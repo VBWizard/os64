@@ -1,0 +1,1 @@
+PASS: actual titlebar pixels match before and after cold boot with the source font absent (x=48..1289, y=36..80).

@@ -22,9 +22,11 @@ client API.
 |---|---|---|
 | 0. Surfaces | `gui/gui_types.h`, `gui/surface.{h,c}` | `rect_t`/`surface_t`, clipping blits/fills/text, `surface_flush_rect` (the ONLY code that touches the hardware framebuffer) |
 | 1. Input | `driver/system/mouse.c`, `keyboard.c` (`ps2_handle_irq`), `gui/input.{h,c}` | PS/2 drivers feed one unified event ring (`input_event_t`): keys + mouse in arrival order |
-| 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues |
+| 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues, which window each damaged pixel belongs to |
+| — | `gui/visible.{h,c}` | The claim walk: the pieces of a rect each window can be seen in, top-down (OCCLUSION.md). No kernel headers; `tools/test_visible_host.sh` checks it against a pixel oracle |
 | 3. Compositor | `gui/compositor.c` | The `/guicomp` daemon: frame loop = drain input → route → recomposite damage → flush; cursor; drag state machine |
 | 4. Client API | `gui/gui_client.{h,c}` | Handle-based, **syscall-shaped** functions apps call; the future userland boundary |
+| — | `gui/glass.{h,c}` | `/dev/glass`: each frame's damage fed to every open viewer, which copies the changed rectangles out of the backbuffer. See the chapter below |
 | — | VT8 seat | `gui_owns_glass()` (compositor.c) — the GUI is VT8's seated shell, and that predicate gates every flush. See the VT8 chapter below |
 | — | ~~`gui/console_window.{h,c}`~~ | RETIRED 2026-08-19 with `kConsoleSink`; boot output lives in VT1's grid, and the shell-in-a-window is ring-3 `gterm` |
 
@@ -34,11 +36,12 @@ client API.
    cacheable RAM surfaces; the uncached (PCD-mapped) hardware framebuffer only
    ever receives finished pixels via `surface_flush_rect`, and is **never
    read**. Scrolling/clears never do read-modify-write on UC memory.
-2. **Damage drives everything.** `gui_damage_add[_locked]()` accumulates one
-   union rect (v1); each frame the compositor recomposites only that region:
-   desktop → windows bottom-up (`wm_composite`) → cursor last → flush. Cursor
-   motion damages old∪new positions; the recomposite restores what was under
-   it — the backbuffer IS the save-under.
+2. **Damage drives everything.** `gui_damage_add[_locked]()` accumulates a
+   short list of rects; each frame the compositor recomposites only those:
+   each pixel by the one window, or the desktop, that can be seen there
+   (`wm_composite`, OCCLUSION.md) → band and switcher → cursor last → flush.
+   Cursor motion damages old∪new positions; the recomposite restores what was
+   under it — the backbuffer IS the save-under.
 3. **kGuiLock serializes all window-system state** (z-list, event queues,
    damage, handle table; see `gui/gui_internal.h`). `wm_*` functions assume it
    held; `gui_*` client calls and the compositor acquire it. Compositing (RAM,
@@ -60,32 +63,94 @@ client API.
 ```
 IRQ1/IRQ12 → ps2_handle_irq (keyboard.c): drain 8042, dispatch on status bit 5
    ├─ keyboard_handle_scancode → emits on MAKE (press) + input_inject_key(down/up)
-   └─ mouse_handle_byte (mouse.c): 3-byte packets, sync bit + 30ms timeout resync
-        → input_inject_mouse(dx, dy, buttons)
+   └─ mouse_handle_byte (mouse.c): 3/4-byte packets selected by device ID, sync bit + 30ms timeout resync
+        → input_inject_mouse(source, dx, dy, buttons, wheel)
 input.c: one ring (irqsave spinlock), tracks cursor position (clamped) and
-         diffs button state into discrete DOWN/UP events
+         diffs button state into discrete DOWN/UP events, then queues WHEEL
+         (text-VT wheels update scrollback directly and defer repaint)
 compositor: drains per frame; routes under kGuiLock:
-   MOUSE, and the GUI does NOT own the glass → vt_select.c (the text VT)
-   clicks → hit-test top-down → raise+focus; titlebar+left = drag grab;
+   moves/buttons, and the GUI does NOT own the glass → vt_select.c (the text VT)
+   clicks → hit-test top-down → raise+focus; decoration control = action grab;
+            remaining titlebar+left = drag grab;
             a click landing in a client's CONTENT starts the pointer grab
    moves  → cursor damage; WM drag → wm_move; pointer grab → its owner;
             else hit-test and deliver content-local to the window under it
+   wheels → pointer-grab owner or content under pointer; no focus change;
+            decorations and WM gestures swallow them
    keys   → focused window
 ```
 
 ### The input fork (2026-08-21)
 
-Mouse events belong to whoever holds the glass. `input_inject_mouse` used to
-DROP them whenever a text VT was focused ("there is no consumer" — true until
-this date); it now enqueues unconditionally, and the fork happens at the far
-end of the ring, in `route_event_locked`, which is the only place that knows
-who holds the glass at drain time. With VT8 up they route to windows; with a
-text terminal up they route to **vt_select.c**, where they become gpm's old
-gesture — select-to-copy, right-click-to-paste, and a pointer that is one
-inverted character cell.
+Motion and button events share the compositor's input ring. With VT8 up
+they route to windows; with a text terminal up they route to **vt_select.c**
+for select-to-copy, right-click-to-paste, and an inverted-cell pointer.
 
-Keys are NOT forked here and never were: the keyboard driver routes those at
-its own end, tty by tty. Only the pointer had nowhere to go.
+Wheel input on VT1..VT7 changes the focused terminal's scrollback at arrival,
+three rows per notch, under its tty lock. It marks the glass stale for
+`tty_flush_if_dirty`; it does not paint or wake a task in the mouse handler.
+This also works on text-only boots. GUI wheel events use event 13 and the
+existing mouse payload; see [MOUSE_WHEEL.md](MOUSE_WHEEL.md).
+
+Control Center's **Mouse Settings** tool (`/bin/mousesettings`) selects an
+individual Bluetooth, USB, or PS/2 mouse. Pointer speed runs from 0.25× to 4×
+(default 1×); the right-primary checkbox swaps left/right button roles. Apply
+changes the live session, Save also persists the selected device in `mouse.conf`,
+and Defaults stages 1× with the left button primary. Refresh reloads the device
+list and current settings, discarding unapplied edits. **Forget** removes the
+selected disconnected mouse's saved preferences and its live registry entry.
+Connected mice cannot be forgotten. If the 16-entry table is full, forget an old
+disconnected device, move the new mouse, and choose Refresh; registration retries
+on relative input without requiring a reboot.
+
+Relative motion is scaled in `input_inject_mouse`, with signed fractional
+remainders per source so low speeds preserve small movements. Wheel notches and
+absolute `/dev/glass` positions are unscaled. A button mapping is latched for the
+whole physical chord: applying a swap during a drag preserves its release, and
+the new mapping starts on the next press. Source removal releases held logical
+buttons while preserving other sources' holds.
+
+`/sys/mouse` reads a versioned binary snapshot and accepts complete atomic
+Apply/Forget commands (`abi/include/os64/mouse.h`, version 2). The bounded registry holds
+16 device identities, including saved offline preferences. A settings generation
+prevents stale windows and desktop restarts from overwriting a newer Apply or
+Forget. Registry slots remain stable while snapshots omit forgotten entries, so
+removing an offline identity cannot change another source's settings index.
+Desktop startup validates the complete config before restoring it; devices that
+arrive afterward inherit their preferences. Each config line is
+`device-key = speed-percent right-primary`, with speed 25–400 and primary 0/1.
+The normal config search path and checked atomic writer handle persistence.
+Forget deletes the saved line before removing the live entry. A file failure
+leaves the entry available for retry; a generation change or reconnection racing
+the file commit keeps the live settings and reports that only the saved
+preferences were removed.
+
+Bluetooth keys use the bonded identity, so reconnection and privacy-address
+changes retain settings. USB keys use PCI controller address, root port and
+VID/PID; moving a receiver to another port selects a different preference.
+Names come from transport/identity information rather than USB product strings.
+Sources awaiting registry space keep default behavior. The GUI
+refresh button discovers devices that arrived after the window opened.
+
+Host validation covers two-source speed isolation, fractional motion, saturation,
+button swaps during held presses, disconnect/reconnect, atomic rejection,
+config parsing and startup/save errors. Full-table regression tests cover Forget,
+waiting device admission, checked file deletion, a seventeenth device's Save and
+restoration, protected connected sources, and file/reconnection failures. The UI
+fixture covers device selection, Apply/Save/Forget/defaults, conflict feedback
+and larger fonts. Windowed QEMU also verified the third Control Center entry, Save through the
+live kernel interface, independent USB/PS2 settings, and restoration of 2× speed
+and right-primary after reboot using temporary disk overlays. P5 testing confirmed
+the Control Center entry and comfortable MX Ergo S motion at 2×. Saved trackball
+speed across a P5 reboot and independent dongle-mouse speed remain hardware checks.
+
+Installation requires the updated kernel, libos64, desktop, mousesettings app and
+menu.conf. A customized `/home/menu.conf` replaces `/etc/menu.conf` in full; add
+`item "Mouse Settings" /bin/mousesettings` inside its `menu settings` block and
+reopen Control Center to expose the new tool.
+
+
+Keyboard drivers route keys at arrival, tty by tty.
 
 Two consequences worth knowing:
 - **No new thread.** The compositor already drains the ring every frame
@@ -105,6 +170,7 @@ to — including coordinates outside its own window, which is exactly what an
 app tracking a drag past its edge needs to see. `s_pointer_window` in
 compositor.c; released when the last button comes up, and by
 `gui_grab_release()` if the window dies mid-gesture.
+Additional button presses during that grab also go to its owner.
 
 The WM's own gestures always had this (`s_drag_window`, `s_band_window`, and
 the comment above them says why). Clients did not, and hit-testing every
@@ -307,6 +373,28 @@ unacceptable for tasks (any task could present/destroy any window).
 
 ### Event delivery
 
+`OS64_GUI_EVENT_POINTER_STATE` reports the latest exposed-content pointer
+target with content-local coordinates and an `inside` flag. The compositor
+reconciles it each frame, including geometry/z-order changes under a stationary
+pointer and VT ownership changes. Client grabs suppress hover in other windows;
+window-manager gestures suppress client hover. Teardown clears the tracked
+window before it can be freed.
+
+The snapshot coalesces outside the per-window input ring and is delivered
+after queued input, so older motion cannot reinstate a stale hover highlight.
+Intermediate crossings can collapse; the final snapshot survives ring pressure.
+It participates in poll/wait readiness and waiter wakeups. Ordinary input retains
+drop-newest on overflow, while a focus change evicts the oldest ring entry.
+
+`OS64_GUI_EVENT_APPEARANCE` carries the published session generation in two
+32-bit words, preserving the event layout. It coalesces in its own slot and
+precedes ordinary input. `/sys/appearance` publication and its window broadcast
+hold `kGuiLock` together; delayed clients read the newest immutable snapshot.
+Window creation and publication serialize on the same lock, and clients check
+the store after creating their first window. The event wakes normal event
+waiters; libui owns payload interpretation and per-process caching. Chrome
+remains independent. See APPEARANCE.md for the publication contract.
+
 **THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
 SIGWINCH question — Chris: "there will be many, so we should probably settle
 on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
@@ -324,8 +412,9 @@ from the outside. The difference is WHEN, and on top of WHAT:
   That is why "which libos64 functions may be called from a handler" is a real
   open question (SIGNALS.md books it).
 
-So: keys, mouse, resize, close, and every future window fact — focus, theme
-change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+So: keys, mouse, resize, focus, appearance changes, and polite close requests
+are EVENTS. Further window facts such as publish acknowledgments follow the
+same pattern. Every windowing
 system converged here independently (X11's queue, the Mac's `GetNextEvent`,
 Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
 signal. **os64 could not even if it wanted to**: the pending set is
@@ -337,8 +426,9 @@ transport by its own design (SIGNALS.md § "Explicitly not in scope").
 
 The first window fact after resize and close: **can anyone see this window?**
 `GUI_WINDOW_COVERED` is set when a window is minimized, or its whole frame is
-behind one window above it (`wm_rect_is_occluded`, the same single-window
-containment publish uses), or a text terminal holds the glass.
+behind one window above it (`wm_rect_is_occluded`'s single-window
+containment; publish and the compositor work out exactly what is visible,
+OCCLUSION.md), or a text terminal holds the glass.
 `wm_cover_sweep_locked` recomputes it every compositor frame, after the
 window manager has moved whatever it moved, and a flip queues one
 `WINDOW_COVERED` / `WINDOW_UNCOVERED` event.
@@ -531,7 +621,10 @@ One owner variable, and it already exists: `kTTYFocused`.
   pty slave), just in ring 3 where it always belonged.
 - **Input routing follows the glass — dual delivery dies.**
   `keyboard_deliver_event` forks on ownership: VT8 focused → GUI input queue
-  only; text VT focused → tty path only. The chords are consumed BEFORE the
+  only; text VT focused → tty path only. A RELEASE is the exception: it goes
+  where its press went (`keyboard_deliver_release`), so a key or modifier
+  pressed on the desktop and let go after a switch to a text terminal still
+  comes up in the window that saw it go down. The chords are consumed BEFORE the
   fork (Alt+arrows must work from either world; they are commands to the
   terminal stack, same doctrine as Ctrl+Alt+Del). The mouse already goes
   only to the GUI queue; on text VTs its events drop (gpm is a non-goal).
@@ -654,6 +747,16 @@ nothing in userland changed; the stale claim was a comment in `os64/gui.h`
 promising they were equal, and that comment is now the explanation of why they
 are not.
 
+### Per-window minimum size
+
+`os64_gui_window_set_min_size` lets an owner raise its window's minimum
+content dimensions above the default 64x32 resize floor. The existing clamp
+serves the outline, drag commit, maximize and restore. A successful request
+grows a too-small window through the normal resize path; limits beyond the
+reserved canvas capacity are refused without changes. See
+[WINDOW_MINIMUM_SIZE.md](WINDOW_MINIMUM_SIZE.md) for the syscall contract,
+mid-drag handling and verification fixture.
+
 ### The gesture
 
 - The chord is BOTH modifiers, so a plain Ctrl-click or Alt-click still reaches
@@ -687,8 +790,10 @@ are not.
   modifier change that produces no delivered event — the extended path updates
   the state and returns without delivering for any key that is not an arrow or
   a named editing key, so holding Right Alt would change the driver's mind and
-  tell nobody. State is published where it CHANGES now
-  (`keyboard_publish_modifiers`), with the choke still covering the xHCI path.
+  tell nobody. State is published where it CHANGES now: `keyboard_publish_modifiers`
+  for PS/2 and `keyboard_publish_hid_modifiers` for each HID keyboard, counted
+  so a modifier is held while any keyboard holds it (keyboard.h). The choke
+  does not touch it.
 - Mouse events carry `modifiers` (input.h, ABI-compatible — the union had 20
   bytes and was using 14), because a compositor keeping its own shadow copy of
   modifier state would drift out of sync across a VT switch.
@@ -707,7 +812,7 @@ still reaches the app) extended from the mouse to the keyboard:
 | **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
 | **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
-| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path` — **PPM (P6) or BMP, by magic bytes**, centered, never scaled (a `screendump` can be the wallpaper). Read by **`/bin/desktop`** since 2026-08-25, which paints it into a bottom-band WINDOW; `gui/desktop.c` and its in-kernel PPM decoder are deleted. With no shell running, the compositor's test pattern is what shows — it is the floor, and it stayed in the kernel for exactly that reason |
+| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path` — **PPM (P6), BMP, PNG or JPEG, by magic bytes through libimage**, centered, never scaled (a `screendump` can be the wallpaper). Read by **`/bin/desktop`** since 2026-08-25, which paints it into a bottom-band WINDOW; `gui/desktop.c` and its in-kernel PPM decoder are deleted. With no shell running, the compositor's test pattern is what shows — it is the floor, and it stayed in the kernel for exactly that reason |
 | `/home/gclock.conf` → `/etc/gclock.conf` | clock window state | `Position = x,y`, `Titlebar = on|off`, `Pinned = true|false`; no file = `(280,10)`, titlebar on, unpinned |
 | `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order). **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. Read once by **`/bin/desktop`** as it starts (2026-08-25) — a shell reads its own rc. The `hello = yes|no` key and the window it switched are retired, and with them `gui/startup.c`: the kernel reads no config file for the GUI at all now |
 
@@ -722,7 +827,7 @@ Three things learned building them, for the next chord:
   lesson, re-learned in one day — it is now the rule.)
 - **The HID path emits releases now.** Until today xHCI delivered key-DOWN
   only: no key-up, no event at all for a modifier-only report. The Alt+Tab
-  hold therefore could not end on USB. `hid_process_keyboard_report`
+  hold therefore could not end on USB. `hid_keyboard_report` (hid_keyboard.c)
   emits a release edge per usage that left the report and a press/release
   per modifier bit that flipped (scancode `0xE0 + bit`, ASCII 0, so the
   text path ignores them exactly as it ignores PS/2 modifier keys).
@@ -817,8 +922,9 @@ list box, and went horizontal only once there were icons to put in it.
   a guess. 16 rows max (`ALTTAB_RING_MAX`); the strip is sized to the count.
 - **The snapshot now carries titles and dim flags**, not just ids. The draw
   path then dereferences no window at all, and the picture cannot reflow
-  under the user's hand mid-walk. (Nothing in the scene is allowed to change
-  during a hold anyway, so a live re-read could only differ by being wrong.)
+  under the user's hand mid-walk. The switcher moves no window during a
+  hold, but a client can rename one (`gui_window_set_title`): its row keeps
+  the name it had when the hold began until Alt is released.
 - **Tab / Shift+Tab move the highlight, and so do Up/Down.** Nothing else.
   The vertical arrows are free precisely because the keyboard driver spends
   Alt+Left/Right on the virtual-terminal cycle: horizontal arrows walk
@@ -862,11 +968,10 @@ The clip is structural, not remembered: `surface_draw_text` paints an
 OPAQUE background per glyph, so a title allowed to run past its row would
 repaint the frame beside it. Strip = rows + border, centered.
 
-The palette is the chrome's, and that is why the four `WINDOW_TITLEBAR_*` /
-`WINDOW_BORDER_*` values moved from `window.c` to `window.h`: the
-highlighted row must be the same blue a focused titlebar is, or the strip is
-describing a different desktop than the one behind it. One copy, two
-consumers.
+The strip reads the active chrome palette through `wm_titlebar_color` and
+`wm_border_color`, so its highlighted row follows the installed decoration.
+Those accessors use the compiled fallback until a decoration is applied.
+Switcher text remains on the bitmap font.
 
 **No separator lines.** Each row is a tile laid on the dark slab and one
 pixel shorter than its pitch, so the frame shows through between them: the
@@ -1001,20 +1106,22 @@ the menu. Found on the second screendump, fixed at the source.
 
 ### Cascades, and what a menu is made of
 
-Every open level is a window: `PINNED` (a menu is never under anything),
-`NO_DECORATIONS`, one pixel of border from the WM. Hovering a cascade row
-opens the child beside it (overlapping the parent by 3px, slid on-screen
-if it would run off — every menu since the Lisa); hovering a different row
-closes it; up to 8 levels open at once (a cascade below that does not
-open — `MENU_DEPTH_MAX`, a fence nobody's menu should reach).
-The program polls every level's queue at frame cadence rather than blocking
-on one window, because the pointer wanders between them and `event_wait`
-watches one handle.
+grootmenu adapts the parsed `menu.conf` tree to libui's immutable menu models
+and action registry. The shared native popup controller owns painting, Interface
+font measurement, keyboard and pointer navigation, scrolling, focus dismissal,
+and child-first teardown. Commands retain their node index and launch through
+`os64_menu_argv` after the popup family closes.
 
-Deliberately NOT in v1, each with its trigger: keyboard navigation
-(arrows/Enter — wants the arrow-key dialect handling gterm has); a menu
-ITEM that opens a named menu in a new root (twm's `f.menu` at top level —
-wait for the dock, which is that); icons; a "tear-off" (Motif, 1989).
+The root popup is standalone; cascade windows are owned by their immediate
+parent. The common dispatcher waits for any registered window and quarantines
+destroyed handles until surviving queues drain. The toolkit accepts up to
+`OS64_UI_MENU_DEPTH` levels and `OS64_UI_MENU_ENTRIES` rows per model; unsupported
+models are refused with a diagnostic rather than truncated. Arrow keys and
+Enter navigate, Escape backs out, and a VT switch preserves the open family.
+Font adoption closes menus before replacing their borrowed font runs.
+
+Icons, tear-offs, and desktop icon placement remain separate work. The shared
+icon-provider boundary is present; grootmenu supplies no artwork provider.
 
 ### What the first morning's drive changed (Chris on the P5, 2026-08-26)
 
@@ -1045,6 +1152,35 @@ gone (focus-lost); open, Escape → gone; open, click "Terminal" → gterm.
 The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
 1=left, 2=right, 4=middle.
 
+## /dev/glass — the backbuffer, watched (built 2026-09-23)
+
+REMOTE.md § 3 is the design and `os64/glass.h` the ABI. What the window
+system has to know:
+
+- **The compositor feeds it.** Right after `composite_locked` runs a
+  frame's damage and before `kGuiLock` drops, `glass_damage_locked` adds that
+  damage to every open viewer and wakes a parked reader. Being fed after the
+  pixels are down and under the same lock is what makes a viewer's copy
+  eventually exact: a composite that overlaps a copy records its damage after
+  the copy took its rectangle.
+- **The backbuffer has readers on other threads now.** A glass read takes its
+  rectangle under `kGuiLock` and copies the pixels after releasing it, so the
+  frame loop never waits on a copy. `gui_backbuffer()` hands the surface out
+  only once `s_backbuffer_ready` is published: `surface_init` stores the
+  pixel pointer before the size, and a reader needs both. The hardware
+  framebuffer is still never read (invariant 1).
+- **A viewer opened "u" is also a keyboard and a pointer.** Its keyboard
+  is a `hid_keyboard_t` (the USB keyboard's interpreter) and its pointer
+  goes through `input_inject_pointer`, which shares `pointer_locked` with
+  the mice. Held keys repeat from `glass_input_tick`, called in the frame
+  loop outside `kGuiLock`. Delivery happens under the view's input lock and
+  never under `kGuiLock`, for the reason the painting rule above gives.
+- **It follows the backbuffer, not the glass.** While a text VT holds the
+  screen the backbuffer keeps compositing, so viewers keep receiving the
+  desktop, flagged `OS64_GLASS_TEXT_VT`. A change of who holds the screen
+  re-sends the whole frame, noticed at the reader's next wake (at most a
+  quarter second).
+
 ## Testing / debugging
 
 - `DEBUG_GUI` (CONFIG.h bit 21; also a cmdline token) gates all GUI printd's:
@@ -1069,16 +1205,17 @@ The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
    + the frame loop).
 5. ~~Window resize~~ **BUILT 2026-08-19 (see the resize chapter above)**;
    ~~minimize, `GUI_WINDOW_NO_DECORATIONS` honor~~ **BUILT 2026-08-23 (the
-   chords chapter above)**. Still open: close buttons (and any titlebar
-   button at all — the chords were chosen so none is needed yet), a
-   taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
+   chords chapter above)**. Prepared titlebars support configurable close,
+   minimize, maximize/restore and pin controls (see `FRAME_STUDIO.md`).
+   Still open: a taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
    **the root menu is BUILT 2026-08-25, see its chapter above; a dock is
    another `gui.conf` line away by design**), and
    re-reading `desktop.conf` without a reboot — **which is a much smaller job
    now that the reader is `/bin/desktop`**: re-reading a config and
    repainting is an ordinary thing for a program to do, where it used to mean
    the compositor re-entering the VFS.
-6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
+6. Five-button IntelliMouse Explorer and horizontal tilt. Vertical wheel
+   input includes descriptor-driven USB reports; see MOUSE_WHEEL.md.
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).
 8. Runtime resolution switching (only `framebuffers[0]` used; fixed by
@@ -1109,3 +1246,19 @@ The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
   its canvas pages — teardown-order invariant violated, or a task exit path
   is missing the `gui_task_destroy_windows` hook. Windows die before pages,
   always.
+
+## Application Settings action
+
+Applications opt in at window creation with `OS64_GUI_WINDOW_HAS_SETTINGS`.
+The Settings titlebar action, or Ctrl+Alt+S, delivers
+`OS64_GUI_EVENT_SETTINGS` (15) to that window. The application owns its
+settings dialog and policy; `os64/ui_settings.h` supplies a reusable modeless
+window. `os64_gui_window_focus` (syscall 62) restores/focuses an owned ordinary
+window within its stacking band, allowing repeated Settings requests to reveal
+the same draft. Desktop and popup windows are refused by that focus call.
+
+Decoration V7 supplies the drawn slider icon, with the usual placement, housing,
+fill and ink options. Unsupported applications omit the slot and automatic gap
+from geometry, painting and hit testing. Explicit spacers remain. The compiled
+fallback also exposes Settings for opted-in windows. Existing compositions
+retain their controls, and the shortcut works when the button or titlebar is absent.

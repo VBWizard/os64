@@ -1,0 +1,409 @@
+#ifndef FETCH_FETCH_H
+#define FETCH_FETCH_H
+
+// fetch.h — a URL in, the page's bytes out. LIBFETCH.md is the design
+// record; this file is the contract every fetcher on os64 shares.
+//
+// THE SHAPE: `open` dials, follows redirects and reads the head, and it
+// BLOCKS — a fetch is a thread's work. `read` hands back body bytes with the
+// chunking and the gzip taken off. `close` releases everything. One object
+// per fetch, so twenty fetches on twenty threads share not one byte of
+// their own. What they do share is the CONNECTIONS a finished fetch leaves
+// open (WIRE.md § 2): a fetch takes a kept connection to its peer before it
+// dials, and gives its own back at close when HTTP says it may be kept, one
+// fetch at a time on each, under one lock held only to take or put
+// (pool.h). A caller sees it in time, in one sentence when a request on a
+// kept connection had to go again (os64_fetch_reason), and in its handle
+// table: up to a quarter of it stays open after its fetches close, for as
+// long as their connections are kept, and a dial refused for want of
+// handles lets one of them go and tries again.
+//
+// POLICY ABOUT THE WIRE IS THE LIBRARY'S; POLICY ABOUT THIS MACHINE IS THE
+// CALLER'S. The library knows what an HTTP reply means, where a Location
+// points, which redirects are safe to follow by default, what the
+// environment's proxy settings say, and how long to wait for a silent
+// peer. The caller knows whether a 404 is a failure (a browser shows the
+// page; a downloader refuses it), whether a person may follow a downgrade,
+// and what to say about any of it — which is why nothing in here prints.
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "os64/url.h"
+#include "fetch/http.h"
+#include "gzip/gzip.h"
+#include "tls/tls.h"
+
+typedef struct os64_fetch os64_fetch_t;   // opaque; one fetch, one object
+
+// ── Why a fetch stopped ─────────────────────────────────────────────────
+//
+// Every value names a cause a caller can act on; `os64_fetch_detail` holds
+// the numbers behind it and `os64_fetch_reason` one sentence about it.
+typedef enum {
+    OS64_FETCH_OK = 0,             // open: head read; read: the body ended WHOLE
+    OS64_FETCH_BAD_URL,            // the address does not parse (detail.url says why)
+    OS64_FETCH_UNSUPPORTED_SCHEME, // parses, but not http or https (detail.scheme)
+    OS64_FETCH_DIAL_FAILED,        // no road to the peer (detail.dial, os64_dial_reason)
+    OS64_FETCH_PROXY_BAD,          // the proxy setting that would carry it is unusable (detail.why)
+    OS64_FETCH_TLS_FAILED,         // handshake, verification, or the trust store (detail.tls*, store*)
+    OS64_FETCH_REQUEST_FAILED,     // could not send the request, or it does not fit (detail.why)
+    OS64_FETCH_BAD_HEAD,           // the reply is not HTTP (detail.head), or its chunk framing
+                                   // stopped being HTTP mid-body (detail.body)
+    OS64_FETCH_UNSUPPORTED,        // a framing, coding, or 101 this code cannot honestly undo
+    OS64_FETCH_SILENT,             // the idle deadline passed (detail.silent_after_body)
+    OS64_FETCH_REDIRECT_STOPPED,   // a hop verdict said stop; the head is the redirect's
+    OS64_FETCH_TOO_MANY_HOPS,      // past max_hops; the head is the last redirect's
+    OS64_FETCH_CUT,                // the peer closed before the framing was satisfied
+    OS64_FETCH_BROKE,              // the connection failed mid-body
+    OS64_FETCH_CORRUPT,            // the gzip coding did not decode (detail.gzip)
+    OS64_FETCH_LIMIT,              // max_body, or the gzip expansion caps
+    OS64_FETCH_INTERRUPTED,        // the caller's predicate said so. (A wait that a signal
+                                   // interrupts is RETRIED under the same deadline — a caught
+                                   // SIGWINCH must not abort a page load — so the predicate
+                                   // is the only way to say "stop"; that is why it exists.)
+    OS64_FETCH_NO_MEMORY,
+} os64_fetch_status_t;
+
+const char *os64_fetch_status_name(os64_fetch_status_t status);
+
+// GET is zero for existing zero-initialized callers.
+typedef enum { OS64_FETCH_METHOD_GET = 0, OS64_FETCH_METHOD_POST } os64_fetch_method_t;
+
+// ── Redirects ───────────────────────────────────────────────────────────
+
+// What a hop IS, worked out by the library before anybody decides anything:
+// the Location resolved against the address that answered, parsed, and
+// judged. WHOLE is a target with a road to it; every other kind names what
+// is wrong with it. The default verdict follows WHOLE and stops on the rest.
+typedef enum {
+    OS64_FETCH_HOP_WHOLE = 0,   // a whole, fetchable, different request, and a proxy or a direct road
+    OS64_FETCH_HOP_NONE,        // the redirect does not say where to
+    OS64_FETCH_HOP_TOO_LONG,    // the address it spells is longer than this will hold
+    OS64_FETCH_HOP_UNUSABLE,    // it spells something that is not a usable address (detail: parse)
+    OS64_FETCH_HOP_SCHEME,      // an address of a kind this library does not fetch (mailto:, ftp://)
+    OS64_FETCH_HOP_DOWNGRADE,   // an HTTPS origin redirected to unencrypted HTTP
+    OS64_FETCH_HOP_PROXY,       // the proxy setting that would carry it is unusable (why)
+    OS64_FETCH_HOP_SELF,        // same address AND method as the request that just answered
+} os64_fetch_hop_kind_t;
+
+// The caller's say. DEFAULT = the library's policy (follow WHOLE, stop on
+// the rest, within max_hops). FOLLOW on a DOWNGRADE or a SELF overrides the
+// policy — a person at a keyboard may choose what a script may not; FOLLOW
+// on a hop with no address to follow (NONE, TOO_LONG, UNUSABLE, SCHEME,
+// PROXY) is STOP, because there is nowhere to go. STOP ends the fetch with
+// the redirect as its final head, body readable.
+typedef enum {
+    OS64_FETCH_HOP_DEFAULT = 0,
+    OS64_FETCH_HOP_FOLLOW,
+    OS64_FETCH_HOP_STOP,
+} os64_fetch_verdict_t;
+
+#define OS64_FETCH_URL_MAX HTTP_URL_TEXT_MAX
+#define OS64_FETCH_WHY_MAX 200
+
+// What a reply said about keeping it (RFC 9111), for a caller that caches:
+// this library keeps nothing. Each field as written, a repeated one joined
+// by ", ", "" when it was not sent. `unreadable`: one of these fields was
+// longer than its place here holds, or than a header line may be (http.c
+// omits such a line whole, and says whose it was), so what is here is not
+// the whole of what the server said.
+#define OS64_FETCH_KEEP_FIELD 192
+typedef struct {
+    char cache_control[OS64_FETCH_KEEP_FIELD];
+    char pragma[OS64_FETCH_KEEP_FIELD];
+    char etag[OS64_FETCH_KEEP_FIELD];
+    char last_modified[OS64_FETCH_KEEP_FIELD];
+    char expires[OS64_FETCH_KEEP_FIELD];
+    char date[OS64_FETCH_KEEP_FIELD];
+    char age[OS64_FETCH_KEEP_FIELD];
+    char vary[OS64_FETCH_KEEP_FIELD];
+    bool unreadable;
+} os64_fetch_keep_t;
+
+typedef struct {
+    os64_fetch_hop_kind_t kind;
+    int32_t  status;                  // the 3xx that sent us
+    char     reason[HTTP_REASON_MAX]; // ...and its own words for it, "" if none
+    uint32_t number;                  // this would be hop N (1 = the first redirect)
+    char     whole[OS64_FETCH_URL_MAX];   // the target spelled out; "" for NONE and TOO_LONG
+    os64_url_t target;                // WHOLE / DOWNGRADE / SELF: parsed, port filled in from the scheme
+    os64_url_result_t parse;          // UNUSABLE: what the parser objected to
+    bool     via_proxy;               // WHOLE: who carries the next hop
+    char     proxy_host[OS64_URL_HOST_MAX];
+    uint16_t proxy_port;
+    bool     from_via_proxy;          // ...and who carried the hop that answered: a caller
+    char     from_proxy_host[OS64_URL_HOST_MAX];   // warning about a proxied first leg needs
+    uint16_t from_proxy_port;         // it even when the final head went direct
+    char     why[OS64_FETCH_WHY_MAX]; // PROXY: what is wrong with the setting
+    os64_fetch_method_t from_method, to_method; // proposed transition, even if stopped
+    os64_fetch_keep_t keep;           // the redirect's own caching fields
+} os64_fetch_hop_t;
+
+// ── What came back ──────────────────────────────────────────────────────
+
+
+// Valid from the moment `open` returns with a head (any status whose head
+// was read: OK, REDIRECT_STOPPED, TOO_MANY_HOPS) until `close`. Every
+// string is storage inside the fetch object — nothing here outlives it.
+typedef struct {
+    int32_t  status;                          // 200, 404, 301...
+    char     reason[HTTP_REASON_MAX];         // the server's own words, "" if none
+    char     content_type[HTTP_TYPE_MAX];     // lowercased media type, "" if not said
+    char     charset[HTTP_CHARSET_MAX];       // lowercased charset parameter, "" if not said
+    bool     has_length;
+    uint64_t length;                          // the WIRE's count — gzip output is larger
+    char     encoding[HTTP_TOKEN_MAX];        // the content coding the wire used; "" = identity
+    bool     has_location;                    // a Location line was seen, even an empty one
+    const char *location;                     // valid until close
+    os64_url_t url;                           // where the body came from, port filled in
+    char     url_text[OS64_FETCH_URL_MAX];    // the same, spelled — the browser's base URL
+    uint32_t hops;                            // redirects followed to get here
+    bool     encrypted;                       // https, and not through a proxy
+    bool     via_proxy;                       // the facts behind "this is not end-to-end"
+    char     proxy_host[OS64_URL_HOST_MAX];
+    uint16_t proxy_port;
+    os64_fetch_method_t method;               // request that produced this head, after redirects
+    os64_fetch_keep_t keep;                   // this head's caching fields
+} os64_fetch_head_t;
+
+// Counters a caller reads between reads, for a meter or a status line.
+typedef struct {
+    uint64_t wire;        // body bytes the framing handed over
+    uint64_t produced;    // bytes handed to the caller (after gzip)
+    uint64_t length;      // the promised wire length, when has_length
+    bool     has_length;
+} os64_fetch_progress_t;
+
+// The numbers behind a status. Only the fields the status names are
+// meaningful; TLS version/fallback describe the current hop after its dial.
+typedef struct {
+    os64_url_result_t url;                    // BAD_URL
+    char     scheme[OS64_URL_SCHEME_MAX];     // UNSUPPORTED_SCHEME: which one
+    int64_t  dial;                            // DIAL_FAILED: os64_dial's answer
+    bool     dial_was_proxy;                  // DIAL_FAILED / TLS_FAILED: the peer was the proxy, not the origin
+    char     dial_host[OS64_URL_HOST_MAX];    // DIAL_FAILED / TLS_FAILED: the peer asked
+    uint16_t dial_port;
+    uint32_t dial_hop;                        // DIAL_FAILED / TLS_FAILED: 0 = the typed address, else which hop
+    os64_tls_status_t tls;                    // TLS_FAILED
+    os64_tls_policy_reason_t tls_policy;
+    int      tls_engine;
+    uint16_t tls_version;                    // 0 until selected; 0x0303 or 0x0304
+    bool     tls_fallback;                   // this hop redialed explicitly with TLS 1.2
+    bool     store_failed;                    // TLS_FAILED: the trust store, not the handshake
+    os64_tls_store_status_t store;
+    os64_tls_store_report_t store_report;
+    http_head_result_t head;                  // BAD_HEAD / UNSUPPORTED (head-shaped)
+    http_body_result_t body;                  // CUT / BROKE / BAD_HEAD (body-shaped)
+    os64_gzip_status_t gzip;                  // CORRUPT / LIMIT / UNSUPPORTED (coding-shaped)
+    uint64_t gzip_limit;                      // LIMIT: the cap the decoder was given
+    char     unsupported[HTTP_TOKEN_MAX];     // UNSUPPORTED: the coding or framing named
+    os64_fetch_hop_t hop;                     // REDIRECT_STOPPED / TOO_MANY_HOPS
+    char     why[OS64_FETCH_WHY_MAX];         // PROXY_BAD / REQUEST_FAILED: the sentence
+    bool     silent_after_body;               // SILENT: mid-body (true) or before the head
+} os64_fetch_detail_t;
+
+// ── Options ─────────────────────────────────────────────────────────────
+
+// The gzip expansion caps: a reply that claims gzip may not expand past
+// RATIO_MAX times its wire length (with a FLOOR so a tiny reply can still
+// unpack to something) nor past OUTPUT_MAX at all. A chunked or close-framed
+// gzip body, whose wire length is unknown in advance, gets OUTPUT_MAX.
+#define OS64_FETCH_GZIP_OUTPUT_FLOOR (1ull * 1024ull * 1024ull)
+#define OS64_FETCH_GZIP_OUTPUT_MAX   (16ull * 1024ull * 1024ull)
+#define OS64_FETCH_GZIP_RATIO_MAX    100ull
+
+#define OS64_FETCH_HOPS_DEFAULT 5
+#define OS64_FETCH_AGENT_MAX    256
+// An Accept list is a browser's whole vocabulary of types, weighted:
+// Chrome's navigation one is about 135 bytes, and yonder's names every
+// picture type libimage decodes besides its page types.
+#define OS64_FETCH_ACCEPT_MAX   512
+// A script's request carries its page's own headers, and one bearer token
+// alone is often past a kilobyte.
+#define OS64_FETCH_EXTRA_MAX    8192
+// What headers_for may write, NUL and all: the lines that say who is asking
+// (half a kilobyte), a hop's Cookie line (8 KiB, the most a common server
+// reads in one field: libway's WAY_COOKIE_LINE_MAX says which servers), and
+// its Referer (4 KiB and a line's name, the most Chrome and Firefox send).
+// libway asserts that its three parts fit here.
+#define OS64_FETCH_HOP_FIELDS_MAX (512 + 8192 + 4096 + 16)
+#define OS64_FETCH_CONTENT_TYPE_MAX 256
+#define OS64_FETCH_METHOD_MAX   HTTP_METHOD_NAME_MAX
+// An order names each line a browser sends once: Chrome's longest, a
+// navigation's, is under 300 bytes.
+#define OS64_FETCH_ORDER_MAX    512
+
+typedef struct {
+    // Request headers, each optional (NULL = not sent). They are COPIED at
+    // open, so the caller's strings need not outlive the call. Every byte
+    // is judged by http.h's field-byte rule and a bad one is REQUEST_FAILED.
+    const char *user_agent;
+    // An empty Accept is sent as one (`Accept: `), unlike the others: a
+    // page's script may set it empty, and Fetch installs its default only
+    // when the header list holds no Accept at all.
+    const char *accept;
+    // The Accept of a hop that is a GET when it differs from a POST's: a
+    // POST redirected by 301, 302 or 303 goes on as a GET and asks with
+    // this. NULL: `accept` on every hop.
+    const char *accept_get;
+    // HTTPS Referer is stripped on an unencrypted connection, from either
+    // header source. Callback cookies use the actual hop URL; static cookies
+    // retain the initial-origin rule below.
+    // Reserved framing/routing/body headers are rejected (http.h lists them).
+    const char *extra_headers;     // "Name: value\r\n" lines, already terminated. Cookie and
+                                   // Authorization are sent to the TYPED origin and to hops
+                                   // that stay on it (scheme, host, port), never to a hop
+                                   // that leaves it; Proxy-Authorization is sent on hops the
+                                   // proxy chosen for the typed address carries, never on a
+                                   // direct request. A credential is for whoever it was given
+                                   // for, not for whoever a redirect or a no_proxy match names.
+    // The trust store, for https. Caller-owned when given and never freed
+    // here. NULL = the system's store, which the library reads once per
+    // process, on the first https hop any fetch makes, and shares with every
+    // fetch that gives none (the "trust once per invocation" rule of #89,
+    // per program): an edit to it reaches the programs started after it.
+    os64_tls_trust *trust;
+    uint64_t max_body;             // decoded bytes; 0 = no cap
+    uint32_t idle_ms;              // 0 = 30 seconds
+    uint32_t max_hops;             // 0 = OS64_FETCH_HOPS_DEFAULT
+    bool     no_proxy;             // ignore the environment's proxy settings
+    // Fires on EVERY hop, followed or not, with the facts worked out. NULL =
+    // the default verdict throughout.
+    os64_fetch_verdict_t (*on_hop)(void *ctx, const os64_fetch_hop_t *hop);
+    // Asked before every wait and after every interrupted one; a yes ends
+    // the fetch as INTERRUPTED. NULL = never (interrupted waits are retried).
+    bool (*cancelled)(void *ctx);
+    void *ctx;
+    // POST bytes (or a method_name's) are borrowed, immutable and needed
+    // through open, including 307/308 replay. NULL body is legal only when
+    // body_len is zero, and means NO body; a non-NULL body of length zero is
+    // an EMPTY one, sent with Content-Length: 0 by any method but GET and HEAD, so the
+    // server can tell the two apart. GET requires NULL body/content_type and zero
+    // body_len. A POST's failed upload is not retried: the server may
+    // already have acted. A PUT's, a DELETE's or an OPTIONS' is, once, body
+    // and all, when it failed on a kept connection before any byte of a
+    // reply (the retry rule, os64_fetch_reason), since sending one of those
+    // twice does what once would. 301/302/303 turn POST
+    // into GET without body metadata; 307/308 preserve it. on_hop can refuse.
+    os64_fetch_method_t method;
+    const void *body;
+    size_t body_len;
+    const char *content_type;     // optional; < CONTENT_TYPE_MAX, copied at open
+    // Per-hop fields, as NUL-terminated "Name: value\r\n" lines within cap,
+    // written in the order given after the static ones. Called before
+    // dialing, including the first request. Only these names are accepted:
+    // Cookie and Referer, and the lines that describe the browser and the
+    // request, most of which change with where a hop goes
+    // (Accept-Language, Sec-CH-UA, Sec-CH-UA-Mobile, Sec-CH-UA-Platform,
+    // Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User,
+    // Upgrade-Insecure-Requests, Priority, and a Reload's Cache-Control).
+    // Duplicates within this block or with retained static fields refuse
+    // the hop. False or bad output is REQUEST_FAILED. encrypted describes
+    // the actual transport, not just URL.
+    bool (*headers_for)(void *ctx, const os64_url_t *hop_url, bool encrypted,
+                        char *out, size_t cap);
+    // Each final-head Set-Cookie VALUE (no name/colon/CRLF), OWS trimmed,
+    // individually and before on_hop/headers_for for a redirect destination.
+    // Value and URL are borrowed for the call. No 1xx/trailer delivery;
+    // oversized lines (HTTP_LINE_MAX) are omitted whole. Earlier calls stand
+    // even if a later header fails. encrypted describes the actual connection:
+    // false for plain HTTPS proxies too. The session applies Secure-cookie
+    // policy using this fact; no cookie parsing/storage is done here.
+    void (*on_set_cookie)(void *ctx, const os64_url_t *from_url, bool encrypted,
+                          const char *value, size_t len);
+    // A METHOD BY NAME, for a caller that owns its redirects (the Fetch
+    // standard's job, yonder/fetch_job.c): any token below
+    // OS64_FETCH_METHOD_MAX but CONNECT (refused, REQUEST_FAILED: its reply
+    // makes the connection a tunnel, which is no connection to keep), sent as
+    // spelled, with `method` left GET and no
+    // content_type. Its body goes with any method but GET and HEAD, a HEAD's
+    // reply is read as bodiless whatever it says, and the library follows
+    // NO redirect: on_hop still hears each one, and every redirect ends the
+    // fetch as REDIRECT_STOPPED with its head readable, for the caller to
+    // rewrite and ask again by its own rule. NULL: `method`, and the hops
+    // above.
+    const char *method_name;
+    // Beside a method_name only: the body's representation headers as
+    // "Name: value\r\n" lines (Content-Type, Content-Encoding,
+    // Content-Language, Content-Location, nothing else), copied at open.
+    const char *body_headers;
+    // Accept-Encoding: identity instead of "gzip, identity", for a request
+    // asking for a byte Range (whose numbers are the representation's).
+    bool identity;
+    // Every field of each final head, in wire order, as read: the name and
+    // the OWS-trimmed value, borrowed for the call; a line too long to read
+    // comes by name with a NULL value, so absence and omission differ. A
+    // followed redirect's head is offered too, before on_hop hears it.
+    void (*on_header)(void *ctx, const char *name, size_t name_len, const char *value,
+                      size_t value_len);
+    // These callbacks run inside open on its thread, using ctx. Copy anything
+    // needed afterward; do not re-enter this fetch. cancellation uses ctx
+    // during reads/close as well, so that context must live through close.
+
+    // `Connection: keep-alive` on every request. The connection is kept
+    // whether or not it is said, since HTTP/1.1 keeps it by default; a
+    // browser says it anyway, and a caller that is one says it too.
+    // `Connection: close` is never sent.
+    bool keep_alive;
+    // The order of the request's lines after Host, as field names separated
+    // by commas ("Connection, User-Agent, Accept"), matched without case and
+    // copied at open: each named line goes where the list puts it, every
+    // line it does not name follows in libfetch's own order (http.h,
+    // http_request_extras_t.order). A browser preset's order for the kind of
+    // request this is (way/origin.h, way_identity_order). NULL: libfetch's
+    // own order throughout.
+    const char *order;
+} os64_fetch_options_t;
+
+// ── The calls ───────────────────────────────────────────────────────────
+
+// Dial, follow redirects, read the head. Returns NULL for no memory ONLY;
+// every other outcome is an object whose status says what happened, so the
+// caller has the detail to explain it. Whatever this returns that is not
+// NULL, close it.
+os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt);
+
+// The LAST outcome: open's until the first read, then each read's.
+os64_fetch_status_t os64_fetch_status(const os64_fetch_t *f);
+const os64_fetch_detail_t *os64_fetch_detail(const os64_fetch_t *f);
+
+// NULL until a head was read (see os64_fetch_head_t).
+const os64_fetch_head_t *os64_fetch_head(const os64_fetch_t *f);
+
+// Body bytes, chunking and gzip removed: > 0 got some; 0 the body is over,
+// and `status` says whether it ENDED (OK: every promised byte arrived) or
+// was merely stopped (CUT); < 0 it cannot go on, and `status` says why.
+// A close-framed body cannot tell ENDED from stopped and reports OK. Once
+// it has answered 0 or < 0 it answers the same thing again. Never hands
+// back a byte past max_body: the cap is refused BEFORE the byte that
+// would cross it is produced. A zero `cap` is the one exception to "< 0
+// is final": it is refused with -1 and nothing changes — status, state,
+// the next read — because 0 would have read as a body that ended whole.
+int64_t os64_fetch_read(os64_fetch_t *f, void *buf, size_t cap);
+
+const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);
+
+// One sentence about the last outcome, in the library's words — for the
+// caller that has nothing more specific to say. Storage inside the object.
+// It ends "(retried once on a fresh connection)" when a request failed on a
+// kept connection before any byte of its reply, or was answered 408 there
+// (the server's idle timeout, said), and was sent again (WIRE.md
+// § 2's retry rule: only a GET, HEAD, OPTIONS, PUT or DELETE, each request
+// at most once), whatever the outcome after that, and says how many when a
+// fetch's redirects made more than one request that went again.
+const char *os64_fetch_reason(os64_fetch_t *f);
+
+// Release the connection, the decoder, and the object. The connection is
+// KEPT for a later fetch to the same peer when
+// HTTP allows it (RFC 9112 § 9.3; pool.h's connection_reusable has every
+// clause): a 1.1 reply, no `Connection: close`, the whole request sent, and
+// a body framed by its length or by chunks and read to its end (or none at
+// all) with nothing past it — a body left unread, a failure, or a
+// cancellation closes it instead, with a bounded TLS closure if the body
+// ended whole. Idempotent on the
+// connection; the object is gone.
+void os64_fetch_close(os64_fetch_t *f);
+
+#endif // FETCH_FETCH_H

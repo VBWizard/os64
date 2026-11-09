@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: a dash of personality</title>
+<style>
+body { margin:24px; background:#eef3f9; color:#182b45; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b8c9dd; border-radius:12px; }
+.card svg { display:block; width:280px; height:168px; background:#f5f8fc; }
+button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: a dash of personality</h1>
+<p>Dashes, dots and curves, drawn live by Yonder. Try zooming to 400%, scrolling and changing the page theme. Enable scripts for the button.</p>
+<div class="card"><h2>1. Move the gaps</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="5">
+<path d="M10 20H130M10 42H130M10 64H130" stroke="#c8d7e8" stroke-width="1"/>
+<g id="phase" stroke-dasharray="12 8" stroke-dashoffset="0">
+<path d="M10 20H130" stroke="#2091de"/>
+<path d="M10 42H130" stroke="#e87925" stroke-linecap="round"/>
+<path d="M10 64H130" stroke="#376d78" stroke-linecap="square"/>
+</g></svg><p>Flat, round and square ends. The button shifts all three patterns; a second click restores them.</p>
+<button id="shift">Shift the dashes</button><p id="result">Original phase.</p></div>
+<div class="card"><h2>2. A dotted recipe</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="6">
+<path d="M12 18H128" stroke="#2091de" stroke-linecap="round" stroke-dasharray="0 12"/>
+<path d="M12 42H128" stroke="#b577ad" stroke-linecap="square" stroke-dasharray="0 12"/>
+<path d="M12 66H128" stroke="#e87925" stroke-linecap="round" stroke-dasharray="0 10 16 10"/>
+</svg><p>Round dots, square dots, then dots mixed with dashes. A zero-length dash still has a cap.</p></div>
+<div class="card"><h2>3. Around the corner</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="5">
+<path d="M14 14H64V70H14Z" stroke="#2091de" stroke-dasharray="38 14" stroke-dashoffset="8"/>
+<rect x="82" y="14" width="44" height="56" rx="10" stroke="#e87925" stroke-linecap="round" stroke-dasharray="8 8"/>
+</svg><p>The blue dash turns the top-left corner as one stroke. Orange dashes follow rounded corners.</p></div>
+<div class="card"><h2>4. Curves keep their rhythm</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="4">
+<path d="M8 66C8 4 62 4 62 66" stroke="#2091de" stroke-linecap="round" stroke-dasharray="7 5"/>
+<circle cx="104" cy="42" r="26" stroke="#e87925" stroke-linecap="round" stroke-dasharray="7 5"/>
+</svg><p>Dash spacing follows distance around each curve. The open arch and closed circle keep distinct ends.</p></div>
+<div class="card"><h2>5. Stretch the whole stroke</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke="#376d78" stroke-width="5" stroke-linecap="round">
+<path d="M12 18H128" stroke-dasharray="0 10"/>
+<g transform="translate(12 46) scale(3 1)"><path d="M0 0H38" stroke-dasharray="0 10"/></g>
+</svg><p>Round dots above; horizontally stretched dots below. Their spacing stretches with their shape.</p></div>
+<div class="card"><h2>6. Overlap without dark seams</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke="#2091de" stroke-width="12" stroke-linecap="round">
+<path d="M14 22H126" stroke-dasharray="0 5" stroke-opacity=".5"/>
+<path d="M14 58H126 M70 58h0" stroke-opacity=".5"/>
+</svg><p>Overlapping dots above, a line with a dot in its middle below. Neither becomes darker where its pieces overlap.</p></div>
+<script>
+var shifted = false;
+document.getElementById('shift').addEventListener('click', function () {
+    shifted = !shifted;
+    document.getElementById('phase').setAttribute('stroke-dashoffset', shifted ? '10' : '0');
+    document.getElementById('result').textContent = shifted ?
+        'Shifted by half a pattern. Click again to restore.' : 'Original phase restored.';
+});
+</script></body></html>

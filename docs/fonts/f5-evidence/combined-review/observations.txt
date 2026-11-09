@@ -1,0 +1,8 @@
+Pre-fix title toggle falsely retained maximized flag 8.
+Post-fix both chrome directions and two-toggle sequence preserve saved content 958x696.
+True min 1200x800 refusal preserves maximized flag 8 and logs saved content/minimum.
+Lowering min to 958x696 restores frame 32,24 960x717 with flag 0.
+windowmintest: PASS (0 failures).
+Malformed fonts.conf: 12 diagnostics in logd file across startup and two palette Applies.
+Workshop, Control Center, and gterm stdout: 0 bytes each.
+QEMU 1920x1080, 8 CPUs, private root and home image copies.

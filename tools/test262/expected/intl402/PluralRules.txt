@@ -1,0 +1,8 @@
+# test262 intl402/PluralRules, held by tools/test262/run.py (its docstring says how).
+[excluded]
+intl402/PluralRules/proto-from-ctor-realm.js	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/PluralRules/proto-from-ctor-realm.js (strict)	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
+intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js (strict)	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
+intl402/PluralRules/prototype/select/notation.js	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
+intl402/PluralRules/prototype/select/notation.js (strict)	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)

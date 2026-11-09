@@ -196,6 +196,31 @@ void pipe_ref_write_end(pipe_t *p)
 		(uintptr_t)p, r, w);
 }
 
+void pipe_hold(pipe_t *p)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	p->holds++;
+	spinlock_release_irqrestore(&p->lock, flags);
+}
+
+void pipe_unhold(pipe_t *p)
+{
+	// The same fused decrement-and-decide as the two end closes below — a
+	// hold is the third kind of holder, and the last of any kind destroys.
+	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	bool didDecrement = false;
+	if (p->holds > 0)
+	{
+		p->holds--;
+		didDecrement = true;
+	}
+	bool shouldDestroy = didDecrement && p->holds == 0 && p->readers == 0 && p->writers == 0;
+	spinlock_release_irqrestore(&p->lock, flags);
+
+	if (shouldDestroy)
+		pipe_destroy(p);
+}
+
 void pipe_close_read_end(pipe_t *p)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
@@ -217,7 +242,7 @@ void pipe_close_read_end(pipe_t *p)
 	// mid-park stays registered; the sweep's readers==0 arm delivers the news.)
 	thread_t *w = (p->readers == 0) ? pipe_claim_parked_waiter(&p->writeWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
-	bool shouldDestroy = didDecrement && nr == 0 && nw == 0;
+	bool shouldDestroy = didDecrement && nr == 0 && nw == 0 && p->holds == 0;
 	spinlock_release_irqrestore(&p->lock, flags);
 
 	printd(DEBUG_PIPE, "pipe_close_read: pipe 0x%016lx readers=%u writers=%u%s\n",
@@ -246,7 +271,7 @@ void pipe_close_write_end(pipe_t *p)
 	// still mid-park stays registered; the sweep's writers==0 arm is its EOF.)
 	thread_t *r = (p->writers == 0) ? pipe_claim_parked_waiter(&p->readWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
-	bool shouldDestroy = didDecrement && nr == 0 && nw == 0;
+	bool shouldDestroy = didDecrement && nr == 0 && nw == 0 && p->holds == 0;
 	spinlock_release_irqrestore(&p->lock, flags);
 
 	printd(DEBUG_PIPE, "pipe_close_write: pipe 0x%016lx readers=%u writers=%u%s\n",
@@ -258,7 +283,7 @@ void pipe_close_write_end(pipe_t *p)
 		pipe_destroy(p);
 }
 
-long pipe_read(pipe_t *p, char *buf, size_t len)
+long pipe_read(pipe_t *p, char *buf, size_t len, uint64_t deadline)
 {
 	if (len == 0)
 		return 0;
@@ -321,6 +346,14 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 			return 0;
 		}
 
+		// Empty, a writer still exists, but the caller's patience is spent:
+		// bytes and EOF are handled above, so only pure waiting times out.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			spinlock_release_irqrestore(&p->lock, flags);
+			return PIPE_ERR_TIMEOUT;
+		}
+
 		// Empty, but a writer still exists: park until one shows up.
 		p->readWaiter = self;
 		uint32_t nw = p->writers;
@@ -333,9 +366,13 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		printd(DEBUG_PIPE, "pipe_read: pipe 0x%016lx PARKING reader (empty, writers=%u still open)\n",
 			(uintptr_t)p, nw);
 
-		signal_raise(SIGSLEEP, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
-		// Woken (by a writer, the sweep, or the backstop) — loop and RE-TEST.
-		// The wake was a hint; another reader may have taken the bytes.
+		uint64_t wake = kTicksSinceStart + PIPE_BACKSTOP_TICKS;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		signal_raise(SIGSLEEP, wake, self);
+		// Woken (by a writer, the sweep, the backstop, or the deadline) —
+		// loop and RE-TEST. The wake was a hint; another reader may have
+		// taken the bytes, and the deadline is re-checked above.
 	}
 }
 
@@ -429,6 +466,32 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 	return (long)written;
 }
 
+long pipe_write_if_room(pipe_t *p, const char *buf, size_t len)
+{
+	if (len == 0)
+		return 0;
+
+	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	if (p->readers == 0)
+	{
+		spinlock_release_irqrestore(&p->lock, flags);
+		return (long)PIPE_ERR_CLOSED;
+	}
+	size_t space = PIPE_CAPACITY - p->count;
+	size_t n = len < space ? len : space;
+	for (size_t i = 0; i < n; i++)
+	{
+		p->buffer[p->head] = (uint8_t)buf[i];
+		p->head = (p->head + 1) % PIPE_CAPACITY;
+	}
+	p->count += n;
+	thread_t *r = (n > 0) ? pipe_claim_parked_waiter(&p->readWaiter) : NULL;
+	spinlock_release_irqrestore(&p->lock, flags);
+
+	pipe_wake_thread(r);
+	return (long)n;
+}
+
 // Dump every live pipe: buffered bytes, both refcounts, and who is parked.
 //
 // Meant to be called FROM THE DEBUGGER when a pipeline is wedged:
@@ -450,11 +513,11 @@ void pipe_dump_all(void)
 	int n = 0;
 	for (pipe_t *p = kPipeList; p != NULL; p = p->next)
 	{
-		printf("  pipe 0x%016lx: %lu/%u bytes buffered, readers=%u writers=%u, "
+		printf("  pipe 0x%016lx: %lu/%u bytes buffered, readers=%u writers=%u holds=%u, "
 		       "reader %s, writer %s\n",
 			(uintptr_t)p,
 			(uint64_t)p->count, PIPE_CAPACITY,
-			p->readers, p->writers,
+			p->readers, p->writers, p->holds,
 			p->readWaiter ? "PARKED" : "-",
 			p->writeWaiter ? "PARKED" : "-");
 		n++;

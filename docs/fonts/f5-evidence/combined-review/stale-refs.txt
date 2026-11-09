@@ -1,0 +1,10 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- fit_text
+   docs/fonts/FABLE-COMBINED-REPLY.md:32: - Removed Control Center's misleading `fit_text` wrapper and unused pixel
+   docs/fonts/FABLE-REVIEW-COMBINED.md:88: - `controlcenter.c` `fit_text` is now a copy with an ignored parameter; the
+   docs/fonts/f5-evidence/combined-review/README.md:19: harness now includes it from `tools/test_font_page_host.c`. `fit_text` in the
+
+== ADDED comment lines making a claim that goes stale first — what would make each false?
+   docs/fonts/FABLE-REVIEW-COMBINED.md: from `refresh_fonts` and gterm's `refresh_font_settings` on EVERY appearance

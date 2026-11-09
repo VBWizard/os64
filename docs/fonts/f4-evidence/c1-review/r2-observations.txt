@@ -1,0 +1,37 @@
+tabs: exit 0
+deny adoption allocation 2: status=OK space=5 tab=64 expected=40
+deny adoption allocation 3: status=OK space=5 tab=64 expected=40
+deny adoption allocation 4: status=OK space=5 tab=64 expected=40
+deny adoption allocation 5: status=OK space=5 tab=64 expected=40
+deny adoption allocation 6: status=OK space=5 tab=64 expected=40
+deny adoption allocation 7: status=OK space=5 tab=64 expected=40
+deny adoption allocation 8: status=OK space=5 tab=64 expected=40
+deny adoption allocation 9: status=OK space=5 tab=64 expected=40
+deny adoption allocation 10: status=OK space=5 tab=64 expected=40
+deny adoption allocation 11: status=OK space=5 tab=64 expected=40
+deny adoption allocation 12: status=OK space=5 tab=64 expected=40
+deny adoption allocation 13: status=OK space=5 tab=64 expected=40
+successful adoptions with wrong tab interval=12; live allocator blocks=0
+
+button: exit 0
+adoption=0, first actual button paint allocations=5, denied paint allocation attempts=1
+ink left normal=52 denied=100, differing pixels=876, retained run=1
+teardown=0
+live allocator blocks=0
+
+busy-state: exit 0
+release=7 (7=BUSY), active identity preserved=0, width before=96 after=32
+live allocator blocks=0
+
+list-release: exit 0
+adoption=0, visible rows=1, retained row runs=1
+no caller-owned sets/runs: teardown=7, retry=7, list runs still retained=1, binding live bytes=810587
+after probe manually frees list internals, teardown=0
+live allocator blocks=0
+
+list-resize: exit 0
+adoption=0, visible rows=3, retained row runs=1
+first paint denied allocation attempts=2; normal paint allocations=10; differing pixels=296
+no caller-owned sets/runs: teardown=7, retry=7, list runs still retained=1, binding live bytes=809855
+after probe manually frees list internals, teardown=0
+live allocator blocks=0

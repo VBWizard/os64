@@ -2,10 +2,16 @@
 #include <stdint.h>
 #include "kernel.h"
 #include "serial_logging.h"
+#include "signals.h"
+#include "smp_core.h"
 
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 extern volatile uint64_t kTicksSinceStart;
 extern uint64_t kTicksPerSecond;
+// Is there a scheduler that can wake a parked thread? nap() asks before
+// parking, because before SMP init there is nothing to wake it back up.
+// This and NOT the per-core mp_schedulerEnabled — see nap().
+extern bool kSMPInitDone;
 
 const int _ytab[2][12] = {
   {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
@@ -110,12 +116,14 @@ time_t mktime(struct tm *tmbuf) {
   if ((TIME_MAX - seconds) / SECS_DAY < day) overflow|=8;
   seconds += day * SECS_DAY;
 
-  // Now adjust according to timezone and daylight saving time
-  if (((kTimeZone > 0) && (TIME_MAX - kTimeZone < seconds)) || 
-      ((kTimeZone < 0) && (seconds < -kTimeZone))) {
+  // mktime receives local civil time, so remove the east-positive offset to
+  // obtain UTC. The kernel owns standard time only; _dstbias is separate.
+  long zone_seconds = (long)kTimeZoneOffsetMinutes * 60;
+  if (((zone_seconds < 0) && (TIME_MAX + zone_seconds < seconds)) ||
+      ((zone_seconds > 0) && (seconds < zone_seconds))) {
           overflow|=16;
   }
-  seconds += kTimeZone;
+  seconds -= zone_seconds;
 
   if (tmbuf->tm_isdst) {
     dst = _dstbias;
@@ -164,24 +172,38 @@ time_t mktime_simple(const struct tm *time) {
 
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf) {
   time_t time = *timer;
-  unsigned long dayclock, dayno;
+  long dayclock, dayno;
   int year = EPOCH_YR;
 
-  dayclock = (unsigned long) time % SECS_DAY;
-  dayno = (unsigned long) time / SECS_DAY;
+  // C division truncates toward zero, but calendar days must floor: -1 is
+  // the final second of 1969, not a negative clock on the first day of 1970.
+  // Keeping dayno signed also prevents a west-of-UTC adjustment near epoch 0
+  // from becoming an enormous unsigned year walk.
+  dayclock = time % SECS_DAY;
+  dayno = time / SECS_DAY;
+  if (dayclock < 0) {
+    dayclock += SECS_DAY;
+    dayno--;
+  }
 
   tmbuf->tm_sec = dayclock % 60;
   tmbuf->tm_min = (dayclock % 3600) / 60;
   tmbuf->tm_hour = dayclock / 3600;
   tmbuf->tm_wday = (dayno + 4) % 7; // Day 0 was a thursday
-  while (dayno >= (unsigned long) YEARSIZE(year)) {
+  if (tmbuf->tm_wday < 0)
+    tmbuf->tm_wday += 7;
+  while (dayno < 0) {
+    year--;
+    dayno += YEARSIZE(year);
+  }
+  while (dayno >= YEARSIZE(year)) {
     dayno -= YEARSIZE(year);
     year++;
   }
   tmbuf->tm_year = year - YEAR0;
   tmbuf->tm_yday = dayno;
   tmbuf->tm_mon = 0;
-  while (dayno >= (unsigned long) _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
+  while (dayno >= _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
     dayno -= _ytab[LEAPYEAR(year)][tmbuf->tm_mon];
     tmbuf->tm_mon++;
   }
@@ -194,14 +216,14 @@ struct tm *localtime(const time_t *timer) {
   time_t t;
   struct tm tmbuf;
   
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, &tmbuf);
 }
 
 struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
   time_t t;
 
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, tmbuf);
 }
 
@@ -243,9 +265,131 @@ void __attribute__((noinline))waitTicks(int TicksToWait)
 void wait(uint64_t msToWait)
 {
 	__asm__("sti\n");
-	uint64_t ticksToWait = msToWait/MS_PER_TICK; 
+	uint64_t ticksToWait = msToWait/MS_PER_TICK;
 	//CLR 12/03/2024: Added in case request is to wait less than MS_PER_TICK
 	if (ticksToWait==0)
 		ticksToWait=1;
     waitTicks(ticksToWait);
+}
+
+// SLEEP for a while — as opposed to wait(), which SPINS for a while.
+//
+// waitTicks() burns a core on `pause` until the global tick counter arrives.
+// That is the only thing possible before there is a scheduler (early driver
+// init has no thread to park), and it cost nothing for years because
+// everything using it ran when nothing else wanted the core. It stopped
+// costing nothing the moment a caller ran beside userland: the LATE test
+// phase held a core at 100% for half a minute while a person was using the
+// machine, which is how this came to be written (Chris spotted it on the
+// first boot: "latetests spins @ 100% usage for the entire 32 seconds").
+//
+// nap() parks instead, the way kworker and the pipe backstop already do: the
+// thread leaves the run queue and the scheduler wakes it at the tick asked
+// for. The polling CADENCE is identical — a caller looping on nap(10) rechecks
+// every tick exactly as it did — so this is the same logic without the burn.
+//
+// IT FALLS BACK TO THE SPIN when this core has no scheduler yet, so it is
+// safe anywhere wait() was. It is NOT safe in two places wait() tolerates:
+// holding a spinlock, or in interrupt context. Parking there is a deadlock,
+// not a delay.
+void nap(uint64_t msToSleep)
+{
+	// WHO AM I? — asked with interrupts OFF, and that is not caution, it is
+	// correctness. get_core_local_storage() reads GS:0, so `cls` names THIS
+	// CORE; a preemption between that read and the `cls->currentThread`
+	// dereference can resume this thread on a DIFFERENT core, after which the
+	// stale CLS names whoever is running on the old one. We would then put an
+	// unrelated thread to sleep and return without sleeping ourselves —
+	// silently, since both halves look like success. Capturing the thread
+	// pointer atomically is enough: SIGSLEEP targets a specific thread and is
+	// correct wherever that thread later runs. (Codex, PR #42.)
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = (cls != NULL) ? cls->currentThread : NULL;
+	if (flags & 0x200)
+		__asm__ volatile("sti" ::: "memory");
+
+	// INTERRUPTS ALREADY OFF ON THE WAY IN IS A CONTRACT VIOLATION, and this
+	// is where it gets said out loud rather than left in a comment nobody
+	// reads at 2am. IF=0 on entry means an interrupt handler or a held
+	// spinlock — the two places the header warns about — and parking there
+	// deadlocks rather than delays. Fall back to the spin (which is what the
+	// caller would have got from wait(), and which re-enables interrupts on
+	// its way in) and name the caller's mistake. No current caller does this;
+	// the point is that the next one finds out immediately.
+	if (!(flags & 0x200))
+	{
+		printd(DEBUG_SYSTEM, "nap: called with interrupts DISABLED — spinning instead of "
+		                     "parking. A nap under a spinlock or in interrupt context is a "
+		                     "deadlock, not a delay; the caller wants wait().\n");
+		wait(msToSleep);
+		return;
+	}
+
+	// CAN ANYTHING WAKE ME? kSMPInitDone, and NOT mp_schedulerEnabled — which
+	// looks like the readiness flag and is not one. scheduler.c says so where
+	// it recruits parked APs: "under tickless the enable ISR leaves AP timers
+	// masked and never sets that flag... kSMPInitDone (checked above) is the
+	// real readiness gate." So an unpinned thread dispatched onto a recruited
+	// tickless AP would have found this false and taken the spin — on exactly
+	// the cores that do not preempt a compute-bound tenant, which is the
+	// worst possible place to spin and the behaviour this function exists to
+	// remove. (Codex, PR #42.)
+	if (self == NULL || self == NO_THREAD || !kSMPInitDone)
+	{
+		wait(msToSleep);
+		return;
+	}
+
+	uint64_t ticks = msToSleep / MS_PER_TICK;
+	if (ticks == 0)
+		ticks = 1;
+	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
+}
+
+// TZ counts offsets WEST of UTC (V7's little prank: Eastern is 5, India is
+// -5:30), so the east-positive minute result negates what the string says.
+// The zone NAME is skipped, not checked — the offset is the only thing the
+// kernel needs from it; the name and the DST rule after the offset are
+// libos64's business.
+void time_set_zone(const char *tz)
+{
+	kTimeZoneOffsetMinutes = 0;
+	if (tz == NULL || tz[0] == '\0')
+		return;
+
+	const char *p = tz;
+	while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))
+		p++;
+	int sign = 1;
+	if (*p == '+')
+		p++;
+	else if (*p == '-') {
+		sign = -1;
+		p++;
+	}
+	if (*p >= '0' && *p <= '9') {
+		int hours = 0;
+		while (*p >= '0' && *p <= '9') {
+			hours = hours * 10 + (*p++ - '0');
+			if (hours > 24)
+				return;
+		}
+
+		int minutes = 0;
+		if (*p == ':') {
+			p++;
+			if (*p < '0' || *p > '9')
+				return;
+			while (*p >= '0' && *p <= '9') {
+				minutes = minutes * 10 + (*p++ - '0');
+				if (minutes > 59)
+					return;
+			}
+		}
+
+		kTimeZoneOffsetMinutes = -sign * (hours * 60 + minutes);
+	}
 }

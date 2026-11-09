@@ -1,0 +1,32 @@
+# WPT's page-visibility in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh page-visibility --update
+# rewrites [passing].
+[required]
+# P1-Da: visibilityState and hidden. Each fails with the switch off.
+test_attributes_exist.html	document.hidden is defined and not null.
+test_attributes_exist.html	document.visibilityState is defined and not null.
+test_attributes_exist.html	document.hidden is defined.
+test_attributes_exist.html	document.visibilityState is defined.
+test_read_only.html	document.hidden is defined and not null.
+test_read_only.html	document.visibilityState is defined and not null.
+test_read_only.html	document.hidden is read only.
+test_read_only.html	document.visibilityState is read only.
+[excluded]
+iframe-session-history.html	needs a frame (IFRAME.md, Tier 1)
+iframe-unload.html	needs a frame (IFRAME.md, Tier 1)
+minimize.html	needs test_driver input, which the runner does not have
+onvisibilitychange.html	needs a frame (IFRAME.md, Tier 1)
+test_child_document.html	needs a frame (IFRAME.md, Tier 1)
+unload-bubbles.html	opens a second window (P3a)
+unload.html	opens a second window (P3a)
+visibility-state-entry.tentative.html	needs test_driver input, which the runner does not have
+[passing]
+test_attributes_exist.html	document.hidden is defined and not null.
+test_attributes_exist.html	document.hidden is defined.
+test_attributes_exist.html	document.visibilityState is defined and not null.
+test_attributes_exist.html	document.visibilityState is defined.
+test_read_only.html	document.hidden is defined and not null.
+test_read_only.html	document.hidden is read only.
+test_read_only.html	document.visibilityState is defined and not null.
+test_read_only.html	document.visibilityState is read only.

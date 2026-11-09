@@ -1,0 +1,26 @@
+From 968af86becaae66f571feec0c8ad11c1bc39ddd9 Mon Sep 17 00:00:00 2001
+From: Mateusz Jurczyk <mjurczyk@google.com>
+Date: Thu, 7 May 2026 13:16:55 +0000
+Subject: [PATCH] * src/psaux/psintrp.c (cf2_interpT2CharString): Fix
+ off-by-one in the subroutine nesting depth check.
+
+Fixes #1432.
+---
+ src/psaux/psintrp.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/psaux/psintrp.c b/src/psaux/psintrp.c
+index 1803f0068..4db0a544a 100644
+--- a/src/psaux/psintrp.c
++++ b/src/psaux/psintrp.c
+@@ -988,8 +988,8 @@
+           FT_TRACE4(( "%s", op1 == cf2_cmdCALLGSUBR ? " callgsubr"
+                                                     : " callsubr" ));
+ 
+-          if ( ( !font->isT1 && charstringIndex > CF2_MAX_SUBR )       ||
+-               (  font->isT1 && charstringIndex > T1_MAX_SUBRS_CALLS ) )
++          if ( ( !font->isT1 && charstringIndex >= CF2_MAX_SUBR )       ||
++               (  font->isT1 && charstringIndex >= T1_MAX_SUBRS_CALLS ) )
+           {
+             /* max subr plus one for charstring */
+             lastError = FT_THROW( Invalid_Glyph_Format );

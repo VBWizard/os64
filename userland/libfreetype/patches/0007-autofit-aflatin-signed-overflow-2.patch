@@ -1,0 +1,29 @@
+From ef54557bda3b17da1b7e42e8e207efd1842bcc05 Mon Sep 17 00:00:00 2001
+From: Werner Lemberg <wl@gnu.org>
+Date: Fri, 3 Apr 2026 06:27:32 +0200
+Subject: [PATCH] [autofit] Prevent signed integer overflow.
+
+Reported as
+
+    https://issues.oss-fuzz.com/issues/499135336
+
+* src/autofit/aflatin.c (af_move_contour_vertically): Use `ADD_LONG`.
+---
+ src/autofit/aflatin.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/autofit/aflatin.c b/src/autofit/aflatin.c
+index cf3f657d7..3c97f91dd 100644
+--- a/src/autofit/aflatin.c
++++ b/src/autofit/aflatin.c
+@@ -2783,8 +2783,8 @@
+     {
+       do
+       {
+-        point->y += movement;
+-        point     = point->next;
++        point->y = ADD_LONG( point->y, movement );
++        point    = point->next;
+ 
+       } while ( point != first_point );
+     }

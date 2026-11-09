@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "os64/file.h"
+
 // handle.h — the per-task handle table.
 //
 // THE CONTRACT (and why it never has to change again):
@@ -19,7 +21,11 @@
 // ONE handle type for everything (files, pipes, later windows) — a handle is a
 // tagged reference to a kernel object, and read/write dispatch on the tag.
 
-#define TASK_MAX_HANDLES 16
+// Room for a program that works in parallel: a work pool's pipes and
+// threads, and then a socket per fetch in flight, is well past sixteen
+// before much has been fetched. A slot costs 16 bytes of task_t. The size
+// is the ABI's, because userland derives limits from it.
+#define TASK_MAX_HANDLES OS64_TASK_HANDLES
 
 typedef enum handle_type
 {
@@ -40,9 +46,23 @@ typedef enum handle_type
 	HANDLE_NET_ICMP,       // object = icmp_conn_t*, a dialed echo conversation
 	                       // (net_dial; write asks, read hears the answer)
 	HANDLE_PTY_MASTER,     // object = tty_t*, the SLAVE this master fronts
-	                       // (PTY.md: write = keystrokes in, pty_snapshot =
-	                       // the interpreted screen out; read is reserved
-	                       // for the STREAM flavor)
+	                       // (PTY.md: write = keystrokes in; the way out is
+	                       // the slave's mode — GRID: pty_snapshot, STREAM:
+	                       // read yields the child's bytes)
+	HANDLE_NET_LISTENER,   // object = tcp_listener_t*, an announced port
+	                       // (net_announce; read = ACCEPT, one
+	                       // os64_netconn_t per completed handshake; write
+	                       // is refused — a door is not a stream)
+	HANDLE_GLASS,          // object = glass_view_t*, one viewer of the screen
+	                       // (/dev/glass; read = one changed rectangle and
+	                       // its pixels, os64/glass.h)
+
+	// A slot reserved before an operation that may publish external state.
+	// Exclusive file creation uses it so a full handle table is discovered
+	// BEFORE the filesystem creates the name. It is not operable; commit turns
+	// it into a live type, while close/task teardown cancels it like any other
+	// handle claim.
+	HANDLE_RESERVED,
 
 	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
 	// only ever reclaims a NONE slot — cannot reuse a slot whose object the
@@ -66,19 +86,67 @@ void handle_table_init(struct task *t);
 // Claim the lowest free slot. Returns the handle, or -1 if the table is full.
 int handle_alloc(struct task *t, handle_type_t type, void *object);
 
+// Two-phase allocation for operations that must know a return slot exists
+// before they mutate external state. reserve returns a slot or -1; commit
+// publishes its object, and cancel gives an unused reservation back. A task
+// teardown may cancel the reservation first, in which case commit is false
+// and the caller still owns `object`.
+int  handle_reserve(struct task *t);
+bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object);
+bool handle_cancel_reserved(struct task *t, int slot);
+
 // Force an object into a SPECIFIC slot, closing whatever was there. This is
 // how spawn redirects a child's stdin/stdout: the child is simply born with a
 // pipe end sitting in slot 0 or 1, and it never knows the difference.
 bool handle_install(struct task *t, int slot, handle_type_t type, void *object);
 
-// Resolve a handle. Returns NULL for out-of-range or free slots — every
-// syscall that takes a handle must treat NULL as "invalid handle", which is
-// also the range check (ring 3 hands us whatever integer it likes).
-handle_t *handle_get(struct task *t, int h);
+// Resolve a handle AND take a reference on the object behind it, as ONE
+// operation against a concurrent close (handle.c § The pin). On success *out
+// is a private copy of the slot — type and object — and the object cannot be
+// freed until handle_unpin(out): a sibling thread closing the same handle
+// meanwhile only drops the TABLE's reference, and whichever reference goes
+// last does the real release. Returns false for out-of-range, free, reserved
+// or mid-close slots — every syscall that takes a handle treats false as
+// "invalid handle", which is also the range check (ring 3 hands us whatever
+// integer it likes).
+//
+// The caller MUST unpin on EVERY path out, including the ones that end in
+// raise_terminating_signal_and_die: that call never returns, and a pin it
+// carries into the grave keeps the object alive forever.
+bool handle_pin(struct task *t, int h, handle_t *out);
+void handle_unpin(const handle_t *pinned);
+
+// SHARE a handle with a child being born — spawn's redirections. Under the
+// same lock and liveness check as a pin, but the reference taken is in the
+// handle's OWN currency, the child's: from this instant the object has one
+// more table holder, exactly as if the child's slot already existed, so
+// nothing a sibling closes between the resolve and the child's first
+// instruction can hang the object up or free it (a pin only keeps a net
+// conn's row, never its line — tcp.h pins). Only what a child's 0/1/2 can
+// be is shareable: the console tags (nothing to take), pipe ends, open
+// files, TCP conns; anything else answers false and touches nothing.
+// handle_share_install puts the share in the child's slot as its handle;
+// handle_unshare gives the reference back when no child comes to own it —
+// the same release handle_close would run. A FILE's share is held as an
+// OPERATION until one or the other happens: a sibling's close that finds
+// it must answer "deferred" (os64/file.h), because an unshare's close has
+// nowhere to answer to — while a child's handle answers for itself.
+bool handle_share(struct task *t, int h, handle_t *out);
+void handle_share_install(struct task *child, int slot, const handle_t *shared);
+void handle_unshare(const handle_t *shared);
 
 // Close one handle: drops the task's reference on the underlying object (for a
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
 bool handle_close(struct task *t, int h);
+// The same close, with the verdict kept apart from the bookkeeping: returns
+// whether there was a handle to close (false: an empty slot, or one another
+// closer owns), and *rc receives the filesystem's own answer for the last
+// close of a file — 0, or its nonzero code when what was written could not
+// be committed. Two facts in two places, because a filesystem's -1 and "no
+// such handle" must never be one number (os64/file.h). *deferred: the
+// verdict belongs to an operation still in flight on another thread, and
+// this close does not have it.
+bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on
@@ -101,11 +169,19 @@ void handle_close_all(struct task *t);
 // (rd14), because most callers have nowhere to report to and silence there was
 // the original defect: on FAT the commit happens inside close.
 int handle_file_object_close(void *vfs_file);
+// The same, for a handle's hold (as_pin false) or a pin's (true, which drops
+// the pin with it in one step), and whether the verdict went elsewhere:
+// *deferred is set when this was not the last holder and what remains is an
+// operation in flight, whose unpin will do the real close with nowhere to
+// answer to.
+int handle_file_object_close_verdict(void *vfs_file, bool as_pin, bool *deferred);
 
-// The directory sibling: closes a HANDLE_DIR's vfs_directory_t from any
-// context (same CR3-check discipline as files) and frees its f_path copy.
-// No refcount — directories can't be passed through spawn redirection (the
-// spawn boundary rejects them), so exactly one handle ever references one.
+// The directory sibling: drops one reference on a HANDLE_DIR's
+// vfs_directory_t (handleRefCount, vfs.h — the table's one, or a pin's), and
+// on the last closes it from any context (same CR3-check discipline as files)
+// and frees its f_path copy. Spawn redirection still rejects directories, so
+// the only references a directory ever has are its one handle and the pins
+// of operations in flight on it.
 void handle_dir_object_close(void *vfs_dir);
 
 #endif // HANDLE_H

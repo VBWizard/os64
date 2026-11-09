@@ -1,0 +1,1 @@
+primary row=[20,30), painted y=[20,29], pixels outside row=0

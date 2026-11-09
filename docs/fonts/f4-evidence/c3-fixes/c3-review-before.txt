@@ -1,0 +1,8 @@
+help round trip: caret 12100 -> 12100, kept origin 7904 -> 0, left 66547 -> 66547, caret pixels 38 -> 0
+prepared caret run bytes=24576, prepared row run bytes=6144
+LIMIT-window font adoption (deny commit=0): status=0, post-barrier allocations=10, extent=18874426, total=18874426, caret run bytes=786432, row run bytes=786432
+caret pixels after adoption: 0
+prepared caret run bytes=24576, prepared row run bytes=6144
+LIMIT-window font adoption (deny commit=1): status=0, post-barrier allocations=2, extent=0, total=0, caret run bytes=24576, row run bytes=6144
+caret pixels after adoption: 0
+Harness checks: 14; failures: 0

@@ -1,12 +1,10 @@
 #include "os64/os64.h"
+#include "os64/walk.h"
 
 #define RM_PATH_MAX 256
-// A task has 16 handle slots, with 0/1/2 occupied by its console handles.
-// Recursive removal holds one parent directory handle open per level. Stop
-// with our honest depth error while 12 are open, leaving the thirteenth free
-// slot as breathing room instead of failing later with a misleading opendir
-// error from an exhausted handle table.
-#define RM_MAX_DEPTH 12
+// Recursive removal holds one parent directory handle open per level: the
+// walk's depth (os64/walk.h), which leaves room in the handle table.
+#define RM_MAX_DEPTH OS64_WALK_MAX_DEPTH
 
 static bool unsafe_recursive_operand(const char *path)
 {
@@ -59,6 +57,18 @@ static int32_t remove_path(const char *path, bool recursive, uint32_t depth)
         return 1;
     }
 
+    // AFTER the operand check, never before it. "/" is itself a mount point
+    // — the root mount — so this test matches it too, and "refusing to cross
+    // a filesystem boundary at '/'" names the wrong reason for the one
+    // refusal rm most needs to get right. The specific complaint wins; this
+    // one is for a mount named as an operand or met during the walk.
+    if (entry.flags & OS64_DE_MOUNT)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "rm: refusing to cross filesystem boundary at '%s'\n", path);
+        return 1;
+    }
+
     if (depth >= RM_MAX_DEPTH)
     {
         os64_hprintf(OS64_STDERR, "rm: maximum directory depth reached at '%s'\n", path);
@@ -90,6 +100,19 @@ static int32_t remove_path(const char *path, bool recursive, uint32_t depth)
         if (wanted < 0 || (size_t)wanted >= sizeof(childPath))
         {
             os64_hprintf(OS64_STDERR, "rm: path too long beneath '%s'\n", path);
+            returnCode = 1;
+            continue;
+        }
+
+        // Use the mount attribute returned with this directory entry so the
+        // recursive walk cannot cross the boundary between reading the name
+        // and descending into it. The stat check above also protects a mount
+        // point supplied directly as an operand.
+        if (child.flags & OS64_DE_MOUNT)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "rm: refusing to cross filesystem boundary at '%s'\n",
+                         childPath);
             returnCode = 1;
             continue;
         }

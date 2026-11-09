@@ -1,0 +1,175 @@
+{
+  "name": "QuickJS",
+  "version": "2026-06-04",
+  "source_url": "https://bellard.org/quickjs/quickjs-2026-06-04.tar.xz",
+  "archive_sha256": "b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a",
+  "configuration": {
+    "atomics": false,
+    "stack_check": true,
+    "jit": false,
+    "host_modules": false
+  },
+  "retained_files": [
+    {
+      "path": "upstream/quickjs.c",
+      "sha256": "a00762d2eee42316cecbc9c15efc4549b715ec500461845cd91b2a6c38190d08"
+    },
+    {
+      "path": "upstream/quickjs.h",
+      "sha256": "2165f47772af9faee1798999a599fa9de850d1bf0259502dade1c25d4a588316"
+    },
+    {
+      "path": "upstream/quickjs-atom.h",
+      "sha256": "342194359417664e652f54e7d682ee2ef91dd982e91f74decbde992a2c848236"
+    },
+    {
+      "path": "upstream/quickjs-opcode.h",
+      "sha256": "a9c60a8c9366820733d9d2acbb805f48b2e9e2778df526e6bcb845fdb6b47834"
+    },
+    {
+      "path": "upstream/dtoa.c",
+      "sha256": "af5abd68fa9806d1a19bdd5f2daef00d5fd0990ae56311382dfed4700343f074"
+    },
+    {
+      "path": "upstream/dtoa.h",
+      "sha256": "462070f7678a894b9f3612422f280f4dce412eb360a5cc585a513f407fc23114"
+    },
+    {
+      "path": "upstream/libregexp.c",
+      "sha256": "fdfcf86167029ab2c39c35730d4ae6875b7bbeb9406a0fcc886de4e9b1f5e2ac"
+    },
+    {
+      "path": "upstream/libregexp.h",
+      "sha256": "f5c5ef1899f224dcc718422a22c789ef9d8b5b837b622818fcfaf681ae793446"
+    },
+    {
+      "path": "upstream/libregexp-opcode.h",
+      "sha256": "2a98d646089f3a72f25480116297c5fdb5b28fd9f815447273951f4ade4a115e"
+    },
+    {
+      "path": "upstream/libunicode.c",
+      "sha256": "26203ae888c0582e7d0e2113f13db0c9b39dc7b0b3836d68fa308c54f7a0898c"
+    },
+    {
+      "path": "upstream/libunicode.h",
+      "sha256": "ce310152bc80d7415dcb657e23abd9a40bf83e393c0d05d325dae384bb01d259"
+    },
+    {
+      "path": "upstream/libunicode-table.h",
+      "sha256": "cf782bc7a07549e976f606bd3cb8555858482b279574554dcb8d46412986006c"
+    },
+    {
+      "path": "upstream/cutils.c",
+      "sha256": "b73a403a59da30726257ddbdf5e399298941c1def997782ee0d4d33f796a80a2"
+    },
+    {
+      "path": "upstream/cutils.h",
+      "sha256": "d2da6d06a75b9e6c116c82b7a41df6bcc170c8b1779f374fa953ecf688eda647"
+    },
+    {
+      "path": "upstream/list.h",
+      "sha256": "181c6b25d9d0e4853315d36a6e6fab3b2c3554271693d898a439384ba0f67c2b"
+    },
+    {
+      "path": "upstream/LICENSE",
+      "sha256": "598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d"
+    },
+    {
+      "path": "upstream/VERSION",
+      "sha256": "234057c4079458cba9862d4bbb6f8a059ac2e4a194947673da0ad38ca16a37fd"
+    }
+  ],
+  "patches": [
+    {
+      "path": "patches/0001-disable-atomics-preserve-stack-check.patch",
+      "sha256": "0f949980fa428a75242d2653a205569607fb2bba21a10b284d64d9f1b50c6bbc",
+      "reason": "Disable Atomics without spoofing Emscripten and losing stack checks."
+    },
+    {
+      "path": "patches/0002-os64-platform-hooks.patch",
+      "sha256": "1f8f1c6d5cef7f339b8d4399bc31cb253dd7c2c6c7f3e107b550168917615149",
+      "reason": "Select os64 allocation/date hooks and publish engine API visibility in target builds."
+    },
+    {
+      "path": "patches/0003-diagnostic-decimal-rounding.patch",
+      "sha256": "c9b81c0e51fdfcd0cb3ab0f9a16e6af2557f52c4a95d44bb404273474e959753",
+      "reason": "Add a target-private ties-even request for diagnostic %f; preserve JavaScript conversion rounding."
+    },
+    {
+      "path": "patches/0004-construction-allocation-cleanup.patch",
+      "sha256": "f0c73acff8fff6324ce6ee1240d1ba768f28012af084a510847a69d75e755ac0",
+      "reason": "Fix context GC unlinking, global construction failure, lazy-global cleanup and consuming Proxy installation failure."
+    },
+    {
+      "path": "patches/0005-backtrace-error-lifetime.patch",
+      "sha256": "bfccbb28a13d46352407921cc8d0e046c275fc4cc003b5f67fc24a3b4c4d1083",
+      "reason": "Retain the borrowed error during backtrace assembly when diagnostic allocation failures replace current_exception; release temporary buffer on early failure."
+    },
+    {
+      "path": "patches/0006-reporting-runtime-teardown.patch",
+      "sha256": "a0196e8b73ae1be1c6c50c8cd944c59ae8621a699ca664e09d6e168df0b9ae5a",
+      "reason": "Return at the object/weakref teardown leak gate for an audited allocator-ledger host; raw and default destruction retain the assertions."
+    },
+    {
+      "path": "patches/0007-browser-legacy-function-arguments.patch",
+      "sha256": "8a5b21235110dc092c7ce18288a08607816022f18444cee6e0fc9c6c8a5feecc",
+      "reason": "Add an explicitly installed browser helper for snapshots of active ordinary non-strict function arguments; needed by Dreamweaver rollovers."
+    },
+    {
+      "path": "patches/0008-browser-global-miss-handler.patch",
+      "sha256": "6fef8805f57f983edea79e958b20d1845cd336b2d2faea15285d91154e81eaa9",
+      "reason": "Let a browser host hear each string name a global-object lookup misses, before the lookup answers as it always does; yonder's diagnostics census."
+    },
+    {
+      "path": "patches/0009-browser-name-not-a-function.patch",
+      "sha256": "0c9eafda826788c605b389c4ae2f6ae6c1cea3c6df4ec7a2d088f1206db1fd9e",
+      "reason": "Name the method in \"not a function\" only for a call proved to be its fetch's: same frame, slot and value, straight-line bytecode between, and the fetched value never popped on the way, sitting under exactly the call's arguments; every other call keeps the plain message."
+    },
+    {
+      "path": "patches/0010-compile-refuses-failed-emit.patch",
+      "sha256": "7ccfb396787e504edf8c2f5a657b9e528cc84adb82feb54eea2cec5559534e3b",
+      "reason": "Refuse, with an out-of-memory exception, to make a function from a def whose bytecode emit failed: the parser never reads the buffer's sticky error, and transforming cut-short bytecode reads one instruction as another."
+    },
+    {
+      "path": "patches/0011a-parser-ignored-failures-throw.patch",
+      "sha256": "ef018afc2aa8b8dfbbe33757d87ac066a21e96ff0fb14c8c32db8c530857efa3",
+      "reason": "Throw out of memory where the parser ignored a failed allocation: a child definition with no constant-pool slot (upstream asserted), a failed closure-variable add in resolve_scope_var (used as an index, emitted as nothing, or read as a position), a failed arguments or function-name add there (captured as a wild argument slot, or looked up as a global), and a failed bytecode buffer read by get_lvalue as a SyntaxError."
+    },
+    {
+      "path": "patches/0012-module-compile-unresolved.patch",
+      "sha256": "7e34763fd1e8455a55efe791f40819b9b6396d94700a0e9a1acceb5b522527a8",
+      "reason": "Compile a module without resolving its imports (JS_EVAL_FLAG_NO_RESOLVE) and name what it imports (JS_GetModuleRequestCount/JS_GetModuleRequest), so a browser host can fetch a module graph before linking it; the pinned engine otherwise resolves through a synchronous loader at compile time. And make handled, telling the tracker, the rejected promise of a module body the engine takes as the module's error, which a host otherwise hears a second time as an unhandled rejection. And leave no module a failed resolve marked resolved, a cycle's members included, which a host whose modules outlive the failure (a page's module map) otherwise links through the NULL of the import never found or through the module the failure freed."
+    },
+    {
+      "path": "patches/0013-set-prototype-refused-shape.patch",
+      "sha256": "7a92f028e9e4c43e0ab3c39e49c6f681fe608b8da0c3ec600aa58ddc98768727",
+      "reason": "Give back the reference JS_SetPrototypeInternal takes on the new prototype when the object's shape copy is refused for memory; upstream returned -1 holding it, so the prototype was never freed and the runtime's teardown found it on its object list."
+    },
+    {
+      "path": "patches/0014-regexp-unicode-sets-outside-class.patch",
+      "sha256": "6562e5f7e2b97d31e6c0b1fa250e3d26f18d550e3e51b70b4e982304e30d4b8b",
+      "reason": "Apply the v flag's ClassSetCharacter rules (no unescaped ( ) [ ] { } / - |, no doubled punctuator) only to a class's atoms and a class string's; upstream applied them to every atom outside a class too, so a v-flag RegExp of `a/b` or `a-b` threw, and with it every HTML pattern holding a slash or a hyphen."
+    },
+    {
+      "path": "patches/0015-read-object-named.patch",
+      "sha256": "a1f042d516d54ad1e9947f2dbfd1f7d3ad44402144f4581c88592311332d7239",
+      "reason": "Read bytecode under a name the reader gives (JS_ReadObjectNamed): every function read takes it in place of the name written, because a browser runs one cached script under a different per-page name, which it reads back off a thrown error to know whose the error is and whether it is muted."
+    },
+    {
+      "path": "patches/0016-read-module-failure-unlisted.patch",
+      "sha256": "e8b16adb9e4eb886850ad5c8c9d2be8294e7f75e60ade69913ac3b6f6591262d",
+      "reason": "A module read that fails part way (an allocation refused) is unlisted and freed: upstream dropped one of its two references, leaving a half-read module on the context's list under its name, which the GC then walked through entry counts whose arrays were never allocated."
+    },
+    {
+      "path": "patches/0017-cstring-failure-reference.patch",
+      "sha256": "55f52a5d578edab1acc68294986a1e6f2ef5ad2d35f1889c4ffc0beddf3e1f87",
+      "reason": "Release the source reference held by JS_ToCStringLen2 when allocating its UTF-8 export fails; upstream returned NULL holding the string, including a newly linearized rope."
+    },
+    {
+      "path": "patches/0017-dynbuf-refusal-sticky.patch",
+      "sha256": "7f2401e82b0f3def6b25c2253e4d1be38ecbdc03091d7b06dbdbc4c458f23bb0",
+      "reason": "A compile whose bytecode buffer is refused memory is freed safely: an errored DynBuf has no room (dbuf_set_error, which a refused growth calls too), so every later put is refused and no hole is left; resolve_labels patches nothing once its output has errored (a relocation recorded after the error pointed inside the last instruction written, and its patch wrote over that instruction's atom); a refused relocation marks the output errored in place of upstream's unsafe fail path, which is gone; and the refused output is what the definition's free walks."
+    }
+  ],
+  "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
+}

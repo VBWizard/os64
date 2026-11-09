@@ -1,0 +1,80 @@
+{
+  "viewport": [
+    192,
+    128
+  ],
+  "cases": [
+    {
+      "url": "/cap-light.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/non-scaling-light.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/group-light.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/evenodd-light.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/wrong-transform-light.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/missing-stroke-light.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/wrong-opacity-light.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/wrong-winding-light.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/cap-dark.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/non-scaling-dark.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/group-dark.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/evenodd-dark.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/wrong-transform-dark.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/missing-stroke-dark.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/wrong-opacity-dark.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/wrong-winding-dark.html",
+      "kind": "negative-control"
+    },
+    {
+      "url": "/mismatch.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/wait.html",
+      "kind": "fixture"
+    }
+  ]
+}

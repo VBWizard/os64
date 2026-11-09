@@ -1,0 +1,15 @@
+shot gallery-final
+shot hid-actions-final
+shot checked-icon-final
+shot hidden-final
+shot f10-reveal-final
+shot alt-reveal-final
+shot context-edge-final
+shot restored-final
+blue runs [(11, 30), (117, 147), (157, 187), (237, 267), (277, 307), (317, 347), (357, 387), (397, 427)]
+shot dismiss-click-final
+shot later-click-final
+shot tall-end-final
+shot tall-page-final
+shot after-cycles-final
+shot vt-preserved-final

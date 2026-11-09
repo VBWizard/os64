@@ -21,6 +21,97 @@
 #include "os64/proc.h"  // os64_taskid — half of what makes that temp name unique
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"   // SYSCALL_CONF_RESOLVE — the kernel walks the ladder
+#include "os64/slurp.h"
+
+int64_t os64_conf_find_bytes(const char *name, char **out, size_t *length)
+{
+	if (!out || !length) return OS64_CONF_BAD_SETTING;
+	*out = NULL; *length = 0;
+	char path[OS64_CONF_PATH_MAX];
+	if (os64_conf_find(name, path, sizeof(path)) < 0) return OS64_CONF_NO_FILE;
+	uint8_t *bytes = NULL;
+	os64_slurp_status_t status = os64_slurp(path, OS64_CONF_MAX - 1, &bytes, length);
+	if (status == OS64_SLURP_TOO_BIG) return OS64_CONF_TRUNCATED;
+	if (status == OS64_SLURP_NO_MEMORY) return OS64_CONF_NO_MEMORY;
+	if (status) return OS64_CONF_IO_ERROR;
+	*out = (char *)bytes;
+	return 0;
+}
+
+static int64_t conf_parse_buffer(char *buf, os64_conf_fn fn, void *user, bool *stopped)
+{
+	if (stopped) *stopped = false;
+	int64_t delivered = 0;
+	size_t i = 0;
+	while (buf[i] != '\0') {
+		// One line: find its bounds, then chop the comment off.
+		size_t start = i;
+		while (buf[i] != '\0' && buf[i] != '\n')
+			i++;
+		size_t end = i;
+		if (buf[i] == '\n')
+			i++;
+		for (size_t c = start; c < end; c++)
+			if (buf[c] == '#') { end = c; break; }
+
+		// key: the first token
+		size_t k = start;
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		size_t ks = k;
+		while (k < end && buf[k] != ' ' && buf[k] != '\t' && buf[k] != '=')
+			k++;
+		size_t ke = k;
+		if (ks == ke)
+			continue;   // blank, or comment-only
+
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		if (k >= end || buf[k] != '=') {
+			// Not `key = value`. Hand the caller the line as written (less
+			// its comment and trailing whitespace) and let it complain in
+			// its own voice.
+			size_t le = end;
+			while (le > ks && (buf[le - 1] == ' ' || buf[le - 1] == '\t' || buf[le - 1] == '\r'))
+				le--;
+			char saved = buf[le];
+			buf[le] = '\0';
+			bool go = fn(NULL, &buf[ks], user);
+			buf[le] = saved;
+			if (!go) {
+				if (stopped) *stopped = true;
+				return delivered;
+			}
+			continue;
+		}
+		k++;   // past '='
+
+		// value: to end of line, trimmed both sides, never split on spaces.
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		size_t vs = k, ve = end;
+		while (ve > vs && (buf[ve - 1] == ' ' || buf[ve - 1] == '\t' || buf[ve - 1] == '\r'))
+			ve--;
+
+		// Terminate both in place for the call, then put the bytes back:
+		// the walk above still needs the line intact (ke may equal vs's
+		// preceding '=', never the same byte as ve, so the two NULs are
+		// independent).
+		char savedK = buf[ke], savedV = buf[ve];
+		buf[ke] = '\0';
+		buf[ve] = '\0';
+		bool go = fn(&buf[ks], &buf[vs], user);
+		buf[ke] = savedK;
+		buf[ve] = savedV;
+		delivered++;
+		if (!go) {
+			if (stopped) *stopped = true;
+			return delivered;
+		}
+	}
+
+	return delivered;
+}
 
 int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 {
@@ -84,77 +175,25 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 	}
 	buf[got] = '\0';
 
-	int64_t delivered = 0;
-	size_t i = 0;
-	while (buf[i] != '\0') {
-		// One line: find its bounds, then chop the comment off.
-		size_t start = i;
-		while (buf[i] != '\0' && buf[i] != '\n')
-			i++;
-		size_t end = i;
-		if (buf[i] == '\n')
-			i++;
-		for (size_t c = start; c < end; c++)
-			if (buf[c] == '#') { end = c; break; }
-
-		// key: the first token
-		size_t k = start;
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t ks = k;
-		while (k < end && buf[k] != ' ' && buf[k] != '\t' && buf[k] != '=')
-			k++;
-		size_t ke = k;
-		if (ks == ke)
-			continue;   // blank, or comment-only
-
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		if (k >= end || buf[k] != '=') {
-			// Not `key = value`. Hand the caller the line as written (less
-			// its comment and trailing whitespace) and let it complain in
-			// its own voice.
-			size_t le = end;
-			while (le > ks && (buf[le - 1] == ' ' || buf[le - 1] == '\t' || buf[le - 1] == '\r'))
-				le--;
-			char saved = buf[le];
-			buf[le] = '\0';
-			bool go = fn(NULL, &buf[ks], user);
-			buf[le] = saved;
-			if (!go) {
-				os64_free(buf);
-				return delivered;
-			}
-			continue;
-		}
-		k++;   // past '='
-
-		// value: to end of line, trimmed both sides, never split on spaces.
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t vs = k, ve = end;
-		while (ve > vs && (buf[ve - 1] == ' ' || buf[ve - 1] == '\t' || buf[ve - 1] == '\r'))
-			ve--;
-
-		// Terminate both in place for the call, then put the bytes back:
-		// the walk above still needs the line intact (ke may equal vs's
-		// preceding '=', never the same byte as ve, so the two NULs are
-		// independent).
-		char savedK = buf[ke], savedV = buf[ve];
-		buf[ke] = '\0';
-		buf[ve] = '\0';
-		bool go = fn(&buf[ks], &buf[vs], user);
-		buf[ke] = savedK;
-		buf[ve] = savedV;
-		delivered++;
-		if (!go) {
-			os64_free(buf);
-			return delivered;
-		}
-	}
-
+	bool stopped;
+	int64_t delivered = conf_parse_buffer(buf, fn, user, &stopped);
 	os64_free(buf);
-	return truncated ? OS64_CONF_TRUNCATED : delivered;
+	return truncated && !stopped ? OS64_CONF_TRUNCATED : delivered;
+}
+
+int64_t os64_conf_parse(const char *text, size_t length, os64_conf_fn fn, void *user)
+{
+	if (!text || !fn) return OS64_CONF_BAD_SETTING;
+	if (length >= OS64_CONF_MAX) return OS64_CONF_TRUNCATED;
+	for (size_t i = 0; i < length; ++i)
+		if (!text[i]) return OS64_CONF_BAD_SETTING;
+	char *buf = os64_malloc(length + 1);
+	if (!buf) return OS64_CONF_NO_MEMORY;
+	os64_memcpy(buf, text, length);
+	buf[length] = 0;
+	int64_t result = conf_parse_buffer(buf, fn, user, NULL);
+	os64_free(buf);
+	return result;
 }
 
 static int64_t conf_resolve(const char *name, size_t from, bool any,
@@ -437,7 +476,16 @@ static bool setting_is_writable(const os64_conf_pair_t *p)
 	return true;
 }
 
-int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
+int64_t os64_conf_target(const char *name, char *path_out, size_t cap)
+{
+	return conf_resolve(name, 0, true, path_out, cap) >= 1 ? 0 : OS64_CONF_NO_FILE;
+}
+
+static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
+                          size_t count, bool atomic_replace, bool delete_keys,
+                          bool first_publication,
+                          const char *source, const char *destination,
+                          bool (*validate)(const char *, size_t, void *), void *user)
 {
 	if (pairs == NULL || count == 0)
 		return 0;                           // nothing asked, nothing broken
@@ -449,17 +497,23 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// (rule 4 in os64/conf.h — same whole-refusal doctrine as TOO_MANY above,
 	// because a save that quietly dropped one of its settings is the silent
 	// config failure this arc exists to abolish).
-	for (size_t p = 0; p < count; p++)
-		if (!setting_is_writable(&pairs[p]))
-			return OS64_CONF_BAD_SETTING;
+	for (size_t p = 0; p < count; p++) {
+		os64_conf_pair_t checked = pairs[p];
+		if (delete_keys && !checked.value) checked.value = "";
+		if (!setting_is_writable(&checked)) return OS64_CONF_BAD_SETTING;
+	}
 
-	// RULE 1: the TOP of the ladder, never where we read from. `true` asks
-	// the kernel for the path this name WOULD have at position 0 — the file
-	// does not exist yet the first time, which is exactly the case a probing
-	// resolve cannot answer.
+	// Named settings target the top of the ladder. Explicit merges supply
+	// their own destination and require a readable source, possibly elsewhere.
 	char path[OS64_CONF_PATH_MAX];
-	if (conf_resolve(name, 0, true, path, sizeof(path)) < 1)
+	if (destination) {
+		if ((!first_publication && (!source || source[0] != '/')) || destination[0] != '/' ||
+		    (source && os64_strlen(source) >= sizeof(path)) || os64_strlen(destination) >= sizeof(path))
+			return OS64_CONF_BAD_SETTING;
+		os64_strcopy(path, sizeof(path), destination);
+	} else if (os64_conf_target(name, path, sizeof(path)) != 0) {
 		return OS64_CONF_NO_FILE;
+	}
 
 	// Room for the old text plus every pair appended, plus the ".new" name.
 	size_t room = OS64_CONF_MAX * 2;
@@ -471,15 +525,16 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		return OS64_CONF_NO_MEMORY;
 	}
 
-	// Read whatever is there. ABSENT IS FINE — this is a first save, and the
-	// merge below simply has nothing to merge with.
+	// Named saves allow a missing destination on first save. Explicit merges
+	// require their source: a failed open must not discard inherited settings.
+	// Checked first publication reads nothing; NOREPLACE protects any destination.
 	//
 	// AN ERROR IS NOT AN ENDING (Codex #29 rd12). This loop used to break on
 	// `n <= 0`, folding "the file ended" together with "the read failed" —
 	// and those demand opposite responses. On EOF the merge below is right.
 	// On an ERROR, `old` holds only the prefix that arrived before the
 	// failure, and carrying on publishes that prefix over the user's real
-	// config: rule 3's atomic rename then commits the loss cleanly and
+	// config: rule 3's ext2 atomic rename then commits the loss cleanly and
 	// completely. The buffer-full case three lines down already understood
 	// this exact danger ("would silently destroy the tail this routine
 	// promises to preserve") — it was guarded for the size door and not for
@@ -487,7 +542,8 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	size_t got = 0;
 	bool too_big = false;
 	bool io_error = false;
-	int64_t fd = os64_open(path, "r");
+	int64_t fd = first_publication ? -1 : os64_open(source ? source : path, "r");
+	if (source && fd < 0) io_error = true;
 	if (fd >= 0) {
 		for (;;) {
 			int64_t n = os64_read((int32_t)fd, old + got, OS64_CONF_MAX - 1 - got);
@@ -528,6 +584,10 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		return OS64_CONF_TRUNCATED;
 	}
 	old[got] = '\0';
+	if (source && validate && !validate(old, got, user)) {
+		os64_free(old); os64_free(neu);
+		return OS64_CONF_BAD_SETTING;
+	}
 
 	// RULE 2: MERGE. Rewrite line by line, replacing only what we own.
 	// count is <= OS64_CONF_WRITE_MAX (refused above), so every pair has a
@@ -551,7 +611,8 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		if (p >= 0 && (size_t)p < marks && !written[p]) {
 			// Replacing this line — hand out_setting the ORIGINAL so it can
 			// carry through any inline comment (the merge contract).
-			out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
+			if (pairs[p].value)
+				out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
 			written[p] = true;
 		} else if (p >= 0 && (size_t)p < marks) {
 			// A REPEATED key we already rewrote: drop the duplicate rather
@@ -567,7 +628,7 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// Pairs that matched no existing line go at the end — no original line,
 	// so no comment to carry (NULL).
 	for (size_t p = 0; p < marks; p++)
-		if (!written[p])
+		if (!written[p] && pairs[p].value)
 			out_setting(&o, pairs[p].key, pairs[p].value, NULL, 0);
 
 	if (o.overflow) {
@@ -576,16 +637,22 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		return OS64_CONF_TRUNCATED;         // refuse to publish a short file
 	}
 	neu[o.len] = '\0';
+	if (atomic_replace && (o.len >= OS64_CONF_MAX ||
+		(validate && !validate(neu, o.len, user)))) {
+		os64_free(old);
+		os64_free(neu);
+		return OS64_CONF_BAD_SETTING;
+	}
 
-	// RULE 3: publish ATOMICALLY — write beside it, then rename over. os64's
-	// rename replaces atomically (the 2026-08-16 ruling), so a crash between
-	// these two calls leaves the OLD config whole rather than a half-written
-	// one.
+	// RULE 3: write beside the target, then rename over it. On ext2 that
+	// replacement is atomic, so a crash between these calls leaves the old
+	// config whole rather than a half-written one. The atomic variant refuses
+	// replacement on FAT; the legacy variant retains flags-zero behavior.
 	// The temp name is PER-SAVER, not a shared "<path>.new" (Codex #29 rd7):
 	// two processes saving the same file both opened the identical temp, and
 	// writer B could truncate it after A closed but before A renamed — so A
 	// published an inode B was still filling, a partial file defeating the
-	// atomic-write guarantee. The rename over `path` is still the atomic
+	// publish guarantee. The rename over `path` is still the ext2 atomic
 	// publish; only the temp needs to be nobody else's.
 	//
 	// TWO parts, because the task id alone is not enough (Codex #29 rd8): it
@@ -658,15 +725,50 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		os64_unlink(temp);                  // no half-file left lying beside the real one
 		return OS64_CONF_NO_FILE;
 	}
-	if (os64_rename(temp, path) != 0) {
+	int64_t renamed = atomic_replace ? os64_rename_with_flags(temp, path,
+	    first_publication ? OS64_RENAME_NOREPLACE : OS64_RENAME_REQUIRE_ATOMIC_REPLACE) : os64_rename(temp, path);
+	if (renamed != 0) {
 		os64_unlink(temp);
 		return OS64_CONF_NO_FILE;
 	}
 	return 0;
 }
 
+int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
+{
+	return conf_write(name, pairs, count, false, false, false, NULL, NULL, NULL, NULL);
+}
+
+int64_t os64_conf_write_checked(const char *name, const os64_conf_pair_t *pairs, size_t count,
+	bool (*validate)(const char *, size_t, void *), void *user)
+{
+	return conf_write(name, pairs, count, true, false, false, NULL, NULL, validate, user);
+}
+
 int64_t os64_conf_set(const char *name, const char *key, const char *value)
 {
 	os64_conf_pair_t one = { .key = key, .value = value };
 	return os64_conf_write(name, &one, 1);
+}
+
+int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
+	size_t count, bool (*validate)(const char *, size_t, void *), void *user)
+{
+	return conf_write(name, pairs, count, true, true, false, NULL, NULL, validate, user);
+}
+
+int64_t os64_conf_merge_checked(const char *source, const char *destination,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user)
+{
+    if (!source || !destination) return OS64_CONF_BAD_SETTING;
+    return conf_write(NULL, pairs, count, true, false, false, source, destination, validate, user);
+}
+
+int64_t os64_conf_create_checked(const char *destination,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user)
+{
+    if (!destination) return OS64_CONF_BAD_SETTING;
+    return conf_write(NULL, pairs, count, true, false, true, NULL, destination, validate, user);
 }

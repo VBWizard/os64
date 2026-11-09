@@ -18,6 +18,7 @@
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
 #include "driver/net/arp.h"
+#include "driver/net/loopback.h"
 #include "spinlock.h"
 #include "kernel.h"   // kTicksSinceStart — the waiting room's expiry clock
 #include "driver/net/ipv4.h"
@@ -148,17 +149,43 @@ void ipv4_input(net_device_t* dev, const void* pkt, uint16_t length)
 	uint32_t src = net_read32(p + 12);
 	uint32_t dst = net_read32(p + 16);
 
-	// Are we the addressee? Three yeses: our unicast address, the limited
-	// broadcast (255.255.255.255 — "this link, everyone", how DHCP DISCOVER
-	// will arrive addressed to a machine that has no address yet), or our
-	// subnet's directed broadcast. Anything else unicast is a NAT/switch
-	// mistake — counted, dropped, never forwarded (hosts don't route).
-	uint32_t subnet_bcast = (kNetIPv4Address & kNetIPv4Netmask) | ~kNetIPv4Netmask;
-	bool broadcast = (dst == 0xFFFFFFFF) || (dst == subnet_bcast);
-	if (dst != kNetIPv4Address && !broadcast)
+	// LOOPBACK ADDRESSES NEVER CROSS A WIRE (RFC 1122 §3.2.1.3). A real card
+	// delivering a 127/8 source or destination is delivering a forgery, and
+	// believing it would be worse than rude: a service announced on loopback
+	// alone is trusted to be reachable from this machine only (REMOTE.md —
+	// vncd asks for no password on exactly that promise), and TCP's demux
+	// would hand a forged 127.0.0.1 segment to a live loopback conversation.
+	// lo itself carries ONLY 127/8 — it is the one place those addresses are
+	// real, and nothing else is ever put on it.
+	bool on_lo = (dev == kNetLoopback);
+	if (!on_lo && (net_ip_is_loopback(src) || net_ip_is_loopback(dst)))
 	{
-		kIPv4Stats.rx_not_for_us++;
+		kIPv4Stats.rx_martian++;
 		return;
+	}
+	bool broadcast = false;
+	if (on_lo)
+	{
+		if (!net_ip_is_loopback(dst))
+		{
+			kIPv4Stats.rx_not_for_us++;
+			return;
+		}
+	}
+	else
+	{
+		// Are we the addressee? Three yeses: our unicast address, the limited
+		// broadcast (255.255.255.255 — "this link, everyone", how DHCP DISCOVER
+		// will arrive addressed to a machine that has no address yet), or our
+		// subnet's directed broadcast. Anything else unicast is a NAT/switch
+		// mistake — counted, dropped, never forwarded (hosts don't route).
+		uint32_t subnet_bcast = (kNetIPv4Address & kNetIPv4Netmask) | ~kNetIPv4Netmask;
+		broadcast = (dst == 0xFFFFFFFF) || (dst == subnet_bcast);
+		if (dst != kNetIPv4Address && !broadcast)
+		{
+			kIPv4Stats.rx_not_for_us++;
+			return;
+		}
 	}
 
 	kIPv4Stats.rx_delivered++;
@@ -318,22 +345,33 @@ void ipv4_arp_resolved(net_device_t* dev, uint32_t ip)
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length)
 {
+	return ipv4_send_from_ex(dev, src_ip, dst_ip, protocol, payload, length, NULL);
+}
+
+int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
+                          uint8_t protocol, const void* payload, uint16_t length,
+                          ipv4_tx_t* how)
+{
 	if ((uint32_t)length + IPV4_HDR_MIN > dev->mtu)
 	{
 		// Over-MTU means fragmenting, and we don't (DF world, see the
 		// header stance). Refused here, loudly, instead of half-sent.
 		kIPv4Stats.tx_too_big++;
+		if (how) *how = IPV4_TX_INVALID;
 		return -1;
 	}
 
 	// The host routing decision, complete: same subnet = hand it to the
 	// destination directly; different subnet = hand it to the gateway and
 	// make it the gateway's problem. Broadcasts skip ARP entirely — you
-	// don't ask "who has everyone?"
+	// don't ask "who has everyone?" And lo is its own next hop: the frame
+	// is addressed to lo's MAC and nobody is asked anything.
 	uint32_t subnet_bcast = (kNetIPv4Address & kNetIPv4Netmask) | ~kNetIPv4Netmask;
 	bool broadcast = (dst_ip == 0xFFFFFFFF) || (dst_ip == subnet_bcast);
 	uint8_t next_hop_mac[NET_MAC_LEN];
-	if (broadcast)
+	if (dev == kNetLoopback)
+		memcpy(next_hop_mac, dev->mac, NET_MAC_LEN);
+	else if (broadcast)
 		memcpy(next_hop_mac, (void*)kEthBroadcastMAC, NET_MAC_LEN);
 	else
 	{
@@ -392,6 +430,7 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			arp_send_request(dev, next_hop);
 			if (!parked)
 				kIPv4Stats.tx_awaiting_arp++;
+			if (how) *how = IPV4_TX_PARKED;   // held, or dropped as a first packet: the wire's either way
 			return -2;
 		}
 	}
@@ -424,5 +463,6 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		kIPv4Stats.tx_sent++;
 	else
 		kIPv4Stats.tx_errors++;
+	if (how) *how = (rc == 0) ? IPV4_TX_SENT : IPV4_TX_DROPPED;
 	return rc;
 }

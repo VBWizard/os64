@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include "serial_logging.h"
 #include "sprintf.h"   // snprintf — the settle tripwire's line formatter
+#include "strings/strcmp.h"   // strcmp — the speculation policy's keywords
+#include "strings/strcpy.h"   // strncpy — remembering the policy's name
 #include "exception_report.h"   // exception_wire_lock — the tripwire narrates atomically
 #include "kmalloc.h"
 #include "kernel.h"
@@ -21,6 +23,7 @@
 #include "gdt.h"
 #include "tss.h"
 #include "thread.h"
+#include "accounting.h"
 #include "idt.h"
 #include "panic.h"
 #include "fpu.h"
@@ -49,7 +52,7 @@ volatile uint64_t kDiagICRMaxSpins = 0;
 volatile uint64_t kDiagSettleBroadcasts = 0;
 volatile uint64_t kDiagSettleTimeouts = 0;
 volatile uint64_t kDiagSettleMaxSpins = 0;
-volatile uint64_t kDiagSettleLastLateAPIC = 0;
+volatile uint64_t kDiagSettleLastLateCPU = 0;
 // Sampled by every scheduler pass ON ITS OWN CORE (LAPIC is core-local):
 // which vector is actually in service (names the interrupt that drove the
 // pass — timer 0x7E vs manual 0x7A vs something unexpected), and the LVT
@@ -74,10 +77,15 @@ uint32_t apic_in_service_vector(void)
     }
     return 0;
 }
+// AP bring-up's scratch: these, tempStack and tempCls below are GLOBALS
+// that every AP uses in turn — sound only because ap_wake_up_aps brings APs
+// through strictly one at a time (it rings the next doorbell after the last
+// AP's coreInitialized handshake). ap_wakeup_entry keeps its state here
+// rather than in locals because it switches stacks under its own frame
+// pointer, and a local would live on the bootloader's stack it just left.
 uintptr_t stackVirtualAddress, stackPhysicalAddress;
 uintptr_t kMPEOIOffset = 0;
-// The AP bootstrap stack. ONE, shared — safe because ap_wake_up_aps brings
-// APs through strictly one at a time (the coreInitialized handshake below).
+// The AP bootstrap stack. ONE, shared, for the reason above.
 //
 // 32KB, and the size is a scar: this was 1KB for years, and ap_wakeup_entry
 // runs real C on it — kmalloc_aligned, paging_map_pages, and (under
@@ -100,7 +108,7 @@ uintptr_t kMPEOIOffset = 0;
 #define TEMP_STACK_CANARY 0x43414E4152592121ULL   // "CANARY!!" — legible in a hex dump
 #define TEMP_STACK_CANARY_QWORDS 8
 __attribute__((aligned(16))) uint8_t tempStack[TEMP_STACK_SIZE];
-uint32_t temp_apic_id;
+uint32_t temp_cpu;   // the waking AP's CPU number
 core_local_storage_t *tempCls;
 
 // Assuming kMPApicBase and APIC_EOI_OFFSET are properly defined elsewhere
@@ -140,17 +148,21 @@ void write_eoi() {
 
 }
 
-void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
+void send_ipi(uint32_t cpu, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode)
 {
-	core_local_storage_t *target_cls = get_core_local_storage_for_core(apic_id);
 	core_local_storage_t *sender_cls = get_core_local_storage();
-	uint32_t sender_apic_id = sender_cls ? sender_cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
-	if (mp_inScheduler[target_cls->apic_id] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
+	uint32_t sender_cpu = sender_cls ? (uint32_t)sender_cls->cpu : BSP_CPU;
+	// A number off the roster has no APIC ID to aim at, and would read past
+	// every per-CPU table on the way: a caller handing one in is the bug.
+	if (cpu >= kCPUCount)
+		panic("send_ipi: AP%u sent vector 0x%02x to CPU %u, which is not on the roster (%u CPUs)",
+		      sender_cpu, vector, cpu, kCPUCount);
+	if (mp_inScheduler[cpu] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
 	{
-		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an scheduling IPI because we're already in the scheduler");
+		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi - NOT sending a scheduling IPI to AP%u, which is already in the scheduler\n", cpu);
 		return;
 	}
-    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u sending IPI 0x%02x to AP%u\n",sender_apic_id, vector, apic_id);
+    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u sending IPI 0x%02x to AP%u\n",sender_cpu, vector, cpu);
     // Ensure previous IPI command has completed — with a bound. An IPI whose
     // delivery-status bit never clears (wedged target core, virtual APIC
     // quirk) previously spun here forever, silently; a loud panic with the
@@ -159,21 +171,34 @@ void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_
     while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000)
     {
         if (++icr_wait_spins > 100000000UL)
-            panic("send_ipi: ICR delivery-status stuck busy — AP%u sending vector 0x%02x to AP%u never completed", sender_apic_id, vector, apic_id);
+            panic("send_ipi: ICR delivery-status stuck busy — AP%u sending vector 0x%02x to AP%u never completed", sender_cpu, vector, cpu);
         __builtin_ia32_pause();
     }
     kDiagIPISends++;                                   // TEMP DIAG
     if (icr_wait_spins > kDiagICRMaxSpins)             // TEMP DIAG
         kDiagICRMaxSpins = icr_wait_spins;             // TEMP DIAG
 
-    // Write to the high pa Canrt of the ICR (destination field)
-    *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
+    // The ICR names its target by APIC ID: this is the hardware door.
+    *((volatile uint32_t*)(kMPICRHigh)) = kCPUs[cpu].apic.id << 24;
 
     // Write to the low part of the ICR (command and vector)
 	// Removed setting of level bit 14 (| (level << 14) )
     uint32_t icr_low_value = vector | (delivery_mode << 8) | (level << 14) | (trigger_mode << 15) | 0x00004000;
     *((volatile uint32_t*)(kMPICRLow)) = icr_low_value;
-    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u programmed ICR for AP%u (0x%04x)\n",sender_apic_id, apic_id, vector);
+    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u programmed ICR for AP%u (0x%04x)\n",sender_cpu, cpu, vector);
+}
+
+// cpu_self (smp_core.h). Before ANY CPU has a CLS only the BSP runs, so
+// that answer is CPU 0 and needs no register at all; an AP between waking
+// and publishing its CLS asks its local APIC and the roster.
+uint32_t cpu_self(void)
+{
+	core_local_storage_t *cls = try_get_core_local_storage();
+	if (cls)
+		return (uint32_t)cls->cpu;
+	if (!kCLSInitialized)
+		return BSP_CPU;
+	return kApicToCPU[read_apic_id().id];
 }
 
 static inline void set_gs_base(uint64_t base) {
@@ -198,57 +223,74 @@ static inline void set_gs_base(uint64_t base) {
 /// the oracle stays: it is cheap, and it earned its keep once already.
 int kernel_scratch_stack_owner(uintptr_t rsp)
 {
-    for (int c = 0; c < kMPCoreCount; c++) {
+    for (uint32_t c = 0; c < kCPUCount; c++) {
         volatile core_local_storage_t *cls = &kCoreLocalStorage[c];
         if (cls->kernel_interrupt_stack_base != 0 &&
             rsp >= cls->kernel_interrupt_stack_base &&
             rsp <  cls->kernel_interrupt_stack_top)
-            return c;
+            return (int)c;
     }
     return -1;
 }
 
-void init_core_local_storage(unsigned apic_id)
+void init_core_local_storage(uint32_t cpu)
 {
+	if (cpu >= kCPUCount)
+		panic("init_core_local_storage: CPU %u is not on the roster (%u CPUs)", cpu, kCPUCount);
 
 	uint64_t coreBase = (uint64_t)kCoreLocalStorage +
-                        (apic_id * sizeof(core_local_storage_t));
+                        (cpu * sizeof(core_local_storage_t));
     set_gs_base(coreBase);
 	core_local_storage_t *cls = (core_local_storage_t*)coreBase;
-	cls->apic_id = apic_id;
+	// Who this CPU is goes in BEFORE `self`: try_get_core_local_storage
+	// trusts a slot only once self points at it, and cpu_self reads the
+	// number the moment it does.
+	cls->cpu = cpu;
+	cls->apic = kCPUs[cpu].apic;
 	cls->self = cls;
-	cls->tss = tss_get_for_cpu(apic_id);
+	cls->tss = tss_get_for_cpu(cpu);
 	cls->kernel_rsp0 = cls->tss ? cls->tss->rsp0 : 0;
 
 	// Allocate upper-half kernel interrupt stack for CR3 switching
 	void *kernel_stack = kmalloc_aligned(KERNEL_INTERRUPT_STACK_SIZE);
 	if (!kernel_stack)
-		panic("Failed to allocate kernel interrupt stack for CPU %u", apic_id);
+		panic("Failed to allocate kernel interrupt stack for CPU %u", cpu);
 
 	cls->kernel_interrupt_stack_base = (uintptr_t)kernel_stack;
 	cls->kernel_interrupt_stack_top = (uintptr_t)kernel_stack + KERNEL_INTERRUPT_STACK_SIZE;
 
 	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
-	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u (kernel stack: 0x%lx-0x%lx)\n",
-		coreBase, apic_id, cls->kernel_interrupt_stack_base, cls->kernel_interrupt_stack_top);
+	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for CPU %u (kernel stack: 0x%lx-0x%lx)\n",
+		coreBase, cpu, cls->kernel_interrupt_stack_base, cls->kernel_interrupt_stack_top);
 }
 
 // Called to finish initializing the AP (stack switch has been done in ap_wakeup_entry())
-void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress, uint64_t stackPhysicalAddress)
+void ap_wakeup_after_stack_switch(uint32_t cpu, uint64_t stackVirtualAddress, uint64_t stackPhysicalAddress)
 {
     volatile core_local_storage_t *temp_cls = get_core_local_storage();
     temp_cls->stackVirtualAddress = stackVirtualAddress;
     temp_cls->stackPhysicalAddress = stackPhysicalAddress;
 
-    printd(DEBUG_SMP, "AP%u: Initial stack v/p: 0x%016x/0x%016x\n",apic_id, stackVirtualAddress, stackPhysicalAddress);
+    // The round trip, checked on the CPU itself: the slot it published is
+    // the number the roster gave it, and that number's APIC ID is the one
+    // its own local APIC reports. Either failing means some CPU is about to
+    // run on another's per-CPU state.
+    apic_id_t mine = read_apic_id();
+    if (temp_cls->cpu != cpu || kCPUs[cpu].apic.id != mine.id || kApicToCPU[mine.id] != cpu)
+        panic("AP bring-up: CPU %u's slot says %lu, the roster says APIC %u, its LAPIC says APIC %u (-> CPU %u)",
+              cpu, temp_cls->cpu, kCPUs[cpu].apic.id, mine.id, kApicToCPU[mine.id]);
+
+    printd(DEBUG_SMP, "AP%u: Initial stack v/p: 0x%016x/0x%016x\n",cpu, stackVirtualAddress, stackPhysicalAddress);
 
     // Read APIC_BASE_MSR
     uint32_t lvt_timer = read_apic_register(kMPApicBase + APIC_LVT_TIMER);
     uint32_t spurious_vector = read_apic_register(kMPApicBase + APIC_SPURIOUS_VECTOR);
-    printd(DEBUG_SMP, "AP%u: LVT_TIMER = 0x%08x, SPURIOUS_VECTOR = 0x%08x\n", apic_id, lvt_timer, spurious_vector);
+    printd(DEBUG_SMP, "AP%u: LVT_TIMER = 0x%08x, SPURIOUS_VECTOR = 0x%08x\n", cpu, lvt_timer, spurious_vector);
 
-	*((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;  // Set destination APIC ID
-	*((volatile uint32_t*) (kCPUInfo[apic_id].apic_tpr)) = 0x30;  // Correct TPR
+	// Every register below is this CPU's OWN local APIC, which it reaches at
+	// kMPApicBase like every other CPU reaches its own.
+	*((volatile uint32_t*)(kMPICRHigh)) = mine.id << 24;  // Set destination APIC ID
+	*((volatile uint32_t*) (kMPApicBase + 0x80)) = 0x30;  // Correct TPR
 	__asm__ volatile ("mfence");  // Ensure memory writes complete
 
 	// PAT entry 7 = write-combining on THIS core, same as the BSP set before
@@ -264,28 +306,28 @@ void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress
 	// watching. (watchpoint.h, limit 3.)
 	watchpoint_sync_this_core();
 
-	*((volatile uint32_t*)kCPUInfo[apic_id].apic_svr) |= 0x100; // Set bit 8 (Enable LAPIC)
+	*((volatile uint32_t*)(kMPApicBase + 0xF0)) |= 0x100; // Set bit 8 (Enable LAPIC)
 	//EOI to clear out the IRR as we don't know what is awaiting us when we enable the APIC/LVT otherwise
-	*((volatile uint32_t*)kCPUInfo[apic_id].apic_eoi) = 0;
+	*((volatile uint32_t*)(kMPApicBase + APIC_EOI_OFFSET)) = 0;
 
 	// Debugging: Check if AP is ready to receive IPI
-    printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", apic_id, *((volatile uint32_t*)kMPICRLow));
+    printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", cpu, *((volatile uint32_t*)kMPICRLow));
 
 	// Set the spurious vector to 0xFF and enable interrupts (bit 8)
-	*((volatile uint32_t*) (kCPUInfo[apic_id].apic_svr)) = 0x1FF;  // Enable APIC + Set spurious vector to 0xFF
+	*((volatile uint32_t*) (kMPApicBase + 0xF0)) = 0x1FF;  // Enable APIC + Set spurious vector to 0xFF
 	__asm__ volatile ("mfence");  // Ensure memory writes complete
 
 	// Debugging: Confirm that AP is now ready to receive IPIs
-	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", apic_id, *((volatile uint32_t*)kMPICRLow));
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", cpu, *((volatile uint32_t*)kMPICRLow));
 
-	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT before: 0x%08x\n", apic_id, *((volatile uint32_t*)kMPLVTTimer));
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT before: 0x%08x\n", cpu, *((volatile uint32_t*)kMPLVTTimer));
 	
 	// Unmask LVT0 (timer) and LVT1 (error) by clearing the mask bit (bit 16)
 	*((volatile uint32_t*)kMPLVTTimer) &= ~0x10000;  // Unmask LVT0 (timer)
 	*((volatile uint32_t*)kMPLVTTimer) &= ~0x20000;  // Unmask LVT1 (error)
 	__asm__ volatile ("mfence");  // Ensure memory writes complete
 	// Debugging: Confirm LVT lines are unmasked
-	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT after: 0x%08x\n", apic_id, *((volatile uint32_t*)kMPLVTTimer));
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT after: 0x%08x\n", cpu, *((volatile uint32_t*)kMPLVTTimer));
 
 	// Now the AP is ready to receive and process the IPI
 	temp_cls->coreAwoken = true;
@@ -303,11 +345,18 @@ void ap_wakeup_entry() {
         :: "r" (kKernelPML4), "r" ((uint16_t)0x30), "r" (tempStack + TEMP_STACK_SIZE - 8)
     );
 
-    temp_apic_id = read_apic_id();
+    // Who am I? The local APIC says where; the roster says which CPU that
+    // is. A miss means Limine started a CPU the roster refused, and it must
+    // stop HERE, before the number indexes anything — the first consumer is
+    // the very next call.
+    temp_cpu = kApicToCPU[read_apic_id().id];
+    if (temp_cpu == CPU_ROSTER_NO_CPU)
+        panic("AP bring-up: a CPU woke with APIC ID %u, which is not on the CPU roster",
+              read_apic_id().id);
 
     // Set up the rest of the AP initialization
     load_gdt_and_jump(&kGDTr);
-    tss_initialize_cpu(temp_apic_id);
+    tss_initialize_cpu(temp_cpu);
 	fpu_init_this_cpu();
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
 
@@ -317,9 +366,9 @@ void ap_wakeup_entry() {
 
     __asm__("mov rsp, %0\n"::"r" (stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t)));
 	
-    tss_set_rsp0(temp_apic_id, stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t));
+    tss_set_rsp0(temp_cpu, stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t));
 
-    init_core_local_storage(temp_apic_id);
+    init_core_local_storage(temp_cpu);
 
 	tempCls = get_core_local_storage();
     if (tempCls)
@@ -328,7 +377,7 @@ void ap_wakeup_entry() {
     }
 
 	// Initialize the AP after stack switch (set spurious vector, enable interrupts, etc.)
-    ap_wakeup_after_stack_switch(temp_apic_id, stackVirtualAddress, stackPhysicalAddress);
+    ap_wakeup_after_stack_switch(temp_cpu, stackVirtualAddress, stackPhysicalAddress);
 
     // Loop to ensure the AP doesn't fall off the function
     while (1) {
@@ -345,28 +394,27 @@ void ap_wake_up_aps() {
 	for (int q = 0; q < TEMP_STACK_CANARY_QWORDS; q++)
 		((volatile uint64_t *)tempStack)[q] = TEMP_STACK_CANARY;
 
-	//TODO: Remve me!
-	//Temporary debugging statement
-	for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
-        uint32_t apic_id = kCPUInfo[coreToWake].apicID;
-        if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
-        
-        printd(DEBUG_SMP, "MP: Waking up AP %u\n", apic_id);
+	// CPU 0 is the BSP, already running; everyone else in roster order. Each
+	// CPU is woken through ITS OWN doorbell and waited for in ITS OWN slot,
+	// both found by the one number — the wake loop cannot ring one CPU and
+	// listen for another.
+	for (uint32_t cpu = 1; cpu < kCPUCount; cpu++) {
+        printd(DEBUG_SMP, "MP: Waking up AP%u (APIC %u)\n", cpu, kCPUs[cpu].apic.id);
 			// BOOTMARK mile-markers (kernel.h) — permanent, BOOTMARKS-gated.
 			// Per-AP resolution because AP bring-up was the 54-second culprit.
 			if (kEnableBootmarks)
-				printf("BOOTMARK ap%u-wake              tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
-			*((volatile uint64_t *) kCPUInfo[apic_id].goto_address) = (uint64_t) &ap_wakeup_entry;
+				printf("BOOTMARK ap%u-wake              tick=%lu tsc=%lu\n", cpu, kTicksSinceStart, rdtsc());
+			*kCPUs[cpu].goto_address = (uint64_t) &ap_wakeup_entry;
 
-			cls = get_core_local_storage_for_core(coreToWake);
+			cls = get_core_local_storage_for_core(cpu);
 
 			while (!cls->coreAwoken) {wait(10);}
 			if (kEnableBootmarks)
-				printf("BOOTMARK ap%u-awoken            tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
-			send_ipi(apic_id, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
+				printf("BOOTMARK ap%u-awoken            tick=%lu tsc=%lu\n", cpu, kTicksSinceStart, rdtsc());
+			send_ipi(cpu, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
 			while (!cls->coreInitialized) {wait(10);}
 			if (kEnableBootmarks)
-				printf("BOOTMARK ap%u-initialized       tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
+				printf("BOOTMARK ap%u-initialized       tick=%lu tsc=%lu\n", cpu, kTicksSinceStart, rdtsc());
 
 			// The AP is up and off the bootstrap stack — verify it never
 			// touched the floor. A smashed canary means bring-up came
@@ -376,30 +424,27 @@ void ap_wake_up_aps() {
 			for (int q = 0; q < TEMP_STACK_CANARY_QWORDS; q++)
 				if (((volatile uint64_t *)tempStack)[q] != TEMP_STACK_CANARY)
 					panic("AP %u bring-up smashed the tempStack canary (qword %u = 0x%016lx) — grow TEMP_STACK_SIZE; see SCHEDULER_STRAY_WRITE.md\n",
-						apic_id, q, ((volatile uint64_t *)tempStack)[q]);
+						cpu, q, ((volatile uint64_t *)tempStack)[q]);
 			if (kTicklessScheduler)
 			{
 				// Tickless (wake-on-work): park AP timers and kick each AP once so it can run its idle thread.
-				send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+				send_ipi(cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 			}
 			else
 			{
-				send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+				send_ipi(cpu, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
 			}
 	    }
 		kSMPInitDone = true;
 }
 
 void ap_enable_schedulers() {
-    for (int i = 0; i < kMPCoreCount; i++) {
-        uint32_t apic_id = kCPUInfo[i].apicID;
-        if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
-        
-        printd(DEBUG_SMP, "MP: Enabling scheduling on AP %u\n", apic_id);
+    for (uint32_t cpu = 1; cpu < kCPUCount; cpu++) {   // CPU 0, the BSP, enables its own
+        printd(DEBUG_SMP, "MP: Enabling scheduling on AP%u\n", cpu);
         if (kTicklessScheduler)
-            send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+            send_ipi(cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
         else
-            mp_enable_scheduling_vector(apic_id);
+            mp_enable_scheduling_vector(cpu);
     }
 }
 
@@ -451,12 +496,232 @@ void mp_determine_local_APIC_timer_speed()
     printd(DEBUG_SMP, "Local APIC timer *adjusted* frequency is %u MHz (average %u ticks per second)\n", displayedSpeed,cls->apicTicksPerSecond);
 }
 
+// ── SPEC_CTRL is the kernel's to write, on every thread (2026-10-18) ─────────
+//
+// IA32_SPEC_CTRL (MSR 0x48) carries the speculation controls an operating
+// system chooses — IBRS, STIBP, SSBD, PSFD — and it is PER HARDWARE THREAD.
+// os64 used to inherit it, and the P5's firmware (Ryzen 5 6600H) hands the
+// SECOND thread of every core SSBD set while the first thread's is clear —
+// because it writes the register on the first thread of each core and never
+// on the second, which keeps whatever it held: the reset value on a cold
+// boot, the last policy across a warm one (the boot line shows both).
+// Measured with /tests/coreprobe: thread 1 paid about six cycles for every
+// branch instruction, taken or not, a 2.5x loss on any loop — which made the
+// compositor three times slower per pixel whenever it landed on an odd APIC
+// and sent yonder spinning on kGuiLock (the per-boot "bad state" of
+// 2026-10-17/18). Every other instrument read "idle" and "halted"; the
+// /sys/cpu/<n>/probe MSR lines found the one register the two threads of a
+// core disagreed on.
+//
+// The policy is the one Linux and Windows apply — the kernel decides the
+// value and writes the same one on every thread — and the VALUE is a system
+// setting: `speculation =` in /etc/os64.conf (Chris, 2026-10-18: "default
+// it to make the OS performant", and when a mitigation is ever wanted it is
+// one line, applied evenly, not a firmware menu's accident).
+//
+//   fast      0 — no controls. The default, and what bring-up writes before
+//             any file can be read. os64 runs no sandboxed untrusted code
+//             that these mitigations protect, and the cost here is measured.
+//   guarded   every control this CPU reports: IBRS, STIBP, SSBD, PSFD.
+//   0x<hex>   the bits themselves, for the person who knows which one;
+//             bits the CPU does not report are dropped, and said so.
+//
+// Bring-up writes `fast` standing on each thread; the root file, read after
+// SMP is up, applies anything else through IPI_SPEC_CTRL_VECTOR, because the
+// register can only be written from the thread it belongs to. What each
+// thread inherited is kept and reported after bring-up and again when the
+// root file changes the policy (spec_ctrl_report), so a firmware that does
+// this again is seen on the glass instead of felt.
+#define SPEC_CTRL_MSR    0x48
+#define SPEC_CTRL_IBRS   (1ull << 0)
+#define SPEC_CTRL_STIBP  (1ull << 1)
+#define SPEC_CTRL_SSBD   (1ull << 2)
+#define SPEC_CTRL_PSFD   (1ull << 7)
+
+volatile uint64_t kSpecCtrlInherited[MAX_CPUS];
+volatile uint64_t kSpecCtrlApplied[MAX_CPUS];   // what each thread last wrote
+volatile uint64_t kSpecCtrlValue;               // the policy in force
+volatile bool kSpecCtrlPresent;
+static char kSpecCtrlPolicy[24] = "fast";
+
+// The bits this CPU implements, by CPUID. Intel: leaf 7 EDX IBRS/IBPB[26],
+// STIBP[27], SSBD[31], PSFD in subleaf 2's EDX[0]. AMD: leaf 0x80000008
+// EBX IBRS[14], STIBP[15], SSBD[24], PSFD[28]. Any bit set means the MSR
+// itself is implemented.
+static uint64_t spec_ctrl_supported(void)
+{
+	uint32_t a = 0, b = 0, c = 0, d = 0;
+	uint64_t mask = 0;
+	if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
+		uint32_t maxsub = a;
+		if (d & (1u << 26)) mask |= SPEC_CTRL_IBRS;
+		if (d & (1u << 27)) mask |= SPEC_CTRL_STIBP;
+		if (d & (1u << 31)) mask |= SPEC_CTRL_SSBD;
+		// Intel enumerates PSFD one subleaf over: CPUID.(7,2):EDX[0].
+		if (maxsub >= 2 && __get_cpuid_count(7, 2, &a, &b, &c, &d) && (d & 1u))
+			mask |= SPEC_CTRL_PSFD;
+	}
+	if (__get_cpuid(0x80000008, &a, &b, &c, &d)) {
+		if (b & (1u << 14)) mask |= SPEC_CTRL_IBRS;
+		if (b & (1u << 15)) mask |= SPEC_CTRL_STIBP;
+		if (b & (1u << 24)) mask |= SPEC_CTRL_SSBD;
+		if (b & (1u << 28)) mask |= SPEC_CTRL_PSFD;
+	}
+	return mask;
+}
+
+static void spec_ctrl_write_this_cpu(uint32_t cpu)
+{
+	uint64_t value = kSpecCtrlValue;
+	if (kSpecCtrlPresent)
+		wrmsr64(SPEC_CTRL_MSR, value);
+	if (cpu < MAX_CPUS)
+		kSpecCtrlApplied[cpu] = value;
+}
+
+static void spec_ctrl_init_this_cpu(uint32_t cpu)
+{
+	if (spec_ctrl_supported() == 0)
+		return;
+	kSpecCtrlPresent = true;
+	uint64_t inherited = rdmsr64(SPEC_CTRL_MSR);
+	if (cpu < MAX_CPUS)
+		kSpecCtrlInherited[cpu] = inherited;
+	spec_ctrl_write_this_cpu(cpu);
+	printd(DEBUG_SMP, "AP%u: SPEC_CTRL inherited 0x%lx, set to 0x%lx\n", cpu, inherited, kSpecCtrlValue);
+}
+
+void spec_ctrl_apply_ISR(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	spec_ctrl_write_this_cpu(cls ? (uint32_t)cls->cpu : MAX_CPUS);
+	write_eoi();
+}
+
+static bool spec_ctrl_parse_hex(const char *value, uint64_t *out)
+{
+	if (value[0] != '0' || (value[1] != 'x' && value[1] != 'X') || value[2] == 0)
+		return false;
+	uint64_t v = 0;
+	for (const char *c = value + 2; *c; c++) {
+		uint64_t digit;
+		if (*c >= '0' && *c <= '9') digit = (uint64_t)(*c - '0');
+		else if (*c >= 'a' && *c <= 'f') digit = (uint64_t)(*c - 'a' + 10);
+		else if (*c >= 'A' && *c <= 'F') digit = (uint64_t)(*c - 'A' + 10);
+		else return false;
+		if (v >> 60)
+			return false;
+		v = (v << 4) | digit;
+	}
+	*out = v;
+	return true;
+}
+
+bool spec_ctrl_set_policy(const char *value)
+{
+	if (value == NULL)
+		return false;
+	if (!kSpecCtrlPresent) {
+		printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s ignored: not implemented on this CPU\n", value);
+		return false;
+	}
+	uint64_t supported = spec_ctrl_supported();
+	uint64_t want;
+	if (strcmp(value, "fast") == 0) {
+		want = 0;
+	} else if (strcmp(value, "guarded") == 0) {
+		want = supported;
+	} else if (spec_ctrl_parse_hex(value, &want)) {
+		if (want & ~supported) {
+			printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s: bits 0x%lx are not implemented here, dropped\n",
+			       value, want & ~supported);
+			want &= supported;
+		}
+	} else {
+		printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s is not fast, guarded or 0x<hex>: keeping %s\n",
+		       value, kSpecCtrlPolicy);
+		return false;
+	}
+	strncpy(kSpecCtrlPolicy, value, sizeof(kSpecCtrlPolicy));
+	kSpecCtrlPolicy[sizeof(kSpecCtrlPolicy) - 1] = 0;
+	kSpecCtrlValue = want;
+
+	// Identify the thread and write it with interrupts off: this task is
+	// not pinned, and a preemption between learning which thread it is on
+	// and writing would record one thread as done while another was written.
+	uint64_t irq;
+	__asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(irq) :: "memory");
+	core_local_storage_t *cls = get_core_local_storage();
+	uint32_t self = cls ? (uint32_t)cls->cpu : BSP_CPU;
+	spec_ctrl_write_this_cpu(self);
+	if (irq & 0x200)
+		__asm__ volatile("sti" ::: "memory");
+	if (!kSMPInitDone)
+		return true;   // nothing else is up; bring-up will write this value
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+		if (cpu != self)
+			send_ipi(cpu, IPI_SPEC_CTRL_VECTOR, 0, 1, 0);
+	}
+	// Bounded, and only with interrupts on (mpAcctSettleAll's rule: never
+	// wait for an interrupt-delivered answer with them off). A thread that
+	// has not confirmed by the report simply shows there as unconfirmed.
+	if (irq & 0x200) {
+		uint64_t deadline = kTicksSinceStart + 10;
+		for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+			while (kSpecCtrlApplied[cpu] != want &&
+			       kTicksSinceStart < deadline)
+				__builtin_ia32_pause();
+		}
+	}
+	// The root file is read after bring-up's report has printed, so say it
+	// again: the glass must show the policy that is actually in force.
+	spec_ctrl_report();
+	return true;
+}
+
+// The boot line, glass and log: the policy in force, how many threads
+// confirmed it, and how many arrived with controls already set. Inherited
+// non-zero is not an error — it is the firmware's choice being overruled,
+// and the number worth knowing the day a machine is slow on half its CPUs.
+void spec_ctrl_report(void)
+{
+	if (!kSpecCtrlPresent) {
+		printf("SPEC_CTRL: not implemented on this CPU\n");
+		printd(DEBUG_BOOT, "SPEC_CTRL: not implemented on this CPU\n");
+		return;
+	}
+	uint32_t nonzero = 0, first = 0, confirmed = 0;
+	uint64_t firstVal = 0;
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+		if (kSpecCtrlApplied[cpu] == kSpecCtrlValue)
+			confirmed++;
+		if (kSpecCtrlInherited[cpu] != 0) {
+			if (nonzero == 0) {
+				first = cpu;
+				firstVal = kSpecCtrlInherited[cpu];
+			}
+			nonzero++;
+		}
+	}
+	char line[160];
+	if (nonzero == 0)
+		sprintf(line, "SPEC_CTRL: %s (0x%lx) on %u of %u threads; none inherited a non-zero value\n",
+		        kSpecCtrlPolicy, kSpecCtrlValue, confirmed, kCPUCount);
+	else
+		sprintf(line, "SPEC_CTRL: %s (0x%lx) on %u of %u threads; %u inherited non-zero (first: CPU %u, APIC %u = 0x%lx)\n",
+		        kSpecCtrlPolicy, kSpecCtrlValue, confirmed, kCPUCount, nonzero, first, kCPUs[first].apic.id, firstVal);
+	printf("%s", line);
+	printd(DEBUG_BOOT, "%s", line);
+}
+
 // Interrupt handler for initializing an AP
 void ap_initialization_handler() {
     
-    // Get the APIC ID to identify the processor
-    uint32_t apic_id = read_apic_id();  // Function to read the APIC ID register
-    printd(DEBUG_SMP,"AP: initialization handler\n",apic_id);
+    // Which CPU this is. The BSP calls this directly, before it has a CLS;
+    // an AP arrives by IPI with its CLS already published by ap_wakeup_entry.
+    // cpu_self answers both.
+    uint32_t cpu = cpu_self();
+    printd(DEBUG_SMP,"AP%u: initialization handler\n",cpu);
 
     // NOTE: Stack was already initialized in ap_wakeup_entry
 
@@ -576,7 +841,11 @@ void ap_initialization_handler() {
 	// This one needs a `std` and any syscall at all.
 	wrmsr64(SFMASK_MSR, (1 << 18) | (1 << 14) | (1 << 10) | (1 << 9) | (1 << 8));
 
-	init_core_local_storage(apic_id);
+	// The speculation controls are this thread's and the kernel's to set —
+	// never inherited (the SPEC_CTRL block above has the day it cost).
+	spec_ctrl_init_this_cpu(cpu);
+
+	init_core_local_storage(cpu);
 	core_local_storage_t *cls = get_core_local_storage();
 
 	// Calibrate the LAPIC timer frequency ONCE, on the BSP; APs inherit its
@@ -587,11 +856,11 @@ void ap_initialization_handler() {
 	// stretched boot (the 54-second VBox mystery, 2026-07-11) AND produced
 	// 2x-wrong AP frequencies (the corrupted apicTPS readings). The BSP's
 	// number is measured early, before any of that noise exists.
-	if (apic_id == BOOTSTRAP_PROCESSOR_ID)
+	if (cpu == BSP_CPU)
 		mp_determine_local_APIC_timer_speed();
 	else
 		cls->apicTicksPerSecond =
-			get_core_local_storage_for_core(BOOTSTRAP_PROCESSOR_ID)->apicTicksPerSecond;
+			get_core_local_storage_for_core(BSP_CPU)->apicTicksPerSecond;
 
 	//Divide the # of APIC timer ticks per second by the number of scheduler runs expected per second to get the timer's initial value
 	cls->apicTimerCount = cls->apicTicksPerSecond / MP_SCHEDULER_RUNS_PER_SECOND;
@@ -599,7 +868,7 @@ void ap_initialization_handler() {
 	cls->coreInitialized = true;
 
 	// Acknowledge the interrupt if not the BSP (BSP calls this method directly)
-	if (cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
+	if (cls->cpu != BSP_CPU)
     	write_eoi();  // Function to send an End-of-Interrupt signal to the APIC
 }
 
@@ -706,9 +975,9 @@ void enableAPScheduling_ISR()
 {
 	ap_configure_scheduler_timer();
 	core_local_storage_t *cls = get_core_local_storage();
-	if (kTicklessScheduler && cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
+	if (kTicklessScheduler && cls->cpu != BSP_CPU)
 	{
-		printd(DEBUG_SMP, "AP: enableAPScheduling_ISR: tickless mode active, leaving AP %u timer masked\n", cls->apic_id);
+		printd(DEBUG_SMP, "AP: enableAPScheduling_ISR: tickless mode active, leaving AP%lu timer masked\n", cls->cpu);
 		write_eoi();
 		return;
 	}
@@ -738,25 +1007,25 @@ void disableAPScheduling_ISR()
 }
 
 // Enable the AP to do scheduling
-void mp_enable_scheduling_vector(int apic_id)
+void mp_enable_scheduling_vector(uint32_t cpu)
 {
     // Enable the AP from the BSP
-    send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
-    printd (DEBUG_SMP, "MP: mp_enable_scheduling_vector: IPI sent to APIC %u for vector 0x%02x\n", apic_id, IPI_ENABLE_SCHEDULING_VECTOR);
+    send_ipi(cpu, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+    printd (DEBUG_SMP, "MP: mp_enable_scheduling_vector: IPI sent to AP%u for vector 0x%02x\n", cpu, IPI_ENABLE_SCHEDULING_VECTOR);
 }
 
-void mpEnableAP(int apic_id)
+void mpEnableAP(uint32_t cpu)
 {
     // Enable the AP from the AP
-    send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
-    printd (DEBUG_SMP, "MP: mpEnableAP: APIC %u, IPI sent for vector 0x%02x\n", apic_id, IPI_ENABLE_SCHEDULING_VECTOR);
+    send_ipi(cpu, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+    printd (DEBUG_SMP, "MP: mpEnableAP: AP%u, IPI sent for vector 0x%02x\n", cpu, IPI_ENABLE_SCHEDULING_VECTOR);
 }
 
-void mpDisableAP(int apic_id)
+void mpDisableAP(uint32_t cpu)
 {
     // Disable the AP from the AP
-    send_ipi(apic_id, IPI_DISABLE_SCHEDULING_VECTOR, 0, 1, 0);
-    printd (DEBUG_SMP, "MP: mpDisableAP: APIC %u, IPI sent for vector 0x%02x\n", apic_id, IPI_DISABLE_SCHEDULING_VECTOR);
+    send_ipi(cpu, IPI_DISABLE_SCHEDULING_VECTOR, 0, 1, 0);
+    printd (DEBUG_SMP, "MP: mpDisableAP: AP%u, IPI sent for vector 0x%02x\n", cpu, IPI_DISABLE_SCHEDULING_VECTOR);
 }
 
 // ── CPU-time settle-on-read ─────────────────────────────────────────────
@@ -776,29 +1045,6 @@ volatile bool mp_acctSettleAck[MAX_CPUS];
 extern volatile uint64_t kTicksSinceStart;
 
 
-// The core-local settle: charge the running thread up to "now", restamp.
-// Called from the IPI handler (interrupts off) and inline for the local
-// core (under cli) — in both cases it cannot interleave with this core's
-// own scheduler pass, which is the only other writer of these fields.
-static void acct_settle_local(void)
-{
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls == NULL)
-        return;
-    uint64_t now = rdtsc();
-    if (cls->acctLastDispatchTSC != 0 &&
-        cls->currentThread != NULL && cls->currentThread != NO_THREAD)
-    {
-        // A halted "current" thread is idle wearing a task's name — its
-        // span belongs to this core's idle thread (smp.h acctCurrentHalted).
-        thread_t *target = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
-                               ? cls->acctIdleThread
-                               : cls->currentThread;
-        target->runCycles += now - cls->acctLastDispatchTSC;
-        cls->acctLastDispatchTSC = now;
-    }
-}
-
 // The compositor's hlt-wait bookends (smp.h has the field doctrine).
 //
 // Begin: called UNDER CLI, immediately before sti;hlt — settle first, so
@@ -806,104 +1052,32 @@ static void acct_settle_local(void)
 // caller, THEN raise the flag so the nap ahead lands on idle.
 //
 // End: called after hlt returns, interrupts live again — wrapped in its own
-// cli window. Settles whatever span is open (if no dispatch intervened,
-// that span is the nap → flag still up → charged to idle; if the scheduler
-// ran meanwhile, dispatch already cleared the flag and charged the nap, and
-// this settle just charges the caller's genuine post-wake work), then drops
-// the flag. Idempotent when already down.
+// cli window. An ordinary IRQ or scheduler dispatch has already closed the
+// nap and cleared the redirect, so this settles the caller's post-wake tail.
+// If another wake source left the redirect up, End closes it here.
 void mpAcctHaltBegin(void)
 {
-    acct_settle_local();
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls != NULL)
-        cls->acctCurrentHalted = true;
+    accounting_halt_begin();
 }
 
 void mpAcctHaltEnd(void)
 {
-    __asm__ volatile("cli" ::: "memory");
-    acct_settle_local();
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls != NULL)
-        cls->acctCurrentHalted = false;
-    __asm__ volatile("sti" ::: "memory");
+    accounting_halt_end();
 }
 
 void acct_settle_ISR(void)
 {
     core_local_storage_t *cls = get_core_local_storage();
-    // The pass owns the meter while it runs. scheduler_do charges the
-    // outgoing thread at pass ENTRY but doesn't move acctLastDispatchTSC
-    // until pass EXIT — and the pass runs with interrupts enabled, so this
-    // IPI can land in between. Settling in that window re-charges the whole
-    // [lastDispatch → now] span on top of the entry charge: on a monopolized
-    // core that goes seconds between passes, that's seconds double-billed
-    // (top -d 5000 showed hogs >100% exactly this way, P5 2026-07-30). One
-    // settle of staleness beats double-charging — skip, ack, let the pass
-    // close its own books. (The header's "cannot interleave with this core's
-    // own scheduler pass" claim was simply wrong; this makes it true.)
-    if (cls != NULL && !mp_inScheduler[cls->apic_id])
-        acct_settle_local();
+    // The scheduler owns its open span between its entry and exit charges.
+    // Its short prologue/epilogue windows still belong to the pass itself:
+    // do not settle there, where the saved scheduler frame may name a
+    // different thread. IRQ entry already closed the interrupted mode;
+    // an active pass can settle into acctSchedCycles.
+    if (cls != NULL && (!mp_inScheduler[cls->cpu] || cls->acctSchedSpanActive))
+        accounting_charge(0);
     if (cls != NULL)
-        mp_acctSettleAck[cls->apic_id] = true;
+        mp_acctSettleAck[cls->cpu] = true;
     write_eoi();
-}
-
-// ── The settle-loop tripwire (2026-08-11) ──────────────────────────────────
-//
-// Born from a real corpse: a soak crash where kCPUInfo[i].apicID read
-// 0xfeb80000 — an e1000 BAR address, not a core number — and the ack-clear
-// below dutifully computed mp_acctSettleAck + 0xfeb80000, which wraps to
-// 0x000000007ec63c30 and page-faulted. Same wrapped 0x7ec6xxxx address in a
-// crash one build earlier, so the poisoning RECURS; what we never got to see
-// is WHAT the rest of the table looked like at that moment, because the wild
-// write faulted first and took the evidence with it.
-//
-// So: validate before indexing, and when the poison IS there, dump the entire
-// kCPUInfo block before panicking. The dump is the actual product — a BAR
-// table, packet bytes, and allocator metadata all look completely different
-// in hex, and that fingerprint names the writer. Tripwires over silence.
-//
-// Every line goes DIRECT to the wire (printf reaches the glass): the heap is
-// by hypothesis corrupt, so nothing here may touch a log queue or allocate.
-#define SETTLE_TRIP_EMIT(fmt, ...) do { \
-        char _st_line[160]; \
-        snprintf(_st_line, sizeof(_st_line), fmt, ##__VA_ARGS__); \
-        printf("%s", _st_line); \
-        serial_print_string(_st_line); \
-    } while (0)
-
-static void __attribute__((noreturn)) settle_tripwire(int i, uint32_t apic_id)
-{
-    // One narrator per report (exception_report.h): the table dump below is
-    // ~30 lines of evidence, and a concurrent fault report braiding through
-    // it would cost exactly the fingerprint this tripwire exists to capture.
-    // The panic() at the end re-enters the lock and abandons it — no unlock
-    // juggling needed on a path that never returns.
-    exception_wire_lock();
-
-    SETTLE_TRIP_EMIT("\n>>> SETTLE TRIPWIRE: kCPUInfo[%d].apicID = 0x%08x — not a core, the table is poisoned <<<\n",
-                     i, apic_id);
-    SETTLE_TRIP_EMIT(">>> kCPUInfo=%p  kMPCoreCount=%u  MAX_CPUS=%u <<<\n",
-                     (void *)kCPUInfo, kMPCoreCount, MAX_CPUS);
-
-    // The whole table, entry by entry, 15 qwords each (sizeof(cpu_t)==120).
-    // Sanity-check the base pointer first — if kCPUInfo ITSELF is bent, say
-    // so instead of faulting mid-dump and truncating the report.
-    if (((uintptr_t)kCPUInfo >> 47) != 0x1FFFF) {
-        SETTLE_TRIP_EMIT(">>> kCPUInfo pointer is not a kernel address — the POINTER is what got hit <<<\n");
-    } else {
-        for (int e = 0; e < kMPCoreCount; e++) {
-            const uint64_t *q = (const uint64_t *)&kCPUInfo[e];
-            SETTLE_TRIP_EMIT("  [%d] %016lx %016lx %016lx %016lx\n", e, q[0], q[1], q[2], q[3]);
-            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx %016lx\n", q[4], q[5], q[6], q[7]);
-            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx %016lx\n", q[8], q[9], q[10], q[11]);
-            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx\n", q[12], q[13], q[14]);
-        }
-    }
-
-    panic("settle tripwire: kCPUInfo poisoned (see table dump above) — the wild ack-write was refused\n");
-    __builtin_unreachable();
 }
 
 void mpAcctSettleAll(void)
@@ -916,29 +1090,28 @@ void mpAcctSettleAll(void)
         return;
     lastSettleTick = kTicksSinceStart;
 
-    // Local core first, atomically vs our own interrupts.
+    // Local core first. The charge routine masks interrupts around its
+    // tuple update; the same scheduler-phase rule applies here and in the
+    // remote IPI handler.
+    // The ack policy below needs the caller's IF, which accounting_charge
+    // preserves across its own interrupt-masked update.
     uint64_t flags;
-    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
-    acct_settle_local();
-    __asm__ volatile("push %0\n\tpopfq" :: "r"(flags) : "memory", "cc");
+    __asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+    core_local_storage_t *local = get_core_local_storage();
+    if (local != NULL && (!mp_inScheduler[local->cpu] || local->acctSchedSpanActive))
+        accounting_charge(0);
 
     if (!kSMPInitDone)
         return;
 
     kDiagSettleBroadcasts++;                            // TEMP DIAG
-    uint32_t self = get_core_local_storage()->apic_id;
-    for (int i = 0; i < kMPCoreCount; i++)
+    uint32_t self = (uint32_t)get_core_local_storage()->cpu;
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
     {
-        uint32_t apic_id = kCPUInfo[i].apicID;
-        // The tripwire (see settle_tripwire above): a poisoned table entry
-        // must produce a table dump, not a wild byte-write at whatever
-        // address the poison happens to wrap to.
-        if (apic_id >= MAX_CPUS)
-            settle_tripwire(i, apic_id);
-        if (apic_id == self)
+        if (cpu == self)
             continue;
-        mp_acctSettleAck[apic_id] = false;
-        send_ipi(apic_id, IPI_ACCT_SETTLE_VECTOR, 0, 1, 0);
+        mp_acctSettleAck[cpu] = false;
+        send_ipi(cpu, IPI_ACCT_SETTLE_VECTOR, 0, 1, 0);
     }
 
     // NEVER WAIT FOR AN INTERRUPT-DELIVERED ANSWER WITH INTERRUPTS OFF.
@@ -972,7 +1145,7 @@ void mpAcctSettleAll(void)
     // the freshness proc_gen_cores already accepts for its other fields
     // ("worst case one slice stale", procfs.c).
     //
-    // `flags` is the CALLER's RFLAGS, captured above before our own cli.
+    // `flags` is the caller's RFLAGS captured before the local charge.
     if (!(flags & 0x200))
         return;                                         // IF was off — send-and-go
 
@@ -983,20 +1156,19 @@ void mpAcctSettleAll(void)
     // already said we would rather have. The old 2,000,000 was sized as if
     // spinning were free — under an emulator that traps pause loops it is
     // tens of seconds.
-    for (int i = 0; i < kMPCoreCount; i++)
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
     {
-        uint32_t apic_id = kCPUInfo[i].apicID;
-        if (apic_id == self)
+        if (cpu == self)
             continue;
         uint64_t spins = 0;
-        while (!mp_acctSettleAck[apic_id] && ++spins < 50000UL)
+        while (!mp_acctSettleAck[cpu] && ++spins < 50000UL)
             __builtin_ia32_pause();
         if (spins > kDiagSettleMaxSpins)                // TEMP DIAG
             kDiagSettleMaxSpins = spins;                // TEMP DIAG
-        if (!mp_acctSettleAck[apic_id])                 // TEMP DIAG: bound hit
+        if (!mp_acctSettleAck[cpu])                     // TEMP DIAG: bound hit
         {
             kDiagSettleTimeouts++;                      // TEMP DIAG
-            kDiagSettleLastLateAPIC = apic_id;          // TEMP DIAG
+            kDiagSettleLastLateCPU = cpu;               // TEMP DIAG
         }
     }
 }
@@ -1009,11 +1181,11 @@ void mpSendInvTLB()
         return;
     // Send an IPI to the AP to invalidate the TLB
     // Send to all APs except the current one
-    for (int i = 0; i < kMPCoreCount; i++) {
-        uint32_t apic_id = kCPUInfo[i].apicID;
-        if (apic_id != read_apic_id()) {
-            send_ipi(apic_id, IPI_INVALIDATE_TLB_VECTOR, 0, 1, 0);
-            printd (DEBUG_SMP, "MP: mpSendInvTLB: APIC %u, IPI sent for vector 0x%02x\n", apic_id, IPI_INVALIDATE_TLB_VECTOR);
+    uint32_t self = cpu_self();
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+        if (cpu != self) {
+            send_ipi(cpu, IPI_INVALIDATE_TLB_VECTOR, 0, 1, 0);
+            printd (DEBUG_SMP, "MP: mpSendInvTLB: AP%u, IPI sent for vector 0x%02x\n", cpu, IPI_INVALIDATE_TLB_VECTOR);
         }
     }
 }
@@ -1051,11 +1223,10 @@ void mpFreezeOtherCores(void)
 {
     if (!kSMPInitDone)
         return;
-    uint32_t self = read_apic_id();
-    for (int i = 0; i < (int)kMPCoreCount; i++) {
-        uint32_t apic_id = (uint32_t)kCPUInfo[i].apicID;
-        if (apic_id != self)
-            send_ipi(apic_id, IPI_FREEZE_VECTOR, 0, 1, 0);
+    uint32_t self = cpu_self();
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+        if (cpu != self)
+            send_ipi(cpu, IPI_FREEZE_VECTOR, 0, 1, 0);
     }
 }
 

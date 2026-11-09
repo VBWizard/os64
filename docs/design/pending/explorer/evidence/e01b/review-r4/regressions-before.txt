@@ -1,0 +1,49 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:897 [r4 I1/I2 refresh failure preserves surviving path] p->selected==selected
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:831 [r4 I1/I2 refresh failure preserves surviving path] parent->selected<parent->model->count
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:897 [r4 I1/I2 refresh failure preserves surviving path] p->selected==selected
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:831 [r4 I1/I2 refresh failure preserves surviving path] parent->selected<parent->model->count
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:897 [r4 I1/I2 refresh failure preserves surviving path] p->selected==selected
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:831 [r4 I1/I2 refresh failure preserves surviving path] parent->selected<parent->model->count
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:897 [r4 I1/I2 refresh failure preserves surviving path] p->selected==selected
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:831 [r4 I1/I2 refresh failure preserves surviving path] parent->selected<parent->model->count
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:913 [r4 I5 production dirty rendering after refresh and view changes] os64_rect_intersect(damage,g.bar.w.bounds,&intersection)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:920 [r4 I5 production dirty rendering after refresh and view changes] os64_ui_render(&g.ui,&damage)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:920 [r4 I5 production dirty rendering after refresh and view changes] bar_pixels()!=pixels
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:925 [r4 I5 production dirty rendering after refresh and view changes] bar_pixels()!=pixels
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:928 [r4 I5 production dirty rendering after refresh and view changes] bar_pixels()==pixels
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:953 [r4 I4 interrupted input pairing] os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:953 [r4 I4 interrupted input pairing] os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:953 [r4 I4 interrupted input pairing] os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:953 [r4 I4 interrupted input pairing] os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:949 [r4 I4 interrupted input pairing] !g.menus->pressed_key&&g.menus->pressed_panel==MENU_NONE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:949 [r4 I4 interrupted input pairing] !g.menus->pressed_key&&g.menus->pressed_panel==MENU_NONE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:950 [r4 I4 interrupted input pairing] !g.menus->held[i]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:959 [r4 I4 interrupted input pairing] g.targets[0].hits==hits+1&&!os64_ui_menu_active(g.menus)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:948 [r4 I4 interrupted input pairing] !g.menus->f10_held&&!g.menus->alt_armed&&!g.menus->suppress_pending&&!g.menus->suppress_button
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:980 [r4 I6 stale Alt/F10 request has one error per fresh gesture] error_count==errors+1&&last_error==OS64_UI_STALE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:980 [r4 I6 stale Alt/F10 request has one error per fresh gesture] error_count==errors+1&&last_error==OS64_UI_STALE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:980 [r4 I6 stale Alt/F10 request has one error per fresh gesture] error_count==errors+1&&last_error==OS64_UI_STALE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:980 [r4 I6 stale Alt/F10 request has one error per fresh gesture] error_count==errors+1&&last_error==OS64_UI_STALE
+r4 transitions: 32 sequences, 1358 invariant boundaries
+r4: 13805 checks, 45 failures
+Artifacts: /tmp/e1b-r4-before

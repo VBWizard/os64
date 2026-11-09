@@ -1,0 +1,29 @@
+COMMAND: make clean && make
+CWD: /home/yogi/src/os64/.worktrees/font-settings
+CHECKPOINT: db3fe41
+EXIT: 2
+Full local log: /tmp/quinn-f5-clean-repro.txt
+SHA256: f9433a44ea8a6c523e0016950e37f1b0298cf3760665cc772aad3ef5e6ea7c43
+Selected diagnostics (not the full build log):
+x86_64-elf-ld: warning: ../../bin/arg_echo has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/stat_test has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/env_fill has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/glutton has a LOAD segment with RWX permissions
+make: [GNUmakefile:553: /home/yogi/src/os64/.worktrees/font-settings/disk/os64.img] Error 1 (ignored)
+::/etc/fonts.conf: no match for target
+Bad target ::/etc/fonts.conf
+make: *** [GNUmakefile:554: /home/yogi/src/os64/.worktrees/font-settings/disk/os64.img] Error 1
+
+COMMAND: make clean && make
+CWD: /home/yogi/src/os64/.worktrees/font-settings
+CHECKPOINT: db3fe41 plus GNUmakefile directory-order fix
+EXIT: 0
+Full local log: /tmp/quinn-f5-clean-fixed.txt
+SHA256: d2ced0a4d97de3b95a1f833ceddfa89b78b29b0b244feb1201baf51381d60066
+Selected diagnostics (not the full build log):
+x86_64-elf-ld: warning: ../../bin/arg_echo has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/stat_test has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/glutton has a LOAD segment with RWX permissions
+x86_64-elf-ld: warning: ../../bin/env_fill has a LOAD segment with RWX permissions
+Limine BIOS stages installed successfully!
+

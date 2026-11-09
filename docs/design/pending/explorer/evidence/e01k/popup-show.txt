@@ -1,0 +1,10 @@
+show: owner=3 other=2 popup=4 child=5; Escape closes deepest; Q exits
+focus: window=2 gained=1 sibling=0 other=0
+focus: window=2 gained=0 sibling=1 other=3
+focus: window=3 gained=1 sibling=1 other=2
+focus: window=3 gained=0 sibling=1 other=4
+focus: window=4 gained=1 sibling=1 other=3
+focus: window=4 gained=0 sibling=1 other=5
+focus: window=5 gained=1 sibling=1 other=4
+focus: window=2 gained=1 sibling=1 other=5
+focus: window=5 gained=0 sibling=1 other=2

@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Web fonts in the guest (PILE3.md § Web fonts, S9a3). Run
+     tools/pages/fonts.sh first: it puts the fonts this page names in
+     tools/pages/fonts/. Each row draws in the face its label names; the
+     DejaVu Sans rows are the fallback, which a missing or refused face
+     leaves. -->
+<title>Web fonts</title>
+<style>
+body{margin:8px;font:15px sans-serif;background:#fff;color:#000}
+.row{margin:6px 0}
+.lab{display:inline-block;width:330px;font:12px sans-serif;color:#555}
+@font-face{font-family:Otf;src:url(fonts/SourceCodePro-Regular.otf) format("opentype")}
+@font-face{font-family:Woff;src:url(fonts/DejaVuSans-Bold.woff) format("woff")}
+@font-face{font-family:Halves;src:url(fonts/DejaVuSerif.ttf);unicode-range:U+0-7F}
+@font-face{font-family:Halves;src:url(fonts/DejaVuSerif-Italic.ttf);unicode-range:U+80-24F}
+@font-face{font-family:Skip;src:url(fonts/none.woff2) format("woff2"),url(fonts/DejaVuSerif.ttf)}
+@font-face{font-family:Gone;src:url(fonts/missing.ttf)}
+@font-face{font-family:Unused;src:url(fonts/never-asked.ttf)}
+@font-face{font-family:Far;src:url(fonts/far.ttf);unicode-range:U+4E00-9FFF}
+</style>
+<div class=row><span class=lab>1. an OpenType face (Source Code Pro)</span><span style="font-family:Otf">The quick brown fox 0O1lI</span></div>
+<div class=row><span class=lab>2. a WOFF unwrapped (DejaVu Sans Bold)</span><span style="font-family:Woff">The quick brown fox</span></div>
+<div class=row><span class=lab>3. two ranges: ASCII upright, the rest italic</span><span style="font-family:Halves">Cafe Caf&eacute; na&iuml;ve &AElig;</span></div>
+<div class=row><span class=lab>4. a WOFF2 source passed over (DejaVu Serif)</span><span style="font-family:Skip">The quick brown fox</span></div>
+<div class=row><span class=lab>5. a face never served (fallback, FAILED font)</span><span style="font-family:Gone">The quick brown fox</span></div>
+<div class=row><span class=lab>6. a range the page never uses (not fetched)</span><span style="font-family:Far">The quick brown fox</span></div>
+<div class=row><span class=lab>7. a family with no face (fallback, MISSING font)</span><span style="font-family:Nowhere">The quick brown fox</span></div>
+<div class=row><span class=lab>8. the system's own family by name</span><span style="font-family:'DejaVu Sans Mono'">The quick brown fox</span></div>

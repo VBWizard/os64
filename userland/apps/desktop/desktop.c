@@ -32,13 +32,15 @@
 #include "os64/os64.h"
 #include "os64/io.h"
 #include "os64/conf.h"
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/draw.h"
 #include "os64/gui.h"
 #include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/fmt.h"       // os64_snprintf — the click position, as argv for the launcher
 #include "os64/thread.h"
+#include "os64/decoration_startup.h"
+#include "os64/mouse_settings.h"
 
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
@@ -359,11 +361,12 @@ static void paint(os64_draw_ctx_t *ctx, const desktop_config_t *cfg,
 
     if (img->pixels != NULL) {
         // Centered, never scaled — and an image larger than the screen is
-        // cropped around its middle rather than shifted, which is the blit's
-        // contract. (tools/mkwall.py sizes an image for the screen.)
+        // cropped around its middle rather than shifted. Composite straight
+        // alpha over the configured fill. (tools/mkwall.py sizes an image
+        // for the screen.)
         int32_t x = ((int32_t)ctx->surf.width  - (int32_t)img->width)  / 2;
         int32_t y = ((int32_t)ctx->surf.height - (int32_t)img->height) / 2;
-        os64_draw_blit(&ctx->surf, x, y, img->pixels,
+        os64_draw_blend(&ctx->surf, x, y, img->pixels,
                        img->width, img->height, img->width);
     }
     os64_draw_publish(ctx, NULL);
@@ -378,6 +381,20 @@ int main(int argc, char **argv)
         os64_complain("desktop: no GUI here (screen_info)\n");
         return 1;
     }
+
+    if(os64_mouse_startup()<0)
+        os64_complain("desktop: mouse preferences could not be restored; live settings retained\n");
+
+    // Disk policy belongs to the desktop startup path. The generation check
+    // preserves a session that was already changed by an explicit Apply.
+    int decoration=os64_decor_startup_install();
+    if(decoration<0)
+        os64_complain("desktop: startup decoration failed (%d); live frame retained\n",decoration);
+    else
+        os64_printf("desktop: startup decoration %s\n",
+            decoration==OS64_DECOR_STARTUP_APPLIED?"installed":
+            decoration==OS64_DECOR_STARTUP_SKIPPED?"skipped (session already changed)":
+            decoration==OS64_DECOR_STARTUP_DEFAULT?"built-in (explicit choice)":"built-in (no saved choice)");
 
     // The window IS the screen. START_UNFOCUSED asks that the programs this
     // shell is about to start get the keyboard rather than the wallpaper —

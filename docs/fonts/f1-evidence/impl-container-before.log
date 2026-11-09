@@ -1,0 +1,18 @@
+FAIL [formats/container-boundary] one-face collection returned OK
+FAIL [formats/container-boundary] bare CFF1 outside SFNT profile returned OK
+
+cost: face @ size                     px peak bytes allocations     held
+DejaVu Sans (TTF)                     16      51268        465    49315
+DejaVu Sans (TTF)                     24      51268        465    49351
+DejaVu Sans (TTF)                     32      51268        465    49418
+DejaVu Sans Mono (TTF)                16      45712        457    44512
+DejaVu Sans Mono (TTF)                24      45712        457    44533
+DejaVu Sans Mono (TTF)                32      45712        457    44579
+Source Sans 3 (CFF)                   16     109780        968   106068
+Source Sans 3 (CFF)                   24     109780        968   106104
+Source Sans 3 (CFF)                   32     109780        968   106114
+Source Code Pro (CFF)                 16      75090        910    71386
+Source Code Pro (CFF)                 24      75090        910    71414
+Source Code Pro (CFF)                 32      75090        910    71429
+
+1075 checks, 2 failures

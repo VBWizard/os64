@@ -1,0 +1,1 @@
+PASS GIF first-frame decode, animation canvases, disposal, loops, rewind, file loading and heap cleanup

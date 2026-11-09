@@ -18,7 +18,7 @@
 #include "serial_logging.h"
 #include "strings/sprintf.h"
 #include "BasicRenderer.h"
-#include "smp.h"        // kCPUInfo, kMPCoreCount
+#include "smp.h"        // kCPUCount
 #include "smp_core.h"   // send_ipi and the IPI vector numbers
 #include "driver/system/x86_64.h"   // read_apic_id
 #include "spinlock.h"
@@ -131,11 +131,10 @@ static void watchpoint_sync_all_cores(void)
 	if (!kSMPInitDone)
 		return;   // nobody else is awake yet; they will sync on their way in
 
-	uint32_t self = read_apic_id();
-	for (int i = 0; i < (int)kMPCoreCount; i++) {
-		uint32_t apic_id = (uint32_t)kCPUInfo[i].apicID;
-		if (apic_id != self)
-			send_ipi(apic_id, IPI_WATCHPOINT_SYNC_VECTOR, 0, 1, 0);
+	uint32_t self = cpu_self();
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+		if (cpu != self)
+			send_ipi(cpu, IPI_WATCHPOINT_SYNC_VECTOR, 0, 1, 0);
 	}
 }
 

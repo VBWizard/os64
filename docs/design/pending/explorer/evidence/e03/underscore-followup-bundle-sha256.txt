@@ -1,0 +1,4 @@
+8a35a265fe309e9e9799fc88ad3f1fb4e8f8a4cace91da96a97706ffe104b624  /tmp/e3-wire/libs/libos64.so
+80826fb9fdddd803e99034a441bee0ba35900859b06549200292047fb303db5c  /tmp/e3-wire/libs/libimage.so
+ef218304e0ac3c2fa62cf07d8eb87195a1d00143ace314df2f25f471d12b469a  /tmp/e3-wire/libs/libfreetype.so
+964019f30f96ca2d8465689d9c7c236f3125fb2db0a052ad47a4d181440a7e35  /tmp/e3-wire/tests/actiongallery

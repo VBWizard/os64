@@ -38,6 +38,18 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+// Finite read/write deadlines saturate at the last representable tick when
+// the requested interval would overflow the absolute tick clock.
+//
+// Write's patience is arg3 of SYSCALL_WRITE, mirroring read below:
+// 0 polls, finite milliseconds round up to ticks, OS64_WAIT_FOREVER blocks.
+// Queue while room exists; once waiting would exceed the deadline, return
+// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain TCP's
+// responsibility and timeout leaves the handle open. TCP honors finite
+// patience; nonempty writes on other handle types refuse it rather than
+// silently blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
+// os64_write_for exposes the argument. Raw syscall callers must set it too.
+
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
 // read(handle, buf, len, timeout_ms) — arg3 says how long the call may WAIT
 // for a byte to exist, in milliseconds, and it means what it says:
@@ -60,11 +72,10 @@
 // meaning of zero is unsayable. Honored: the poll()/select() tradition
 // (0 = now, forever spelled out), which is the family this call belongs to.
 //
-// The timeout is REFUSED (not silently ignored) on handles that don't honor
-// it — a pipe read that accepts a patience it won't keep is a lie with a
-// delay. The console honors it today; pipes and the net's conn handles grow
-// or carry it the day their consumers demand (the net branch already
-// speaks this contract on udp/tcp/icmp).
+// Finite patience is supported by console input, pipes, UDP/TCP/ICMP,
+// listeners, STREAM PTY masters, and glass readers. Other handles refuse
+// it rather than silently blocking. Ready pipe bytes and EOF precede the
+// deadline check: a zero-time poll can still return either.
 #define OS64_WAIT_FOREVER  UINT64_C(0xFFFFFFFFFFFFFFFF)   // ((uint64_t)-1)
 
 // The empty-wait verdict: the deadline expired with nothing to show. Shares
@@ -94,6 +105,17 @@
 // count since boot AND the active tick rate. The stopwatch, not the
 // calendar — see the header for the doctrine and the everyday arithmetic.
 #define SYSCALL_TICKS      26
+
+// micros() — the same stopwatch with finer graduations: microseconds since
+// boot, returned in RAX. No arguments, no struct: one number in the unit
+// the caller wants. Read from the CPU's cycle counter at the rate the boot
+// calibrated, so it counts what the tick clock loses under load (the two
+// drift apart by exactly those lost ticks — os64/ticks.h), and folded
+// through a high-water mark so no core can ever be handed a smaller value
+// than another was. A kernel without
+// this call answers the dispatcher's negative verdict for an unknown
+// number, which is how a program on a lifeboat kernel finds out.
+#define SYSCALL_MICROS     59
 
 // memory(out) — fill an os64_memory_t (os64/memory.h) with the physical
 // memory picture: total/usable/free/reclaimable/available + largest free
@@ -226,18 +248,16 @@
 // natively, and the ext2 write driver was built to it the same afternoon
 // the contract was ratified (2026-08-04: ext2_rm, promise kept).
 //
-// Returns 0 on success. Refused, not half-done: a read-only filesystem
-// (os64's ext2 ROOT mount stays read-only until ratified writable — the
-// driver itself writes since 2026-08-04), a path that isn't there, a file
-// or directory another handle holds OPEN (ext2 refuses rather than racing
-// the reader), or a directory that still has contents — emptying it first
-// is the caller's
-// job, which is what rm -r's depth-first walk is.
+// Returns 0 on success. Refused, not half-done: a read-only filesystem, a
+// path that isn't there, an OPEN directory, or a directory that still has
+// contents — emptying it first is the caller's job, which is what rm -r's
+// depth-first walk is. An open regular ext2 file loses its name immediately
+// and its storage at last close, so replacing a running program is safe.
 #define SYSCALL_UNLINK 35
 
 // mkdir(path) — create a directory. Returns 0, or negative: read-only
-// filesystem (ext2 by design), a parent that doesn't exist, or a name
-// already taken. One call, atomic, done.
+// filesystem, a parent that doesn't exist, or a name already taken. One
+// call, atomic, done.
 //
 // That last word is the whole history: Unix went its FIRST DECADE without
 // this syscall. V6/V7's mkdir(1) was a SETUID-ROOT PROGRAM that built a
@@ -282,6 +302,20 @@
 // and the newcomer moves. Renumbering the newcomer costs one rebuild;
 // renumbering the incumbent costs every binary ever built.
 #define SYSCALL_NET_DIAL   37
+
+// pty_create_stream(cols, rows) — a STREAM-flavor pty (SERVERS.md). Its own
+// syscall rather than a mode argument on 44, so 44's two-argument ABI is
+// untouched for the GRID callers already compiled against it.
+#define SYSCALL_PTY_CREATE_STREAM 56
+
+// net_announce(local) — open the INBOUND door (SERVERS.md, 2026-09-12).
+// arg0 = const os64_netdest_t* read as "where I am": ip 0, the port to
+// answer on, protocol TCP. Returns a LISTENER handle whose read() yields
+// one os64_netconn_t per completed handshake (os64/net.h) — accept is a
+// read, NETWORK.md ruling #3 — or negative: the dial table's codes, plus
+// OS64_NET_ERR_PORT_TAKEN when the port is already spoken for. The verb
+// is Plan 9's `announce`, kept for the reason `dial` was.
+#define SYSCALL_NET_ANNOUNCE 55
 
 // sync(1)'s engine (2026-08-06): walk the kernel's open-file registry and
 // run every open file's fops->sync. No arguments — the broom sweeps the
@@ -388,9 +422,9 @@ typedef enum os64_shutdown_mode
 // rename(oldpath, newpath) — give a file a different name, possibly in a
 // different directory. Returns 0, or negative on refusal.
 //
-// THE GUARANTEE, and the only reason this call exists as a call: if
-// `newpath` already names a regular file, it is REPLACED, and there is no
-// instant at which `newpath` fails to resolve. That is the whole point.
+// THE LEGACY CONTRACT: if `newpath` already names a regular file, it is
+// REPLACED. A filesystem capable of swinging that name directly keeps it
+// resolving throughout; the FAT limitation is stated below.
 // Unix went its first decade without rename(2) — you wrote link(new, old)
 // then unlink(old), two steps, and a crash between them left you with two
 // names or none. 4.2BSD (1983) added rename precisely to close that window,
@@ -400,8 +434,8 @@ typedef enum os64_shutdown_mode
 // reason it was built: a transfer that fails must leave the previous file
 // exactly where it was, not a truncated impostor wearing its name.
 //
-// os64 keeps the atomicity and declines the rest of POSIX's rename, which
-// accumulated a great deal (EXDEV, directory-onto-empty-directory
+// os64 keeps the single-operation rename and declines the rest of POSIX's
+// rename, which accumulated a great deal (EXDEV, directory-onto-empty-directory
 // replacement, the ".."-and-link-count corner cases). The rules here are
 // four, and each one refuses rather than surprising you:
 //
@@ -425,14 +459,36 @@ typedef enum os64_shutdown_mode
 //     detaches the subtree into a ring nothing points at — one of the few
 //     things a rename can do that fsck cannot quietly repair.
 //
-// ATOMICITY IS THE FILESYSTEM'S TO GRANT. ext2 keeps the promise honestly
-// (one directory-block write swings the name onto the new inode). FAT
+// syscall 43 deliberately remains a two-argument ABI. Its unused registers
+// were never required to be zero, so reinterpreting arg2 here would make an
+// old binary's behavior depend on register residue. The safety policies
+// therefore have their own door, SYSCALL_RENAME_WITH_FLAGS (54):
+//
+//   OS64_RENAME_NOREPLACE
+//       Refuse if newpath already exists. The existence check and rename are
+//       one filesystem operation, so this is a destination-name claim rather
+//       than the racy userland sequence "stat, then rename".
+//
+//   OS64_RENAME_REQUIRE_ATOMIC_REPLACE
+//       Rename when newpath is absent; when it exists, replace only if the
+//       filesystem can do so without first removing the old name. ext2 can;
+//       FAT refuses and leaves both files intact.
+//
+// The modes are mutually exclusive. Unknown bits or both bits together are
+// refused. os64_rename() uses syscall 43; os64_rename_with_flags() uses 54.
+//
+// ATOMICITY IS THE FILESYSTEM'S TO GRANT. ext2 keeps the legacy promise
+// honestly (one directory-block write swings the name onto the new inode). FAT
 // cannot — it has no file identity separate from the directory entry, which
 // is exactly the idea the inode was and MS-DOS's 1981 filesystem was not —
 // so on FAT an existing destination is removed first and a real window
 // exists. Booked in DEBTS; root is ext2 precisely so the guarantee lives
 // where it can be kept.
+#define OS64_RENAME_NOREPLACE                 0x01
+#define OS64_RENAME_REQUIRE_ATOMIC_REPLACE    0x02
+#define OS64_RENAME_FLAG_MASK                 0x03
 #define SYSCALL_RENAME 43
+#define SYSCALL_RENAME_WITH_FLAGS 54
 
 // 44 and 45 belong to the pty pair (PTY_CREATE / PTY_SNAPSHOT, defined with
 // the GUI block below) — they were claimed on the gui branch first and this
@@ -525,6 +581,35 @@ typedef enum os64_shutdown_mode
 // of acquiring handles into the ABI.
 #define SYSCALL_CONF_RESOLVE 47
 
+// HOW LONG ONE spawn() ARGUMENT MAY BE, including its terminator: 128 KiB,
+// Linux's MAX_ARG_STRLEN. The kernel measures every argument before it
+// copies any, and REFUSES a spawn it cannot carry whole — it never truncates
+// — answering OS64_SPAWN_TOO_LONG, so a caller holding a string of its own
+// choosing needs the number rather than a guess. The per-argument cap is not
+// what really bounds a spawn: the child's whole argument block is one
+// mebibyte, its pointers included, and at most OS64_SPAWN_MAX_ARGS arguments.
+// The cap is this large because one argument can be a whole command line — `husk -c`
+// carries it as a single string, and so does an ssh exec request — and a
+// limit a caller cannot see is one it reports as the wrong thing.
+#define OS64_SPAWN_ARG_MAX (128 * 1024)
+#define OS64_SPAWN_MAX_ARGS 4096
+
+// spawn()'s own refusal. The boundary's two answers keep their meanings (-1:
+// the kernel will not do it — no such program, a handle that cannot be
+// handed on; -2: a request it could not take in — an unreadable address, a
+// path it cannot resolve, a flag it does not know), and this one says the
+// arguments were readable and there is too much of them: one longer than
+// OS64_SPAWN_ARG_MAX, more than OS64_SPAWN_MAX_ARGS of them, or more in all
+// than a child's argument block holds. Distinct because "cannot run" sends a person looking
+// for a program that is sitting right there — Unix's E2BIG, the "Argument
+// list too long" every shell user has met.
+#define OS64_SPAWN_TOO_LONG (-3)
+
+// HOW LONG A PATH MAY BE, including its terminator. The cwd getcwd copies out
+// and a program path spawn resolves are both bounded by it, so a buffer this
+// size always holds one.
+#define OS64_PATH_MAX 256
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
@@ -551,11 +636,17 @@ typedef enum os64_shutdown_mode
 
 // The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows)
 // returns a MASTER handle; the slave is a kernel tty the master names at
-// spawn (above) and tasks name as their controlling terminal. GRID mode:
-// write(master) injects keystrokes (0x03 runs the slave's Ctrl+C intercept),
-// pty_snapshot copies the interpreted screen out; read(master) is reserved
-// for the STREAM mode whose customer (telnetd) waits on TCP listen().
-#define SYSCALL_PTY_CREATE   44
+// spawn (above) and tasks name as their controlling terminal. In BOTH pty
+// flavors write(master) injects keystrokes (0x03 runs the slave's Ctrl+C
+// intercept). What differs is the way OUT, and the FLAVOR IS THE SYSCALL
+// NUMBER, not an argument — 44 stays exactly two-argument so an already-built
+// GRID caller (which passes RDX unspecified through os64_syscall2) is never
+// re-read as a mode. GRID (44) interprets the child's output into a screen
+// that pty_snapshot copies out and read(master) refuses; STREAM (56, SERVERS.md
+// 2026-09-12) hands the child's bytes to read(master) uninterpreted and
+// pty_snapshot refuses — what a remote terminal wants, the rendering happening
+// at its end.
+#define SYSCALL_PTY_CREATE        44
 #define SYSCALL_PTY_SNAPSHOT 45
 // pty_resize(master, cols, rows): the grid follows the window and every
 // task seated on the slave that installed a SIGWINCH handler hears it; the
@@ -564,6 +655,14 @@ typedef enum os64_shutdown_mode
 // The master's verb — it owns the geometry. A program that hears the signal
 // asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
 #define SYSCALL_PTY_RESIZE   51
+#define SYSCALL_PTY_HISTORY  60
+#define SYSCALL_PTY_VIEWPORT 61
+
+// mount(what, where) / unmount(where): the namespace verbs (2026-08-30).
+// `what` is a GPT partition name or GUID — never a device path (os64/mount.h
+// carries the vocabulary and the result codes both sides speak).
+#define SYSCALL_MOUNT        52
+#define SYSCALL_UNMOUNT      53
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the
@@ -609,6 +708,22 @@ typedef enum os64_shutdown_mode
 // and what you pinned, and discovered that nothing in the client ABI could
 // tell an app anything the WINDOW SYSTEM knew about its own window.
 #define SYSCALL_GUI_WINDOW_GET_STATE    48
+
+// Owner-set minimum content dimensions; see os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_MIN_SIZE 57
+#define SYSCALL_GUI_WINDOW_FOCUS 62
+// Any-window readiness and content-origin snapshot; see os64/gui.h.
+#define SYSCALL_GUI_EVENT_WAIT_ANY 63
+#define SYSCALL_GUI_WINDOW_GET_CONTENT_RECT 64
+// Rename an owned window: arg0 = handle, arg1 = title string, arg2 = flags
+// (OS64_GUI_WINDOW_TITLE_UTF8 or 0). See os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_TITLE 65
+// Change an owned ordinary window's stacking band: arg0 handle, arg1 0/1.
+#define SYSCALL_GUI_WINDOW_SET_PINNED 66
+
+// Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
+// Bits coalesce outside the input ring; see os64/gui.h.
+#define SYSCALL_GUI_EVENT_RING 58
 
 // signal_handler — install a handler for a signal, and answer with the one it
 // replaced.

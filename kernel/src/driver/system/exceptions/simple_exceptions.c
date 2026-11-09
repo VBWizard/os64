@@ -7,7 +7,9 @@
 #include "smp_core.h"
 #include "task.h"
 #include "stack_trace.h"   // symbolized ring-3 call chains (NOTRACE-gated)
+#include "signals.h"       // SIGNALS_EXIT_SIGSEGV — the status a fault death leaves
 #include "CONFIG.h"
+#include "driver/system/x86_64.h"   // read_apic_id works before this CPU installs GS
 #include "msr.h"        // rdmsr64 — GS_BASE in the fault report
 #include "log.h"
 #include "memory/paging.h"
@@ -30,6 +32,9 @@
 // one thing the old panic never told you was which stack.
 extern uint64_t mp_isrSavedRSP[];
 #include "shared_object.h"
+#include "tty.h"             // tty_write — a ring-3 death's headline goes to the program's own terminal
+#include "gui/compositor.h"  // gui_emergency_disable — exception_panic takes the glass
+#include "strings/strlen.h"  // strlen — the headline's length for tty_write
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
@@ -50,6 +55,22 @@ bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
 volatile uint64_t kPageFaultCount;
 
+// Count a fault after it has a retryable mapping. Fatal faults never return
+// through this door; a file read includes a filesystem-cache hit because the
+// pager cannot distinguish it from device I/O at this boundary.
+static void record_resolved_fault(thread_t *fault_thread, bool did_read,
+                                  bool anon_zero)
+{
+    if (fault_thread != NULL && fault_thread != NO_THREAD)
+    {
+        __atomic_fetch_add(did_read ? &fault_thread->majorFaults : &fault_thread->minorFaults,
+                           1, __ATOMIC_RELAXED);
+        if (anon_zero)
+            __atomic_fetch_add(&fault_thread->anonZeroPages, 1, __ATOMIC_RELAXED);
+    }
+    kPageFaultCount++;
+}
+
 // ── The twin-resolve publish lock (2026-08-16) ──────────────────────────────
 //
 // Two threads of one task faulting on the SAME not-yet-present page both used
@@ -67,8 +88,9 @@ volatile uint64_t kPageFaultCount;
 // table, and the racer who finds the page already present frees its own frame
 // instead of mapping over the winner's. No I/O and no allocation ever happens
 // with this lock held (paging_map_page can draw a table page, which takes
-// kMemoryStatusLock — that nests publish→memory, and nothing takes them in
-// the other order), so the spin is bounded by a map, not a disk.
+// the allocator's locks (kFrameLock, kMemoryStatusLock) — that nests
+// publish→allocator, and nothing takes them in the other order), so the
+// spin is bounded by a map, not a disk.
 //
 // One global lock, not per-task: the critical section is a walk plus at most
 // one map, and a lock that small doesn't earn a per-task field.
@@ -121,7 +143,7 @@ static bool fault_address_readable(uint64_t address)
 	if (address_is_mapped(address)) {
 		return true;
 	}
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = try_get_core_local_storage();
 	task_t *t = (cls != NULL) ? (task_t *)cls->task : NULL;
 	if (t == NULL || t->pml4v == 0) {
 		return false;
@@ -157,8 +179,10 @@ static bool fault_address_readable(uint64_t address)
 // `direct` now means exactly ONE thing: THIS CORE IS DYING. A panic must not
 // depend on logd being alive to drain a queue, so it writes polled serial and
 // nothing else. Everything else — a ring-3 segfault, a page-fault diagnosis, a
-// stack trace — goes to ALL THREE sinks: the glass, the wire, and (only when a
-// userland daemon owns it) the LOGD= file.
+// stack trace — goes to the wire and (only when a userland daemon owns it) the
+// LOGD= file, and to the glass unless s_fault_glass says otherwise (below: a
+// ring-3 death shows one line where the program ran, and the rest is for the
+// log).
 //
 // THE RULING THAT CHANGED THIS (Chris, 2026-08-11): a fault report belongs on
 // the wire unconditionally — "it's cheap and it's permanent, and it's viewable
@@ -178,10 +202,48 @@ static bool fault_address_readable(uint64_t address)
 // The printd copy is added only when it lands somewhere OTHER than this same
 // wire — see log_printd_reaches_serial(). Without that test the whole report
 // prints twice on COM1 in the no-LOGD case, which is the default case.
+//
+// THE GLASS IS THE SINK A RING-3 DEATH SPARES (Chris, 2026-08-28): a
+// program dying is a fact the person at the keyboard needs in ONE line —
+// which program, why, and the exit code — while the register dump and the
+// call chain are for whoever reads the log. The full report was the right
+// default while the kernel itself liked to die and the glass was the only
+// sink you were sure to see; it is noise now that a ring-3 fault kills the
+// program and never the machine. So the ring-3 kill paths print their
+// headline (user_death_headline — on the TERMINAL THAT RAN THE PROGRAM),
+// then clear s_fault_glass for the rest of the report; the wire and the log
+// still receive every line in order, per the ruling above. Ring-0 panics
+// never touch the switch and stay as loud as they ever were.
+static bool s_fault_glass = true;
+
+// The headline of a ring-3 death goes to the terminal that ran the program —
+// where every shell since V7 has printed "Segmentation fault" — and not to
+// VT1, which is the kernel's address, not the program's: a death in a gterm
+// or on VT2 would otherwise show nothing at all where the person was
+// looking. A gterm's pty slave carries it into the window; a text VT shows
+// it in place; a task with no terminal falls back to the system console.
+// The wire and the log get the same line, first line of the full report.
+static void user_death_headline(task_t *task, const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+
+	if (task->tty != NULL)
+		tty_write((tty_t *)task->tty, line, strlen(line));
+	else
+		printf("%s", line);
+	serial_print_string(line);
+	if (!log_printd_reaches_serial())
+		printd(DEBUG_EXCEPTIONS, "%s", line);
+}
+
 #define FAULT_PRINT(direct, fmt, ...) do { \
         if (direct) { EXCEPTION_PRINT(fmt, ##__VA_ARGS__); } \
         else { \
-            printf(fmt, ##__VA_ARGS__); \
+            if (s_fault_glass) printf(fmt, ##__VA_ARGS__); \
             char _flt_line[512]; \
             snprintf(_flt_line, sizeof(_flt_line), fmt, ##__VA_ARGS__); \
             serial_print_string(_flt_line); \
@@ -322,14 +384,9 @@ void dump_fault_registers(bool direct)
 	// the shape of the corruption family this OS spent weeks on.
 	//
 	// The SELECTOR is the useless half; in long mode the base comes from
-	// IA32_GS_BASE, so that MSR is what gets printed. And because os64 uses
-	// SWAPGS NOWHERE (verified — the base is written once per core at bring-up
-	// in smp_core.c and never swapped), this value has one correct answer at
-	// all times, in ring 0 and ring 3 alike: it must point into the
-	// kCoreLocalStorage array. So we do not merely print it, we CHECK it — a
-	// number a reader has to validate by hand is a number that gets skimmed
-	// past. If this ever says WRONG, stop reading the rest of the report and
-	// believe this line first.
+	// IA32_GS_BASE, so that MSR is what gets printed. After CLS initialization
+	// it should point into kCoreLocalStorage in ring 0 and ring 3 alike.
+	// During CPU bring-up, zero is expected until that CPU installs GS.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -337,7 +394,8 @@ void dump_fault_registers(bool direct)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		FAULT_PRINT(direct, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		                gs_base,
-		                sane ? "in kCoreLocalStorage — ok"
+		                (!kSMPInitDone && gs_base == 0) ? "not initialized (early boot)"
+		                     : sane ? "in kCoreLocalStorage — ok"
 		                     : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
 	FAULT_PRINT(direct, ">>> R8  0x%016lx  R9  0x%016lx  R10 0x%016lx  R11 0x%016lx <<<\n",
@@ -370,7 +428,21 @@ void dump_fault_registers(bool direct)
 
 
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
-    core_local_storage_t* core = get_core_local_storage();
+    core_local_storage_t* core = try_get_core_local_storage();
+
+    // TAKE THE GLASS FIRST, as panic() does and for panic()'s reasons — this
+    // machine is about to halt, and what reaches the screen is all a machine
+    // with no serial port will ever say about why. Without it the report goes
+    // through the live terminal, and the live terminal stops painting at its
+    // first SCROLL and leaves the rest to a rider that runs from the
+    // scheduler — which a halted machine never runs again. On a screen with
+    // room left that loses everything after the first few lines; on a full
+    // one, which is the normal state of a machine that has been up for a
+    // minute, it loses the whole report.
+    mpFreezeOtherCores();
+    gui_emergency_disable();
+    renderer_bust_lock();
+    tty_emergency_direct();
 
     // One narrator per report (exception_report.h) — without this, two cores
     // faulting together braid their reports character-by-character on COM1,
@@ -378,7 +450,8 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     exception_wire_lock();
 
     EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
-    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
+    EXCEPTION_PRINT(">>> AP %u (APIC %u) (Thread 0x%08x) <<<                        \n",
+                    cpu_self(), read_apic_id().id, core ? core->threadID : 0);
     EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
 
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
@@ -389,7 +462,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     // 2026-08-09). Not decoration — these three are what turn an unexplainable
     // #DF into a diagnosis, and their absence cost a full day.
     //
-    // The story: a reproducible double fault against /bin/hog printed a task
+    // The story: a reproducible double fault against a ring-3 CPU hog printed a task
     // name and a faulting instruction, and nothing else. Everything that
     // actually mattered had to be dug out of the QEMU monitor by hand — CR2
     // said 0x1023bf98, CR3 said kKernelPML4 was live, and the two together
@@ -424,7 +497,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     EXCEPTION_PRINT(">>> CR2: 0x%016lx (page-fault address; STALE unless this is a #PF)  CR3: 0x%016lx <<<\n",
                     cr2_val, cr3_val);
     EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
-                    mp_isrSavedRSP[core->apic_id]);
+                    core ? mp_isrSavedRSP[core->cpu] : 0);
 
     // The register set the fault interrupted. Free (already pushed by the
     // stub), always safe, and frequently the whole answer — CR2 says WHAT
@@ -444,7 +517,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     // instead of confidently walking the last page fault's stack.
     dump_stack_trace(rip, true);
 
-    if (core->currentThread) {
+    if (core && core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
         EXCEPTION_PRINT(">>> Excepting Task: %s <<<                         \n", task->path);
@@ -484,11 +557,10 @@ void handle_invalid_opcode(uint64_t rip) {
 // something wrong.
 void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
 {
-	core_local_storage_t *core = get_core_local_storage();
 	// EXCEPTION_PRINT, not FAULT_PRINT: a #DF is as dying as it gets. The wire
 	// copy is the only one that can be trusted to survive, and touching a log
 	// queue here risks a lock this core may already hold.
-	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %lu <<<\n", core ? core->apic_id : 0);
+	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %u (APIC %u) <<<\n", cpu_self(), read_apic_id().id);
 	EXCEPTION_PRINT(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
 	// Name the usual suspects rather than making a reader decode bits.
 	if (rflags & 0x100)   EXCEPTION_PRINT(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");
@@ -565,7 +637,7 @@ void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t 
 
 void user_exception_kill(exception_context_t *ctx)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	core_local_storage_t *cls = try_get_core_local_storage();
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
 	if (task == NULL || task->kernelTask)
@@ -573,13 +645,19 @@ void user_exception_kill(exception_context_t *ctx)
 
 	exception_wire_lock();
 
-	FAULT_PRINT(false, "\nFatal exception: %s (task %lu, %s)\n",
-	            task->exename[0] ? task->exename : "(unnamed)", task->taskID,
-	            exception_vector_name(ctx->vector));
-	FAULT_PRINT(false, "  RIP 0x%016lx  error 0x%lx  exit %lu\n",
-	            ctx->rip, ctx->error_code, EXIT_CPU_EXCEPTION_BASE + ctx->vector);
+	// The headline is the glass's whole share of this report, on the
+	// program's own terminal (FAULT_PRINT's header says why); everything
+	// after it goes to the wire and the log.
+	user_death_headline(task, "\nFatal exception: %s (task %lu, %s) - exit %lu\n",
+	                    task->exename[0] ? task->exename : "(unnamed)", task->taskID,
+	                    exception_vector_name(ctx->vector), EXIT_CPU_EXCEPTION_BASE + ctx->vector);
+	s_fault_glass = false;
+	exception_glass_mute(true);
+	FAULT_PRINT(false, "  RIP 0x%016lx  error 0x%lx\n", ctx->rip, ctx->error_code);
 	exception_report_registers(ctx, false);   // the OS survives this — ordinary log, in order
-	stack_trace_user(task, ctx->rip, ctx->rbp);
+	stack_trace_user(task, ctx->rip, ctx->rbp, false);
+	exception_glass_mute(false);
+	s_fault_glass = true;
 
 	exception_wire_unlock();
 
@@ -673,7 +751,7 @@ static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t
 // itself faulted, or the faulted stack can't hold the frame — §9's limit).
 static bool try_catch_segv(task_t *task)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	core_local_storage_t *cls = try_get_core_local_storage();
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	exception_context_t *ctx = exception_current_context();
 	if (thread == NULL || ctx == NULL)
@@ -681,20 +759,65 @@ static bool try_catch_segv(task_t *task)
 	return signal_deliver_segv(task, thread, ctx);
 }
 
+// Which side of a thread's user stack a faulting address fell on, if it
+// fell in the unmapped guard on either side: a word for the headline, or
+// NULL. The stack is `task_alloc_guarded_stack`'s layout — esp3BaseV is the
+// lowest usable byte, esp3Size (the size the thread got, which a main
+// thread's program may declare, SCRIPT_STACK.md) above it, and
+// THREAD_STACK_GUARD_PAGE_COUNT unmapped pages beyond each end.
+//
+// A fault in the guard below is a stack overflow: a frame the stack had no
+// room for. A frame smaller than the guard cannot miss it; a larger one,
+// allocated in one `sub rsp`, can step over it and fault wherever its first
+// write falls — which is why userland is built -fstack-clash-protection,
+// lowering a big frame a page at a time so every overflow lands here. The
+// guard above is the underflow nobody has met; it costs the same compare.
+// (Before this check existed a guard fault was reported as a plain "access
+// to unmapped address": a 16KB frame sixty calls deep landed 11KB into the
+// guard on 2026-10-30 and left the arithmetic to the reader.)
+static const char *stack_guard_side(const thread_t *thread, uint64_t cr2)
+{
+	if (thread == NULL || thread == NO_THREAD || thread->esp3BaseV == 0)
+		return NULL;
+	uint64_t guard = (uint64_t)THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE;
+	uint64_t low   = thread->esp3BaseV;
+	uint64_t high  = low + thread->esp3Size;     // the size it got (SCRIPT_STACK.md)
+	if (cr2 >= low - guard && cr2 < low)
+		return "Stack overflow";
+	if (cr2 >= high && cr2 < high + guard)
+		return "Stack underflow";
+	return NULL;
+}
+
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
     uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
+	// A fault in the thread's own stack guard is named for what it is. The
+	// exit code stays 139 — it is still a segmentation fault; the headline
+	// is the diagnosis the reader would otherwise have to do by hand.
+	core_local_storage_t *gcls = try_get_core_local_storage();
+	thread_t *gthr = gcls ? gcls->currentThread : NULL;
+	const char *guard_side = stack_guard_side(gthr, cr2);
+	const char *headline = guard_side ? guard_side : "Segmentation fault";
+	if (guard_side != NULL)
+		why = cr2 < gthr->esp3BaseV ? "the guard below the thread's stack"
+		                            : "the guard above the thread's stack";
+
 	// One narrator per report (exception_report.h). Ring-3 kills are the most
 	// COMMON concurrent reporters — two tops segfaulting on two cores is
 	// exactly what braided the 2026-08-11 soak log — and this whole report,
 	// headline through call chain, must land on the wire as one story.
 	exception_wire_lock();
 
-	// The headline, on EVERY sink. DEBUG_EXCEPTIONS is permanently on (see
-	// CONFIG.h), so the printd is not a hedge — it is the copy a script greps.
-	// The direct serial write is the copy that survives the session.
-	FAULT_PRINT(false, "\nSegmentation fault: %s (task %lu, %s)\n",
-	       task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
+	// The headline, on the program's own terminal, the wire and the log — and
+	// the glass's whole share of the report (FAULT_PRINT's header says why).
+	// DEBUG_EXCEPTIONS is permanently on (see CONFIG.h), so the printd copy
+	// is not a hedge — it is the one a script greps. The direct serial write
+	// is the one that survives the session.
+	user_death_headline(task, "\n%s: %s (task %lu, %s) - exit 139\n", headline,
+	                    task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
+	s_fault_glass = false;
+	exception_glass_mute(true);
 
 	// The error code decoded, because "error=0x7" is a number and "write to a
 	// present page from user mode" is a diagnosis. These five bits answer the
@@ -705,6 +828,14 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		page_fault_decode(bits, sizeof(bits), error_code);
 		FAULT_PRINT(false, "  address 0x%016lx  RIP 0x%016lx  error 0x%lx [%s]\n",
 		            cr2, rip, error_code, bits);
+	}
+	// A guard hit: where the stack is, and how far past it the fault fell.
+	if (guard_side != NULL) {
+		uint64_t low  = gthr->esp3BaseV;
+		uint64_t high = low + gthr->esp3Size;
+		FAULT_PRINT(false, "  stack: thread 0x%08x user stack 0x%016lx-0x%016lx (%u guard pages each side); fault %lu bytes %s it\n",
+		            gthr->threadID, low, high, (unsigned)THREAD_STACK_GUARD_PAGE_COUNT,
+		            cr2 < low ? low - cr2 : cr2 - high + 1, cr2 < low ? "below" : "above");
 	}
 
 	// The registers the program died holding — same argument as the kernel
@@ -730,7 +861,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		{
 			uint64_t liveCr3;
 			__asm__ volatile("mov %0, cr3" : "=r"(liveCr3));
-			core_local_storage_t *dcls = get_core_local_storage();
+			core_local_storage_t *dcls = try_get_core_local_storage();
 			thread_t *dthr = (dcls != NULL) ? dcls->currentThread : NULL;
 			uintptr_t rspPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rsp) : 0;
 			uintptr_t ripPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rip) : 0;
@@ -757,20 +888,22 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		}
 
 		// And the call chain. NOTRACE disables everything inside.
-		stack_trace_user(task, rip, ctx->rbp);
+		stack_trace_user(task, rip, ctx->rbp, false);
 	} else {
 		dump_fault_registers(false);  // the OS survives this — ordinary log, in order
 
 		// And the call chain. gLastFaultRbp is captured by the #PF stub before it
 		// calls us (handler_errors.S), which is the only reason a trace is possible
 		// this far from the fault. NOTRACE disables everything below.
-		stack_trace_user(task, rip, gLastFaultRbp);
+		stack_trace_user(task, rip, gLastFaultRbp, false);
 	}
+	exception_glass_mute(false);
+	s_fault_glass = true;
 
 	// Report told — free the wire BEFORE task_exit, which never returns.
 	exception_wire_unlock();
 
-	task->retVal = 139;   // 128 + SIGSEGV(11)
+	task->retVal = SIGNALS_EXIT_SIGSEGV;
 	task_exit();
 	__builtin_unreachable();
 }
@@ -801,16 +934,34 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // line loses nothing when a fault is actually news.
     printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
 
-    // Guard against faults BEFORE per-core state exists (early boot: CLS not
-    // allocated and/or GS base not programmed). Without this, [gs:0] returns
-    // junk, ->task is junk, and vma_lookup faults on the junk pointer — the
-    // handler then re-enters itself until the stack dies in a triple fault,
-    // taking the diagnosable panic below with it.
-    task_t *task = kCLSInitialized ? get_core_local_storage()->task : NULL;
+    // Early faults have no task context until GS-based CLS is installed.
+    // Do not read it to look up a VMA before that initialization.
+    core_local_storage_t *cls = try_get_core_local_storage();
+    thread_t *fault_thread = cls ? cls->currentThread : NULL;
+    // A migrated thread can run before cls->task catches up. The thread owns
+    // the address space we must fault into, and a file read may later block
+    // and resume it on another core; retain this identity across that read.
+    task_t *task = (fault_thread != NULL && fault_thread != NO_THREAD)
+                   ? (task_t *)fault_thread->ownerTask : (cls ? cls->task : NULL);
     if (!task)
     {
         page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
     }
+
+    // A VMA cannot override the first-page guard. Refuse before resolving
+    // backing pages: the mapper rejects this address, so retrying would
+    // fault again and could allocate an unreachable frame on each pass.
+    if (cr2 < PAGE_SIZE)
+    {
+        if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;
+            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
+        }
+        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
+    }
+
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
     {
@@ -876,8 +1027,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             page_fault_panic("CoW fault — page table walk did not find the original page",
                              cr2, error_code, rip);
 
-        // kmalloc_aligned guarantees the page is accessible via HHDM in kKernelPML4.
-        // allocate_memory_aligned() does not make that guarantee.
+        // Any allocator-owned page, kmalloc_aligned's or
+        // allocate_memory_aligned's alike, is reachable through the HHDM
+        // while it is allocated (the lazy-HHDM contract, paging.h).
         void *new_virt = kmalloc_aligned(PAGE_SIZE);
         if (!new_virt)
             page_fault_panic("CoW fault — failed to allocate replacement page",
@@ -915,7 +1067,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             printd(DEBUG_DEMAND_PAGING,
                    "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
                    aligned);
-            kPageFaultCount++;
+            record_resolved_fault(fault_thread, false, false);
             return;
         }
         paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
@@ -928,7 +1080,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
         printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
                aligned, old_phys, new_phys);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, false, false);
         return;
     }
 
@@ -988,7 +1140,8 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             page_fault_panic("shared-object VMA covers an address outside its image",
                              cr2, error_code, rip);
 
-        uintptr_t phys = shared_object_resolve_page(so, page_idx);
+        bool did_read = false;
+        uintptr_t phys = shared_object_resolve_page(so, page_idx, &did_read);
         if (!phys)
         {
             // The image could not be materialised: out of memory, a disk read
@@ -1011,13 +1164,15 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         }
 
         paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, did_read, false);
         return;
     }
 
     // Ordinary demand page fault: page is not present yet.  Resolve via the
     // VMA's backing (static executables, anonymous memory).
-    uintptr_t phys = vma_resolve_backing_page(vma, cr2);
+    bool did_read = false;
+    bool anon_zero = (vma->flags & MAP_ANONYMOUS) || vma->file == NULL;
+    uintptr_t phys = vma_resolve_backing_page(vma, cr2, &did_read);
     if (!phys)
         page_fault_panic("failed to resolve the page", cr2, error_code, rip);
 
@@ -1046,8 +1201,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // frame holds an identical copy; give it back BY ITS OWN ALLOCATOR —
         // the same fork vma_resolve_backing_page allocates on: anonymous
         // pages come from the physical allocator, file-backed from kmalloc.
-        // (Freed OUTSIDE the publish lock: both frees take kMemoryStatusLock,
-        // and holding two locks where one will do is how ABBAs are born.)
+        // (Freed OUTSIDE the publish lock: both frees take the allocator's
+        // locks (kFrameLock, kMemoryStatusLock), and holding two locks where
+        // one will do is how ABBAs are born.)
         if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
             free_memory(phys);
         else
@@ -1055,7 +1211,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         printd(DEBUG_DEMAND_PAGING,
                "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
                aligned, phys);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, did_read, anon_zero);
         return;   // retry the access against the winner's mapping
     }
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
@@ -1063,7 +1219,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
     printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 
-    kPageFaultCount++;
+    record_resolved_fault(fault_thread, did_read, anon_zero);
 }
 
 

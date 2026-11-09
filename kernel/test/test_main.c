@@ -6,6 +6,7 @@
 #include "memory/memset.h"
 #include "memory/memcmp.h"
 #include "strcmp.h"
+#include "strcpy.h"   // test_mount_unmount captures the victim prefix
 #include "strlen.h"
 #include "memory/memcpy.h"
 #include "memory/memcmp.h"
@@ -18,7 +19,7 @@
 #include "dlist.h"
 #include <stdint.h>
 #include "smp_core.h"
-#include "smp.h"       // kCPUInfo/kMPCoreCount — the backstop test picks its AP
+#include "smp.h"       // kCPUCount — the backstop test needs an AP
 #include "signals.h"   // SIGKILL — delivered to the hog by a backstop pass
 #include "CONFIG.h"    // the backstop test's windows are denominated in
                        // leases (kSchedBackstopMS), never in milliseconds
@@ -28,12 +29,16 @@
 #include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
+#include "os64/mount.h"   // the mount/unmount result vocabulary (test_mount_unmount)
 #include "driver/block/block_cache.h"          // stats + is_active (buffer-cache test)
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
+#include "strftime.h"
 #include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
+#include "doorbell.h"                // test_doorbell_wakes_sleeper
+#include "random.h"                  // test_random_pool
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
@@ -45,9 +50,15 @@
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
 #include "driver/net/icmp_conn.h"
+#include "driver/system/x86_64.h"   // rdtsc — the arrival-wake figure in test_net_icmp_conn
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 #include "fpu.h"
 
+extern bool test_window_minimum_clamp(void);
+extern bool test_window_opacity(void);
+extern bool test_window_title(void);
+extern bool test_window_maximized(void);
+extern bool test_surface_blit(void);
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -69,6 +80,10 @@ static bool g_framework_initialized = false;
 
 bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
+bool test_pty_publication_hold(void);
+bool test_pty_resize_modes(void);
+bool test_pty_history(void);
+bool test_pty_stream_seats(void);
 
 bool test_register_policy(const char *name, bool (*func)(void), int phase,
                           test_policy_t policy)
@@ -98,6 +113,99 @@ bool test_register(const char *name, bool (*func)(void), int phase)
         phase == TEST_PHASE_PREBOOT ? TEST_POLICY_PANIC : TEST_POLICY_WARN);
 }
 
+static bool test_null_guard_for_root(pt_entry_t *root, const char *name)
+{
+    uintptr_t pte_address = paging_pte_address(root, 0);
+    if (pte_address == 0 || *(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+
+    // A remap must be refused even without PAGE_PRESENT in the request,
+    // and an unaligned address must not bypass the first-page guard.
+    paging_map_page(root, 0, PAGE_SIZE, 0);
+    paging_map_page(root, PAGE_SIZE - 1, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    if (*(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+    return true;
+}
+
+static bool test_page_zero_unmapped(void)
+{
+    if (!test_null_guard_for_root((pt_entry_t *)kKernelPML4v, "kernel NULL guard"))
+        TEST_FAIL("kernel page zero is not guarded");
+
+    // The other address a NULL turns into: physical 0 is what a failed page
+    // walk returns, so `0 | kHHDMOffset` must fault too. The MP scan maps
+    // that alias to read the BIOS data area and must have taken it down.
+    if (paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, kHHDMOffset, true) & PAGE_PRESENT)
+        TEST_FAIL("the HHDM alias of physical page zero is still mapped after boot's BDA reads");
+
+    // Exercise the production task-table constructor without creating a
+    // schedulable thread. Its arena owns the throwaway tables in full.
+    task_t *task = kmalloc(sizeof(*task));
+    if (task == NULL)
+        TEST_FAIL("cannot allocate the NULL-guard test task");
+    memset(task, 0, sizeof(*task));
+    task_init_page_tables(task);
+    bool ok = test_null_guard_for_root(task->pml4v, "fresh task NULL guard");
+
+    // Bulk mapping must retain the guard while still mapping its neighbour.
+    // The backing addresses are arena pages; the test reads only the tables.
+    uintptr_t phys = (uintptr_t)task->pml4;
+    paging_map_pages(task->pml4v, 0, phys, 2, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    ok = test_null_guard_for_root(task->pml4v, "task NULL guard after bulk map") && ok;
+    uintptr_t neighbour = paging_walk_paging_table_keep_flags(task->pml4v, PAGE_SIZE, true);
+    if ((neighbour & (PAGE_ADDRESS_MASK | PAGE_PRESENT | PAGE_WRITE | PAGE_USER)) !=
+        ((phys + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER))
+        ok = false;
+
+    arena_destroy(task->tableArena);
+    kfree(task);
+    if (!ok)
+        TEST_FAIL("task page zero guard or neighbouring mapping is incorrect");
+    return true;
+}
+
+// The CPU roster round-trips (CPU_NUMBERS.md): every numbered CPU's APIC ID
+// maps back to that CPU, no two CPUs share an APIC ID, CPU 0 is the BSP, and
+// the CPU running this — the BSP, before the APs are woken — sits in the CLS
+// slot its own local APIC says it should. Each AP checks the same of itself
+// as it comes up (ap_wakeup_after_stack_switch).
+static bool test_cpu_roster_round_trip(void)
+{
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+        uint32_t id = kCPUs[cpu].apic.id;
+        if (id > CPU_ROSTER_APIC_MAX || kApicToCPU[id] != cpu) {
+            printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - CPU %u is APIC %u, which maps back to %u\n",
+                   cpu, id, id > CPU_ROSTER_APIC_MAX ? CPU_ROSTER_NO_CPU : kApicToCPU[id]);
+            return false;
+        }
+    }
+    uint32_t named = 0;
+    for (uint32_t id = 0; id < CPU_ROSTER_APIC_IDS; id++)
+        if (kApicToCPU[id] != CPU_ROSTER_NO_CPU)
+            named++;
+    if (named != kCPUCount) {
+        printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - the inverse table names %u CPUs, the roster has %u\n",
+               named, kCPUCount);
+        return false;
+    }
+    core_local_storage_t *cls = get_core_local_storage();
+    apic_id_t mine = read_apic_id();
+    if (cls->cpu != BSP_CPU || cls->apic.id != mine.id || kCPUs[BSP_CPU].apic.id != mine.id) {
+        printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - the BSP's slot says CPU %lu APIC %u, its LAPIC says APIC %u, the roster's CPU 0 is APIC %u\n",
+               cls->cpu, cls->apic.id, mine.id, kCPUs[BSP_CPU].apic.id);
+        return false;
+    }
+    printd(DEBUG_TESTS, "\tPASS: test_cpu_roster_round_trip (%u CPUs, BSP APIC %u)\n", kCPUCount, mine.id);
+    return true;
+}
+
 static bool test_kmalloc_not_null(void)
 {
     void *ptr = kmalloc(64);
@@ -106,6 +214,133 @@ static bool test_kmalloc_not_null(void)
     }
 
     kfree(ptr);
+    return true;
+}
+
+// FRAMES.md's kernel acceptance: more live 4 KiB frames at once than the old
+// ledger had rows (100,000), released in a shuffled order, with the frame
+// table audited and the books balanced at both ends. A machine without the
+// room tests what it can hold.
+static bool test_frame_table_scale(void)
+{
+    const char *why;
+    uint64_t where = 0;
+    if ((why = allocator_audit(&where)) != NULL) {
+        printd(DEBUG_TESTS, "\tframe_table_scale: audit before: %s at %lu\n", why, where);
+        TEST_FAIL("frame table audit failed before the test");
+    }
+    uint64_t free_before = 0, used_before = 0, free_frames = 0;
+    allocator_memory_snapshot(&free_before, &used_before, NULL);
+    allocator_frame_counts(NULL, &free_frames, NULL, NULL);
+    uint64_t want = 120000;
+    if (want > free_frames / 2)
+        want = free_frames / 2;
+
+    uint64_t *frames = (uint64_t *)(allocate_memory_aligned(want * sizeof(uint64_t)) | kHHDMOffset);
+    for (uint64_t i = 0; i < want; i++)
+        frames[i] = allocate_memory_aligned(PAGE_SIZE);
+    if ((why = allocator_audit(&where)) != NULL) {
+        printd(DEBUG_TESTS, "\tframe_table_scale: audit with %lu live: %s at %lu\n", want, why, where);
+        TEST_FAIL("frame table audit failed with every frame live");
+    }
+    // A cheap shuffle (an LCG walk) so the frees coalesce in no tidy order.
+    uint64_t state = 0x2545F4914F6CDD1DULL;
+    for (uint64_t i = want - 1; i > 0; i--) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t j = (state >> 33) % (i + 1), t = frames[i];
+        frames[i] = frames[j];
+        frames[j] = t;
+    }
+    for (uint64_t i = 0; i < want; i++)
+        free_memory(frames[i]);
+    free_memory((uintptr_t)frames - kHHDMOffset);
+
+    if ((why = allocator_audit(&where)) != NULL) {
+        printd(DEBUG_TESTS, "\tframe_table_scale: audit after: %s at %lu\n", why, where);
+        TEST_FAIL("frame table audit failed after freeing");
+    }
+    uint64_t free_after = 0, used_after = 0;
+    allocator_memory_snapshot(&free_after, &used_after, NULL);
+    printd(DEBUG_TESTS, "\tframe_table_scale: %lu frames held live and released; free %lu -> %lu\n",
+           want, free_before, free_after);
+    if (free_before + used_before != kAvailableMemory || free_after + used_after != kAvailableMemory)
+        TEST_FAIL("free + used != usable");
+    if (want < 100001 && free_frames >= 200002)
+        TEST_FAIL("the test held fewer frames than the old ledger's wall");
+    return true;
+}
+
+// A refusal is clean: allocate_memory_try of more frames than the table has
+// answers 0, panics nothing, changes no books, and is counted.
+static bool test_allocator_try_refuses(void)
+{
+    allocator_stats_t before, after;
+    allocator_stats(&before, 0);
+    uint64_t got = allocate_memory_try((before.frames_usable + 1) * PAGE_SIZE);
+    allocator_stats(&after, 0);
+    if (got != 0)
+        TEST_FAIL("allocate_memory_try of more than all memory answered an address");
+    if (after.free_bytes != before.free_bytes || after.used_bytes != before.used_bytes)
+        TEST_FAIL("a refused allocation changed the books");
+    if (after.refusals != before.refusals + 1)
+        TEST_FAIL("the refusal was not counted");
+    return true;
+}
+
+// A stack a program declared, refused, degrades (SCRIPT_STACK.md): the
+// fallible stack allocator answers NULL for more than all memory, panics
+// nothing, reserves nothing, and the refusal is counted, so createThread's
+// fallback to the default can run (Codex #441 rd1).
+static bool test_stack_try_refuses(void)
+{
+    allocator_stats_t before, after;
+    allocator_stats(&before, 0);
+    uintptr_t next = task_reserve_task_virt(kKernelTask, 0);    // the counter, unmoved
+    void *got = task_try_guarded_stack(kKernelTask, (before.frames_usable + 1) * PAGE_SIZE, false);
+    allocator_stats(&after, 0);
+    if (got != NULL)
+        TEST_FAIL("task_try_guarded_stack of more than all memory answered a stack");
+    if (task_reserve_task_virt(kKernelTask, 0) != next)
+        TEST_FAIL("a refused stack reserved address space");
+    if (after.free_bytes != before.free_bytes || after.refusals != before.refusals + 1)
+        TEST_FAIL("a refused stack changed the books, or was not counted");
+    return true;
+}
+
+// Zero-on-allocate after a poisoned free, through both layers. Frame runs zero
+// OUTSIDE the frame lock, and the exact-length list hands a freed run straight
+// back to the next request of its size, so "free, then allocate the same
+// size" is exactly the path where a missed zero would hand out 0xFE poison
+// (or the previous owner's bytes).
+static bool zeroed(const uint8_t *p, uint64_t n)
+{
+    for (uint64_t i = 0; i < n; i++)
+        if (p[i] != 0)
+            return false;
+    return true;
+}
+
+static bool test_allocator_zero_after_free(void)
+{
+    const uint64_t run = 3 * PAGE_SIZE;
+    uint64_t a = allocate_memory_aligned(run);
+    memset((void *)(a | kHHDMOffset), 0xAB, run);
+    free_memory(a);
+    uint64_t b = allocate_memory_aligned(run);
+    bool same_run = a == b;
+    if (!zeroed((const uint8_t *)(b | kHHDMOffset), run))
+        TEST_FAIL("a frame run came back after a free with nonzero bytes");
+    free_memory(b);
+
+    uint8_t *s = kmalloc(48);
+    memset(s, 0xAB, 48);
+    kfree(s);
+    uint8_t *t = kmalloc(48);
+    if (!zeroed(t, 48))
+        TEST_FAIL("a ledger object came back after a free with nonzero bytes");
+    printd(DEBUG_TESTS, "\tallocator_zero_after_free: run %s, ledger object %s\n",
+           same_run ? "reused" : "moved", s == t ? "reused" : "moved");
+    kfree(t);
     return true;
 }
 
@@ -835,7 +1070,7 @@ static bool test_elf_loader(void)
 
     uint64_t faults_before = kPageFaultCount;
 
-    task_t *elf_task = test_spawn("/bin/test_elf", 0, NULL, true);
+    task_t *elf_task = test_spawn("/tests/test_elf", 0, NULL, true);
     if (elf_task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task_create returned NULL\n");
         return false;
@@ -868,7 +1103,7 @@ static bool test_elf_loader(void)
     // where the second fault in the same VMA would panic instead of mapping.
     //
     // THIS is why elf_loader keeps a kernel seat while its ring-3 half moved to
-    // /bin/testrun: kPageFaultCount is a kernel global, and no program can see
+    // /tests/testrun: kPageFaultCount is a kernel global, and no program can see
     // it. The exit-code half is testrun's now; the demand-paging half is this.
     else if (kPageFaultCount < faults_before + 2) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - expected >=2 page faults, got %lu\n",
@@ -905,14 +1140,14 @@ static bool test_dynamic_linking(void)
         return true;
     }
 
-    task_t *task_a = test_spawn("/bin/dyn_consumer", 0, NULL, true);
+    task_t *task_a = test_spawn("/tests/dyn_consumer", 0, NULL, true);
     if (task_a == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task A) returned NULL\n");
         return false;
     }
     scheduler_submit_new_task(task_a);
 
-    task_t *task_b = test_spawn("/bin/dyn_consumer", 0, NULL, true);
+    task_t *task_b = test_spawn("/tests/dyn_consumer", 0, NULL, true);
     if (task_b == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task B) returned NULL\n");
         test_release(task_a);
@@ -948,11 +1183,14 @@ static bool test_dynamic_linking(void)
     uint64_t retval_a = task_a->retVal;
     uint64_t retval_b = task_b->retVal;
 
-    // Registry state, captured live. (These lookups each take a reference that
-    // is never released — deliberate: the test holds the registry's objects
-    // warm for the rest of the boot, and the expected counts below include
-    // them by name.)
-    shared_object_t *exe_so = shared_object_load_or_get("/bin/dyn_consumer");
+    // Registry state, captured live. Each lookup takes a reference, and the
+    // expected counts below include them by name; both are given back once
+    // the tables have been walked, so this test leaves nothing resident that
+    // the two tasks' burials will not release — a later fixture replaces
+    // libtest.so underneath a holder (test_shared_object_reload), and a
+    // reference kept here would keep the superseded copy, and its orphaned
+    // inode, alive for the rest of the boot.
+    shared_object_t *exe_so = shared_object_load_or_get("/tests/dyn_consumer");
     shared_object_t *so     = shared_object_load_or_get("/lib/libtest.so");
     uint32_t exe_refcount   = (exe_so != NULL) ? exe_so->refcount : 0;
     uint32_t lib_refcount   = (so != NULL) ? so->refcount : 0;
@@ -970,6 +1208,11 @@ static bool test_dynamic_linking(void)
         code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, lib_page0);
         code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, lib_page0);
     }
+
+    // Both lookups returned before the tasks are: the tasks' own references
+    // keep both objects loaded, so neither release can be the last one here.
+    shared_object_release(so);
+    shared_object_release(exe_so);
 
     test_release(task_a);
     test_release(task_b);
@@ -1010,8 +1253,9 @@ static bool test_dynamic_linking(void)
 
     // libtest.so, by contrast, is loaded as dyn_consumer's DT_NEEDED
     // dependency exactly ONCE — the second task_create cache-hits the
-    // already-loaded executable and never re-walks its deps — so: that one
-    // dependency edge + this lookup = 2. THIS ASYMMETRY IS LOAD-BEARING: it is
+    // already-loaded executable, and the closure check that hit performs
+    // takes no references of its own — so: that one dependency edge + this
+    // lookup = 2. THIS ASYMMETRY IS LOAD-BEARING: it is
     // why the undertaker releases one edge on the main image rather than one
     // per entry in task->shared_objects, which would drive this very count
     // negative on the second burial (see shared_object.h's pairing rule).
@@ -1047,19 +1291,570 @@ static bool test_dynamic_linking(void)
 }
 
 
+// ── Retention and reload (2026-08-28) ────────────────────────────────────────
+//
+// Two claims, one fixture, because they are the two halves of one answer to
+// "is the resident copy of a program still the program on disk?":
+//
+//   RETENTION — an object with no holders is UNLOADED, so the registry only
+//   ever describes what is in use. Shown by loading a program, dropping the
+//   reference, and finding the registry empty of it.
+//
+//   RELOAD — an object whose FILE has been replaced is retired and rebuilt
+//   from the new file, while the old copy stays for whoever is still running
+//   it. Shown by renaming a second copy over the first's name — which is
+//   exactly how os64get commits a refresh — and finding a different object, a
+//   different identity, and the old one retired but alive under its held
+//   reference.
+//
+//   THE CLOSURE — a program whose LIBRARY has been replaced is stale too, even
+//   though its own file is untouched, because its cached pages were relocated
+//   against the old library. Shown by replacing only /lib/libtest.so under a
+//   held /tests/dyn_consumer and finding the program retired with the library
+//   and rebuilt against the new one.
+//
+// The first two claims use a byte copy of a real dynamically-linked program
+// under a scratch name: they are about the REGISTRY, not about any particular
+// binary, and /bin is not the suite's to rearrange. The third uses the
+// dynamic-linking fixture pair, the one library on the system nothing live
+// is linked against.
+//
+// Replacing a file somebody holds open is an ext2 property (the inode is the
+// file, the name is only a name); FAT's rename has to unlink the destination
+// first and FatFs refuses that for an open file. So the second and third
+// claims are proven only where the root can keep them, and the lifeboat
+// proves retention alone.
+#define SO_FAIL(...) do { \
+        printd(DEBUG_TESTS, "\tFAIL: test_shared_object_reload - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+// Byte-copy `src` onto `dst` through the VFS. A real program is tens of
+// kilobytes, so the buffer is kmalloc'd rather than a stack array.
+static bool so_copy_file(const char *src, const char *dst)
+{
+    vfs_file_t *in = NULL, *out = NULL;
+    if (kRootFilesystem->fops->open(&in, src, "r", kRootFilesystem) != 0)
+        return false;
+    if (kRootFilesystem->fops->open(&out, dst, "c", kRootFilesystem) != 0) {
+        kRootFilesystem->fops->close(in);
+        return false;
+    }
+
+    enum { SO_COPY_CHUNK = 8192 };
+    uint8_t *buf = kmalloc(SO_COPY_CHUNK);
+    bool ok = (buf != NULL);
+    while (ok) {
+        int n = kRootFilesystem->fops->read(in, buf, SO_COPY_CHUNK);
+        if (n <= 0) {
+            ok = (n == 0);   // 0 is end of file; negative is a real failure
+            break;
+        }
+        if (kRootFilesystem->fops->write(out, buf, (size_t)n) != n)
+            ok = false;
+    }
+
+    kfree(buf);
+    kRootFilesystem->fops->close(in);
+    kRootFilesystem->fops->close(out);
+    return ok;
+}
+
+// Does the registry currently serve `path`? Asked the way every caller asks
+// it — a retired object does not answer to its own name any more — and under
+// the registry lock, because a walk without it can read a node another core
+// is freeing (the same rule /sys/shlib follows).
+static bool so_registry_serves(const char *path)
+{
+    bool found = false;
+    shared_object_registry_lock();
+    if (kLoadedSharedObjects != NULL) {
+        for (dlist_node_t *n = kLoadedSharedObjects->head; n != NULL && !found; n = n->next) {
+            shared_object_t *so = (shared_object_t *)n->data;
+            found = (so != NULL && !so->retired && strcmp(so->path, path) == 0);
+        }
+    }
+    shared_object_registry_unlock();
+    return found;
+}
+
+static bool test_shared_object_reload(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_shared_object_reload (no root filesystem mounted)\n");
+        return true;
+    }
+    if (kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL ||
+        kRootFilesystem->fops->rm == NULL || kRootFilesystem->dops->mkdir == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_shared_object_reload (root filesystem cannot write, rename or remove)\n");
+        return true;
+    }
+
+    static const char *live = "/etc/testdata/reload_a";
+    static const char *incoming = "/etc/testdata/reload_b";
+
+    // Provision, then start from a known floor — a previous boot's leftovers
+    // would make "already loaded" read as a retention bug. (mkdir answers -1
+    // for "already exists" too, so its result is deliberately ignored; the
+    // copy below is the real judge of whether the directory is usable.)
+    char pathbuf[40];
+    sprintf(pathbuf, "%s", "/etc");
+    kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+    sprintf(pathbuf, "%s", "/etc/testdata");
+    kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+    kRootFilesystem->fops->rm(live, kRootFilesystem);
+    kRootFilesystem->fops->rm(incoming, kRootFilesystem);
+
+    if (!so_copy_file("/bin/hello", live))
+        SO_FAIL("could not copy /bin/hello to %s\n", live);
+
+    // 1. RETENTION. One load, one release, and nothing left behind.
+    shared_object_t *first = shared_object_load_executable(live);
+    if (first == NULL)
+        SO_FAIL("could not load the copy at %s\n", live);
+    uint64_t first_ident = first->ident;
+    if (first_ident == 0)
+        SO_FAIL("the root filesystem gave %s no identity — a replaced file could not be noticed\n", live);
+
+    shared_object_release(first);   // the last reference: `first` is freed here
+    if (so_registry_serves(live))
+        SO_FAIL("%s outlived its last reference — unload-at-zero did not run\n", live);
+
+    // The remaining claims replace files that are held open, which only ext2
+    // can do (see the header). Identified by the op table, the way
+    // test_vfs_rename does it.
+    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        kRootFilesystem->fops->rm(live, kRootFilesystem);
+        printd(DEBUG_TESTS, "\tPASS: test_shared_object_reload (unloaded at zero; reload and closure "
+                            "claims need a root that can replace an open file, and this one cannot)\n");
+        return true;
+    }
+
+    // 2. RELOAD. Hold one copy the way a running task would, replace the file
+    //    underneath it, and ask for it again.
+    shared_object_t *held = shared_object_load_executable(live);
+    if (held == NULL)
+        SO_FAIL("could not re-load %s after it was unloaded\n", live);
+    uint64_t held_ident = held->ident;
+
+    if (!so_copy_file("/bin/hello", incoming)) {
+        shared_object_release(held);
+        SO_FAIL("could not stage a replacement at %s\n", incoming);
+    }
+    if (kRootFilesystem->fops->rename(incoming, live, kRootFilesystem, 0) != 0) {
+        shared_object_release(held);
+        SO_FAIL("could not rename %s over %s (an open destination must be replaceable)\n",
+                incoming, live);
+    }
+
+    shared_object_t *fresh = shared_object_load_executable(live);
+    if (fresh == NULL) {
+        shared_object_release(held);
+        SO_FAIL("loading %s after its file was replaced returned nothing\n", live);
+    }
+
+    // Everything the two objects can tell us, read BEFORE either release —
+    // a release that drops the last reference frees the struct it names.
+    bool distinct       = (fresh != held);
+    bool identity_moved = (fresh->ident != held_ident);
+    bool old_retired    = held->retired;
+    uint32_t held_refs  = held->refcount;
+    uint64_t fresh_ident = fresh->ident;
+
+    shared_object_release(fresh);
+    shared_object_release(held);
+
+    if (!distinct)
+        SO_FAIL("a replaced file returned the SAME object — the registry answered from the path alone\n");
+    if (!identity_moved)
+        SO_FAIL("the reloaded object kept identity %lu — the new file was not noticed\n", held_ident);
+    if (!old_retired)
+        SO_FAIL("the superseded object was not retired — a later load could still find it\n");
+    if (held_refs != 1)
+        SO_FAIL("the superseded object's refcount is %u, expected 1 (this test's own hold) — "
+                "retiring must not disturb the count\n", held_refs);
+    if (so_registry_serves(live))
+        SO_FAIL("%s outlived both references\n", live);
+
+    kRootFilesystem->fops->rm(live, kRootFilesystem);
+
+    // 3. THE CLOSURE. Hold a program, replace ONLY its library, and ask for
+    //    the program again. Its own file is unchanged, so a registry that
+    //    looked no deeper than the name it was asked for would answer from
+    //    the cache — and the next task would run against the old library.
+    static const char *consumer     = "/tests/dyn_consumer";
+    static const char *lib          = "/lib/libtest.so";
+    static const char *lib_incoming = "/lib/libtest.so.reload";
+
+    shared_object_t *held_exe = shared_object_load_executable(consumer);
+    if (held_exe == NULL)
+        SO_FAIL("could not load %s\n", consumer);
+    if (held_exe->dep_count != 1 || held_exe->deps[0] == NULL ||
+        strcmp(held_exe->deps[0]->path, lib) != 0) {
+        shared_object_release(held_exe);
+        SO_FAIL("%s is not linked against exactly %s — the closure claim has no subject\n",
+                consumer, lib);
+    }
+    shared_object_t *old_lib = held_exe->deps[0];   // alive while held_exe's edge is
+    uint64_t old_lib_ident = old_lib->ident;
+
+    kRootFilesystem->fops->rm(lib_incoming, kRootFilesystem);   // a previous boot's leftover
+    if (!so_copy_file(lib, lib_incoming)) {
+        shared_object_release(held_exe);
+        SO_FAIL("could not stage a replacement library at %s\n", lib_incoming);
+    }
+    if (kRootFilesystem->fops->rename(lib_incoming, lib, kRootFilesystem, 0) != 0) {
+        shared_object_release(held_exe);
+        SO_FAIL("could not rename %s over %s\n", lib_incoming, lib);
+    }
+
+    shared_object_t *fresh_exe = shared_object_load_executable(consumer);
+    if (fresh_exe == NULL) {
+        shared_object_release(held_exe);
+        SO_FAIL("loading %s after its library was replaced returned nothing\n", consumer);
+    }
+
+    bool exe_distinct  = (fresh_exe != held_exe);
+    bool exe_retired   = held_exe->retired;
+    bool lib_retired   = old_lib->retired;
+    bool lib_rebuilt   = (fresh_exe->dep_count == 1 && fresh_exe->deps[0] != NULL &&
+                          fresh_exe->deps[0] != old_lib &&
+                          fresh_exe->deps[0]->ident != old_lib_ident);
+    uint64_t new_lib_ident = lib_rebuilt ? fresh_exe->deps[0]->ident : 0;
+
+    shared_object_release(fresh_exe);
+    shared_object_release(held_exe);
+
+    if (!exe_distinct)
+        SO_FAIL("a program whose LIBRARY was replaced returned the SAME object — the cache hit "
+                "did not look beneath the name it was asked for\n");
+    if (!lib_retired)
+        SO_FAIL("the superseded library was not retired\n");
+    if (!exe_retired)
+        SO_FAIL("the program linked against the superseded library was not retired with it\n");
+    if (!lib_rebuilt)
+        SO_FAIL("the reloaded program is not linked against the new library\n");
+    if (so_registry_serves(consumer) || so_registry_serves(lib))
+        SO_FAIL("%s or %s outlived their references\n", consumer, lib);
+
+    printd(DEBUG_TESTS, "\tPASS: test_shared_object_reload (unloaded at zero; a replaced file retired "
+                        "the loaded copy, id %lu -> %lu, and reloaded; a replaced library, id %lu -> %lu, "
+                        "retired and reloaded the program linked against it)\n",
+           held_ident, fresh_ident, old_lib_ident, new_lib_ident);
+    return true;
+}
+#undef SO_FAIL
+
+// ── test_mount_unmount ───────────────────────────────────────────────────────
+// The namespace verbs, proven on a live table: pick a mounted, disk-backed,
+// non-root filesystem nobody is using, hold a file on it and watch unmount
+// refuse; release, unmount, watch its name leave the namespace; remount it by
+// GUID at a scratch prefix — READ-ONLY, with the write verbs verifiably
+// absent — and read through the new name; put it back where and HOW it was
+// found. The refusals are half the feature — BUSY on a held file, NOT_A_MOUNT
+// after the strike, and BAD_ARGS for an unknown flag bit are asserted, not
+// assumed.
+#define MU_FAIL(...) do { \
+        printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount - " __VA_ARGS__); \
+        goto mu_cleanup; \
+    } while (0)
+static bool test_mount_unmount(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no root filesystem mounted)\n");
+        return true;
+    }
+
+    // The victim: mounted, disk-backed, not "/", with no open handles,
+    // descendant mount, or live cwd user. Its identity is captured as the GUID
+    // string, because that survives the unmount (the table entry does not).
+    char victim_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    char victim_guid[40] = "";
+    vfs_filesystem_t *victim = NULL;
+    for (int i = 0; i < kMountCount; i++) {
+        vfs_filesystem_t *fs = kMountTable[i].fs;
+        if (fs == NULL || kMountTable[i].prefix_len == 1 || fs->block_device_info == NULL)
+            continue;
+        if (vfs_openfiles_on(fs) != 0 || fs->open_dir_count != 0)
+            continue;
+        const char *prefix = kMountTable[i].prefix;
+        if (vfs_mount_under(prefix))
+            continue;
+
+        bool cwd_inside = false;
+        size_t prefix_len = kMountTable[i].prefix_len;
+        for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+        {
+            if (t->exited || t->cwd == NULL)
+                continue;
+            if (strncmp(t->cwd, prefix, prefix_len) == 0 &&
+                (t->cwd[prefix_len] == '\0' || t->cwd[prefix_len] == '/'))
+            {
+                cwd_inside = true;
+                break;
+            }
+        }
+        if (cwd_inside)
+            continue;
+
+        victim = fs;
+        strcpy(victim_prefix, prefix);
+        vfs_format_guid(kMountTable[i].part_guid, victim_guid);
+        break;
+    }
+    // Captured now because the restore must put back what was FOUND — a
+    // victim that was mounted ro (a mounts.conf `ro` line, or a device that
+    // cannot write) goes back ro, or the test would quietly hand the boot's
+    // namespace a pen it did not have.
+    bool victim_ro = (victim != NULL) && victim->read_only;
+    if (victim == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no unmountable disk mount to exercise)\n");
+        return true;
+    }
+
+    // Cleanup owns these after their first successful acquisition. A failed
+    // assertion must release the artificial holder before it can put the
+    // victim mount back.
+    vfs_file_t *held = NULL;
+    vfs_directory_t *held_dir = NULL;
+    bool held_open = false;
+    bool held_dir_open = false;
+    bool held_dir_counted = false;
+
+    // 1. BUSY. A held file on the victim must hold the mount down.
+    char probe_path[VFS_MOUNT_PREFIX_MAX + 16];
+    sprintf(probe_path, "%s/mu_probe", victim_prefix);
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(probe_path, &tail);
+    if (fs != victim)
+        MU_FAIL("%s did not route to the victim filesystem\n", probe_path);
+    held_open = (victim->fops->open != NULL &&
+                 victim->fops->open(&held, "/", "r", victim) == 0 && held != NULL);
+    // Not every fs opens its root as a FILE; a directory hold proves the same
+    // arithmetic through the other counter.
+    if (!held_open) {
+        if (victim->dops->open == NULL ||
+            victim->dops->open(&held_dir, "/", victim) != 0 || held_dir == NULL)
+            MU_FAIL("could not hold anything open on %s\n", victim_prefix);
+        held_dir_open = true;
+        __sync_fetch_and_add(&victim->open_dir_count, 1);   // the syscall door's half, done by hand
+        held_dir_counted = true;
+    }
+    int r = vfs_unmount(victim_prefix);
+    if (r != OS64_UNMOUNT_BUSY)
+    {
+        // OK here is the regression this leg exists to catch — and it means
+        // the filesystem was TORN DOWN AND FREED under our holder, taking
+        // `victim` (and the handle we are holding) with it. Cleanup must not
+        // touch either, so drop the claims before jumping: the object they
+        // name is already gone. Any other answer left the mount standing,
+        // and cleanup closes the holder normally.
+        if (r == OS64_MOUNT_OK)
+        {
+            held_open = false;
+            held_dir_open = false;
+            held_dir_counted = false;
+        }
+        MU_FAIL("unmount of %s with a holder answered %d, expected BUSY (%d)\n",
+                victim_prefix, r, OS64_UNMOUNT_BUSY);
+    }
+
+    // 2. RELEASE AND UNMOUNT. The name must leave the namespace.
+    if (held_open) {
+        victim->fops->close(held);
+        held = NULL;
+        held_open = false;
+    } else {
+        __sync_fetch_and_sub(&victim->open_dir_count, 1);
+        held_dir_counted = false;
+        victim->dops->close(held_dir);
+        held_dir = NULL;
+        held_dir_open = false;
+    }
+    r = vfs_unmount(victim_prefix);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of idle %s answered %d\n", victim_prefix, r);
+    // `victim` is freed as of that call — only the strings live on.
+    r = vfs_unmount(victim_prefix);
+    if (r != OS64_UNMOUNT_NOT_A_MOUNT)
+        MU_FAIL("second unmount of %s answered %d, expected NOT_A_MOUNT (%d)\n",
+                victim_prefix, r, OS64_UNMOUNT_NOT_A_MOUNT);
+
+    // 3. REMOUNT BY GUID at a scratch prefix — READ-ONLY — and the tree must
+    // answer there while every pen is verifiably gone. An unknown flag bit
+    // must bounce before anything mounts.
+    static const char *scratch = "/mu_mount";
+    r = vfs_mount_explicit(victim_guid, scratch, 0x8000);
+    if (r != OS64_MOUNT_BAD_ARGS)
+        MU_FAIL("an unknown mount flag answered %d, expected BAD_ARGS (%d)\n",
+                r, OS64_MOUNT_BAD_ARGS);
+    r = vfs_mount_explicit(victim_guid, scratch, OS64_MOUNT_RO);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("remount of %s at %s answered %d\n", victim_guid, scratch, r);
+    tail = NULL;
+    fs = vfs_resolve_mount("/mu_mount/anything", &tail);
+    if (fs == NULL || fs == kRootFilesystem || strcmp(tail, "/anything") != 0)
+        MU_FAIL("%s did not route into the remounted filesystem\n", scratch);
+    if (!fs->read_only || fs->fops->write != NULL || fs->fops->rm != NULL ||
+        fs->dops->mkdir != NULL)
+        MU_FAIL("an OS64_MOUNT_RO mount still carries write verbs\n");
+    os64_dirent_t entry;
+    if (fs->dops->stat == NULL || fs->dops->stat("/", &entry, fs) != 0)
+        MU_FAIL("stat of the remounted root failed\n");
+
+    // 3a. AND THE OPEN ITSELF MUST REFUSE. Taking the write verbs away is
+    // only half of read-only: a creating open writes before any of those
+    // verbs is reached (FAT's does it inside f_open), so the mount would
+    // have been one `>` away from the stray-write tripwire's panic. Both
+    // drivers answer this from fs->read_only, so this leg holds for either.
+    vfs_file_t *pen = NULL;
+    if (fs->fops->open != NULL &&
+        fs->fops->open(&pen, "/mu_pen", "w", fs) == 0)
+    {
+        if (fs->fops->close != NULL)
+            fs->fops->close(pen);
+        MU_FAIL("a read-only mount opened /mu_pen for writing\n");
+    }
+
+    r = vfs_unmount(scratch);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of %s answered %d\n", scratch, r);
+
+    // 3b. AN IDENTIFIER IS EXACT. A valid GUID with anything appended names
+    // no partition — a bounded compare answered "yes" to that, so malformed
+    // administrative input acted on a real disk.
+    char guid_plus[48];
+    sprintf(guid_plus, "%sjunk", victim_guid);
+    r = vfs_mount_explicit(guid_plus, scratch, 0);
+    if (r != OS64_MOUNT_NOT_FOUND) {
+        if (r == OS64_MOUNT_OK)
+            vfs_unmount(scratch);
+        MU_FAIL("'%s' answered %d, expected NOT_FOUND (%d)\n",
+                guid_plus, r, OS64_MOUNT_NOT_FOUND);
+    }
+
+    // 3c. A MOUNT UNDER A DIRECTORY PINS THAT DIRECTORY. /bin is an ordinary
+    // directory to unlink and rename, and removing it while something is
+    // mounted beneath leaves a live filesystem whose point has no parent —
+    // vfs_mount_under is what those two verbs ask. Three answers, because
+    // the wrong string compare gets one of them wrong: the parent yes, a
+    // partial path component no, the mount point itself no.
+    if (kRootFilesystem->dops != NULL && kRootFilesystem->dops->stat != NULL &&
+        kRootFilesystem->dops->stat("/bin", &entry, kRootFilesystem) == 0 &&
+        (entry.flags & OS64_DE_DIR))
+    {
+        static const char *nested = "/bin/mu_mount";
+        r = vfs_mount_explicit(victim_guid, nested, OS64_MOUNT_RO);
+        if (r != OS64_MOUNT_OK)
+            MU_FAIL("nested mount at %s answered %d\n", nested, r);
+        bool under_parent = vfs_mount_under("/bin");
+        bool under_partial = vfs_mount_under("/bi");
+        bool under_self = vfs_mount_under(nested);
+        r = vfs_unmount(nested);
+        if (!under_parent)
+            MU_FAIL("/bin holds a mount and vfs_mount_under said otherwise\n");
+        if (under_partial)
+            MU_FAIL("vfs_mount_under matched /bi, which is not a path component\n");
+        if (under_self)
+            MU_FAIL("vfs_mount_under counted %s as being under itself\n", nested);
+        if (r != OS64_MOUNT_OK)
+            MU_FAIL("unmount of nested %s answered %d\n", nested, r);
+    }
+
+    // 3d. NO WHERE: the verb derives the label default — `mount fat` and a
+    // one-token mounts.conf line are the same ask. The landing prefix is
+    // found by GUID, because the fixture deliberately does not re-implement
+    // the derivation it is testing.
+    r = vfs_mount_explicit(victim_guid, NULL, 0);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("mount with no where answered %d\n", r);
+    char derived_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    for (int i = 0; i < kMountCount; i++) {
+        char g[40];
+        if (kMountTable[i].fs == NULL)
+            continue;
+        vfs_format_guid(kMountTable[i].part_guid, g);
+        if (strcmp(g, victim_guid) == 0) {
+            strcpy(derived_prefix, kMountTable[i].prefix);
+            break;
+        }
+    }
+    if (derived_prefix[0] != '/' || derived_prefix[1] == '\0')
+        MU_FAIL("the label-derived mount is not in the table\n");
+    r = vfs_unmount(derived_prefix);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of derived %s answered %d\n", derived_prefix, r);
+
+    // 4. PUT IT BACK, in the mode it was found. The boot's namespace
+    // outlives the test.
+    r = vfs_mount_explicit(victim_guid, victim_prefix, victim_ro ? OS64_MOUNT_RO : 0);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("restoring %s at %s answered %d\n", victim_guid, victim_prefix, r);
+
+    printd(DEBUG_TESTS, "\tPASS: test_mount_unmount (%s: busy while held, unmounted idle, "
+                        "remounted ro by GUID at %s with its open refusing a pen, "
+                        "exact identifiers, a nested mount pinning its parent, restored %s)\n",
+           victim_prefix, scratch, victim_ro ? "ro" : "rw");
+    return true;
+
+mu_cleanup:
+    if (held_open && held != NULL)
+        victim->fops->close(held);
+    if (held_dir_open && held_dir != NULL) {
+        if (held_dir_counted)
+            __sync_fetch_and_sub(&victim->open_dir_count, 1);
+        victim->dops->close(held_dir);
+    }
+
+    // Find the victim by the identity captured before its first unmount. It
+    // may be absent or may occupy scratch, nested, or label-derived storage;
+    // remove that temporary claim before restoring the boot-time prefix.
+    char current_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    for (int i = 0; i < kMountCount; i++) {
+        char g[40];
+        if (kMountTable[i].fs == NULL)
+            continue;
+        vfs_format_guid(kMountTable[i].part_guid, g);
+        if (strcmp(g, victim_guid) == 0) {
+            strcpy(current_prefix, kMountTable[i].prefix);
+            break;
+        }
+    }
+
+    bool at_original = strcmp(current_prefix, victim_prefix) == 0;
+    if (current_prefix[0] != '\0' && !at_original) {
+        int cleanup_r = vfs_unmount(current_prefix);
+        if (cleanup_r != OS64_MOUNT_OK)
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount cleanup could not unmount %s (%d)\n",
+                   current_prefix, cleanup_r);
+        else
+            current_prefix[0] = '\0';
+    }
+    if (!at_original && current_prefix[0] == '\0') {
+        int cleanup_r = vfs_mount_explicit(victim_guid, victim_prefix,
+                                           victim_ro ? OS64_MOUNT_RO : 0);
+        if (cleanup_r != OS64_MOUNT_OK)
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount cleanup could not restore %s (%d)\n",
+                   victim_prefix, cleanup_r);
+    }
+    return false;
+}
+#undef MU_FAIL
+
+
 // ── Argument delivery (2026-08-13) ───────────────────────────────────────────
 //
-// /bin/arg_echo has existed since ring-3 bring-up and checks the whole startup
+// /tests/arg_echo has existed since ring-3 bring-up and checks the whole startup
 // contract end to end — argc in RDI, argv in RSI at TASK_ARGV_VIRT, env in RDX
 // at TASK_ENV_VIRT, the argv strings actually copied into the task's own blob,
 // the NULL terminator, and the ELF loader's partial-page BSS zero-fill — with a
 // distinct 0xE00000xx code per broken invariant so a failure names itself.
 //
-// It was only ever run from /bin/testrun, the RING-3 suite, which lives behind
+// It was only ever run from /tests/testrun, the RING-3 suite, which lives behind
 // its own Limine entry. So on an ordinary boot, argument processing had NO
 // coverage at all: you could break argv and every normal boot would stay green.
 // Chris asked for that gap to be closed (2026-08-13) the same evening the argv
-// blob was about to be re-laid — packed strings, new fixed VAs, a 512-argument
+// blob was about to be re-laid — packed strings, new fixed VAs, a larger argument
 // ceiling — which is exactly the change that would have broken it silently.
 //
 // Cheap: one spawn, no filesystem writes, and it fails with a number that says
@@ -1074,9 +1869,9 @@ static bool test_task_args(void)
 
     // The exact argv the fixture asserts on — it checks argv[1]/argv[2] by
     // content, so these strings are part of the contract, not decoration.
-    char *args[] = { "/bin/arg_echo", "hello", "world" };
+    char *args[] = { "/tests/arg_echo", "hello", "world" };
 
-    task_t *t = test_spawn("/bin/arg_echo", 3, args, false);
+    task_t *t = test_spawn("/tests/arg_echo", 3, args, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
         return false;
@@ -1119,10 +1914,11 @@ static bool test_task_args(void)
 // window, up to the TASK_ENV_MAX_BYTES (64KB) ceiling. The dangerous moving
 // parts are the mid-run REMAP of the task's own read-only window and the
 // grow-copy chain preserving every pair — so the coverage is a ring-3 fixture
-// (/bin/env_fill) that fills ~11KB (two growth events), reads every pair back
+// (/tests/env_fill) that fills ~11KB (two growth events), reads every pair back
 // through the remapped window, drives the block to the ceiling and demands an
-// honest refusal, then proves the refusal corrupted nothing. Distinct
-// 0xE27Fxxxx codes name the invariant that broke.
+// honest refusal, then proves an oversized replacement also refuses without
+// deleting its old value. Distinct 0xE27Fxxxx codes name the invariant that
+// broke.
 #define ENV_FILL_OK 0x0E27600DUL
 static bool test_env_growth(void)
 {
@@ -1131,7 +1927,7 @@ static bool test_env_growth(void)
         return true;
     }
 
-    task_t *t = test_spawn("/bin/env_fill", 0, NULL, false);
+    task_t *t = test_spawn("/tests/env_fill", 0, NULL, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_env_growth - task_create returned NULL\n");
         return false;
@@ -1162,7 +1958,7 @@ static bool test_env_growth(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_env_growth (block grew under the fixed window, pairs "
-                        "survived the copies, 64KB ceiling refused honestly)\n");
+                        "survived the copies, 64KB refusals were atomic)\n");
     return true;
 }
 
@@ -1190,7 +1986,7 @@ static bool test_env_growth(void)
 // floor proves pages were resident AND came back.
 //
 // The fixture matched the claim the same day (Chris's requirement: "a real
-// program with real multiple text pages, bss, heap pages"): /bin/glutton
+// program with real multiple text pages, bss, heap pages"): /tests/glutton
 // deliberately touches ~4 text pages, a dirtied .data page, 4 .bss pages,
 // and a 4-page mapped heap region it never unmaps — then exits with all of
 // it resident, making burial do a real program's worth of work. The asserted
@@ -1234,7 +2030,7 @@ static bool teardown_leak_wait_quiet(void)
     int quiet_ms = 0;
 
     for (int i = 0; i < 400 && quiet_ms < 5000; i++) {
-        wait(50);
+        nap(50);
         if (kTaskBurialCount != last) {
             last = kTaskBurialCount;
             quiet_ms = 0;      // someone was buried — restart the settle
@@ -1245,12 +2041,40 @@ static bool teardown_leak_wait_quiet(void)
     return quiet_ms >= 5000;
 }
 
+// AND THE OTHER HALF OF QUIET, which only became necessary when this test
+// moved to the LATE phase (2026-08-29) and started running beside a live
+// userland instead of on an empty machine.
+//
+// The settle above watches BURIALS, because burials were the only thing that
+// moved memory while nothing but the suite was running. What the test
+// actually asserts on is the GLOBAL free-page count, and that is moved by
+// anything at all: logd draining into a file, a block cache warming, a shell
+// faulting in a page it had not touched yet. None of those is a leak, and all
+// of them land in `lost` as one.
+//
+// So ask the question the assertion depends on: is the free-page count STILL?
+// Two samples a short pause apart, a few attempts, and a truthful "no" if it
+// will not hold. A test that cannot measure must skip — it must never spend
+// its caller's trust on a number it did not earn.
+static bool teardown_leak_wait_allocation_still(void)
+{
+    for (int attempt = 0; attempt < 10; attempt++) {
+        uint64_t a = 0, b = 0;
+        allocator_memory_snapshot(&a, NULL, NULL);
+        nap(200);
+        allocator_memory_snapshot(&b, NULL, NULL);
+        if (a == b)
+            return true;
+    }
+    return false;
+}
+
 // One complete cycle: spawn a ring-3 fixture, let it exit, release the corpse,
 // and WAIT FOR THE FUNERAL — not for the death. The distinction is the whole
 // point: at exit time nothing has been freed yet, and a snapshot taken then
 // would measure the corpse, not the cleanup.
 //
-// /bin/glutton is the fixture on purpose (since 2026-08-15; exit_by_return
+// /tests/glutton is the fixture on purpose (since 2026-08-15; exit_by_return
 // before that). It is ring 3, so it exercises every allocation burial frees —
 // argv blob, env blob, exit trampoline page — AND it deliberately exits with
 // a real program's resident set still mapped: multiple text pages, a dirtied
@@ -1261,15 +2085,18 @@ static bool teardown_leak_one_cycle(void)
 {
     uint64_t burials_before = kTaskBurialCount;
 
-    task_t *t = test_spawn("/bin/glutton", 0, NULL, false);
+    task_t *t = test_spawn("/tests/glutton", 0, NULL, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - task_create returned NULL\n");
         return false;
     }
     scheduler_submit_new_task(t);
 
+    // nap(), not wait(): same tick cadence, but this waits on a task that has
+    // to be SCHEDULED to make progress, and spinning here holds a core that
+    // the fixture (and the shell beside it) could be using.
     for (int i = 0; i < 500 && !t->exited; i++)
-        wait(10);
+        nap(10);
 
     // Read the struct BEFORE releasing it — after test_release the undertaker
     // may free it at any moment and a recycled struct reads as zeros (the
@@ -1294,8 +2121,11 @@ static bool teardown_leak_one_cycle(void)
     // exact when the machine is fast, patient when it is slow. 15s ceiling is
     // ~7 kworker periods — if burial hasn't happened by then it isn't going to,
     // and that is itself the bug.
+    //
+    // nap(), not wait(): the cadence is the same tick, but this loop runs in
+    // the LATE phase beside a live userland, and wait() spins.
     for (int i = 0; i < 1500 && kTaskBurialCount == burials_before; i++)
-        wait(10);
+        nap(10);
 
     if (kTaskBurialCount == burials_before) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - no burial completed within 15 seconds "
@@ -1305,26 +2135,58 @@ static bool teardown_leak_one_cycle(void)
     return true;
 }
 
-static bool test_task_teardown_leak(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (no root filesystem mounted)\n");
-        return true;
-    }
 
+// The verdict of ONE measurement attempt. The distinction that matters is
+// between "the number is bad" and "the number is not mine to read", because
+// only the first is a defect and only the second is worth retrying.
+typedef enum {
+    TL_CLEAN,     // measured, and a cycle cost nothing
+    TL_DIRTY,     // could not get a window to measure in — say so, try again
+    TL_ANOMALY,   // measured a loss (or a short reclaim) — REAL if it repeats
+    TL_ERROR      // a cycle could not be run at all; nothing to do but fail
+} teardown_verdict_t;
+
+static teardown_verdict_t teardown_leak_attempt(void)
+{
     if (!teardown_leak_wait_quiet()) {
         // Not a failure of teardown — a failure to get a quiet window, which
         // makes any number we produce meaningless. Say which it is: a test
         // that can't measure must not report a verdict it didn't earn.
-        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (undertaker never went quiet — "
-                            "burials still completing after 20s, cannot measure cleanly)\n");
-        return true;
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: undertaker never went quiet — "
+                            "burials still completing after 20s\n");
+        return TL_DIRTY;
+    }
+    if (!teardown_leak_wait_allocation_still()) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: the free-page count would not hold "
+                            "still — something on this machine is allocating\n");
+        return TL_DIRTY;
     }
 
     for (int i = 0; i < TEARDOWN_LEAK_WARMUP_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
-            return false;
+            return TL_ERROR;
     }
+
+    // WHOSE FUNERALS HAPPENED IN OUR WINDOW? Exactly one per cycle, or the
+    // delta below belongs partly to somebody else and cannot be read as ours.
+    //
+    // Settling BEFORE the window is not enough, and that is not a guess: with
+    // this test moved to the LATE phase it runs beside a live shell, and one
+    // `ps` typed while it measured turned "a task costs nothing" into a
+    // failure on the glass. The stillness it needs is stillness THROUGHOUT,
+    // and the honest way to get it is not to wait longer — a user can always
+    // out-wait you — but to notice afterwards that the window was not ours
+    // alone, and decline to draw a conclusion from it.
+    //
+    // THE BRACKETS OPEN BEFORE THE MEMORY SNAPSHOT AND CLOSE AFTER IT, and
+    // that order is the whole instrument: a bracket's claim is "nothing it
+    // watches moved between the two memory readings", so each baseline must
+    // be older than free_before and each check younger than free_after. A
+    // burial or a reap that landed between free_before and a baseline taken
+    // after it would be inside the memory delta and outside the bracket —
+    // counted as the starting state, and the delta blamed on the cycles.
+    uint64_t burials_before = kTaskBurialCount;
+    uint64_t tcp_moves_before = tcp_leak_bracket_snapshot();
 
     uint64_t free_before = 0, free_after = 0;
     allocator_memory_snapshot(&free_before, NULL, NULL);
@@ -1332,7 +2194,15 @@ static bool test_task_teardown_leak(void)
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
-            return false;
+            return TL_ERROR;
+    }
+
+    uint64_t burials = kTaskBurialCount - burials_before;
+    if (burials != (uint64_t)TEARDOWN_LEAK_MEASURED_CYCLES) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: %lu burials in a window that should have "
+                            "held %d — this machine was busy\n",
+               burials, TEARDOWN_LEAK_MEASURED_CYCLES);
+        return TL_DIRTY;
     }
 
     // (A TEMP DIAG surviving-extent differ lived here during the
@@ -1342,8 +2212,47 @@ static bool test_task_teardown_leak(void)
     // page. Removed after the deferral was paid; the two clauses below are
     // the permanent instrument.)
 
+    // free_after IS TAKEN FIRST, before the check below, and the order is the
+    // point: anything sampled after a two-second stillness probe would be
+    // measuring that probe's window too.
     allocator_memory_snapshot(&free_after, NULL, NULL);
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
+
+    // THE THIRD BRACKET, for the moves the other two cannot see: TCP's
+    // heap. A connection's rings (tcp.h TCP_RCV_BUF and TCP_SND_BUF) are
+    // allocated at the dial
+    // and freed on the morgue's clock or at a failed dial's return, with
+    // no task burial to census either edge and the free far too late for
+    // the stillness probes to catch the culprit still allocating; each
+    // edge alone reads as a leak — bytes lost at the dial, bytes conjured
+    // at the free. (Two corpses reaping mid-window measured as -67200
+    // bytes/task and convicted task_destroy of a leak it didn't have; an
+    // os64get typed mid-window read as +214468 the same way.) The
+    // bracket asks ONE number: tcp.h's heap_moves, which every TCP
+    // allocation and free ticks under the list lock in the same critical
+    // section as the move, read here under that lock — so it either sees
+    // a move or the move has not happened, and no edge can go uncounted
+    // by construction (the per-edge counters this replaced missed five
+    // in a row).
+    if (tcp_leak_bracket_snapshot() != tcp_moves_before) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: TCP moved heap inside the window — "
+                            "a connection's buffers are in the delta and are not ours\n");
+        return TL_DIRTY;
+    }
+
+    // AND THE OTHER END OF THE BRACKET. The burial count above catches other
+    // TASKS living and dying in our window; it says nothing about allocation
+    // that never involves a task at all — a block cache line taken and kept,
+    // logd writing, a shell faulting in a page it had not touched. The
+    // stillness check BEFORE the window cannot see inside it either. So ask
+    // again on the way out: a machine still moving memory a moment later was
+    // probably moving it during the cycles, and that window is not ours to
+    // read. (Codex, PR #42 rd3.)
+    if (!teardown_leak_wait_allocation_still()) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: the free-page count would not hold still "
+                            "after the window either — something was allocating across it\n");
+        return TL_DIRTY;
+    }
 
     // Signed on purpose: free memory going UP across the window is not a leak,
     // it is the allocator having coalesced or some cache having shrunk, and
@@ -1361,13 +2270,11 @@ static bool test_task_teardown_leak(void)
     // all is an undeclared leak.
     if (lost != 0) {
         printd(DEBUG_TESTS,
-               "\tFAIL: test_task_teardown_leak - %ld bytes per %d cycles leaked "
-               "(%ld bytes/task). Since 2026-08-15 burial reclaims EVERYTHING a task "
-               "owned; something allocated in task_create (or on the task's behalf) "
-               "has no matching free in task_destroy.\n",
+               "\ttask_teardown_leak: %ld bytes per %d cycles unaccounted for "
+               "(%ld bytes/task)\n",
                lost, TEARDOWN_LEAK_MEASURED_CYCLES,
                lost / TEARDOWN_LEAK_MEASURED_CYCLES);
-        return false;
+        return TL_ANOMALY;
     }
 
     // Clause 2: the reclaim provably RAN. A zero delta alone could mean the
@@ -1378,17 +2285,284 @@ static bool test_task_teardown_leak(void)
         GLUTTON_MIN_RECLAIM_PER_CYCLE * TEARDOWN_LEAK_MEASURED_CYCLES;
     if (reclaimed < reclaim_floor) {
         printd(DEBUG_TESTS,
-               "\tFAIL: test_task_teardown_leak - reclaim ran short: %lu bytes freed "
-               "over %d cycles, floor is %lu (glutton's data+bss+heap). Either demand "
-               "paging faulted nothing in, or burial's walk missed resident frames.\n",
+               "\ttask_teardown_leak: reclaim ran short: %lu bytes freed over %d cycles, "
+               "floor is %lu (glutton's data+bss+heap)\n",
                reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES, reclaim_floor);
+        return TL_ANOMALY;
+    }
+
+    // A MEASUREMENT, NOT A VERDICT — this used to say PASS, which was a claim
+    // one window is not entitled to make now that a clean result has to repeat
+    // like a failing one does. The caller announces the verdict once two
+    // windows agree.
+    printd(DEBUG_TESTS,
+           "\ttask_teardown_leak: window clean — 0 bytes lost, %lu bytes of VMA backing "
+           "reclaimed over %d cycles\n",
+           reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES);
+    return TL_CLEAN;
+}
+
+// A VERDICT HAS TO REPEAT BEFORE IT IS BELIEVED — AND SO DOES A CLEAN ONE.
+//
+// The first half was always the argument: a leak happens every time, while a
+// single bad measurement on a live machine usually is not even about us. The
+// block cache takes 64KB at a time and never gives it back, so one `ls` typed
+// while this runs drops the free count by a quarter of a megabyte no burial
+// will return. Calling that a leak on the glass is how a suite teaches people
+// to ignore it.
+//
+// THE SECOND HALF IS THE ONE I HAD BACKWARDS, and it is the dangerous
+// direction (Codex, PR #42 rd3): the global free count is shared, so an
+// unrelated FREE inside our window can offset a real leak and make `lost`
+// land on zero. The old loop took the first clean window as proof and stopped
+// looking — a false PASS, which hides a defect instead of crying wolf about
+// one. Noise cuts both ways and the test must too.
+//
+// So both verdicts are earned the same way: TWO windows agreeing. Two clean
+// ones pass, two measured losses fail, and any other mixture is inconclusive
+// and says so rather than picking the answer it happened to see last. On a
+// quiet machine that costs one extra window — which is exactly the sort of
+// bill the LATE phase exists to pay, since nobody is waiting on it.
+#define TEARDOWN_LEAK_ATTEMPTS 4
+#define TEARDOWN_LEAK_AGREE    2   // windows that must agree before we believe them
+
+// ── The doorbell (DOORBELL.md) ──────────────────────────────────────────
+// The entropy pool, right after random_init: two draws differ, neither is
+// one repeated byte, and the pool's own account of itself is consistent —
+// a trusted hardware instruction means it was seeded by hardware and gave
+// at least the 256 bits a seed takes, unless it ran dry mid-draw (then the
+// jitter loop, and hw_exhausted says why); no hardware means the jitter
+// loop or nothing, and /sys/random will say. The construction itself is proven on
+// the host (tools/test_random_host.sh); this is the instruction meeting
+// the real CPU, once per boot.
+
+static bool test_random_pool(void)
+{
+    uint8_t a[64], b[64];
+    random_bytes(a, sizeof(a));
+    random_bytes(b, sizeof(b));
+
+    bool same = true, flat_a = true, flat_b = true;
+    for (size_t i = 0; i < sizeof(a); i++) {
+        if (a[i] != b[i]) same = false;
+        if (a[i] != a[0]) flat_a = false;
+        if (b[i] != b[0]) flat_b = false;
+    }
+    if (same || flat_a || flat_b) {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - draws %s\n",
+               same ? "identical" : "constant");
         return false;
     }
 
+    const random_stats_t *r = &kRandomStats;
+    bool hw = r->rdseed_trusted || r->rdrand_trusted;
+    // A trusted instruction that then ran dry inside the seed draw's retry
+    // budget is a real, recoverable state: the pool falls through to the
+    // jitter loop, and hw_exhausted says so. That is not a failure of the
+    // pool — and this test runs PREBOOT, where a failure is a panic — so
+    // hardware is held to "seeded by hardware with a full seed" only when
+    // it never ran dry.
+    bool hw_ran_dry = r->hw_exhausted > 0;
+    if (hw && !hw_ran_dry && (!r->seeded || r->hw_words < 4)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but pool %s (hw words %lu)\n",
+               r->seeded ? "under-seeded" : "unseeded", r->hw_words);
+        return false;
+    }
+    if (hw && !hw_ran_dry && r->seeded_by[0] != 'r') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but seeded by %s\n", r->seeded_by);
+        return false;
+    }
+    if (hw && hw_ran_dry && r->seeded && r->seeded_by[0] != 'r' && r->seeded_by[0] != 'j') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware ran dry (%lu exhausted) yet seeded by %s before any interrupt\n",
+               r->hw_exhausted, r->seeded_by);
+        return false;
+    }
+    if (!hw && r->seeded && r->seeded_by[0] != 'j') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - no hardware, yet seeded by %s before any interrupt\n",
+               r->seeded_by);
+        return false;
+    }
+    printd(DEBUG_TESTS, "\ttest_random_pool: seeded %s by %s (rdseed %s, rdrand %s, hw words %lu, retries %lu, exhausted %lu, jitter %lu)\n",
+           r->seeded ? "yes" : "NO", r->seeded ? r->seeded_by : "-",
+           !r->cpuid_rdseed ? "absent" : r->rdseed_trusted ? "ok" : "failed",
+           !r->cpuid_rdrand ? "absent" : r->rdrand_trusted ? "ok" : "failed",
+           r->hw_words, r->hw_retries, r->hw_exhausted, r->jitter_samples);
+    return true;
+}
+
+// The owed wake (WAKE_OWED.md), three ways, each judged against a 10 s
+// backstop so a wake that did not happen is unmistakable:
+//   1. owed while RUNNING — exactly the state between registering and the
+//      park — then parked: the requeue pays it, within a few ticks;
+//   2. parked first, then woken from a pass (processSignals, armed through
+//      kWakeOwedTestTarget three ticks out): the plain ISLEEP wake, which
+//      must still work;
+//   3. owed, then voided as a wait's pass-top would, then nap(100): the whole
+//      100 ms must be slept. nap is the instrument on purpose — it is one
+//      signal_raise with no loop, so a debt that leaked past its void cuts
+//      it short visibly, where syscall_sleep re-checks its deadline and
+//      would hide the leak behind one extra pass. Do not swap it for a
+//      looping sleep.
+// The counts are machine-wide and a live desktop may move them too, so they
+// are checked as "at least this many more".
+
+static bool test_wake_owed(void)
+{
+    thread_t *self = get_core_local_storage()->currentThread;
+    const uint64_t backstop = 10 * TICKS_PER_SECOND;
+
+    scheduler_wake_counts_t c0 = scheduler_wake_counts();
+    uint64_t before = kTicksSinceStart;
+    scheduler_wake_or_owe(self);
+    signal_raise(SIGSLEEP, kTicksSinceStart + backstop, self);
+    uint64_t paid_took = kTicksSinceStart - before;
+    scheduler_wake_counts_t c1 = scheduler_wake_counts();
+    if (paid_took > 3 || c1.owed < c0.owed + 1 || c1.paid < c0.paid + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a wake owed mid-park took %lu ticks (owed +%lu, paid +%lu)\n",
+               paid_took, c1.owed - c0.owed, c1.paid - c0.paid);
+        return false;
+    }
+
+    before = kTicksSinceStart;
+    kWakeOwedTestTick = before + 3;
+    __sync_synchronize();
+    kWakeOwedTestTarget = self;
+    signal_raise(SIGSLEEP, kTicksSinceStart + backstop, self);
+    uint64_t woke_took = kTicksSinceStart - before;
+    if (kWakeOwedTestTarget != NULL || woke_took < 3 || woke_took > 8) {
+        kWakeOwedTestTarget = NULL;
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a parked thread woke after %lu ticks for a wake aimed at tick 3\n",
+               woke_took);
+        return false;
+    }
+
+    scheduler_wake_counts_t c2 = scheduler_wake_counts();
+    scheduler_wake_or_owe(self);
+    scheduler_forget_owed_wake(self);
+    before = kTicksSinceStart;
+    nap(100);
+    uint64_t nap_took = kTicksSinceStart - before;
+    scheduler_wake_counts_t c3 = scheduler_wake_counts();
+    if (nap_took < 100 / MS_PER_TICK - 1 || c3.voided < c2.voided + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a voided debt let a 100 ms nap end after %lu ticks (voided +%lu)\n",
+               nap_took, c3.voided - c2.voided);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_wake_owed (paid at the park in %lu tick(s), parked wake in %lu, voided debt slept %lu)\n",
+           paid_took, woke_took, nap_took);
+    return true;
+}
+
+// A sleeper parked on a bell is woken by the next pass that rings it, not
+// by its backstop. processSignals rings kDoorbellTestBell on the pass after
+// the arm is set, so a wake within a couple of ticks is the primitive
+// working end to end — service point, expedite, park — and a wake at the
+// five-second backstop is the primitive NOT working, unmistakably.
+
+static bool test_doorbell_wakes_sleeper(void)
+{
+    thread_t *self = get_core_local_storage()->currentThread;
+    doorbell_register(&kDoorbellTestBell, self, "test");
+
+    uint64_t worst = 0;
+    bool ok = true;
+    for (int round = 0; round < 3 && ok; round++) {
+        doorbell_take(&kDoorbellTestBell);   // lower the edge, as a sleeper does at its loop top
+        uint64_t before = kTicksSinceStart;
+        kDoorbellTestArm = true;                                // the BSP's next pass rings
+        doorbell_park(&kDoorbellTestBell, 5 * TICKS_PER_SECOND);
+        uint64_t took = kTicksSinceStart - before;
+        if (took > worst)
+            worst = took;
+        if (!doorbell_rung(&kDoorbellTestBell)) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - woke with the bell unrung after %lu ticks (the backstop, not the bell)\n", took);
+            ok = false;
+        } else if (took > 3) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - the ring took %lu ticks to wake the sleeper\n", took);
+            ok = false;
+        }
+    }
+    doorbell_unregister(&kDoorbellTestBell);
+    if (ok)
+        printd(DEBUG_TESTS, "\tPASS: test_doorbell_wakes_sleeper (3 rings, worst %lu tick(s), %lu wake(s) answered by a pass)\n",
+               worst, kDoorbellTestBell.wakes);
+    return ok;
+}
+
+static bool test_task_teardown_leak(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (no root filesystem mounted)\n");
+        return true;
+    }
+
+    // COUNT THE ATTEMPTS, do not just remember the last one. The verdict used
+    // to read whatever `v` happened to hold when the loop ended, which is a
+    // different question from the one being asked: DIRTY,DIRTY,ANOMALY
+    // announced that "the loss REPEATED across 3 windows" on the strength of
+    // ONE measurement, and ANOMALY,ANOMALY,DIRTY reported "never measurable"
+    // after measuring twice. Both are the wrong story, and on a live machine
+    // — where dirty windows are the expected case — both were reachable.
+    // (Codex, PR #42.)
+    int clean = 0;     // windows that measured a cycle costing nothing
+    int lost  = 0;     // windows that measured a loss
+    int dirty = 0;     // windows that could not be measured at all
+
+    for (int attempt = 1; attempt <= TEARDOWN_LEAK_ATTEMPTS; attempt++) {
+        teardown_verdict_t v = teardown_leak_attempt();
+
+        if (v == TL_ERROR) {
+            printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - a cycle could not be run "
+                                "(spawn or burial failed); nothing was measured\n");
+            return false;
+        }
+        if (v == TL_CLEAN)
+            clean++;
+        else if (v == TL_ANOMALY)
+            lost++;
+        else
+            dirty++;
+
+        // Stop as soon as either verdict has the agreement it needs. There is
+        // nothing to learn from a fourth window once two have said the same
+        // thing, and this test is already the slowest thing on the machine.
+        if (clean >= TEARDOWN_LEAK_AGREE || lost >= TEARDOWN_LEAK_AGREE)
+            break;
+
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: attempt %d of %d was %s — measuring "
+                            "again on a fresh window\n",
+               attempt, TEARDOWN_LEAK_ATTEMPTS,
+               v == TL_DIRTY ? "unmeasurable" : (v == TL_CLEAN ? "clean" : "a loss"));
+    }
+
+    if (clean >= TEARDOWN_LEAK_AGREE) {
+        printd(DEBUG_TESTS,
+               "\tPASS: test_task_teardown_leak (a task costs nothing — %d independently "
+               "measured windows agreed, with %d unmeasurable)\n", clean, dirty);
+        return true;
+    }
+
+    if (lost >= TEARDOWN_LEAK_AGREE) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independently "
+               "measured windows, so it is not the machine: since 2026-08-15 burial reclaims "
+               "everything a task owned, and something allocated in task_create (or on the "
+               "task's behalf) has no matching free in task_destroy. The per-attempt numbers "
+               "are above.\n",
+               lost);
+        return false;
+    }
+
+    // Neither verdict earned its two windows. That is not a finding about
+    // teardown and must not be dressed as one — on a machine busy enough to
+    // spoil most windows it is a finding about the machine. The counts go in
+    // the line so a human can see which way it was leaning.
     printd(DEBUG_TESTS,
-           "\tPASS: test_task_teardown_leak (a task costs nothing: 0 bytes lost, "
-           "%lu bytes of VMA backing reclaimed over %d cycles)\n",
-           reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES);
+           "\tSKIP: test_task_teardown_leak (inconclusive after %d attempts: %d clean, "
+           "%d showing a loss, %d unmeasurable — no verdict repeated, and one measurement "
+           "is not a repeat in either direction. A quiet machine settles it)\n",
+           TEARDOWN_LEAK_ATTEMPTS, clean, lost, dirty);
     return true;
 }
 
@@ -2090,11 +3264,9 @@ static bool test_vfs_write_mkdir(void)
 //
 // What it actually proves, in order of how much it would hurt to get wrong:
 //
-//   1. ATOMIC REPLACE (the 2026-08-16 ruling). Renaming onto an existing
-//      file leaves the DESTINATION NAME holding the SOURCE'S BYTES. This is
-//      the assertion the whole feature exists for — if it ever fails, the
-//      write-a-temp-then-publish recipe is a lie and os64get can eat a good
-//      file.
+//   1. DESTINATION POLICY. NOREPLACE leaves both names intact everywhere;
+//      REQUIRE_ATOMIC_REPLACE publishes on ext2 and refuses on FAT; flags
+//      zero retains FAT's legacy remove-then-rename replacement.
 //   2. A directory MOVE keeps its contents reachable through the new path.
 //      That single read proves both halves of the surgery: the new parent's
 //      entry AND the moved directory's rewritten "..".
@@ -2103,7 +3275,8 @@ static bool test_vfs_write_mkdir(void)
 //
 // The ext2-only steps are gated on the op table rather than a filesystem-type
 // field (there isn't one): a mount whose rename IS ext2's is ext2's. FAT gets
-// the shared assertions and is spared the two it cannot answer — the
+// the shared assertions, including its explicit safe-policy refusal, and is
+// spared the two it cannot answer — the
 // open-handle refusal (FAT keeps no open-inode count) and the loop refusal
 // (which on FAT would mean deliberately asking the lifeboat to corrupt
 // itself to see whether it declines).
@@ -2184,7 +3357,7 @@ static bool test_vfs_rename(void)
     if (!rn_plant("/etc/testdata/rn/a", alpha, sizeof(alpha) - 1))
         RN_FAIL("could not plant rn/a\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/a", "/etc/testdata/rn/b",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("plain rename a -> b failed\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/a", &de, kRootFilesystem) == 0)
         RN_FAIL("old name rn/a still resolves after rename\n");
@@ -2192,38 +3365,69 @@ static bool test_vfs_rename(void)
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("rn/b read-back mismatch after rename (n=%d)\n", n);
 
-    // 2. THE RULING: atomic replace. rn/c exists and holds OMEGA; renaming
-    //    b onto it must leave c holding ALPHA — the source's bytes under the
-    //    destination's name, with no third state in between.
+    // 2. rn/c exists and holds OMEGA. NOREPLACE must refuse without consuming
+    //    either name. An unknown policy must do the same even for an in-kernel
+    //    caller that bypasses syscall validation.
     if (!rn_plant("/etc/testdata/rn/c", omega, sizeof(omega) - 1))
         RN_FAIL("could not plant rn/c\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
-                                      kRootFilesystem) != 0)
-        RN_FAIL("replacing rename b -> c failed (the ruling says it must succeed)\n");
+                                      kRootFilesystem, OS64_RENAME_NOREPLACE) == 0)
+        RN_FAIL("NOREPLACE accepted an existing destination\n");
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
+                                      kRootFilesystem, 0x80) == 0)
+        RN_FAIL("an unknown rename policy was accepted\n");
+    n = rn_slurp("/etc/testdata/rn/b", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("a refused destination policy damaged rn/b (n=%d)\n", n);
+    n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
+    if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+        RN_FAIL("a refused destination policy damaged rn/c (n=%d)\n", n);
+
+    // 3. REQUIRE_ATOMIC_REPLACE may replace on ext2. FAT must refuse and
+    //    preserve both files; a following flags-zero call then proves the old
+    //    FAT behavior remains available to every existing caller.
+    int safe_replace = kRootFilesystem->fops->rename(
+        "/etc/testdata/rn/b", "/etc/testdata/rn/c", kRootFilesystem,
+        OS64_RENAME_REQUIRE_ATOMIC_REPLACE);
+    if (is_ext2 && safe_replace != 0)
+        RN_FAIL("ext2 refused a replacement it can perform atomically\n");
+    if (!is_ext2) {
+        if (safe_replace == 0)
+            RN_FAIL("FAT performed a replacement under REQUIRE_ATOMIC_REPLACE\n");
+        n = rn_slurp("/etc/testdata/rn/b", buf, sizeof(buf));
+        if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+            RN_FAIL("FAT's safe-policy refusal damaged rn/b (n=%d)\n", n);
+        n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
+        if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+            RN_FAIL("FAT's safe-policy refusal damaged rn/c (n=%d)\n", n);
+        if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
+                                          kRootFilesystem, 0) != 0)
+            RN_FAIL("flags-zero FAT replacement no longer works\n");
+    }
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/b", &de, kRootFilesystem) == 0)
         RN_FAIL("source rn/b survived a replacing rename\n");
     n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
-        RN_FAIL("replace left the WRONG bytes under rn/c (n=%d) — atomic replace is broken\n", n);
+        RN_FAIL("replace left the WRONG bytes under rn/c (n=%d)\n", n);
 
-    // 3. Move to a different directory, same filesystem.
+    // 4. Move to a different directory, same filesystem.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/c", "/etc/testdata/rn2/c",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("cross-directory rename failed\n");
     n = rn_slurp("/etc/testdata/rn2/c", buf, sizeof(buf));
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("rn2/c read-back mismatch after move (n=%d)\n", n);
 
-    // 4. A source that isn't there is a refusal, not a silent success.
+    // 5. A source that isn't there is a refusal, not a silent success.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/nothing_here",
-                                      "/etc/testdata/rn/x", kRootFilesystem) == 0)
+                                      "/etc/testdata/rn/x", kRootFilesystem, 0) == 0)
         RN_FAIL("rename of a nonexistent source reported success\n");
 
-    // 5. A directory is never replaced — and the source must survive the no.
+    // 6. A directory is never replaced — and the source must survive the no.
     if (!rn_plant("/etc/testdata/rn/f", omega, sizeof(omega) - 1))
         RN_FAIL("could not plant rn/f\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/f", "/etc/testdata/rn2",
-                                      kRootFilesystem) == 0)
+                                      kRootFilesystem, 0) == 0)
         RN_FAIL("rename replaced a DIRECTORY — the ruling forbids it\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
         RN_FAIL("refused rename still consumed the source rn/f\n");
@@ -2231,7 +3435,7 @@ static bool test_vfs_rename(void)
         || !(de.flags & OS64_DE_DIR))
         RN_FAIL("refused rename damaged the destination directory rn2\n");
 
-    // 6. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
+    // 7. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
     //    slice. This step originally asserted the opposite, and it FAILED the
     //    first boot after the rule changed, which is exactly what a test that
     //    encodes a ruling is for. The rule it encodes now: an ext2 handle
@@ -2245,7 +3449,7 @@ static bool test_vfs_rename(void)
         if (kRootFilesystem->fops->open(&held, "/etc/testdata/rn/f", "r", kRootFilesystem) != 0)
             RN_FAIL("could not open rn/f to hold it\n");
         if (kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                          "/etc/testdata/rn/g", kRootFilesystem) != 0) {
+                                          "/etc/testdata/rn/g", kRootFilesystem, 0) != 0) {
             kRootFilesystem->fops->close(held);
             RN_FAIL("refused to rename a file that was merely OPEN — a reader holds an inode, not a name\n");
         }
@@ -2265,7 +3469,7 @@ static bool test_vfs_rename(void)
         vfs_directory_t *heldDir = NULL;
         if (kRootFilesystem->dops->open(&heldDir, "/etc/testdata/rn2", kRootFilesystem) == 0) {
             int rcDir = kRootFilesystem->fops->rename("/etc/testdata/rn2",
-                                                      "/etc/testdata/rn2moved", kRootFilesystem);
+                                                      "/etc/testdata/rn2moved", kRootFilesystem, 0);
             kRootFilesystem->dops->close(heldDir);
             if (rcDir == 0)
                 RN_FAIL("moved a directory that another handle was reading\n");
@@ -2276,11 +3480,11 @@ static bool test_vfs_rename(void)
         kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
     }
 
-    // 7. Move a whole DIRECTORY, and prove its contents came with it. One
+    // 8. Move a whole DIRECTORY, and prove its contents came with it. One
     //    read through the new path exercises the new parent's entry and the
     //    moved directory's rewritten ".." at the same time.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn2", "/etc/testdata/rn/sub",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("directory rename rn2 -> rn/sub failed\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub", &de, kRootFilesystem) != 0
         || !(de.flags & OS64_DE_DIR))
@@ -2289,12 +3493,12 @@ static bool test_vfs_rename(void)
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("moved directory's contents unreachable at the new path (n=%d)\n", n);
 
-    // 8. A directory may not move into its own descendant. Attempted on ext2
+    // 9. A directory may not move into its own descendant. Attempted on ext2
     //    only — on FAT this would be asking the lifeboat to corrupt itself to
     //    see whether it says no.
     if (is_ext2) {
         if (kRootFilesystem->fops->rename("/etc/testdata/rn", "/etc/testdata/rn/sub/loop",
-                                          kRootFilesystem) == 0)
+                                          kRootFilesystem, 0) == 0)
             RN_FAIL("renamed a directory into its own descendant — that's a detached loop\n");
         if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub/c", &de, kRootFilesystem) != 0)
             RN_FAIL("the refused loop rename damaged the tree\n");
@@ -2306,8 +3510,8 @@ static bool test_vfs_rename(void)
     kRootFilesystem->fops->rm("/etc/testdata/rn/sub", kRootFilesystem);
     kRootFilesystem->fops->rm("/etc/testdata/rn", kRootFilesystem);
 
-    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, open-source survives, %u refusals)\n",
-           is_ext2 ? "ext2" : "FAT", is_ext2 ? 4u : 2u);
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: legacy plus safe policies, move, directory move, open-source survives, %u refusals)\n",
+           is_ext2 ? "ext2" : "FAT", is_ext2 ? 6u : 5u);
     return true;
 }
 #undef RN_FAIL
@@ -2339,43 +3543,150 @@ static bool test_vfs_rename(void)
 // fail one chosen metadata write, restore the real callback immediately, and
 // ask fops->mounted to perform the same replay a boot performs.
 
-// ext2_orphan test's block-write fault seam. These globals belong exclusively
-// to test_ext2_orphan and are live only around its synchronous close/replay
-// calls; ext2's write_lock keeps another writer on this mount from entering
-// while the chosen operation is in flight.
-static size_t (*sOrphanRealWrite)(void *, uint64_t, const void *, uint64_t);
-static uint32_t sOrphanWriteCount;
-static uint32_t sOrphanFailWrite;
+// The ext2 block-write fault seam. These globals are live only around one
+// synchronous filesystem operation; ext2's write_lock keeps another writer
+// on this mount from entering while the chosen operation is in flight.
+static size_t (*sExt2FaultRealWrite)(void *, uint64_t, const void *, uint64_t);
+static uint32_t sExt2FaultWriteCount;
+static uint32_t sExt2FaultFailWrite;
 
-static size_t orphan_test_write(void *device, uint64_t sector,
-                                const void *buffer, uint64_t sector_count)
+static size_t ext2_fault_test_write(void *device, uint64_t sector,
+                                    const void *buffer, uint64_t sector_count)
 {
-    sOrphanWriteCount++;
-    if (sOrphanWriteCount == sOrphanFailWrite)
+    sExt2FaultWriteCount++;
+    // The instrument for re-choreographing a fault test: the write numbers
+    // are the operation's command stream. If an implementation change moves
+    // a chosen failure point, the new boundary is read from this line.
+    printd(DEBUG_TESTS, "\text2 fault seam: write %u = LBA %lu x%lu%s\n",
+           sExt2FaultWriteCount, sector, sector_count,
+           sExt2FaultWriteCount == sExt2FaultFailWrite ? " (FAILED by the seam)" : "");
+    if (sExt2FaultWriteCount == sExt2FaultFailWrite)
         return 1;
-    return sOrphanRealWrite(device, sector, buffer, sector_count);
+    return sExt2FaultRealWrite(device, sector, buffer, sector_count);
 }
 
-static bool orphan_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
+static bool ext2_fault_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
 {
     if (fs == NULL || fs->bops == NULL || fs->bops->write == NULL ||
-        sOrphanRealWrite != NULL || nth == 0)
+        sExt2FaultRealWrite != NULL || nth == 0)
         return false;
-    sOrphanRealWrite = fs->bops->write;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = nth;
-    fs->bops->write = orphan_test_write;
+    sExt2FaultRealWrite = fs->bops->write;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = nth;
+    fs->bops->write = ext2_fault_test_write;
     return true;
 }
 
-static uint32_t orphan_test_restore_write(vfs_filesystem_t *fs)
+static uint32_t ext2_fault_test_restore_write(vfs_filesystem_t *fs)
 {
-    uint32_t writes = sOrphanWriteCount;
-    fs->bops->write = sOrphanRealWrite;
-    sOrphanRealWrite = NULL;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = 0;
+    uint32_t writes = sExt2FaultWriteCount;
+    fs->bops->write = sExt2FaultRealWrite;
+    sExt2FaultRealWrite = NULL;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = 0;
     return writes;
+}
+
+// A directory entry can reach disk one write before its parent inode. For a
+// regular file the second write carries only mtime, but mkdir also carries
+// the parent's backlink count. Fail exactly that final mkdir write and prove
+// the driver keeps the published child allocated, reports the partial result,
+// and demotes instead of continuing with structurally stale metadata.
+//
+// The damaged parent is itself disposable: cleanup removes the published
+// child and then the parent inode, so its deliberately stale private link
+// count cannot survive this test or reach the host's e2fsck verdict.
+static bool test_ext2_published_insert_failure(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->dops == NULL ||
+        kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_published_insert_failure (root is not writable ext2)\n");
+        return true;
+    }
+
+    static const char parent_path[] = "/etc/testdata/insertfault";
+    static const char probe_path[] = "/etc/testdata/insertfault/probe";
+    static const char child_path[] = "/etc/testdata/insertfault/child";
+    char parent_mut[48], probe_mut[56], child_mut[56];
+    sprintf(parent_mut, "%s", parent_path);
+    sprintf(probe_mut, "%s", probe_path);
+    sprintf(child_mut, "%s", child_path);
+
+    // A prior interrupted test run must not decide this run's allocation
+    // shape or baseline.
+    kRootFilesystem->fops->rm(child_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+    uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
+
+    if (kRootFilesystem->dops->mkdir(parent_mut, kRootFilesystem) != 0)
+        goto fail;
+
+    // Measure this image's mkdir write stream without failing it. Removing
+    // the probe returns the same inode/block slots, making the second mkdir
+    // repeat the stream with its final write selected.
+    if (!ext2_fault_test_fail_write(kRootFilesystem, UINT32_MAX))
+        goto cleanup_parent;
+    int probe_rc = kRootFilesystem->dops->mkdir(probe_mut, kRootFilesystem);
+    uint32_t parent_write = ext2_fault_test_restore_write(kRootFilesystem);
+    os64_dirent_t de;
+    bool probe_exists = kRootFilesystem->dops->stat(
+        probe_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    if (probe_rc != 0 || !probe_exists || parent_write == 0)
+        goto cleanup_probe;
+    if (kRootFilesystem->fops->rm(probe_path, kRootFilesystem) != 0)
+        goto cleanup_parent;
+
+    // Demote a private mount copy so the real root remains available to
+    // remove the deliberately half-completed fixture afterward.
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    kTestingExpectedNoise = true;
+    if (!ext2_fault_test_fail_write(kRootFilesystem, parent_write))
+        goto cleanup_parent;
+    int child_rc = shadow.dops->mkdir(child_mut, &shadow);
+    uint32_t failed_writes = ext2_fault_test_restore_write(kRootFilesystem);
+    bool child_exists = kRootFilesystem->dops->stat(
+        child_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    bool shadow_demoted = shadow.read_only && shadow.dops->mkdir == NULL &&
+                          shadow.fops->write == NULL;
+    bool root_writable = !kRootFilesystem->read_only &&
+                         kRootFilesystem->dops->mkdir != NULL &&
+                         kRootFilesystem->fops->write != NULL;
+
+    bool cleanup_ok = child_exists &&
+        kRootFilesystem->fops->rm(child_path, kRootFilesystem) == 0;
+    cleanup_ok = kRootFilesystem->fops->rm(parent_path, kRootFilesystem) == 0 &&
+                 cleanup_ok;
+    bool counts_restored = ext2_free_inodes(kRootFilesystem) == inodes0 &&
+                           ext2_free_blocks(kRootFilesystem) == blocks0;
+
+    if (child_rc == 0 || failed_writes != parent_write || !child_exists ||
+        !shadow_demoted || !root_writable || !cleanup_ok || !counts_restored) {
+        printf("FAIL ext2_published_insert_failure: rc=%d writes=%u/%u published=%u demoted=%u root-rw=%u cleanup=%u counts=%u\n",
+               child_rc, failed_writes, parent_write, child_exists,
+               shadow_demoted, root_writable, cleanup_ok, counts_restored);
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (published mkdir parent-write failure mishandled)\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_published_insert_failure (write %u failed after dirent publication; child retained, private mount demoted, cleanup exact)\n",
+           parent_write);
+    return true;
+
+cleanup_probe:
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+cleanup_parent:
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+fail:
+    printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (could not establish deterministic fixture)\n");
+    return false;
 }
 
 #define OR_FAIL(...) do { \
@@ -2485,7 +3796,7 @@ static bool test_ext2_orphan(void)
     // The replacement lands on the victim's name while that handle is live.
     // Before 2026-08-16 this refused outright.
     if (kRootFilesystem->fops->rename("/etc/testdata/orph/replacement",
-                                      "/etc/testdata/orph/victim", kRootFilesystem) != 0) {
+                                      "/etc/testdata/orph/victim", kRootFilesystem, 0) != 0) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("rename onto an OPEN destination was refused — the orphan path never ran\n");
     }
@@ -2519,46 +3830,53 @@ static bool test_ext2_orphan(void)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
     }
 
-    // The program exits. Let its first block-bitmap release land, then fail
-    // the following group-descriptor count at write 2. Write 3 persists the
-    // retry map. The next replay must see the already-clear bit and reconcile
-    // both count ledgers without counting that block twice.
+    // The program exits. The release runs through one batch: every data
+    // block's bit — twelve direct and the indirect child — clears in the
+    // batch's bitmap copy and lands in ONE bitmap write (write 1) when the
+    // indirect leaf's subtree is published; fail the group-descriptor count
+    // that follows at write 2. Write 3 persists the retry map. The next
+    // replay must see thirteen already-clear bits and reconcile both count
+    // ledgers without counting any of them twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 2)) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("could not install the release-write fault seam\n");
     }
     kRootFilesystem->fops->close(held);
     held = NULL;
-    uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
+    uint32_t injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (injected_writes != 3)
         OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
-        OR_FAIL("failed last-close release did not leave exactly one bitmap-completed block for replay\n");
-    // THE AMBIGUOUS FREE, asserted: that block's bitmap bit is clear on disk
-    // while the retry map still names it, so the allocator must be stopped
-    // until replay — and only AFTER write 3 put the map somewhere replay can
-    // find it. A generic "the free failed" would have left this mount taking
-    // allocations that replay would later hand back to the free pool.
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks)
+        OR_FAIL("failed last-close release did not leave exactly the %u data blocks bitmap-completed for replay (freed %u)\n",
+                orphan_data_blocks, ext2_free_blocks(kRootFilesystem) - orphan_blocks);
+    // THE AMBIGUOUS FREE, asserted: those blocks' bitmap bits are clear on
+    // disk while the retry map still names them (the leaf's pointers were
+    // never rewritten, the indirect root's own bit never cleared), so the
+    // allocator must be stopped until replay — and only AFTER write 3 put
+    // the map somewhere replay can find it. A generic "the free failed"
+    // would have left this mount taking allocations that replay would later
+    // hand back to the free pool.
     if (!reap_mount.read_only)
         OR_FAIL("half-completed last-close block release did not demote its mount\n");
     if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
         OR_FAIL("last-close demotion escaped onto the real root mount\n");
 
-    // Now exercise MOUNT REPLAY itself, including the new indirect ordering.
-    // Reconciliation of the first direct block costs two writes; the eleven
-    // remaining direct children bring the count to 35. The indirect child is
-    // 36..38, its parent-pointer clear is 39, and its root release is 40..42.
-    // The zero map is write 43 and the inode bitmap is 44; fail its GDT count
-    // at write 45. A clean retry must reconcile the already-free inode too.
+    // Now exercise MOUNT REPLAY itself, including the indirect ordering.
+    // Replay revisits every direct block and the indirect child and finds
+    // each bit already clear, so the leaf's publication is a reconcile:
+    // bitmap (1), GDT (2), superblock (3); the leaf's pointer clear is 4.
+    // The indirect root's own release publishes at the batch's end, 5..7.
+    // The zero map is write 8 and the inode bitmap is 9; fail its GDT count
+    // at write 10. A clean retry must reconcile the already-free inode too.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 45))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 10))
         OR_FAIL("could not install the replay-write fault seam\n");
-    // Another private mount, for the same reason and a sharper hazard: write 44
+    // Another private mount, for the same reason and a sharper hazard: write 9
     // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
     // orphan chain still names it for teardown. Hand it to a new file and the
     // next replay releases that file's storage. This replay must therefore end
@@ -2571,9 +3889,9 @@ static bool test_ext2_orphan(void)
     replay_mount.dops = &replay_dops;
 
     replay_mount.fops->mounted(&replay_mount);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 45)
-        OR_FAIL("failed indirect replay made %u metadata writes, expected 45 with orphan still linked\n",
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
+    if (injected_writes != 10)
+        OR_FAIL("failed indirect replay made %u metadata writes, expected 10 with orphan still linked\n",
                 injected_writes);
     if (!replay_mount.read_only)
         OR_FAIL("half-completed orphan inode free did not demote its mount\n");
@@ -2605,11 +3923,14 @@ static bool test_ext2_orphan(void)
         OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
-    // Closed-destination rename failure: freeing twelve direct blocks costs
-    // writes 8..43, freeing the indirect child costs 44..46, and write 47 is
-    // the parent-pointer clear. Fail that clear after its child is already
-    // free. The retry inode + orphan-head writes MUST be allowed to land as
-    // writes 48 and 49 before the mount publishes read-only state.
+    // Closed-destination rename failure: the rename's own writes are 1..7;
+    // the release then publishes all thirteen data bits — twelve direct and
+    // the indirect child — as bitmap 8, GDT 9, superblock 10, and write 11
+    // is the parent-pointer clear. Fail that clear after its children are
+    // already free. The retry inode + orphan-head writes MUST be allowed to
+    // land as writes 12 and 13 before the mount publishes read-only state.
+    // (The seam prints its stream under DEBUG_TESTS; re-read it there when
+    // the release path's command stream changes shape.)
     if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_victim", "c",
                                     kRootFilesystem) != 0)
         OR_FAIL("could not create the closed retry victim\n");
@@ -2646,15 +3967,15 @@ static bool test_ext2_orphan(void)
     shadow.fops = &shadow_fops;
     shadow.dops = &shadow_dops;
 
-    if (!orphan_test_fail_write(kRootFilesystem, 47))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 11))
         OR_FAIL("could not install the closed-rename release fault seam\n");
     int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
-                                        "/etc/testdata/orph/retry_victim", &shadow);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
+                                        "/etc/testdata/orph/retry_victim", &shadow, 0);
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (rename_rc != 0)
         OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
-    if (injected_writes != 49)
-        OR_FAIL("failed closed rename made %u metadata writes, expected 49 (failed parent clear, retry inode, orphan head)\n",
+    if (injected_writes != 13)
+        OR_FAIL("failed closed rename made %u metadata writes, expected 13 (failed parent clear, retry inode, orphan head)\n",
                 injected_writes);
     if (!shadow.read_only)
         OR_FAIL("closed rename parent-clear failure did not demote its mount\n");
@@ -2727,7 +4048,7 @@ static bool test_ext2_readonly_demotion(void)
     int (*saved_open)(vfs_file_t **, const char *, const char *, vfs_filesystem_t *) = shadow_fops.open;
     int (*saved_write)(vfs_file_t *, const void *, size_t) = shadow_fops.write;
     int (*saved_rm)(const char *, vfs_filesystem_t *) = shadow_fops.rm;
-    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *) = shadow_fops.rename;
+    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *, uint64_t) = shadow_fops.rename;
     int (*saved_mkdir)(char *, vfs_filesystem_t *) = shadow_dops.mkdir;
 
     vfs_demote_mount_readonly(&shadow);
@@ -2748,7 +4069,7 @@ static bool test_ext2_readonly_demotion(void)
         shadow.fops->close(file);
     }
 
-    const char modes[] = { 'w', 'c', 'a' };
+    const char modes[] = { 'w', 'c', 'a', 'x' };
     for (unsigned i = 0; i < sizeof(modes); i++) {
         char mode[2] = { modes[i], '\0' };
         file = NULL;
@@ -2762,9 +4083,14 @@ static bool test_ext2_readonly_demotion(void)
         ROD_FAIL("retained open callback created a file after demotion\n");
         shadow.fops->close(file);
     }
+    file = NULL;
+    if (saved_open(&file, created_path, "x", &shadow) == 0) {
+        ROD_FAIL("retained exclusive open created a file after demotion\n");
+        shadow.fops->close(file);
+    }
     if (saved_mkdir(mkdir_path, &shadow) == 0)
         ROD_FAIL("retained mkdir callback mutated a demoted mount\n");
-    if (saved_rename(guard_path, renamed_path, &shadow) == 0)
+    if (saved_rename(guard_path, renamed_path, &shadow, 0) == 0)
         ROD_FAIL("retained rename callback mutated a demoted mount\n");
     if (saved_rm(guard_path, &shadow) == 0)
         ROD_FAIL("retained rm callback mutated a demoted mount\n");
@@ -2785,7 +4111,7 @@ static bool test_ext2_readonly_demotion(void)
     kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
 
     if (ok)
-        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/exclusive-create/truncate/append/write/rm/rename/mkdir refused)\n");
     return ok;
 #undef ROD_FAIL
 }
@@ -2831,7 +4157,41 @@ static bool test_ext2_secondary_write(void)
     char buf[64];
     vfs_file_t *f = NULL;
 
-    // 1. Create, write, close, reopen, read back byte-exact.
+    // 1. Exclusive creation: one new inode and handle, then a refusal that
+    //    preserves its contents rather than truncating through the name.
+    fs->fops->rm("/__xtest.txt", fs);
+    if (fs->fops->open(&f, "/__xtest.txt", "x", fs) != 0) {
+        ES_FAIL("exclusive create /__xtest.txt failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
+        ES_FAIL("write through exclusive handle failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    vfs_file_t *second = NULL;
+    if (fs->fops->open(&second, "/__xtest.txt", "x", fs) == 0) {
+        ES_FAIL("exclusive open accepted an existing name\n");
+        fs->fops->close(second);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__xtest.txt", "r", fs) != 0) {
+        ES_FAIL("reopen after exclusive create failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0 ||
+        fs->fops->rm("/__xtest.txt", fs) != 0) {
+        ES_FAIL("exclusive-create contents changed or cleanup failed (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Create, write, close, reopen, read back byte-exact.
     if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
         ES_FAIL("create /__wtest.txt failed\n");
         return false;
@@ -2847,7 +4207,7 @@ static bool test_ext2_secondary_write(void)
         ES_FAIL("reopen after create failed\n");
         return false;
     }
-    int n = fs->fops->read(f, buf, sizeof(buf));
+    n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
@@ -2855,7 +4215,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 2. Append; verify the concatenation and the stat'd size.
+    // 3. Append; verify the concatenation and the stat'd size.
     if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
         ES_FAIL("append open failed\n");
         return false;
@@ -2874,7 +4234,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 3. Truncate via "w": size drops to 0 territory, then rewrite.
+    // 4. Truncate via "w": size drops to 0 territory, then rewrite.
     if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
         ES_FAIL("truncating open failed\n");
         return false;
@@ -2899,7 +4259,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 4. Growth across the single-indirect boundary. At 1KB blocks the
+    // 5. Growth across the single-indirect boundary. At 1KB blocks the
     //    direct blocks end at byte 12,287; a 16KB file forces the indirect
     //    chain into existence. Self-describing 16-byte records, same idea
     //    as pattern.bin.
@@ -2953,7 +4313,7 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
 
-    // 5. A hole: seek far past end, write one record; the gap reads zeros.
+    // 6. A hole: seek far past end, write one record; the gap reads zeros.
     if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
         ES_FAIL("create /__whole.bin failed\n");
         return false;
@@ -2991,7 +4351,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 6. mkdir; a file inside proves it's a real directory; readdir sees the
+    // 7. mkdir; a file inside proves it's a real directory; readdir sees the
     //    file and (Plan 9 doctrine) no dot entries.
     if (fs->dops->mkdir("/__wdir", fs) != 0) {
         ES_FAIL("mkdir /__wdir failed\n");
@@ -3023,7 +4383,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 7. The one removal verb, all four verdicts: non-empty dir refused,
+    // 8. The one removal verb, all four verdicts: non-empty dir refused,
     //    nonexistent refused, file removed, then-empty dir removed.
     if (fs->fops->rm("/__wdir", fs) == 0) {
         ES_FAIL("rm of NON-empty dir succeeded (must refuse)\n");
@@ -3044,7 +4404,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 8. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
+    // 9. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
     //
     //    Ruling 5 made rm refuse ANY open file, and this step asserted
     //    exactly that. The orphan slice superseded it: an open REGULAR file
@@ -3130,14 +4490,14 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
+    // 10. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
     //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
     if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
         ES_FAIL("cleanup rm failed\n");
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
     return true;
 }
 #undef ES_FAIL
@@ -3254,6 +4614,52 @@ static int32_t arp_pending_order_transmit(net_device_t *dev, const void *frame,
     net_write32(reply + 24, kNetIPv4Address);
     arp_input(dev, reply, sizeof(reply));
     return 0;
+}
+
+// A MARTIAN is a 127/8 address arriving on a real card, and it is a forgery:
+// nothing on a wire may carry one (RFC 1122). The whole remote-access design
+// leans on ipv4_input refusing them — a door announced on loopback asks for
+// no password because only this machine can reach it (REMOTE.md) — and the
+// host cannot forge one through QEMU's user network, so the test does it
+// here: a well-formed TCP SYN with a loopback address in each position,
+// handed to ipv4_input as if a card had delivered it. The card is a stand-in
+// struct, since the rule is "not lo" and a netless boot must pass too.
+static bool test_net_martian_dropped(void)
+{
+    static net_device_t card;   // any device that is not kNetLoopback
+    struct { uint32_t src, dst; const char *what; } cases[] = {
+        { NET_IPV4(127, 0, 0, 1), kNetIPv4Address,        "a 127/8 source" },
+        { NET_IPV4(10, 0, 2, 2),  NET_IPV4(127, 0, 0, 1), "a 127/8 destination" },
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        uint8_t pkt[IPV4_HDR_MIN + TCP_HDR_MIN];
+        memset(pkt, 0, sizeof(pkt));
+        pkt[0] = 0x45;
+        net_write16(pkt + 2, sizeof(pkt));
+        pkt[8] = 64;
+        pkt[9] = IPV4_PROTO_TCP;
+        net_write32(pkt + 12, cases[i].src);
+        net_write32(pkt + 16, cases[i].dst);
+        net_write16(pkt + 10, net_checksum(pkt, IPV4_HDR_MIN));
+        uint8_t *seg = pkt + IPV4_HDR_MIN;
+        net_write16(seg + 0, 40000);
+        net_write16(seg + 2, 22);
+        seg[12] = (TCP_HDR_MIN / 4) << 4;
+        seg[13] = 0x02;   // SYN
+
+        uint64_t martians = kIPv4Stats.rx_martian;
+        uint64_t segments = kTcpStats.segments_in;
+        ipv4_input(&card, pkt, sizeof(pkt));
+        if (kIPv4Stats.rx_martian != martians + 1 || kTcpStats.segments_in != segments)
+        {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_martian_dropped - %s on a card reached %s\n",
+                   cases[i].what,
+                   kTcpStats.segments_in != segments ? "TCP" : "no counter");
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool test_net_arp_pending_order(void)
@@ -3745,10 +5151,13 @@ static bool test_net_udp_conn(void)
         net_device_rx(dev, f, (uint16_t)n);                                   \
     } while (0)
 
-    // In from the PEER: must queue and read back verbatim.
+    // In from the PEER: must queue and read back verbatim. The frame is
+    // injected synchronously, so the read never parks — but a deadline
+    // anyway, because a demux that stopped delivering must FAIL this
+    // test, not hang the suite on a wait that can never end.
     CONN_FRAME(5555, msg1, 14);
     char buf[64];
-    long got = udp_conn_read(conn, buf, sizeof(buf), 0);
+    long got = udp_conn_read(conn, buf, sizeof(buf), kTicksSinceStart + 10);
     if (got != 14 || memcmp(buf, msg1, 14) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
                got, conn->rx_delivered);
@@ -3770,7 +5179,7 @@ static bool test_net_udp_conn(void)
     // Truncation contract: a 14-byte datagram read into an 8-byte buffer
     // returns 8 and the tail DROPS — one datagram, one read, no carryover.
     CONN_FRAME(5555, msg1, 14);
-    got = udp_conn_read(conn, buf, 8, 0);
+    got = udp_conn_read(conn, buf, 8, kTicksSinceStart + 10);
     if (got != 8 || conn->count != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
                got, conn->count);
@@ -3837,19 +5246,99 @@ static bool test_net_icmp_conn(void)
         return false;
     }
 
+    // Every read here is BOUNDED (Codex #145): this is a live echo across
+    // a real or emulated wire, and a dropped reply against a zero deadline
+    // is "wait forever" — a suite that hangs on packet loss is worse than
+    // one that fails. Two seconds is a hundred round trips of slack.
+    #define ECHO_PATIENCE (kTicksSinceStart + 2 * TICKS_PER_SECOND)
     uint8_t in[64];
-    long got = icmp_conn_read(c, in, sizeof(in), 0);
+    long got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
     uint64_t rtt = kTicksSinceStart - stamp;
 
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
-               got, (uint32_t)sizeof(out));
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u%s\n",
+               got, (uint32_t)sizeof(out),
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         icmp_conn_close(c);
         return false;
     }
     // Byte-for-byte: an echo that alters the payload is not an echo.
     if (memcmp(in, out, sizeof(out)) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - payload came back altered\n");
+        icmp_conn_close(c);
+        return false;
+    }
+
+    // THE ARRIVAL WAKE (ARRIVAL_WAKE.md): from icmp_conn_deliver's enqueue
+    // stamp to this thread running again is the kernel's own wake-up
+    // latency — the part of a round trip that is the scheduler's, not the
+    // wire's. Woken on arrival it is microseconds. Woken by the sweep it
+    // is the next scheduler pass — which on an idle machine knet's own
+    // park provokes at once (measured 15-128 us with the arrival wake
+    // disabled), so this figure cannot tell the two apart here; what it
+    // catches is a reader woken by nothing but its backstop second. The
+    // MIN over several echoes is the figure: one sample can land in the
+    // registered-not-yet-parked window the sweep exists for, and one can
+    // eat host scheduling jitter, but not all of them.
+    // A lost reply is a lost SAMPLE, not a failed test: UDP-honest echo can
+    // drop, and the figure is a minimum, which survives losing a few. Half
+    // the samples lost is a different problem and is reported as one.
+    //
+    // BOTH ENDS OF THE SUBTRACTION COME FROM ONE CORE'S TSC (Codex #145
+    // rd2, nvme.c's rule): the stamp is knet's, on the BSP, and the wake
+    // would otherwise recruit whichever AP is idle — a cross-core TSC
+    // delta, which QEMU and WSL2 have both been seen to offset. So this
+    // thread is pinned to the BSP for the measurement and parks once
+    // first, so that it has actually moved there before the first stamp;
+    // every rdtsc below then runs on the core that took the stamp. The
+    // pin costs nothing the figure cares about — a pinned wake on knet's
+    // own core is picked by the pass knet's park provokes, the same pass
+    // that would have run the sweep.
+    thread_t *self = get_core_local_storage()->currentThread;
+    uint64_t affinity_before = self->pinnedCPU;
+    self->pinnedCPU = BSP_CPU;
+    __sync_synchronize();
+    nap(10);
+    uint64_t wake_min_us = ~0UL, wake_max_us = 0;
+    int samples = 0, lost = 0;
+    const char *measure_fail = NULL;
+    uint32_t measured_on = 0;
+    for (int i = 0; i < 8 && measure_fail == NULL; i++) {
+        if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+            measure_fail = "write";
+            break;
+        }
+        long r = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+        if (r == ICMP_CONN_ERR_TIMEOUT) { lost++; continue; }
+        if (r != (long)sizeof(out)) {
+            measure_fail = "read";
+            break;
+        }
+        uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+        uint64_t stamp_tsc = c->last_arrival_tsc;
+        uint64_t now_tsc = rdtsc();
+        measured_on = get_core_local_storage()->cpu;   // printed, so the pin is checkable in every log
+        uint64_t wake_us = (per_us && now_tsc > stamp_tsc) ? (now_tsc - stamp_tsc) / per_us : 0;
+        if (wake_us < wake_min_us) wake_min_us = wake_us;
+        if (wake_us > wake_max_us) wake_max_us = wake_us;
+        samples++;
+    }
+    self->pinnedCPU = affinity_before;   // the pin was the measurement's, not the test's
+    __sync_synchronize();
+    if (measure_fail != NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - a %s in the wake measurement failed\n", measure_fail);
+        icmp_conn_close(c);
+        return false;
+    }
+    if (samples < 4) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - only %d of 8 echoes came back within 2 s (%d lost); "
+               "the wire, not the wake, is the problem\n", samples, lost);
+        icmp_conn_close(c);
+        return false;
+    }
+    if (wake_min_us >= 1000) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - best enqueue-to-reader wake was %lu us over 8 echoes "
+               "(neither the arrival wake nor the sweep woke it; that is the backstop)\n", wake_min_us);
         icmp_conn_close(c);
         return false;
     }
@@ -3867,16 +5356,18 @@ static bool test_net_icmp_conn(void)
         icmp_conn_close(c);
         return false;
     }
-    got = icmp_conn_read(c, in, sizeof(in), 0);
+    got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+    #undef ECHO_PATIENCE
     icmp_conn_close(c);
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld\n", got);
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld%s\n", got,
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         return false;
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "cold-cache echo survived the ARP re-ask)\n",
-           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
+           "arrival wake %lu-%lu us over %d echoes, %d lost, measured on CPU %u; cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost, measured_on);
     return true;
 }
 
@@ -3917,7 +5408,16 @@ static bool test_net_tcp_refused(void)
     // to count — and a test that calls that a stack failure cries wolf
     // (the P5's gateway did it one boot in six). Refusal is asserted only
     // when there WAS a refusal; the timeout is reported and skipped.
-    if (why == OS64_NET_ERR_TIMEOUT && kTcpStats.connections_refused == refused_before) {
+    // THE VERDICT IS CONNECTION-LOCAL, and it had to become so when this test
+    // moved to the LATE phase: `kTcpStats.connections_refused` is MACHINE-WIDE,
+    // so any other program completing a refused dial inside our window moved
+    // it. That turned a valid refusal into a failure (delta > 1) and a valid
+    // timeout into a failure rather than a skip (delta != 0). `why` comes from
+    // this connection's own `c->reset` and cannot be moved by anybody else, so
+    // it answers the question the counter was only approximating. (Codex, PR
+    // #42.) The counter still appears in the failure text below, where it is
+    // context for a human rather than an assertion.
+    if (why == OS64_NET_ERR_TIMEOUT) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (the gateway answered port 9 with silence, not RST — "
                "timed out after %lu ticks; nothing to assert about the stack)\n", elapsed);
         return true;
@@ -3929,11 +5429,16 @@ static bool test_net_tcp_refused(void)
                "want OS64_NET_ERR_REFUSED (%d)\n", why, OS64_NET_ERR_REFUSED);
         return false;
     }
-    // A refusal must be an ANSWER (an RST), not the connect timeout —
-    // fast failure is the observable difference, and the timeout is 10s.
-    if (kTcpStats.connections_refused != refused_before + 1) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - no RST counted "
-               "(refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
+    // A refusal must be an ANSWER (an RST), not the connect timeout — fast
+    // failure is the observable difference, and the timeout is 10s. AT LEAST
+    // ours, not EXACTLY ours: the counter is machine-wide, so demanding it
+    // moved by exactly one made this test fail whenever another program's
+    // dial was refused in the same window. `why` above already proved THIS
+    // connection got an RST; what is left for the counter to prove is only
+    // that the stack counted the thing it just did.
+    if (kTcpStats.connections_refused < refused_before + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - the dial reported REFUSED but "
+               "no RST was counted (refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
                kTcpStats.connections_refused, kTcpStats.connect_timeouts,
                kTcpStats.resets_received, elapsed);
         return false;
@@ -4082,6 +5587,133 @@ static bool test_env_inherit_independence(void)
     return true;
 }
 
+static bool test_gmtime_negative_epoch(void)
+{
+    time_t before_epoch = -1;
+    struct tm utc_before_epoch;
+    gmtime(&before_epoch, &utc_before_epoch);
+    if (utc_before_epoch.tm_year != 69 || utc_before_epoch.tm_mon != 11 ||
+        utc_before_epoch.tm_mday != 31 || utc_before_epoch.tm_hour != 23 ||
+        utc_before_epoch.tm_min != 59 || utc_before_epoch.tm_sec != 59 ||
+        utc_before_epoch.tm_wday != 3) {
+        TEST_FAIL("gmtime(-1) did not land on the final second of 1969");
+    }
+    return true;
+}
+
+static bool test_time_zone_minute_offsets(void)
+{
+    int saved = kTimeZoneOffsetMinutes;
+
+    time_set_zone("IST-5:30");
+    if (kTimeZoneOffsetMinutes != 330) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("IST-5:30 did not parse as 330 minutes east");
+    }
+
+    // Exercise the opposite sign too: classic TZ offsets count west of UTC,
+    // while the kernel ABI reports minutes east.
+    time_set_zone("NST3:30");
+    if (kTimeZoneOffsetMinutes != -210) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("NST3:30 did not parse as 210 minutes west");
+    }
+
+    // This is the regression boundary: applying a westward offset to epoch
+    // zero produces a negative local epoch. gmtime must floor it into 1969,
+    // not cast it into an effectively endless unsigned year walk.
+    time_set_zone("EST5");
+    time_t epoch = 0;
+    struct tm local;
+    localtime_r(&epoch, &local);
+    if (local.tm_year != 69 || local.tm_mon != 11 || local.tm_mday != 31 ||
+        local.tm_hour != 19 || local.tm_min != 0 || local.tm_wday != 3) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("westward epoch-zero localtime did not land in 1969");
+    }
+
+    time_set_zone("EST5EDT");
+    if (kTimeZoneOffsetMinutes != -300) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("whole-hour TZ no longer uses minute units");
+    }
+
+    time_set_zone("IST-5:30");
+    localtime_r(&epoch, &local);
+    if (local.tm_hour != 5 || local.tm_min != 30) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel localtime did not apply the minute offset");
+    }
+    struct tm local_epoch = {
+        .tm_year = 70, .tm_mon = 0, .tm_mday = 1,
+        .tm_hour = 5, .tm_min = 30, .tm_sec = 0,
+    };
+    if (mktime(&local_epoch) != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel mktime did not remove the minute offset");
+    }
+    char rendered[6];
+    if (strftime(rendered, sizeof(rendered), "%z", &local) == 0 ||
+        strcmp(rendered, "+0530") != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel strftime did not render the minute offset");
+    }
+
+    // A malformed minute suffix must not degrade into its whole-hour prefix.
+    time_set_zone("BAD5:60");
+    if (kTimeZoneOffsetMinutes != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("out-of-range TZ minutes were silently truncated");
+    }
+    time_set_zone("BAD5:");
+    if (kTimeZoneOffsetMinutes != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("missing TZ minutes were silently truncated");
+    }
+
+    kTimeZoneOffsetMinutes = saved;
+    return true;
+}
+
+static bool test_env_inherit_grown(void)
+{
+    envpage_t *parent = env_create();
+    if (!parent) TEST_FAIL("env_create returned NULL");
+
+    envpage_t *bigger = env_grow(parent, TASK_ENV_MAX_BYTES / PAGE_SIZE);
+    if (!bigger) TEST_FAIL("env_grow returned NULL");
+    kfree(parent);
+    parent = bigger;
+
+    // Put live data beyond the first page, not merely unused capacity, so a
+    // one-page inheritance copy cannot pass by accident.
+    char key[8];
+    static char value[256];
+    for (int i = 0; i < 255; i++)
+        value[i] = (char)('a' + (i % 26));
+    value[255] = '\0';
+    for (int i = 0; i < 25; i++) {
+        key[0] = 'G';
+        key[1] = '0' + (i / 10);
+        key[2] = '0' + (i % 10);
+        key[3] = '\0';
+        if (!env_set(parent, key, value))
+            TEST_FAIL("two-page parent filled unexpectedly early");
+    }
+    if (parent->data_end <= ENV_DATA_CAPACITY(1))
+        TEST_FAIL("grown parent has no live data beyond page one");
+
+    envpage_t *child = env_inherit(parent);
+    if (!child) TEST_FAIL("env_inherit returned NULL for grown parent");
+    size_t bytes = (size_t)parent->page_count * PAGE_SIZE;
+    if (child->page_count != parent->page_count || memcmp(child, parent, bytes) != 0)
+        TEST_FAIL("child did not inherit the complete grown environment");
+
+    kfree(parent);
+    kfree(child);
+    return true;
+}
+
 static bool test_env_count_accurate(void)
 {
     envpage_t *env = env_create();
@@ -4125,6 +5757,19 @@ static bool test_env_capacity_full(void)
     // Entries set before the page filled must still be readable.
     if (env_get(env, "K000") == NULL)
         TEST_FAIL("K000 missing after fill");
+
+    // A larger replacement that cannot fit must be transactional. This is
+    // the bootenv PATH case: compacting the old pair before the capacity
+    // check used to return false with the old value already deleted.
+    static uint8_t before[PAGE_SIZE];
+    memcpy(before, env, PAGE_SIZE);
+    if (env_set(env, "K000", "replacement"))
+        TEST_FAIL("oversized replacement unexpectedly fit in full env");
+    if (memcmp(before, env, PAGE_SIZE) != 0)
+        TEST_FAIL("failed replacement changed the environment");
+    const char *preserved = env_get(env, "K000");
+    if (preserved == NULL || strcmp(preserved, "V000") != 0)
+        TEST_FAIL("failed replacement lost the old value");
 
     kfree(env);
     return true;
@@ -4291,7 +5936,17 @@ static bool test_block_cache(void)
     if (homefs->fops->rm != NULL)
         homefs->fops->rm(tail, homefs);   // tidy; failure is not a verdict
 
-    if (got < (int)sizeof(contentB) || memcmp(chunk, contentB, sizeof(contentB)) != 0)
+    // Two failures that used to share one verdict, and must not: a SHORT
+    // read means the rewrite never landed (a full /home refuses the block —
+    // the P5, 2026-09-06, spent a morning on "invalidation broken" that was
+    // a disk with zero free blocks), while the OLD bytes at full length is
+    // the cache serving what the disk no longer holds.
+    if (got < (int)sizeof(contentB))
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: rewrite came back SHORT — the write was refused (is /home full?), the cache is not on trial");
+    }
+    if (memcmp(chunk, contentB, sizeof(contentB)) != 0)
     {
         kfree(chunk);
         TEST_FAIL("coherence: read-after-write returned STALE data — invalidation broken");
@@ -4341,7 +5996,7 @@ static bool test_dirent_mtime(void)
 }
 
 // The preemption backstop, end to end (2026-08-13; the 08-09 starvation debt's
-// funeral). Pin a syscall-free ring-3 hog (/bin/hog) to an AP, watch that
+// funeral). Pin a syscall-free ring-3 spinner (/tests/nosyscall) to an AP, watch that
 // core's lease expiries tick up for half a second, then SIGKILL it — a signal
 // that only a scheduler pass can deliver to a thread that never enters the
 // kernel. Pre-backstop, both halves fail on tickless: the core takes zero
@@ -4353,7 +6008,7 @@ static bool test_backstop_preemption(void)
         printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (backstop not active this boot)\n");
         return true;
     }
-    if (kMPCoreCount < 2) {
+    if (kCPUCount < 2) {
         printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (needs an AP)\n");
         return true;
     }
@@ -4362,13 +6017,21 @@ static bool test_backstop_preemption(void)
         return true;
     }
 
-    uint32_t ap = kCPUInfo[1].apicID;
+    uint32_t ap = 1;   // CPU 1: the first AP
     uint64_t fires_before = kSchedBackstopFires[ap];
 
-    // Ring 3 and PINNED: the exact starvation shape. An unpinned hog would
-    // still prove the lease, but the pin removes any doubt about WHOSE
+    // Ring 3 and PINNED: the exact starvation shape. An unpinned spinner
+    // would still prove the lease, but the pin removes any doubt about WHOSE
     // counter must move.
-    task_t *hog = task_create("/bin/hog", 0, NULL, kKernelTask, false, ap);
+    //
+    // /tests/nosyscall, and the NAME is load-bearing: this test is only
+    // meaningful against a thread that never enters the kernel, because a
+    // thread that syscalls gets its scheduler pass for free and would prove
+    // nothing about the backstop. It read "/bin/hog" until 2026-08-29, by
+    // which time /bin/hog was the OTHER hog — the measuring instrument, which
+    // reads the clock as it spins. Renaming the fixture after the property it
+    // must have is what stops that recurring.
+    task_t *hog = task_create("/tests/nosyscall", 0, NULL, kKernelTask, false, ap);
     if (hog == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - task_create returned NULL\n");
         return false;
@@ -4402,14 +6065,14 @@ static bool test_backstop_preemption(void)
     bool ok = false;
 
     if (expiries < 3) {
-        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - only %lu lease expiries on APIC %u in 500ms (wanted >=3)\n",
+        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - only %lu lease expiries on CPU %u in 500ms (wanted >=3)\n",
                expiries, ap);
     }
     else if (!hog->exited) {
         printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - SIGKILL never reached the hog (no pass delivered it?)\n");
     }
     else {
-        printd(DEBUG_TESTS, "\tPASS: test_backstop_preemption (%lu lease expiries on APIC %u, SIGKILL landed)\n",
+        printd(DEBUG_TESTS, "\tPASS: test_backstop_preemption (%lu lease expiries on CPU %u, SIGKILL landed)\n",
                expiries, ap);
         ok = true;
     }
@@ -4422,9 +6085,19 @@ static bool test_backstop_preemption(void)
 
 static void register_builtin_tests(void)
 {
+    test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
+    test_register("surface_blit", test_surface_blit, TEST_PHASE_PREBOOT);
+	test_register("cpu_roster_round_trip", test_cpu_roster_round_trip, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
+	test_register("frame_table_scale", test_frame_table_scale, TEST_PHASE_PREBOOT);
+	test_register("allocator_try_refuses", test_allocator_try_refuses, TEST_PHASE_PREBOOT);
+	// Pre-boot, beside the allocator's own refusal test: after kKernelTask
+	// exists, and before any other task allocates under the books it reads.
+	test_register("stack_try_refuses", test_stack_try_refuses, TEST_PHASE_PREBOOT);
+	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
+    test_register_policy("page_zero_unmapped", test_page_zero_unmapped, TEST_PHASE_PREBOOT, TEST_POLICY_PANIC);
     test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);
     test_register("arena_create_and_destroy", test_arena_create_and_destroy, TEST_PHASE_PREBOOT);
     test_register("arena_basic_alloc", test_arena_basic_alloc, TEST_PHASE_PREBOOT);
@@ -4441,6 +6114,9 @@ static void register_builtin_tests(void)
     test_register("env_multi_key",           test_env_multi_key,             TEST_PHASE_PREBOOT);
     test_register("env_inherit_copies",      test_env_inherit_copies,        TEST_PHASE_PREBOOT);
     test_register("env_inherit_independence",test_env_inherit_independence,  TEST_PHASE_PREBOOT);
+    test_register("gmtime_negative_epoch",   test_gmtime_negative_epoch,     TEST_PHASE_PREBOOT);
+    test_register("time_zone_minute_offsets",test_time_zone_minute_offsets,  TEST_PHASE_PREBOOT);
+    test_register("env_inherit_grown",       test_env_inherit_grown,         TEST_PHASE_PREBOOT);
     test_register("env_count_accurate",      test_env_count_accurate,        TEST_PHASE_PREBOOT);
     test_register("env_capacity_full",       test_env_capacity_full,         TEST_PHASE_PREBOOT);
     test_register("task_arena_create_and_destroy", test_task_arena_create_and_destroy, TEST_PHASE_PREBOOT);
@@ -4451,21 +6127,40 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
+    test_register("pty_history", test_pty_history, TEST_PHASE_POSTBOOT);
+    test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
+    test_register("pty_stream_seats", test_pty_stream_seats, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("env_growth", test_env_growth, TEST_PHASE_POSTBOOT);
-    test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
+    // LATE, both of them, and they are the two that bought the phase: on a
+    // machine with a NIC these were twenty of the ~thirty seconds between
+    // power-on and a prompt, and neither answers a question anyone needs
+    // answered before the shell exists. task_teardown_leak spends five
+    // seconds proving the undertaker has gone quiet before it dares measure;
+    // net_tcp_refused spends a ten-second dial timeout whenever the gateway
+    // drops the SYN instead of resetting it, and then SKIPS. Off the critical
+    // path, both costs stop being costs at all.
+    test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
+    test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
+    test_register("wake_owed", test_wake_owed, TEST_PHASE_LATE);
+    test_register("window_opacity", test_window_opacity, TEST_PHASE_LATE);
+    test_register("window_title", test_window_title, TEST_PHASE_LATE);
+    test_register("window_maximized", test_window_maximized, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);
     test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
+    test_register("net_martian_dropped", test_net_martian_dropped, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
+    test_register("random_pool", test_random_pool, TEST_PHASE_PREBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
     test_register("net_echo_responder", test_net_echo_responder, TEST_PHASE_POSTBOOT);
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
     test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
-    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_LATE);
     // The write gauntlets carry TEST_POLICY_RO: a failure here impeaches the
     // WRITE path while logd is actively appending to a disk — continuing to
     // write compounds the damage, halting costs the analysis. Demote every
@@ -4473,9 +6168,17 @@ static void register_builtin_tests(void)
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_published_insert_failure", test_ext2_published_insert_failure, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    // Writes, but NOT a write gauntlet: what it impeaches on failure is the
+    // shared-object registry, not the disk, so demoting every mount to
+    // read-only would be an answer to a question this test never asked. It
+    // runs after the gauntlets above, which is what makes its own writes
+    // trustworthy.
+    test_register("shared_object_reload", test_shared_object_reload, TEST_PHASE_POSTBOOT);
+    test_register("mount_unmount", test_mount_unmount, TEST_PHASE_POSTBOOT);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);
@@ -4574,8 +6277,22 @@ static void test_run_phase(int phase, const char *label)
     // count is what proves the tests actually happened.
     // (Chris caught it 2026-08-01, one slice after catching the same
     // "assume it all went to plan" habit in the DNS fixture.)
-    printf("%s tests: %u passed, %u failed\n", label,
-           (unsigned int)passed, (unsigned int)failed);
+    //
+    // EXCEPT WHEN NOBODY ASKED AND SOMEBODY IS TYPING. The LATE phase runs
+    // beside a live shell, so a clean summary lands in the middle of whatever
+    // the user is at — observed exactly that: "husk> /late tests: 2 passed, 0
+    // failed", printed through a half-typed command. os64 has ruled on this
+    // twice already, both times the same way: the GUI heartbeat left the
+    // glass when a real shell moved into the console window, and a ring-3
+    // death report became one line on the dying program's OWN terminal. A
+    // clean verdict nobody is waiting for is not worth stepping on a prompt.
+    //
+    // A FAILING one still is. The honesty argument above is untouched for the
+    // phases a person is watching, and for the late phase the count still
+    // reaches the log, which is where a late verdict is read anyway.
+    if (phase != TEST_PHASE_LATE || failed > 0)
+        printf("%s tests: %u passed, %u failed\n", label,
+               (unsigned int)passed, (unsigned int)failed);
 
     // The verdicts, severest first (test_framework.h owns the taxonomy —
     // ext2's s_errors trio reborn, ratified 2026-08-08: "a failed test means
@@ -4600,4 +6317,18 @@ void test_run_preboot(void)
 void test_run_postboot(void)
 {
     test_run_phase(TEST_PHASE_POSTBOOT, "post-boot");
+}
+
+// The LATE phase, on its own kernel thread (kernel.c creates it as
+// "/latetests" once the shells are seated). The boot does not wait for this:
+// by the time it runs there is a prompt on the glass, which is the entire
+// point — see TEST_PHASE_LATE's comment in test_framework.h.
+//
+// It ends by exiting the thread rather than returning, because a kernel
+// thread's "return" has nowhere to go: the task's entry RIP was set straight
+// to this function, so there is no caller frame beneath it.
+void late_tests_thread(void)
+{
+    test_run_phase(TEST_PHASE_LATE, "late");
+    task_exit();
 }

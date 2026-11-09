@@ -1,0 +1,16 @@
+<!doctype html>
+<title>The runner's own: the clock</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// Two seconds of the window's clock pass between the turns, and a later
+// timer fires after an earlier one.
+async_test(function(t) {
+  var order = [];
+  t.step_timeout(function() { order.push("2s"); }, 2000);
+  t.step_timeout(function() { order.push("1s"); }, 1000);
+  t.step_timeout(t.step_func_done(function() {
+    assert_array_equals(order, ["1s", "2s"]);
+  }), 3000);
+}, "timers fire in their order as the clock moves");
+</script>

@@ -9,14 +9,22 @@
 #include "acpi.h"
 #include "pci_lookup.h"
 #include "paging.h"
+#include "panic.h"
+#include "BasicRenderer.h"   // printf — a table overflow is said on the glass
 
 extern __uint128_t kDebugLevel;
 
-uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
+uint16_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
+// Entries a full table could not hold, reported once after the scan. A real
+// machine's class-0x06 population alone (host bridges, data-fabric functions,
+// GPP bridges) runs to dozens, and a table that writes past its end corrupts
+// the heap silently, so every insert is bounded and the loss is said aloud.
+static uint32_t sPCIDropped;
 pci_bridge_t* kPCIBridgeHeaders;
 pci_device_t* kPCIDeviceHeaders;
 pci_device_t* kPCIDeviceFunctions;
 uintptr_t kPCIBaseAddress=0;
+uint8_t kPCIBusFirst, kPCIBusLast;
 uint16_t bussesToScan[100];
 uint16_t bussesToScanCount;
 
@@ -255,7 +263,13 @@ void addBridge(pci_device_t* node, uint8_t bus, uint8_t device, uint8_t function
         return;
     printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED,"\t* Found bridge on %02X:%02X:%02X,Cls#%02X pBus#%02X, sBus#%02X, suBus# %02X,MF=%u\n",bus, device, function, bridge.class, bridge.primaryBusNum, bridge.secondaryBusNum, bridge.subordinateBusNum, bridge.multiFunction);
     printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED,"\t  deviceID: %04X, vendorID: %04X, class: %04X, subclass %04X\n", bridge.device, bridge.vendor, bridge.class, bridge.subClass);
-	bussesToScan[bussesToScanCount++]=bridge.secondaryBusNum;
+	if (bussesToScanCount < sizeof(bussesToScan) / sizeof(bussesToScan[0]))
+		bussesToScan[bussesToScanCount++]=bridge.secondaryBusNum;
+	if (kPCIBridgeCount >= PCI_BRIDGE_SLOTS)
+	{
+		sPCIDropped++;
+		return;
+	}
     memcpy(&kPCIBridgeHeaders[kPCIBridgeCount++],&bridge,sizeof(pci_bridge_t));
     memcpy(&newNode,node,sizeof(pci_device_t));
 }
@@ -263,6 +277,11 @@ void addBridge(pci_device_t* node, uint8_t bus, uint8_t device, uint8_t function
 void addDevice(pci_device_t* node)
 {
     printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED,"\t\t* Found device #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X, Sbcls 0x%04x MF=%u\n",kPCIDeviceCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->subClass, node->multiFunction);
+    if (kPCIDeviceCount >= PCI_DEVICE_SLOTS)
+    {
+        sPCIDropped++;
+        return;
+    }
     memcpy(&kPCIDeviceHeaders[kPCIDeviceCount++],node,sizeof(pci_device_t));
 }
 
@@ -272,6 +291,11 @@ void addFunction(pci_device_t* node)
     // sizeof(pci_device_t), not sizeof(pci_bridge_t): node and the array slot
     // are both pci_device_t. The bridge struct is packed and a different size,
     // so the old copy truncated the tail of every saved function header.
+    if (kPCIFunctionCount >= PCI_FUNCTION_SLOTS)
+    {
+        sPCIDropped++;
+        return;
+    }
     memcpy(&kPCIDeviceFunctions[kPCIFunctionCount++],node,sizeof(pci_device_t));
 }
 
@@ -384,7 +408,7 @@ void init_PCI()
  {
 
 	pci_device_t device, funcDevice;
-	uint16_t prevDev=0,prevBus=0;
+	uint16_t prevBus=0;
 	uint16_t currFunc;
 	__uint128_t saved = kDebugLevel;
 	kDebugLevel &= ~(DEBUG_PCI_DISCOVERY);
@@ -392,19 +416,25 @@ void init_PCI()
 	kPCIDeviceCount=kPCIBridgeCount=kPCIFunctionCount=kPCIBusCount=0;
 
 	kPCIDeviceHeaders = kmalloc(sizeof(pci_device_t) * PCI_DEVICE_SLOTS);
-	kPCIBridgeHeaders = kmalloc(sizeof(pci_device_t) * PCI_BRIDGE_SLOTS);
+	kPCIBridgeHeaders = kmalloc(sizeof(pci_bridge_t) * PCI_BRIDGE_SLOTS);
 	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);
+
+	// readPCIRegister reads configuration space through the MCFG's window,
+	// with no port-0xCF8 fallback: os64 targets q35 and modern hardware on
+	// purpose. Without the window every config read would land at
+	// PCI_MMIO_OFFSET past address zero, so refuse by name instead.
+	if (kPCIBaseAddress == 0)
+		panic("PCI: the ACPI tables describe no PCI Express configuration space (no MCFG segment 0)\n");
 
 	printd(DEBUG_PCI_DISCOVERY,"Iterating the PCI busses ...\n");
 	
-	for (uint16_t currBus=0;currBus<120;currBus++)
+	for (uint16_t currBus=kPCIBusFirst;currBus<=kPCIBusLast;currBus++)
 	{
 		printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED, "Scanning bus %u\n", currBus);
 		for (uint16_t currSlot=0;currSlot<32;currSlot++)
 		{
 			//if device found print it
 			currFunc=0;
-			prevDev=0;
 			if (getDeviceHeader(&device, currBus, currSlot, currFunc)==true)
 			{
 				if (prevBus!=currBus)
@@ -418,13 +448,20 @@ void init_PCI()
 				}
 				else
 					addDevice(&device);
-				//if found device is multi-function, iterate all of the functions
-				for (currFunc=0;currFunc<8;currFunc++)
+				// Functions 1-7 exist only when function 0's header says the
+				// device is multifunction (PCI spec, header type bit 7); a
+				// single-function device may answer every function number
+				// with function 0's registers. Each function that answers is
+				// its own device, whatever its ID: two identical controllers
+				// in one device (the 3900X's chipset USB at 07:00.1 and
+				// 07:00.3) are two controllers, and a missing function in
+				// between does not end the list.
+				if (device.multiFunction)
 				{
-					getDeviceHeader(&funcDevice, currBus, currSlot, currFunc);
-					if (funcDevice.vendor!=0xFFFF && funcDevice.device != device.device && funcDevice.device != prevDev)
+					for (currFunc=1;currFunc<8;currFunc++)
 					{
-						prevDev=funcDevice.device;
+						if (!getDeviceHeader(&funcDevice, currBus, currSlot, currFunc))
+							continue;
 						if (funcDevice.class == 0x06)
 							addBridge(&funcDevice, currBus, currSlot, currFunc);
 						else
@@ -436,6 +473,11 @@ void init_PCI()
 	}
 	
 	kDebugLevel = saved;
+	if (sPCIDropped)
+	{
+		printf("PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
+		printd(DEBUG_BOOT, "PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
+	}
 	pci_print_discovery_results();
  }
 
@@ -447,4 +489,23 @@ pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t fu
     pci_config_space_t *configSpace = (pci_config_space_t *)configSpaceAddress;
 
     return configSpace;
+}
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
+{
+	// Status bit 4 says the list exists at all; a function without it may
+	// carry garbage at 0x34, and following garbage is how walks wander.
+	uint32_t status_cmd = readPCIRegister(bus, device, function, 0x04);
+	if (((status_cmd >> 16) & 0x0010) == 0)
+		return 0;
+
+	uint8_t ptr = (uint8_t)(readPCIRegister(bus, device, function, 0x34) & 0xFC);
+	for (int hops = 0; ptr != 0 && hops < 48; hops++)
+	{
+		uint32_t entry = readPCIRegister(bus, device, function, ptr);
+		if ((entry & 0xFF) == cap_id)
+			return ptr;
+		ptr = (uint8_t)((entry >> 8) & 0xFC);
+	}
+	return 0;
 }

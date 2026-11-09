@@ -21,6 +21,7 @@ to stay current:
 | `MEMORY.md` / `docs/arena_allocator.md` | Allocator, paging, arenas |
 | `VERIFICATION.md` | How this project proves things work |
 | `DEBTS.md` | Everything consciously deferred, and the "explicitly NOT debts" list — read that list before "fixing" a pipe/handle design decision that is actually a ratified choice |
+| `DECLINED.md` | Findings that were CORRECT and are not being fixed, each with what would reverse it. Its header carries the bar, which is a comparison and not a severity — and the warning that "rare" and "adversarial" are different words |
 | `DIVERGENCES.md` | The ledger of every deliberate departure from Unix/Linux (and every convergence kept on merit) — breadcrumbs pointing at the doc that carries each argument; doubles as the future Linux-compat requirements list |
 
 ## The philosophy (the part that outlives any code)
@@ -58,11 +59,16 @@ to stay current:
    windows — a handle is a tagged reference; read/write/close dispatch on the
    tag. The non-regret guarantee: routing changes, the contract doesn't.
    Redirect beats pipe when both claim a slot. NO blanket handle inheritance
-   across spawn — a child gets the console plus exactly what was asked for.
+   across spawn — a child gets its parent's 0/1/2 plus exactly what was asked
+   for (the "0/1/2" was "the console" until 2026-08-28, which is why a
+   redirected testrun's fixtures kept printing to the screen).
 7. **The tree is curated, /proc will be pure.** Single-rooted hierarchy,
-   WITHOUT the sediment: /bin (all executables, no sbin/usr split ever —
-   the /usr split was Ken and Dennis's 1971 disk shortage, not a design),
-   /lib, /etc, /home, /tmp, /dev later. /proc = processes ONLY, Plan 9
+   WITHOUT the sediment: /bin (the programs and tools a person runs — no
+   sbin/usr split ever; the /usr split was Ken and Dennis's 1971 disk
+   shortage, not a design), /tests (the proof harness — badge-code fixtures
+   and acceptance probes; a split by PURPOSE, which is what /usr never was,
+   and it lands on the path after /bin so a fixture can never shadow a
+   command), /lib, /etc, /home, /tmp, /dev later. /proc = processes ONLY, Plan 9
    style; kernel state goes elsewhere. ext2 is the root's future; FAT keeps
    the boot/interop job forever. ("." and ".." are not directory content —
    readdir never delivers them.)
@@ -112,7 +118,7 @@ The older catalog is in ABI.md §Failure fingerprints. This session's addenda:
 | `pkill -f X` kills your own shell | The pattern matches your own wrapper's command line. `pkill -f "patter[n]"` |
 | A struct field reads NULL/garbage in ONE binary while the library tests green | Stale object compiled against an older struct layout — a makefile without `-MMD` header deps. Struck the kernel AND userland on consecutive days (7/18, 7/19: ls read args.value 8 bytes off). Any new makefile gets `-MMD -MP` + `-include` on day one |
 | A logged string mysteriously truncates at its first token | An in-place tokenizer NUL-split it before the print (the "Commandline:" line showed only ROOT=... for years). Parse a scratch copy, print the original |
-| `make` fails at the ISO step (Error 1) with no obvious cause | A live QEMU is holding os64_kernel.iso (or the /mnt/c/temp copy is Windows-locked). Quit your QEMU before rebuilding the ISO |
+| `make` fails at the ISO step (Error 1) with no obvious cause | A live QEMU is holding os64_kernel.iso. Quit your QEMU before rebuilding the ISO. (The Windows-locked /mnt/c/temp copy used to be the other half of this answer; that copy left the build for `make copy` on 2026-08-28, so it can only bite you there now) |
 | PCI probe matches nothing though the device exists | pci_device_t carries BOTH `prog` and `progIF` fields; pci.c fills `prog`. Check which field is real before matching on it |
 | A firmware table's LATE fields read as garbage while its early ones are fine — a 64-bit address of 0x0000200100000000, a machine that reports no ACPI power management | A spec struct embedded BY VALUE that is not `__attribute__((packed))`. ACPI's GenericAddressStructure is 12 bytes; unpacked it is 16, and the FADT holds five of them, so every field past `ResetReg` drifts 4 bytes per structure. Invisible until something reads a late field — which nothing did for nine years (2016 → 2026-08-21, the S5 slice). Cost an evening across two machines. THE CURE IS THE ASSERT, not the fix: any struct laid down by a spec gets `_Static_assert(sizeof(...) == N)` and an offsetof check on the fields you actually read, so the next one fails at BUILD time instead of at power-off time |
 | Modern UEFI machine "has no PM1a control block" / no ACPI soft-off | Its firmware zeroed the LEGACY 32-bit FADT fields and put the truth only in the extended `X_` ones. That is normal, not broken — a fallback of "use the legacy field if the extended one looks empty" fails on exactly these machines, which is most of them now |
@@ -161,10 +167,34 @@ timeout 240 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
   (husk, app output, the "Commandline:" line — none of it reaches the log).
   To SEE what you typed: `screendump $SCRATCH/shot.ppm` via the monitor,
   convert with PIL, and READ THE IMAGE. That is how you watch husk answer.
-- Poll the serial log for progress markers, never sleep blind:
-  `for i in $(seq 1 40); do sleep 3; grep -q "BUILT-IN TESTS" log && break; done`.
-  Which root booted? NOT the Commandline line — grep for
-  `Root filesystem found (ext2)` vs plain `Root filesystem found, mounting` (FAT).
+- **Poll for `"boot complete"`, never sleep blind, and never poll for anything
+  else.** Chris's ruling, 2026-08-28, after watching both Fable and Opus wait
+  out 90- and 200-second timeouts polling for strings that stopped reaching the
+  wire when logd took the serial port:
+
+  ```bash
+  for i in $(seq 1 60); do sleep 1; grep -q "boot complete" "$LOG" && break; done
+  ```
+
+  `[pool] boot complete: N/M paging pages used` is written by `kernel_park`
+  with **`serial_print_string` — the direct polled write, panic's own door**,
+  so no debug level gates it and no logd claim can intercept it. It is printed
+  at the moment the kernel task parks *because userland is running*, which is
+  exactly the thing you are waiting for. Measured: it lands at ~32s on the
+  default entry, where the blind sleeps in use before it were 45-50s.
+
+  **The whole of what reaches the wire on the default (`LOGD=`) entry** is the
+  four pre-logd banner lines, ring-3 fixture output, that one pool line, husk's
+  rc line, and a pool slope line each minute after. Anything a `printd` writes
+  — the test suite's verdict, the root-mount line, every driver message — goes
+  to logd's FILE. Grep the file (`debugfs -R "cat /os64.log"
+  "disk/os64_data.img?offset=1048576"`, host-side, AFTER the guest exits) or
+  boot an entry with no `LOGD=`.
+- Which root booted? The `Commandline:` line reaches the wire but names the
+  ROOT= you *asked* for, not what mounted. The outcome (`Root filesystem found
+  (ext2)` vs plain `Root filesystem found, mounting` for FAT) is a `printd`, so
+  under `LOGD=` it is in the log file, not on the wire — read it there, or use
+  an entry without `LOGD=` when which-root is the question under test.
 - **Limine menu selection races its 10s timeout**: get sendkeys in within
   ~4-6s of launch (sleep 4, fast keys = reliable; sleep 8, slow keys =
   silently boots the default and your "FAT test" tests ext2 — check WHICH
@@ -172,7 +202,8 @@ timeout 240 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
 - Bash trap that cost a session: `VAR=x && qemu … &` backgrounds the WHOLE
   list, including the assignment — your foreground `$VAR` is empty and the
   screendump lands in `/`. Set variables on their own line.
-- Suite green ≠ done. The suite is 24 pre-boot + N post-boot in serial; the
+- Suite green ≠ done. The suite is pre-boot + post-boot + a LATE phase that runs
+  after the shells are seated (so its verdict lands after `boot complete`); the
   INTERACTIVE things (backspace echo, Ctrl+D, PATH lookup, pipelines) you
   verify by sendkey + screendump, like a user with hands.
 - Host-testable code (fmt/args/env — pure computation) gets tested on the

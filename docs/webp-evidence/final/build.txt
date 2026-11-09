@@ -1,0 +1,19 @@
+make -C kernel
+make -C userland
+make[1]: Entering directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel'
+make[1]: Entering directory '/home/yogi/src/os64/.worktrees/webp-decoder/userland'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel'
+make -C kernel test-elf
+make[1]: Entering directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel'
+make -C test/shlib OUTPUT=../../bin/libtest.so CC="x86_64-elf-gcc" LD="x86_64-elf-ld"
+make[2]: Entering directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel/test/shlib'
+make[2]: Nothing to be done for 'all'.
+make[2]: Leaving directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel/test/shlib'
+make -C test/elf OUTPUT=../../bin/test_elf CC="x86_64-elf-gcc" LD="x86_64-elf-ld"
+make[2]: Entering directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel/test/elf'
+make[2]: Nothing to be done for 'all'.
+make[2]: Leaving directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel/test/elf'
+make[1]: Leaving directory '/home/yogi/src/os64/.worktrees/webp-decoder/kernel'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/yogi/src/os64/.worktrees/webp-decoder/userland'

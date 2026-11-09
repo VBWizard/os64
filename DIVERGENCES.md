@@ -24,8 +24,10 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `fork` AND `exec`, both first-class | Alongside spawn. Good names, good ideas (LIBOS64 § process model) |
 | Handles 0/1/2 = in/out/err | The contract every filter is written against |
 | The single-rooted tree | Without the sediment — see the tree section below |
+| Linux's 200ms retransmit-timer floor, against RFC 6298's "SHOULD 1 second" | Kept from Linux on MERIT, not inheritance (2026-09-04): the floor exists so a peer's delayed ack is not read as loss, 200ms clears that, and one second — the fixed timer os64 had — made every lost segment on a millisecond wire cost a second (rig: 11.8s → 3.3s for 100KB at 10% loss). tcp.h's timer comment carries the argument |
 | `#!` on line one, handled by the KERNEL's exec — and `$1`..`$9`, `$*`, `$#` in husk | Ritchie's V8 (1980) put `#!` in exec() so the loader answers "what runs this file" and every program, not just the shell, can run a script. os64 does it in task_create (elf_loader.h): one level, an absolute interpreter, one optional argument, V7/BSD semantics. No filename extensions, ever — the file says what it is on its first line (Chris, 2026-08-22). The positional sigil is `$` because husk already expands `$CWD`/`$NAME` with it; `%1` was DOS's and a second sigil would be the wart |
 | Small tools composed by pipes | The whole userland doctrine |
+| `/etc/environment` — the first environment as a key=value DATA file, not a script | `bootenv.conf` (2026-08-30), on the config ladder, `/home` layered over `/etc`, read by the kernel into the first task's block. V7's `/etc/profile` (1979) was a script the login shell ran — husk.rc's ancestor, with the same blind spot: a program that is not a shell's child never sees it (the desktop's clock showed UTC while husk's showed Eastern). PAM's `/etc/environment` closed the same gap in the 90s, as data. `kernel/include/bootenv.h` |
 | `\|` `<` `>` `&` shell notation | `<` predates `\|` by two years; `&` is Thompson 1973 |
 | `$?`, exit code 0 = success | Bourne 1977; last pipeline stage speaks for the job |
 | 128+signo death codes (130, 137) | Human-legible corpse tags, kept even though signal *bits* diverged |
@@ -36,7 +38,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Ctrl+letter = control codes; Ctrl+D = EOT = EOF | 1963 semantics, done properly (one-shot EOF, then normal reads) |
 | ELF, SysV x86-64 calling convention | Interop with the toolchain — a *specific reason*, per the philosophy |
 | Syscall args in RDI/RSI/RDX/R10/R8/R9 | Hardware forces R10-for-RCX; happens to match Linux |
-| ext2 on-disk format | FFS re-expressed; FULL read/write since 2026-08-04, judged by the host's own e2fsck (`make fsck-ext2`); root stays mounted read-only until ratified (FAT keeps boot/interop forever) |
+| ext2 on-disk format | FFS re-expressed; full read/write, including writable root, judged by the host's own e2fsck (`make fsck-ext2`); FAT keeps boot/interop forever |
 
 ---
 
@@ -44,12 +46,13 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 | Unix/Linux | os64 | Why | Recorded |
 |---|---|---|---|
+| `clock_gettime(CLOCK_MONOTONIC, &ts)` — a struct of seconds and nanoseconds through a pointer, one of several clock IDs | `micros()` returns microseconds since boot in RAX; `ticks()` is the scheduler's own count beside it | One number in the unit an interval wants, and no pointer to get wrong; nanoseconds would promise a precision a 3-second TSC calibration cannot keep. Two calls on purpose: they can disagree (lost ticks), and a struct carrying both invites adding them | ABI #59, `os64/ticks.h`, ARRIVAL_WAKE.md |
 | `errno` (global, action at a distance) | In-band errors only; designed convention = RAX:RDX value:status pair (interim: two high sentinels) | The error check belongs at the call site | ABI § register contract |
 | `lseek` (whence + offset dance, return needs care) | `seek` returns the NEW absolute position; `SEEK_END+0` = file size, no fstat needed | The useful answer, directly | ABI inventory #10 |
 | `getdents` + per-entry `stat` dance; `struct dirent`'s poverty | `readdir` yields name+size+kind in ONE call; returns 1/0/<0; EOF is sticky | One call, whole answer | dirent.h, ABI #11 |
 | Separate `struct stat` | `stat` fills the SAME `os64_dirent_t` readdir yields — "stat is readdir for exactly one name" | One struct, no fork | ABI #23 |
 | `readdir` delivers `.` and `..` | Never. They are not directory content | Plan 9 was right | SUCCESSION #7 |
-| `open` flag ints (O_RDONLY\|O_CREAT\|...) | Mode strings "r"/"w"/"a"/"c", "d" for directories; unknown modes REFUSED at the boundary | Tripwires over silence | ABI #9 |
+| `open` flag ints (O_RDONLY\|O_CREAT\|...) | Mode strings "r"/"w"/"a"/"c", "u" for update, "x" for atomic create-new, "d" for directories; unknown modes REFUSED at the boundary | The common operations get names; unsupported combinations cannot slip through as flag arithmetic | ABI #9 |
 | `O_DIRECTORY` / opendir as separate machinery | Directories open with mode "d", same open, same close, one handle type | One door | ABI #9 |
 | `brk`/`sbrk` | NEVER. `map(len)`/`unmap(base)` regions: demand-paged, zeroed, guard page after, VAs never reused | brk frees only from the end; stale pointers must fault | DEBTS not-debts, MALLOC.md, ABI #12-13 |
 | `waitpid(WNOHANG)` | `reap` is its OWN syscall; returns 0 = "nobody died" as an ordinary answer | A wait that doesn't wait is a name that lies | syscall.c reap, task.h |
@@ -59,7 +62,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Unknown flags silently ignored (much of POSIX) | Unknown spawn flags / open modes / ctl verbs REFUSED | A silently dropped request "succeeded" and didn't | syscall.c boundaries |
 | `unlink(2)` + `rmdir(2)`, two removal verbs | ONE verb: `unlink` removes files AND empty directories; rmdir will never exist (ratified 2026-08-04) | POSIX's split is a pre-4.2BSD scar (setuid rmdir(1) hand-unlinking `.`, `..`, then the entry); Plan 9's `remove()` got it right | abi syscall_numbers.h #35, ABI #35 |
 | `unlink` of an open file succeeds (blocks freed at last close) | **CONVERGED 2026-08-16** — os64 now does the same for regular FILES, and `rename` over an open file likewise. An open DIRECTORY still refuses | Refused from 2026-08-04, explicitly consumer-driven ("built the day a consumer needs it"). The consumer arrived: replacing `/bin/husk` over the network while husk is running — a task holds its own ELF open for demand paging. Converged on MERIT, not inheritance: the inode outliving its name is what makes a file a file rather than a directory entry. Kept honest by the CRASH story rather than the happy path — the orphan list lives on disk in `s_last_orphan`, a mount replays it out loud, and e2fsck already knows that field | ext2_write.c orphan chain / VERIFICATION.md crash procedure |
-| `rename(2)` replaces almost anything: file over file, empty dir over empty dir; some systems even swap | REPLACEMENT IS FILE-ONTO-FILE ONLY. A directory is never replaced, and a directory never lands on an existing name. The atomicity is KEPT (ratified 2026-08-16) — that half of rename is the good idea | The window rename(2) was invented to close (4.2BSD, 1983, because link-then-unlink couldn't be atomic) is worth every line; the directory-replacement corners are where POSIX's rename grew its `..`-and-link-count folklore, and no os64 consumer has asked for them | abi syscall_numbers.h #43, ABI #43 |
+| `rename(2)` replaces almost anything: file over file, empty dir over empty dir; some systems even swap | REPLACEMENT IS FILE-ONTO-FILE ONLY. A directory is never replaced, and a directory never lands on an existing name. Legacy replacement is atomic on ext2; FAT retains its remove-first behavior. Callers that require safety use `rename_with_flags`: atomic no-replace everywhere, or atomic replacement where supported and refusal otherwise | The window rename(2) was invented to close (4.2BSD, 1983, because link-then-unlink couldn't be atomic) is worth every line; the directory-replacement corners are where POSIX's rename grew its `..`-and-link-count folklore, and no os64 consumer has asked for them | `abi/include/os64/syscall_numbers.h` #43/#54, ABI #43/#54 |
 | `rename(2)` across filesystems fails with EXDEV and the caller copies | Same line, same reason — refused at the syscall boundary, and `mv` does copy-then-unlink in userland | A convergence kept on MERIT, not inheritance: a half-finished copy needs a cleanup policy (retry? keep the partial? prompt?), and policy belongs where a human can be asked | syscall.c syscall_rename |
 | `rename(2)` of an open file succeeds | **CONVERGED, same day it was written (2026-08-16)** — open FILES rename freely on both sides; an open DIRECTORY refuses | Shipped that morning REFUSING both sides, inheriting rm's 2026-08-04 ruling. By evening the orphan chain had shown the inheritance was wrong on the source side (an ext2 handle holds an inode number, not a path, so a reader cannot even perceive a rename) and unnecessary on the destination side (the displaced inode simply survives, nameless, until last close). A directory handle IS mid-walk through what a move re-parents, so that one stands | ext2_write.c ext2_rename |
 | `fsync(2)` matters (write-back caches defer everything) | ext2 writes are FULL WRITE-THROUGH: data + inode committed before write() returns; `sync` is an already-kept promise | No block cache to flush, and a file being appended reads at true length to everyone immediately — honestly better than FAT's looks-empty-until-sync (which is why sync exists at all). A future block cache re-earns sync | ext2_write.c durability doctrine |
@@ -72,7 +75,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Unix/Linux | os64 | Why | Recorded |
 |---|---|---|---|
 | fork+exec as the only birth | `spawn(path, argv, in/out/err, flags)` first-class beside fork | The everyday launch deserves one syscall | ABI #5 |
-| Child inherits the WHOLE fd table | NO blanket inheritance: console + exactly the handles asked for | Kills the classic held-open-pipe-end pipeline hang | DEBTS not-debts |
+| Child inherits the WHOLE fd table | NO blanket inheritance: the parent's 0/1/2 + exactly the handles asked for | Kills the classic held-open-pipe-end pipeline hang | DEBTS not-debts |
 | Background job reads tty → SIGTTIN stop (sessions, pgrps, tcsetpgrp) | `OS64_SPAWN_BACKGROUND` is kernel-known; a background read of handle 0 returns EOF (`cmd &` ≡ `cmd < /dev/null &`) | v1 shape; ctl stop/start later makes it SIGTTIN-like without the session machinery | task.h backgroundJob, syscall_numbers.h |
 | Sessions / process groups / controlling terminal | `controllingShell` flag + `kForegroundTask`, riding `wait` not spawn | The 10% that does the job; generalizes to per-tty later | SIGINT.md |
 | Shells may leak zombies; init adopts orphans | Reporting a finished job and reaping it are the same act — `&` cannot leak | The shell buries its own dead | jobs commit 6167aa3, husk.c |
@@ -111,6 +114,32 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `listen()`/`accept()` trio: vestigial backlog int, sockaddr out-param, then `getpeername()` | A listener HANDLE whose read() yields one `os64_netconn_t {handle, peer_ip, peer_port}` — accept IS read; peer identity arrives with the connection | Berkeley's own poll() reports a pending connection as READABLE — its event API spent 40 years admitting accept is a read | NETWORK.md ruling #3 |
 | `sendto`/`recvfrom` per-packet addressing as UDP's front door | Dial a UDP peer once, then plain read/write on the handle; a recvfrom-equivalent arrives only when a real consumer demands it | Covers DHCP/DNS/ping cleanly; consumer-driven growth (the args-parser precedent) | NETWORK.md ruling #4 |
 | `/proc/net/*` text files (network state squatting in the process filesystem) | Syscall first (memory(out) pattern: typed struct, meanings fixed forever) for fixed-shape state; a real `/net` mount later (procfs template) for browsable tables. /proc stays processes-only, constitutionally | Numbers may change; meanings never do — and /proc's scope creep is exactly how Linux's happened | NETWORK.md ruling #5 |
+| `ftp` opens in ASCII mode and offers `ascii`/`binary` as commands | `/bin/ftp` sends `TYPE I` once at login and has no way to ask for anything else | ASCII mode translates line endings between machines that disagree about them. os64 agrees with Unix, so the translation can only corrupt a binary somebody forgot to switch modes for — which is the accident the mode is famous for, not a hazard invented here | FTP.md ruling 3 |
+
+---
+
+## The browser's script requests (yonder, Modern Web slice 2, 2026-10-23)
+
+Where yonder's fetch and XMLHttpRequest depart from the Fetch standard on
+purpose; ORIGIN.md carries each argument.
+
+| The standard / browsers | yonder | Why | Recorded |
+|---|---|---|---|
+| A script may set `User-Agent` (no longer a forbidden request-header) | `User-Agent` stays forbidden: a page's own is dropped, the browser's goes | The agent is the person's setting (Settings), and a page rewriting it per request is fingerprinting yonder's agent setting exists to prevent | ORIGIN.md § 3 |
+| A preflight-cache entry from `Access-Control-Allow-Methods: *` (or `-Headers: *`) serves a later request by the standard's match rule | A `*` grant is kept as an UNCREDENTIALED one whatever request earned it | The standard's match would let a `*` from a credentialed answer that also named one method stand in for a method it never named | ORIGIN.md § 5 |
+| `Access-Control-Max-Age` caps vary by browser (Chrome 7200 s, Firefox 86400 s) | Capped at 7200 s | The shorter of the common caps: a grant outlives a server's change of mind for less time | ORIGIN.md § 5 |
+| `http://localhost` is a potentially trustworthy origin | Only `127.0.0.0/8` literals are; the NAME `localhost` is not | os64 cannot promise the name resolves to loopback | ORIGIN.md § 12 |
+| An `http` page's script follows an `https` to `http` redirect | Every `https` to `http` redirect of a script request is a network error | A 307 replays a body in the clear to an address the page never named; a page may still name an `http` address itself | ORIGIN.md § 8 (ruling 3), `fetch.h`'s house policy |
+| A header name repeated in a list takes its first spelling (§ 2.2.2 "append") | The request's header names go on the wire as written | No script-visible reader shows a spelling and HTTP folds case, while the rule costs a scan per append, quadratic over a list a page or a server hands over whole | LIBDOM.md § Slice 2's rows, `fetch.c` `list_take` |
+
+## The browser's identity (yonder, 2026-10-24)
+
+| The standard / browsers | yonder | Why | Recorded |
+|---|---|---|---|
+| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF, WebP, APNG and signed exchanges and Firefox's picture `Accept` AVIF, JPEG XL, WebP and SVG, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints, `Accept-Language`, `Priority` and `Connection: keep-alive` byte for byte and in its browser's order, and libway its Fetch Metadata; it claims nothing yonder cannot do: the browser's `Accept` for each destination LESS the types yonder cannot decode (WebP and APNG among them, whose animations it cannot play), `Accept-Encoding: gzip, identity`, HTTP/1.1, os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 and § 2, each as built |
+| A kept connection belongs to a network partition (Fetch § 2.6, "connection pool"): keyed by the top-level site that asked as well as the origin, so a connection opened under one site is never used for another's request, as Chrome and Firefox partition | libfetch's pool is keyed by origin (or proxy) and trust store alone, shared across every top-level site, as yonder's cookie jar is shared (`way/jar.h`, one jar per browser) | A tracker embedded on two sites can link a person's visits by the connection both reuse, as it can by a cookie the jar keeps for both: the same cost, from the same missing partition. Partitioning the jar and the pool is one change, the site that asked becoming part of both keys | `userland/libfetch/pool.h` `fetch_pool_key_t`; WIRE.md § 2 as built |
+| A script's navigation inside a person's gesture (a listener's `a.click()`, `form.submit()` or `location=` during their click) carries their activation: HTML's "create navigation params by fetching" takes it from the source's transient activation, and the request sends `Sec-Fetch-User: ?1` | Every navigation a page's script asks for is nobody's: no `Sec-Fetch-User` | yonder tracks no transient activation yet; saying less than a browser would is honest, saying a person acted when nobody did would not be. Booked in BROWSER_DEBTS | `way/origin.h` (`WAY_BY_PAGE`); WIRE.md § 1 as built |
+| Sec-Fetch-Site names the request's site against each URL by the public-suffix list (`same-site` for a site's own subdomains) | Where the site cannot be known without the list (two hosts sharing their last two labels: sibling subdomains, or two sites under one public suffix) the request sends no `Sec-Fetch-*` at all; what is certain is said | A site's own subdomain called `cross-site` is what a resource-isolation policy refuses, so the stand-in that is restrictive for CORS is not restrictive here; silence is what a browser from before Fetch Metadata sends, and every such policy lets it through. Ends when the public-suffix list lands (DEBTS) | `way_origin_site`; WIRE.md § 1 as built |
 
 ---
 
@@ -119,7 +148,10 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Unix/Linux | os64 | Why | Recorded |
 |---|---|---|---|
 | /usr split, /sbin, /usr/local sediment | /bin holds ALL executables; /lib, /etc, /home, /tmp, /dev later; NO /usr ever | The /usr split was Ken and Dennis's 1971 disk shortage (a full RK05), not a design | SUCCESSION #7 |
-| fstab + mount(2) | Mount table auto-mounts recognized partitions at "/<fstype>", longest-prefix routed, GUID-deduped, foreign partitions allowlisted OUT | Boots self-describing; Windows-safety by construction | vfs.c, CLAUDE.md |
+| fstab + mount(2) | fstab's one row conflated WHAT mounts (local policy) with WHERE (now the disk's own business — a partition mounts at its GPT label). os64 splits them: `/etc/mounts.conf` lists only WHAT joins the namespace at boot (`mount = <name> [/where] [ro]`, gui.conf's whole-list rule; absent file = the authored-GUIDs default sweep — the old Windows-safety allowlist demoted from gate to default). Runtime mount(52)/unmount(53) since 2026-08-30: `mount` names a PARTITION (GPT name or GUID — PARTLABEL-first, where Linux ended up), never a device path, and any partition it can name is mountable — naming is the deliberateness | Boots self-describing; the not-fstab is a list of names, no columns to drift; Windows-safety kept where the accident lived (the uninvited sweep) | vfs.c, os64/mount.h, CLAUDE.md |
+| A mount point must be an existing directory | The mount table IS the namespace at that level (Plan 9's view, ratified 2026-08-30): the point itself need not exist, only its PARENT must be a real directory — so `ls` never invents one. Unix mounts OVER a directory because a second RK05 needed a name inside the first one's tree (1971) | No empty stub directories to curate | vfs.c vfs_mount_explicit |
+| lsof duplicates a shared hold per process (`txt`/`mem` rows for every instance running one binary) | One kernel-held row per ACTUAL open: a dyn-linked program's image is held once by the shared-object registry however many instances run, and `/sys/openfiles` says so — lsof prints it under `kernel`, not once per task. Linux duplicates because its lsof's *source* is per-process (`/proc/pid/maps`); the shared `struct file` under its hood is just as singular, never shown. Ratified 2026-08-31: "duplication would just be for the sake of parity, which we don't do." Per-task attribution stays available in `/proc/<pid>/maps` for any tool that wants the other view | The ledger answers "how many holds keep this busy?" without counting ghosts | /sys/openfiles, lsof(1) |
+| df(1) reads statfs(2) | df reads `/sys/mounts` — a FILE (the /proc/self/tty doctrine): one line per mount with fstype, device, GUID, mode, totals from each fs's `space` fop. lsblk reads `/sys/block` the same way | One `cat` answers what a syscall would; the tools are trivially HIS to write | sysfs.c |
 | Path hygiene scattered everywhere | ONE canonicalization point (`vfs_canonicalize_path`, at chdir/open); cwd stored canonical, kernel-owned | Path hygiene happens in exactly one place | ABI #15 |
 | Mouse on a text console is a USERLAND DAEMON (gpm, 1994) reading /dev/mouse and handing the selection back through `ioctl(TIOCLINUX)` | In the kernel, beside the pieces it needs: `vt_select.c` reads the events the compositor already drains, the console's own cell grid, and the kernel clipboard | gpm was a daemon because of where Linux's pieces LIVED — the mouse was a character device with no in-kernel consumer, while the highlight and the paste were always kernel code. os64 holds all three on one side already; a daemon would mean inventing a /dev/mouse to export events and a control path to feed them straight back in. The seam stays open if selection POLICY (word/line modes — gpm's real value-add) ever wants userland | CLIPBOARD.md § slice 4, vt_select.h |
 | A clipboard is a windowing-system API (X11 selections, Win32 `OpenClipboard`) with TWO buffers — PRIMARY and CLIPBOARD | ONE buffer, and it is a FILE: `/sys/clipboard`. `cmd > /sys/clipboard` copies, `cat /sys/clipboard` pastes. No new syscall, no GUI dependency — a headless text VT has the same clipboard the desktop does | Content belongs in the byte-stream world, where pipes and redirection already work; forty years of X11 users pasting the wrong buffer is the argument against two. **Convergence with Plan 9**, which served snarf as `/dev/snarf` for the same reason — os64 files it under /sys because its /dev is the narrower Unix-shaped one (stateless devices), not Plan 9's service namespace | CLIPBOARD.md, sysfs.c |
@@ -168,7 +200,24 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `$PWD` env var (drifts from reality) | `$CWD` fetched LIVE at expansion; the env seed that lied was deleted | A cache that can lie is worse than a syscall | husk expand_line |
 | `kill %1` job notation | Job reports print job number AND task number — the task number IS the handle you type into `/proc/N/ctl` | No second process-naming scheme | husk job_announce |
 | Shells glue newlines onto ragged output | Shell adds NOTHING; GENERATORS terminate their own last line, FILTERS are byte-faithful (`cat < a > b` must equal `a`) | State it the two-clause way — the short form caused a real bug | roadmap memory 7/19 |
+| `2>&1` binds POSITIONALLY — stderr gets whatever stdout was bound to at the moment the token was read, so `cmd 2>&1 > f` leaves stderr on the terminal | `2>&1` (and `>&2`, `&>`) bind LAST, to the other stream's final destination — file, pipe or console — wherever on the line they were written | Forty-five years of tutorials carry a paragraph explaining the positional rule; nobody has ever *meant* it. Chris, 2026-08-28: "the other way just sounds annoying." The rest of the vocabulary is Bourne's verbatim: the digit is the handle number, `2>>` appends, `&>` is bash's 1989 both-streams shorthand | husk extract_redirections |
+| Two kinds of variable: shell variables are private until `export`ed into the environment (Bourne 1977; csh's `set` vs `setenv`) | ONE kind. `NAME=value` sets an environment variable; `$NAME` reads it; children inherit it; `export NAME=value` is the same act under its older name | The split was a PDP-11 economy (the environment is copied at every exec) that became a silent trap — a child that cannot see a value says nothing, so everyone exports everything and pays for a distinction they never use (Chris: "95% of the time I used export"). One namespace means a variable means the same thing at the prompt, in a script, in a `for`, and in the child. Costs, accepted: a loop counter leaks into children's environments; nothing is kept from a child by default — `env -u NAME command` withholds one variable from one program, and the day os64 has secrets in scripts, the answer is a `local`-shaped verb, not a private tier. Refused on purpose: a case-of-the-name rule (uppercase flows, lowercase stays) — magic hiding in spelling. Ruled 2026-08-28 | husk run_assignment |
+| `` `cmd` `` backquote substitution, and `$(cmd)` forks a SUBSHELL | `$(cmd)` only (Korn 1983 — nests, quotes sanely); the inner line runs IN THIS SHELL, one expansion depth down | No second spelling for one idea. In-process because the inner text must reach exactly one parser — expanding it in the outer shell and again in a `husk -c` child would hand substituted values to the second parser as syntax (PR #28's rule). Consequences, deliberate: a builtin inside `$()` acts on THIS shell (`$(cd /x)` moves you) and its output is not captured (builtins write to the console, not through the capture pipe — `$(pwd)` works because pwd is a program); `$?` after the line is the LINE's — with Bourne's one exception, adopted 2026-08-29 when the first `x=$(cmd)` needed its verdict: a bare assignment answers with the substitution's status (the value IS the command there), while `echo $(false)` stays echo's 0 | husk run_substitution / run_assignment |
 | Bracketed paste (`ESC[200~`/`ESC[201~`, xterm 2002) so the shell can refuse to run a pasted newline | NOT IMPLEMENTED, deliberately. gterm's right-click writes the snarf to the pty master as if typed; a pasted newline RUNS the line | Chris's ruling, 2026-08-21: "I am a smart guy. If I want to run multiple lines I copy multiple lines. If I want to review first, I review before copy or copy one line at a time, no newline." The wrapper exists so a shell can second-guess its user; os64 has one user and he is not asking for that. (The copy side helps: a one-row copy carries no trailing newline, so it lands on the prompt un-run) | CLIPBOARD.md § slice 3, gterm.c |
+
+---
+
+## Scheduled work (cron, 2026-08-29)
+
+| Unix/Linux | os64 | Why | Recorded |
+|---|---|---|---|
+| Five compressed fields — `0 3 * * 1` — where day-of-month and day-of-week are OR'd, not AND'd | Words, left to right: `@reboot`, `every 5m`, `every 2h`, `daily 03:00`, `weekly sun 04:30` | The five fields are compression for a file parsed by a tiny C program and typed on a teletype. Nobody reads `*/5 2-4 * * 1-5` right the first time, and the dom/dow OR has surprised people for forty-five years. What os64 gives up is range and step expressiveness; it buys that back the day something asks for it | cron.c header |
+| cron runs in LOCAL time, so DST gives it an hour that never happens and an hour that happens twice — a real source of jobs that run twice or never, which Vixie documented and worked around rather than solved | UTC, always, read straight from the kernel epoch rather than through anybody's `TZ` | The system clock is UTC by ruling (the sysfs arc); a UTC cron simply cannot have the bug. Cost, stated in `/etc/crontab` rather than hidden: `daily 03:00` is 03:00 UTC | cron.c `utc_now` |
+| `*/5` is a calendar match; interval schedulers elsewhere measure from last run | `every 5m` is a CALENDAR MATCH too — minute % 5 — which makes every schedule STATELESS | Due-ness becomes a question about the clock alone, so nothing survives a re-read and a restarted cron is exactly where a running one would be. The wart, stated: `every 7m` is lumpy at the hour (60 ∤ 7). No cron has ever been otherwise | cron.c `job_is_due` |
+| Per-user spools plus `crontab(1)` to manage them | One file, found on the config search path, and no command | `crontab(1)` exists to enforce per-user permissions on a spool directory. os64 has neither users nor a spool, so the command would be a wrapper around `scribe` | cron.c header |
+| `/etc/crontab` is one file; user tables live elsewhere | `/home/crontab` MERGES on top of `/etc/crontab` | A crontab is a LIST, not a setting — the `hosts` treatment (Chris, 2026-08-22), for the same reason: your jobs should join the system's, not erase them. Consequence, stated in the file: adding a crontab cannot turn a system job OFF, only add to it | cron.c `load_crontabs` |
+| cron MAILS a job's output to its owner | Output goes to the console and the log; the exit status is logged for every job, not just failures | There is no mail. The log is where you go looking for "what happened while nobody was watching", and "nothing was printed" is not an answer you can act on | cron.c `reap_finished` |
+| `@reboot` is a scheduling verb because Unix already had rc scripts and Vixie needed a hook an unprivileged user could reach | `@reboot` is os64's ONLY boot hook, because os64 has no init at all | Kept knowingly, not inherited: `husk.rc` runs in EVERY shell (VT1 and VT2 both), so a system service started there starts twice — the bug that moved the desktop's startup list out of it. The day os64 grows an init, cron becomes its tenant and this row gets revisited | kernel.c cron launch |
 
 ---
 
@@ -181,6 +230,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Heap statistics need LD_PRELOAD or a debug build | `cat /proc/<pid>/heap` — malloc publishes one struct, the kernel renders the file, `watch` makes it a live profiler | The allocator is the only thing that knows its own shape; a report is cheaper than an interposition mechanism | abi/os64/heap.h, PROC.md |
 | Eager full direct map (Linux) | Lazy HHDM: mapped exactly while allocated; freed memory FAULTS on touch | A designed use-after-free tripwire | CLAUDE.md § HHDM |
 | KPTI (unshared kernel half) | Shared U/S-protected kernel upper half | Deliberate for os64's threat model: we run our own binaries | DEBTS not-debts |
+| `stty raw` / `cbreak` / termios (a dozen bits, an ioctl, and `stty sane` for the day a program dies with them flipped) | ONE bit per terminal — Ctrl+C and Ctrl+D are bytes, or they are SIGINT and EOF — set by writing `raw`/`cooked` to `/proc/self/tty` (foreground task only) and cleared by the kernel when that task exits | The console never had line buffering or echo to switch off, so those two interpretations were the whole discipline; a file because that is how a program already asks "what is my terminal"; kernel reset because a deaf seat is the one failure `stty sane` exists for | SIGINT.md § Raw mode |
 | Log rings drop-and-count | NEVER drop a byte — buffers grow (16MB/core), the drainer hands off to a ring-3 daemon rather than paying 115200 baud, and panics write serial direct + emergency flush. **REFINED, not reversed, 2026-08-18:** at the WALL — ring full, nothing draining, growth impossible — the rings now keep the NEWEST entry, overwrite the oldest, and COUNT it (`buffer->lost`, reported by /sys/log). What that replaced was a PANIC after two billion spins, so the honest framing is Chris's own: *"never drop a byte is aspirational."* The choice at that moment is not whether to lose lines but which, and a panic loses all of them plus the machine. Drop-and-count remains rejected as an operating MODE; this is the behavior at the end of the road, and it is loud | Chris's motto, load-bearing — and the corollary decides the tie: the byte that matters most is the last one | SUCCESSION #4; log.c `LOG_FULL_PATIENCE_SPINS` |
 
 ---
@@ -196,3 +246,68 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
   the direction of travel is ours.)
 - **The rows above are the spec.** Anything in "Kept on merit" is free;
   everything else is a translation entry.
+
+## SSH access
+
+SSH public keys authorize access to the machine, not to a per-user account.
+os64 records the username from an accepted SSH login but has no user database
+or per-user permissions to apply. The v1 server supports ECDSA P-256 keys,
+non-PTY exec, and a STREAM-PTY shell, with one session channel per connection,
+and local forwarding (`ssh -L`) to this machine's loopback only.
+Unsupported authentication and channel features are refused on the wire;
+see SSHD.md for the bounds and supported OpenSSH client.
+
+## The screen as a device (`/dev/glass`, 2026-09-23)
+
+Any process may watch the screen through `/dev/glass`, and with mode `"u"`
+type and point on it, because os64 has no users to refuse: the same machine
+lets any process read `/proc/<pid>/mem`. X11 and Wayland gate the
+equivalent on a display connection's authority. Here the gate is who can
+reach the machine at all, and for remote viewers that is sshd's key check
+(REMOTE.md: vncd listens on loopback only). The device is also shaped
+differently from `/dev/fb0`'s memory map: a read returns a CHANGED
+rectangle and blocks until there is one, which is what a remote viewer
+needs, where a flat framebuffer file would make every reader diff frames
+itself.
+
+## The browser's script binding (libdom)
+
+Parts from the DOM Standard rather than from Unix, recorded here because a
+page's script can see them.
+
+- **A Node member called on an Attr through `Node.prototype` itself**
+  (`Node.prototype.appendChild.call(attr, x)`) is a TypeError, "an Attr is
+  a Node with no place in the tree", where the standard would answer as
+  the member does for any node with no children. Every `attr.x` is
+  answered by `Attr.prototype`, which shadows each of Node's members with
+  the standard's answer (LIBDOM.md § Attributes as nodes); the shared
+  member takes a tree node, which an Attr is not. The comparisons
+  (`isSameNode`, `isEqualNode`, `compareDocumentPosition`) are the
+  exception: Node's and Attr's are one function, which takes either.
+- **`window.close()` never closes the window.** HTML lets a script close a
+  top-level window whose session history holds a single entry (a page
+  opened in a new window, or the first page of one). In yonder the window
+  is the person's: no page closes it, and `closed` stays false
+  (`browsing.c`; LIBDOM.md § P1-W's rows).
+- **`crypto.subtle` does its work on the call, not in parallel.** Web
+  Cryptography computes "in parallel" and settles from a queued task;
+  yonder computes before the method returns and settles from a task of
+  no delay, one task for every answer waiting, in call order, so the page
+  sees the answer when another browser's page would, its reactions in a
+  task of their own (a page whose own timers hold its whole timer quota
+  has its promise settled on the call instead). What a page can
+  tell: the call holds it for as long as the work takes, which is long
+  only for an input the size of its heap or a PBKDF2 iteration count in
+  the millions. Its consequence, which no page can tell: a BufferSource
+  argument is read where it lies rather than copied, read after the last
+  algorithm is normalized as the spec copies it, since no page code runs
+  between the read and the answer (`subtle.c`; WEB_CRYPTO.md § 5).
+- **An offset inside a character above U+FFFF means the character's
+  start.** CharacterData offsets count UTF-16 code units and such a
+  character is two of them; the tree holds UTF-8, which cannot hold half of
+  one. Where the standard would split the pair into two lone surrogates —
+  `splitText`, `insertData`, `deleteData`, `replaceData`, `substringData`,
+  and a live range's boundary — the offset, and the end a count reaches,
+  snap down to the pair's first unit: `splitText` puts the whole character
+  on the second side, and a deletion ending inside it leaves it whole
+  (RANGE.md § 4, `h_utf16_byte`).

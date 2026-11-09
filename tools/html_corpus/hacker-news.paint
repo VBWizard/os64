@@ -1,0 +1,316 @@
+fill 0 0 800 600 #fefefe
+fill 67 8 666 592 #f6f6ef
+fill 67 8 666 20 #ff6600
+image 67 9 18 18
+text "Hacker News" 93 22 #1010ee
+fill 93 23 84 1 #1010ee
+text "new" 177 22 #1010ee
+fill 177 23 28 1 #1010ee
+text " | " 205 22 #101010
+text "past" 217 22 #1010ee
+fill 217 23 28 1 #1010ee
+text " | " 245 22 #101010
+text "comments" 257 22 #1010ee
+fill 257 23 68 1 #1010ee
+text " | " 325 22 #101010
+text "ask" 337 22 #1010ee
+fill 337 23 24 1 #1010ee
+text " | " 361 22 #101010
+text "show" 373 22 #1010ee
+fill 373 23 36 1 #1010ee
+text " | " 409 22 #101010
+text "jobs" 421 22 #1010ee
+fill 421 23 28 1 #1010ee
+text " | " 449 22 #101010
+text "submit" 461 22 #1010ee
+fill 461 23 44 1 #1010ee
+text "login" 687 22 #1010ee
+fill 687 23 32 1 #1010ee
+text "1." 79 42 #101010
+text "If coding is solved, what now?: Measuring the sloppiness of code" 87 42 #1010ee
+fill 87 43 432 1 #1010ee
+text " (" 519 42 #101010
+text "earendil.com" 531 42 #1010ee
+fill 531 43 84 1 #1010ee
+text ")" 615 42 #101010
+text "37 points" 87 62 #101010
+text " by " 147 62 #101010
+text "doppp" 171 62 #1010ee
+fill 171 63 40 1 #1010ee
+text " " 211 62 #101010
+text "44 minutes ago" 215 62 #1010ee
+fill 215 63 100 1 #1010ee
+text " " 315 62 #101010
+text "| " 319 62 #101010
+text "hide" 327 62 #1010ee
+fill 327 63 28 1 #1010ee
+text " | " 355 62 #101010
+text "20 comments" 367 62 #1010ee
+fill 367 63 92 1 #1010ee
+text "2." 75 82 #101010
+text "The Waymo effect: how AI is quietly making research less collaborative" 87 82 #1010ee
+fill 87 83 468 1 #1010ee
+text " (" 555 82 #101010
+text "researchagenda.news" 567 82 #1010ee
+fill 567 83 144 1 #1010ee
+text ")" 711 82 #101010
+text "224 points" 87 102 #101010
+text " by " 155 102 #101010
+text "JohnHammersley" 179 102 #1010ee
+fill 179 103 112 1 #1010ee
+text " " 291 102 #101010
+text "3 hours ago" 295 102 #1010ee
+fill 295 103 76 1 #1010ee
+text " " 371 102 #101010
+text "| " 375 102 #101010
+text "hide" 383 102 #1010ee
+fill 383 103 28 1 #1010ee
+text " | " 411 102 #101010
+text "165 comments" 423 102 #1010ee
+fill 423 103 96 1 #1010ee
+text "3." 75 122 #101010
+text "Houthis 'take control' of key island in global shipping route" 87 122 #1010ee
+fill 87 123 380 1 #1010ee
+text " (" 467 122 #101010
+text "bbc.com" 479 122 #1010ee
+fill 479 123 56 1 #1010ee
+text ")" 535 122 #101010
+text "81 points" 87 142 #101010
+text " by " 143 142 #101010
+text "consumer451" 167 142 #1010ee
+fill 167 143 84 1 #1010ee
+text " " 251 142 #101010
+text "44 minutes ago" 255 142 #1010ee
+fill 255 143 100 1 #1010ee
+text " " 355 142 #101010
+text "| " 359 142 #101010
+text "hide" 367 142 #1010ee
+fill 367 143 28 1 #1010ee
+text " | " 395 142 #101010
+text "45 comments" 407 142 #1010ee
+fill 407 143 92 1 #1010ee
+text "4." 75 162 #101010
+text "Logo Programming Language" 87 162 #1010ee
+fill 87 163 188 1 #1010ee
+text " (" 275 162 #101010
+text "media.mit.edu" 287 162 #1010ee
+fill 287 163 92 1 #1010ee
+text ")" 379 162 #101010
+text "25 points" 87 182 #101010
+text " by " 147 182 #101010
+text "azhenley" 171 182 #1010ee
+fill 171 183 60 1 #1010ee
+text " " 231 182 #101010
+text "1 hour ago" 235 182 #1010ee
+fill 235 183 64 1 #1010ee
+text " " 299 182 #101010
+text "| " 303 182 #101010
+text "hide" 311 182 #1010ee
+fill 311 183 28 1 #1010ee
+text " | " 339 182 #101010
+text "3 comments" 351 182 #1010ee
+fill 351 183 84 1 #1010ee
+text "5." 75 202 #101010
+text "So you want to use OpenRouter?" 87 202 #1010ee
+fill 87 203 208 1 #1010ee
+text " (" 295 202 #101010
+text "mmoustafa.com" 307 202 #1010ee
+fill 307 203 104 1 #1010ee
+text ")" 411 202 #101010
+text "353 points" 87 222 #101010
+text " by " 155 222 #101010
+text "player85" 179 222 #1010ee
+fill 179 223 56 1 #1010ee
+text " " 235 222 #101010
+text "7 hours ago" 239 222 #1010ee
+fill 239 223 76 1 #1010ee
+text " " 315 222 #101010
+text "| " 319 222 #101010
+text "hide" 327 222 #1010ee
+fill 327 223 28 1 #1010ee
+text " | " 355 222 #101010
+text "88 comments" 367 222 #1010ee
+fill 367 223 92 1 #1010ee
+text "6." 75 242 #101010
+text "Cherenkov Radiation - traveling faster than light" 87 242 #1010ee
+fill 87 243 308 1 #1010ee
+text " (" 395 242 #101010
+text "iaea.org" 407 242 #1010ee
+fill 407 243 52 1 #1010ee
+text ")" 459 242 #101010
+text "147 points" 87 262 #101010
+text " by " 151 262 #101010
+text "andsoitis" 175 262 #1010ee
+fill 175 263 60 1 #1010ee
+text " " 235 262 #101010
+text "5 hours ago" 239 262 #1010ee
+fill 239 263 76 1 #1010ee
+text " " 315 262 #101010
+text "| " 319 262 #101010
+text "hide" 327 262 #1010ee
+fill 327 263 28 1 #1010ee
+text " | " 355 262 #101010
+text "75 comments" 367 262 #1010ee
+fill 367 263 92 1 #1010ee
+text "7." 75 282 #101010
+text "RTK reports token savings, but our cost benchmarks disagree" 87 282 #1010ee
+fill 87 283 396 1 #1010ee
+text " (" 483 282 #101010
+text "quesma.com" 495 282 #1010ee
+fill 495 283 84 1 #1010ee
+text ")" 579 282 #101010
+text "73 points" 87 302 #101010
+text " by " 147 302 #101010
+text "michalwarda" 171 302 #1010ee
+fill 171 303 84 1 #1010ee
+text " " 255 302 #101010
+text "3 hours ago" 259 302 #1010ee
+fill 259 303 76 1 #1010ee
+text " " 335 302 #101010
+text "| " 339 302 #101010
+text "hide" 347 302 #1010ee
+fill 347 303 28 1 #1010ee
+text " | " 375 302 #101010
+text "42 comments" 387 302 #1010ee
+fill 387 303 92 1 #1010ee
+text "8." 75 322 #101010
+text "Re-Engineering YouTube for the Living Room: Bringing "Chrobalt" to RDK" 87 322 #1010ee
+fill 87 323 464 1 #1010ee
+text " (" 551 322 #101010
+text "collabora.com" 563 322 #1010ee
+fill 563 323 92 1 #1010ee
+text ")" 655 322 #101010
+text "6 points" 87 342 #101010
+text " by " 139 342 #101010
+text "losgehts" 163 342 #1010ee
+fill 163 343 56 1 #1010ee
+text " " 219 342 #101010
+text "44 minutes ago" 223 342 #1010ee
+fill 223 343 100 1 #1010ee
+text " " 323 342 #101010
+text "| " 327 342 #101010
+text "hide" 335 342 #1010ee
+fill 335 343 28 1 #1010ee
+text " | " 363 342 #101010
+text "discuss" 375 342 #1010ee
+fill 375 343 52 1 #1010ee
+text "9." 75 362 #101010
+text "Shopify is moving from React Native back to Swift and Kotlin" 87 362 #1010ee
+fill 87 363 388 1 #1010ee
+text " (" 475 362 #101010
+text "shopify.engineering" 487 362 #1010ee
+fill 487 363 128 1 #1010ee
+text ")" 615 362 #101010
+text "1163 points" 87 382 #101010
+text " by " 155 382 #101010
+text "fnthawar2" 179 382 #1010ee
+fill 179 383 64 1 #1010ee
+text " " 243 382 #101010
+text "1 day ago" 247 382 #1010ee
+fill 247 383 60 1 #1010ee
+text " " 307 382 #101010
+text "| " 311 382 #101010
+text "hide" 319 382 #1010ee
+fill 319 383 28 1 #1010ee
+text " | " 347 382 #101010
+text "848 comments" 359 382 #1010ee
+fill 359 383 100 1 #1010ee
+text "10." 71 402 #101010
+text "Ask HN: Can we please limit the AI news flood?" 87 402 #1010ee
+fill 87 403 308 1 #1010ee
+text "295 points" 87 422 #101010
+text " by " 155 422 #101010
+text "cromka" 179 422 #1010ee
+fill 179 423 48 1 #1010ee
+text " " 227 422 #101010
+text "1 hour ago" 231 422 #1010ee
+fill 231 423 64 1 #1010ee
+text " " 295 422 #101010
+text "| " 299 422 #101010
+text "hide" 307 422 #1010ee
+fill 307 423 28 1 #1010ee
+text " | " 335 422 #101010
+text "159 comments" 347 422 #1010ee
+fill 347 423 96 1 #1010ee
+text "11." 75 442 #101010
+text "iPod Classic 6G in QEMU" 87 442 #1010ee
+fill 87 443 156 1 #1010ee
+text " (" 243 442 #101010
+text "reddit.com" 255 442 #1010ee
+fill 255 443 68 1 #1010ee
+text ")" 323 442 #101010
+text "81 points" 87 462 #101010
+text " by " 143 462 #101010
+text "dmonterocrespo" 167 462 #1010ee
+fill 167 463 104 1 #1010ee
+text " " 271 462 #101010
+text "6 hours ago" 275 462 #1010ee
+fill 275 463 76 1 #1010ee
+text " " 351 462 #101010
+text "| " 355 462 #101010
+text "hide" 363 462 #1010ee
+fill 363 463 28 1 #1010ee
+text " | " 391 462 #101010
+text "12 comments" 403 462 #1010ee
+fill 403 463 88 1 #1010ee
+text "12." 71 482 #101010
+text "Show HN: ClaudeStatsBar: your session is 486k deep and nothing told you" 87 482 #1010ee
+fill 87 483 476 1 #1010ee
+text "(" 87 502 #101010
+text "github.com/field-logic-ltd" 95 502 #1010ee
+fill 95 503 172 1 #1010ee
+text ")" 267 502 #101010
+text "9 points" 87 522 #101010
+text " by " 139 522 #101010
+text "edf13" 163 522 #1010ee
+fill 163 523 32 1 #1010ee
+text " " 195 522 #101010
+text "42 minutes ago" 199 522 #1010ee
+fill 199 523 100 1 #1010ee
+text " " 299 522 #101010
+text "| " 303 522 #101010
+text "hide" 311 522 #1010ee
+fill 311 523 28 1 #1010ee
+text " | " 339 522 #101010
+text "5 comments" 351 522 #1010ee
+fill 351 523 84 1 #1010ee
+text "13." 71 542 #101010
+text "Don't let anyone take away your big box of cables" 87 542 #1010ee
+fill 87 543 324 1 #1010ee
+text " (" 411 542 #101010
+text "jim-nielsen.com" 423 542 #1010ee
+fill 423 543 108 1 #1010ee
+text ")" 531 542 #101010
+text "658 points" 87 562 #101010
+text " by " 155 562 #101010
+text "Brajeshwar" 179 562 #1010ee
+fill 179 563 72 1 #1010ee
+text " " 251 562 #101010
+text "22 hours ago" 255 562 #1010ee
+fill 255 563 84 1 #1010ee
+text " " 339 562 #101010
+text "| " 343 562 #101010
+text "hide" 351 562 #1010ee
+fill 351 563 28 1 #1010ee
+text " | " 379 562 #101010
+text "406 comments" 391 562 #1010ee
+fill 391 563 100 1 #1010ee
+text "14." 71 582 #101010
+text "RISC-V Emulator and Linux System from Scratch" 87 582 #1010ee
+fill 87 583 312 1 #1010ee
+text " (" 399 582 #101010
+text "github.com/werwolv" 411 582 #1010ee
+fill 411 583 136 1 #1010ee
+text ")" 547 582 #101010
+text "22 points" 87 602 #101010
+text " by " 147 602 #101010
+text "Bluestein" 171 602 #1010ee
+text " " 231 602 #101010
+text "4 hours ago" 235 602 #1010ee
+text " " 311 602 #101010
+text "| " 315 602 #101010
+text "hide" 323 602 #1010ee
+text " | " 351 602 #101010
+text "2 comments" 363 602 #1010ee
+-- 3000
+fill 0 3000 800 600 #fefefe

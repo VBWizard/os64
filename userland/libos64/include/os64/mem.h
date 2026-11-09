@@ -77,6 +77,13 @@ int64_t os64_memory(os64_memory_t *out);
 // case every caller has to remember.
 void *os64_malloc(size_t size);
 
+// Return the live block's payload capacity, including alignment slack but
+// excluding allocator metadata. NULL returns zero. Other pointers must be
+// live allocation bases from this heap; invalid pointers end the program
+// through the same validation as free/realloc. No allocation/report counters
+// change. The caller must prevent concurrent free/realloc of this block.
+size_t os64_malloc_size(const void *ptr);
+
 // Release a block from os64_malloc/calloc/realloc. NULL is a no-op; anything
 // else that isn't a live block ends the program (see above).
 void os64_free(void *ptr);
@@ -103,6 +110,12 @@ void os64_heap_init(void);
 // tool a program can call between suspicious operations, not a mode that
 // quietly changes the allocator's behaviour.
 uint64_t os64_heap_verify(void);
+
+// This program's own heap report (os64/heap.h), the figures /proc/<pid>/heap
+// renders, without the text round trip: a program that wants to say what it
+// holds (yonder's page record, MEMORY_CENSUS.md) reads them directly. Never
+// torn. Costs one lock and a copy of the struct.
+void os64_heap_report_copy(os64_heap_report_t *out);
 
 // Tell the kernel where this program's heap report lives, so procfs can
 // render /proc/<pid>/heap. LIBRARY PLUMBING — os64_heap_init calls it once

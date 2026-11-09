@@ -1,0 +1,13 @@
+Selected transfer receipts; byte progress and icon lines omitted.
+Full guest report SHA-256: 4f5161f6e2c8f3fa82b8958a775ee0a7d43801f0fcf761b6208b2f41a95c0c6b
+os64get: 142 files, 6234100 bytes, from 10.0.2.2
+/bin/roam: 63896 bytes, crc 3fd50038, transfer verified
+/lib/libfreetype.so: 1817008 bytes, crc c51aef9f, transfer verified
+/lib/libgzip.so: 50728 bytes, crc ed64f4b5, transfer verified
+/lib/libimage.so: 77520 bytes, crc 407355b5, transfer verified
+/lib/libjpeg.so: 730432 bytes, crc 5b567fb0, transfer verified
+/lib/libmath.so: 150384 bytes, crc 980723f3, transfer verified
+/lib/libos64.so: 1166696 bytes, crc 21446223, transfer verified
+/lib/libpng.so: 26704 bytes, crc 9b9c0aa8, transfer verified
+/lib/libwebp.so: 1786352 bytes, crc 9029a300, transfer verified
+os64get: 1 installed, 141 unchanged, 0 failed

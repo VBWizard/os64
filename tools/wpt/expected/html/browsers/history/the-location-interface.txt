@@ -1,0 +1,75 @@
+# WPT's html/browsers/history/the-location-interface in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/browsers/history/the-location-interface --update
+# rewrites [passing].
+[required]
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): added whole by P7, the
+# location as Location's. Each fails with the switch off (with P7's, the
+# Modern Web's earlier fragment and history work); the passes not listed
+# pass either way.
+location-hash-setter-empty-string.html	Location hash setter with the empty string
+location-non-configurable-toString-valueOf.html	'toString' redefinition with accessor fails
+location-non-configurable-toString-valueOf.html	'valueOf' redefinition with accessor fails
+location-prototype-no-toString-valueOf.html	'toString' accessor property is defined
+location-prototype-no-toString-valueOf.html	'toString' data property is created via [[Set]]
+location-prototype-no-toString-valueOf.html	'valueOf' accessor property is defined
+location-prototype-no-toString-valueOf.html	'valueOf' data property is created via [[Set]]
+location-stringifier.html	Location stringifier 5
+location-symbol-toprimitive.html	Location Symbol.toPrimitive
+location-valueof.html	Location valueOf
+location_assign.html	URL that fails to parse
+location_assign.html	location assign
+location_hash.html	Setting hash should automatically include hash character
+location_hash.html	Setting hash should encode incompatible characters
+location_hash.html	Setting hash to an already encoded value should not double encode it
+location_hash.html	Setting hash which is partially encoded should only encode incompatible characters
+location_hash.html	location hash
+location_hashchange_infinite_loop.html	Setting window.location.hash to same value while handling hashchange event shouldn't cause an infinite loop.
+location_href.html	location href
+location_replace.html	URL that fails to parse
+location_replace.html	location replace
+location_search.html	location search
+[excluded]
+[passing]
+document_location.html	document not in a browsing context
+document_location.html	document.location equals window.location
+location-ancestor-origins-referrerpolicy-unsupported-elements.html	<embed> does not expose contentWindow on initial about:blank
+location-hash-setter-empty-string.html	Location hash setter with the empty string
+location-non-configurable-toString-valueOf.html	'toString' redefinition with accessor fails
+location-non-configurable-toString-valueOf.html	'valueOf' redefinition with accessor fails
+location-protocol-setter-with-colon.sub.html	General setup
+location-prototype-no-toString-valueOf.html	'toString' accessor property is defined
+location-prototype-no-toString-valueOf.html	'toString' data property is created via [[Set]]
+location-prototype-no-toString-valueOf.html	'valueOf' accessor property is defined
+location-prototype-no-toString-valueOf.html	'valueOf' data property is created via [[Set]]
+location-prototype-setting-same-origin.html	Same-origin prerequisite check: the original prototype is accessible
+location-prototype-setting-same-origin.html	Same-origin: setting the prototype to its original value via Object.setPrototypeOf should not throw
+location-prototype-setting-same-origin.html	Same-origin: setting the prototype to its original value via Reflect.setPrototypeOf should return true
+location-prototype-setting-same-origin.html	Same-origin: setting the prototype to its original value via __proto__ should not throw
+location-stringifier.html	Location stringifier
+location-stringifier.html	Location stringifier 1
+location-stringifier.html	Location stringifier 2
+location-stringifier.html	Location stringifier 3
+location-stringifier.html	Location stringifier 4
+location-stringifier.html	Location stringifier 5
+location-symbol-toprimitive.html	Location Symbol.toPrimitive
+location-tojson.html	Location has no toJSON
+location-valueof.html	Location valueOf
+location_assign.html	URL that fails to parse
+location_assign.html	location assign
+location_hash.html	Setting hash should automatically include hash character
+location_hash.html	Setting hash should encode incompatible characters
+location_hash.html	Setting hash to an already encoded value should not double encode it
+location_hash.html	Setting hash which is partially encoded should only encode incompatible characters
+location_hash.html	location hash
+location_hash_set_empty_string.html	window.location.hash is an empty string
+location_hashchange_infinite_loop.html	Setting window.location.hash to same value while handling hashchange event shouldn't cause an infinite loop.
+location_host.html	location host
+location_hostname.html	location hostname
+location_href.html	location href
+location_origin.html	location origin
+location_pathname.html	location pathname
+location_protocol.html	location protocol
+location_replace.html	URL that fails to parse
+location_replace.html	location replace
+location_search.html	location search

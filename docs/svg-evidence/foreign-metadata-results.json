@@ -1,0 +1,66 @@
+{
+  "base": "e7a61cc7",
+  "change": "Exclude foreign-namespace data subtrees from SVG scene, clip and gradient rendering",
+  "regression": {
+    "before": "first foreign metadata case returns SVG_UNSUPPORTED",
+    "after": "15 scene/clip/gradient cases pass; foreignObject, SVG case mismatch and multiple clip silhouettes remain refused"
+  },
+  "native_adapter_suite": "pass",
+  "window_checks": 10991,
+  "window_failures": 0,
+  "sanitizers": [
+    "ASan",
+    "UBSan",
+    "LeakSanitizer"
+  ],
+  "freestanding_build": "pass",
+  "reference": {
+    "browser": "140.0.7339.16",
+    "icons": [
+      {
+        "icon": "users",
+        "mean_absolute_channel_difference": 1.2891666666666666,
+        "source_sha256": "befa223a61329a1a199c90b327e5a72f07a926ca0458b5a6f248ef608775eb46"
+      },
+      {
+        "icon": "heartbeat",
+        "mean_absolute_channel_difference": 0.6239583333333333,
+        "source_sha256": "d8e75457e02987fb08dca484d87c7c451d0cb5211b489f005bc315732af1b8f2"
+      },
+      {
+        "icon": "user-plus",
+        "mean_absolute_channel_difference": 0.851875,
+        "source_sha256": "ca05a795c5a58b1e6659a8ea96146738051164e48fe0bfa91a267428ab69fab0"
+      },
+      {
+        "icon": "list",
+        "mean_absolute_channel_difference": 0.32416666666666666,
+        "source_sha256": "1b78133b733e39f5a8302c815b876244d7fc62aa68793b07d1ae54d9d31e44d8"
+      },
+      {
+        "icon": "trophy",
+        "mean_absolute_channel_difference": 0.7266666666666667,
+        "source_sha256": "c080b3f8cfce90a3d78c7a4b3553132549851b9957a6efd08c0a55d89e63e352"
+      },
+      {
+        "icon": "life-ring",
+        "mean_absolute_channel_difference": 1.3822916666666667,
+        "source_sha256": "cd5e529926a12a9283a07dbc31d285b7c9d985be46e4bf187711c31a71fbc960"
+      },
+      {
+        "icon": "security",
+        "mean_absolute_channel_difference": 0.7075,
+        "source_sha256": "78279759a432c29b2557a09d53ba61e5832033bcd3649824b5b5aa00dd86b9e3"
+      }
+    ],
+    "note": "Original Debian SVG files render successfully; edges differ slightly between rasterizers"
+  },
+  "source_sha256": "a929ca578a86757b133e787744ad793c24f6a4fbffeb5613a212c17b4b014280",
+  "delivery": {
+    "files": 39,
+    "changed_from_image_scale": [
+      "bin/yonder"
+    ]
+  },
+  "hardware_acceptance": "P5: Debian SVG icons and Rust logo verified (2026-10-28). Debian header PNG remains unsupported: openlogo-50.png uses Adam7 interlacing; confirmed with the PNG host harness."
+}

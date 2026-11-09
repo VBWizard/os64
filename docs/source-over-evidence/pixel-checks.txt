@@ -1,0 +1,4 @@
+PASS checker: 256x192 canvas exactly matches reference RGB pixels
+PASS large: 384x288 canvas exactly matches reference RGB pixels
+PASS small: 128x96 canvas exactly matches reference RGB pixels
+PASS JPEG: 96x64 canvas exactly matches Pillow RGB decode

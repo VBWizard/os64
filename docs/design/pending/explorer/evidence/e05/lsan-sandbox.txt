@@ -1,0 +1,5 @@
+==60==LeakSanitizer: checking for leaks==61==Could not attach to thread 60 (errno 1).
+==61==Failed suspending threads.
+==60==LeakSanitizer has encountered a fatal error.
+==60==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==60==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)

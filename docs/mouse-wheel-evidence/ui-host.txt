@@ -1,0 +1,2 @@
+test_ui_text_host: 1482 checks, 0 failures
+Artifacts: /tmp/os64-ui-text-5nendtgl

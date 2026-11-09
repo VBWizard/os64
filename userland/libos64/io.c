@@ -12,8 +12,16 @@
 
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
 {
-    return (long)os64_syscall3(SYSCALL_WRITE, (uint64_t)handle,
-                               (uint64_t)buf, (uint64_t)len);
+    // As with read, the stub states its patience: syscall 3 consumes arg3,
+    // so an unspecified r10 would give an ordinary write an arbitrary wait.
+    return (long)os64_syscall4(SYSCALL_WRITE, (uint64_t)handle,
+                               (uint64_t)buf, (uint64_t)len, OS64_WAIT_FOREVER);
+}
+
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms)
+{
+    return (long)os64_syscall4(SYSCALL_WRITE, (uint64_t)handle,
+                             (uint64_t)buf, (uint64_t)len, timeout_ms);
 }
 
 int64_t os64_read(int32_t handle, void *buf, size_t len)
@@ -181,6 +189,52 @@ int64_t os64_puts(const char *s)
     return os64_write(SYSCALL_HANDLE_CONSOLE_OUT, s, os64_strlen(s));
 }
 
+int64_t os64_write_escaped(int32_t handle, const char *s)
+{
+    static const char hex[] = "0123456789abcdef";
+    // Batched through a small buffer: one write per 256 bytes rather than
+    // one per escape. An escape is at most four bytes, which is the flush
+    // margin below.
+    char out[256];
+    size_t n = 0;
+
+    for (; *s != '\0'; s++)
+    {
+        unsigned char c = (unsigned char)*s;
+        if (n + 4 > sizeof(out))
+        {
+            int64_t r = os64_write(handle, out, n);
+            if (r < 0)
+                return r;
+            n = 0;
+        }
+        switch (c)
+        {
+        case '\n': out[n++] = '\\'; out[n++] = 'n';  break;
+        case '\t': out[n++] = '\\'; out[n++] = 't';  break;
+        case '\r': out[n++] = '\\'; out[n++] = 'r';  break;
+        case '\\': out[n++] = '\\'; out[n++] = '\\'; break;
+        default:
+            if (c < 0x20 || c == 0x7f)
+            {
+                out[n++] = '\\';
+                out[n++] = 'x';
+                out[n++] = hex[c >> 4];
+                out[n++] = hex[c & 0xf];
+            }
+            else
+                out[n++] = (char)c;
+        }
+    }
+    if (n > 0)
+    {
+        int64_t r = os64_write(handle, out, n);
+        if (r < 0)
+            return r;
+    }
+    return 0;
+}
+
 // The screen layer's one verb (see io.h for the doctrine and the rename
 // story). The SYSCALL number and its "printat" table name stay — the wire
 // is stable; only the identifier learned to say which layer it addresses.
@@ -307,17 +361,13 @@ int64_t os64_unlink(const char *path)
 // Give a file a different name, possibly in a different directory of the
 // same filesystem. Relative paths resolve against the cwd, like open's.
 //
-// The guarantee worth knowing: replacing an existing regular file happens in
-// ONE motion — `newpath` never stops resolving, not even for an instant.
-// That is what makes the safe-publish recipe work:
+// On ext2, replacing an existing regular file happens in one motion. FAT's
+// legacy replacement removes the destination first, so callers that require
+// safe publication use os64_rename_with_flags below:
 //
 //     h = os64_open("report.part", "w");   ...write, verify...
-//     os64_rename("report.part", "report");
-//
-// A crash anywhere in that sequence leaves either the old `report` intact or
-// the new one complete, never a half-written impostor wearing the name. Unix
-// had no such call for its first decade (link-then-unlink, with the window
-// in the middle); 4.2BSD added rename(2) to close it, and this is that.
+//     os64_rename_with_flags("report.part", "report",
+//                            OS64_RENAME_REQUIRE_ATOMIC_REPLACE);
 //
 // Returns 0 on success, negative on refusal: a read-only filesystem, a
 // source that isn't there, the two paths on DIFFERENT filesystems (that's a
@@ -334,6 +384,27 @@ int64_t os64_unlink(const char *path)
 int64_t os64_rename(const char *oldpath, const char *newpath)
 {
     return (long)os64_syscall2(SYSCALL_RENAME, (uint64_t)oldpath, (uint64_t)newpath);
+}
+
+// The separate syscall number asks for a stronger destination policy. Keeping
+// the original wrapper on syscall 43 is intentional: unused registers in an
+// old raw call were never defined, so only a new door can preserve old binaries.
+int64_t os64_rename_with_flags(const char *oldpath, const char *newpath,
+                               uint64_t flags)
+{
+    return (long)os64_syscall3(SYSCALL_RENAME_WITH_FLAGS, (uint64_t)oldpath,
+                               (uint64_t)newpath, flags);
+}
+
+// The namespace verbs (io.h has the contract; os64/mount.h the vocabulary).
+int64_t os64_mount(const char *what, const char *where, uint64_t flags)
+{
+    return (long)os64_syscall3(SYSCALL_MOUNT, (uint64_t)what, (uint64_t)where, flags);
+}
+
+int64_t os64_unmount(const char *where)
+{
+    return (long)os64_syscall1(SYSCALL_UNMOUNT, (uint64_t)where);
 }
 
 // Create a directory. Relative paths resolve against the cwd, like open's.

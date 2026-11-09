@@ -17,14 +17,18 @@ _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
                "gui/window.h and abi os64/gui.h disagree on the title capacity");
 #include "gui/surface.h"
 #include "gui/compositor.h"
+#include "gui/visible.h"
 
 #include "CONFIG.h"
 #include "kernel.h"      // kTicksSinceStart — the stamp on a synthesized event
 #include "kmalloc.h"
 #include "memset.h"
 #include "printd.h"
-#include "scheduler.h"   // scheduler_wake_isleep_thread — event_wait's alarm bell
+#include "scheduler.h"   // scheduler_wake_or_owe — event_wait's alarm bell
 #include "strcpy.h"
+#include "strcmp.h"      // strncmp — wm_set_title's no-change test
+#include <limits.h>
+#include "os64/text_profile.h"
 #include "video.h"       // kFrameBuffer — the screen IS the canvas capacity
 
 extern struct Framebuffer kFrameBuffer;
@@ -36,16 +40,195 @@ static window_t *s_bottom = NULL;
 static window_t *s_focused = NULL;
 static uint32_t s_next_id = 1;
 
-// Chrome colors: the focused window gets the saturated titlebar. The four
-// WINDOW_TITLEBAR_*/WINDOW_BORDER_* values moved to window.h when the Alt+Tab
-// switcher became a second consumer (see the palette note there); this one
-// stays private because nothing outside window.c paints a client area.
+static os64_decor_view_t s_decoration;
+
+static uint32_t decoration_min_width(const os64_decor_view_t *v,uint32_t flags)
+{
+    if(!wm_has_titlebar(flags))return 0;
+    if(!v->header)return flags & GUI_WINDOW_HAS_SETTINGS ? 64 : 0;
+    os64_decor_header_t h;
+    os64_decor_filter(v->header,(flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
+    return os64_decor_min_width(&h);
+}
+static rect_t fallback_settings(const window_t *w)
+{
+    return (rect_t){w->frame.w-26,GUI_BORDER_WIDTH+2,20,GUI_TITLEBAR_HEIGHT-GUI_BORDER_WIDTH-4};
+}
+
+static os64_decor_insets_t decoration_insets(const os64_decor_view_t *v, uint32_t flags)
+{
+	if (flags & GUI_WINDOW_DESKTOP) return (os64_decor_insets_t){0};
+	if (flags & GUI_WINDOW_NO_DECORATIONS) return (os64_decor_insets_t){1,1,1,1};
+	if (v->header) {
+        os64_decor_header_t h;
+        os64_decor_filter(v->header,(flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
+        return os64_decor_insets(&h,true);
+    }
+	return (os64_decor_insets_t){GUI_BORDER_WIDTH,GUI_TITLEBAR_HEIGHT,GUI_BORDER_WIDTH,GUI_BORDER_WIDTH};
+}
+
+os64_decor_insets_t wm_decoration_insets(uint32_t flags)
+{ return decoration_insets(&s_decoration, flags); }
+uint32_t wm_titlebar_color(bool active)
+{
+	if (s_decoration.header) return active?s_decoration.header->active_face:s_decoration.header->inactive_face;
+	return active?WINDOW_TITLEBAR_FOCUSED:WINDOW_TITLEBAR_UNFOCUSED;
+}
+uint32_t wm_border_color(bool active)
+{
+	if (s_decoration.header) return active?s_decoration.header->active_border:s_decoration.header->inactive_border;
+	return active?WINDOW_BORDER_FOCUSED:WINDOW_BORDER_UNFOCUSED;
+}
+
+uint32_t wm_decoration_min_width(uint32_t flags)
+{
+	return decoration_min_width(&s_decoration,flags);
+}
+uint32_t wm_decoration_hit(const window_t *w,int32_t x,int32_t y)
+{
+	if (!wm_has_titlebar(w->flags) || wm_is_hidden(w)) return 0;
+	int64_t lx=(int64_t)x-w->frame.x,ly=(int64_t)y-w->frame.y;
+	if (lx<0 || ly<0 || lx>=w->frame.w || ly>=w->frame.h) return 0;
+    if(!s_decoration.header) {
+        rect_t r=fallback_settings(w);
+        return (w->flags & GUI_WINDOW_HAS_SETTINGS) && lx>=r.x && ly>=r.y &&
+            lx<r.x+r.w && ly<r.y+r.h ? OS64_DECOR_SETTINGS : 0;
+    }
+    os64_decor_header_t h;
+    os64_decor_filter(s_decoration.header,(w->flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
+	os64_decor_layout_t layout;
+	if (!os64_decor_layout(&h,w->frame.w,w->frame.h,true,&layout)) return 0;
+	return os64_decor_hit(&h,&layout,(int32_t)lx,(int32_t)ly);
+}
+uint32_t wm_decoration_disabled(const window_t *w)
+{
+	rect_t target=(w->flags & GUI_WINDOW_MAXIMIZED)?w->restoreFrame:
+		(rect_t){0,0,(int32_t)kFrameBuffer.width,(int32_t)kFrameBuffer.height};
+	rect_t clamped=wm_clamp_frame(w,target);
+	return clamped.w!=target.w || clamped.h!=target.h ? (1u<<OS64_DECOR_MAXIMIZE):0;
+}
+void wm_decoration_state(window_t *w,uint32_t hover,uint32_t pressed)
+{
+	if (w->decor_hover==hover && w->decor_pressed==pressed) return;
+	w->decor_hover=hover;w->decor_pressed=pressed;
+	gui_damage_add_locked((rect_t){w->frame.x,w->frame.y,w->frame.w,wm_chrome_top(w->flags)});
+}
+void wm_decoration_action(window_t *w,uint32_t action,uint64_t tick)
+{
+	if (!w || (w->flags & GUI_WINDOW_DESKTOP) || wm_is_hidden(w) ||
+		((w->flags & GUI_WINDOW_POPUP) && action!=OS64_DECOR_CLOSE)) return;
+	if (action==OS64_DECOR_CLOSE) {
+		input_event_t close={.type=INPUT_EVENT_WINDOW_CLOSE,.tick=tick};
+		wm_deliver_event(w,&close);
+    } else if(action==OS64_DECOR_SETTINGS && (w->flags & GUI_WINDOW_HAS_SETTINGS)) {
+        input_event_t request={.type=INPUT_EVENT_SETTINGS,.tick=tick};
+        wm_deliver_event(w,&request);
+	} else if (action==OS64_DECOR_MINIMIZE) wm_set_minimized(w,true);
+	else if (action==OS64_DECOR_MAXIMIZE) wm_set_maximized(w,!(w->flags & GUI_WINDOW_MAXIMIZED));
+	else if (action==OS64_DECOR_PIN) wm_set_pinned(w,!(w->flags & GUI_WINDOW_PINNED));
+}
+
+static bool decoration_frame(rect_t old, os64_decor_insets_t before,
+	os64_decor_insets_t after, bool maximized, rect_t *out)
+{
+	int64_t x=(int64_t)old.x+before.left-after.left;
+	int64_t y=(int64_t)old.y+before.top-after.top;
+	int64_t width=(int64_t)old.w-before.left-before.right+after.left+after.right;
+	int64_t height=(int64_t)old.h-before.top-before.bottom+after.top+after.bottom;
+	if (maximized) { x=y=0; width=kFrameBuffer.width; height=kFrameBuffer.height; }
+	else {
+		int64_t grip=width<32?width:32;
+		if (x+width<grip) x=grip-width;
+		if (x>(int64_t)kFrameBuffer.width-grip) x=(int64_t)kFrameBuffer.width-grip;
+		if (y<0) y=0;
+		if (y>(int64_t)kFrameBuffer.height-after.top) y=(int64_t)kFrameBuffer.height-after.top;
+	}
+	if (width<=after.left+after.right || height<=after.top+after.bottom ||
+		width>wm_dim_max() || height>wm_dim_max() || after.top>=(int32_t)kFrameBuffer.height ||
+		x<INT32_MIN || y<INT32_MIN || x+width>INT32_MAX || y+height>INT32_MAX) return false;
+	*out=(rect_t){(int32_t)x,(int32_t)y,(int32_t)width,(int32_t)height};
+	return true;
+}
+
+bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
+{
+	if (!view || !view->header || !retired) return false;
+	*retired=NULL;
+	// Preflight the same deterministic geometry that the commit pass uses.
+	for (window_t *w=s_top;w;w=w->below) {
+		if (!wm_has_titlebar(w->flags)) continue;
+		os64_decor_insets_t old=wm_decoration_insets(w->flags), next=decoration_insets(view,w->flags);
+		rect_t frame,restore;
+		bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
+		if (!decoration_frame(w->frame,old,next,maximized,&frame)) {
+			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): frame geometry\n", w->id, w->title);
+			return false;
+		}
+		if (frame.w<(int32_t)decoration_min_width(view,w->flags)) {
+			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): decoration minimum width\n", w->id, w->title);
+			return false;
+		}
+		int32_t cw=frame.w-next.left-next.right,ch=frame.h-next.top-next.bottom;
+		if (cw>(int32_t)w->canvas_cap_w || ch>(int32_t)w->canvas_cap_h) {
+			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): canvas capacity\n", w->id, w->title);
+			return false;
+		}
+		if (maximized && (cw<(int32_t)w->min_content_w || ch<(int32_t)w->min_content_h)) {
+			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): maximized content minimum\n", w->id, w->title);
+			return false;
+		}
+		if (maximized && (!decoration_frame(w->restoreFrame,old,next,false,&restore) ||
+			restore.w<(int32_t)decoration_min_width(view,w->flags))) {
+			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): restore geometry or minimum width\n", w->id, w->title);
+			return false;
+		}
+	}
+	os64_decor_view_t previous=s_decoration;
+	gui_decoration_changed();
+	s_decoration=*view;
+	for (window_t *w=s_top;w;w=w->below) {
+		if (!wm_has_titlebar(w->flags)) continue;
+		os64_decor_insets_t old=decoration_insets(&previous,w->flags), next=wm_decoration_insets(w->flags);
+		rect_t frame=w->frame,old_frame=w->frame;
+		bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
+		(void)decoration_frame(old_frame,old,next,maximized,&frame);
+		if (maximized) {
+			(void)decoration_frame(w->restoreFrame,old,next,false,&w->restoreFrame);
+			(void)wm_resize(w,frame);
+		} else w->frame=frame;
+		gui_damage_add_locked(rect_union(old_frame,frame));
+	}
+	*retired=(void *)previous.header;
+	return true;
+}
+
+// Initial client pixels are independent of the installed decoration palette.
 #define WINDOW_CONTENT_INITIAL    GUI_COLOR_LIGHT_GRAY
 
 // Focus recency, see window_t.focusSerial. EVERY assignment to s_focused
 // goes through here so the serial can never be forgotten at one site —
 // which is the whole reason it is a function and not a field write.
 static uint64_t s_focus_serial = 0;
+window_t *wm_focus_root(window_t *w)
+{
+    while (w && w->popup_owner_id) {
+        window_t *parent = wm_window_by_id(w->popup_owner_id);
+        if (!parent || parent->owner != w->owner || parent->retiring) break;
+        w = parent;
+    }
+    return w;
+}
+
+static void damage_focus_chain(window_t *w)
+{
+    while (w) {
+        gui_damage_add_locked(w->frame);
+        window_t *parent = wm_window_by_id(w->popup_owner_id);
+        if (!parent || parent->owner != w->owner || parent->retiring) break;
+        w = parent;
+    }
+}
+
 static void focus_window(window_t *w)
 {
 	window_t *old = s_focused;
@@ -55,7 +238,7 @@ static void focus_window(window_t *w)
 
 	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
 	// passes through here — birth, death, raise — which is why the event is
-	// raised here and not at the three callers: a popup menu must learn that
+	// raised here so each caller shares the rule: a popup menu must learn that
 	// a NEW window stole its focus just as surely as that a click did. The
 	// sibling bit is the same-owner test; `w` may be NULL when the last
 	// window dies. wm_deliver_event's wake is legal from a client syscall
@@ -63,6 +246,8 @@ static void focus_window(window_t *w)
 	// variant, the one pipe_read uses from thread context.
 	if (old == w)
 		return;
+    damage_focus_chain(old);
+    damage_focus_chain(w);
 	// 0 is the not-a-task sentinel, never a real owner, so two windows
 	// carrying it are strangers rather than siblings — otherwise a popup
 	// would decline to dismiss for a window that belongs to nobody.
@@ -71,7 +256,8 @@ static void focus_window(window_t *w)
 	if (old != NULL) {
 		input_event_t ev = {
 			.type  = INPUT_EVENT_WINDOW_FOCUS,
-			.focus = { .gained = 0, .sibling = sibling ? 1 : 0 },
+			.focus = { .gained = 0, .sibling = sibling ? 1 : 0,
+                       .other_handle = sibling ? w->client_handle : 0 },
 			.tick  = kTicksSinceStart,
 		};
 		wm_deliver_event(old, &ev);
@@ -79,7 +265,8 @@ static void focus_window(window_t *w)
 	if (w != NULL) {
 		input_event_t ev = {
 			.type  = INPUT_EVENT_WINDOW_FOCUS,
-			.focus = { .gained = 1, .sibling = sibling ? 1 : 0 },
+			.focus = { .gained = 1, .sibling = sibling ? 1 : 0,
+                       .other_handle = sibling ? old->client_handle : 0 },
 			.tick  = kTicksSinceStart,
 		};
 		wm_deliver_event(w, &ev);
@@ -151,29 +338,38 @@ static bool at_band_top(const window_t *w)
 	return w->above == NULL || band_of(w->above) > band_of(w);
 }
 
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner)
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
+                    uint16_t client_handle, uint32_t popup_owner_id, bool popup_capacity)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
 	int32_t content_w = frame.w - 2 * wm_border_width(flags);
 	int32_t content_h = frame.h - wm_chrome_top(flags) - wm_border_width(flags);
-	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
+	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT ||
+		frame.w<(int32_t)wm_decoration_min_width(flags))
 		return NULL;
 
+	if (s_next_id == 0) return NULL; // IDs held by owner links must not wrap.
 	window_t *w = kmalloc(sizeof(window_t));
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
-	w->owner = owner;   // before the focus grab below, which reports siblings by it
+	w->min_content_w = GUI_WINDOW_MIN_CONTENT_W;
+	w->min_content_h = GUI_WINDOW_MIN_CONTENT_H;
+	w->owner = owner;
+    w->client_handle = client_handle;
+    w->popup_owner_id = popup_owner_id;
 
 	// Both stores are reserved at CAPACITY and report the content size — the
 	// reservation that makes resize free of allocation, of pixel motion, and
 	// (for the task-backed canvas gui_window_create swaps in below) of any
 	// need to unmap a live user page. See canvas_cap_w's comment in window.h.
 	uint32_t cap_w, cap_h;
-	wm_canvas_capacity_for(content_w, content_h, &cap_w, &cap_h);
+	wm_canvas_capacity_for(content_w, content_h, popup_capacity, &cap_w, &cap_h);
 	w->canvas_cap_w = cap_w;
 	w->canvas_cap_h = cap_h;
+    if (w->min_content_w > cap_w) w->min_content_w = cap_w;
+    if (w->min_content_h > cap_h) w->min_content_h = cap_h;
 
 	if (surface_init_capacity(&w->content, (uint32_t)content_w, (uint32_t)content_h,
 	                          cap_w, cap_h) != 0) {
@@ -210,20 +406,11 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	// declining boot would leave keys routing to NULL). See the flag's
 	// comment in window.h for the no-mouse race that earned it.
 	//
-	// TITLEBARS REPAINT ON FOCUS CHANGE — the rule with three doors, and
-	// this was the last to learn it (2026-08-19, Chris's find). wm_raise
-	// always damaged the dethroned window; wm_destroy learned it 8/17 when
-	// the first window to DIE holding focus left a half-gray, half-blue
-	// titlebar; and this door — focus stolen AT BIRTH — hid until the first
-	// focus-taking window was ever born onto a live desktop with a focused
-	// window standing visible: `gclock &` typed inside gterm, whose titlebar
-	// then kept wearing the focused blue in front of an eyewitness.
-	window_t *old_focus = s_focused;
+	// focus_window damages the old and new owner chains; birth also damages
+	// the new surface when START_UNFOCUSED leaves focus elsewhere.
 	if (!(flags & GUI_WINDOW_START_UNFOCUSED) || s_focused == NULL)
 		focus_window(w);
 	gui_damage_add_locked(w->frame);
-	if (s_focused == w && old_focus != NULL && old_focus != w)
-		gui_damage_add_locked(old_focus->frame);
 
 	printd(DEBUG_GUI, "wm: created window %u '%s' at (%d,%d) %dx%d\n",
 		w->id, w->title, frame.x, frame.y, frame.w, frame.h);
@@ -239,21 +426,23 @@ void wm_destroy(window_t *w)
 	gui_grab_release(w);
 
 	gui_damage_add_locked(w->frame);   // repaint what the window covered
-	if (s_focused == w)
-		focus_window(w->below ? w->below : s_top);
-	unlink_window(w);
-	if (s_focused == w)
-		focus_window(s_top);
-	// If focus just moved, the inheriting window's titlebar changes color —
-	// damage it, or only the slice under the dead window's frame repaints.
-	// wm_raise always knew this; this path never did, and nobody noticed
-	// until 2026-08-17 because no window had ever DIED holding focus: the
-	// first ring-3 client exiting mid-focus left the console wearing half a
-	// gray titlebar and half a blue one, split exactly at the dead window's
-	// old edge — a screenshot's worth of exactly where damage tracking
-	// stopped.
-	if (s_focused != NULL && s_focused != w)
-		gui_damage_add_locked(s_focused->frame);
+    w->retiring = true;
+    if (s_focused == w) {
+        window_t *next = wm_window_by_id(w->popup_owner_id);
+        if (next && (next->owner != w->owner || next->retiring || wm_is_hidden(next)))
+            next = NULL;
+        if (next) wm_raise(next);
+        else {
+            next = w->below;
+            while (next && (next->retiring || wm_is_hidden(next))) next = next->below;
+            if (!next) {
+                next = s_top;
+                while (next && (next->retiring || wm_is_hidden(next))) next = next->below;
+            }
+            focus_window(next);
+        }
+    }
+    unlink_window(w);
 	surface_free(&w->canvas);
 	surface_free(&w->content);
 	kfree(w);
@@ -317,6 +506,27 @@ static bool popup_declines(const window_t *w, const char *verb)
 	return true;
 }
 
+void wm_set_title(window_t *w, const char *title, bool utf8)
+{
+	char next[GUI_WINDOW_TITLE_MAX];
+	strncpy(next, title ? title : "", GUI_WINDOW_TITLE_MAX);
+	next[GUI_WINDOW_TITLE_MAX - 1] = '\0';
+	uint32_t flags = utf8 ? (w->flags | GUI_WINDOW_TITLE_UTF8)
+	                      : (w->flags & ~GUI_WINDOW_TITLE_UTF8);
+	if (flags == w->flags && strncmp(next, w->title, GUI_WINDOW_TITLE_MAX) == 0)
+		return;
+	strncpy(w->title, next, GUI_WINDOW_TITLE_MAX);
+	w->flags = flags;
+	// The encoding bit changes how the text is drawn and no inset
+	// (decoration_insets does not read it), so the frame and content stay
+	// put and only the titlebar is repainted. A window showing no titlebar
+	// has nothing to repaint; showing it again repaints the frame.
+	if (wm_has_titlebar(w->flags))
+		gui_damage_add_locked((rect_t){w->frame.x, w->frame.y, w->frame.w,
+		                               wm_chrome_top(w->flags)});
+	printd(DEBUG_GUI, "wm: window %u retitled '%s'\n", w->id, w->title);
+}
+
 void wm_set_pinned(window_t *w, bool pinned)
 {
 	if (desktop_declines(w, "pin"))
@@ -334,37 +544,35 @@ void wm_set_pinned(window_t *w, bool pinned)
 	unlink_window(w);
 	link_on_top(w);
 	gui_damage_add_locked(w->frame);
+    input_event_t changed={.type=INPUT_EVENT_WINDOW_PIN_CHANGED,.tick=kTicksSinceStart};
+    wm_deliver_event(w,&changed);
 }
 
 void wm_set_decorated(window_t *w, bool decorated)
 {
-	// The desktop has no chrome to toggle. wm_has_titlebar answers false for
-	// it whatever this bit says (rd3), so flipping the bit would change
-	// nothing on the glass — and a toggle that changes nothing but the flag
-	// word is worse than one that is refused: get_state would report a
-	// decoration the window does not have. (Before rd3, composite_one read
-	// the bit directly, and the toggle really did paint a "desktop" titlebar
-	// across the wallpaper that doubled as a drag handle — Fable's review,
-	// 2026-08-25. The decline predates the fix that made it cosmetic.)
-	if (desktop_declines(w, "decorate") || popup_declines(w, "decorate"))
-		return;
-	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
-		return;
-	rect_t old = w->frame;
-	// The content's screen position is the invariant; the frame's top edge
-	// moves by the difference between the two chrome heights to keep it so.
-	int32_t before = wm_chrome_top(w->flags);
-	if (decorated)
-		w->flags &= ~GUI_WINDOW_NO_DECORATIONS;
-	else
-		w->flags |= GUI_WINDOW_NO_DECORATIONS;
-	int32_t after = wm_chrome_top(w->flags);
-	w->frame.y += before - after;
-	w->frame.h += after - before;
-	gui_damage_add_locked(rect_union(old, w->frame));
+	if (desktop_declines(w,"decorate") || popup_declines(w,"decorate")) return;
+	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS)) return;
+	uint32_t next_flags=decorated?w->flags & ~GUI_WINDOW_NO_DECORATIONS:w->flags | GUI_WINDOW_NO_DECORATIONS;
+	os64_decor_insets_t before=wm_decoration_insets(w->flags),after=wm_decoration_insets(next_flags);
+	bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
+	rect_t frame,restore=w->restoreFrame,old=w->frame;
+	if (!decoration_frame(old,before,after,maximized,&frame) ||
+		frame.w<(int32_t)wm_decoration_min_width(next_flags)) return;
+	if (maximized) {
+		int32_t cw=frame.w-after.left-after.right,ch=frame.h-after.top-after.bottom;
+		if (cw<(int32_t)w->min_content_w || ch<(int32_t)w->min_content_h ||
+			cw>(int32_t)w->canvas_cap_w || ch>(int32_t)w->canvas_cap_h ||
+			!decoration_frame(restore,before,after,false,&restore) ||
+			restore.w<(int32_t)wm_decoration_min_width(next_flags)) return;
+	}
+	gui_decoration_changed();
+	w->flags=next_flags;
+	if (maximized) { w->restoreFrame=restore; (void)wm_resize(w,frame); }
+	else w->frame=frame;
+	gui_damage_add_locked(rect_union(old,frame));
 }
 
-void wm_set_maximized(window_t *w, bool maximized)
+static void set_maximized(window_t *w, bool maximized, bool raise)
 {
 	// A desktop already fills the screen; "maximize" would be a no-op that
 	// still clobbered restoreFrame, and un-maximizing would then shrink your
@@ -374,17 +582,43 @@ void wm_set_maximized(window_t *w, bool maximized)
 	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
 		return;
 	if (maximized) {
+		if (wm_decoration_disabled(w) & (1u<<OS64_DECOR_MAXIMIZE)) return;
+		gui_geometry_changing(w);
 		w->restoreFrame = w->frame;
 		w->flags |= GUI_WINDOW_MAXIMIZED;
-		// Raised as well: a maximized window you cannot see (focused but
-		// stacked under its siblings, which START_UNFOCUSED makes possible)
-		// answers the chord with nothing visible happening.
-		wm_raise(w);
+		// Interactive maximization raises and focuses the window so the
+		// action is visible. Birth already placed it atop its band and
+		// decided focus, including START_UNFOCUSED's existing-owner case.
+		if (raise) wm_raise(w);
 		wm_resize(w, (rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
 	} else {
-		w->flags &= ~GUI_WINDOW_MAXIMIZED;
-		wm_resize(w, w->restoreFrame);
+		// The saved rectangle may predate a larger application minimum (for
+		// example, after changing fonts). Keep the maximized state and saved
+		// rectangle until Restore can honor that size without clamping it.
+		rect_t target = wm_clamp_frame(w, w->restoreFrame);
+		if (target.w != w->restoreFrame.w || target.h != w->restoreFrame.h) {
+			printd(DEBUG_GUI, "wm: window %u restore refused: saved content %dx%d, minimum %ux%u\n",
+			       w->id, w->restoreFrame.w - 2 * wm_border_width(w->flags),
+			       w->restoreFrame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags),
+			       w->min_content_w, w->min_content_h);
+			return;
+		}
+		bool already_there = target.x == w->frame.x && target.y == w->frame.y &&
+		                     target.w == w->frame.w && target.h == w->frame.h;
+		gui_geometry_changing(w);
+		if (already_there || wm_resize(w, target))
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	}
+}
+
+void wm_set_maximized(window_t *w, bool maximized)
+{
+	set_maximized(w, maximized, true);
+}
+
+void wm_maximize_at_birth(window_t *w)
+{
+	set_maximized(w, true, false);
 }
 
 void wm_set_minimized(window_t *w, bool minimized)
@@ -396,6 +630,8 @@ void wm_set_minimized(window_t *w, bool minimized)
 	if (minimized == wm_is_hidden(w))
 		return;
 	if (minimized) {
+		gui_geometry_changing(w);
+		gui_cancel_decoration(w);
 		w->flags |= GUI_WINDOW_MINIMIZED;
 		gui_damage_add_locked(w->frame);   // what it covered comes back
 		if (s_focused == w) {
@@ -419,6 +655,7 @@ void wm_set_minimized(window_t *w, bool minimized)
 
 void wm_move(window_t *w, int32_t x, int32_t y)
 {
+	gui_cancel_decoration(w);
 	// A moved window is no longer "the maximized one": the user took its
 	// geometry back (see GUI_WINDOW_MAXIMIZED). Cleared before the move so a
 	// restore can never return it to a place it has since left.
@@ -454,11 +691,11 @@ uint32_t wm_dim_max(void)
 	return m;
 }
 
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, bool popup_capacity,
                             uint32_t *cap_w, uint32_t *cap_h)
 {
-	uint32_t cw = kFrameBuffer.width;
-	uint32_t ch = kFrameBuffer.height;
+    uint32_t cw = popup_capacity ? (uint32_t)content_w : kFrameBuffer.width;
+    uint32_t ch = popup_capacity ? (uint32_t)content_h : kFrameBuffer.height;
 
 	// Never smaller than what the window already is, or the surface it is
 	// asked to hold would not fit its own reservation.
@@ -483,13 +720,15 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	int32_t content_w = frame.w - 2 * wm_border_width(w->flags);
 	int32_t content_h = frame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags);
 
+	int32_t decor_min=(int32_t)wm_decoration_min_width(w->flags)-2*wm_border_width(w->flags);
+	if (content_w<decor_min) content_w=decor_min;
 	// Clamp into [minimum, reservation]. Clamping rather than refusing is
 	// deliberate: this is driven by a mouse, and a drag that runs past a
 	// limit should STOP at the limit, not abandon the whole gesture.
-	if (content_w < GUI_WINDOW_MIN_CONTENT_W)
-		content_w = GUI_WINDOW_MIN_CONTENT_W;
-	if (content_h < GUI_WINDOW_MIN_CONTENT_H)
-		content_h = GUI_WINDOW_MIN_CONTENT_H;
+	if (content_w < (int32_t)w->min_content_w)
+		content_w = (int32_t)w->min_content_w;
+	if (content_h < (int32_t)w->min_content_h)
+		content_h = (int32_t)w->min_content_h;
 	if ((uint32_t)content_w > w->canvas_cap_w)
 		content_w = (int32_t)w->canvas_cap_w;
 	if ((uint32_t)content_h > w->canvas_cap_h)
@@ -500,6 +739,30 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	frame.w = content_w + 2 * wm_border_width(w->flags);
 	frame.h = content_h + wm_chrome_top(w->flags) + wm_border_width(w->flags);
 	return frame;
+}
+
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
+{
+    uint32_t floor_w = GUI_WINDOW_MIN_CONTENT_W, floor_h = GUI_WINDOW_MIN_CONTENT_H;
+    if (w->flags & GUI_WINDOW_POPUP) {
+        if (floor_w > w->canvas_cap_w) floor_w = w->canvas_cap_w;
+        if (floor_h > w->canvas_cap_h) floor_h = w->canvas_cap_h;
+    }
+    if (width < floor_w) width = floor_w;
+    if (height < floor_h) height = floor_h;
+	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
+		return false;
+	if (width != w->min_content_w || height != w->min_content_h) {
+		gui_geometry_changing(w);
+		// An outline computed with the previous limits must not commit later.
+		gui_cancel_resize(w);
+		gui_cancel_decoration(w);
+		gui_damage_add_locked(w->frame);
+		w->min_content_w = width;
+		w->min_content_h = height;
+	}
+	wm_resize(w, w->frame);
+	return true;
 }
 
 bool wm_resize(window_t *w, rect_t frame)
@@ -520,6 +783,7 @@ bool wm_resize(window_t *w, rect_t frame)
 	    (uint32_t)content_w == old_cw && (uint32_t)content_h == old_ch)
 		return false;   // a gesture that ended where it started
 
+	gui_cancel_decoration(w);
 	// The resize itself: two size fields. No allocation, no copy, no pixel
 	// relocation — the reservation already holds every pixel either surface
 	// will ever address, at offsets that do not move because pitch does not
@@ -558,10 +822,9 @@ bool wm_resize(window_t *w, rect_t frame)
 	w->frame = frame;
 	gui_damage_add_locked(rect_union(old_frame, w->frame));
 
-	// Tell the owner. This is the ONLY way an app finds out — there is no
-	// polling interface for geometry, deliberately (see the event type's
-	// comment in input.h). An app that ignores it keeps drawing a correct
-	// picture at the wrong size, which is a bug with a very obvious shape.
+	// Tell the owner to refresh its surface and layout after a size change.
+	// This covers automatic adjustments as well as gestures; the compositor
+	// separately reports completed user placement for preference persistence.
 	input_event_t ev = {
 		.type = INPUT_EVENT_WINDOW_RESIZE,
 		.resize = { .w = content_w, .h = content_h },
@@ -619,11 +882,9 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 	if (max > ALTTAB_RING_MAX)
 		max = ALTTAB_RING_MAX;
 	for (window_t *w = s_top; w; w = w->below) {
-		// The desktop is not something you tab TO — it is what is left when
-		// you tab away from everything. Listing it would put a permanent
-		// last entry in every switcher strip and make Alt+Tab between two
-		// windows a three-stop walk.
-		if (w->flags & GUI_WINDOW_DESKTOP)
+		// Alt+Tab selects ordinary applications; their transient popups and
+		// the desktop are not independent switcher destinations.
+		if (w->flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_POPUP))
 			continue;
 		size_t i = n;
 		while (i > 0 && serials[i - 1] < w->focusSerial) {
@@ -639,56 +900,42 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
-	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
-	if (next == w->evt_tail) {
-		// FULL. Drop-newest is right for a stream — an unread mouse move is
-		// a sample nobody misses — and wrong for a focus transition, which
-		// is state the client cannot reconstruct and which a popup's whole
-		// dismissal hangs on: lose it and the menu stays up, pinned, with
-		// nothing left to take it down.
-		//
-		// So focus takes the OLDEST slot instead. Advancing the tail is what
-		// a reader does, so the arithmetic is untouched and no state lives
-		// outside the ring.
-		//
-		// What LEAVES is whatever is oldest, and it is worth being honest
-		// about the cost: usually a mouse move, but it can be anything the
-		// client has not read — an evicted WINDOW_CLOSE makes a polite
-		// Alt+F4 do nothing, and turns the user's second one into the
-		// SIGTERM escalation. That trade is deliberate, and only reachable
-		// by a client that has let its queue fill. (An older FOCUS event is
-		// the one eviction that costs nothing: the newer one is the
-		// transition that still holds.)
-		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
-			return;
-		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n",
-		       w->id);
-	}
-	w->events[w->evt_head] = *ev;
-	w->evt_head = next;
+	int stored = gui_event_queue_push(&w->event_queue, ev);
+	if (!stored) return;
+	if (stored == 2)
+		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n", w->id);
 
-	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
+	// Aim a wake at the event_wait-er. Runs in THREAD context under
 	// kGuiLock — the compositor's thread, or a client's own thread inside a
-	// create/destroy syscall, since the birth and death focus grabs deliver
+	// create/destroy/ring syscall or appearance publication, since those deliver
 	// from there. Never an ISR under either, which is what invariant 4 needs.
 	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
-	// the design already accepted. A waiter still mid-park is deliberately
-	// left alone (the wake API's own rule) — its backstop re-runs the drain
-	// moments later. The slot is NOT cleared here: the waiter owns its
-	// registration, and a redundant wake at worst re-checks an empty queue.
+	// the design already accepted. A waiter still mid-park keeps its backstop
+	// and is OWED the wake, which the requeue that parks it pays — owed
+	// under kGuiLock, the lock the waiter registers and voids under, so the
+	// debt cannot outlive its wait (WAKE_OWED.md). The slot is NOT cleared
+	// here: the waiter owns its registration, and a redundant wake at worst
+	// re-checks an empty queue.
 	if (w->waiter != NULL)
-		scheduler_wake_isleep_thread(w->waiter);
+		scheduler_wake_or_owe(w->waiter);
+}
+
+void wm_appearance_changed(uint64_t generation)
+{
+    input_event_t ev = {
+        .type = INPUT_EVENT_APPEARANCE,
+        .appearance = { .generation_lo = (uint32_t)generation,
+                        .generation_hi = (uint32_t)(generation >> 32) },
+        .tick = kTicksSinceStart,
+    };
+    for (window_t *w = s_top; w; w = w->below)
+        wm_deliver_event(w, &ev);
 }
 
 bool wm_pop_event(window_t *w, input_event_t *out)
 {
-	if (w->evt_head == w->evt_tail)
-		return false;
-	*out = w->events[w->evt_tail];
-	w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-	return true;
+	return gui_event_queue_pop(&w->event_queue, out);
 }
 
 // Draw one window's chrome + content into the damaged part of the backbuffer.
@@ -710,14 +957,40 @@ bool wm_pop_event(window_t *w, input_event_t *out)
 // damage rect, draw in its coordinates, and the clipping in surface.c cannot
 // be talked out of it. It is also a straight win — a 25x25 ball no longer
 // repaints an entire 768x480 console underneath it.
+//
+// AND EVERY PIXEL OF frame ∩ damage — the other half of the contract, and
+// what lets a window claim its whole frame in the claim walk (OCCLUSION.md).
+// Nothing is painted under a window, so a pixel it leaves alone shows
+// whatever the backbuffer held last frame. It holds because the
+// insets the decoration declares, the content sized to the frame minus
+// those insets (wm_create, wm_resize) and the painting below agree, on both
+// the decorated and the plain path, for every decoration view the kernel
+// accepts. test_window_opacity paints each kind of window over a sentinel
+// colour and fails on any that survives; the decoration's paint has the same
+// test on the host against prepared views (test_decoration_host.c).
 static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damage)
 {
 	surface_t view = surface_view(backbuffer, damage);
-	bool focused = (w == s_focused);
+	bool focused = (w == s_focused || w == wm_focus_root(s_focused));
 	// Frame in VIEW coordinates; everything below is drawn in that space.
 	rect_t f = {w->frame.x - damage.x, w->frame.y - damage.y,
 	            w->frame.w, w->frame.h};
 
+	if (s_decoration.header && wm_has_titlebar(w->flags)) {
+		os64_decor_surface_t dst={view.pixels,view.width,view.height,view.pitch_px};
+		size_t n=0;
+		while (n<GUI_WINDOW_TITLE_MAX && w->title[n]) ++n;
+		os64_decor_state_t state={w->decor_hover,w->decor_pressed,wm_decoration_disabled(w),
+			(w->flags & GUI_WINDOW_MAXIMIZED)!=0};
+        os64_decor_header_t filtered;
+        os64_decor_filter(s_decoration.header,(w->flags & GUI_WINDOW_HAS_SETTINGS)!=0,&filtered);
+        os64_decor_view_t effective=s_decoration;effective.header=&filtered;
+		(void)os64_decor_paint(&effective,&dst,
+			(os64_decor_rect_t){f.x,f.y,f.w,f.h},
+			(os64_decor_rect_t){0,0,(int32_t)view.width,(int32_t)view.height},
+			true,focused,(w->flags & GUI_WINDOW_PINNED)!=0,w->title,n,
+			!(w->flags & GUI_WINDOW_TITLE_UTF8),&state);
+	} else {
 	// Border around everything (the titlebar overwrites the top edge) — for
 	// every window that HAS one. The desktop does not: a border separates a
 	// window from what is behind it, and there is nothing behind the desktop.
@@ -725,8 +998,7 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	// colour whenever you clicked the wallpaper, which reads as a rendering
 	// fault rather than as focus (Chris, the first afternoon the shell ran).
 	if (wm_border_width(w->flags) > 0)
-		surface_draw_rect(&view, f,
-		                  focused ? WINDOW_BORDER_FOCUSED : WINDOW_BORDER_UNFOCUSED);
+		surface_draw_rect(&view, f, wm_border_color(focused));
 
 	// Titlebar with centered-ish title text (8px/glyph, 16px tall font) —
 	// unless the window declined one, in which case the border IS the chrome
@@ -742,15 +1014,41 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 			title_len++;
 		// Text clips per glyph cell against the view, so a titlebar sliced down
 		// the middle by a damage rect draws its half-glyph and stops.
-		surface_draw_text(&view, bar.x + 6, bar.y + (bar.h - 16) / 2,
-		                  w->title, title_len, GUI_COLOR_WHITE, bar_color);
+		char fallback[GUI_WINDOW_TITLE_MAX*2];
+		const char *paint_title=w->title;
+		if (w->flags & GUI_WINDOW_TITLE_UTF8) {
+			size_t at=0,n=0;
+			while (at<title_len) {
+				os64_w1_cluster_t d=os64_w1_decode((const uint8_t *)w->title,title_len,at,false);
+				fallback[n++]=(d.scalar>=32 && d.scalar<=255)?(char)d.scalar:'?';
+				if (d.extra_marker) fallback[n++]='?';
+				at=d.end;
+			}
+			paint_title=fallback;title_len=n;
+		}
+        int32_t title_room=bar.w-12-((w->flags & GUI_WINDOW_HAS_SETTINGS)?28:0)-
+            ((w->flags & GUI_WINDOW_PINNED)?14:0);
+        if(title_len>(size_t)(title_room>0?title_room/8:0))title_len=(size_t)(title_room>0?title_room/8:0);
+		surface_draw_text(&view,bar.x+6,bar.y+(bar.h-16)/2,
+			paint_title,title_len,GUI_COLOR_WHITE,bar_color);
 
-		// A pinned window wears a small white square at the right end of its
-		// bar — the only chrome the pin has, and enough to answer "why won't
-		// this thing go behind?" at a glance.
+        if(w->flags & GUI_WINDOW_HAS_SETTINGS) {
+            rect_t r=fallback_settings(w);r.x+=f.x;r.y+=f.y;
+            uint32_t ink=GUI_COLOR_WHITE;
+            if(w->decor_hover==OS64_DECOR_SETTINGS || w->decor_pressed==OS64_DECOR_SETTINGS)
+                surface_fill_rect(&view,r,WINDOW_TITLEBAR_UNFOCUSED);
+            for(int line=-1;line<=1;++line) {
+                int32_t y=r.y+r.h/2+line*4,x=r.x+r.w/2-5;
+                surface_fill_rect(&view,(rect_t){x,y,11,1},ink);
+                surface_fill_rect(&view,(rect_t){x+(line==0?7:3),y-1,1,3},ink);
+            }
+        }
+		// Keep the pin indicator beside Settings when both are present.
 		if (w->flags & GUI_WINDOW_PINNED)
-			surface_fill_rect(&view, (rect_t){bar.x + bar.w - 14, bar.y + (bar.h - 8) / 2, 8, 8},
+			surface_fill_rect(&view, (rect_t){bar.x + bar.w - 14 - ((w->flags & GUI_WINDOW_HAS_SETTINGS)?28:0), bar.y + (bar.h - 8) / 2, 8, 8},
 			                  GUI_COLOR_WHITE);
+	}
+
 	}
 
 	// Client content. Blit the WHOLE content rect at its view-space position
@@ -763,77 +1061,147 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	             (rect_t){0, 0, (int32_t)w->content.width, (int32_t)w->content.height});
 }
 
-void wm_composite(surface_t *backbuffer, rect_t damage)
+bool wm_paint_window(surface_t *dst, const window_t *w, rect_t view)
 {
-	// Bottom-up so overlaps resolve by z-order; skip windows that don't
-	// touch the damage at all.
-	rect_t overlap;
-	for (window_t *w = s_bottom; w; w = w->above)
-		if (!wm_is_hidden(w) && rect_intersect(w->frame, damage, &overlap))
-			composite_one(backbuffer, w, damage);
+	composite_one(dst, w, view);
+	return s_decoration.header && wm_has_titlebar(w->flags);
 }
 
-// THE SAME QUESTION, ASKED ABOUT THE BACKGROUND (2026-08-25). The compositor
-// paints kDesktop into every damage rect before it paints any window — which
-// was free-ish when the background was the only thing under them, and stopped
-// being free the day the desktop shell became a FULLSCREEN WINDOW. Then every
-// damage rect cost two screenful-sized blits of the same pixels: the
-// compositor's background, and the shell's window painted straight over it.
-//
-// Chris measured it within the hour on the P5: guicomp at 17-20% while
-// dragging a large gterm, against 1% for a small gclock — the tell being that
-// the cost tracked the RECT AREA, which is what a redundant full-rect blit
-// looks like.
-//
-// So: if some window already covers this rect completely, the background
-// underneath it cannot be seen and is not painted. Self-correcting by
-// construction — if the shell dies, nothing covers the rect any more and the
-// kernel's test pattern comes straight back, which is exactly the floor
-// behaviour we wanted. It also pays off for a case that predates the shell: a
-// maximized window now suppresses the background blit too.
-bool wm_rect_is_covered(rect_t screen_rect)
-{
-	if (rect_is_empty(screen_rect))
-		return true;
+// The frames a claim walk holds at once (visible.h). More visible windows
+// than this is legal: the walk stops after the last frame it holds and the
+// windows below it are painted the old way, as when the pieces run out.
+#define WM_CLAIM_FRAMES 32
 
-	for (const window_t *w = s_top; w; w = w->below) {
-		rect_t covered;
+static inline visible_rect_t as_visible(rect_t r)
+{
+	return (visible_rect_t){r.x, r.y, r.w, r.h};
+}
+
+static inline rect_t as_rect(visible_rect_t r)
+{
+	return (rect_t){r.x, r.y, r.w, r.h};
+}
+
+static inline uint64_t area_of(rect_t r)
+{
+	return (uint64_t)r.w * (uint64_t)r.h;
+}
+
+// The visible windows above `stop` (all of them when NULL), top-down: their
+// frames and the windows themselves, at most WM_CLAIM_FRAMES. Answers how
+// many there are in all, which may be more than it wrote.
+//
+// A window claims its whole frame because it is opaque: composite_one
+// writes every pixel of frame ∩ view. The day a window can be seen
+// through, it must not claim here; it is painted over what is under it,
+// not instead of it.
+static int32_t claim_stack(const window_t *stop, visible_rect_t *frames, window_t **windows)
+{
+	int32_t n = 0;
+	for (window_t *w = s_top; w && w != stop; w = w->below) {
 		if (wm_is_hidden(w))
 			continue;
-		// Same containment test as wm_rect_is_occluded, and the same
-		// deliberate simplicity: ONE window must cover the whole rect. Two
-		// that jointly cover it read as uncovered and the background is
-		// painted — wasted work, never a wrong pixel.
-		//
-		// And the same opacity caveat, which matters MORE here: every os64
-		// window is fully opaque today. The day translucency lands, a
-		// see-through window must stop suppressing the background, or you
-		// will see through it to whatever the backbuffer last held.
-		if (rect_intersect(w->frame, screen_rect, &covered) &&
-		    covered.x == screen_rect.x && covered.y == screen_rect.y &&
-		    covered.w == screen_rect.w && covered.h == screen_rect.h)
-			return true;
+		if (n < WM_CLAIM_FRAMES) {
+			frames[n] = as_visible(w->frame);
+			windows[n] = w;
+		}
+		n++;
 	}
-	return false;
+	return n;
 }
 
-// Occlusion, the cheap half (2026-08-18). Painter's algorithm draws a covered
-// window and then draws over it: correct, and entirely wasted work — plus a
-// flush of uncached pixels that cannot possibly change. This answers the one
-// question that lets publish skip both.
+// The old painter, for what a claim walk could not finish: the background,
+// then every window touching `piece`, bottom-up and inside it, so the top
+// one wins as it always did. The windows the walk consumed miss the piece
+// by construction and are not painted at all.
+static uint64_t paint_bottom_up(surface_t *backbuffer, const surface_t *background, rect_t piece)
+{
+	surface_blit(backbuffer, piece.x, piece.y, background, piece);
+	uint64_t painted = area_of(piece);
+	rect_t overlap;
+	for (window_t *w = s_bottom; w; w = w->above)
+		if (!wm_is_hidden(w) && rect_intersect(w->frame, piece, &overlap)) {
+			composite_one(backbuffer, w, piece);
+			painted += area_of(overlap);
+		}
+	return painted;
+}
+
+wm_composite_result_t wm_composite(surface_t *backbuffer, const surface_t *background, rect_t damage)
+{
+	wm_composite_result_t result = {0};
+	visible_rect_t frames[WM_CLAIM_FRAMES];
+	window_t *windows[WM_CLAIM_FRAMES];
+	visible_piece_t pieces[VISIBLE_PIECES_MAX];
+	int32_t total = claim_stack(NULL, frames, windows);
+	int32_t consumed;
+	int32_t n = visible_claim(as_visible(damage), frames,
+	                          total < WM_CLAIM_FRAMES ? total : WM_CLAIM_FRAMES,
+	                          pieces, VISIBLE_PIECES_MAX, &consumed);
+	uint64_t covered = 0;
+	for (int32_t i = 0; i < n; i++) {
+		rect_t piece = as_rect(pieces[i].r);
+		covered += area_of(piece);
+		// A window paints what it claimed, once per piece and with the piece
+		// as its view: one call with a wider view would paint over pieces
+		// claimed by the windows above it.
+		if (pieces[i].owner != VISIBLE_UNCLAIMED) {
+			composite_one(backbuffer, windows[pieces[i].owner], piece);
+			result.painted += area_of(piece);
+		} else if (consumed == total) {
+			// Under no window at all: the background's.
+			surface_blit(backbuffer, piece.x, piece.y, background, piece);
+			result.painted += area_of(piece);
+		} else {
+			result.painted += paint_bottom_up(backbuffer, background, piece);
+			result.stopped = true;
+		}
+	}
+	result.fault = covered != area_of(damage);
+	return result;
+}
+
+size_t wm_visible_damage(const window_t *w, rect_t screen_rect, rect_t *out, size_t max)
+{
+	visible_rect_t frames[WM_CLAIM_FRAMES];
+	window_t *windows[WM_CLAIM_FRAMES];
+	visible_piece_t pieces[VISIBLE_PIECES_MAX];
+	// A minimized window shows nothing, and coming back damages its frame.
+	if (wm_is_hidden(w))
+		return 0;
+	int32_t total = claim_stack(w, frames, windows);
+	int32_t consumed;
+	int32_t n = visible_claim(as_visible(screen_rect), frames,
+	                          total < WM_CLAIM_FRAMES ? total : WM_CLAIM_FRAMES,
+	                          pieces, VISIBLE_PIECES_MAX, &consumed);
+	// The unclaimed pieces are what can be seen. A walk that stopped early
+	// leaves some under windows it never applied; they count as seen, which
+	// is more damage and never less.
+	size_t seen = 0;
+	rect_t bounds = {0, 0, 0, 0};
+	for (int32_t i = 0; i < n; i++) {
+		if (pieces[i].owner != VISIBLE_UNCLAIMED)
+			continue;
+		rect_t piece = as_rect(pieces[i].r);
+		bounds = seen == 0 ? piece : rect_union(bounds, piece);
+		if (seen < max)
+			out[seen] = piece;
+		seen++;
+	}
+	if (seen <= max)
+		return seen;
+	out[0] = bounds;
+	return 1;
+}
+
+// Is this rect inside ONE window above `w`? The cover sweep's test: two
+// windows that jointly cover a window read as not covering it, so its
+// client is told to stop only in the common shape, one window over
+// another. wm_visible_damage answers the exact question, the day a
+// consumer wants it (DEBTS).
 //
-// DELIBERATELY the simple test: is this rect inside ONE window above me? Two
-// windows that JOINTLY cover it read as visible here and still get composited.
-// Doing better means subtracting a real region (X11/Cairo territory) and
-// maintaining it as windows move — a bigger idea, its own slice, and one this
-// z-list can't answer in a walk. The common desktop shape is one window over
-// another, which is exactly what this catches.
-//
-// Note it takes no view on WINDOW opacity, because os64 has none yet: every
-// window is fully opaque (the X byte in XRGB is reserved for the translucency
-// row that hasn't landed). The day alpha exists, this function is where it
-// must be taught to stop trusting a covering frame — a window you can see
-// through occludes nothing.
+// Like claim_stack it trusts a covering frame because every window is
+// opaque; a window you can see through covers nothing.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 {
 	if (rect_is_empty(screen_rect))

@@ -1,0 +1,289 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Intl capture</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 60em; }
+  #verdict { font-weight: bold; margin-top: 16px; }
+  pre { white-space: pre-wrap; font-size: 13px; }
+</style>
+<h1>Intl capture</h1>
+<p>What this browser's <code>Intl</code> answers for en-US, captured as a file:
+the strings libjs is held to byte for byte (INTL.md § 8). It formats fixed
+matrices of DateTimeFormat cases (option bags, zones, instants, ranges,
+parts), of NumberFormat and PluralRules cases (option bags, values, ranges,
+parts, plural categories), of RelativeTimeFormat and ListFormat cases, of
+Collator's comparisons and of Segmenter's segments at every granularity,
+asks the questions other browsers answer differently (an alias zone's
+name, words in the scripts browsers find with dictionaries), and lists the
+browser's Intl surface.</p>
+<p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
+directory and saves what the page sends to the file it names; or press
+<b>Save</b> for a download.</p>
+<div id="verdict">capturing…</div>
+<p><button id="save" disabled>Save</button></p>
+<pre id="summary"></pre>
+<script>
+"use strict";
+// The cases. tools/intl_capture_check.py reads them from the capture, so
+// this page alone decides what is asked.
+const bags = [];
+const comps = {
+    weekday: ['narrow', 'short', 'long'], era: ['narrow', 'short', 'long'], year: ['2-digit', 'numeric'],
+    month: ['2-digit', 'numeric', 'narrow', 'short', 'long'], day: ['2-digit', 'numeric'],
+    hour: ['2-digit', 'numeric'], minute: ['2-digit', 'numeric'], second: ['2-digit', 'numeric'],
+    timeZoneName: ['short', 'long', 'shortOffset', 'longOffset', 'shortGeneric', 'longGeneric'],
+};
+for (const [k, vs] of Object.entries(comps)) for (const v of vs) bags.push({[k]: v});
+const combos = [
+    ['year', 'month', 'day'], ['month', 'day'], ['year', 'month'], ['weekday', 'month', 'day'],
+    ['weekday', 'year', 'month', 'day'], ['hour', 'minute'], ['hour', 'minute', 'second'], ['minute', 'second'],
+    ['month', 'day', 'hour', 'minute'], ['year', 'month', 'day', 'hour', 'minute'], ['weekday', 'hour'],
+    ['year', 'month', 'day', 'hour', 'minute', 'second', 'timeZoneName'], ['day', 'hour'], ['era', 'year'],
+    ['era', 'year', 'month', 'day'], ['weekday', 'day'], ['hour', 'timeZoneName'], ['month', 'year', 'hour'],
+];
+for (const c of combos) for (const m of ['numeric', 'short', 'long', '2-digit']) {
+    const o = {};
+    for (const k of c) {
+        if (k === 'month') o.month = m;
+        else if (k === 'weekday') o.weekday = m === 'long' ? 'long' : 'short';
+        else if (k === 'era') o.era = m === 'long' ? 'long' : 'short';
+        else if (k === 'timeZoneName') o.timeZoneName = m === 'long' ? 'long' : 'short';
+        else o[k] = m === '2-digit' ? '2-digit' : 'numeric';
+    }
+    bags.push(o);
+}
+for (const s of ['full', 'long', 'medium', 'short']) {
+    bags.push({dateStyle: s}, {timeStyle: s});
+    for (const t of ['full', 'long', 'medium', 'short']) bags.push({dateStyle: s, timeStyle: t});
+}
+for (const hc of ['h11', 'h12', 'h23', 'h24'])
+    bags.push({hour: 'numeric', hourCycle: hc}, {hour: 'numeric', minute: '2-digit', hourCycle: hc},
+              {timeStyle: 'short', hourCycle: hc}, {dateStyle: 'medium', timeStyle: 'medium', hourCycle: hc});
+bags.push({hour: 'numeric', hour12: false}, {hour: 'numeric', minute: 'numeric', hour12: true}, {timeStyle: 'short', hour12: false});
+for (const dp of ['narrow', 'short', 'long'])
+    bags.push({dayPeriod: dp}, {dayPeriod: dp, hour: 'numeric'}, {dayPeriod: dp, hour: 'numeric', minute: 'numeric'});
+for (const n of [1, 2, 3])
+    bags.push({fractionalSecondDigits: n}, {second: 'numeric', fractionalSecondDigits: n},
+              {minute: 'numeric', second: 'numeric', fractionalSecondDigits: n});
+bags.push({});
+
+const zones = ['America/New_York', 'UTC', 'Europe/London', 'Asia/Kolkata', 'Australia/Sydney', 'Pacific/Honolulu', '+05:30'];
+const instants = [Date.UTC(2026, 0, 5, 15, 30, 45, 123), Date.UTC(2026, 6, 4, 4, 5, 6, 7),
+                  Date.UTC(2026, 0, 5, 12, 0, 0), Date.UTC(2026, 0, 5, 0, 0, 0)];
+const H = 3600000, DAY = 24 * H, base = Date.UTC(2026, 0, 5, 9, 5, 7, 250);
+const ranges = [0, 30000, 90 * 60000, 5 * H, 14 * H, DAY, 40 * DAY, 400 * DAY].map(d => [base, base + d]);
+
+const capture = {
+    userAgent: navigator.userAgent, language: navigator.language, languages: navigator.languages,
+    when: new Date().toISOString(), cases: [], probes: {}, surface: {},
+};
+function attempt(f) { try { return f(); } catch (e) { return 'THROWS ' + e.name; } }
+for (const zone of zones) for (const bag of bags) {
+    const options = Object.assign({timeZone: zone}, bag);
+    const dtf = attempt(() => new Intl.DateTimeFormat('en-US', options));
+    const c = {options};
+    if (typeof dtf === 'string') { c.construct = dtf; capture.cases.push(c); continue; }
+    c.resolved = dtf.resolvedOptions();
+    c.format = instants.map(t => [t, dtf.format(t)]);
+    c.parts = [[instants[0], dtf.formatToParts(instants[0])]];
+    c.range = ranges.map(([x, y]) => [x, y, dtf.formatRange(x, y)]);
+    c.rangeParts = [[ranges[3][0], ranges[3][1], dtf.formatRangeToParts(ranges[3][0], ranges[3][1])]];
+    capture.cases.push(c);
+}
+// NumberFormat and PluralRules: option sets by style and modifier, then a
+// seeded random sample, each with the same values. A value is written as
+// text ("n:" a Number, "b:" a BigInt, "s:" a string), since JSON holds
+// neither a BigInt nor -0; the checker reads it back with numberValue.
+function numberValue(text) {
+    const kind = text.slice(0, 2), body = text.slice(2);
+    return kind === 'b:' ? BigInt(body) : kind === 's:' ? body : body === '-0' ? -0 : Number(body);
+}
+const numberValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:1.5', 'n:0.5', 'n:0.05', 'n:0.005', 'n:0.0001234', 'n:12',
+    'n:123', 'n:999', 'n:999.5', 'n:1000', 'n:1234', 'n:1234.5678', 'n:9999.9', 'n:12345', 'n:123456', 'n:999999',
+    'n:1234567.891', 'n:1000000000', 'n:1500000000000', 'n:1e15', 'n:1e21', 'n:1e-7', 'n:-1234.5', 'n:-0.004', 'n:NaN',
+    'n:Infinity', 'n:-Infinity', 'b:12345678901234567890', 'b:-5', 's:1.005', 's:-0', 's:12345678901234567890.123456789',
+    's:0x1F', 's: 42 ', 's:1e3', 's:abc', 'n:2.5', 'n:-2.5', 'n:0.125', 'n:1.45', 'n:329606050212053000',
+    's:1e400', 's:-1e400', 's:1.234e-400', 'n:-9.99', 'n:-999.99', 'n:-999999.9'];
+const numberRanges = [['n:3', 'n:5'], ['n:-3', 'n:5'], ['n:-5', 'n:-3'], ['n:3', 'n:3'], ['n:-3', 'n:-3'], ['n:0', 'n:1'],
+    ['n:1', 'n:1.5'], ['n:3000', 'n:5000'], ['n:3000', 'n:3001'], ['n:3000', 'n:5000000'], ['n:-0', 'n:0'], ['s:-0', 'n:0'],
+    ['n:5', 'n:3'], ['n:1', 'n:Infinity'], ['n:1.999', 'n:2.001'], ['n:-0.0001', 'n:0'], ['n:Infinity', 'n:Infinity'],
+    ['n:-Infinity', 'n:-Infinity'], ['s:-0', 's:0'], ['n:-0', 's:-0'], ['n:-0', 's:0'], ['n:-0', 'n:0.0001']];
+const numberStyles = [{}, {style: 'percent'}, {style: 'currency', currency: 'USD'}, {style: 'currency', currency: 'EUR'},
+    {style: 'currency', currency: 'JPY'}, {style: 'currency', currency: 'USD', currencyDisplay: 'code'},
+    {style: 'currency', currency: 'USD', currencyDisplay: 'name'}, {style: 'currency', currency: 'CAD', currencyDisplay: 'narrowSymbol'},
+    {style: 'currency', currency: 'GBP', currencySign: 'accounting'}, {style: 'currency', currency: 'XYZ'},
+    {style: 'unit', unit: 'kilometer'}, {style: 'unit', unit: 'kilometer', unitDisplay: 'long'},
+    {style: 'unit', unit: 'kilometer-per-hour', unitDisplay: 'narrow'}, {style: 'unit', unit: 'liter-per-kilometer', unitDisplay: 'long'},
+    {style: 'unit', unit: 'percent'}, {style: 'unit', unit: 'percent', unitDisplay: 'long'}, {style: 'unit', unit: 'byte', unitDisplay: 'narrow'},
+    {style: 'unit', unit: 'percent-per-second'}];
+const numberModifiers = [{}, {notation: 'compact'}, {notation: 'compact', compactDisplay: 'long'}, {notation: 'scientific'},
+    {notation: 'engineering'}, {signDisplay: 'always'}, {signDisplay: 'exceptZero'}, {signDisplay: 'never'}, {signDisplay: 'negative'},
+    {maximumFractionDigits: 0}, {minimumFractionDigits: 2}, {maximumSignificantDigits: 3}, {minimumIntegerDigits: 4},
+    {useGrouping: false}, {useGrouping: 'min2'}, {useGrouping: 'always'}, {roundingMode: 'floor'}, {roundingMode: 'halfEven', maximumFractionDigits: 0},
+    {roundingIncrement: 25, maximumFractionDigits: 2, minimumFractionDigits: 2},
+    {roundingPriority: 'morePrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
+    {roundingPriority: 'lessPrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
+    {trailingZeroDisplay: 'stripIfInteger', minimumFractionDigits: 2},
+    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'lessPrecision'}, {notation: 'compact', useGrouping: 'auto'},
+    {notation: 'scientific', maximumSignificantDigits: 2, roundingMode: 'floor'}, {notation: 'compact', roundingMode: 'floor'},
+    {notation: 'compact', roundingIncrement: 2, minimumFractionDigits: 0, maximumFractionDigits: 0}];
+const numberBags = [];
+for (const s of numberStyles) for (const m of numberModifiers) numberBags.push(Object.assign({}, s, m));
+let seed = 12345;
+const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+const randomKeys = {
+    style: [undefined, 'decimal', 'percent', 'currency', 'unit'], currency: ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'INR', 'KRW', 'ABC'],
+    currencyDisplay: [undefined, 'symbol', 'narrowSymbol', 'code', 'name'], currencySign: [undefined, 'standard', 'accounting'],
+    unit: ['meter', 'second', 'byte', 'percent', 'mile-per-hour', 'kilogram', 'day', 'gigabyte-per-second'],
+    unitDisplay: [undefined, 'short', 'long', 'narrow'], notation: [undefined, 'standard', 'scientific', 'engineering', 'compact'],
+    compactDisplay: [undefined, 'short', 'long'], signDisplay: [undefined, 'auto', 'always', 'never', 'exceptZero', 'negative'],
+    useGrouping: [undefined, true, false, 'min2', 'auto', 'always'], roundingMode: [undefined, 'ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor', 'halfExpand', 'halfTrunc', 'halfEven'],
+    roundingPriority: [undefined, undefined, 'auto', 'morePrecision', 'lessPrecision'], trailingZeroDisplay: [undefined, 'auto', 'stripIfInteger'],
+    minimumIntegerDigits: [undefined, undefined, 1, 2, 5], minimumFractionDigits: [undefined, undefined, 0, 1, 3],
+    maximumFractionDigits: [undefined, undefined, 0, 2, 4, 8], minimumSignificantDigits: [undefined, undefined, undefined, 1, 3],
+    maximumSignificantDigits: [undefined, undefined, undefined, 2, 5, 21], roundingIncrement: [undefined, undefined, undefined, 1, 5, 50],
+};
+for (let n = 0; n < 400; n++) {
+    const o = {};
+    for (const [k, vs] of Object.entries(randomKeys)) { const v = vs[rand(vs.length)]; if (v !== undefined) o[k] = v; }
+    numberBags.push(o);
+}
+capture.numberCases = [];
+for (const options of numberBags) {
+    const nf = attempt(() => new Intl.NumberFormat('en-US', options));
+    const c = {kind: 'NumberFormat', options};
+    if (typeof nf === 'string') { c.construct = nf; capture.numberCases.push(c); continue; }
+    c.resolved = nf.resolvedOptions();
+    c.format = numberValues.map(v => [v, attempt(() => nf.format(numberValue(v)))]);
+    c.parts = ['n:-1234.5', 'n:0.005', 'b:-5', 'n:NaN'].map(v => [v, attempt(() => nf.formatToParts(numberValue(v)))]);
+    c.range = numberRanges.map(([x, y]) => [x, y, attempt(() => nf.formatRange(numberValue(x), numberValue(y)))]);
+    c.rangeParts = [numberRanges[1], numberRanges[3], numberRanges[9]].map(([x, y]) =>
+        [x, y, attempt(() => nf.formatRangeToParts(numberValue(x), numberValue(y)))]);
+    capture.numberCases.push(c);
+}
+const pluralBags = [{}, {type: 'ordinal'}, {minimumFractionDigits: 1}, {maximumSignificantDigits: 1}, {type: 'ordinal', maximumFractionDigits: 0},
+    {roundingIncrement: 5, maximumFractionDigits: 1, minimumFractionDigits: 1}, {notation: 'compact'}, {notation: 'scientific', type: 'ordinal'},
+    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'morePrecision'}];
+const pluralValues = ['n:0', 'n:1', 'n:2', 'n:3', 'n:4', 'n:11', 'n:12', 'n:13', 'n:21', 'n:22', 'n:23', 'n:101', 'n:111', 'n:1.5',
+    'n:0.99', 'n:1.04', 'n:1.05', 'n:-1', 'n:-2', 'n:1e21', 'n:NaN', 'n:Infinity', 'n:1499', 'n:329606050212053000'];
+for (const options of pluralBags) {
+    const pr = attempt(() => new Intl.PluralRules('en-US', options));
+    const c = {kind: 'PluralRules', options};
+    if (typeof pr === 'string') { c.construct = pr; capture.numberCases.push(c); continue; }
+    c.resolved = pr.resolvedOptions();
+    c.select = pluralValues.map(v => [v, attempt(() => pr.select(numberValue(v)))]);
+    c.selectRange = numberRanges.map(([x, y]) => [x, y, attempt(() => pr.selectRange(numberValue(x), numberValue(y)))]);
+    capture.numberCases.push(c);
+}
+// RelativeTimeFormat and ListFormat: every style and numeric choice, the
+// units singular and plural, values about now (where numeric "auto" has
+// words) and away from it; every list type and style over lists of every
+// length.
+const relativeUnits = ['second', 'minutes', 'hour', 'days', 'week', 'month', 'quarters', 'year'];
+const relativeValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:-2', 'n:0.004', 'n:0.005', 'n:0.995', 'n:-1.004', 'n:1.5',
+    'n:-3', 'n:1000', 'n:-1234.5678', 'n:1e21', 'n:1.0005', 'n:0.0025', 'n:-1.0625', 'n:-0.0005'];
+for (const style of ['long', 'short', 'narrow']) for (const numeric of ['always', 'auto']) {
+    const options = {style, numeric};
+    const rtf = new Intl.RelativeTimeFormat('en-US', options);
+    const c = {kind: 'RelativeTimeFormat', options, resolved: rtf.resolvedOptions(), relative: []};
+    for (const u of relativeUnits) for (const v of relativeValues)
+        c.relative.push([v, u, attempt(() => rtf.format(numberValue(v), u)), attempt(() => rtf.formatToParts(numberValue(v), u))]);
+    capture.numberCases.push(c);
+}
+const listInputs = [[], ['a'], ['a', 'b'], ['a', 'b', 'c'], ['Motorcycle', 'Bus', 'Car', 'Train'], ['a', '', 'c'], ['']];
+for (const type of ['conjunction', 'disjunction', 'unit']) for (const style of ['long', 'short', 'narrow']) {
+    const options = {type, style};
+    const lf = new Intl.ListFormat('en-US', options);
+    capture.numberCases.push({kind: 'ListFormat', options, resolved: lf.resolvedOptions(),
+                              lists: listInputs.map(l => [l, lf.format(l), lf.formatToParts(l)])});
+}
+// Segmenter (SEGMENTER.md): every granularity over texts that reach the
+// rules a page meets (marks, emoji sequences, flags, an Indic conjunct,
+// apostrophes, numbers, kana, abbreviations, characters whose category and
+// word class disagree), each segment with its index and word-likeness. The dictionary scripts are probes below, not cases.
+const segmenterTexts = ['Hello, world! It\'s 3.14 o\'clock.', '_', 'a_b __ 1_2', 'é\u{1F44D}\u{1F3FD}\u{1F1FA}\u{1F1F8}',
+    '\u{1F468}‍\u{1F469}‍\u{1F467} family', 'Mr. Smith went to Washington. He arrived at 3 p.m. today. OK?',
+    'क्षि नमस्ते', '\u{1F600}!', 'can\'t won’t', '  spaces\tand\nlines\r\n',
+    '1,234.56 and 7:30', 'ケーキ カタカナ', 'α βγ Ünïcödé',
+    'Is it “done”? Yes! (Really.) No… maybe.', '\uD800x\uDC00', '① ½ x² ⓐ', ''];
+const segmentsOf = (seg, t) => Array.from(seg.segment(t), d => [d.segment, d.index, d.isWordLike === undefined ? null : d.isWordLike]);
+for (const granularity of ['grapheme', 'word', 'sentence']) {
+    const options = {granularity};
+    const seg = new Intl.Segmenter('en-US', options);
+    capture.numberCases.push({kind: 'Segmenter', options, resolved: seg.resolvedOptions(),
+                              segments: segmenterTexts.map(t => [t, segmentsOf(seg, t)])});
+}
+// Collator: the sign of compare over fixed pairs and a seeded sample of
+// short strings (Latin, its marks, punctuation, a few characters beyond),
+// under every sensitivity, numeric, caseFirst and ignorePunctuation.
+const collatorPairs = [['a', 'A'], ['a', '\u00e1'], ['\u00df', 'ss'], ['\u00e6', 'ae'], ['1', 'a'], ['_', '1'], ['a-b', 'ab'],
+    ['a$b', 'ab'], ['e\u0301', '\u00e9'], ['item 10', 'item 9'], ['a01', 'a1'], ['l\u00b7l', 'll'], ['\u0101', 'b'],
+    ['\u0142', 'm'], ['co-op', 'coop'], ['\u201cq\u201d', 'q'], ['\u03b1', 'z'], ['\u4e00', '\u0430'], ['a\tb', 'ab'],
+    ['x\r\ny', 'xy'], ['\u20ac', '1'], ['\ud83d\ude00', 'a'], ['9'.repeat(300), '1' + '0'.repeat(300)]];
+const collatorAlphabet = 'aAbBeEzZ019 -_.,\'\u00e9\u00c9\u00df\u00e6\u00c6\u00f8\u00d8\u0101\u0142\u0301\u2013\u201c$\t\n';
+for (let i = 0; i < 200; i++) {
+    const word = () => { let s = ''; for (let n = 1 + rand(4); n > 0; n--) s += collatorAlphabet[rand(collatorAlphabet.length)]; return s; };
+    collatorPairs.push([word(), word()]);
+}
+for (const sensitivity of ['base', 'accent', 'case', 'variant']) for (const numeric of [false, true])
+    for (const caseFirst of ['false', 'upper']) for (const ignorePunctuation of [false, true]) {
+        const options = {sensitivity, numeric, caseFirst, ignorePunctuation};
+        const coll = new Intl.Collator('en-US', options);
+        capture.numberCases.push({kind: 'Collator', options, resolved: coll.resolvedOptions(),
+                                  compare: collatorPairs.map(([x, y]) => [x, y, Math.sign(coll.compare(x, y))])});
+    }
+// The questions other browsers answer differently from test262 or from
+// one another: each is what the browser said.
+const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
+for (const z of ['Asia/Calcutta', 'Asia/Kolkata', 'Australia/Canberra', 'Etc/GMT', 'Etc/UTC', 'GMT', 'US/Eastern',
+                 'EST5EDT', 'america/new_york', 'Etc/GMT+5', 'Europe/Kiev', 'Asia/Saigon'])
+    capture.probes['timeZone ' + z] = zoneOf(z);
+capture.probes['default resolvedOptions'] = new Intl.DateTimeFormat().resolvedOptions();
+capture.probes['format(0) default'] = new Intl.DateTimeFormat().format(0);
+capture.probes['supportedLocalesOf de-DE en-GB en-US'] = Intl.DateTimeFormat.supportedLocalesOf(['de-DE', 'en-GB', 'en-US']);
+capture.probes['de-DE resolved locale'] = new Intl.DateTimeFormat('de-DE').resolvedOptions().locale;
+capture.probes['Locale und-Thai maximize'] = attempt(() => new Intl.Locale('und-Thai').maximize().toString());
+capture.probes['Locale en maximize'] = attempt(() => new Intl.Locale('en').maximize().toString());
+capture.probes['Locale cel-gaulish'] = attempt(() => new Intl.Locale('cel-gaulish').toString());
+capture.probes['Date toLocaleString 0'] = new Date(0).toLocaleString('en-US', {timeZone: 'UTC'});
+capture.probes['Date toString 0'] = new Date(0).toString();
+capture.probes['toLocaleString 1234.5'] = (1234.5).toLocaleString();
+capture.probes['toLocaleString BigInt'] = (12345678901234567890n).toLocaleString('en', {style: 'currency', currency: 'EUR'});
+capture.probes['Array toLocaleString'] = [1234.5, new Date(0), null, 'x'].toLocaleString('en-US', {timeZone: 'UTC'});
+capture.probes['localeCompare a B'] = 'a'.localeCompare('B');
+capture.probes['Date toLocaleDateString long'] = new Date(1.5e12).toLocaleDateString('en-US', {month: 'long', day: 'numeric', timeZone: 'UTC'});
+capture.probes['getCanonicalLocales'] = attempt(() => Intl.getCanonicalLocales(['EN-us', 'en-latn-US', 'hy-SU']));
+for (const k of ['calendar', 'collation', 'currency', 'numberingSystem', 'timeZone', 'unit'])
+    capture.probes['supportedValuesOf ' + k] = attempt(() => Intl.supportedValuesOf(k));
+// Words in the scripts other browsers find with dictionaries (SEGMENTER.md
+// § 3: UAX #29 has none, so these record a known difference).
+const wordsOf = t => attempt(() => Array.from(new Intl.Segmenter('en-US', {granularity: 'word'}).segment(t), d => d.segment));
+capture.probes['Segmenter words Thai'] = wordsOf('สวัสดีครับผม');
+capture.probes['Segmenter words Chinese'] = wordsOf('我喜欢吃苹果');
+capture.probes['Segmenter words Japanese'] = wordsOf('私は日本語を話します');
+// The surface: Intl's own names and each constructor's prototype's.
+capture.surface.Intl = Object.getOwnPropertyNames(Intl).sort();
+for (const name of capture.surface.Intl) {
+    const value = Intl[name];
+    if (typeof value === 'function' && value.prototype)
+        capture.surface[name] = Object.getOwnPropertyNames(value.prototype).sort();
+}
+
+const text = JSON.stringify(capture);
+const summary = `${capture.cases.length} date option sets, ${capture.numberCases.length} number option sets, ` +
+    `${Object.keys(capture.probes).length} probes, ` +
+    `${text.length} bytes\n${capture.userAgent}`;
+document.getElementById('summary').textContent = summary;
+const save = document.getElementById('save');
+save.disabled = false;
+save.onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+    a.download = 'intl-capture.json';
+    a.click();
+};
+fetch('capture', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: text})
+    .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(where => { document.getElementById('verdict').textContent = 'Saved: ' + where; })
+    .catch(e => { document.getElementById('verdict').textContent = 'Not sent (' + e.message + '): press Save'; });
+</script>

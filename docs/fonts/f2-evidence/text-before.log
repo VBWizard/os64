@@ -1,0 +1,10 @@
+texttest: DejaVuSans.ttf 18px advance 16737/64, glyphs 29, carets 29
+texttest: DejaVuSans.ttf 28px advance 25629/64, glyphs 29, carets 29
+texttest: DejaVuSansMono.ttf 18px advance 20224/64, glyphs 29, carets 29
+texttest: DejaVuSansMono.ttf 28px advance 30976/64, glyphs 29, carets 29
+texttest: SourceSans3-Regular.otf 18px advance 13443/64, glyphs 29, carets 29
+texttest: SourceSans3-Regular.otf 28px advance 20699/64, glyphs 29, carets 29
+texttest: SourceCodePro-Regular.otf 18px advance 20224/64, glyphs 29, carets 29
+texttest: SourceCodePro-Regular.otf 28px advance 30976/64, glyphs 29, carets 29
+texttest: SKIP specimen (text boot)
+texttest: PASS peak 3755042 bytes

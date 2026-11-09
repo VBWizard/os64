@@ -1,0 +1,56 @@
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:215 [Ctrl punctuation] os64_ui_shortcut_match(specs[i].shortcut,&e)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:219 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:220 [Ctrl punctuation] t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:221 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:223 [Ctrl punctuation] os64_ui_shortcut_route(&router,v,&e,NULL)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:277 [status complete secondary fit] equal==(remaining[i]<secondary_width)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:277 [status complete secondary fit] equal==(remaining[i]<secondary_width)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:277 [status complete secondary fit] equal==(remaining[i]<secondary_width)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:277 [status complete secondary fit] equal==(remaining[i]<secondary_width)
+action/status: 313 checks, 54 failures
+Artifacts: /tmp/e01a-r1-before

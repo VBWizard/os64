@@ -33,7 +33,7 @@
 //      readers looped on `n <= 0`, folding "the file ended" together with
 //      "the storage failed". rd12 was the worst finding of the whole review
 //      because it DESTROYS DATA: the conf merge proceeded on a prefix and
-//      the atomic rename published it over the user's real file — the
+//      the ext2 atomic rename published it over the user's real file — the
 //      atomicity that exists to prevent a half-written file is what commits
 //      the loss, because the corruption happened UPSTREAM of the part being
 //      made safe.

@@ -1,0 +1,2 @@
+framestudio: ready content=1240x840 title=24 buttons=4 generation=1
+framestudio: startup default result=0 generation=1

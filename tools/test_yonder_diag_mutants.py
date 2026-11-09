@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""One deliberate break at a time to the page files and the badge
+(docs/design/pending/YONDER_DIAGNOSTICS.md), against the scripted-page
+harness, and the DOM host for libdom's half of where a script failed: a
+mutant is CAUGHT when its harness fails, MISSED when it passes,
+which means a test is missing and gets written. A build failure is neither.
+
+The shape is test_yonder_loop_mutants.py's: each mutant is applied to the
+worktree's copy of its file, the harness is run, and the file is put back
+from the bytes read before the change, checked byte for byte, whatever
+happens. Run it from a clean tree; the per-mutant logs are in --logs.
+"""
+import argparse
+import pathlib
+import re
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--logs', type=pathlib.Path, default=pathlib.Path('/tmp/yonder-diag-mutants'))
+parser.add_argument('--only', help='run the mutants whose name contains this')
+args = parser.parse_args()
+root = pathlib.Path(__file__).resolve().parent.parent
+args.logs.mkdir(parents=True, exist_ok=True)
+
+DIAG = 'userland/apps/yonder/diag.c'
+SCRIPTS = 'userland/apps/yonder/scripts.c'
+YONDER = 'userland/apps/yonder/yonder.c'
+WINDOW = 'tools/test_yonder_scripts_host.sh'
+REPORT = 'userland/libdom/report.c'
+EVENT = 'userland/libdom/event.c'
+DOM = 'tools/test_dom_host.sh'
+MODULES = 'userland/apps/yonder/modules.c'
+CASCADE = 'userland/libgarb/cascade.c'
+GARB = 'tools/test_garb_host.sh'
+
+# (name, file, old, new, harness). Each breaks one rule the design states.
+mutants = [
+    # The brief's three.
+    ('departure-rewrite-skipped', YONDER,
+     '    diag_observe(p, "when the page was left");\n    diag_write(p->diag);',
+     '    diag_observe(p, "when the page was left");', WINDOW),
+    ('miss-counted-twice', SCRIPTS,
+     '    yonder_diag_missing(s->options.diag, "global", name, 1);',
+     '    yonder_diag_missing(s->options.diag, "global", name, 2);', WINDOW),
+    ('tokens-leak-into-a-plain-line', DIAG,
+     '        put_text(&o, d->facts.lines[i].b);',
+     '        puts_(&o, d->facts.lines[i].b);', WINDOW),
+    ('tokens-leak-into-record-data', DIAG,
+     '        puts_(&o, ": ");\n        put_text(&o, l->b);',
+     '        puts_(&o, ": ");\n        puts_(&o, l->b);', WINDOW),
+    ('the-verdict-names-an-empty-token', DIAG,
+     '        if (d->missing.n != 0 && d->failed.n != 0)',
+     '        if (true)', WINDOW),
+    # And the rules around them.
+    ('a-look-counts-again', YONDER,
+     '            yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);',
+     '            yonder_diag_missing(d, "element", kNothing[k], nothing[k]);', WINDOW),
+    ('arrival-write-skipped', YONDER,
+     '    diag_observe(p, "when the page arrived");\n    diag_write(p->diag);',
+     '    diag_observe(p, "when the page arrived");', WINDOW),
+    ('a-failure-is-not-recorded', YONDER,
+     '    yonder_diag_failed(diag, key, placed);',
+     '    (void)placed;', WINDOW),
+    # Where a script failed (YONDER_DIAGNOSTICS.md, a FAILED line's place).
+    ('a-frame-names-eval', REPORT,
+     "        bool anonymous = length >= 2 && text[0] == '<' && text[length - 1] == '>';",
+     '        bool anonymous = false;', DOM),
+    ('a-frame-file-keeps-its-function', REPORT, '            if (last != end)\n                for (',
+     '            if (false)\n                for (', DOM),
+    ('a-listener-error-has-no-stack', EVENT,
+     '    out->diagnostic_truncated |= d_error_stack(ctx, error, out->stack_trace, sizeof(out->stack_trace));',
+     '', DOM),
+    ('a-rejection-has-no-stack', REPORT,
+     '        failure.diagnostic_truncated |= d_error_stack(ctx, reason, failure.stack_trace, sizeof(failure.stack_trace));',
+     '', WINDOW),
+    ('a-told-rejection-loses-its-stack', REPORT, 'failure.message, failure.stack_trace);',
+     'failure.message, "");', WINDOW),
+    ('the-page-is-not-inline', REPORT, '    *page = os64_streq(name, page_name);', '    *page = false;', WINDOW),
+    ('the-own-script-is-named', SCRIPTS,
+     '    if (address != NULL && own != NULL && os64_streq(address, own)) {',
+     '    if (address != NULL && own != NULL && false) {', WINDOW),
+    ('another-script-is-unnamed', SCRIPTS, '    } else if (address != NULL) {', '    } else if (false) {', WINDOW),
+    ('the-outcome-place-is-dropped', YONDER,
+     '    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));',
+     '    yonder_scripts_failure(host, address, failure, "", placed, sizeof(placed));', WINDOW),
+    ('a-told-place-is-dropped', SCRIPTS,
+     '    yonder_scripts_failure(s, s->task_address, message, stack, failure, sizeof(failure));',
+     '    yonder_scripts_failure(s, s->task_address, message, stack + os64_strlen(stack), failure, sizeof(failure));',
+     WINDOW),
+    ('json-text-is-a-place', REPORT,
+     "            if (!(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&",
+     "            if (true || !(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&", WINDOW),
+    ('eval-code-is-no-place', REPORT,
+     "            if (!(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&",
+     "            if (!(frame->file_length >= 2 && frame->file[0] == '<' &&", DOM),
+    ('a-cut-line-is-a-frame', REPORT, "        if (*end != '\\n') break;",
+     "        if (*end != '\\n' && !(end > start && end[-1] >= '0' && end[-1] <= '9')) break;", DOM),
+    ('a-module-is-not-its-own', SCRIPTS,
+     '    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&',
+     '    if (false && address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&', WINDOW),
+    ('a-module-compile-is-unplaced', MODULES,
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack, placed, sizeof(placed));',
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack + os64_strlen(stack), placed, sizeof(placed));',
+     WINDOW),
+    ('a-lost-load-writes-nothing', YONDER,
+     'static void stream_failed(const char *line)\n{\n    yonder_diag_failed(g.stream.diag, "page", line);',
+     'static void stream_failed(const char *line)\n{\n    (void)line;', WINDOW),
+    ('the-badge-stays-blank', YONDER,
+     '    g.badge_missing = missing;\n    g.badge_failed = failed;',
+     '    g.badge_missing = missing;\n    g.badge_failed = failed;\n    return;', WINDOW),
+    ('the-hook-is-not-installed', SCRIPTS,
+     '    if (s->options.diag != NULL)\n        os64_dom_set_global_miss(s->dom, global_missed, s);',
+     '    (void)global_missed;', WINDOW),
+    ('module-not-recorded', YONDER,
+     '        yonder_diag_missing(g.stream.diag, "script", "module", 1);',
+     '        (void)0;', WINDOW),
+    ('cascade-not-looked-at', YONDER,
+     '    if (p->cascade != NULL)\n        diag_cascade(d, p->cascade);',
+     '    (void)diag_cascade;', WINDOW),
+    ('a-dropped-value-is-not-counted', CASCADE,
+     '        else if (only_words(d->value, d->nvalue))',
+     '        else if (only_words(d->value, d->nvalue) && false)', GARB),
+    ('an-approximation-is-not-counted', CASCADE,
+     '            skipped_value(c, prop, os64_strlen(prop), &one, 1);',
+     '            (void)one;\n            (void)prop;', WINDOW),
+    # Batch 1.
+    ('an-error-page-is-clean', YONDER,
+     '            if (g.stream.head.status >= 400) {',
+     '            if (g.stream.head.status >= 4000) {', WINDOW),
+    ('an-undecoded-format-is-not-missing', YONDER,
+     '        yonder_diag_missing(p->diag, "image", product->format, 1);',
+     '        (void)product;', WINDOW),
+    ('svg-is-not-sniffed', DIAG,
+     '        if (os64_memcmp(bytes + i, "<svg", 4) == 0)',
+     '        if (os64_memcmp(bytes + i, "<svG", 4) == 0)', WINDOW),
+    ('the-whole-address-is-not-used', YONDER,
+     '    os64_snprintf(key, sizeof(key), "script %s", address != NULL ? address : name);',
+     '    os64_snprintf(key, sizeof(key), "script %s", name);\n    (void)address;', WINDOW),
+    ('an-ie-hack-is-counted', CASCADE,
+     '            if ((unsigned char)v[i].text[k] < 0x20)\n                return;',
+     '            if ((unsigned char)v[i].text[k] < 0x01)\n                return;', GARB),
+    ('sequence-restarts', DIAG,
+     '    return high < UINT32_MAX ? high + 1 : high;',
+     '    return 1;', WINDOW),
+    ('a-line-breaker-is-written-raw', DIAG,
+     '        } else if (c < 0x20 || c == 0x7F) {',
+     '        } else if (c == 0x7F) {', WINDOW),
+    ('the-missing-parent-is-not-said', YONDER,
+     '        why = os64_mkdir(dir) == 0 ? NULL : "cannot be made (does its parent exist?)";',
+     '        why = ((void)os64_mkdir(dir), NULL);', WINDOW),
+    # The pictures that were not shown.
+    ('a-failed-picture-is-only-counted', YONDER,
+     '        os64_snprintf(line, sizeof(line), "%s: %s", url, why);\n        yonder_diag_failed(p->diag, asked != NULL ? "picture" : "picture-fetch", line);',
+     '        os64_snprintf(line, sizeof(line), "%s: %s", url, why);', WINDOW),
+    ('an-undecoded-picture-is-not-named', YONDER,
+     '        yonder_diag_fact(p->diag, key, why);',
+     '        (void)key;', WINDOW),
+    ('the-last-picture-writes-nothing', YONDER,
+     '        if (waiting > 0 && g.page.waiting == 0 && s_web.waiting == 0)\n            diag_pictures_in(&g.page);',
+     '        if (waiting > 0 && g.page.waiting == 0 && s_web.waiting == 0)\n            (void)diag_pictures_in;', WINDOW),
+    ('a-picture-past-the-memory-kept-is-unnamed', YONDER,
+     '        yonder_diag_fact(g.page.diag, key, "past the memory kept for the page\'s pictures");',
+     '        (void)key;', WINDOW),
+    ('a-picture-never-asked-for-is-unnamed', YONDER,
+     '            picture_failed(p, pic->url, NULL,\n                           g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it");',
+     '            (void)0;', WINDOW),
+    ('a-refused-last-picture-writes-nothing', YONDER,
+     '    if (refused && p->waiting == 0)\n        diag_pictures_in(p);',
+     '    (void)refused;', WINDOW),
+    ('the-rewrite-leaves-the-badge', YONDER,
+     '    // What the observation found since arrival is the badge\'s too.\n    if (p == &g.page)\n        badge_follow();',
+     '', WINDOW),
+    ('workerless-pictures-are-never-fed', YONDER,
+     '                                     bg->src.refused);\n    }\n    pictures_feed(p);',
+     '                                     bg->src.refused);\n    }\n    if (g.pool != NULL)\n        pictures_feed(p);', WINDOW),
+    ('stopped-workers-leave-pictures-unnamed', YONDER,
+     '        picture_failed(p, p->pics[i].url, NULL, "the workers stopped");',
+     '        (void)0;', WINDOW),
+    ('stopped-workers-leave-the-queue-unnamed', YONDER,
+     '    p->in_flight = 0;\n    pictures_feed(p);\n    if (any)',
+     '    p->in_flight = 0;\n    if (any)', WINDOW),
+    ('a-picture-refused-before-the-table-is-unnamed', YONDER,
+     '        if (k < 0)\n            fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);',
+     '        (void)0;', WINDOW),
+    ('an-unfetched-scheme-is-not-counted', YONDER,
+     '        yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);',
+     '            (void)scheme;', WINDOW),
+    ('pictures-still-coming-are-not-counted', YONDER,
+     '        coming += p->pics[i].state == PIC_WAITING || p->pics[i].state == PIC_QUEUED;',
+     '        coming += 0;', WINDOW),
+    ('a-standing-failure-counts-each-look', DIAG,
+     '    if (l != NULL && l->count == 0)\n        l->count = 1;',
+     '    if (l != NULL)\n        l->count++;', WINDOW),
+    ('a-refusal-met-again-counts-again', YONDER,
+     '        if (p->unasked_seen[i] == h)\n            return false;',
+     '        if (p->unasked_seen[i] == h + 1)\n            return false;', WINDOW),
+    ('a-css-picture-refused-is-unnamed', YONDER,
+     '                fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);',
+     '                (void)0;', WINDOW),
+    ('a-late-refusal-writes-nothing', YONDER,
+     '    pictures_feed(p);\n    // A refusal met with nothing out to write the record when it comes in\n    // is written now, as one met with the pictures in would be.\n    if (fresh && p->waiting == 0)\n        diag_pictures_in(p);',
+     '    pictures_feed(p);\n    (void)fresh;', WINDOW),
+    ('a-moving-last-picture-writes-before-its-layout', YONDER,
+     '    if (p->waiting > 0 || (p == &g.page && (g.pictures_moved || s_web.moved || s_web.waiting > 0))) {\n        p->record_owed = true;\n        return;\n    }',
+     '', WINDOW),
+    ('an-owed-record-is-never-written', YONDER,
+     '    if (g.page.record_owed && !g.pictures_moved && !s_web.moved)\n        diag_pictures_in(&g.page);',
+     '    (void)0;', WINDOW),
+    ('a-one-letter-scheme-is-no-scheme', YONDER,
+     '    bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));',
+     '    bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme)) && scheme[1] != 0;', WINDOW),
+    ('every-picture-writes', YONDER,
+     '        if (waiting > 0 && g.page.waiting == 0 && s_web.waiting == 0)',
+     '        if ((void)waiting, g.page.waiting == 0 && s_web.waiting == 0)', WINDOW),
+    # #280 round 4: a line that met no room is counted once.
+    ('lost-lines-recount', DIAG,
+     '    if (list_find(&t->by_gone, t->gone, t->ngone, a, b, both) >= 0)\n        return;\n',
+     '    (void)both;\n', WINDOW),
+    # P2a's cold read: a line is found by its key, never by walking the record.
+    ('lookup-walks', DIAG,
+     '    if (slot != NULL)\n        return *slot != 0 ? (int64_t)*slot - 1 : -1;\n',
+     '    (void)slot;\n', WINDOW),
+    ('forget-keeps-the-lost', DIAG,
+     '    for (int k = 0; k < 2; k++) {',
+     '    for (int k = 0; k < 1; k++) {', WINDOW),
+    ('found-stays-lost', DIAG,
+     '    table_found(t, a, b, both);\n',
+     '    (void)table_found;\n', WINDOW),
+    # #280 round 5: past what it can tell apart, it says there are more.
+    ('more-is-unsaid', DIAG,
+     '                  t->more ? ", and more not counted" : "");',
+     '                  "");', WINDOW),
+    ('more-recounts', DIAG,
+     '        t->more = true;\n        return;',
+     '        t->more = true;\n        if (t->ngone > 0)\n            t->ngone++;\n        return;', WINDOW),
+    ('memory-short-is-unsaid', DIAG,
+     '    if (d->short_of_memory)\n        puts_(&o, "some lines',
+     '    if (false)\n        puts_(&o, "some lines', WINDOW),
+    # #280 round 6: a value with no memory to keep says so.
+    ('a-short-value-reads-empty', DIAG,
+     '    l->count = v == NULL;',
+     '    (void)0;', WINDOW),
+    ('a-short-value-is-unsaid', DIAG,
+     '        if (d->facts.lines[i].count != 0)',
+     '        if (false)', WINDOW),
+    # #326 round 7: a placeholder that is not whole is no claim.
+    ('claim-placeholder-without-memory-taken', DIAG,
+     '    bool whole = text != NULL;\n    if (whole) {',
+     '    bool whole = true;\n    if (text != NULL) {', WINDOW),
+    ('claim-placeholder-write-failure-taken', DIAG,
+     '        whole = write_all((int32_t)h, text, m.at);',
+     '        (void)write_all((int32_t)h, text, m.at);', WINDOW),
+    ('claim-placeholder-close-failure-taken', DIAG,
+     '    whole = os64_close((int32_t)h) == 0 && whole;',
+     '    (void)os64_close((int32_t)h);', WINDOW),
+    ('claim-placeholder-left-behind', DIAG,
+     '    if (!whole)\n        (void)os64_unlink(path);',
+     '', WINDOW),
+    # A data: address is shortened as a line is kept (diag.h), in a line's
+    # fields and a fact's value, at a word's start, and a lookup by the
+    # whole key finds it.
+    ('data-kept-whole', DIAG, '        if (run <= DATA_RUN_MAX)\n            return s;',
+     '        if (run <= DATA_RUN_MAX || true)\n            return s;', WINDOW),
+    ('data-inside-a-word', DIAG, "        if (!word || at[1] != 'a'", "        if ((void)word, at[1] != 'a'", WINDOW),
+    ('data-value-whole', DIAG, '    value = shown(value, &made_value);\n', '    made_value = NULL;\n', WINDOW),
+    ('data-lookup-whole', DIAG, '    char *made;\n    key = shown(key, &made);',
+     '    char *made = NULL;', WINDOW),
+    # A failure on the console, and a stack overflow's callers (2026-10-31).
+    ('an-overflow-names-no-callers', SCRIPTS, '    if (ml < ol || !os64_streq(message + ml - ol, kOverflow))',
+     '    if (true || !os64_streq(message + ml - ol, kOverflow))', WINDOW),
+    ('the-console-hears-it-every-time', DIAG, '    if (l == NULL || l->count != 0)\n        return;\n    char w[512]',
+     '    if (l == NULL)\n        return;\n    char w[512]', WINDOW),
+    ('the-console-hears-nothing', DIAG,
+     '    said_on_console(l, what, message);\n    if (l != NULL)\n        l->count = saturating(l->count, 1);',
+     '    if (l != NULL)\n        l->count = saturating(l->count, 1);', WINDOW),
+    ('a-long-address-is-not-cut', DIAG, '        if (length <= CONSOLE_ADDRESS_MAX) {', '        if (length > 0) {', WINDOW),
+    ('a-trailing-comma-is-the-address', DIAG, "        while (end > at && (end[-1] == ',' || end[-1] == ';'))\n            end--;\n", '', WINDOW),
+    ('the-console-is-not-escaped', DIAG, "        if (c < 0x20 || c >= 0x7f || c == '\\\\') {", '        if (false) {', WINDOW),
+    ('a-caller-keeps-the-engines-name', SCRIPTS, '            break;\n        frame_file(s, own, &frame, &file, &file_length);',
+     '            break;\n        file = frame.file;\n        file_length = frame.file_length;', WINDOW),
+    ('a-query-slash-names-the-file', DIAG, '            const char *last = last_end;', '            const char *last = core_end;', WINDOW),
+    ('the-line-outgrows-the-complaint', DIAG, '    console_short(message, m, CONSOLE_LINE_MAX - used);', '    console_short(message, m, sizeof(m) + 0 * used);', WINDOW),
+]
+
+caught, missed, unbuilt = [], [], []
+for name, rel, old, new, harness in mutants:
+    if args.only and args.only not in name:
+        continue
+    path = root / rel
+    original = path.read_bytes()
+    text = original.decode()
+    if text.count(old) != 1:
+        print(f'{name}: the text to break is not found once in {rel}', file=sys.stderr)
+        unbuilt.append(name)
+        continue
+    log = args.logs / f'{name}.log'
+    try:
+        path.write_text(text.replace(old, new))
+        with log.open('w') as out:
+            try:
+                result = subprocess.run(['bash', '-c', harness if harness.endswith('.sh') else f'python3 {harness}'],
+                                        cwd=root, stdout=out, stderr=out, timeout=900)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = 'timeout'
+                subprocess.run(['pkill', '-f', 'yonder-script[s]'])
+    finally:
+        path.write_bytes(original)
+        if path.read_bytes() != original:
+            print(f'{name}: {rel} WAS NOT RESTORED', file=sys.stderr)
+            sys.exit(2)
+    body = log.read_text(errors='replace')
+    # A compiler's error, not a sanitizer's "runtime error:", which is a catch.
+    built = re.search(r'\.(c|h|inc):\d+:\d+: error:', body) is None and 'undefined reference' not in body
+    if not built:
+        unbuilt.append(name)
+        verdict = 'did not build'
+    elif code != 0:
+        caught.append(name)
+        verdict = 'caught'
+    else:
+        missed.append(name)
+        verdict = 'MISSED'
+    print(f'{name}: {verdict}', flush=True)
+
+print(f'\ndiagnostics mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
+if missed:
+    print('missed: ' + ', '.join(missed))
+if unbuilt:
+    print('did not build: ' + ', '.join(unbuilt))
+sys.exit(1 if missed or unbuilt else 0)

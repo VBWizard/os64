@@ -1,11 +1,13 @@
 #ifndef GUI_WINDOW_H
 #define GUI_WINDOW_H
+#include "os64/decoration.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "gui/gui_types.h"
 #include "gui/input.h"
+#include "gui/event_queue.h"
 
 // The window system (GUI layer 3): window objects, z-order, decorations,
 // hit-testing, event routing.
@@ -21,14 +23,14 @@
 // size from data, as an image viewer does, will otherwise hand over a legal
 // picture and be told its window is bad.
 #define GUI_MIN_CONTENT        8
-#define GUI_WINDOW_EVENTS_MAX  64
 
-// Chrome geometry: a titlebar across the top (which includes the top border)
-// and a 1-pixel border on the other three sides.
+// Compiled fallback geometry, also published as legacy ABI defaults.
+// Installed decorations derive their metrics from the prepared font.
 #define GUI_TITLEBAR_HEIGHT    20
 #define GUI_BORDER_WIDTH       1
 
-// The smallest content area a RESIZE may leave behind. Deliberately larger
+// Default minimum content for RESIZE; popup floors are capped by birth
+// capacity. Ordinary defaults are deliberately larger
 // than wm_create's 8x8 degenerate-surface guard, and for a different reason:
 // creation's floor exists so a 0-wide surface can't ripple NULLs through the
 // compositor, while this one exists so a drag can't produce a window with
@@ -40,8 +42,9 @@
 // flags
 // NO TITLEBAR. Honored since 2026-08-23 (it was reserved from birth): the
 // window keeps its 1-pixel border on all four sides — a window with no edge
-// at all is unfindable on a desktop — and loses the 20-pixel bar. Content
-// size is untouched; only the frame shrinks. A creation flag for clients
+// at all is unfindable on a desktop — and loses the configured titlebar. Content
+// size is preserved for ordinary windows; maximized windows retain their
+// screen-sized frame. A creation flag for clients
 // AND a toggle for the user (Ctrl+Alt+T), because "hide the title" is a
 // thing you decide while looking at the window, not only when writing the
 // program. Ctrl+Alt+left-drag still moves it — the chord gestures were
@@ -59,6 +62,9 @@
 // the "unless nothing holds it yet" clause is what focuses the desktop on
 // a boot that starts nothing.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
+// Title bytes use the shared Western UTF-8 profile instead of legacy Latin-1.
+#define GUI_WINDOW_TITLE_UTF8 (1u << 8)
+#define GUI_WINDOW_HAS_SETTINGS (1u << 9) // opt in to the Settings titlebar action
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
 // and cannot be buried by an ordinary raise. The user can toggle it with
 // Ctrl+Alt+P, and clients whose persisted state asks for it can request it
@@ -69,8 +75,10 @@
 #define GUI_WINDOW_PINNED          (1u << 2)
 // MAXIMIZED (2026-08-23): the frame is the whole screen and restoreFrame
 // remembers where it came from. Ctrl+Alt+M toggles; so does a double-click
-// on the titlebar (the 1990 habit). A manual move or resize clears it — the
-// user has taken the geometry back, and a later "restore" to a frame they
+// on the titlebar (the 1990 habit). Restore retains this flag and the saved
+// frame if its size would need clamping to the current limits. A manual
+// move or resize clears it — the user has taken the geometry back, and a
+// later "restore" to a frame they
 // have since abandoned would be a surprise. The capacity reservation is
 // what makes this trivial: the screen IS the canvas capacity, so a
 // maximize can never fail and never allocates (window.h's canvas_cap_w).
@@ -145,21 +153,18 @@
 // other's; this one pins the kernel's flags to EACH OTHER.
 _Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
                 GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
-                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP) ==
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8 ^ GUI_WINDOW_HAS_SETTINGS) ==
                (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
                 GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
-                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP),
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS),
                "two window flags share a bit");
 
-// Alt+F4 twice within this long (5s) on a window that did not go away is
-// "I mean it": the owner task gets SIGTERM.
+// Alt+F4 twice within this long (5s) on a window without a popup owner
+// escalates to task-wide SIGTERM. Owned popups repeat the close request.
 #define GUI_CLOSE_ESCALATE_TICKS   (5 * TICKS_PER_SECOND)
 
-// THE CHROME PALETTE. Private to window.c until 2026-08-23, when the Alt+Tab
-// switcher became a second consumer: its highlighted cell has to be the same
-// blue a focused titlebar is, or the strip is telling the user about a
-// different desktop than the one behind it. One copy, shared — the alternative
-// was a second set of literals drifting a shade at a time.
+// Compiled fallback palette. Consumers of the active palette use
+// wm_titlebar_color/wm_border_color under the GUI lock.
 #define WINDOW_TITLEBAR_FOCUSED   0xff2a62b8
 #define WINDOW_TITLEBAR_UNFOCUSED 0xff6a6f78
 #define WINDOW_BORDER_FOCUSED     0xffd8dce4
@@ -187,11 +192,12 @@ typedef struct window
     rect_t    restoreFrame;
 
     // When Alt+F4 last asked this window to close (kTicksSinceStart), 0 if
-    // never. A second ask within GUI_CLOSE_ESCALATE_TICKS while the window
-    // is still here escalates to SIGTERM on the owner — see
+    // not armed. Owned popups leave this unarmed. For other windows a second
+    // ask within GUI_CLOSE_ESCALATE_TICKS escalates to task-wide SIGTERM — see
     // INPUT_EVENT_WINDOW_CLOSE in input.h for why the first one is only a
     // request.
     uint64_t  closeAskedTick;
+    uint32_t decor_hover, decor_pressed;
 
     // The task that created this window through the client API (task.h
     // taskID), or 0 for a window no task is behind. Stamped by wm_create
@@ -200,13 +206,19 @@ typedef struct window
     //
     // What ownership MEANS is a client-API concept: gui_client.c enforces it
     // on every handle lookup, and gui_task_destroy_windows sweeps by it on
-    // task exit. The wm_ layer reads it too, for the sibling bit —
+    // task exit. The wm_ layer also validates popup associations and the sibling bit —
     // focus_window asks whether the window that just took the focus belongs
     // to the same task as the one losing it. A kernel thread can own a
     // window the same way, and simply never exits to trigger the sweep.
     uint64_t  owner;
+    uint32_t  popup_owner_id; // immutable same-task parent, zero for unowned
+    uint16_t  client_handle;  // assigned before birth focus notifications
+    bool      retiring;      // task sweep excludes doomed focus successors
 
     char      title[GUI_WINDOW_TITLE_MAX];
+
+    // Effective content floors; popup defaults are capped by birth capacity.
+    uint32_t min_content_w, min_content_h;
 
     rect_t    frame;      // screen rect INCLUDING decorations
     surface_t content;    // what the COMPOSITOR composites (the front buffer)
@@ -239,19 +251,19 @@ typedef struct window
     //     owner could write through a stale entry into recycled memory. That
     //     last one is the whole reason this shape was chosen over
     //     realloc-and-remap; the hazard it avoids is silent, not a fault.
-    // The price is standing memory: capacity is the SCREEN (see
-    // wm_canvas_capacity_for), so a small window still reserves a screenful
-    // twice over. Committing lazily is possible but needs a task reference or
+    // Ordinary windows reserve at least the screen (up to wm_dim_max());
+    // callers opting into popup capacity reserve birth content size. Both
+    // stores share this capacity through wm_canvas_capacity_for. Committing
+    // lazily is possible but needs a task reference or
     // a deferred-work channel to map pages into a foreign address space
     // safely — booked in DEBTS rather than built.
     uint32_t  canvas_cap_w, canvas_cap_h;
 
-    // Per-window event queue: the compositor pushes routed events, the
-    // owning app thread pops them via gui_event_poll(). Drop-newest on full,
-    // except a focus transition, which evicts the oldest to get in
-    // (wm_deliver_event says why).
-    input_event_t events[GUI_WINDOW_EVENTS_MAX];
-    uint32_t  evt_head, evt_tail;
+    // Routed input and synthesized window facts share this queue. The owning
+    // app drains it through poll/wait. event_queue.h defines ring overflow;
+    // coalesced appearance generations precede input and pointer snapshots
+    // follow it, independently of ring capacity.
+    gui_event_queue_t event_queue;
 
     // The thread parked in gui_event_wait on this window, or NULL. Owned by
     // the WAITER (it registers and unregisters itself, console_read's
@@ -275,10 +287,14 @@ typedef struct window
 // layer records the value and compares it for that bit; what ownership MEANS
 // — who may look a handle up, whose exit collects the window — is
 // gui_client's.
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner);
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
+                    uint16_t client_handle, uint32_t popup_owner_id, bool popup_capacity);
 
-// Unlink + free. (No owner-notification semantics yet — the caller is the
-// owner.) Damages the vacated area.
+// Follow immutable popup links to the owning ordinary/root window.
+window_t *wm_focus_root(window_t *w);
+
+// Unlink/free and conditionally return focus to the popup parent. The client
+// API enforces child-first destruction. Damages the vacated area.
 void wm_destroy(window_t *w);
 
 // Topmost unhidden window whose frame contains the point, or NULL if none
@@ -292,6 +308,11 @@ void wm_raise(window_t *w);
 // Move the frame origin (drag). Damages the vacated and occupied areas.
 void wm_move(window_t *w, int32_t x, int32_t y);
 
+// Replace the title and its encoding (GUI_WINDOW_TITLE_UTF8 set or clear),
+// and damage the titlebar if the window has one. `title` is copied and cut
+// to GUI_WINDOW_TITLE_MAX as wm_create cuts it. A no-op when neither changes.
+void wm_set_title(window_t *w, const char *title, bool utf8);
+
 // Pin (or unpin) a window — see GUI_WINDOW_PINNED. Re-places it at the top
 // of its new band and damages its frame. A no-op if already in that state.
 void wm_set_pinned(window_t *w, bool pinned);
@@ -300,21 +321,25 @@ void wm_set_pinned(window_t *w, bool pinned);
 // wm_create sizes the kernel-side stores with it, and gui_window_create sizes
 // the task-backed canvas extent with it. A window may be created larger than
 // the screen (the client API allows up to wm_dim_max() — 4096, or the screen
-// if it is larger), so capacity is the larger of
-// the two — never smaller than what the window already is.
+// if it is larger), so ordinary capacity is the larger of the two.
+// The explicit create-time popup_capacity option selects birth-sized capacity.
 uint32_t wm_dim_max(void);   // the largest side a window may have
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, bool popup_capacity,
                             uint32_t *cap_w, uint32_t *cap_h);
 
 // The frame this window would actually ADOPT for a requested one: content
-// clamped to [GUI_WINDOW_MIN_CONTENT_*, capacity], then re-inflated by the
+// clamped to [per-window minimum, capacity], then re-inflated by the
 // chrome. Exported so an interactive resize can PREVIEW exactly what it will
 // commit — the rubber band and wm_resize share this function precisely so the
 // outline can never promise a size the window then refuses.
 rect_t wm_clamp_frame(const window_t *w, rect_t frame);
 
+// Validate both floors against capacity before changing either. Zero uses the
+// default floor; success grows a too-small window without shrinking it.
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height);
+
 // Resize to `frame` (screen rect INCLUDING decorations), clamping the content
-// to [GUI_WINDOW_MIN_CONTENT_*, the canvas capacity]. Because both pixel
+// to [per-window minimum, the canvas capacity]. Because both pixel
 // stores were reserved at capacity this only re-reports their size, paints
 // whatever the growth newly exposed, damages old ∪ new, and hands the owner
 // an INPUT_EVENT_WINDOW_RESIZE. It allocates nothing and cannot fail; the
@@ -359,25 +384,52 @@ window_t *wm_focused(void);
 size_t wm_recency_ids(uint32_t *ids, size_t max);
 #define ALTTAB_RING_MAX 16   // the most a snapshot holds; the cycle covers the top sixteen
 
-// Push a routed event onto the window's queue (drops when full).
+// Deliver an event and wake its waiter; event_queue.h defines overflow policy.
 void wm_deliver_event(window_t *w, const input_event_t *ev);
+// Caller holds kGuiLock through publication and this broadcast.
+void wm_appearance_changed(uint64_t generation);
 
 // Pop for the owner side; false when empty.
 bool wm_pop_event(window_t *w, input_event_t *out);
 // Is anything queued? The peek-wait's question (gui_event_wait with no out).
 static inline bool wm_has_event(const window_t *w)
 {
-    return w->evt_head != w->evt_tail;
+    return gui_event_queue_pending(&w->event_queue);
 }
 
-// Composite every window that intersects `damage` (screen coords) into the
-// backbuffer, bottom-up, chrome + content. The desktop below and the cursor
-// above are the compositor's business, not ours.
-void wm_composite(surface_t *backbuffer, rect_t damage);
+// What one wm_composite did, for /sys/gui.
+typedef struct {
+	uint64_t painted;   // pixels the background and the windows wrote
+	bool stopped;       // the claim walk stopped early and the old painter took the rest
+	bool fault;         // the pieces did not add up to the rectangle: a geometry bug
+} wm_composite_result_t;
 
-// Is this screen rect completely hidden behind some window ABOVE `w`? The
-// only question publish needs to ask before spending a composite and a slow
-// uncached flush on pixels nobody can see. Caller holds kGuiLock.
+// Paint `damage` (screen coords, on the screen) into the backbuffer, each
+// pixel by the one layer that can be seen there: the topmost window over it
+// (chrome + content) or, under no window, `background` (OCCLUSION.md). The
+// claim walk (visible.h) splits `damage` into the piece each window owns;
+// when it stops early, what it left is painted the old way, the background
+// and then every window touching it bottom-up, and `stopped` says so. The
+// band, the switcher and the cursor above are the compositor's business.
+wm_composite_result_t wm_composite(surface_t *backbuffer, const surface_t *background, rect_t damage);
+
+// Paint `w` into `dst`, whose coordinates are the screen's, inside `view`
+// (which lies within `dst`): what wm_composite does for a piece `w` owns,
+// with whatever decoration is installed. Answers whether that decoration
+// painted the titlebar (false: the plain one, or none). `w` need not be in
+// the z-list, which is what lets test_window_opacity paint windows nobody
+// sees. Caller holds kGuiLock.
+bool wm_paint_window(surface_t *dst, const window_t *w, rect_t view);
+
+// The part of `screen_rect` no window above `w` covers: what a publish of
+// it can change on the glass. Writes the pieces to `out` (room for `max`, at
+// least 1) and answers how many; more than `max` become one, their bounding
+// box. 0 means none of it can be seen, which is also the answer for a
+// minimized `w`. Caller holds kGuiLock.
+size_t wm_visible_damage(const window_t *w, rect_t screen_rect, rect_t *out, size_t max);
+
+// Is this screen rect completely hidden behind ONE window above `w`? The
+// cover sweep's question. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
 // Recompute GUI_WINDOW_COVERED for every window and announce each flip with
@@ -385,46 +437,21 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 // compositor frame (a dozen windows, each asked about the ones above it).
 void wm_cover_sweep_locked(void);
 
-// Is this screen rect completely covered by SOME window? The compositor asks
-// before painting the desktop background into a damage rect: if a window is
-// about to cover every pixel of it, the background underneath is invisible
-// and painting it is pure cost. Matters since the desktop shell became a
-// fullscreen window — see the comment at the definition for the measurement.
-bool wm_rect_is_covered(rect_t screen_rect);
-
-// How much chrome sits ABOVE the content: the titlebar (which includes the
-// top border) for a decorated window, the bare border for an undecorated
-// one. THE one place the question is answered — seven sites used to spell
-// "GUI_TITLEBAR_HEIGHT" by hand, which is seven sites to miss the day the
-// answer stopped being constant. Takes flags, not a window, because the
-// client boundary sizes a content area before any window exists.
+// Four-sided geometry is derived from the current immutable decoration.
+// Call under kGuiLock, including sizing at the client boundary.
+os64_decor_insets_t wm_decoration_insets(uint32_t flags);
+uint32_t wm_decoration_min_width(uint32_t flags);
+uint32_t wm_decoration_hit(const window_t *, int32_t x, int32_t y);
+uint32_t wm_decoration_disabled(const window_t *);
+void wm_decoration_state(window_t *, uint32_t hover, uint32_t pressed);
+void wm_decoration_action(window_t *, uint32_t action, uint64_t tick);
+bool wm_set_decoration(const os64_decor_view_t *view, void **retired);
+uint32_t wm_titlebar_color(bool active);
+uint32_t wm_border_color(bool active);
 static inline int32_t wm_chrome_top(uint32_t flags)
-{
-    if (flags & GUI_WINDOW_DESKTOP)
-        return 0;   // no chrome at all — see wm_border_width
-    return (flags & GUI_WINDOW_NO_DECORATIONS) ? GUI_BORDER_WIDTH : GUI_TITLEBAR_HEIGHT;
-}
-
-// How wide the border is — and it is not always a constant, which is why this
-// exists (2026-08-25). THE DESKTOP HAS NO BORDER.
-//
-// NO_DECORATIONS drops the titlebar and keeps a 1px frame, which is right for
-// an ordinary undecorated window: the border is what separates it from
-// whatever is behind it, and its COLOR is the only focus indication such a
-// window has. Neither argument survives on the desktop. There is nothing
-// behind it to be separated from, and the "border" is a line around the edge
-// of the entire screen that changes colour when you click the wallpaper —
-// which is what Chris saw the first afternoon the shell ran, and it reads as
-// a rendering bug rather than as focus.
-//
-// Written as a function beside wm_chrome_top for exactly the reason that one
-// exists: the border was spelled GUI_BORDER_WIDTH by hand at six sites, and
-// six sites is six chances to miss the day the answer stopped being constant.
-// It stopped being constant today.
+{ return wm_decoration_insets(flags).top; }
 static inline int32_t wm_border_width(uint32_t flags)
-{
-    return (flags & GUI_WINDOW_DESKTOP) ? 0 : GUI_BORDER_WIDTH;
-}
+{ return wm_decoration_insets(flags).left; }
 
 // Where the content area sits on screen (for event coordinate translation
 // and publish-rect mapping).
@@ -438,40 +465,29 @@ static inline rect_t wm_content_rect_on_screen(const window_t *w)
     };
 }
 
-// True if the point (screen coords) lands in the window's titlebar — the
-// grab-handle for dragging and NOT part of the client content. An
-// undecorated window has none; its top border is content-adjacent chrome
-// like the other three sides, and a click there is the window system's.
-// Does this window HAVE a titlebar? Asked of wm_chrome_top rather than of the
-// NO_DECORATIONS bit (Codex #31 rd3): a DESKTOP window has no chrome whatever
-// its decoration bit says, and the two sites that tested the bit by hand —
-// this hit-test and composite_one's titlebar paint — disagreed with the
-// chrome functions for a desktop created WITHOUT NO_DECORATIONS: an
-// invisible 20px titlebar across the top of the wallpaper that swallowed
-// clicks and dragged the desktop. One question, one answerer.
+// Titlebar presence is semantic, independent of a particular font height.
 static inline bool wm_has_titlebar(uint32_t flags)
-{
-    return wm_chrome_top(flags) == GUI_TITLEBAR_HEIGHT;
-}
-
+{ return !(flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_NO_DECORATIONS)); }
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
-    if (!wm_has_titlebar(w->flags))
-        return false;
-    return rect_contains_point(
-        (rect_t){w->frame.x, w->frame.y, w->frame.w, GUI_TITLEBAR_HEIGHT}, x, y);
+    return wm_has_titlebar(w->flags) && rect_contains_point(
+        (rect_t){w->frame.x, w->frame.y, w->frame.w, wm_chrome_top(w->flags)}, x, y);
 }
 
-// Show or hide the titlebar (Ctrl+Alt+T). The CONTENT STAYS WHERE IT IS —
-// the frame's top edge moves to meet it — because the content is what the
-// user is looking at, and a window that jumps 19 pixels when you hide its
-// title is a window you hid the title of by mistake. Damages old ∪ new.
+// Toggle between the configured decoration and the 1px bare frame. Ordinary
+// content retains its size/position subject to titlebar reachability; maximized
+// frames stay screen-sized and refuse a toggle that violates content minima.
 void wm_set_decorated(window_t *w, bool decorated);
 
-// Maximize to the screen, or restore the remembered frame. See
+// Maximize to the screen, or restore the remembered frame when its size
+// fits the current limits without clamping; otherwise keep it maximized. See
 // GUI_WINDOW_MAXIMIZED. Goes through wm_resize, so the owner gets its
 // resize event exactly as it would for a drag.
 void wm_set_maximized(window_t *w, bool maximized);
+
+// Apply initial maximized geometry after installing the client canvas,
+// preserving wm_create's stacking and focus decisions. Caller holds kGuiLock.
+void wm_maximize_at_birth(window_t *w);
 
 // Hide from the glass, or bring back (restored = raised + focused). See
 // GUI_WINDOW_MINIMIZED.

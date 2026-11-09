@@ -6,8 +6,16 @@
 #include "thread.h"
 #include "tss.h"
 #include "task.h"
+#include "cpu_roster.h"
 
-#define MAX_CPUS 24
+// A bound on CPU NUMBERS (0..kCPUCount-1, cpu_roster.h), and so the size of
+// every per-CPU table. A machine with more brings up the first MAX_CPUS of the
+// roster's order and says how many it left parked. 64 is a Threadripper
+// 3970X; each CPU costs two GDT slots for its TSS (GDT_ENTRIES follows).
+#define MAX_CPUS 64
+// The roster's inverse table spells "no CPU" as 0xFF, so that byte can never
+// be a CPU number.
+_Static_assert(MAX_CPUS < CPU_ROSTER_NO_CPU, "MAX_CPUS must stay below kApicToCPU's sentinel");
 #define APIC_EOI_OFFSET    0xB0
 #define AP_STACK_SIZE 0x1000
 #define KERNEL_INTERRUPT_STACK_SIZE (16 * 4096)  // 64KB per-CPU kernel stack
@@ -21,18 +29,17 @@ typedef enum mpRecType
     LOCALINTASS
 } eMPRecType;
 
+// One CPU on the roster, indexed by CPU number (kCPUs). Its register
+// addresses are not here: every CPU sees its OWN local APIC at the one
+// address kMPApicBase holds, so a per-CPU copy could only ever be the same
+// number or a wrong one.
 typedef struct
 {
-    int apicID;
-    //Virtual register base address
-	uint64_t registerBase;
-	//IO APIC address
-	uint64_t ioAPICAddress;
-	uint64_t apic_lvt_timer, apic_lvt_lint0, apic_lvt_lint1, apic_lvt_error, apic_tpr;
-	uint64_t apic_id_reg, apic_svr, apic_eoi, apic_icr_low, apic_icr_high;
-    uint64_t ticksPerSecond;
-	//Put an address in this field and the CPU will jump out of park, to it
-	void *goto_address;
+	apic_id_t apic;          // where an IPI or an interrupt aimed at it goes
+	// Limine's doorbell for THIS CPU: an address written here and the CPU
+	// jumps out of the bootloader's park to it. Carried by the roster entry
+	// so the wake loop can only ring the CPU it named.
+	volatile uint64_t *goto_address;
 } cpu_t;
 
 typedef struct mpConfig
@@ -54,7 +61,7 @@ typedef struct mpConfig
 typedef struct
 {
 	void *self;										// 0
-	uint64_t apic_id;								// 8
+	uint64_t cpu;									// 8: this CPU's number (cpu_roster.h)
 	uint64_t threadID;								// 16
 	uint64_t apicTicksPerSecond;					// 24
 	uint64_t apicTimerCount;
@@ -94,23 +101,26 @@ typedef struct
 	// syscall_user_rsp above genuinely is per-core — stored and consumed
 	// nanoseconds apart under SFMASK's IF=0, before anything can park.)
 
-	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
-	// All three are written ONLY by this core, inside its own scheduler
-	// pass; /sys/cpu/<n>/time reads them cross-core, which is safe for the values
-	// (worst case one slice stale) as long as no reader ever SUBTRACTS a
-	// remote TSC reading from a local one.
+	// acct = CPU-time accounting. The owning core commits each span with
+	// same-core TSC subtraction. Readers use acctSequence to copy a complete
+	// tuple; a remote reader never subtracts its own TSC from these stamps.
+	uint64_t acctSequence;
 	uint64_t acctZeroTSC;          // this core's meter epoch (first pass)
-	uint64_t acctLastDispatchTSC;  // when the current thread got the core
+	uint64_t acctLastDispatchTSC;  // start of the uncommitted open span
 	uint64_t acctSchedCycles;      // cycles spent inside scheduler passes
+	uint64_t acctUserCycles;       // ring-3 time committed on this core
+	uint64_t acctSystemCycles;     // thread-attributed ring-0 time on this core
+	bool acctSchedSpanActive;      // open span belongs to acctSchedCycles
+	bool acctSchedulerIRQOpen;      // scheduler entry stamped the outgoing thread
 
 	// acctCurrentHalted: the CURRENT thread is parked in an sti;hlt of its
 	// own making (the compositor's idle idiom — the one thread that idles
-	// OUTSIDE the scheduler's view). While raised, every charge site
-	// redirects this core's span to acctIdleThread instead of the current
-	// thread: halted time is idle time, whoever's rbp it happens under.
+	// OUTSIDE the scheduler's view). While raised, charges redirect this
+	// core's open span to acctIdleThread instead of the current thread.
 	// Raised by mpAcctHaltBegin (under cli, after settling the real work),
-	// dropped by mpAcctHaltEnd AND by every dispatch (a switched-in thread
-	// is never halted). Born 2026-08-17, the day top showed guicomp at 95%
+	// dropped at interrupt entry after the nap is charged, or by
+	// mpAcctHaltEnd or dispatch if no interrupt entry did so. A switched-in
+	// thread is never halted. Born 2026-08-17, the day top showed guicomp at 95%
 	// of a core while its flush counter proved it doing nothing — hlt-in-
 	// task bills as work unless the books are told otherwise.
 	bool acctCurrentHalted;
@@ -119,13 +129,23 @@ typedef struct
 	// and written by charge code running ON this core, so the same-core-TSC
 	// discipline the meters live by is preserved automatically.
 	thread_t *acctIdleThread;
+
+	// This CPU's hardware address, for code that has to name it TO the
+	// hardware. Everything else says `cpu`.
+	apic_id_t apic;
 } __attribute__((aligned(64))) core_local_storage_t;
 
-extern cpu_t *kCPUInfo;
+// The roster (cpu_roster.h), built once by cpu_roster_init before the log
+// rings and read-only from then on, so it needs no lock.
+extern cpu_t kCPUs[MAX_CPUS];
+extern uint32_t kCPUCount;
+// APIC ID -> CPU number, CPU_ROSTER_NO_CPU for an ID that is not a numbered
+// CPU. The one array an apic_id_t may index.
+extern uint8_t kApicToCPU[CPU_ROSTER_APIC_IDS];
+extern cpu_roster_report_t kCPURosterReport;
 extern volatile uintptr_t kMPApicBase;
 extern int kLocalAPICTimerSpeed[MAX_CPUS];
 extern volatile core_local_storage_t kCoreLocalStorage[MAX_CPUS];
-extern volatile uint8_t kMPCoreCount;
 extern uintptr_t kMPICRLow;
 extern uintptr_t kMPICRHigh;
 extern uint64_t kMPIdReg;
@@ -133,6 +153,10 @@ extern uintptr_t kIOAPICAddress;
 extern mpConfig_t* kMPConfigTable;
 extern uint32_t kMPConfigTableCount;
 
+void cpu_roster_init(void);
+// The SMP boot line's tail: CPU count, the APIC range when it is not dense,
+// and anything the roster left out.
+void cpu_roster_print(void);
 int init_SMP(bool enableSMP);
 
 #endif

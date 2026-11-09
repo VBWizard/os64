@@ -1,0 +1,2 @@
+registration status=0 (0 would be a silent success)
+registration allocation denied; adoption=0 planner_calls=1 (expected refusal or registered planner)

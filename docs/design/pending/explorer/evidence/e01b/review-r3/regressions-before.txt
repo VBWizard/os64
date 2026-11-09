@@ -1,0 +1,35 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:510 [round three: menu gestures precede registered shortcuts] r3_last_action==(i==13?15u:1u)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [round three: menu gestures precede registered shortcuts] r3_calls==before+(activate?1:0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:511 [round three: menu gestures precede registered shortcuts] popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:510 [round three: menu gestures precede registered shortcuts] r3_last_action==(i==13?15u:1u)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:510 [round three: menu gestures precede registered shortcuts] r3_last_action==(i==13?15u:1u)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:521 [round three: failed stale hidden-bar reveal collapses] g.bar.w.hidden&&!g.bar.temporary&&!os64_ui_menu_active(g.menus)&&!popup_handle()
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:535 [round three: page movement counts model rows] r3_last_action==11
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:538 [round three: page movement counts model rows] r3_last_action==51
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:575 [bar and cascades] os64_ui_action_invoke(g.views[2],BAR).status==OS64_UI_OK&&g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:576 [bar and cascades] os64_ui_menu_active(g.menus)&&g.bar.temporary&&!g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:577 [bar and cascades] !os64_ui_menu_active(g.menus)&&g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:578 [bar and cascades] g.bar.temporary&&!g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:579 [bar and cascades] g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:584 [bar and cascades] popup_handle()&&g.bar.temporary
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:585 [bar and cascades] g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:591 [bar and cascades] os64_ui_action_invoke(g.views[2],BAR).status==OS64_UI_OK&&!g.bar.w.hidden
+/home/yogi/src/os64/.worktrees/explorer-e1b/userland/libos64/ui_menu.c:147:11: runtime error: member access within null pointer of type 'struct os64_ui_popup_t'
+Artifacts: /tmp/e1b-r3-before

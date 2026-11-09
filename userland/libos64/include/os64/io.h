@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "os64/file.h"   // what os64_close can answer
 #include <stdbool.h>                // os64_linereader_t carries an eof flag
 #include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
 #include "os64/dirent.h"            // os64_dirent_t — what readdir() delivers
@@ -22,6 +23,16 @@
 // Write `len` bytes of `buf` to `handle`. Returns bytes written, or a
 // negative value on error (the in-band status half of the ABI; no errno).
 int64_t os64_write(int32_t handle, const void *buf, size_t len);
+
+// Write with caller patience: 0 polls, finite milliseconds bound waiting
+// for room (rounded up to ticks), OS64_WAIT_FOREVER is ordinary os64_write.
+// TCP honors finite waits; other handle types refuse them on nonempty writes.
+// Queue while room exists, then return progress or OS64_ERR_TIMEOUT if a
+// full ring reaches the deadline before any bytes were queued. Ready room
+// precedes timeout. Retain any suffix; timeout does not close/reset the handle.
+// A positive result means queued, not acknowledged. Full contract beside
+// read's patience in os64/syscall_numbers.h.
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms);
 
 // Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
 // byte is available, then returns the count read (>= 1), or negative on error.
@@ -58,12 +69,9 @@ int64_t os64_read(int32_t handle, void *buf, size_t len);
 // FOREVER for its first few weeks — SO_RCVTIMEO's wart — until the console
 // learned patience and top needed zero's honest meaning for its 'q' key.
 //
-// Granularity is the scheduler tick (10ms), so a timeout_ms of 1..10 is one
-// tick of patience, not a microsecond fuse. HONORED BY: the console, and
-// dialed net handles (udp/tcp/icmp) — the two branches that grew this
-// independently, joined at the merge of 2026-08-05. Every other handle
-// REFUSES a finite patience (negative return) rather than silently
-// blocking, until a real consumer earns it there.
+// Granularity is the active scheduler tick. Console input, pipes, network
+// connections/listeners, STREAM PTY masters and glass honor finite patience;
+// other handle types refuse it. Pipe bytes and EOF precede the deadline.
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
 
 // Read one LINE from `handle` into `buf` (cap bytes INCLUDING the
@@ -148,6 +156,7 @@ void    os64_linereader_close(os64_linereader_t *lr);
 //   "r"  read what exists            "u"  update what exists (read/write)
 //   "a"  append to what exists
 //   "w"/"c"  create (or truncate) for writing
+//   "x"  atomically create a NEW file for writing; refuse if it exists
 // Pass NULL for "r" — reading is what almost every open is.
 //
 // The handle you get back is the SAME species as 0/1/2 and pipe ends: it
@@ -247,6 +256,17 @@ int64_t os64_tty_handle(void);
 // dropping the last write end is what delivers end-of-input to the reader, and
 // dropping the last read end is what kills a writer that is producing into the
 // void.
+//
+// FOUR ANSWERS (os64/file.h, included here so a caller can name them). 0:
+// the handle is gone and nothing was left undone. OS64_CLOSE_NOT_COMMITTED:
+// the handle is gone but what you wrote is not where you think it is — a
+// FAT file's flush failed at close (that is where FatFs commits), or a file
+// that judges what it is given refused it (/sys/console/font, whose `last:`
+// line then says why). OS64_CLOSE_DEFERRED: the handle is gone, but another
+// thread of yours was mid-operation on it, so the real close is that
+// thread's and its outcome went to the log — sync first if it matters. -1:
+// there was no such handle. A program that ignores the result loses nothing
+// it had before; one that checks it is told the truth, which `cp` does.
 int64_t os64_close(int32_t handle);
 
 // Commit a written file to the device — its bytes AND the directory entry
@@ -299,9 +319,10 @@ int64_t os64_unlink(const char *path);
 // Both must live on the SAME filesystem — moving between mounts is a copy,
 // and belongs in userland where a half-finished one can be cleaned up.
 //
-// Replacing an existing regular file is ATOMIC: `newpath` never stops
-// resolving, so the write-a-temp-then-put-it-in-place recipe is actually
-// safe. Refuses (negative) rather than surprising you: read-only filesystem,
+// With flags zero, replacement follows the filesystem's legacy behavior:
+// ext2 replaces atomically, while FAT removes the destination before moving
+// the source and therefore has a window where neither name exists. Refuses
+// (negative) rather than surprising you: read-only filesystem,
 // missing source, cross-filesystem, a directory on either side of a
 // replacement, an open DIRECTORY on either side, or a directory moved into
 // its own descendant. Open FILES are fine on both sides — replacing one that
@@ -309,9 +330,32 @@ int64_t os64_unlink(const char *path);
 // This is the call `mv` is built on — within one filesystem.
 int64_t os64_rename(const char *oldpath, const char *newpath);
 
+// The opt-in safe-publish policies. OS64_RENAME_NOREPLACE atomically refuses
+// when newpath exists. OS64_RENAME_REQUIRE_ATOMIC_REPLACE replaces an existing
+// destination only on a filesystem that can do so without unlinking it first;
+// FAT therefore refuses that case and preserves both files. The two flags are
+// mutually exclusive, and unknown combinations are refused.
+int64_t os64_rename_with_flags(const char *oldpath, const char *newpath,
+                               uint64_t flags);
+
+// Mount a partition into the namespace, or take a mount out of it. `what`
+// names the PARTITION — its GPT name ("home") or dashed GUID — never a
+// device path; `where` is the mount point (its parent must exist; the point
+// itself need not — the mount table is the namespace at that level). A NULL
+// `where` mounts at the partition's own GPT label, exactly as a one-token
+// mounts.conf line does.
+// `flags` is the OS64_MOUNT_* bits — OS64_MOUNT_RO mounts with every write
+// verb refused from birth; an unknown bit is refused as BAD_ARGS.
+// Returns 0 or a negative os64/mount.h code that says WHICH refusal:
+// OS64_UNMOUNT_BUSY and OS64_MOUNT_NOT_FOUND demand different next moves,
+// so the number carries the difference. /sys/mounts and /sys/block are the
+// eyes; these two are the hands.
+int64_t os64_mount(const char *what, const char *where, uint64_t flags);
+int64_t os64_unmount(const char *where);
+
 // Create a directory at `path` (relative paths resolve against the cwd).
-// 0 on success, negative on failure: a read-only filesystem (ext2, by
-// design), a parent that doesn't exist, or a name already taken. Atomic —
+// 0 on success, negative on failure: a read-only filesystem, a parent that
+// doesn't exist, or a name already taken. Atomic —
 // one call, unlike the three-step setuid dance early Unix made of it.
 // This is the call `mkdir` is built on; its undo is os64_unlink above —
 // the one removal verb covers empty directories, so no rmdir twin needed.
@@ -319,6 +363,15 @@ int64_t os64_mkdir(const char *path);
 
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
+
+// Write `s` to `handle` with every control byte and backslash spelled as a
+// C escape — `\n`, `\t`, `\r`, `\\`, and `\xHH` for the rest — so the bytes
+// that would move a cursor arrive as glyphs instead. For LISTINGS whose
+// reader is a human or a grep: one entry per line only holds while no
+// entry can break a line, and a value captured from `ls` by $(...) carries
+// exactly the newlines that would. Returns 0, or the negative verdict of
+// the write that failed.
+int64_t os64_write_escaped(int32_t handle, const char *s);
 
 // Park a string at an absolute character cell (x, y) on the PHYSICAL console
 // — the SCREEN LAYER (née "the widget plane": renamed 2026-08-19 when libui

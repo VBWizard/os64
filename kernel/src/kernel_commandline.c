@@ -15,6 +15,7 @@ extern bool kEnableUSB;
 extern bool kUSBQuiet;
 extern bool kEnableNet;
 extern bool kEnableR8125;
+extern bool kNetPoll;
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
 // supersedes all three in NETWORK.md Phase 3.
@@ -24,7 +25,8 @@ extern char kNetMaskString[];
 extern char kRootPartUUID[];
 extern char kTZString[];
 extern int kTSCCalibrationSeconds;
-extern int kMaxActiveCores;
+extern int kMaxCPUs;
+extern int kMaxCPUsAlias;
 extern int kBlockCacheCapMB;      // block_cache.c — CACHE=<MB>
 extern bool kBlockCacheDisabled;  // block_cache.c — NOCACHE
 bool kEnableAHCI = true, kEnableNVME = true;
@@ -44,7 +46,7 @@ bool kRunKeytest = false;
 // Launch /bin/husk (the shell) from the boot flow and keep the system up. This
 // is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
 bool kRunHusk = false;
-// TESTRUN: launch /bin/testrun (the ring-3 half of the suite) once the boot
+// TESTRUN: launch /tests/testrun (the ring-3 half of the suite) once the boot
 // flow is done. The in-kernel suite can only test what the kernel can see;
 // the fixtures that answer "does a program actually run, exit, and hand back
 // the right code" had to become a PROGRAM, so they moved out here. Off by
@@ -54,6 +56,26 @@ bool kRunHusk = false;
 // serial wire via klog, so an unattended A/B run can grep it — which is the
 // entire reason the A/B harness limine entry exists.
 bool kRunTestrun = false;
+// CRON: launch /bin/cron once userland is up. What it then DOES is entirely
+// the crontab's business — an absent or fully-commented file means a sleeping
+// daemon and nothing else — so this flag is only about whether the scheduler
+// exists on this boot, not about what is scheduled. Gated rather than
+// unconditional to match HUSK and LOGD=: the kernel starts a userland service
+// because a boot entry asked it to, never because the kernel had an opinion.
+bool kRunCron = false;
+// TELNETD: launch /bin/telnetd once userland is up (SERVERS.md § 3). The
+// CRON precedent exactly — the kernel starts it because a boot entry asked,
+// and not husk.rc, which runs in every husk and would announce one port
+// twice. What it then hands out is a shell to anyone on the LAN, which is
+// why the lifeboat entry does not carry it.
+bool kRunTelnetd = false;
+// SSHD requests the userland SSH listener; absent means no SSH listener.
+bool kRunSshd = false;
+// VNCD requests the remote-desktop listener (REMOTE.md). It listens on
+// loopback only, so on its own it serves nobody off the machine: it is
+// reached through SSHD's forwarding, and a boot that wants remote access
+// carries both tokens.
+bool kRunVncd = false;
 // DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
 // the per-core queues entirely.
 //
@@ -249,19 +271,28 @@ static int parse_decimal(const char *s)
     return value;
 }
 
-// Simple in-place whitespace tokenizer
+// Simple in-place whitespace tokenizer.
+//
+// CR AND LF SEPARATE TOKENS TOO, and that is not decoration: this string
+// arrives from a config file somebody may have saved on Windows, and a line
+// ending that survives the bootloader lands on the LAST token of the line.
+// Every string option would then carry it — LOGD=/home/os64.log\r opens a
+// file whose name ends in a control character, ROOT=<guid>\r names no
+// partition at all. The config readers already treat CR as whitespace
+// (conf.c, and mounts.conf strips it by hand); the cmdline is the one door
+// that did not, and it is the door that decides whether a root mounts.
 static int tokenize(char *cmdline, const char **argv, int max)
 {
     int argc = 0;
     char *p = cmdline;
     while (*p && argc < max)
     {
-        while ((*p == ' ' || *p == '\t') && *p)
+        while ((*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') && *p)
             p++;
         if (!*p)
             break;
         argv[argc++] = p;
-        while (*p && *p != ' ' && *p != '\t')
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
             p++;
         if (*p)
         {
@@ -285,9 +316,12 @@ static cmdopt_t cmdopts[] = {
     // = 50; GUI entries pass 10 for smooth animation). Validated after the
     // parse loop — out-of-range snaps back to the default, loudly.
     {"BACKSTOP", OPT_INT, &kSchedBackstopMS, 0, 0},
-    // Cap the number of cores init_SMP brings up (0 = use them all). The
-    // uncapped cores are never woken — they stay parked in Limine's AP loop.
-    {"MAXCORES", OPT_INT, &kMaxActiveCores, 0, 0},
+    // How many CPUs this boot numbers and brings up (0 = all of them): the
+    // first N of the roster's order, BSP first. The rest are never woken —
+    // they stay parked in Limine's AP loop. MAXCORES is its old name, kept as
+    // an alias that announces itself (cpu_roster_init).
+    {"MAXCPUS", OPT_INT, &kMaxCPUs, 0, 0},
+    {"MAXCORES", OPT_INT, &kMaxCPUsAlias, 0, 0},
     {"DEBUG_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED, 0},
     {"DEBUG_EXTRA_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, 0},
     {"AHCI", OPT_BOOL, &kEnableAHCI, true, 0},
@@ -300,6 +334,10 @@ static cmdopt_t cmdopts[] = {
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
+    {"CRON", OPT_BOOL, &kRunCron, true, 0},
+    {"TELNETD", OPT_BOOL, &kRunTelnetd, true, 0},
+    {"SSHD", OPT_BOOL, &kRunSshd, true, 0},
+    {"VNCD", OPT_BOOL, &kRunVncd, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
@@ -328,6 +366,10 @@ static cmdopt_t cmdopts[] = {
     // this table is matched with strcmp and folds no case — the lesson
     // three dead boot entries taught on 2026-08-16 (commit 642eb9f).
     {"NOR8125", OPT_BOOL, &kEnableR8125, false, 0},
+    // The bottom-half flashlight (DOORBELL.md): every NIC stays TICK-DRIVEN —
+    // no INTx probe, no MSI — and knet wakes only when processSignals rings
+    // it. The path that carried every packet before the doorbell existed.
+    {"NETPOLL", OPT_BOOL, &kNetPoll, true, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —
     // boot with DEBUG_NVME, run the workload, read the log.
@@ -396,7 +438,7 @@ static cmdopt_t cmdopts[] = {
     // declaration in kernel.c for who consumes which half of it.
     {"TZ", OPT_STRING, kTZString, 0, 64},
     // Boot TSC calibration window in seconds (see kernel.c for the default
-    // and the precision arithmetic). TSCCAL=5 for the impatient.
+    // and the precision arithmetic). TSCCAL=15 when absolute CPU time matters.
     {"TSCCAL", OPT_INT, &kTSCCalibrationSeconds, 0, 0},
 };
 

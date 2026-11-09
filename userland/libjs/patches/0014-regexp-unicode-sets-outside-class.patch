@@ -1,0 +1,37 @@
+# With the `v` flag (unicodeSets), ES2024 forbids some characters and every
+# doubled punctuator as ClassSetCharacters: inside a character class, and in
+# a class string (\q{...}). get_class_atom also parses the atoms OUTSIDE a
+# class, and applied both rules there too, so `new RegExp("a/b", "v")` and
+# `new RegExp("a-b", "v")` threw "invalid character in class" — every HTML
+# `pattern` with a `/` or a `-` in it, which HTML compiles with `v`. The
+# rules now apply only where get_class_atom is asked for a class atom, and a
+# class string's atoms are asked as class atoms.
+--- a/libregexp.c
++++ b/libregexp.c
+@@ -1008,7 +1008,7 @@
+     for(;;) {
+         str.size = 0;
+         while (*p != '}' && *p != '|') {
+-            c = get_class_atom(s, NULL, &p, FALSE);
++            c = get_class_atom(s, NULL, &p, TRUE);
+             if (c < 0)
+                 goto fail;
+             if (dbuf_put_u32(&str, c)) {
+@@ -1183,7 +1183,7 @@
+     case '^':
+     case '`':
+     case '~':
+-        if (s->unicode_sets && p[1] == c) {
++        if (s->unicode_sets && inclass && p[1] == c) {
+             /* forbidden double characters */
+             return re_parse_error(s, "invalid class set operation in regular expression");
+         }
+@@ -1198,7 +1198,7 @@
+     case '/':
+     case '-':
+     case '|':
+-        if (s->unicode_sets) {
++        if (s->unicode_sets && inclass) {
+             /* invalid characters in unicode sets */
+             return re_parse_error(s, "invalid character in class in regular expression");
+         }

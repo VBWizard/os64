@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- pile 3, the Web face. The controls below are drawn in fonts.conf's
+     web.face at 13/16 of the page's default size (web.size) - 13 px at the
+     default 16 - and follow the zoom: at 200% (Ctrl+= four times) their
+     text is twice as tall, as the paragraph's is. The toolbar does not
+     change: it wears the Interface font. -->
+<html><head><title>controls</title>
+<style>
+body { margin: 16px; background: #f4f4f0 }
+.row { margin-bottom: 12px }
+</style></head>
+<body>
+<p>This paragraph is the page's default text, at web.size. The controls
+under it should read a little smaller, in the Web face.</p>
+<form>
+<div class=row><input name=q value="Search the web"> <input type=submit value="Search"></div>
+<div class=row><input type=checkbox checked> Remember me <input type=password value="secret"></div>
+<div class=row><select name=size>
+<option>Small</option><option selected>Medium</option><option>Large</option>
+<option>Extra large, with a long name</option></select>
+<button type=button>A button element</button></div>
+</form>
+</body></html>

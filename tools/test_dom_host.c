@@ -1,0 +1,692 @@
+/* Reuse the established target heap/syscall fixtures, not DOM expectations. */
+#define main js_port_fixture_main
+#include "test_js_port_host.c"
+#undef main
+#include <os64/js_engine.h>
+#include "quickjs.h"
+#include <dom/dom.h>
+#include <html/html.h>
+#include <page/page.h>
+#include <math.h>
+#include <garb/timing.h>
+
+int64_t os64_open(const char *path, const char *mode)
+{ (void)path; (void)mode; return -1; }
+int64_t os64_read(int32_t handle, void *buffer, size_t size)
+{ (void)handle; (void)buffer; (void)size; return -1; }
+int64_t os64_close(int32_t handle)
+{ (void)handle; return 0; }
+/* libway's preflight cache lock yields under contention; one thread never
+ * contends. */
+void os64_yield(void) {}
+/* A clock that stands still unless a case makes it step, so a deadline is
+ * met only where a case means it to be. */
+static int64_t dom_clock = 10000000, dom_clock_step;
+int64_t os64_micros(void)
+{ return dom_clock += dom_clock_step; }
+static os64_js_config_t fixture_config(void)
+{
+    return (os64_js_config_t){.limits={16*1024*1024,256*1024,64*1024,1000,100}};
+}
+static os64_js_runtime_t *create_fixture(const os64_js_config_t *config)
+{
+    os64_js_runtime_t *runtime=NULL;
+    os64_js_outcome_t outcome;
+    check(os64_js_create(config,OS64_JS_ABI_ID,&runtime,&outcome)==OS64_JS_OK&&runtime,
+          "runtime creation");
+    return runtime;
+}
+static size_t dom_attempts, dom_fail_at, dom_live, dom_sweeps;
+typedef struct DomAllocation {
+    void *pointer;
+    size_t size;
+    struct DomAllocation *next;
+} DomAllocation;
+static DomAllocation *dom_allocations;
+void *dom_host_malloc(size_t size)
+{
+    dom_attempts++;
+    if (dom_fail_at && dom_attempts == dom_fail_at)
+        return NULL;
+    void *pointer = os64_malloc(size);
+    if (!pointer)
+        return NULL;
+    DomAllocation *record = malloc(sizeof(*record));
+    if (!record)
+        abort();
+    *record = (DomAllocation){pointer, os64_malloc_size(pointer), dom_allocations};
+    dom_allocations = record;
+    dom_live++;
+    return pointer;
+}
+void *dom_host_calloc(size_t count, size_t size)
+{
+    if (size && count > SIZE_MAX / size)
+        return NULL;
+    void *pointer = dom_host_malloc(count * size);
+    if (pointer)
+        memset(pointer, 0, count * size);
+    return pointer;
+}
+void dom_host_free(void *pointer)
+{
+    if (!pointer)
+        return;
+    DomAllocation **link = &dom_allocations;
+    while (*link && (*link)->pointer != pointer)
+        link = &(*link)->next;
+    if (!*link) {
+        fputs("binding freed storage outside its native allocation ledger\n", stderr);
+        abort();
+    }
+    DomAllocation *record = *link;
+    *link = record->next;
+    dom_live--;
+    os64_free(pointer);
+    free(record);
+}
+size_t dom_host_malloc_size(const void *pointer)
+{
+    return pointer ? os64_malloc_size(pointer) : 0;
+}
+void *dom_host_realloc(void *pointer, size_t size)
+{
+    if (!pointer)
+        return dom_host_malloc(size);
+    if (!size) {
+        dom_host_free(pointer);
+        return NULL;
+    }
+    void *replacement = dom_host_malloc(size);
+    if (replacement) {
+        size_t old = dom_host_malloc_size(pointer);
+        memcpy(replacement, pointer, old < size ? old : size);
+        dom_host_free(pointer);
+    }
+    return replacement;
+}
+void *os64_calloc(size_t count, size_t size)
+{
+    if (size && count > SIZE_MAX / size)
+        return NULL;
+    void *pointer = os64_malloc(count * size);
+    if (pointer)
+        memset(pointer, 0, count * size);
+    return pointer;
+}
+static char alert_text[512];
+static size_t alert_length, alerts;
+static void alert_capture(void *opaque, const char *text, size_t length)
+{
+    check(opaque == alert_text, "alert receives its borrowed host context");
+    check(length < sizeof(alert_text), "alert bounded fixture message");
+    if (length >= sizeof(alert_text))
+        length = sizeof(alert_text) - 1;
+    memcpy(alert_text, text, length);
+    alert_text[length] = 0;
+    alert_length = length;
+    alerts++;
+}
+typedef struct {
+    os64_js_runtime_t *runtime;
+    os64_html_document_t *document;
+    os64_page_state_t *state;
+    os64_dom_t *binding;
+} DomFixture;
+static const char initial_html[] =
+    "<!doctype html><html><head><title>fixture</title></head><body>"
+    "<div id=box class=old><p id=one>one</p><p id=two>two</p></div>"
+    "<form id=form><input id=field value=default><input id=check type=checkbox>"
+    "<input id=r1 type=radio name=g checked><input id=r2 type=radio name=g>"
+    "<select id=select><option id=o1>A</option><option id=o2>B</option></select></form>"
+    "<template id=template><b>inside</b></template></body></html>";
+/* The fixture's document and page state over a runtime built from `config`. */
+static DomFixture fixture_configured(size_t arena, size_t state_cap, const os64_js_config_t *config)
+{
+    DomFixture fixture = {0};
+    os64_html_options_t html_options = os64_html_options_default();
+    html_options.charset = "utf-8";
+    if (arena) html_options.max_arena_bytes=arena;
+    os64_html_parser_t *parser = os64_html_parser_new(&html_options);
+    if (!parser)
+        return fixture;
+    os64_html_parser_feed(parser, initial_html, sizeof(initial_html) - 1);
+    fixture.document = os64_html_parser_finish(parser);
+    fixture.state = os64_page_state_create(fixture.document, state_cap);
+    fixture.runtime = create_fixture(config);
+    return fixture;
+}
+static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap)
+{
+    os64_js_config_t config = fixture_config();
+    if(engine_cap) config.limits.memory_bytes=engine_cap;
+    return fixture_configured(arena, state_cap, &config);
+}
+/* A binding over a runtime capped at `engine_cap` bytes (0: the fixture's
+ * default). */
+static DomFixture fixture_new_capped(const os64_dom_options_t *options, size_t engine_cap)
+{
+    DomFixture fixture=fixture_base(0,0,engine_cap);
+    if(fixture.runtime&&fixture.state){
+        os64_js_outcome_t outcome;
+        fixture.binding=os64_dom_create(fixture.runtime,fixture.document,fixture.state,options,&outcome);
+    }
+    return fixture;
+}
+static DomFixture fixture_new(const os64_dom_options_t *options)
+{
+    return fixture_new_capped(options, 0);
+}
+
+/* MEMORY_CENSUS.md § 4: the kinds are a partition of os64_dom_bytes, live
+ * blocks never exceed blocks made, and an unknown kind answers zero. */
+static void memory_balanced(const os64_dom_t *dom, const char *when)
+{
+    size_t bytes = 0;
+    bool sane = true;
+    for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
+        os64_dom_mem_t m = os64_dom_memory(dom, (os64_dom_mem_kind_t)k);
+        bytes += m.bytes;
+        if (m.blocks > m.made || (m.blocks == 0) != (m.bytes == 0)) sane = false;
+    }
+    os64_dom_mem_t past = os64_dom_memory(dom, OS64_DOM_MEM_KINDS);
+    if (bytes != os64_dom_bytes(dom))
+        fprintf(stderr, "memory census %s: kinds %zu, bytes %zu\n", when, bytes, os64_dom_bytes(dom));
+    check(bytes == os64_dom_bytes(dom) && sane && past.bytes == 0 && past.made == 0,
+          "memory census: the kinds sum to the binding's bytes");
+}
+
+static void fixture_free(DomFixture *fixture)
+{
+    memory_balanced(fixture->binding, "before drain");
+    os64_dom_drain(fixture->binding);
+    memory_balanced(fixture->binding, "after drain");
+    check(os64_dom_registry_count(fixture->binding) == 0, "drain releases retained engine values");
+    os64_dom_drain(fixture->binding);
+    os64_js_destroy(fixture->runtime);
+    os64_dom_free(fixture->binding);
+    os64_page_state_free(fixture->state);
+    os64_html_document_free(fixture->document);
+    memset(fixture, 0, sizeof(*fixture));
+    if (live != 0 || dom_live != 0) fprintf(stderr, "teardown: live=%zu dom_live=%zu\n", live, dom_live);
+    check(live == 0 && dom_live == 0 && !dom_allocations, "ordered teardown releases all native and engine storage");
+}
+static int dom_script(DomFixture *fixture, const char *source, const char *name)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t result = os64_js_run(fixture->runtime, source, strlen(source), name, &outcome);
+    if (result != OS64_JS_OK)
+        fprintf(stderr, "DOM script %s: status=%d limit=%d message=%s\n%s\n", name, result, outcome.limit, outcome.message, outcome.stack_trace);
+    check(result == OS64_JS_OK, name);
+    return result == OS64_JS_OK;
+}
+static os64_html_node_t *native_id(os64_html_node_t *node, const char *id)
+{
+    for (; node; node = node->next) {
+        const os64_html_attr_t *attr = os64_html_attr(node, "id");
+        if (attr && !strcmp(attr->value, id))
+            return node;
+        os64_html_node_t *child = native_id(node->first_child, id);
+        if (child)
+            return child;
+        if (node->template_contents) {
+            child = native_id(node->template_contents->first_child, id);
+            if (child)
+                return child;
+        }
+    }
+    return NULL;
+}
+static char *native_serialized(const os64_html_node_t *node)
+{
+    size_t length = os64_html_serialize(node, false, true, NULL, 0);
+    char *text = malloc(length + 1);
+    if (!text)
+        abort();
+    check(os64_html_serialize(node, false, true, text, length + 1) == length,
+          "native serialization sized independently");
+    return text;
+}
+#include "test_dom_cases.inc"
+#include "test_libpage_clone.inc"
+#include "test_dom_reclaim.inc"
+#include "test_dom_events.inc"
+#include "test_dom_classic.inc"
+#include "test_dom_modern.inc"
+#include "test_dom_storage.inc"
+#include "test_dom_text.inc"
+#include "test_dom_canvas.inc"
+#include "test_dom_canvas_images.inc"
+#include "test_dom_canvas_paints.inc"
+#include "test_dom_custom.inc"
+#include "test_dom_observer.inc"
+#include "test_dom_platform.inc"
+#include "test_dom_view.inc"
+#include "test_dom_implementation.inc"
+#include "test_dom_attributes.inc"
+#include "test_dom_fetch.inc"
+#include "test_dom_window.inc"
+#include "test_dom_report.inc"
+#include "test_dom_document.inc"
+#include "test_dom_message.inc"
+#include "test_dom_animation.inc"
+#include "test_dom_webanimation.inc"
+#include "test_dom_intersection.inc"
+#include "test_dom_resize.inc"
+#include "test_dom_walker.inc"
+#include "test_dom_pointer.inc"
+#include "test_dom_importmap.inc"
+#include "test_dom_shadow.inc"
+#include "test_dom_ranges.inc"
+#define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
+    "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
+
+typedef struct {
+    DomFixture *fixture;
+    unsigned calls;
+    bool refuse, slow, unboxed;
+} GeometryFixture;
+
+static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
+{
+    GeometryFixture *fixture=opaque;
+    check(node->kind==OS64_HTML_ELEMENT, "geometry provider receives a native element");
+    fixture->calls++;
+    *out=(os64_dom_geometry_t){.x=1.25,.y=-3.5,.width=20.5,.height=30.25,
+        .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
+        .client_left=1,.client_top=2,.client_width=19,.client_height=27,
+        .offset_parent=fixture->fixture->document->body,.layouts=1,.elapsed_us=250,.boxed=!fixture->unboxed};
+    if(fixture->slow) dom_clock+=2000000;
+    return !fixture->refuse;
+}
+
+static void dom_geometry_cases(void)
+{
+    DomFixture f=fixture_new(NULL);
+    if(!fixture_ready(&f)) return;
+    dom_script(&f,GEOMETRY_ASSERT
+        "throws('InvalidStateError',()=>document.body.offsetWidth);"
+        "throws('InvalidStateError',()=>document.body.getBoundingClientRect());", "geometry-without-provider");
+    dom_script(&f,GEOMETRY_ASSERT
+        "var holder=document.createElement('div');holder.innerHTML='<svg><rect/></svg>';"
+        "for(const foreign of [holder.firstChild,holder.firstChild.firstChild]){"
+        "for(const name of ['offsetLeft','offsetTop','offsetWidth','offsetHeight',"
+        "'clientLeft','clientTop','clientWidth','clientHeight'])assert(foreign[name]===0);"
+        "assert(foreign.offsetParent===null);"
+        "const r=foreign.getBoundingClientRect();assert(r instanceof DOMRect);"
+        "for(const k of ['x','y','width','height','top','right','bottom','left'])assert(r[k]===0,k);"
+        "assert(foreign.getClientRects().length===0,'a foreign element has no box');}",
+        "foreign-geometry-without-provider");
+    GeometryFixture provider={.fixture=&f};
+    os64_dom_set_geometry(f.binding,fake_geometry,&provider);
+    dom_script(&f,GEOMETRY_ASSERT
+        "var node=document.getElementById('one');var rect=node.getBoundingClientRect();"
+        "assert(rect instanceof DOMRect,'a DOMRect');"
+        "assert(rect.x===1.25&&rect.y===-3.5&&rect.width===20.5&&rect.height===30.25);"
+        "assert(rect.left===rect.x&&rect.top===rect.y&&rect.right===21.75&&rect.bottom===26.75);"
+        "assert(node.offsetLeft===2&&node.offsetTop===3&&node.offsetWidth===21&&node.offsetHeight===30);"
+        "assert(node.clientLeft===1&&node.clientTop===2&&node.clientWidth===19&&node.clientHeight===27);"
+        "assert(node.offsetParent===document.body);"
+        "Object.defineProperty(Object.prototype,'x',{set(){throw Error('setter ran')},configurable:true});"
+        "assert(node.getBoundingClientRect().x===1.25);delete Object.prototype.x;"
+        "let owner=Object.getPrototypeOf(node);"
+        "while(!Object.prototype.hasOwnProperty.call(owner,'offsetWidth'))owner=Object.getPrototypeOf(owner);"
+        "const getter=Object.getOwnPropertyDescriptor(owner,'offsetWidth').get;"
+        "throws('TypeError',()=>getter.call(document));throws('TypeError',()=>getter.call(node.firstChild));"
+        "throws('TypeError',()=>node.getBoundingClientRect.call({}));", "geometry-values-and-receivers");
+    os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
+    check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
+          "geometry telemetry counts provider work and resets independently");
+    /* getClientRects (CSSOM View § 6.1): the border box an element with a
+     * box has, in a DOMRectList; empty for one with none. */
+    dom_script(&f,GEOMETRY_ASSERT
+        "var node=document.getElementById('one'),list=node.getClientRects();"
+        "assert(list instanceof DOMRectList&&list.length===1&&list.item(0)===list[0]&&list.item(1)===null);"
+        "assert(list[0] instanceof DOMRect&&list[0].x===1.25&&list[0].width===20.5&&list[0].height===30.25);"
+        "assert([...list].length===1&&list[0]!==node.getClientRects()[0],'iterable, and a new list each read');"
+        "throws('TypeError',()=>new DOMRectList());throws('TypeError',()=>list.item());"
+        "throws('TypeError',()=>DOMRectList.prototype.item.call({},0));"
+        "throws('TypeError',()=>node.getClientRects.call(document));"
+        "assert(Object.getOwnPropertyDescriptor(list,0).writable===false);",
+        "geometry-client-rects");
+    provider.unboxed=true;
+    dom_script(&f,GEOMETRY_ASSERT
+        "var empty=document.getElementById('one').getClientRects();"
+        "assert(empty.length===0&&empty.item(0)===null&&empty[0]===undefined&&[...empty].length===0);",
+        "geometry-client-rects-without-a-box");
+    provider.unboxed=false;
+    os64_dom_geometry_stats(f.binding,true);
+    unsigned before_foreign=provider.calls;
+    dom_script(&f,GEOMETRY_ASSERT
+        "assert(holder.firstChild.clientWidth===0);assert(holder.firstChild.firstChild.getBoundingClientRect().width===0);",
+        "foreign-geometry-with-provider");
+    check(provider.calls==before_foreign,"foreign geometry does not ask the HTML layout provider");
+    provider.refuse=true;
+    dom_script(&f,GEOMETRY_ASSERT "throws('InvalidStateError',()=>document.body.offsetHeight);", "geometry-refusal");
+    check(os64_dom_geometry_stats(f.binding,false).layouts==1,
+          "failed geometry retains attempted-layout telemetry");
+    /* 0f's P4a: a person's submission's validation runs its invalid
+     * listeners through the wrapper's own call, so geometry has its budget,
+     * as it has for a script's checkValidity(). */
+    provider.refuse=false;
+    dom_script(&f,GEOMETRY_ASSERT
+        "var vf=document.createElement('form');vf.id='vf';vf.innerHTML='<input required>';document.body.appendChild(vf);"
+        "globalThis.measured=null;vf.addEventListener('invalid',function(){"
+        "try{measured=document.body.offsetWidth}catch(e){measured=String(e)}},true);",
+        "validity-geometry-setup");
+    bool form_valid=true, form_ran=false;
+    os64_js_outcome_t validated;
+    os64_html_node_t *vf=native_id(f.document->document,"vf");
+    check(vf!=NULL&&os64_dom_form_validate(f.binding,vf,NULL,&form_valid,&form_ran,&validated)==OS64_JS_OK&&
+          form_ran&&!form_valid,"a person's submission's validation runs as a task, and finds the form invalid");
+    dom_script(&f,GEOMETRY_ASSERT "assert(measured===21,'measured '+measured);","validity-geometry-budget");
+    provider.refuse=false;provider.slow=true;provider.calls=0;
+    os64_js_outcome_t outcome;
+    const char *source="try{document.body.offsetWidth}catch(e){};try{document.body.offsetWidth}catch(e){}";
+    check(os64_js_run(f.runtime,source,strlen(source),"geometry-overrun",&outcome)==OS64_JS_LIMIT&&
+          outcome.limit==OS64_JS_LIMIT_EXECUTION&&provider.calls==1,
+          "caught native geometry overrun remains sticky and stops later provider work");
+    dom_clock=10000000;
+    fixture_free(&f);
+    /* With the Modern Web's switch off there is no DOMRect: the same eight
+     * numbers, as a plain object's own. */
+    os64_dom_options_t classic=os64_dom_default_options();classic.modern=false;
+    f=fixture_new(&classic);
+    if(!fixture_ready(&f)) return;
+    provider=(GeometryFixture){.fixture=&f};
+    os64_dom_set_geometry(f.binding,fake_geometry,&provider);
+    dom_script(&f,GEOMETRY_ASSERT
+        "var r=document.getElementById('one').getBoundingClientRect();"
+        "assert(typeof DOMRect==='undefined'&&Object.getPrototypeOf(r)===Object.prototype);"
+        "assert(Object.keys(r).join()==='x,y,width,height,left,top,right,bottom'&&r.right===21.75);",
+        "geometry-classic-rect");
+    fixture_free(&f);
+}
+
+/* CSSOM View § 7: an element's scroll. A fake box `box` that can scroll
+ * 300 across and 600 down, whose geometry reads where it is; the root's
+ * scroll is the view's. */
+typedef struct {
+    DomFixture *fixture;
+    double left, top;
+    unsigned scrolls, untouched;
+    bool refuse;
+} ScrollFake;
+
+static bool scroll_is_box(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *id = os64_html_attr(node, "id");
+    return id != NULL && !strcmp(id->value, "box");
+}
+
+static bool fake_scroll_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
+{
+    ScrollFake *s = opaque;
+    *out = (os64_dom_geometry_t){0};
+    if (scroll_is_box(node))
+        *out = (os64_dom_geometry_t){.client_width = 200, .client_height = 300, .scroll_left = (int32_t)s->left,
+                                     .scroll_top = (int32_t)s->top, .scroll_width = 500, .scroll_height = 900};
+    return true;
+}
+
+/* The view provider's opaque is the view fake's, so the box's door finds
+ * its fake here. */
+static ScrollFake *scroll_fake;
+
+static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
+                            os64_dom_geometry_stats_t *cost)
+{
+    (void)opaque; (void)cost;
+    ScrollFake *s = scroll_fake;
+    s->scrolls++;
+    if (s->refuse) return false;
+    if (!scroll_is_box(element)) return true;
+    s->untouched += isnan(x) + isnan(y);
+    if (by) {
+        x += s->left;
+        y += s->top;
+    }
+    if (!isnan(x)) s->left = x < 0 ? 0 : x > 300 ? 300 : x;
+    if (!isnan(y)) s->top = y < 0 ? 0 : y > 600 ? 600 : y;
+    return true;
+}
+
+static void dom_element_scroll_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "http://scroll.test/";
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    ScrollFake s = {.fixture = &f};
+    scroll_fake = &s;
+    os64_dom_set_geometry(f.binding, fake_scroll_geometry, &s);
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t view = {fake_view_read, fake_view_scroll, &v, fake_scroll_box};
+    os64_dom_set_view(f.binding, &view);
+    dom_script(&f, GEOMETRY_ASSERT
+        "var box=document.getElementById('box');"
+        "var d=Object.getOwnPropertyDescriptor(Element.prototype,'scrollTop');"
+        "assert(typeof d.get==='function'&&typeof d.set==='function'&&d.enumerable&&d.configurable);"
+        "assert(box.scrollWidth===500&&box.scrollHeight===900&&box.scrollTop===0);"
+        "box.scrollTop=120;assert(box.scrollTop===120&&box.scrollLeft===0,'the setter scrolls its own box');"
+        "box.scrollLeft=NaN;assert(box.scrollLeft===0,'NaN is 0');"
+        "box.scrollTop=1e9;assert(box.scrollTop===600,'held to the range');"
+        "box.scroll(10,20);assert(box.scrollLeft===10&&box.scrollTop===20,'two numbers');"
+        "box.scrollTo({top:5});assert(box.scrollLeft===10&&box.scrollTop===5,'a missing member keeps its axis');"
+        "box.scrollBy(1,2);assert(box.scrollLeft===11&&box.scrollTop===7,'scrollBy adds');"
+        "box.scrollBy({left:4});assert(box.scrollLeft===15&&box.scrollTop===7);"
+        "box.scrollTo();assert(box.scrollLeft===15&&box.scrollTop===7,'no arguments, no move');"
+        "throws('TypeError',()=>box.scroll('x'));throws('TypeError',()=>box.scroll({behavior:'jump'}));"
+        "assert(box.scroll.length===0&&box.scrollBy.name==='scrollBy');"
+        "throws('TypeError',()=>Element.prototype.scrollBy.call({},1,1));"
+        "document.getElementById('one').scrollTop=40;assert(document.getElementById('one').scrollTop===0,"
+        "'an element that makes no container scrolls nothing');"
+        "document.documentElement.scrollTop=50;assert(scrollY===50&&box.scrollTop===7,'the root is the view');"
+        "document.documentElement.scrollBy({left:3});assert(scrollX===3&&scrollY===50);"
+        "document.documentElement.scroll(0,0);"
+        "var other=document.implementation.createHTMLDocument('').body;other.scrollTop=9;"
+        "assert(scrollY===0,'an element of another document scrolls nothing');",
+        "element scroll");
+    check(s.scrolls > 0, "element scroll: the box's door was asked");
+    unsigned untouched = s.untouched;
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollLeft=9;b.scrollTop=4;b.scrollBy({top:1});"
+        "assert(b.scrollLeft===9&&b.scrollTop===5);",
+        "element scroll: one axis");
+    check(s.untouched == untouched + 3, "element scroll: the axis a call leaves alone is sent as NaN, not read back");
+    /* The fake's place is fractional where its getter reads whole pixels:
+     * scrollBy is the host's sum, so moving by 0 moves nothing. */
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollTop=0.5;assert(b.scrollTop===0);b.scrollBy(0,0);"
+        "b.scrollBy({left:0.25});",
+        "element scroll: by");
+    check(s.top == 0.5 && s.left == 9.25, "element scroll: scrollBy adds to where the box is, not to its getter");
+    s.refuse = true;
+    dom_script(&f, GEOMETRY_ASSERT
+        "throws('InvalidStateError',()=>{document.getElementById('box').scrollTop=3});",
+        "element scroll: no current layout");
+    s.refuse = false;
+    fixture_free(&f);
+
+    options.modern = false;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, GEOMETRY_ASSERT
+        "var owner=document.body;while(!Object.prototype.hasOwnProperty.call(owner,'scrollTop'))"
+        "owner=Object.getPrototypeOf(owner);var d=Object.getOwnPropertyDescriptor(owner,'scrollTop');"
+        "assert(typeof d.get==='function'&&d.set===undefined,'classic: a getter alone');"
+        "assert(!('scrollBy' in document.body)&&!('scrollHeight' in document.body),'classic: none of the row');",
+        "element scroll: classic");
+    fixture_free(&f);
+}
+
+/* Patch 0008: what a lookup on the global object did not find, heard
+ * without changing the answer the page gets (YONDER_DIAGNOSTICS.md). */
+typedef struct { char names[1024]; unsigned heard; } MissFixture;
+static void heard_miss(void *opaque, const char *name)
+{
+    MissFixture *m=opaque;
+    size_t at=strlen(m->names);
+    snprintf(m->names+at,sizeof(m->names)-at,"%s|",name);
+    m->heard++;
+}
+/* One form of lookup, and the names it should be heard to miss. The cases'
+ * missing name, noSuchGlobal, is one no row installs. */
+static void miss_form(DomFixture *f, MissFixture *m, const char *source, const char *heard, const char *what)
+{
+    *m=(MissFixture){0};
+    char script[1024];
+    snprintf(script,sizeof(script),GEOMETRY_ASSERT "%s",source);
+    dom_script(f,script,what);
+    if(strcmp(m->names,heard)) fprintf(stderr,"%s: heard '%s', wanted '%s'\n",what,m->names,heard);
+    check(!strcmp(m->names,heard),what);
+}
+static void dom_global_miss_cases(void)
+{
+    DomFixture f=fixture_new(NULL);
+    if(!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    JSContext *ctx=os64_js_context(f.runtime,OS64_JS_ABI_ID,&outcome);
+    MissFixture m={0};
+    JS_SetGlobalMissHandler(ctx,heard_miss,&m);
+    miss_form(&f,&m,"assert(typeof noSuchGlobal==='undefined');","noSuchGlobal|","global miss: typeof a bare name");
+    miss_form(&f,&m,"assert(window.noSuchGlobal===undefined);","noSuchGlobal|","global miss: a property of window");
+    miss_form(&f,&m,"assert(window['noSuchGlobal']===undefined&&globalThis.noSuchGlobal===undefined);","noSuchGlobal|noSuchGlobal|",
+              "global miss: a computed property, and globalThis");
+    miss_form(&f,&m,"assert(window.noSuchGlobal?.('x')===undefined);","noSuchGlobal|","global miss: an optional call");
+    miss_form(&f,&m,"throws('ReferenceError',()=>noSuchGlobal);","noSuchGlobal|",
+              "global miss: a bare name in a closure, which still throws");
+    miss_form(&f,&m,"var r;try{noSuchGlobal}catch(e){r=e.name}assert(r==='ReferenceError');","noSuchGlobal|",
+              "global miss: a bare name at top level, which still throws");
+    miss_form(&f,&m,"(function(){assert(typeof noSuchGlobal==='undefined')})();",
+              "noSuchGlobal|","global miss: typeof inside a function");
+    miss_form(&f,&m,"assert(window[Symbol.iterator]===undefined&&window[7]===undefined);","",
+              "global miss: a symbol or an index is no name");
+    miss_form(&f,&m,"assert(typeof document==='object'&&window.document===document);"
+              "var mine=1;assert(window.mine===1);let scoped=2;assert(scoped===2);","",
+              "global miss: what is found is not heard");
+    miss_form(&f,&m,"assert(!('noSuchGlobal' in window)&&!window.hasOwnProperty('noSuchGlobal'));"
+              "assert(Object.getOwnPropertyDescriptor(window,'noSuchGlobal')===undefined);","",
+              "global miss: in, hasOwnProperty and a descriptor are feature tests, not lookups");
+    JS_SetGlobalMissHandler(ctx,NULL,NULL);
+    miss_form(&f,&m,"assert(typeof noSuchGlobal==='undefined');","","global miss: nobody asked, nothing is heard");
+    dom_script(&f,GEOMETRY_ASSERT
+        "function msg(f){try{f()}catch(e){return e.message}return 'none'}"
+        "var o={ok:function(){return 1},n:5},plain=5,k='bogus';"
+        "assert(msg(()=>o.bogus())===\"'bogus' is not a function\",msg(()=>o.bogus()));"
+        "assert(msg(()=>document.bogusMethod(1))===\"'bogusMethod' is not a function\");"
+        "assert(msg(()=>o.n())===\"'n' is not a function\");"
+        "assert(msg(()=>o.bogus(o.ok()))==='not a function','a call in the arguments proves nothing');"
+        "assert(msg(()=>o.bogus(o.n,'x',7))===\"'bogus' is not a function\",'straight-line arguments');"
+        "assert(msg(()=>plain())==='not a function');"
+        /* Quinn's three (#239): a skipped optional call, a failing argument,
+         * an abandoned call; none may lend its name to another call. */
+        "assert(msg(()=>{o.optional?.();plain()})==='not a function','skipped optional call');"
+        "assert(msg(()=>o.bogus(plain()))==='not a function','the argument failed, not bogus');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};plain()})==='not a function');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};o[k]()})==='not a function',"
+        "'a computed callee is not a fetched one');"
+        "assert(msg(()=>{o.optional?.();o.second()})===\"'second' is not a function\");"
+        /* Quinn's round two (#239): a skipped optional call's slot refilled
+         * by another callee holding the same undefined. */
+        "var base=null;assert(msg(()=>{o.optional?.();(base?.inner)()})==='not a function','optional chain');"
+        "assert(msg(new Function('o',\"o.optional?.();with({inner:undefined}){inner()}\").bind(null,o))==='not a function','with');"
+        "class C{get #inner(){return undefined}run(){o.optional?.();this.#inner()}}"
+        "assert(msg(()=>new C().run())==='not a function','a private getter');"
+        /* Quinn's round three (#239): an update's fetch, consumed, its slot
+         * refilled by a straight-line super or private call. */
+        "class Pa{} class Ch extends Pa{run(){o.counter++;super.missing()}}"
+        "assert(msg(()=>new Ch().run())==='not a function','an increment then super');"
+        "class D{#missing;run(){o.other++;this.#missing()}}"
+        "assert(msg(()=>new D().run())==='not a function','an increment then a private field');"
+        "assert(msg(()=>{o.k2+=1;o.named()})===\"'named' is not a function\",'an update then a real fetch');"
+        "assert(o.ok()===1);",
+        "not-a-function names the method of the call that failed, or nothing");
+    fixture_free(&f);
+}
+
+int main(int argc, char **argv)
+{
+    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--attributes")){dom_attributes_cases();attributes_allocation_cases();implementation_jquery_cases();printf("DOM attributes probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--fetch")){dom_fetch_cases();printf("DOM fetch probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--window-reads")){dom_window_read_timing();return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--ranges")){dom_range_cases();printf("DOM ranges probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--shadow")){dom_shadow_cases();printf("DOM shadow probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--web-animations")){dom_webanimation_cases();printf("DOM web animations probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
+    dom_classic_cases();
+    dom_modern_cases();
+    dom_pointer_cases();
+    dom_custom_cases();
+    dom_observer_cases();
+    dom_view_cases();
+    dom_storage_cases();
+    dom_base64_cases();
+    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
+    dom_screen_cases();
+    dom_performance_cases();
+    dom_performance_observer_cases();
+    dom_url_cases();
+    dom_storage_engine_cases();
+    dom_fetch_cases();
+    dom_window_cases();
+    dom_report_cases();
+    dom_document_cases();
+    dom_p2b_cases();
+    dom_animation_cases();
+    dom_webanimation_cases();
+    dom_intersection_cases();
+    dom_resize_cases();
+    dom_walker_cases();
+    dom_import_map_cases();
+    dom_geometry_cases();
+    dom_element_scroll_cases();
+    dom_global_miss_cases();
+    dom_surface_cases();
+    dom_identity_cases();
+    dom_collection_cases();
+    dom_selector_cases();
+    dom_classic_method_cases();
+    dom_cookie_cases();
+    dom_reclaim_cases();
+    dom_unicode_cases();
+    dom_control_cases();
+    dom_clone_control_cases();
+    dom_clone_native_cases();
+    dom_clone_state_cap_cases();
+    dom_clone_character_data_cases();
+    dom_refusal_cases();
+    dom_extra_surface_cases();
+    dom_review_property_cases();
+    dom_exception_ownership_cases();
+    dom_fragment_mode_cases();
+    dom_budget_cases();
+    dom_event_cases();
+    dom_implementation_cases();
+    dom_attributes_cases();
+    dom_shadow_cases();
+    dom_range_cases();
+    if(!mutation_mode){dom_report_sweep_cases();dom_p2b_sweep_cases();dom_import_map_sweep_cases();dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();attributes_allocation_cases();}
+    printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
+    return failures ? 1 : 0;
+}

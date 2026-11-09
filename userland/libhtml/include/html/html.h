@@ -1,0 +1,817 @@
+#ifndef OS64_HTML_H
+#define OS64_HTML_H
+
+#include "html/tags.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct os64_html_parser os64_html_parser_t;
+
+typedef enum {
+    OS64_HTML_OK = 0,
+    /* Not a refusal: the parse is stopped at a script (below). */
+    OS64_HTML_SCRIPT = 1,
+    OS64_HTML_TOO_LARGE = -1,
+    OS64_HTML_ARENA_EXHAUSTED = -2,
+    OS64_HTML_NO_MEMORY = -3,
+    OS64_HTML_TOO_DEEP = -4,
+    OS64_HTML_WORK_EXHAUSTED = -5,
+    /* What a verb that changes a document answers (below). */
+    OS64_HTML_HIERARCHY = -6,      /* the tree the DOM Standard refuses to make */
+    OS64_HTML_NOT_FOUND = -7,      /* the reference child is not the parent's child */
+    OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
+    OS64_HTML_ROOT_REQUIRED = -9,  /* the document would lose its html element */
+    OS64_HTML_BAD_ARGUMENT = -10,
+    OS64_HTML_NOT_SUPPORTED = -11, /* what the DOM Standard refuses as NotSupportedError */
+    OS64_HTML_INVALID_NODE_TYPE = -12, /* a doctype as a range's boundary: InvalidNodeTypeError */
+    OS64_HTML_INDEX_SIZE = -13     /* an offset past a node's length: IndexSizeError */
+} os64_html_status_t;
+
+/* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
+ * including document teardown with outstanding holds or pins ("HTML"). */
+#define OS64_HTML_FATAL_EXIT 0x48544D4C
+
+typedef enum {
+    OS64_HTML_DOCUMENT,
+    OS64_HTML_FRAGMENT,
+    OS64_HTML_DOCTYPE,
+    OS64_HTML_ELEMENT,
+    OS64_HTML_TEXT,
+    OS64_HTML_COMMENT,
+    OS64_HTML_PI
+} os64_html_node_kind_t;
+
+typedef enum {
+    OS64_HTML_NS_HTML, OS64_HTML_NS_SVG, OS64_HTML_NS_MATHML,
+    OS64_HTML_NS_NONE, OS64_HTML_NS_OTHER
+} os64_html_ns_t;
+
+typedef enum { OS64_HTML_NO_QUIRKS, OS64_HTML_LIMITED_QUIRKS, OS64_HTML_QUIRKS } os64_html_quirks_t;
+
+typedef struct {
+    const char *charset;
+    size_t max_bytes, max_arena_bytes, max_depth;
+    uint64_t max_work;
+    /* Parse as a browser that runs scripts does (THE PARSE THAT STOPS,
+     * below). Off, a script is text like any other and no call stops. */
+    bool scripting;
+} os64_html_options_t;
+
+typedef struct os64_html_attr {
+    const char *name, *value;
+    /* Namespace URI, or NULL. name retains the qualified spelling. */
+    const char *ns;
+    struct os64_html_attr *next;
+} os64_html_attr_t;
+
+/* Nodes and attributes are read-only views owned by their document; what
+ * changes one is a verb, at the foot of this file. */
+typedef struct os64_html_node {
+    os64_html_node_kind_t kind;
+    os64_html_ns_t ns;
+    os64_html_tag_t tag;
+    /* The library's mark of which document the node belongs to. It means
+     * nothing to a reader. */
+    uint32_t document_id;
+    const char *name; /* Local element name; PI target; doctype name. */
+    const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
+    bool xml_document; /* Owning arena is an XML document, including detached nodes. */
+    /* A TEXT node that is a CDATA section (DOM's CDATASection, nodeType 4):
+     * text in every other respect, except that normalize leaves it out of a
+     * run of text (DOM's "exclusive Text node"). Set only by os64_html_create_cdata,
+     * and carried by clone and split_text. */
+    bool cdata;
+    /* An element's custom state, an os64_html_ce_t (below). Only
+     * os64_html_set_ce changes it. */
+    uint8_t ce;
+    /* A shadow root's OS64_HTML_SHADOW_* options (SHADOW TREES, below);
+     * zero on every other node. Set once, by os64_html_attach_shadow. */
+    uint8_t shadow;
+    const char *public_id, *system_id;
+    const char *text;
+    size_t text_len;
+    os64_html_attr_t *attrs;
+    struct os64_html_node *template_contents;
+    /* An element's shadow root, or NULL. Like a template's contents it is
+     * no child of the element and on no child list (SHADOW TREES, below). */
+    struct os64_html_node *shadow_root;
+    struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
+    /* Parser association at insertion, or NULL; document-owned, possibly
+     * non-ancestor. Consumers resolve form= and ancestry separately. */
+    struct os64_html_node *form_owner;
+} os64_html_node_t;
+
+typedef struct {
+    size_t byte_offset;
+    const char *name;
+} os64_html_parse_error_t;
+
+typedef struct os64_html_document {
+    os64_html_node_t *document, *html, *head, *body;
+    bool is_xml; /* XML documents do not have HTML landmarks. */
+    os64_html_quirks_t quirks;
+    int64_t refusal;
+    bool truncated;
+    /* charset is NULL if refusal prevented encoding selection. */
+    const char *charset, *charset_unsupported, *charset_late_meta;
+    /* node_count includes detached allocations; arena counts capacity/headers. */
+    size_t node_count, arena_bytes, input_bytes;
+    size_t peak_arena_bytes;
+    uint64_t work;
+    size_t parse_errors;
+    os64_html_parse_error_t first_errors[16];
+} os64_html_document_t;
+
+/* NULL options select defaults. For overrides, initialize with options_default;
+ * supplied zero limits are literal zero limits. The charset label is copied.
+ * Constructor failure returns NULL, including a budget below initial storage
+ * and a program that has begun 2^32 - 1 documents: each has a mark its nodes
+ * carry, and a mark is not given out twice.
+ * Each parser has independent state; serialize calls on the same parser. */
+#pragma GCC visibility push(default)
+os64_html_options_t os64_html_options_default(void);
+os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options);
+int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t len);
+/* Consumes p. A successful constructor reserves a freeable partial document
+ * and its html node, so finish does not need to allocate to transfer ownership. */
+os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p);
+void os64_html_parser_destroy(os64_html_parser_t *p);
+void os64_html_document_free(os64_html_document_t *doc);
+/* Generic element child, or NULL; valid for HTML and independently owned XML. */
+const os64_html_node_t *os64_html_document_element(const os64_html_document_t *doc);
+/* URI of an element, including canonical known namespaces; NULL for none. */
+const char *os64_html_namespace_uri(const os64_html_node_t *node);
+
+/* ── THE PARSE THAT STOPS (docs/design/pending/DOM.md) ────────────────────
+ *
+ * With `scripting` set, `noscript` is parsed as the standard says a browser
+ * with scripting enabled parses it (its contents are text), and THE PARSE
+ * STOPS AT THE END TAG OF EACH SCRIPT: the call answers OS64_HTML_SCRIPT,
+ * which is not a refusal, and `os64_html_parser_script` names the element,
+ * whole and where the parser put it. It names one until the parse is
+ * resumed and NULL otherwise. Whether that script is run, and how, is the
+ * caller's business; the parser only waits. An SVG `script` stops the parse
+ * too, at its end tag or at a start tag that closes itself. A script inside
+ * a template's contents, which no browser runs, does not, nor does one that
+ * only the end of the input closed.
+ *
+ * `resume` carries on, and may stop at the next script. A `feed` while the
+ * parse is stopped parses nothing: its bytes are kept on the heap, counted
+ * against `max_bytes` and not against the arena, and it answers
+ * OS64_HTML_SCRIPT again. Where a chunk ends stays invisible: stops fall at
+ * the same scripts, and the document comes out the same, however the bytes
+ * were cut. Which call answers a stop does depend on the cut. In particular
+ * a parser reads its first 1024 bytes for an encoding before it parses any
+ * of them, so a script among those stops the call that fills that window,
+ * or the one that says the input has ended.
+ *
+ * THE END OF THE INPUT is said one of two ways. `finish` is the way that
+ * does not stop: it parses whatever is kept and the end-of-input steps
+ * straight through, past any script, and hands over the document. A host
+ * that runs scripts says `end` first, which may stop as `feed` does, and
+ * calls `finish` once `end` or a `resume` after it has answered
+ * OS64_HTML_OK. No byte is fed after `end` (OS64_HTML_BAD_ARGUMENT, which
+ * like a `resume` of a parse that is not stopped changes nothing).
+ *
+ * `abandon` is for a page being left mid-load: it parses nothing more, runs
+ * no end-of-input steps, and hands over the document as far as it was
+ * built, to be freed like any other. (`destroy` frees the document with the
+ * parser, which is right when nothing can be pointing into it.)
+ *
+ * `write` IS document.write (docs/design/pending/DOM_D9.md). The host
+ * calls it for the script the parse is stopped at, while that script runs
+ * (which caller is writing is the host's to know; the parser knows only
+ * that it is stopped). `len` bytes of UTF-8 go into the input just before
+ * its next character and are parsed at once, as far as that point and no
+ * further. The script's next write goes after everything it has written,
+ * however the bytes around it were cut.
+ * A script it wrote stops the parse as one fed would: the call answers
+ * OS64_HTML_SCRIPT and `os64_html_parser_script` names the new one, and
+ * the writer's later writes wait behind it. `resume` then means "the
+ * script that was running is done": if what it wrote stopped the parse, it
+ * answers OS64_HTML_SCRIPT at once and parses nothing, so the host runs
+ * that script next, and its own writes go just after it. Written text is
+ * INPUT and not tree: it is kept on the heap and counted against
+ * `max_bytes`, which ends the input where it falls as it does for fed
+ * bytes (a write is cut there on a character, not a byte): whatever was
+ * waiting behind the cut is dropped unparsed, and nothing fed or written
+ * after it is taken, a script before it still stops the parse; it moves the
+ * version as any parsing call does, and an empty write changes nothing. A write that
+ * is not UTF-8 or holds a NUL is OS64_HTML_BAD_TEXT and nothing of it is
+ * parsed. A write when the parse is not stopped at a script (before the
+ * first stop, after a `resume` or an `end` that answered OK) is
+ * OS64_HTML_BAD_ARGUMENT and changes nothing. A refusal met while parsing
+ * it is the parse's, as for `feed`.
+ * `finish` parses what was written with the rest; `abandon` frees it.
+ *
+ * BETWEEN TWO CALLS THE TREE IS A DOCUMENT. `os64_html_parser_document`
+ * answers it, the same one `finish` will hand over. It can be read, pinned
+ * and changed with the verbs at the foot of this file, with one
+ * difference from a finished document: until the parser has reached the
+ * first tag or text, the `html` element is not yet in the document. The
+ * parser still owns it: it is not freed while the parser lives.
+ *
+ * Every call that parses anything moves the document's version, and so does
+ * a `finish` or an `abandon` that has to give the document its `html`
+ * element. What a snapshot pinned between two calls keeps pointing at stays
+ * put: the parser adding to a text node such a snapshot can see writes the
+ * longer text elsewhere and retires the old bytes, as `set_text` does.
+ *
+ * A verb between two calls may leave the tree unlike anything a parser
+ * built: its open elements detached, moved, nested the other way. The
+ * parser then goes on as the standard says, adding to the elements it has
+ * open wherever they now are, but it keeps the verbs' rules. A link the
+ * rules refuse is not made and the node stays where it was (a cycle; a
+ * second element, or a doctype after the element, under the document). A
+ * node that would lie deeper than the limit refuses the parse
+ * (OS64_HTML_TOO_DEEP). A control the parser moves out of its form's tree
+ * loses its `form_owner`, and `head` and `body` stay the document element's
+ * first of each. */
+os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p);
+/* The element whose text the parser is still adding to — a `style`, a
+ * `script`, a `title`, a `textarea`, whatever its raw or escaped text is
+ * read as — or NULL. Between two feeds such an element is in the tree with
+ * part of its text, so whoever reads its text then reads a fragment: a
+ * stylesheet taken from it now is a truncated sheet. */
+os64_html_node_t *os64_html_parser_open_text(const os64_html_parser_t *p);
+int64_t os64_html_parser_resume(os64_html_parser_t *p);
+int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t len);
+int64_t os64_html_parser_end(os64_html_parser_t *p);
+os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p);
+os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p);
+const os64_html_attr_t *os64_html_attr(const os64_html_node_t *element, const char *name);
+/* The attribute of namespace `ns` (NULL for none) and local name `local`
+ * (DOM's "get an attribute by namespace and local name"), NULL for none: a
+ * record's local name is its name after the colon when it is in a
+ * namespace, its whole name when it is in none. HTML's own attributes are
+ * the ones in no namespace. */
+const os64_html_attr_t *os64_html_attr_ns(const os64_html_node_t *element, const char *ns, const char *local);
+os64_html_tag_t os64_html_tag_from_name(const char *name);
+const char *os64_html_tag_name(os64_html_tag_t tag);
+const char *os64_html_status_name(int64_t status);
+
+/* THE ENCODING TABLE ANSWERS FOR EVERYONE, so nothing carries a second copy
+ * of it. A parser needs to read a label and decode bytes; a consumer asking
+ * what a form's accept-charset names, and writing that encoding back out,
+ * needs the same table read the other way.
+ *
+ * `os64_html_encoding_for_label` takes one label of `len` bytes, ASCII
+ * whitespace at either end ignored, and answers with the canonical name of
+ * the encoding it names — "utf-8", "windows-1252", "utf-16le", "utf-16be",
+ * the four this parser decodes — or NULL for a label it does not know. The
+ * name is a literal and outlives any document.
+ *
+ * `os64_html_encode_windows_1252` is the Encoding Standard's single-byte
+ * encoder for that index. False means the encoding has no byte for the code
+ * point, which is a fact and not an error: what to send instead belongs to
+ * whoever is doing the sending.
+ *
+ * `os64_html_decode_windows_1252` is its decoder, the same index read the
+ * other way: every byte names a code point, so it cannot fail. */
+const char *os64_html_encoding_for_label(const char *label, size_t len);
+bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
+uint32_t os64_html_decode_windows_1252(uint8_t byte);
+
+/* ── CHANGING A DOCUMENT (docs/design/pending/DOM.md) ─────────────────────
+ *
+ * The structs above stay read-only views. A change goes through a verb, so
+ * that every one keeps what every reader relies on: no cycle, the DOM
+ * Standard's rules for what may be whose child, strings that are UTF-8 with
+ * no NUL, an HTML document that still has its `html` element, and a tree no deeper
+ * than a parse under the same `max_depth` could have built, which is twice
+ * that number of levels (OS64_HTML_TOO_DEEP). A verb either happens or changes nothing a
+ * reader can see, and answers OS64_HTML_OK or the name of why not; a verb's
+ * failure is the verb's, and `doc->refusal` stays what the parse said.
+ *
+ * A REMOVED SUBTREE LIVES WHILE SOMETHING HOLDS IT. A successful remove,
+ * replace, or insertion draining a fragment can reclaim the detached subtree
+ * when no node in it is held and no older snapshot pin remains. A counted
+ * hold preserves node identity across mutations; a pin preserves snapshot
+ * bytes. Hold a node before a verb if it must remain usable afterwards.
+ * A successful insertion consumes even an empty fragment container unless
+ * it is held; an empty insertion still leaves the document version unchanged.
+ * Creation results never inserted stay charged until document teardown.
+ * What a verb allocates is charged to the document's `max_arena_bytes`.
+ *
+ * A VERB REPLACES A STRING; IT DOES NOT WRITE INTO ONE. Replacing a node's
+ * text or an attribute's value swaps the pointer and RETIRES the old bytes,
+ * which are freed once nothing built before the swap can still be pointing
+ * at them.
+ * The document learns that from PINS: whatever keeps pointers into the tree
+ * across a change (a page model, a cascade, a layout) pins the document
+ * while it does, and lets go when it is freed.
+ *
+ * `os64_html_version` moves on every change a reader could see, and is never
+ * zero for a document: comparing it with the version something was built at
+ * answers "has the tree moved since?". The library calls nobody but the
+ * one listener a document may be given (THE LISTENER, below). A verb that
+ * leaves everything as it was answers OK and does not move it: an empty
+ * fragment inserted, a node inserted where it already sits (unless that
+ * parted a control from its form, below), a text or an attribute set to the
+ * value it has, an absent attribute removed, a node replaced by itself.
+ *
+ * `os64_html_pin` answers a pin, or 0 when the document has none left to
+ * give (it has sixteen). No two pins in a program are answered with the same
+ * number, so a pin names one taking of it and nothing later. Freeing a
+ * document while one is held, or releasing what is not held (a pin let go
+ * already, or one taken on another document), ends the program
+ * (OS64_HTML_FATAL_EXIT): the holder is about to read freed memory.
+ * `os64_html_retired_bytes` counts individually owned blocks kept by pins,
+ * including unheld retired subtrees. Permanent chunks remain charged.
+ *
+ * EVERY NODE A VERB IS HANDED BELONGS TO `doc`, the source of a clone
+ * excepted. A node lies in its document's arena and can be reclaimed when
+ * removed or when that document is freed, so a foreign node would point to
+ * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
+typedef uint64_t os64_html_pin_t;
+/* Allocation-free, counted identity protection. The document must own the
+ * node; invalid ownership, overflow, and an unheld release end the program
+ * with OS64_HTML_FATAL_EXIT. Releasing the last hold may reclaim a formerly
+ * detached subtree, so the node must not be read after release. Document
+ * teardown refuses outstanding holds as well as live snapshot pins. */
+void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
+void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
+uint64_t os64_html_version(const os64_html_document_t *doc);
+/* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
+ * detached nodes and template contents, independent of input type/value.
+ * NULL answers zero. Zero permits skipping explicit-owner scans; a nonzero
+ * count does not establish that an affected radio is in the document tree. */
+size_t os64_html_form_input_count(const os64_html_document_t *doc);
+/* Whether a live node belongs to this document, connected or detached.
+ * NULL for either argument answers false. This compares the library's
+ * ownership mark; it neither walks the tree nor changes the document. */
+bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node);
+os64_html_pin_t os64_html_pin(const os64_html_document_t *doc);
+void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin);
+size_t os64_html_retired_bytes(const os64_html_document_t *doc);
+
+/* New nodes, detached and owned by `doc`. NULL with `*status` (which may be
+ * NULL) saying why. An element's `name` is taken as written: the caller
+ * lowercases an HTML one. create_element accepts the known HTML/SVG/MathML
+ * enums; arbitrary/no-namespace creation is supplied by the XML builder.
+ * `os64_html_clone` copies one node, or with `deep`
+ * its whole subtree and a template's contents; a copy has no form owner.
+ * Its `node` may belong to another document, which is how a node is brought
+ * from one to another: the copy then shares no memory with that document
+ * and outlives it. A subtree taller than this document allows is refused
+ * (OS64_HTML_TOO_DEEP). */
+os64_html_node_t *os64_html_create_element(os64_html_document_t *doc, os64_html_ns_t ns,
+                                           const char *name, int64_t *status);
+os64_html_node_t *os64_html_create_text(os64_html_document_t *doc, const char *utf8, size_t len,
+                                        int64_t *status);
+os64_html_node_t *os64_html_create_comment(os64_html_document_t *doc, const char *utf8, size_t len,
+                                           int64_t *status);
+os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *status);
+/* A CDATA section: a TEXT node with `cdata` set. Its data is the caller's to
+ * check (DOM refuses "]]>" in it); libhtml checks only that it is text. */
+os64_html_node_t *os64_html_create_cdata(os64_html_document_t *doc, const char *utf8, size_t len,
+                                         int64_t *status);
+/* A processing instruction: `target` its name, `utf8` its data. The target's
+ * Name production and "?>" in the data are the caller's to check. */
+os64_html_node_t *os64_html_create_pi(os64_html_document_t *doc, const char *target, const char *utf8,
+                                      size_t len, int64_t *status);
+/* An element in any namespace, as DOM's createElementNS makes one:
+ * `namespace_uri` NULL for none, `prefix` NULL for none, `local` its local
+ * name, each copied. The HTML, SVG and MathML namespaces get their kinds
+ * (an HTML element its tag, a template its contents); any other is
+ * OS64_HTML_NS_OTHER, keeping the URI, and none is OS64_HTML_NS_NONE, as the
+ * XML builder makes them. The name rules are the caller's (DOM's validate
+ * and extract). */
+os64_html_node_t *os64_html_create_element_ns(os64_html_document_t *doc, const char *namespace_uri,
+                                              const char *prefix, const char *local, int64_t *status);
+/* A SECOND DOCUMENT, as DOMImplementation makes one (DOM § 4.5.1): a
+ * DOCUMENT node, empty, that lives in `doc`'s arena and carries its mark,
+ * so a node moves between it and `doc`'s own tree as any of `doc`'s nodes
+ * moves, and the verbs build its tree. They give it the DOM Standard's
+ * rules for a document's children (one element, a doctype only before it,
+ * no text) and nothing more: its element may be anything and may be taken
+ * away, and `doc`'s `html`, `head` and `body` stay `doc->document`'s. It is
+ * no node's child, so it is never inserted, and like any node never
+ * inserted it stays charged until `doc` is freed. `create_doctype` makes a
+ * doctype with the name and identifiers given, each copied (UTF-8 with no
+ * NUL, else OS64_HTML_BAD_TEXT; "" is a value, NULL is BAD_ARGUMENT). */
+os64_html_node_t *os64_html_create_document(os64_html_document_t *doc, int64_t *status);
+os64_html_node_t *os64_html_create_doctype(os64_html_document_t *doc, const char *name,
+                                           const char *public_id, const char *system_id,
+                                           int64_t *status);
+os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_node_t *node,
+                                  bool deep, int64_t *status);
+
+/* `insert` puts `node` under `parent` before `before` (NULL: last), moving
+ * it from wherever it was; a FRAGMENT gives up its children in its place and
+ * is left empty. `replace` puts `node` where `old` is. `remove` unlinks a
+ * node that has a parent and is a no-op on one that has none. Adjacent text
+ * is not merged. Tree linking allocates nothing; an optional change log may
+ * allocate, and reports loss to its readers if that allocation fails.
+ *
+ * A document's element or doctype cannot be inserted under that document
+ * again, even to where it already is: the rule that a document has one of
+ * each counts the node itself (OS64_HTML_HIERARCHY), as it does in a
+ * browser. Replacing either with itself is allowed and changes nothing.
+ *
+ * A form control's `form_owner` record is cleared by the change that makes
+ * it untrue, as the HTML Standard's "reset the form owner" says: a move that
+ * leaves the control and its form in different trees, whichever of the two
+ * moved, and giving a listed control a `form` attribute of its own. A
+ * control and its form that move together stay tied. */
+int64_t os64_html_insert(os64_html_document_t *doc, os64_html_node_t *parent,
+                         os64_html_node_t *node, os64_html_node_t *before);
+/* What `insert` would answer for `node` going under `parent` (at the end),
+ * asked without moving anything: OK, or the refusal. A caller that must
+ * first move a node somewhere else (into a fragment) asks before that move,
+ * so a refusal leaves the node where it was. */
+int64_t os64_html_may_insert(const os64_html_document_t *doc, const os64_html_node_t *parent,
+                             const os64_html_node_t *node);
+int64_t os64_html_replace(os64_html_document_t *doc, os64_html_node_t *parent,
+                          os64_html_node_t *node, os64_html_node_t *old);
+int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
+
+/* An attribute by its qualified name, as os64_html_attr finds it. Setting
+ * one that exists keeps its place in the list; a new one goes last.
+ * `set_text` replaces a TEXT, COMMENT or PI node's data whole. */
+/* Changes are applied in order to one element's attributes. A change finds
+ * its record by qualified name (first match, any namespace), or with
+ * `by_ns` by namespace `ns` (NULL for none) and the local part of `name`
+ * (after its colon when `ns` is set), which is unique on an element. A set
+ * retains an existing record's qualified name, namespace and position; a
+ * new record goes last, in `ns` when `by_ns` and in none otherwise. A
+ * remove ignores value/value_len. All entries are validated before any
+ * change; failure preserves the tree, version, parse verdict and arena
+ * accounting, including peak. Complete success publishes once, with replaced
+ * records retired for existing pins. An unchanged final list is a no-op. */
+typedef struct {
+    const char *name, *value;
+    size_t value_len;
+    bool remove;
+    bool by_ns;
+    const char *ns;
+} os64_html_attr_change_t;
+int64_t os64_html_set_attrs(os64_html_document_t *doc, os64_html_node_t *element,
+                            const os64_html_attr_change_t *changes, size_t count);
+
+int64_t os64_html_set_attr(os64_html_document_t *doc, os64_html_node_t *element,
+                           const char *name, const char *value, size_t value_len);
+int64_t os64_html_remove_attr(os64_html_document_t *doc, os64_html_node_t *element,
+                              const char *name);
+int64_t os64_html_set_text(os64_html_document_t *doc, os64_html_node_t *node, const char *utf8,
+                           size_t len);
+
+/* ── THE LISTENER (docs/design/pending/CUSTOM_ELEMENTS.md, RELAYOUT.md) ───
+ *
+ * A document may be given one function to be told, inside a verb and after
+ * its change is applied, of every change the DOM Standard's "queue a
+ * mutation record" step sees: custom element reactions and MutationObserver
+ * are both built on it. A verb that sets an attribute or a text to the
+ * value it already has is told too, though the version does not move, and
+ * so is a node inserted where it already sits (its removal and its
+ * insertion) or replaced by itself (the same two). Removing an absent
+ * attribute is not a change and is not told, nor is inserting an empty
+ * fragment.
+ *
+ * The record shapes are the standard's. A node inserted or replaced in
+ * from another parent is two records: its removal from that parent, then
+ * the insertion. A fragment drained is two: the fragment's record with its
+ * children removed, then the parent's with them added. A replace is one
+ * record on the parent, with both lists filled; the node it puts in has
+ * left its own parent before the node it takes out goes. The siblings are
+ * the ones the standard names, read as the tree stood at that step.
+ *
+ * THE DOCUMENT PARSER IS TOLD AS A VERB IS: every node it links in or takes
+ * out, every character it appends to a text node, every attribute a second
+ * `html` or `body` tag adds. A fragment parse tells nothing, since it
+ * builds in a tree of its own and the result reaches the document by a
+ * verb. Nor does a clone: nothing can be listening to a copy being built.
+ *
+ * Everything a record points at is borrowed for the call. The old value of
+ * an attribute or a text is still the bytes the node had, before they are
+ * retired. A removed node is still alive, before the verb decides whether
+ * it can be reclaimed, so a listener that holds it keeps it
+ * (os64_html_hold allocates nothing). The listener must not change the
+ * document, pin it, or free it. */
+typedef enum {
+    OS64_HTML_CHANGE_CHILDREN = 1, /* target's children changed */
+    OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
+    OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
+    /* Something the cascade reads changed at target though no node did: an
+     * element's custom state (os64_html_set_ce, which `:defined` reads), or
+     * a tree's adopted style sheets (os64_html_touch, target the document
+     * node or a shadow root). The standard records no mutation for either,
+     * so no listener is told. The kind is for a log of the document's
+     * changes (RELAYOUT.md), whose every entry stands for a move of the
+     * version. */
+    OS64_HTML_CHANGE_STATE
+} os64_html_change_kind_t;
+
+typedef struct {
+    uint64_t version;               /* the document's version once the change was made */
+    os64_html_change_kind_t kind;
+    const os64_html_node_t *target; /* CHILDREN: the parent; ATTR: the element; TEXT: the node */
+    /* CHILDREN: what was put in and taken out, each a run of siblings: the
+     * first and how many, read along `next` as the tree stands when the
+     * listener is told. A removed run of more than one node is a drained
+     * fragment's children, which by then lie together in their new parent.
+     * The siblings the change happened between, NULL at an end. */
+    const os64_html_node_t *added, *removed;
+    size_t nadded, nremoved;
+    const os64_html_node_t *previous_sibling, *next_sibling;
+    /* ATTR: the qualified name, the namespace URI (NULL for none), the
+     * local name, and the value before the change: NULL when it was
+     * absent, and not NUL-terminated. */
+    const char *attr_name, *attr_ns, *attr_local, *attr_old;
+    size_t attr_old_len;
+    /* TEXT: the text before the change, not NUL-terminated. */
+    const char *text_old;
+    size_t text_old_len;
+} os64_html_change_t;
+
+/* NULL `changed` takes the listener away. */
+void os64_html_observe(os64_html_document_t *doc,
+                       void (*changed)(void *opaque, const os64_html_change_t *change),
+                       void *opaque);
+
+/* ── BOUNDED CHANGE LOG ───────────────────────────────────────────────
+ * Independent native readers consume invalidations since a document version.
+ * With no readers, no log storage or node holds are created. This is a lossy
+ * optimization aid: -1 from changes means rebuild from the current document.
+ * It does not replace the synchronous listener or retain old text/values.
+ *
+ * Entries own copies of attribute names and arrays of node identities. They
+ * hold target, siblings and listed nodes; their tree links and current data
+ * may change. In particular, iterate the arrays, not nodes' next pointers.
+ * The borrowed chain lasts until the next mutation, reader operation or limit
+ * change on this document. Hold nodes separately to keep them beyond that.
+ * Reader operations must not run inside the listener. Free readers before
+ * freeing their document. A future version or allocation failure refuses new.
+ */
+typedef struct os64_html_reader os64_html_reader_t;
+typedef struct os64_html_change_entry {
+    uint64_t version;
+    os64_html_change_kind_t kind;
+    const os64_html_node_t *target;
+    const os64_html_node_t *const *added, *const *removed;
+    size_t nadded, nremoved;
+    const os64_html_node_t *previous_sibling, *next_sibling;
+    const char *attr_name, *attr_ns, *attr_local;
+    const struct os64_html_change_entry *next;
+} os64_html_change_entry_t;
+os64_html_reader_t *os64_html_reader_new(os64_html_document_t *doc, uint64_t version);
+void os64_html_reader_free(os64_html_reader_t *reader);
+/* Advances to the current version, including on -1. Zero sets *out to NULL.
+ * Records from a parser call or one verb may share a version. */
+int64_t os64_html_changes(os64_html_reader_t *reader, const os64_html_change_entry_t **out);
+/* Default cap is one sixteenth of the document arena budget. Zero disables
+ * retention; loss still reports -1. The cap counts record allocation headers
+ * and payloads; readers themselves also consume the document arena budget. */
+void os64_html_changes_limit(os64_html_document_t *doc, size_t bytes);
+size_t os64_html_changes_bytes(const os64_html_document_t *doc);
+
+/* ── CUSTOM STATE (docs/design/pending/CUSTOM_ELEMENTS.md) ──────────────
+ *
+ * The standard's five states fold into three: "uncustomized" and
+ * "undefined" are PLAIN, told apart by the name; "precustomized" lives on
+ * a constructor's stack, where only the upgrade itself can see it. Every
+ * node is born PLAIN, and so is a clone, since the standard upgrades a
+ * clone after making it; that is also what lets a FAILED element's clone
+ * be tried again.
+ *
+ * `set_ce` moves the version when the state changes (the cascade reads it
+ * for `:defined`) and tells no listener. An element only, of `doc`, and a
+ * state the enum names; anything else is OS64_HTML_BAD_ARGUMENT.
+ *
+ * `os64_html_custom_name` is HTML's valid custom element name (§ 4.13.2):
+ * a lowercase ASCII letter, then name characters with a hyphen among them,
+ * and none of the names SVG and MathML already use. A byte past ASCII is
+ * taken as one of the name characters, which nearly every code point past
+ * ASCII is. */
+typedef enum {
+    OS64_HTML_CE_PLAIN = 0, /* by its name: undefined when it is a valid custom element name */
+    OS64_HTML_CE_CUSTOM,    /* constructed by its definition */
+    OS64_HTML_CE_FAILED     /* its constructor threw, or returned something else */
+} os64_html_ce_t;
+int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
+bool os64_html_custom_name(const char *name);
+
+/* `touch` says something a reader of the document's version depends on
+ * changed at `node` though no node did: it moves the version and logs a
+ * STATE change of `node`, telling no listener, as `set_ce` does. The
+ * consumer is a tree's adopted style sheets (SHADOW_DOM.md § 12, D4b):
+ * `node` is the document node or a shadow root whose sheets changed. A node
+ * of `doc` only; anything else is OS64_HTML_BAD_ARGUMENT. */
+int64_t os64_html_touch(os64_html_document_t *doc, os64_html_node_t *node);
+
+/* ── LIVE RANGES (docs/design/pending/RANGE.md § 3, § 4) ───────────────
+ *
+ * A live range is two boundary points, start (0) and end (1), each a node
+ * and an offset: UTF-16 code units into a Text, Comment or PI node's data,
+ * a child index into any other node. Every mutation of the document keeps
+ * every range right, by the DOM Standard's steps for inserting, removing,
+ * replacing data, splitting a Text node and normalizing, run inside the
+ * verbs that make them, the parser's included. A range holds both its
+ * boundary nodes, so a subtree it points into is not reclaimed under it;
+ * every range must be freed before its document is.
+ *
+ * `range_new` places both points at (the document, 0). `range_set` places
+ * one: a doctype is INVALID_NODE_TYPE, an offset past the node's length
+ * INDEX_SIZE; an offset between a surrogate pair's halves is snapped down to
+ * the pair's start, since the data is UTF-8 and a pair is never split. It
+ * checks nothing about the other point: comparing points, and collapsing a
+ * range whose start would pass its end, is the caller's algorithm.
+ *
+ * `node_length` is the DOM's "length": the data's UTF-16 units for Text,
+ * Comment and PI, 0 for a doctype, the number of children otherwise.
+ *
+ * The data verbs, offsets and counts in UTF-16 units, each snapped down to
+ * a code point's start, a count past the end taken as reaching it, an
+ * offset past the length INDEX_SIZE; each logs a TEXT change with the old
+ * data, as `set_text` does:
+ * - `replace_data` is the standard's replace data: `count` units at
+ *   `offset` become `utf8` (Text, Comment, PI). `set_text` is replace data
+ *   of the whole length, and carries the same range steps.
+ * - `split_text` is Text's splitText: the data from `offset` on becomes a
+ *   new Text node, inserted after the node when it has a parent (an insert,
+ *   logged as one), then the node is truncated; the new node in `*out`.
+ * - `normalize` is Node's normalize over `node`'s descendants: an empty
+ *   Text node is removed, contiguous Text siblings are merged into the
+ *   first (an append to it, then the removal of the rest). */
+typedef struct os64_html_range os64_html_range_t;
+os64_html_range_t *os64_html_range_new(os64_html_document_t *doc);
+void os64_html_range_free(os64_html_range_t *range);
+int64_t os64_html_range_set(os64_html_range_t *range, int which, os64_html_node_t *node, uint32_t offset);
+void os64_html_range_get(const os64_html_range_t *range, int which, const os64_html_node_t **node,
+                         uint32_t *offset);
+uint32_t os64_html_node_length(const os64_html_node_t *node);
+/* UTF-16 units over UTF-8 text, as the data verbs count them: a string's
+ * length in units, and the byte where unit `unit` starts — snapped down to
+ * its code point's start, so a surrogate pair is never split; `len` for a
+ * unit at or past the end. */
+uint32_t os64_html_utf16_length(const char *utf8, size_t len);
+size_t os64_html_utf16_byte(const char *utf8, size_t len, uint32_t unit);
+int64_t os64_html_replace_data(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                               uint32_t count, const char *utf8, size_t len);
+int64_t os64_html_split_text(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                             os64_html_node_t **out);
+int64_t os64_html_normalize(os64_html_document_t *doc, os64_html_node_t *node);
+
+/* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
+ *
+ * A shadow root is a FRAGMENT its host element owns through
+ * `shadow_root`, as a template owns its contents: on no child list, so no
+ * walk of children enters it, and it lives and is reclaimed with its host.
+ * Its `shadow` field holds the options it was attached with.
+ *
+ * `attach_shadow` is DOM's "attach a shadow root" for what libhtml can
+ * judge: `host` must be an HTML element of `doc` that is a valid shadow
+ * host (`valid_shadow_host`) and has no root yet, else
+ * OS64_HTML_NOT_SUPPORTED; whether a custom element definition disables
+ * shadows is its caller's to know. `options` is OS64_HTML_SHADOW_OPEN or
+ * OS64_HTML_SHADOW_CLOSED with any of the flags; anything else is
+ * OS64_HTML_BAD_ARGUMENT. Attaching moves the version and logs a CHILDREN
+ * change of the host with nothing added or removed, since what the host
+ * renders changed; like `set_ce` it tells no listener, as DOM queues no
+ * mutation record for it.
+ *
+ * `shadow_host` is a shadow root's host, and NULL for any other node.
+ * `shadow_including_parent` is a node's parent, or for a shadow root its
+ * host: one step of the climb a question about inheritance through hosts
+ * (directionality, language) takes. `shadow_including_root` climbs it to
+ * the top: a node is connected when that is a document.
+ * `shadow_including_next` is preorder over `root`'s shadow-including
+ * descendants, a host's shadow root (and its tree) before the host's
+ * children, NULL after the last: the standard's shadow-including tree
+ * order. A template's contents are no part of it, as they are no part of
+ * the tree. */
+enum {
+    OS64_HTML_SHADOW_OPEN = 1,
+    OS64_HTML_SHADOW_CLOSED = 2,
+    OS64_HTML_SHADOW_DELEGATES_FOCUS = 4,
+    OS64_HTML_SHADOW_CLONABLE = 8,
+    OS64_HTML_SHADOW_SERIALIZABLE = 16
+};
+bool os64_html_valid_shadow_host(const os64_html_node_t *element);
+os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_node_t *host,
+                                          uint8_t options, int64_t *status);
+const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_parent(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
+                                                        const os64_html_node_t *node);
+/* DOM's "retarget A against B" (§ 4.8): A, unless A is in a shadow tree
+ * whose root is not a shadow-including inclusive ancestor of B, when it is
+ * that root's host, again until it is not. A NULL B (the window, or no
+ * node) retargets A out of every shadow tree, into the tree its
+ * shadow-including root is. */
+const os64_html_node_t *os64_html_retarget(const os64_html_node_t *a, const os64_html_node_t *b);
+/* Whether the document has ever had a shadow root (it stays true once
+ * one is made), so a reader can skip shadow-only work on a page with
+ * none. */
+bool os64_html_has_shadow_roots(const os64_html_document_t *doc);
+
+/* SLOTS AND THE FLAT TREE (SHADOW_DOM.md § 4). Named assignment: each
+ * element or text child of a host is assigned to the first `slot` in the
+ * host's shadow tree, in tree order, whose `name` equals the child's `slot`
+ * attribute (the empty name for none). It is computed per shadow root and
+ * kept until a change that can move it (SLOTCHANGE, below) or the
+ * document's version moving; a refused allocation answers the same by
+ * walking the trees, more slowly.
+ *
+ * `assigned_slot` is a node's slot, NULL when it has none (its parent is
+ * no host, or no slot takes its name). `slot_assigned_count` and
+ * `slot_assigned` are a slot's assigned nodes in tree order; a slot in no
+ * shadow tree has none.
+ *
+ * The flat tree: a host's flat children are its shadow root's children, a
+ * slot's are its assigned nodes or, with none, its own children, every
+ * other node's its own. A slot is a node of it. `flat_parent` of a host's
+ * child is its slot, NULL when it has none, and of a slot's own child NULL
+ * while the slot has nodes assigned: neither is in the flat tree, and
+ * neither renders. These take a const document though they may refresh
+ * its cache; a document is read on one thread. */
+const os64_html_node_t *os64_html_assigned_slot(const os64_html_document_t *doc,
+                                                const os64_html_node_t *node);
+size_t os64_html_slot_assigned_count(const os64_html_document_t *doc, const os64_html_node_t *slot);
+const os64_html_node_t *os64_html_slot_assigned(const os64_html_document_t *doc,
+                                                const os64_html_node_t *slot, size_t index);
+const os64_html_node_t *os64_html_flat_first_child(const os64_html_document_t *doc,
+                                                   const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_next_sibling(const os64_html_document_t *doc,
+                                                    const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
+                                              const os64_html_node_t *node);
+
+/* SLOTCHANGE (SHADOW_DOM.md § 4). A change that can move an assignment
+ * (a host's children, anything inside a shadow tree, a host child's `slot`
+ * attribute, a slot's `name`, a root attached) marks its shadow root as it
+ * is made, whether or not anything reads assignment afterwards.
+ * `slot_changes` compares each marked root's assignment now with the one
+ * it last reported and hands `changed` each slot whose assigned nodes
+ * differ, a slot's first assignment included, in the order the roots were
+ * marked and each root's slots in tree order; then it keeps the new
+ * assignment as reported. `changed` must not change the document. A root
+ * there is no memory for is left marked, reported by a later call, and
+ * the call answers OS64_HTML_NO_MEMORY. A slot removed from its shadow
+ * tree is not reported: its list may name nodes since reclaimed.
+ * `slot_changes_pending` says whether any root is marked, so a caller
+ * knows a report is waiting without making one. */
+int64_t os64_html_slot_changes(os64_html_document_t *doc,
+                               void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque);
+bool os64_html_slot_changes_pending(const os64_html_document_t *doc);
+
+/* Parse a complete UTF-8 string in an owned ELEMENT context.
+ * This HTML fragment entry point refuses XML documents and unknown/no-namespace
+ * contexts with BAD_ARGUMENT; it does not provide XML fragment parsing. The returned
+ * FRAGMENT is detached and owned by doc; script elements never stop or run.
+ * scripting selects noscript's policy. There is no sniffing, BOM stripping,
+ * or meta charset interpretation. Invalid UTF-8 becomes U+FFFD. NUL follows
+ * tokenizer/tree state: ordinary HTML text drops it; raw text, RCDATA,
+ * attributes, comments and foreign text replace it.
+ * Work is capped at saturating (4096 + 256 * len), including context ancestry
+ * and result copying. Depth uses doc's limit from the detached fragment root;
+ * insertion rechecks depth from the destination tree. Temporary parsing and
+ * final copying both charge doc's remaining arena, so peak storage includes
+ * both until commit. Status is OK, BAD_ARGUMENT, NO_MEMORY, ARENA_EXHAUSTED,
+ * TOO_DEEP or WORK_EXHAUSTED. On failure all doc accounting and state remain
+ * unchanged; on success only allocation counts/peak and owned storage change.
+ * Tree version, parse refusal/work/errors, landmarks and pins do not change.
+ * Calls on one document must be serialized with its other operations. */
+os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
+                                           const os64_html_node_t *context,
+                                           const char *utf8, size_t len,
+                                           bool scripting, int64_t *status);
+/* As os64_html_parse_fragment, but the parse's root comes back as the `html`
+ * element it is (HTML namespace), detached, holding what the fragment would
+ * and the attributes the markup's `<html>` start tags gave it, rather than as
+ * a FRAGMENT, and it is parsed in no-quirks mode whatever doc's mode is.
+ * With an `html` context it is a whole document's markup as its root
+ * element: DOMParser's document. Same limits, statuses and accounting. */
+os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
+                                                const os64_html_node_t *context,
+                                                const char *utf8, size_t len,
+                                                bool scripting, int64_t *status);
+/* innerHTML when children_only, outerHTML otherwise; document and fragment
+ * nodes have no wrapper. HTML template contents are traversed and HTML void
+ * elements have no children/end tag in output. Text escapes &, NBSP, <, >
+ * except in HTML raw-text parents (including noscript when scripting); attrs
+ * also escape double quotes. Names retain namespace-qualified spelling.
+ * Allocation-free. Returns total bytes excluding NUL (saturates at SIZE_MAX),
+ * writes a byte prefix of at most cap-1 and NUL when out != NULL and cap > 0.
+ * cap == 0 writes nothing; truncation may split UTF-8. NULL node is empty.
+ * Do not run this concurrently with a mutation of the node's document. */
+size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
+                           bool scripting, char *out, size_t cap);
+
+/* XML serialization (DOM Parsing § 3.2.1 with require well-formed false):
+ * what XMLSerializer.serializeToString makes of `node` and its subtree, a
+ * document or fragment being its children. Namespaces are declared where
+ * they change and attributes' prefixes resolved as the browsers do
+ * (serialize_xml.c). Answers the total length excluding NUL and writes as
+ * os64_html_serialize does (at most cap-1 bytes and a NUL; cap 0 writes
+ * nothing), or OS64_HTML_NO_MEMORY when its namespace map or its stack of
+ * open elements could not grow;
+ * the same tree gives the same answer twice. NULL node is empty. Do not
+ * run this concurrently with a mutation of the node's document. */
+int64_t os64_html_serialize_xml(const os64_html_node_t *node, char *out, size_t cap);
+
+#pragma GCC visibility pop
+
+#endif

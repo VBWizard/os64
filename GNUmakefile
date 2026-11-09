@@ -1,5 +1,13 @@
 # Nuke built-in rules and variables.
 MAKEFLAGS += -rR
+# Parallel by default, decided at the TOP only: a sub-make inherits this
+# make's jobserver (or its serial -j1), and one -j of its own would make
+# it drop that jobserver and run its full count beside ours — GNU make even
+# says so ("-jN forced in makefile: resetting jobserver mode"). A -j on the
+# command line still wins over this line.
+ifeq ($(MAKELEVEL),0)
+MAKEFLAGS += -j$(shell nproc)
+endif
 .SUFFIXES:
 QEMUDEBUGFLAGS = -S -s
 # Convenience macro to reliably declare user overridable variables.
@@ -20,7 +28,14 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # target individually, so anyone rebuilding an invocation from these
 # variables — as the headless harness does — inherited everything EXCEPT the
 # flag that mattered. See VERIFICATION.md's headless section for the scar.
-QEMU_BASE_FLAGS = -machine q35 -m 8g -no-reboot -smp 8 \
+# -cpu: the default qemu64 model hides RDRAND and RDSEED, which every real
+# machine this OS runs on has (RNG_PROBE.md); exposing them keeps the
+# harness honest about the entropy pool's normal path. A boot on the bare
+# model (drop the +features) is how the pool's timing-only path is tested.
+# -smp: the CPU topology, QEMU_SMP=<spec> on the command line for any
+# target. run-sparse is the one every SMP change should also boot.
+QEMU_SMP ?= 8
+QEMU_BASE_FLAGS = -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -no-reboot -smp $(QEMU_SMP) \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)
@@ -173,30 +188,122 @@ override IMAGE_NAME := os64_kernel
 # $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
 # once per .c file — without it, top appears twice in every list built here.
 USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
-USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
+# Punctuation aliases are alternate names for discovered apps, and therefore
+# ride every /bin without pretending to be independently linked programs.
+USERLAND_ALIASES := [
+USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS) $(USERLAND_ALIASES))
 
-# The shared libraries every one of those apps now needs to run at all
-# (2026-08-22). This is not optional cargo: since libos64 became a .so, an
-# image with /bin but no /lib/libos64.so boots to a husk that cannot start —
-# and cannot start anything else either. It goes on EVERY volume that carries
-# a /bin, which today means the ext2 root AND the FAT lifeboat. The lifeboat
-# gets its own copy on its own partition on purpose: the whole point of a
-# lifeboat is that it does not share machinery with the thing it exists to
-# repair, so a stray write that eats the root's library leaves the lifeboat's
-# untouched.
-USERLAND_LIBS := userland/bin/libos64.so
+# The fixtures, discovered the same way from userland/tests/ and installed to
+# /tests instead of /bin. /bin is the programs and tools a person runs; /tests
+# is the proof harness. The routing is the SOURCE DIRECTORY and nothing else,
+# so no list here has to be kept in step with anyone's opinion about what
+# counts as a test — moving a directory moves the program.
+USERLAND_TESTS    := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/tests/*/*.c)))))
+USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 
-# Kernel-side ring-3 test fixtures that also ride the image.
+# The shared libraries used by the discovered apps. libos64 is foundational:
+# an image with /bin but no /lib/libos64.so boots to a husk that cannot start
+# anything. Other modules, beginning with libgzip, serve narrower consumers
+# but travel with the complete userland so installed binaries have their
+# dependencies. The set goes on both volumes that currently carry /bin — the
+# ext2 root and the FAT lifeboat — with independent copies so damage to one
+# volume does not also eat the repair environment's libraries.
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libwebp.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so userland/bin/libdom.so userland/bin/libxml.so userland/bin/libsvg.so userland/bin/libdraw2d.so userland/bin/libcanvas.so
+# The engine's pinned notice travels with both image copies of libjs.
+QUICKJS_LICENSE := userland/libjs/upstream/LICENSE
+
+# The font fixtures /tests/fonttest reads: two TrueType faces and two
+# OpenType/CFF ones, with their licences beside them. They land in /tests
+# as test inputs. The product selection ships the complete DejaVu serif,
+# sans and mono families as independent copies in /etc/fonts.
+# userland/libfreetype/fixtures/FIXTURES.md records where each file came
+# from, its digest, and what licence it travels under.
+FONT_FIXTURE_DIR   := userland/libfreetype/fixtures
+FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
+                      SourceSans3-Regular.otf SourceCodePro-Regular.otf \
+                      LICENSE-DejaVu.txt LICENSE-SourceCodePro.txt \
+                      LICENSE-SourceSans3.txt
+FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
+FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSerif-Bold.ttf \
+                      DejaVuSerif-Italic.ttf DejaVuSerif-BoldItalic.ttf \
+                      DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf \
+                      DejaVuSans-BoldOblique.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
+                      DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf)
+
+# The real pages the layout library is tested on, and libgarb's style
+# sheets and its showcase page (garb.html), side by side in /tests/pages, so
+# /tests/flowdump, /tests/garbdump and yonder have something to read on a
+# machine with no network. Where each page came from is in
+# tools/html_corpus/SOURCES.json, which ships beside them. tools/pages holds
+# pages written here to show a feature beside Chrome (each says what to look
+# for), with the pictures they name.
+PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
+                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png tools/pages/*.webp tools/pages/*.jpg tools/pages/*.svg)
+
+# The same fixtures for the wire, staged alone: os64serve serves a directory
+# whole, and tools/html_corpus also holds the host harness's expected dumps,
+# which mean nothing on os64. Served as the `pages` lot (os64get.conf).
+# The directory holds exactly the list: os64serve offers whatever is in it,
+# so a fixture renamed or deleted from the corpus is removed here too, not
+# left to be served and installed as if it were still one.
+PAGES_STAGE  := userland/bin/pages
+PAGES_STAGED := $(addprefix $(PAGES_STAGE)/,$(notdir $(PAGE_FIXTURES)))
+PAGES_RETIRED = $(filter-out $(PAGES_STAGED),$(wildcard $(PAGES_STAGE)/*))
+$(PAGES_STAGE)/%: tools/html_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+$(PAGES_STAGE)/%: tools/garb_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+$(PAGES_STAGE)/%: tools/pages/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+.PHONY: stage-pages
+stage-pages: $(PAGES_STAGED)
+	$(if $(strip $(PAGES_RETIRED)),rm -f $(PAGES_RETIRED))
+
+# The faces the image ships in /etc/fonts, staged alone for the wire: a
+# machine refreshed over the network (the P5) has no other way to receive
+# them. Served from here they install by suffix (os64get.conf's *.ttf rule).
+# The directory holds exactly the list, as pages' does: a face dropped from
+# the image is not left here to be installed.
+FONTS_STAGE  := userland/bin/fonts
+FONTS_STAGED := $(addprefix $(FONTS_STAGE)/,$(notdir $(FONT_PRODUCT)))
+FONTS_RETIRED = $(filter-out $(FONTS_STAGED),$(wildcard $(FONTS_STAGE)/*))
+$(FONTS_STAGE)/%: $(FONT_FIXTURE_DIR)/%
+	@mkdir -p $(FONTS_STAGE) && cp $< $@
+.PHONY: stage-fonts
+stage-fonts: $(FONTS_STAGED)
+	$(if $(strip $(FONTS_RETIRED)),rm -f $(FONTS_RETIRED))
+
+# Prepared compositions carry their own glyphs and finish tiles.
+FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
+
+# Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
+# the userland ones — same shelf, because they are the same KIND of thing: a
+# program whose verdict is its exit code. Only their source tree differs
+# (kernel/test/elf, where they were born to be spawned from the kernel suite).
+# libtest.so rides this list for its build dependency only — it is a LIBRARY,
+# so the copy loops filter it out and place it in /lib with the others.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test hog env_fill glutton libtest.so)
+                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test nosyscall env_fill glutton libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
+BT_FIRMWARE_LICENSE := firmware/intel/LICENCE.ibt_firmware
+
+# THE TRIPWIRE FOR THE COLLISION THAT STARTED ALL THIS. Two source trees feed
+# /tests, and neither image builder complains when they claim one name: debugfs
+# refuses the second write, mcopy replaces the first, and both do it silently.
+# `hog` sat in that blind spot from 2026-08-13 until the /tests split found it.
+# A name owned twice now stops the build instead of picking a winner.
+TESTS_NAME_CLASH := $(filter $(USERLAND_TESTS),$(filter-out libtest.so,$(notdir $(KERNEL_FIXTURES))))
+ifneq ($(TESTS_NAME_CLASH),)
+$(error name claimed by both userland/tests and kernel/test/elf: $(TESTS_NAME_CLASH) — \
+        both install to /tests, so a name must belong to exactly one of them)
+endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso
+all: $(IMAGE_NAME).iso stage-pages stage-fonts
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd
+all-hdd: $(IMAGE_NAME).hdd stage-pages stage-fonts
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.
@@ -204,7 +311,7 @@ all-hdd: $(IMAGE_NAME).hdd
 # (new mtime -> the disk image and ISO rebuild) or leaves it alone (old mtime ->
 # they don't). That is what makes `make run` cheap when nothing changed.
 $(KERNEL_BIN) $(KERNEL_FIXTURES): kernel ;
-$(USERLAND_BINS) $(USERLAND_LIBS): userland ;
+$(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS): userland ;
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
@@ -219,6 +326,19 @@ debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
+
+# The AMD 3900X's APIC layout: 24 CPUs whose APIC IDs are 0-5, 8-13, 16-21,
+# 24-29 (QEMU builds them die << 3 | core << 1 | thread, three cores in each
+# four-slot die, which is what Zen 2 does per CCX). A kernel that uses an
+# APIC ID as a CPU number boots fine on every dense machine and dies on
+# this one, so this is the acceptance test for anything that touches CPU
+# bring-up, IPIs or per-CPU state (CPU_NUMBERS.md). Add MAXCPUS=4 or nosmp
+# at the Limine menu (`e`) for the capped boots.
+QEMU_SPARSE_SMP = 24,sockets=1,dies=4,cores=3,threads=2
+
+.PHONY: run-sparse
+run-sparse:
+	$(MAKE) run QEMU_SMP=$(QEMU_SPARSE_SMP)
 
 # ── Network-attached variants ────────────────────────────────────────────────
 # Same run/debug, plus a virtio NIC on QEMU's user-mode NAT (guest 10.0.2.15,
@@ -240,6 +360,38 @@ run-net: $(IMAGE_NAME).iso
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
+
+# The chaos rig: run-net with tools/cable.py in the wire (its header is the
+# design). Two filter-redirectors hand every frame out to the cable and take
+# the survivors back; the pcap dump sits AFTER the cable in both directions,
+# so the capture records what got through and the cable's ledger says what
+# did not. Creation order is the ordering: QEMU walks a netdev's filters
+# forward for frames the netdev sends (slirp → guest, queue=tx) and in
+# REVERSE for frames sent to it (guest → slirp, queue=rx), so cable_down
+# must come before the dump and cable_up after it. START THE CABLE FIRST
+# AND LEAVE IT RUNNING: with no cable listening at QEMU start, frames pass
+# through untouched (no cable, no weather) — but a cable that goes away
+# mid-run wedges the redirectors (QEMU 8.2.2 reconnects only half the
+# chardevs and every send after that fails EPERM), so the cure is to
+# restart the guest, never the cable. Weather is set on the cable's command
+# line or changed live, which is why it never needs restarting:
+# tools/cable.py ctl set up loss 0.1
+CABLE_PORT ?= 7100
+QEMU_CHAOS_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+                   -chardev socket,id=cable_up_out,host=127.0.0.1,port=$$(($(CABLE_PORT)+1)),reconnect=1 \
+                   -chardev socket,id=cable_up_in,host=127.0.0.1,port=$$(($(CABLE_PORT)+2)),reconnect=1 \
+                   -chardev socket,id=cable_down_out,host=127.0.0.1,port=$$(($(CABLE_PORT)+3)),reconnect=1 \
+                   -chardev socket,id=cable_down_in,host=127.0.0.1,port=$$(($(CABLE_PORT)+4)),reconnect=1 \
+                   -object filter-redirector,id=cable_down,netdev=n0,queue=tx,outdev=cable_down_out,indev=cable_down_in \
+                   -object filter-dump,id=dump0,netdev=n0,file=net_capture.pcap \
+                   -object filter-redirector,id=cable_up,netdev=n0,queue=rx,outdev=cable_up_out,indev=cable_up_in
+
+.PHONY: run-chaos
+run-chaos: $(IMAGE_NAME).iso | $(DATA_IMAGE)
+	qemu-system-x86_64 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMU_CHAOS_FLAGS)
 
 # Same slirp harness, e1000 instead of virtio — the INTx doorbell's test
 # bench (2026-08-06). Boot this to see "e1000: interrupts live — INTx
@@ -345,7 +497,7 @@ userland:
 # It used to be phony, which meant every single `make run` destroyed the image
 # (rm + sgdisk + mformat), re-mcopy'd all eleven files, and — because the ISO
 # carries this image as a Limine module — forced xorriso to repack the whole
-# 77MB ISO. Nothing downstream could EVER be up to date, because a phony
+# ISO. Nothing downstream could EVER be up to date, because a phony
 # prerequisite is by definition always out of date. Fixing the kernel's header
 # dependencies bought nothing until this was fixed too.
 #
@@ -359,7 +511,13 @@ userland:
 # ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf GNUmakefile
+TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
+ICON_ASSET_DIR := assets/icons/default
+ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
+ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
+ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
+
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -373,32 +531,69 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS)
 	# Second debugfs pass: the program payload. Generated here (not in the
 	# python script) because the bin list is THIS makefile's knowledge — same
 	# discovery as the FAT mcopy loop below, no per-app line to forget.
-	# /etc and /tmp join /bin and /lib: the curated tree, now that root is
-	# writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
+	# /etc, /tmp and /tests join /bin and /lib: the curated tree, now that root
+	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/mouse.conf mouse.conf\nwrite etc/icons.conf icons.conf\nwrite etc/roam.conf roam.conf\nwrite etc/file-associations.conf file-associations.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	# The pinned public roots are system configuration; /home/tls.conf can
+	# select another store through the configuration ladder.
+	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /etc/licenses\nwrite license/libjpeg-turbo-LICENSE /etc/licenses/libjpeg-turbo.txt\nwrite license/libwebp-LICENSE /etc/licenses/libwebp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/libpage-numeric-LICENSE /etc/licenses/libpage-numeric.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# The FreeType Licence asks that anything shipping FreeType credit it in
+	# its documentation. A file on the machine IS this machine's
+	# documentation, so the credit travels with the library rather than
+	# living only in a repository nobody has at run time. The shipped file
+	# is upstream's dual-licence notice followed by the FTL in full, which
+	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
+	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/icons\nmkdir /etc/icons/default\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(ICON_METADATA),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach f,$(ICON_ASSETS),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/frames\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(FRAME_COMPOSITIONS),printf 'write %s /etc/frames/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	# /tests: the proof harness — the userland fixtures and the kernel-born
+	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
+	# name again: debugfs `write` REFUSES an existing name, so HERE the first
+	# writer wins, while the lifeboat's `mcopy -o` REPLACES, so THERE the last
+	# one does. Opposite rules, neither of them loud. When `hog` was claimed by
+	# both trees they happened to agree, which is luck and not a mechanism —
+	# separate directories are the mechanism.
+	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach t,$(USERLAND_TESTBINS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /tests/fonts\ncd /tests/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(FONT_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /tests/pages\ncd /tests/pages\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
-	# /lib: every library in USERLAND_LIBS (libos64.so is what every app in
-	# /bin above is dynamically linked against — without it nothing on this
-	# volume runs) and libtest.so (the dynamic-linking regression fixture).
+	# /lib: every shipped userland library (libos64.so is foundational;
+	# optional modules are loaded by their consumers) and libtest.so, the dynamic-linking
+	# regression fixture.
 	# Iterated, same as the apps, so a new library cannot be forgotten here.
 	printf 'cd /lib\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach l,$(USERLAND_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'write kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
-	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
+	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps, $(words $(USERLAND_TESTS)) fixtures)"
 
-# etc/desktop.conf, etc/gclock.conf and etc/os64.conf are dependencies because the recipe COPIES
+# Every etc/ file named below is a dependency because the recipe COPIES
 # them onto the lifeboat's /etc. desktop.conf was missing from this list when it
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -424,12 +619,30 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	# Drop the host-authored ext2 filesystem into partition 2, byte for byte.
 	dd if=$(EXT2_TEST_IMAGE) of=$(DISK_IMAGE) bs=512 seek=$(EXT2_START_SECTOR) conv=notrunc,sparse status=none
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
-	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/bin/$(notdir $(f));))
 	# Every discovered userland app, automatically — no per-app line to forget.
 	$(foreach b,$(USERLAND_BINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
+	# THE LIFEBOAT CARRIES THE PROOF HARNESS TOO (Chris's call, 2026-08-29):
+	# a lifeboat exists to be trusted while everything else is suspect, and one
+	# that cannot demonstrate the CPU, the kernel and the syscall floor are
+	# sound is asking to be taken on faith at the worst possible moment. It
+	# costs ~750KB of the 59MB this partition has spare.
+	$(foreach t,$(USERLAND_TESTBINS),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
+	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/$(notdir $(f));))
+	# The font fixtures travel with the harness for the same reason the
+	# harness travels at all: a fixture that cannot find its inputs proves
+	# nothing, and a lifeboat where one test always skips is a lifeboat whose
+	# green result means less than root's.
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/fonts > /dev/null 2>&1
+	$(foreach f,$(FONT_FIXTURES),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/fonts/$(notdir $(f));)
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/pages > /dev/null 2>&1
+	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/pages/$(notdir $(f));)
 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
 	# root's, so these files are what make the lifeboat a working system
 	# rather than a partition full of programs that cannot start. Iterated
@@ -440,11 +653,10 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root
-	# because the DEFAULT boot entry mounts ext2 as root, and ext2 is
-	# read-only by design here — /etc/husk.rc would not merely be awkward to
-	# update from inside the OS, it would be unwritable. On this boot it
-	# appears as /fat/husk.rc; on a FAT-root boot the same file is /husk.rc,
-	# which is why husk looks in both places.
+# because the DEFAULT boot entry mounts ext2 as root. On that boot this copy
+# appears as /fat/husk.rc; on a FAT-root lifeboat boot it is /husk.rc, which
+# is why husk looks in both places. Keeping the rescue copy on FAT also makes
+# it available when the ext2 root is the thing being repaired.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
 	# The lifeboat's /etc (2026-08-23): the desktop and gclock, so a FAT-root
 	# GUI boot — the QEMU GUI entry — gets the same setup the ext2 root does, and
@@ -455,9 +667,37 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	# which is the entire job of the lifeboat. The other config files keep
 	# their ext2-only life until something on the lifeboat wants them.
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc > /dev/null 2>&1
+	# Product fonts live beside their configuration; create the parent first.
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
+	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons/default
+	$(foreach f,$(ICON_METADATA),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/icons/default/$(notdir $(f));)
+	$(foreach f,$(ICON_ASSETS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/icons/default/$(notdir $(f));)
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
+	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt ::/etc/licenses/DejaVu.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libwebp-LICENSE ::/etc/licenses/libwebp.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libpage-numeric-LICENSE ::/etc/licenses/libpage-numeric.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/icons.conf ::/etc/icons.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/roam.conf ::/etc/roam.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/file-associations.conf ::/etc/file-associations.conf
+	# bootenv.conf for the same reason as os64.conf: the boot environment is
+	# decided by a file now, and the lifeboat boots with the same defaults the
+	# ext2 root does rather than with whatever the kernel's floor happens to be.
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/bootenv.conf ::/etc/bootenv.conf
 	# gui.conf matters MORE on the lifeboat than anywhere else: the QEMU GUI
 	# boot entry roots this FAT partition, so without a copy here that boot
 	# takes the built-in defaults (the demo pair, started by /bin/desktop) and the file
@@ -465,6 +705,7 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gui.conf ::/etc/gui.conf
 	# menu.conf rides with gui.conf: the launcher gui.conf names reads it.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/menu.conf ::/etc/menu.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/mouse.conf ::/etc/mouse.conf
 	# ── The HD-boot payload (2026-08-21) ─────────────────────────────────
 	# Kernel + boot modules + the HD-boot menu ride the FAT partition at
 	# /boot, so p5-refresh.sh's ordinary mirror makes the P5's lifeboat a
@@ -493,6 +734,7 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	# through /fat.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	@echo "  disk image rebuilt: $(words $(USERLAND_APPS)) apps ($(USERLAND_APPS))"
+	@echo "                      $(words $(USERLAND_TESTS)) fixtures in /tests ($(USERLAND_TESTS))"
 
 # The data disk. NO PREREQUISITES, DELIBERATELY: this rule fires exactly once,
 # when the file does not exist, and never again — not when the kernel changes,
@@ -614,12 +856,15 @@ vbox-sync: $(DISK_IMAGE)
 
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root
-# Real file prerequisites, so xorriso only repacks the 77MB ISO when something
-# on it actually changed (it used to depend on the phony disk-populate, which
-# guaranteed a full repack on every single make).
-$(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
+# Real file prerequisites, so xorriso only repacks the ISO when something on it
+# actually changed (it used to depend on the phony disk-populate, which
+# guaranteed a full repack on every single make). Nearly all of the ISO's bulk
+# is $(DISK_IMAGE) riding along as a Limine module for the RAMDISK entries —
+# sparse on disk here, dense once xorriso writes it out.
+$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
+	cp $(BT_FIRMWARE_LICENSE) iso_root/
 	# The P5 refresh script rides at the ISO root: boot the target machine's
 	# Linux, mount the stick, `sudo bash <stick>/p5-refresh.sh <stick>` — the
 	# ISO carries its own installer (one-time setup lives in its header).
@@ -642,14 +887,46 @@ $(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso > /dev/null
 	./limine/limine bios-install $(IMAGE_NAME).iso > /dev/null
-# The c:/temp export feeds Chris's VBox/P5 boots — a WSL2 convenience, not
-# part of the build contract. Gated on the directory existing (PR #26): an
-# unconditional cp made `make` FAIL on any machine without /mnt/c/temp,
-# which is every machine that isn't this one.
-	@if [ -d /mnt/c/temp ]; then \
-		rm -f /mnt/c/temp/os64_kernel.iso; \
-		cp -v os64_kernel.iso /mnt/c/temp; \
+
+# Hand the built ISO to a machine that isn't this one. Its consumer is
+# VirtualBox on the Windows side, which boots C:/temp/os64_kernel.iso; the
+# DISK half of that hand-off is `make vbox-sync` (VM off), and the two are
+# separate because syncing a VDI is a heavier and rarer act than dropping a
+# fresh ISO next to it.
+#
+# THIS USED TO RIDE INSIDE THE ISO RULE (moved out 2026-08-28, Chris's call).
+# It had quietly become the most expensive step of a build almost nobody was
+# using it for: 2.6s of Windows-filesystem copy against 1.4s to pack the ISO
+# itself, paid on every kernel change, to feed a VM that is barely opened now
+# that the P5 boots os64 from its own disk and takes its refreshes over the
+# wire from os64get. Everything that boots ON this machine — `make run`, and
+# the QEMU harness in SUCCESSION.md — depends on the ISO target directly, so
+# the ISO itself stays in the default build: it is incremental and costs
+# nothing when nothing changed, and gating it would trade 1.4 seconds for the
+# chance of silently booting a stale one.
+#
+# LOUD WHEN IT CANNOT, which is the half that changes with the move. Skipping
+# silently was right for a side effect that had to survive on machines with no
+# /mnt/c/temp (PR #26 — the unconditional cp used to make `make` FAIL on every
+# machine that isn't this one). It is wrong for a target you TYPED: a silent
+# no-op there means booting yesterday's ISO in VBox and wondering where the fix
+# went.
+#
+# NOT CALLED `dist`, which was the first name and lasted an hour: `distclean`
+# already lives two targets down and means the autotools thing (clean harder),
+# so the two would have sat together in tab-completion looking like a pair
+# while meaning nothing to do with each other.
+.PHONY: copy
+copy: $(IMAGE_NAME).iso
+	@if [ ! -d /mnt/c/temp ]; then \
+		echo "copy: /mnt/c/temp does not exist — nowhere to hand the ISO to." >&2; \
+		echo "      This target is the WSL2 -> VirtualBox hand-off. Anywhere else," >&2; \
+		echo "      the ISO you want is already at ./$(IMAGE_NAME).iso." >&2; \
+		exit 1; \
 	fi
+	rm -f /mnt/c/temp/$(IMAGE_NAME).iso
+	cp $(IMAGE_NAME).iso /mnt/c/temp/
+	@echo "copy: C:/temp/$(IMAGE_NAME).iso updated ($$(du -h $(IMAGE_NAME).iso | cut -f1))"
 
 $(IMAGE_NAME).hdd: limine/limine kernel
 #	@rm -f $(IMAGE_NAME).hdd
@@ -670,6 +947,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 #	@mmd -i $(IMAGE_NAME).hdd@@1048576 ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	# Copy bootloader and kernel files to the EFI partition
 	@mcopy -i $(IMAGE_NAME).hdd@@1048576 kernel/bin/os64_kernel ::/boot
+	@mcopy -o -i $(IMAGE_NAME).hdd@@1048576 $(BT_FIRMWARE_LICENSE) ::/boot/LICENCE.ibt_firmware
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine.conf limine/limine-bios.sys ::/boot/limine
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTX64.EFI ::/EFI/BOOT
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTIA32.EFI ::/EFI/BOOT

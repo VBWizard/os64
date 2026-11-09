@@ -1,0 +1,312 @@
+// test_http_host.c — host-side harness for os64get's HTTP parser.
+//
+// The companion shell script generates replies with Python (http.client is
+// the reference implementation for the well-formed ones, urllib.parse for
+// the URLs) and drives this across every input chunk size, under ASan and
+// UBSan. The point of the chunk sweep is that a stream parser's bugs live
+// exactly where a token straddles two reads — a status line split between
+// the '2' and the '00', a CRLF whose halves arrive a second apart.
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "fetch/http.h"
+#include "os64/str.h"
+
+// fmt.c's printf half writes through this; nothing under test calls it.
+int64_t os64_write(int32_t handle, const void *buf, size_t len)
+{
+    return (int64_t)fwrite(buf, 1, len, handle == 2 ? stderr : stdout);
+}
+
+typedef struct {
+    const uint8_t *bytes;
+    size_t         len;
+    size_t         pos;
+    size_t         chunk;    // most bytes handed over per call
+    size_t         breakAt;  // answer -1 once this many have been handed over
+    int            broken;
+} mem_source_t;
+
+static int64_t mem_read(void *ctx, void *buf, size_t cap)
+{
+    mem_source_t *m = (mem_source_t *)ctx;
+
+    if (m->breakAt != 0 && m->pos >= m->breakAt) {
+        m->broken = 1;
+        return -1;
+    }
+    if (m->pos >= m->len)
+        return 0;
+
+    size_t n = m->len - m->pos;
+    if (n > cap)
+        n = cap;
+    if (n > m->chunk)
+        n = m->chunk;
+    if (m->breakAt != 0 && m->pos + n > m->breakAt)
+        n = m->breakAt - m->pos;
+
+    memcpy(buf, m->bytes + m->pos, n);
+    m->pos += n;
+    return (int64_t)n;
+}
+
+static uint8_t *read_file(const char *path, size_t *length)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL)
+        return NULL;
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return NULL; }
+    long end = ftell(file);
+    if (end < 0 || fseek(file, 0, SEEK_SET) != 0) { fclose(file); return NULL; }
+
+    size_t size = (size_t)end;
+    uint8_t *bytes = malloc(size == 0 ? 1 : size);
+    if (bytes == NULL || fread(bytes, 1, size, file) != size) {
+        free(bytes);
+        fclose(file);
+        return NULL;
+    }
+    fclose(file);
+    *length = size;
+    return bytes;
+}
+
+static const char *url_result_name(http_url_result_t rc)
+{
+    switch (rc) {
+        case HTTP_URL_OK:         return "ok";
+        case HTTP_URL_NOT_A_URL:  return "not_a_url";
+        case HTTP_URL_SCHEME:     return "scheme";
+        case HTTP_URL_NO_HOST:    return "no_host";
+        case HTTP_URL_HOST_CHARS: return "host_chars";
+        case HTTP_URL_PATH_CHARS: return "path_chars";
+        case HTTP_URL_PORT:       return "port";
+        case HTTP_URL_TOO_LONG:   return "too_long";
+    }
+    return "?";
+}
+
+static const char *head_result_name(http_head_result_t rc)
+{
+    switch (rc) {
+        case HTTP_HEAD_OK:       return "ok";
+        case HTTP_HEAD_SOURCE:   return "source";
+        case HTTP_HEAD_STATUS:   return "status";
+        case HTTP_HEAD_SYNTAX:   return "syntax";
+        case HTTP_HEAD_TOO_MUCH: return "too_much";
+        case HTTP_HEAD_CONFLICT: return "conflict";
+        case HTTP_HEAD_FRAMING:  return "framing";
+        case HTTP_HEAD_SWITCHED: return "switched";
+    }
+    return "?";
+}
+
+static const char *body_result_name(http_body_result_t rc)
+{
+    switch (rc) {
+        case HTTP_BODY_OPEN:     return "open";
+        case HTTP_BODY_DONE:     return "done";
+        case HTTP_BODY_CUT:      return "cut";
+        case HTTP_BODY_BROKE:    return "broke";
+        case HTTP_BODY_SYNTAX:   return "syntax";
+        case HTTP_BODY_TOO_MUCH: return "too_much";
+    }
+    return "?";
+}
+
+static int do_url(const char *text)
+{
+    http_url_t url;
+    http_url_result_t rc = http_url_parse(text, &url);
+
+    printf("%s\n", url_result_name(rc));
+    printf("scheme=%s\n", url.scheme);
+    if (rc == HTTP_URL_OK) {
+        printf("host=%s\n", url.host);
+        printf("port=%u\n", (unsigned)url.port);
+        printf("path=%s\n", url.path);
+
+        char rendered[HTTP_URL_TEXT_MAX];
+        if (!http_url_render(&url, rendered, sizeof(rendered))) {
+            fprintf(stderr, "render does not fit\n");
+            return 3;
+        }
+        printf("render=%s\n", rendered);
+
+        char request[HTTP_TARGET_MAX + 1024];
+        if (!http_request(request, sizeof(request), &url, false, NULL)) {
+            fprintf(stderr, "request does not fit\n");
+            return 3;
+        }
+        fputs("request<<\n", stdout);
+        fputs(request, stdout);
+        fputs(">>\n", stdout);
+
+        // The same ask, addressed to a proxy: whole URL in the request line,
+        // Host still naming the origin.
+        if (!http_request(request, sizeof(request), &url, true, NULL)) {
+            fprintf(stderr, "proxy request does not fit\n");
+            return 3;
+        }
+        fputs("proxyrequest<<\n", stdout);
+        fputs(request, stdout);
+        fputs(">>\n", stdout);
+    }
+    return 0;
+}
+
+static bool emit_headers;
+static void print_header(void *ctx, const char *name, size_t name_len, const char *value, size_t len)
+{
+    (void)ctx;
+    printf("header=%.*s\t%.*s\n", (int)name_len, name, (int)len, value);
+}
+
+static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
+                   const char *bodyPath)
+{
+    size_t length = 0;
+    uint8_t *bytes = read_file(path, &length);
+    if (bytes == NULL) {
+        fprintf(stderr, "cannot read %s\n", path);
+        return 2;
+    }
+
+    mem_source_t source = {
+        .bytes = bytes, .len = length, .pos = 0,
+        .chunk = chunk == 0 ? length + 1 : chunk,
+        .breakAt = breakAt, .broken = 0,
+    };
+
+    http_stream_t stream;
+    http_stream_init(&stream, mem_read, &source);
+
+    http_response_t reply;
+    http_head_result_t rc = http_head_read_with_headers(&stream, &reply,
+                                                         emit_headers ? print_header : NULL, NULL);
+    printf("%s\n", head_result_name(rc));
+    if (rc != HTTP_HEAD_OK) {
+        free(bytes);
+        return 0;
+    }
+
+    printf("status=%d\n", (int)reply.status);
+    printf("reason=%s\n", reply.reason);
+    printf("haslength=%d\n", reply.hasLength ? 1 : 0);
+    printf("length=%llu\n", (unsigned long long)(reply.hasLength ? reply.length : 0));
+    printf("transfer=%s\n", reply.transferEncoding);
+    printf("content=%s\n", reply.contentEncoding);
+    printf("location=%s\n", reply.location);
+
+    // The body, read exactly the way os64get reads it: through the body
+    // reader, which takes the framing off — a length, chunks, or the close.
+    // A transfer coding it cannot undo is reported as os64get would refuse
+    // it, and nothing is read.
+    http_body_t body;
+    if (!http_body_open(&body, &stream, &reply)) {
+        printf("framing=unsupported\n");
+        free(bytes);
+        return 0;
+    }
+    printf("framing=%s\n", body.framing == HTTP_FRAMING_CHUNKED ? "chunked"
+                         : body.framing == HTTP_FRAMING_LENGTH  ? "length" : "close");
+
+    FILE *out = fopen(bodyPath, "wb");
+    if (out == NULL) {
+        fprintf(stderr, "cannot write %s\n", bodyPath);
+        free(bytes);
+        return 2;
+    }
+
+    uint8_t *sipBuf = malloc(sip);
+    if (sipBuf == NULL) { fclose(out); free(bytes); return 2; }
+
+    uint64_t got = 0;
+    for (;;) {
+        int64_t n = http_body_read(&body, sipBuf, sip);
+        if (n <= 0) break;
+        fwrite(sipBuf, 1, (size_t)n, out);
+        got += (uint64_t)n;
+    }
+    // Once over, the reader must keep answering the same verdict: a caller
+    // that asks again after 0 or -1 gets no fresh byte and no new story.
+    http_body_result_t verdict = body.result;
+    uint8_t again[8];
+    int64_t more = http_body_read(&body, again, sizeof(again));
+    if (body.result != verdict || more > 0) {
+        fprintf(stderr, "the body reader changed its mind after finishing\n");
+        return 3;
+    }
+    fclose(out);
+    free(sipBuf);
+    free(bytes);
+
+    printf("bodylen=%llu\n", (unsigned long long)got);
+    printf("verdict=%s\n", body_result_name(verdict));
+    // The two words os64get's exit codes are keyed on. `short` is a body the
+    // framing says is incomplete; `broke` is a source that failed.
+    printf("broke=%d\n", verdict == HTTP_BODY_BROKE ? 1 : 0);
+    printf("short=%d\n", verdict == HTTP_BODY_CUT ? 1 : 0);
+    return 0;
+}
+
+// "absolute": given a base URL and a Location, print the whole address the
+// redirect resolves to — or "declined" when there is none to spell (an empty
+// reference, or an answer too long to hold). Checked against
+// urllib.parse.urljoin, which implements the same RFC 3986 §5.2.
+static int do_absolute(const char *baseText, const char *location)
+{
+    http_url_t base;
+    if (http_url_parse(baseText, &base) != HTTP_URL_OK) {
+        fprintf(stderr, "base is not a URL: %s\n", baseText);
+        return 2;
+    }
+
+    // The resolver lives in libos64 and takes the library's URL, where a
+    // default port is spelled as 0 — http_url_to_os64 is the one conversion.
+    os64_url_t baseUrl;
+    http_url_to_os64(&base, &baseUrl);
+    char whole[HTTP_URL_TEXT_MAX];
+    if (!os64_url_absolute(&baseUrl, location, whole, sizeof(whole))) {
+        printf("declined\n");
+        return 0;
+    }
+    printf("absolute\n");
+    printf("url=%s\n", whole);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 4 && strcmp(argv[1], "post") == 0) {
+        http_url_t url;
+        char request[8192];
+        http_request_extras_t opt = { .method = HTTP_METHOD_POST,
+            .body_len = (size_t)strtoull(argv[2], NULL, 10), .content_type = argv[3] };
+        if (http_url_parse("http://example.test/form", &url) != HTTP_URL_OK ||
+            !http_request(request, sizeof(request), &url, false, &opt)) return 1;
+        fputs(request, stdout);
+        return 0;
+    }
+    if (argc >= 3 && strcmp(argv[1], "url") == 0)
+        return do_url(argv[2]);
+
+    if (argc >= 4 && strcmp(argv[1], "absolute") == 0)
+        return do_absolute(argv[2], argv[3]);
+
+    emit_headers = argc >= 2 && strcmp(argv[1], "headers") == 0;
+    if (argc >= 7 && (strcmp(argv[1], "head") == 0 || emit_headers))
+        return do_head(argv[2], (size_t)strtoul(argv[3], NULL, 0),
+                       (size_t)strtoul(argv[4], NULL, 0),
+                       (size_t)strtoul(argv[5], NULL, 0), argv[6]);
+
+    fprintf(stderr,
+            "usage: test_http url <URL>\n"
+            "       test_http head <file> <chunk> <sip> <breakat> <bodyout>\n"
+            "       test_http absolute <base-url> <location>\n");
+    return 2;
+}

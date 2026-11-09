@@ -1,0 +1,2 @@
+map mode requires one worker; use heap mode for contention.
+rc=2

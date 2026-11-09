@@ -1,4 +1,4 @@
-// test_image_host.c — HOST-side unit test for libimage and libdraw's blit.
+// test_image_host.c — HOST-side unit test for libimage and libdraw's copy/blend.
 //
 // Both are pure computation over buffers — no syscalls, no windows — which
 // is exactly why image.c was split into a `load` half (file I/O) and a
@@ -14,32 +14,19 @@
 // "does it look right?" glance reliably catches, because a symmetric test
 // pattern looks right upside down.
 //
-// Build & run (one line):
-//   gcc -fsanitize=address,undefined
-//       -I userland/libos64/include -I abi/include -masm=intel
-//       userland/libos64/image.c userland/libos64/draw.c
-//       tools/test_image_host.c -o /tmp/os64_image_test
-//   /tmp/os64_image_test
-//
-// RUN IT UNDER THE SANITIZERS. os64 itself cannot use them — a freestanding
-// kernel has no runtime to link — which makes this host harness the only
-// place in the project where they are available at all, so declining them
-// here costs everything. Codex #30 rd3 found a heap-buffer-overflow in THIS
-// FILE's own BMP builder that way: the fixture corrupted its own heap while
-// reporting PASS, and no amount of reading it had caught that.
+// Run through tools/test_jpeg_host.py, which links the codec dependencies.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/draw.h"
 #include "os64/slurp.h"
 #include "os64/proc.h"
 
 // libimage allocates through libos64's heap; on the host these are the
-// system's. image.c never calls anything else, which is the whole reason it
-// can be tested here.
+// system's. Codec dependencies use the same allocation adapter.
 // Instrumented, because one of these tests is about what was ALLOCATED
 // rather than about what was returned. See the huge-dimension case: before
 // the fix, a hostile header allocated a gigabyte and then returned exactly
@@ -54,6 +41,10 @@ void *os64_malloc(size_t size)
     return malloc(size);
 }
 void  os64_free(void *ptr)     { free(ptr); }
+int os64_memcmp(const void *a, const void *b, size_t n) { return memcmp(a,b,n); }
+void *os64_memcpy(void *d, const void *s, size_t n) { return memcpy(d,s,n); }
+void *os64_memmove(void *d, const void *s, size_t n) { return memmove(d,s,n); }
+void *os64_memset(void *d, int c, size_t n) { return memset(d,c,n); }
 
 // ── stubs for the halves these tests deliberately do not reach ──────────────
 //
@@ -605,12 +596,210 @@ static void test_blit(void)
     eq_u32(dst_at(0, 0), 0xff111111u, "blit: zero size and NULL source are no-ops");
 }
 
+// Floating-point reference independent of the production integer rounding.
+static uint32_t blend_reference(uint32_t src, uint32_t dst)
+{
+    unsigned a = src >> 24;
+    if (!a) return dst;
+    double coverage = a / 255.0;
+    uint32_t out = 0xff000000u;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        double s = (src >> shift) & 255, d = (dst >> shift) & 255;
+        out |= (uint32_t)(s * coverage + d * (1.0 - coverage) + 0.5) << shift;
+    }
+    return out;
+}
+
+static void test_blend(void)
+{
+    printf("blend (straight alpha, rounding, clipping, pitch, guards)\n");
+    uint32_t src[] = {0x00ff0080, 0x01ff0080, 0x80ff0080, 0xfeff0080, 0xffff0080};
+    uint32_t expected[] = {0x12326496, 0xff336496, 0xff99328b, 0xfffe0080, 0xffff0080};
+    uint32_t out[5];
+    for (unsigned i = 0; i < 5; i++) out[i] = 0x12326496;
+    os64_gui_surface_t d = {out, 5, 1, 5};
+    os64_draw_blend(&d, 0, 0, src, 5, 1, 5);
+    ok(!memcmp(out, expected, sizeof out), "blend: exact alpha 0,1,128,254,255 and reserved-byte policy");
+
+    // For each alpha, cover the complete source/background channel domain.
+    // Complement green and permute blue to catch swapped-channel arithmetic.
+    enum { CHANNEL_PAIRS = 256 * 256 };
+    uint32_t *source = malloc(CHANNEL_PAIRS * 4), *dest = malloc(CHANNEL_PAIRS * 4);
+    if (!source || !dest) { free(source); free(dest); ok(0, "blend test buffers"); return; }
+    d = (os64_gui_surface_t){dest, CHANNEL_PAIRS, 1, CHANNEL_PAIRS};
+    bool good = true;
+    for (unsigned a = 0; a < 256 && good; a++) {
+        for (unsigned s = 0; s < 256; s++) for (unsigned b = 0; b < 256; b++) {
+            size_t i = s * 256 + b;
+            source[i] = (a << 24) | (s << 16) | ((255-s) << 8) | (s ^ 85);
+            dest[i] = 0x42000000u | (b << 16) | ((255-b) << 8) | (b ^ 170);
+        }
+        os64_draw_blend(&d, 0, 0, source, CHANNEL_PAIRS, 1, CHANNEL_PAIRS);
+        for (unsigned s = 0; s < 256 && good; s++) for (unsigned b = 0; b < 256; b++) {
+            uint32_t back = 0x42000000u | (b << 16) | ((255-b) << 8) | (b ^ 170);
+            if (dest[s*256+b] != blend_reference(source[s*256+b], back)) { good=false; break; }
+        }
+    }
+    ok(good, "blend: all 16,777,216 alpha/source/background channel combinations");
+    free(source); free(dest);
+
+    enum { SW=4, SH=3, SP=7, GUARD=4 };
+    uint32_t parent[SP * 5];
+    const unsigned alphas[] = {0, 255, 128, 1, 254};
+    for (unsigned i=0; i<SP*5; i++) parent[i]=(alphas[i%5]<<24) | (i*0x050b13u & 0xffffff);
+    const uint32_t *sub = parent + SP + 1;
+    uint32_t guarded[GUARD + DST_PITCH*DST_H + GUARD], ref[sizeof guarded/sizeof *guarded];
+    const int32_t places[][2] = {{2,1},{-2,-1},{-1,2},{2,-1},{9,2},{2,5},{9,5},
+                                {-4,0},{0,-3},{10,0},{0,6},{INT32_MIN,INT32_MIN},{INT32_MAX,INT32_MAX}};
+    good = true;
+    for (unsigned p=0; p<sizeof places/sizeof *places; p++) {
+        for (unsigned i=0; i<sizeof guarded/sizeof *guarded; i++) guarded[i]=0x271d354bu+i;
+        memcpy(ref,guarded,sizeof guarded);
+        d=(os64_gui_surface_t){guarded+GUARD,DST_W,DST_H,DST_PITCH};
+        int32_t x=places[p][0], y=places[p][1];
+        for (unsigned dy=0; dy<DST_H; dy++) for (unsigned dx=0; dx<DST_W; dx++) {
+            int64_t sx=(int64_t)dx-x, sy=(int64_t)dy-y;
+            if (sx>=0 && sx<SW && sy>=0 && sy<SH) {
+                size_t i=GUARD+dy*DST_PITCH+dx;
+                ref[i]=blend_reference(sub[sy*SP+sx],ref[i]);
+            }
+        }
+        os64_draw_blend(&d,x,y,sub,SW,SH,SP);
+        if (memcmp(guarded,ref,sizeof guarded)) good=false;
+    }
+    ok(good, "blend: four-edge/negative/extreme clipping, source subimage, destination padding and guards");
+
+    memcpy(ref,guarded,sizeof guarded);
+    os64_draw_blend(NULL,0,0,sub,SW,SH,SP);
+    os64_draw_blend(&d,0,0,NULL,SW,SH,SP);
+    os64_draw_blend(&d,0,0,sub,0,SH,SP);
+    os64_draw_blend(&d,0,0,sub,SW,0,SP);
+    os64_draw_blend(&d,0,0,sub,SW,SH,SW-1);
+    os64_draw_blend(&d,0,0,sub,UINT32_MAX,SH,UINT32_MAX);
+    os64_draw_blend(&d,0,0,sub,SW,UINT32_MAX,SP);
+    ok(!memcmp(guarded,ref,sizeof guarded), "blend: invalid requests do not touch destination");
+
+    uint32_t opaque[SW*SH], copy[DST_PITCH*DST_H];
+    for (unsigned i=0;i<SW*SH;i++) opaque[i]=0xff112233u+i;
+    d=make_dst();
+    os64_draw_blit(&d,-1,1,opaque,SW,SH,SW);
+    memcpy(copy,dst_pixels,sizeof copy);
+    d=make_dst();
+    os64_draw_blend(&d,-1,1,opaque,SW,SH,SW);
+    ok(!memcmp(copy,dst_pixels,sizeof copy), "blend: opaque rows match blit byte-for-byte");
+    d=make_dst();
+    os64_draw_blit(&d,0,0,src,5,1,5);
+    ok(!memcmp(dst_pixels,src,sizeof src), "blit still copies alpha-zero and partial-alpha words verbatim");
+}
+
+// A tiny hand-authored GIF: red, green / green, red. The LZW stream is
+// Clear, 0, 1, Clear, 1, 0, EOI, packed in three-bit codes.
+static void test_gif(void)
+{
+    const uint8_t base[] = {
+        'G','I','F','8','9','a', 2,0,2,0, 0x80,0,0,
+        255,0,0, 0,255,0,
+        0x2c,0,0,0,0,2,0,2,0,0, 2,3,0x44,0x18,0x14,0,0x3b
+    };
+    os64_image_t img;
+    eq_status(os64_image_decode(base, sizeof base, &img), OS64_IMAGE_OK,
+              "GIF global palette decodes");
+    if (img.pixels) {
+        eq_u32(img.pixels[0], 0xffff0000, "GIF first pixel");
+        eq_u32(img.pixels[1], 0xff00ff00, "GIF second pixel");
+        eq_u32(img.pixels[2], 0xff00ff00, "GIF second row");
+        eq_u32(img.pixels[3], 0xffff0000, "GIF fourth pixel");
+    }
+    os64_image_free(&img);
+    uint8_t b[sizeof base];
+    memcpy(b, base, sizeof b);
+    b[4] = '7';
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_OK, "GIF87a");
+    os64_image_free(&img);
+    for (size_t n = 6; n < sizeof base; n++) {
+        g_alloc_largest = 0;
+        eq_status(os64_image_decode(base, n, &img), OS64_IMAGE_MALFORMED,
+                  "GIF truncated prefix");
+        ok(g_alloc_largest == 0, "GIF missing trailer refuses before allocation");
+        ok(img.pixels == NULL && img.width == 0 && img.height == 0,
+           "GIF refusal owns nothing");
+    }
+    memcpy(b, base, sizeof b);
+    b[6] = b[7] = 0xff;
+    g_alloc_largest = 0;
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_LIMIT,
+              "GIF huge header refuses");
+    ok(g_alloc_largest == 0, "GIF dimension limit allocates nothing");
+    memcpy(b, base, sizeof b);
+    b[6] = b[8] = 1; b[7] = b[9] = 0x10;
+    g_alloc_largest = 0;
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_LIMIT,
+              "GIF pixel budget refuses");
+    ok(g_alloc_largest == 0, "GIF pixel limit allocates nothing");
+    memcpy(b, base, sizeof b);
+    b[32] = 0x10; // Clears the EOI code, retaining the expected pixels.
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_MALFORMED,
+              "GIF exact pixels still need EOI");
+    ok(img.pixels == NULL, "GIF LZW failure publishes nothing");
+}
+
+// OS64_IMAGE_ACCEPT names what the front door decodes: every type on it has
+// a signature here, and the front door takes that signature for its own
+// (a truncated file of it is MALFORMED, never UNKNOWN_FORMAT). A type added
+// to the list with no decoder behind it, or with no row here, fails.
+static void test_accept(void)
+{
+    static const struct {
+        const char *type;
+        uint8_t magic[8];
+        size_t len;
+    } kinds[] = {
+        {"image/png", {137, 80, 78, 71, 13, 10, 26, 10}, 8},
+        {"image/jpeg", {255, 216}, 2},
+        {"image/pjpeg", {255, 216}, 2},
+        {"image/gif", {'G', 'I', 'F', '8', '9', 'a'}, 6},
+        {"image/bmp", {'B', 'M'}, 2},
+        {"image/x-ms-bmp", {'B', 'M'}, 2},
+        {"image/x-portable-pixmap", {'P', '6'}, 2},
+    };
+    printf("accept (the list is what the front door decodes)\n");
+    const char *at = OS64_IMAGE_ACCEPT;
+    int listed = 0;
+    while (*at != '\0') {
+        while (*at == ' ' || *at == ',')
+            at++;
+        const char *end = at;
+        while (*end != '\0' && *end != ',')
+            end++;
+        size_t n = (size_t)(end - at);
+        int found = 0;
+        for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
+            if (strlen(kinds[k].type) != n || memcmp(kinds[k].type, at, n) != 0)
+                continue;
+            found = 1;
+            os64_image_t img;
+            os64_image_status_t st = os64_image_decode(kinds[k].magic, kinds[k].len, &img);
+            ok(st != OS64_IMAGE_UNKNOWN_FORMAT, kinds[k].type);
+            os64_image_free(&img);
+        }
+        if (n > 0) {
+            listed++;
+            ok(found, "every listed type has a signature row");
+        }
+        at = end;
+    }
+    ok(listed == (int)(sizeof kinds / sizeof kinds[0]), "every signature row is listed");
+}
+
 int main(void)
 {
-    printf("libimage + libdraw blit — host tests\n\n");
+    printf("libimage + libdraw copy/blend — host tests\n\n");
     test_formats();
     test_refusals();
     test_blit();
+    test_blend();
+    test_gif();
+    test_accept();
     printf("\n%d checks, %d failures\n", checks, failures);
     if (failures == 0)
         printf("PASS\n");

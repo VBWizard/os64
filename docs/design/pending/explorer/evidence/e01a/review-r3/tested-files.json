@@ -1,0 +1,10 @@
+{
+  "reviewed_base": "8d622f778e94016db0113a6406945b473c57b09a",
+  "finding": "https://github.com/VBWizard/os64/pull/254#discussion_r4243733256",
+  "runtime_evidence": "../review-r2/tested-files.json",
+  "sha256": {
+    "userland/libos64/include/os64/ui_action.h": "182d9c5011535a8504436fff16d5681f268ff2e70a793803e3b1647dcb56fc05",
+    "/tmp/e01a-r2-fake/test_ui_action": "b9d491f3431fb7108698c9b2b8ed22d527ec974787a38887cafd4cfe29d10b49",
+    "/tmp/e01a-r2-real/test_ui_action": "9bbde1025f3f4703e7425da8438b6262c29d3e785631a38ee9712bb4be8cd106"
+  }
+}

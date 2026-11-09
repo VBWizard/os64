@@ -1,0 +1,228 @@
+gallery focus handle=4 gained=1 other=0
+gallery key handle=4 edge=2 ascii=10 scan=40 mods=128
+gallery windows=1 font-bytes=1279381 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery windows=2 font-bytes=1291818 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=409 height=169 pitch=409
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery windows=3 font-bytes=1299582 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=355 height=84 pitch=355
+gallery surface handle=6 width=333 height=84 pitch=333
+gallery focus handle=6 gained=0 other=5
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=6 gained=1 other=5
+gallery invoke=12 menus=0 target=0
+gallery focus handle=4 gained=1 other=5
+gallery windows=1 font-bytes=1289439 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery windows=2 font-bytes=1293237 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=355 height=84 pitch=355
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery windows=3 font-bytes=1299582 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=355 height=84 pitch=355
+gallery surface handle=6 width=333 height=84 pitch=333
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=4 gained=1 other=5
+gallery windows=2 font-bytes=1518287 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=784 height=1438 pitch=784
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery windows=3 font-bytes=1299582 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=355 height=84 pitch=355
+gallery surface handle=6 width=333 height=84 pitch=333
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=4 gained=1 other=5
+gallery windows=2 font-bytes=1518287 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=784 height=1438 pitch=784
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery windows=3 font-bytes=1299582 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=355 height=84 pitch=355
+gallery surface handle=6 width=333 height=84 pitch=333
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=5 gained=1 other=6
+gallery focus handle=6 gained=1 other=5
+gallery focus handle=5 gained=0 other=6
+gallery focus handle=4 gained=1 other=5
+gallery windows=2 font-bytes=1518287 target-hits=0,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=5 width=784 height=1438 pitch=784
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery focus handle=4 gained=1 other=5
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery invoke=1 menus=0 target=0
+gallery focus handle=4 gained=1 other=5
+gallery windows=1 font-bytes=1289439 target-hits=1,0
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery key handle=4 edge=1 ascii=0 scan=226 mods=132
+gallery key handle=4 edge=2 ascii=0 scan=226 mods=128
+gallery key handle=4 edge=1 ascii=0 scan=226 mods=132
+gallery key handle=4 edge=2 ascii=0 scan=226 mods=128
+gallery focus handle=4 gained=0 other=0
+gallery focus handle=4 gained=1 other=0
+gallery invoke=1 menus=0 target=1
+gallery invoke=1 menus=0 target=1
+gallery invoke=1 menus=0 target=1
+gallery invoke=1 menus=0 target=0
+gallery invoke=1 menus=0 target=0
+gallery invoke=1 menus=0 target=0
+gallery invoke=5 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=4 menus=0 target=2
+gallery invoke=5 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=4 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=6 menus=0 target=2
+gallery invoke=5 menus=0 target=2
+gallery invoke=5 menus=0 target=2
+gallery invoke=5 menus=0 target=2
+gallery invoke=5 menus=0 target=2
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1289472 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=425 height=234 pitch=425
+gallery invoke=9 menus=0 target=0
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1276468 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1290481 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=425 height=234 pitch=425
+gallery invoke=10 menus=0 target=0
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1276468 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1290481 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=425 height=234 pitch=425
+gallery focus handle=4 gained=1 other=6
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery focus handle=4 gained=1 other=6
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery invoke=11 menus=0 target=0
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1277147 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1287641 target-hits=4,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=370 height=165 pitch=370
+gallery invoke=1 menus=0 target=0
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1277937 target-hits=5,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1288431 target-hits=5,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=370 height=165 pitch=370
+gallery invoke=1 menus=0 target=0
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1278529 target-hits=6,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery focus handle=6 gained=1 other=4
+gallery focus handle=4 gained=0 other=6
+gallery windows=2 font-bytes=1289023 target-hits=6,3
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery surface handle=6 width=370 height=165 pitch=370
+gallery invoke=1 menus=0 target=1
+gallery focus handle=4 gained=1 other=6
+gallery windows=1 font-bytes=1278529 target-hits=6,4
+gallery surface handle=4 width=876 height=703 pitch=2560
+gallery exit font-bytes=0 refs=0,0 hits=6,4

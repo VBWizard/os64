@@ -1,0 +1,52 @@
+#!/bin/bash
+# libpage on the host, under the sanitizers: markup in, the REQUEST out.
+#
+# The corpus is the durable artefact (LIBPAGE.md § Proof before integration).
+# It is pure computation over libhtml's tree — no syscalls, no terminal, no
+# wire — so it runs here at full speed with ASan and UBSan watching, and a
+# case survives every front end written over the library.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+
+python3 tools/gen_libpage_range.py --check
+
+work=$(mktemp -d)
+cleanup() {
+    status=$?
+    if [ "$status" -eq 0 ]; then rm -rf "$work"; else echo "libpage test artifacts: $work" >&2; fi
+}
+trap cleanup EXIT
+
+cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+   -fno-sanitize-recover=all \
+   -I userland/libpage/include -I userland/libhtml/include -I userland/libos64/include \
+   -I abi/include -I tools -I userland/libpage/upstream/ryu \
+   tools/test_libpage_host.c userland/apps/wend/render.c \
+   userland/libpage/core.c userland/libpage/state.c userland/libpage/resolve.c userland/libpage/value.c \
+   userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
+   userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c userland/libpage/activate.c \
+   userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
+   userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c userland/libhtml/range.c \
+   userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
+   -o "$work/libpage_driver"
+
+if [ "$#" -eq 0 ]; then set -- --sweep; fi
+# The real pages os64_page_sheets_in is compared with the model on.
+ls tools/html_corpus/*.html > "$work/corpus.list"
+LIBPAGE_CORPUS="$work/corpus.list" "$work/libpage_driver" "$@"
+
+# A live model borrows explicit state, so freeing that state must stop with
+# the PAGE badge rather than leave the model pointing at freed storage.
+if "$work/libpage_driver" --rebuild-live-state-free > "$work/fatal.log" 2>&1; then
+    cat "$work/fatal.log" >&2
+    echo "libpage: live-state free returned instead of ending the program" >&2
+    exit 1
+else
+    fatal_status=$?
+fi
+if [ "$fatal_status" -ne 3 ] || ! grep -q 'libpage host fatal exit: 0x50414745' "$work/fatal.log"; then
+    cat "$work/fatal.log" >&2
+    echo "libpage: live-state free missed the PAGE fatal exit" >&2
+    exit 1
+fi
+echo "libpage: live-state free stopped with PAGE badge"

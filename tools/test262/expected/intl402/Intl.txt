@@ -1,0 +1,16 @@
+# test262 intl402/Intl, held by tools/test262/run.py (its docstring says how).
+[excluded]
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js (strict)	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js (strict)	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js	-u-tz values are not canonicalized by the bcp47 time zone aliases (DEBTS § Intl)
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js (strict)	-u-tz values are not canonicalized by the bcp47 time zone aliases (DEBTS § Intl)
+intl402/Intl/supportedValuesOf/calendars-accepted-by-DisplayNames.js	Intl.DisplayNames is not shipped (INTL.md § 4)
+intl402/Intl/supportedValuesOf/calendars-accepted-by-DisplayNames.js (strict)	Intl.DisplayNames is not shipped (INTL.md § 4)
+intl402/Intl/supportedValuesOf/calendars-required-by-intl-era-monthcode.js	a calendar other than gregory: data not held (INTL.md § 7)
+intl402/Intl/supportedValuesOf/calendars-required-by-intl-era-monthcode.js (strict)	a calendar other than gregory: data not held (INTL.md § 7)
+intl402/Intl/supportedValuesOf/currencies-accepted-by-DisplayNames.js	Intl.DisplayNames is not shipped (INTL.md § 4)
+intl402/Intl/supportedValuesOf/currencies-accepted-by-DisplayNames.js (strict)	Intl.DisplayNames is not shipped (INTL.md § 4)
+intl402/Intl/supportedValuesOf/numberingSystems-with-simple-digit-mappings.js	a numbering system other than latn: data not held (INTL.md § 7)
+intl402/Intl/supportedValuesOf/numberingSystems-with-simple-digit-mappings.js (strict)	a numbering system other than latn: data not held (INTL.md § 7)

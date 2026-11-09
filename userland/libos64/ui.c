@@ -4,13 +4,10 @@
 // away and left the desktop with nothing to click.
 
 #include "os64/ui.h"
+#include "os64/damage.h"
+#include "ui_internal.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
-
-// ── tiny local string helpers ───────────────────────────────────────────────
-// Self-contained on purpose (the klog_format precedent): three helpers do
-// not justify a header dependency, and the theme parser wants exactly these
-// shapes.
 
 static size_t ui_strlen(const char *s)
 {
@@ -20,253 +17,27 @@ static size_t ui_strlen(const char *s)
 	return n;
 }
 
-static bool ui_span_equals(const char *span, size_t len, const char *lit)
-{
-	size_t n = 0;
-	while (n < len && lit[n] != '\0' && span[n] == lit[n])
-		n++;
-	return n == len && lit[n] == '\0';
-}
-
-// ── the theme ───────────────────────────────────────────────────────────────
-
-static void theme_defaults(os64_ui_theme_t *t)
-{
-	// The house look: the grays every window already wears, the focused-
-	// titlebar blue for the one element that invites a press. EVERY value
-	// here is overridable from /home/theme.conf — that is the entire point
-	// of this table existing.
-	t->panel_bg            = OS64_GUI_COLOR_LIGHT_GRAY;
-	t->panel_border        = OS64_GUI_COLOR_DARK_GRAY;
-	t->label_fg            = OS64_GUI_COLOR_BLACK;
-	t->button_face         = 0xff2a62b8u;   // the titlebar-focused blue
-	t->button_face_pressed = 0xff1c4380u;   // same hue, pressed down a stop
-	t->button_border       = OS64_GUI_COLOR_DARK_GRAY;
-	t->button_fg           = OS64_GUI_COLOR_WHITE;
-
-	// The text family: gkeys' warm paper, ink on it, and the house blue
-	// inverted for selection — the look every editor since Bravo settled on.
-	t->text_bg             = 0xfff4f2eau;   // warm paper white
-	t->text_fg             = OS64_GUI_COLOR_BLACK;
-	t->text_sel_bg         = 0xff2a62b8u;   // the house blue
-	t->text_sel_fg         = OS64_GUI_COLOR_WHITE;
-	t->text_caret          = OS64_GUI_COLOR_BLACK;
-	t->field_bg            = OS64_GUI_COLOR_WHITE;
-	t->field_fg            = OS64_GUI_COLOR_BLACK;
-	t->field_border        = OS64_GUI_COLOR_DARK_GRAY;
-	t->field_border_focus  = 0xff2a62b8u;   // "your keys land here"
-	t->scroll_track        = 0xffd8d6ceu;
-	t->scroll_thumb        = 0xff8a8880u;
-
-	// The menu family: the panel's gray, the house blue for the row under
-	// the pointer — a menu is a column of buttons that have not been drawn
-	// as buttons.
-	t->menu_bg             = OS64_GUI_COLOR_LIGHT_GRAY;
-	t->menu_fg             = OS64_GUI_COLOR_BLACK;
-	t->menu_hi_bg          = 0xff2a62b8u;
-	t->menu_hi_fg          = OS64_GUI_COLOR_WHITE;
-	t->menu_sep            = OS64_GUI_COLOR_DARK_GRAY;
-
-	t->pad      = 8;
-	t->gap      = 8;
-	t->button_h = 24;
-	t->scroll_w = 14;
-
-	t->font_w = 8;    // the embedded PSF1 face (font_psf1.h)
-	t->font_h = 16;
-}
-
-// The key table: theme.conf names → theme fields. Adding a themable value =
-// one struct field + one row here; scattering a constant anywhere else is
-// the review offense the ui.h header warns about.
-typedef enum { THEME_COLOR, THEME_METRIC } theme_kind_t;
-typedef struct
-{
-	const char  *key;
-	theme_kind_t kind;
-	size_t       offset;
-} theme_key_t;
-
-#define THEME_ROW(name, kind, field) \
-	{ name, kind, __builtin_offsetof(os64_ui_theme_t, field) }
-
-static const theme_key_t kThemeKeys[] = {
-	THEME_ROW("panel.bg",            THEME_COLOR,  panel_bg),
-	THEME_ROW("panel.border",        THEME_COLOR,  panel_border),
-	THEME_ROW("label.fg",            THEME_COLOR,  label_fg),
-	THEME_ROW("button.face",         THEME_COLOR,  button_face),
-	THEME_ROW("button.face.pressed", THEME_COLOR,  button_face_pressed),
-	THEME_ROW("button.border",       THEME_COLOR,  button_border),
-	THEME_ROW("button.fg",           THEME_COLOR,  button_fg),
-	THEME_ROW("text.bg",             THEME_COLOR,  text_bg),
-	THEME_ROW("text.fg",             THEME_COLOR,  text_fg),
-	THEME_ROW("text.sel.bg",         THEME_COLOR,  text_sel_bg),
-	THEME_ROW("text.sel.fg",         THEME_COLOR,  text_sel_fg),
-	THEME_ROW("text.caret",          THEME_COLOR,  text_caret),
-	THEME_ROW("field.bg",            THEME_COLOR,  field_bg),
-	THEME_ROW("field.fg",            THEME_COLOR,  field_fg),
-	THEME_ROW("field.border",        THEME_COLOR,  field_border),
-	THEME_ROW("field.border.focus",  THEME_COLOR,  field_border_focus),
-	THEME_ROW("scroll.track",        THEME_COLOR,  scroll_track),
-	THEME_ROW("scroll.thumb",        THEME_COLOR,  scroll_thumb),
-	THEME_ROW("menu.bg",             THEME_COLOR,  menu_bg),
-	THEME_ROW("menu.fg",             THEME_COLOR,  menu_fg),
-	THEME_ROW("menu.hi.bg",          THEME_COLOR,  menu_hi_bg),
-	THEME_ROW("menu.hi.fg",          THEME_COLOR,  menu_hi_fg),
-	THEME_ROW("menu.sep",            THEME_COLOR,  menu_sep),
-	THEME_ROW("pad",                 THEME_METRIC, pad),
-	THEME_ROW("gap",                 THEME_METRIC, gap),
-	THEME_ROW("button.h",            THEME_METRIC, button_h),
-	THEME_ROW("scroll.w",            THEME_METRIC, scroll_w),
-	THEME_ROW("font.w",              THEME_METRIC, font_w),
-	THEME_ROW("font.h",              THEME_METRIC, font_h),
-};
-#define THEME_KEY_COUNT (sizeof(kThemeKeys) / sizeof(kThemeKeys[0]))
-
-// Parse a 6-digit RGB hex span ("2a62b8") into opaque XRGB. Returns false on
-// anything else — a color the user wrote wrong should be refused loudly, not
-// half-parsed into a surprise.
-static bool parse_color(const char *s, size_t len, uint32_t *out)
-{
-	if (len != 6)
-		return false;
-	uint32_t v = 0;
-	for (size_t i = 0; i < 6; i++) {
-		char c = s[i];
-		uint32_t d;
-		if (c >= '0' && c <= '9')      d = (uint32_t)(c - '0');
-		else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a' + 10);
-		else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
-		else return false;
-		v = (v << 4) | d;
-	}
-	*out = 0xff000000u | v;   // the X byte stays opaque until alpha exists
-	return true;
-}
-
-static bool parse_metric(const char *s, size_t len, int32_t *out)
-{
-	if (len == 0 || len > 5)
-		return false;
-	int32_t v = 0;
-	for (size_t i = 0; i < len; i++) {
-		if (s[i] < '0' || s[i] > '9')
-			return false;
-		v = v * 10 + (s[i] - '0');
-	}
-	*out = v;
-	return true;
-}
-
-// /home/theme.conf — logd.conf's grammar verbatim: `key = value`, whitespace
-// anywhere, '#' to end of line, last occurrence wins. Same reader shape too
-// (whole file into a static buffer, complain if it overflows), because
-// os64's config files should feel like one family.
-#define THEME_CONF_PATH "/home/theme.conf"
-#define THEME_CONF_MAX  8192
-
-static void theme_load_conf(os64_ui_theme_t *t)
-{
-	int64_t fd = os64_open(THEME_CONF_PATH, "r");
-	if (fd < 0)
-		return;   // no file = the defaults, silently; absence is not an error
-
-	static char buf[THEME_CONF_MAX];
-	size_t got = 0;
-	for (;;) {
-		int64_t n = os64_read((int32_t)fd, buf + got, sizeof(buf) - 1 - got);
-		if (n <= 0)
-			break;
-		got += (size_t)n;
-		if (got >= sizeof(buf) - 1) {
-			os64_printf("libui: %s larger than the reader's %u bytes — tail unread\n",
-			            THEME_CONF_PATH, (unsigned)THEME_CONF_MAX);
-			break;
-		}
-	}
-	os64_close((int32_t)fd);
-	if (got == 0)
-		return;
-	buf[got] = '\0';
-
-	size_t i = 0;
-	while (buf[i] != '\0') {
-		size_t start = i;
-		while (buf[i] != '\0' && buf[i] != '\n')
-			i++;
-		size_t end = i;
-		if (buf[i] == '\n')
-			i++;
-		for (size_t c = start; c < end; c++)
-			if (buf[c] == '#') { end = c; break; }
-
-		// key
-		size_t k = start;
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t ks = k;
-		while (k < end && buf[k] != ' ' && buf[k] != '\t' && buf[k] != '=')
-			k++;
-		size_t ke = k;
-		if (ks == ke)
-			continue;   // blank or comment-only line
-
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		if (k >= end || buf[k] != '=') {
-			os64_printf("libui: %s: expected 'key = value' — line ignored\n",
-			            THEME_CONF_PATH);
-			continue;
-		}
-		k++;
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t vs = k, ve = end;
-		while (ve > vs && (buf[ve - 1] == ' ' || buf[ve - 1] == '\t' || buf[ve - 1] == '\r'))
-			ve--;
-
-		const theme_key_t *row = (const theme_key_t *)0;
-		for (size_t r = 0; r < THEME_KEY_COUNT; r++) {
-			if (ui_span_equals(&buf[ks], ke - ks, kThemeKeys[r].key)) {
-				row = &kThemeKeys[r];
-				break;
-			}
-		}
-		if (row == (const theme_key_t *)0) {
-			buf[ke] = '\0';
-			os64_printf("libui: %s: unknown setting, ignored: %s\n",
-			            THEME_CONF_PATH, &buf[ks]);
-			continue;
-		}
-
-		bool ok;
-		if (row->kind == THEME_COLOR)
-			ok = parse_color(&buf[vs], ve - vs,
-			                 (uint32_t *)((char *)t + row->offset));
-		else
-			ok = parse_metric(&buf[vs], ve - vs,
-			                  (int32_t *)((char *)t + row->offset));
-		if (!ok) {
-			buf[ke] = '\0';
-			os64_printf("libui: %s: bad value for %s (colors: 6 hex digits; "
-			            "metrics: decimal) — keeping previous\n",
-			            THEME_CONF_PATH, &buf[ks]);
-		}
-	}
-}
-
-void os64_ui_theme_init(os64_ui_theme_t *t)
-{
-	theme_defaults(t);
-	theme_load_conf(t);
-}
-
 // ── tree + dirty ────────────────────────────────────────────────────────────
+
+// Thread a subtree onto its UI, so every widget in it can reach the window's
+// font binding — layout runs before the first paint and already measures.
+static void adopt_tree(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	if (w == (os64_ui_widget_t *)0)
+		return;
+	w->ui = ui;
+	if (w->cls && w->cls->metrics)
+		w->cls->metrics(w, ui);
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		adopt_tree(c, ui);
+}
 
 void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child)
 {
 	child->parent = parent;
 	child->next_sibling = (os64_ui_widget_t *)0;
+	if (parent->ui)
+		adopt_tree(child, parent->ui);
 	if (parent->first_child == (os64_ui_widget_t *)0) {
 		parent->first_child = child;
 		return;
@@ -277,62 +48,234 @@ void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child)
 	w->next_sibling = child;
 }
 
+static bool rect_holds(os64_gui_rect_t outer, os64_gui_rect_t r)
+{
+	return (int64_t)r.x >= outer.x && (int64_t)r.y >= outer.y &&
+	       (int64_t)r.x + r.w <= (int64_t)outer.x + outer.w &&
+	       (int64_t)r.y + r.h <= (int64_t)outer.y + outer.h;
+}
+
 void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w)
 {
-	if (w == (os64_ui_widget_t *)0)
+	if (w == (os64_ui_widget_t *)0 || os64_rect_is_empty(w->bounds))
 		return;
-	ui->dirty = ui->any_dirty ? os64_rect_union(ui->dirty, w->bounds)
-	                          : w->bounds;
+	os64_gui_rect_t r = w->bounds;
+	// `any_dirty` is the authority: a list it calls clean is empty, so a
+	// hand clear of the flag clears the list too.
+	if (!ui->any_dirty)
+		ui->damage_count = 0;
+	// A mark that holds entries swallows them first: the compositor's rule
+	// would merge it into the first and leave the others to be painted
+	// again, and a root mark (a resize, a theme) would repaint every part
+	// inside it twice.
+	uint32_t kept = 0;
+	for (uint32_t i = 0; i < ui->damage_count; i++)
+		if (!rect_holds(r, ui->damage[i]))
+			ui->damage[kept++] = ui->damage[i];
+	ui->damage_count = kept;
+	if (os64_damage_add(ui->damage, &ui->damage_count, OS64_UI_DAMAGE_MAX, OS64_UI_DAMAGE_SLACK, r))
+		ui->damage_collapses++;
+	ui->dirty = ui->any_dirty ? os64_rect_union(ui->dirty, r) : r;
 	ui->any_dirty = true;
+}
+
+bool os64_ui_dirty_covers(const os64_ui_t *ui, os64_gui_rect_t r)
+{
+	for (uint32_t i = 0; ui->any_dirty && i < ui->damage_count; i++)
+		if (rect_holds(ui->damage[i], r))
+			return true;
+	return false;
+}
+
+static void clean(os64_ui_t *ui)
+{
+	ui->any_dirty = false;
+	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	ui->damage_count = 0;
 }
 
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 {
+	ui->placement = (os64_window_placement_t){0};
+	ui->placement_event = NULL;
 	ui->ctx = ctx;
-	os64_ui_theme_init(&ui->theme);
-	ui->root = ui->grab = ui->focus = (os64_ui_widget_t *)0;
-	ui->any_dirty = false;
-	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	os64_ui_theme_defaults(&ui->theme);
+	ui->appearance_generation = 0;
+	ui->follow_session = true;
+	os64_ui_theme_current(&ui->theme, &ui->appearance_generation);
+	ui->root = ui->grab = ui->focus = ui->hover = (os64_ui_widget_t *)0;
+	ui->grab_button = 0;
+	ui->window_blurred = false;
+	clean(ui);
+	ui->damage_collapses = 0;
 	ui->on_resize = (void (*)(os64_ui_t *))0;
 	ui->on_close = (void (*)(os64_ui_t *))0;
+	ui->on_doorbell = NULL;
 	ui->quit = false;
+	ui->font = (void *)0;
+	ui->font_session = NULL;
+	ui->font_generation = 0;
+	ui->font_settings_ready = false;
+	ui->font_settings_result = 0;
+	ui->font_plan = (os64_font_status_t (*)(os64_ui_t *, void *, void **))0;
+	ui->font_plan_commit = (void (*)(os64_ui_t *, void *, void *))0;
+	ui->font_plan_discard = (void (*)(os64_ui_t *, void *, void *))0;
+	ui->font_plan_user = (void *)0;
+	ui->menu = NULL;
+	ui->menu_event = NULL;
+	ui->menu_before_font = NULL;
+	ui->menu_turn = NULL;
+}
+
+void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h)
+{
+	w->bounds.h = h;
+	w->auto_h = false;
 }
 
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
 {
+	os64_ui_cancel_interaction(ui);
 	ui->root = root;
+	adopt_tree(root, ui);
 	os64_ui_mark_dirty(ui, root);
+}
+
+bool os64_ui_widget_enabled(const os64_ui_widget_t *w)
+{
+	if (!w) return false;
+	for (; w; w = w->parent)
+		if (w->hidden || w->disabled) return false;
+	return true;
+}
+
+static bool belongs_to(os64_ui_t *ui, os64_ui_widget_t *w)
+{
+	if (!w) return false;
+	while (w->parent) w = w->parent;
+	return w == ui->root;
+}
+
+static void cancel_widget(os64_ui_t *ui, os64_ui_widget_t *w)
+{
+	if (!w) return;
+	if (ui->grab == w) ui_gesture_canceled(ui, w);
+	w->pressed = false;
+	w->activation_key = 0;
+	if (w->cls->cancel) w->cls->cancel(w);
+	os64_ui_mark_dirty(ui, w);
 }
 
 void os64_ui_set_focus(os64_ui_t *ui, os64_ui_widget_t *w)
 {
+	if (w && (!w->focusable || !os64_ui_widget_enabled(w) || !belongs_to(ui, w)))
+		return;
 	if (ui->focus == w)
 		return;
 	// Both ends repaint: the old widget's caret has to DISAPPEAR, which no
 	// amount of painting the new one can accomplish.
 	if (ui->focus) {
+		cancel_widget(ui, ui->focus);
+		if (ui->grab == ui->focus) ui->grab = NULL;
 		ui->focus->focused = false;
 		os64_ui_mark_dirty(ui, ui->focus);
 	}
 	ui->focus = w;
 	if (w) {
-		w->focused = true;
+		w->focused = !ui->window_blurred;
 		os64_ui_mark_dirty(ui, w);
 	}
 }
 
-// ── hit testing ─────────────────────────────────────────────────────────────
-
-static bool rect_contains(os64_gui_rect_t r, int32_t x, int32_t y)
+void os64_ui_clear_hover(os64_ui_t *ui)
 {
-	return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+	if (ui->hover) {
+		ui->hover->hovered = false;
+		os64_ui_mark_dirty(ui, ui->hover);
+		ui->hover = NULL;
+	}
 }
 
+void os64_ui_cancel_gestures(os64_ui_t *ui)
+{
+	cancel_widget(ui, ui->grab);
+	if (ui->focus != ui->grab) cancel_widget(ui, ui->focus);
+	ui->grab = NULL;
+	ui->grab_button = 0;
+	os64_ui_clear_hover(ui);
+}
+
+void os64_ui_cancel_interaction(os64_ui_t *ui)
+{
+	os64_ui_set_focus(ui, NULL);
+	os64_ui_cancel_gestures(ui);
+}
+
+static void reconcile(os64_ui_t *ui)
+{
+	if (ui->grab && (!os64_ui_widget_enabled(ui->grab) || !belongs_to(ui, ui->grab))) {
+		cancel_widget(ui, ui->grab);
+		ui->grab = NULL;
+	}
+	if (ui->focus && (!os64_ui_widget_enabled(ui->focus) ||
+	                  !ui->focus->focusable || !belongs_to(ui, ui->focus)))
+		os64_ui_set_focus(ui, NULL);
+	if (ui->hover && (!os64_ui_widget_enabled(ui->hover) || !belongs_to(ui, ui->hover)))
+		os64_ui_clear_hover(ui);
+}
+
+void os64_ui_set_enabled(os64_ui_t *ui, os64_ui_widget_t *w, bool enabled)
+{
+	// A widget left as it was paints as it did: a caller that sets every
+	// widget's state on each pass marks only what changed.
+	bool changed = w->disabled == enabled;
+	w->disabled = !enabled;
+	reconcile(ui);
+	if (changed)
+		os64_ui_mark_dirty(ui, w);
+}
+
+void os64_ui_set_hidden(os64_ui_t *ui, os64_ui_widget_t *w, bool hidden)
+{
+	w->hidden = hidden;
+	reconcile(ui);
+	// The parent repaints the vacated area when a child disappears.
+	os64_ui_mark_dirty(ui, w->parent ? w->parent : w);
+}
+
+static os64_ui_widget_t *tree_next(os64_ui_widget_t *w)
+{
+	if (w->first_child) return w->first_child;
+	while (w && !w->next_sibling) w = w->parent;
+	return w ? w->next_sibling : NULL;
+}
+
+bool os64_ui_focus_next(os64_ui_t *ui, bool reverse, bool wrap)
+{
+	reconcile(ui);
+	os64_ui_widget_t *first = NULL, *last = NULL, *previous = NULL, *next = NULL;
+	bool seen = ui->focus == NULL;
+	for (os64_ui_widget_t *w = ui->root; w; w = tree_next(w)) {
+		if (!w->focusable || !os64_ui_widget_enabled(w)) continue;
+		if (!first) first = w;
+		if (w == ui->focus) { previous = last; seen = true; }
+		else if (seen && !next) next = w;
+		last = w;
+	}
+	os64_ui_widget_t *target = reverse ? previous : next;
+	if (!ui->focus || (wrap && !target)) target = reverse ? last : first;
+	os64_ui_set_focus(ui, target);
+	return target != NULL;
+}
+
+// ── hit testing ─────────────────────────────────────────────────────────────
+
 // Deepest visible widget under the point. Children are checked LAST-first so
-// a hit resolves to whatever painted on top (list order is paint order).
+// a hit resolves to whatever painted on top (list order is paint order). A
+// clipped widget is there only where it is seen (ui_widget_holds).
 static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 {
-	if (w == (os64_ui_widget_t *)0 || w->hidden || !rect_contains(w->bounds, x, y))
+	if (w == (os64_ui_widget_t *)0 || w->hidden || !ui_widget_holds(w, x, y))
 		return (os64_ui_widget_t *)0;
 
 	os64_ui_widget_t *best = (os64_ui_widget_t *)0;
@@ -346,8 +289,46 @@ static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 
 // ── dispatch ────────────────────────────────────────────────────────────────
 
+bool os64_ui_context(os64_ui_t *ui, const os64_gui_event_t *ev, bool keyboard)
+{
+	os64_ui_widget_t *w = keyboard ? ui->focus : hit_test(ui->root, ev->mouse.x, ev->mouse.y);
+	for (; w; w = w->parent)
+		if (os64_ui_widget_enabled(w) && w->on_context && w->on_context(w, ev, w->context_user))
+			return true;
+	return false;
+}
+
+static void update_hover(os64_ui_t *ui, int32_t x, int32_t y)
+{
+	os64_ui_widget_t *w = hit_test(ui->root, x, y);
+	if (w && (!w->cls->event || !os64_ui_widget_enabled(w) ||
+	          (ui->grab && ui->grab != w))) w = NULL;
+	if (w == ui->hover) return;
+	os64_ui_clear_hover(ui);
+	ui->hover = w;
+	if (w) {
+		w->hovered = true;
+		os64_ui_mark_dirty(ui, w);
+	}
+}
+
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
+	if (ev->type == OS64_GUI_EVENT_WINDOW_PLACEMENT && ui->placement_event)
+		return ui->placement_event(ui, ev);
+	if (ev->type == OS64_GUI_EVENT_DOORBELL) {
+		if (!ui->on_doorbell) return false;
+		ui->on_doorbell(ui, ev);
+		return true;
+	}
+	if (ev->type == OS64_GUI_EVENT_APPEARANCE) {
+		if (ui->follow_session && ui->font_session) ui->font_session(ui);
+		if (ui->follow_session && os64_ui_theme_session(&ui->theme,
+		        &ui->appearance_generation, os64_gui_appearance_generation(ev)))
+			os64_ui_mark_dirty(ui, ui->root);
+		return true;
+	}
+	reconcile(ui);
 	// A close request needs no widget tree to land on — handled first so the
 	// root guard cannot swallow it.
 	if (ev->type == OS64_GUI_EVENT_WINDOW_CLOSE) {
@@ -361,35 +342,89 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		return false;
 
 	switch (ev->type) {
+	case OS64_GUI_EVENT_POINTER_STATE:
+		if (ev->pointer.inside) update_hover(ui, ev->pointer.x, ev->pointer.y);
+		else os64_ui_clear_hover(ui);
+		return true;
+    case OS64_GUI_EVENT_INPUT_LOST:
+        os64_ui_cancel_gestures(ui);
+        return true;
+	case OS64_GUI_EVENT_WINDOW_COVERED:
+		cancel_widget(ui, ui->grab);
+		ui->grab = NULL;
+		cancel_widget(ui, ui->focus);
+		return true;
+	case OS64_GUI_EVENT_WINDOW_FOCUS:
+		ui->window_blurred = !ev->focus.gained;
+		if (ui->window_blurred) {
+			cancel_widget(ui, ui->grab);
+			ui->grab = NULL;
+			cancel_widget(ui, ui->focus);
+		}
+		// Pointer presence is independent of keyboard focus. Its snapshot
+		// clears hover when another window actually covers this control.
+		if (ui->focus) {
+			ui->focus->focused = !ui->window_blurred;
+			os64_ui_mark_dirty(ui, ui->focus);
+		}
+		return true;
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
+		if (ev->mouse.button == OS64_GUI_MOUSE_RIGHT)
+			return os64_ui_context(ui, ev, false);
+		if (ev->mouse.button != OS64_GUI_MOUSE_LEFT || ui->grab) return false;
+		update_hover(ui, ev->mouse.x, ev->mouse.y);
 		os64_ui_widget_t *w = hit_test(ui->root, ev->mouse.x, ev->mouse.y);
-		if (w && w->cls->event && w->cls->event(w, ui, ev)) {
-			ui->grab = w;
+		if (w && os64_ui_widget_enabled(w) && w->cls->event && w->cls->event(w, ui, ev)) {
+			// Callbacks may disable or hide their control during the press.
+			if (os64_ui_widget_enabled(w) && belongs_to(ui, w)) {
+				ui->grab = w;
+				ui->grab_button = ev->mouse.button;
+			}
 			return true;
 		}
 		return false;
 	}
+	case OS64_GUI_EVENT_MOUSE_WHEEL: {
+		// Wheel targets the visible widget under the pointer without taking
+		// keyboard focus or changing a button grab. Unhandled wheels bubble.
+		os64_ui_widget_t *w = hit_test(ui->root, ev->mouse.x, ev->mouse.y);
+		for (; w; w = w->parent)
+			if (os64_ui_widget_enabled(w) && w->cls->event && w->cls->event(w, ui, ev))
+				return true;
+		return false;
+	}
 	case OS64_GUI_EVENT_MOUSE_MOVE:
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
+		update_hover(ui, ev->mouse.x, ev->mouse.y);
 		// A grab owns the pointer until release — the ancient button
 		// contract (drag off to cancel) needs moves and the release even
 		// when the cursor has left the widget's bounds.
 		os64_ui_widget_t *w = ui->grab;
 		if (w == (os64_ui_widget_t *)0)
 			return false;
+		if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP &&
+		    ev->mouse.button != ui->grab_button) return false;
+		// Release ownership before callbacks can change focus or enabled state.
+		if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) ui->grab = NULL;
 		bool consumed = w->cls->event ? w->cls->event(w, ui, ev) : false;
-		if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP)
-			ui->grab = (os64_ui_widget_t *)0;
 		return consumed;
 	}
 	case OS64_GUI_EVENT_KEY_DOWN:
 	case OS64_GUI_EVENT_KEY_UP: {
+		if (ui->window_blurred) return false;
 		os64_ui_widget_t *w = ui->focus;
+		if (ev->key.ascii == '\t' && !(ev->key.modifiers & OS64_GUI_MOD_ALT) &&
+		    (!w || !w->accepts_tab || (ev->key.modifiers & OS64_GUI_MOD_CTRL))) {
+			if (ev->type == OS64_GUI_EVENT_KEY_DOWN)
+				os64_ui_focus_next(ui, ev->key.modifiers & OS64_GUI_MOD_SHIFT, true);
+			return true;
+		}
 		return (w && w->cls->event) ? w->cls->event(w, ui, ev) : false;
 	}
 	case OS64_GUI_EVENT_WINDOW_RESIZE: {
-		// The window grew or shrank. libui does the three things every app
-		// would otherwise have to remember, in the order they have to happen:
+		// Cancel presses/drags across changed bounds but keep the typing target.
+		os64_ui_cancel_gestures(ui);
+		// After cancelling gestures, refresh geometry before app layout:
 		//
 		//   1. refresh the draw context, or every primitive keeps clipping to
 		//      the old bounds and the new strip stays blank;
@@ -399,15 +434,13 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		//      the APP's (os64_ui_stack_vertical is a function you call, not a
 		//      mode you set) and libui has no way to guess which one.
 		//
-		// Then mark the ENTIRE surface dirty rather than unioning bounds: on a
-		// shrink the vacated area belongs to nobody's widget, and on a grow the
-		// newly exposed strip holds the window's background — neither is
-		// reachable from any widget rect, so a bounds-union repaint would
-		// leave visible litter exactly where the eye is already looking.
+		// Then mark the ENTIRE surface dirty (the root, stretched to it)
+		// rather than the widgets that moved: on a shrink the vacated area
+		// belongs to nobody's widget, and on a grow the newly exposed strip
+		// holds the window's background — neither is reachable from any
+		// widget rect, so their repaint would leave visible litter exactly
+		// where the eye is already looking.
 		os64_draw_ctx_refresh(ui->ctx);
-		// Rootless is legal (os64_ui_init leaves root NULL, and the sibling
-		// cases above all tolerate it) — refresh the context and leave; there
-		// is no tree to stretch and nothing of ours to repaint.
 		if (!ui->root)
 			return true;
 		ui->root->bounds = (os64_gui_rect_t){0, 0,
@@ -415,8 +448,8 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		                                     (int32_t)ui->ctx->surf.height};
 		if (ui->on_resize)
 			ui->on_resize(ui);
-		ui->dirty = ui->root->bounds;
-		ui->any_dirty = true;
+		reconcile(ui);
+		os64_ui_mark_dirty(ui, ui->root);
 		return true;
 	}
 	default:
@@ -426,42 +459,146 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 
 // ── paint ───────────────────────────────────────────────────────────────────
 
-static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui)
+// One walk, parent before children (children overpaint), so a widget
+// painted for several rectangles is painted for all of them before any
+// child is. A paints_part class is painted once for each rectangle it
+// meets, cut to it; any other is painted whole, once, even when only
+// partly dirty: the canvas beyond the rectangles just gets the same
+// bytes it already shows (repaint-from-state), and only the rectangles
+// are published. Widgets paint INSIDE their bounds by contract — the
+// primitives clip to the CANVAS, so a widget that strays stomps a
+// sibling, which is LIBDRAW.md's named fingerprint for this layer.
+static void paint_self(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list, uint32_t count,
+                       os64_gui_rect_t met)
+{
+	os64_gui_rect_t clip;
+	os64_ui_theme_t t = ui->theme;
+	if (!os64_ui_widget_enabled(w)) {
+		t.panel_bg = t.button_face = t.button_face_pressed = t.button_face_hover =
+		    t.text_bg = t.field_bg = t.scroll_track = t.disabled_bg;
+		t.label_fg = t.button_fg = t.text_fg = t.field_fg = t.scroll_thumb =
+		    t.button_border = t.field_border = t.button_highlight = t.button_shadow =
+		    t.hover_border = t.focus_ring = t.text_caret = t.disabled_fg;
+		t.text_sel_bg = t.disabled_fg;
+		t.text_sel_fg = t.disabled_bg;
+	}
+	if (w->cls->paints_part) {
+		for (uint32_t i = 0; i < count; i++)
+			if (os64_rect_intersect(w->bounds, list[i], &clip)) {
+				ui->dirty = list[i];
+				w->cls->paint(w, ui->ctx, &t);
+			}
+	} else {
+		ui->dirty = met;
+		w->cls->paint(w, ui->ctx, &t);
+	}
+}
+
+// A clipped widget painted through its clip: a sub-surface whose origin is
+// the corner of what is seen, the widget's bounds and the rectangles it is
+// painted for moved into it for the paint and put back after, so the
+// primitives' own clip to the canvas is the cut. Wholly seen, it is painted
+// as any widget is; not seen at all, not painted.
+static void paint_cut(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list, uint32_t count,
+                      os64_gui_rect_t met)
+{
+	os64_gui_surface_t whole = ui->ctx->surf;
+	os64_gui_rect_t canvas = {0, 0, (int32_t)whole.width, (int32_t)whole.height}, seen;
+	if (!os64_rect_intersect(w->bounds, w->clip, &seen) || !os64_rect_intersect(seen, canvas, &seen))
+		return;
+	if (seen.x == w->bounds.x && seen.y == w->bounds.y && seen.w == w->bounds.w && seen.h == w->bounds.h) {
+		paint_self(w, ui, list, count, met);
+		return;
+	}
+	os64_gui_rect_t moved[OS64_UI_DAMAGE_MAX];
+	for (uint32_t i = 0; i < count; i++)
+		moved[i] = (os64_gui_rect_t){list[i].x - seen.x, list[i].y - seen.y, list[i].w, list[i].h};
+	os64_gui_rect_t bounds = w->bounds;
+	ui->ctx->surf.pixels = whole.pixels + (size_t)seen.y * whole.pitch_px + (size_t)seen.x;
+	ui->ctx->surf.width = (uint32_t)seen.w;
+	ui->ctx->surf.height = (uint32_t)seen.h;
+	w->bounds.x -= seen.x;
+	w->bounds.y -= seen.y;
+	paint_self(w, ui, moved, count, (os64_gui_rect_t){met.x - seen.x, met.y - seen.y, met.w, met.h});
+	w->bounds = bounds;
+	ui->ctx->surf = whole;
+}
+
+static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list,
+                            uint32_t count)
 {
 	if (w == (os64_ui_widget_t *)0 || w->hidden)
 		return;
-	os64_gui_rect_t clip;
-	if (!os64_rect_intersect(w->bounds, ui->dirty, &clip))
+	w->ui = ui;   // a widget attached by hand still reaches the fonts
+	os64_gui_rect_t met = {0, 0, 0, 0}, clip;
+	bool meets = false;
+	for (uint32_t i = 0; i < count; i++)
+		if (os64_rect_intersect(w->bounds, list[i], &clip)) {
+			met = meets ? os64_rect_union(met, list[i]) : list[i];
+			meets = true;
+		}
+	if (!meets)
 		return;
-	// Parent before children (children overpaint), whole widget even when
-	// only partly dirty: the canvas beyond the dirty rect just gets the same
-	// bytes it already shows (repaint-from-state), and only `dirty` is
-	// published. Widgets paint INSIDE their bounds by contract — the
-	// primitives clip to the CANVAS, so a widget that strays stomps a
-	// sibling, which is LIBDRAW.md's named fingerprint for this layer.
-	if (w->cls->paint)
-		w->cls->paint(w, ui->ctx, &ui->theme);
+	if (w->cls->paint) {
+		if (!w->clipped)
+			paint_self(w, ui, list, count, met);
+		else
+			paint_cut(w, ui, list, count, met);
+	}
 	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
-		paint_recursive(c, ui);
+		paint_recursive(c, ui, list, count);
+}
+
+uint32_t os64_ui_render_list(os64_ui_t *ui, os64_gui_rect_t out[OS64_UI_DAMAGE_MAX])
+{
+	reconcile(ui);
+	if (!ui->any_dirty || ui->root == (os64_ui_widget_t *)0)
+		return 0;
+	// The walk reads a copy: `dirty` is rewritten for each paint, and the
+	// list is cleared after it, so a mark made while painting is dropped,
+	// as it always was.
+	uint32_t count = ui->damage_count;
+	for (uint32_t i = 0; i < count; i++)
+		out[i] = ui->damage[i];
+	paint_recursive(ui->root, ui, out, count);
+	clean(ui);
+	return count;
+}
+
+bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage)
+{
+	os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+	uint32_t count = os64_ui_render_list(ui, list);
+	if (count == 0)
+		return false;
+	if (damage) {
+		*damage = list[0];
+		for (uint32_t i = 1; i < count; i++)
+			*damage = os64_rect_union(*damage, list[i]);
+	}
+	return true;
 }
 
 void os64_ui_paint(os64_ui_t *ui)
 {
-	if (!ui->any_dirty || ui->root == (os64_ui_widget_t *)0)
-		return;
-	paint_recursive(ui->root, ui);
-	os64_draw_publish(ui->ctx, &ui->dirty);
-	ui->any_dirty = false;
-	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+	uint32_t count = os64_ui_render_list(ui, list);
+	for (uint32_t i = 0; i < count; i++)
+		os64_draw_publish(ui->ctx, &list[i]);
 }
 
 // ── the packaged loop ───────────────────────────────────────────────────────
 
 void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 {
+	if (ui->follow_session) (void)os64_ui_font_follow(ui);
 	os64_ui_paint(ui);   // first frame: whatever set_root marked
 
 	while ((running == (volatile bool *)0 || *running) && !ui->quit) {
+		if (ui->menu_turn) {
+			if (ui->menu_turn(ui) < 0) break;
+			continue;
+		}
 		os64_gui_event_t ev;
 		int64_t rc = os64_gui_event_wait(win, &ev);
 		if (rc != 1)
@@ -477,32 +614,103 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 
 // ── layout ──────────────────────────────────────────────────────────────────
 
-void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
+// One arithmetic, two destinations: assigned now, or staged for a font
+// transaction to commit. A planner needs the second, because live bounds
+// may not move until the whole adoption has succeeded.
+static void stack_vertical_into(os64_ui_t *ui, os64_ui_widget_t *parent, bool staged)
 {
 	const os64_ui_theme_t *t = &ui->theme;
-	int32_t x = parent->bounds.x + t->pad;
-	int32_t y = parent->bounds.y + t->pad;
-	int32_t w = parent->bounds.w - 2 * t->pad;
+	// THE CHILDREN GO INSIDE THE PARENT THIS LAYOUT IS ABOUT. Staging reads
+	// the parent's planned rectangle for the same reason it reads a child's:
+	// a planner that moves or resizes a panel and then stacks it would
+	// otherwise commit the panel's new rectangle with children measured
+	// from its old one, and they would land outside it. It is also what
+	// makes a staged stack nest — an outer stack stages a container before
+	// an inner one lays out what is in it.
+	os64_gui_rect_t area = staged ? os64_ui_widget_planned_bounds(parent)
+	                             : parent->bounds;
+	int32_t x = area.x + t->pad;
+	int32_t y = area.y + t->pad;
+	int32_t w = area.w - 2 * t->pad;
 
 	for (os64_ui_widget_t *c = parent->first_child; c; c = c->next_sibling) {
 		if (c->hidden)
 			continue;
-		int32_t h = c->bounds.h > 0 ? c->bounds.h : t->button_h;
-		c->bounds = (os64_gui_rect_t){x, y, w, h};
+		// The widget's own answer when it is sizing itself, the
+		// application's when it said otherwise, and the theme's stock
+		// height for a widget with no opinion either way. While STAGING,
+		// "what the application said" means what it has staged — a planner
+		// sizes a child and then stacks, and the stack has to see the
+		// first decision to honour it in the second.
+		int32_t chosen = staged ? os64_ui_widget_planned_bounds(c).h : c->bounds.h;
+		int32_t h = c->auto_h && c->natural_h > 0 ? c->natural_h :
+		            chosen > 0 ? chosen : t->button_h;
+		os64_gui_rect_t rect = {x, y, w, h};
+		if (staged)
+			os64_ui_widget_stage_bounds(c, rect);
+		else
+			c->bounds = rect;
 		y += h + t->gap;
 	}
 	os64_ui_mark_dirty(ui, parent);
+}
+
+void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
+{
+	stack_vertical_into(ui, parent, false);
+}
+
+void os64_ui_stack_vertical_staged(os64_ui_t *ui, os64_ui_widget_t *parent)
+{
+	stack_vertical_into(ui, parent, true);
 }
 
 // ── the stock widgets ───────────────────────────────────────────────────────
 // Logic in event, look in paint, look reads only the theme. Swap a paint
 // pointer, keep the logic: that is the engine seam, working.
 
+// A panel is usually a window's root, so it meets every dirty rectangle: it
+// fills and outlines only what `dirty` covers of it (paints_part), or the
+// whole window would be filled again for each one.
 static void panel_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                         const os64_ui_theme_t *t)
 {
-	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
-	os64_draw_rect(&ctx->surf, w->bounds, t->panel_border);
+	os64_gui_rect_t part, b = w->bounds, edge;
+	if (!os64_rect_intersect(b, w->ui ? w->ui->dirty : b, &part))
+		return;
+	os64_draw_fill_rect(&ctx->surf, part, t->panel_bg);
+	const os64_gui_rect_t edges[4] = {
+		{b.x, b.y, b.w, 1}, {b.x, b.y + b.h - 1, b.w, 1},
+		{b.x, b.y, 1, b.h}, {b.x + b.w - 1, b.y, 1, b.h},
+	};
+	for (int i = 0; i < 4; i++)
+		if (os64_rect_intersect(edges[i], part, &edge))
+			os64_draw_fill_rect(&ctx->surf, edge, t->panel_border);
+}
+
+int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role)
+{
+	int32_t row = os64_ui_font_row_height(ui, role);
+	int32_t want = row + 2 * (ui ? ui->theme.pad : 0);
+	int32_t floor = ui ? ui->theme.button_h : 0;
+	return want > floor ? want : floor;
+}
+
+int32_t os64_ui_control_min_height(os64_ui_t *ui)
+{
+	return ui_control_min_height(ui, OS64_FONT_ROLE_UI);
+}
+
+// A label is one row of text, a button is a control: same face, different
+// furniture around it.
+static void label_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	w->natural_h = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
+}
+
+static void button_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	w->natural_h = ui_control_min_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 }
 
 static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -511,28 +719,82 @@ static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	// Labels sit on their parent panel's face — repaint that patch first so
 	// a text change never shows the old glyphs underneath.
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
-	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
-	os64_draw_text(&ctx->surf, w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
-	               w->text ? w->text : "", ui_strlen(w->text),
-	               t->label_fg, t->panel_bg);
+	os64_ui_t *ui = os64_ui_of(w);
+	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
+	int32_t ty = w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, role)) / 2;
+	os64_ui_draw_text(ui, &w->run, role, &ctx->surf, w->bounds,
+	                  w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
+	                  w->text ? w->text : "", ui_strlen(w->text),
+	                  t->label_fg, t->panel_bg);
+}
+
+void os64_ui_button_face(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                          const os64_ui_theme_t *t)
+{
+	uint32_t face = w->pressed ? t->button_face_pressed :
+	                w->hovered ? t->button_face_hover : t->button_face;
+	int32_t radius = t->control_radius;
+	if (radius < 0) radius = 0;
+	if (radius > 8) radius = 8;
+	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
+	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
+	if (radius) os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
+	os64_draw_fill_round_rect(&ctx->surf, w->bounds, radius, face);
+	uint32_t border = w->focused ? t->focus_ring :
+		w->hovered ? t->hover_border : t->button_border;
+	os64_draw_round_rect(&ctx->surf, w->bounds, radius, border, border);
+	// Bound relief to the control, including when it is smaller than its radius.
+	int32_t bevel = t->button_bevel;
+	if (bevel > 4) bevel = 4;
+	if (bevel > w->bounds.w / 2) bevel = w->bounds.w / 2;
+	if (bevel > w->bounds.h / 2) bevel = w->bounds.h / 2;
+	uint32_t light = w->pressed ? t->button_shadow : t->button_highlight;
+	uint32_t dark = w->pressed ? t->button_highlight : t->button_shadow;
+	for (int32_t i = 1; i < bevel; ++i) {
+		os64_gui_rect_t edge = {w->bounds.x + i, w->bounds.y + i,
+		                        w->bounds.w - 2 * i, w->bounds.h - 2 * i};
+		os64_draw_round_rect(&ctx->surf, edge, radius > i ? radius - i : 0, light, dark);
+	}
 }
 
 static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                          const os64_ui_theme_t *t)
 {
-	uint32_t face = w->pressed ? t->button_face_pressed : t->button_face;
-	os64_draw_fill_rect(&ctx->surf, w->bounds, face);
-	os64_draw_rect(&ctx->surf, w->bounds, t->button_border);
+	os64_ui_button_face(w, ctx, t);
+	uint32_t face = w->pressed ? t->button_face_pressed :
+	                w->hovered ? t->button_face_hover : t->button_face;
+	int32_t radius = t->control_radius;
+	if (radius < 0) radius = 0;
+	if (radius > 8) radius = 8;
+	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
+	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
+	os64_ui_t *ui = os64_ui_of(w);
+	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
 	size_t len = ui_strlen(w->text);
-	int32_t tw = (int32_t)len * t->font_w;
+	// ASK THE RUN THAT WILL BE PAINTED, AND BELIEVE IT WHEN IT SAYS NO.
+	// Measuring separately meant a second layout on every paint; ignoring
+	// the answer meant a caption whose new text could not be prepared was
+	// placed from a width of zero and then painted anyway, because the
+	// draw's own retry happened to succeed. A width that does not exist is
+	// not a position — this paint leaves the caption off the face it just
+	// drew, and the next one puts it where it belongs. And the draw is of
+	// the SAME choice the width came from, the slot's run or the bitmap
+	// cell: a second lookup could find a face the first one did not.
+	int32_t tw = 0;
+	bool placed = os64_ui_run_width(ui, &w->run, role,
+	                                w->text, len, &tw) == OS64_FONT_OK;
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
-	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
+	int32_t ty = w->bounds.y +
+	             (w->bounds.h - os64_ui_font_row_height(ui, role)) / 2;
 	if (tx < w->bounds.x + t->pad)
 		tx = w->bounds.x + t->pad;
 	if (ty < w->bounds.y)
 		ty = w->bounds.y;
-	os64_draw_text(&ctx->surf, tx, ty, w->text ? w->text : "", len,
-	               t->button_fg, face);
+	os64_gui_rect_t text_clip = w->bounds;
+	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
+	if (placed)
+		os64_ui_draw_run(ui, w->run, role, &ctx->surf, text_clip,
+		                 tx, ty, w->text ? w->text : "", len, t->button_fg, face);
 }
 
 static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
@@ -540,13 +802,16 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 {
 	switch (ev->type) {
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
+		if (ev->mouse.button != OS64_GUI_MOUSE_LEFT) return false;
+		os64_ui_set_focus(ui, w);
+		w->activation_key = 0;
 		w->pressed = true;
 		os64_ui_mark_dirty(ui, w);
 		return true;
 	case OS64_GUI_EVENT_MOUSE_MOVE: {
 		// Held button, cursor wandering: pressed tracks whether release
 		// here would still count. The visual IS the contract.
-		bool inside = rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool inside = ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		if (inside != w->pressed) {
 			w->pressed = inside;
 			os64_ui_mark_dirty(ui, w);
@@ -554,12 +819,35 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		return true;
 	}
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
-		bool fire = w->pressed &&
-		            rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool fire = w->pressed && ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		w->pressed = false;
 		os64_ui_mark_dirty(ui, w);
 		if (fire && w->on_click)
 			w->on_click(w, w->user);
+		return true;
+	}
+	case OS64_GUI_EVENT_KEY_DOWN: {
+		if (ui->grab || (ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_ALT)) ||
+		    (ev->key.ascii != ' ' && ev->key.ascii != '\n' && ev->key.ascii != '\r'))
+			return false;
+		if (!w->activation_key) {
+			// Keep the physical key identity: a changed modifier on release
+			// must not strand a pressed visual or activate a different key.
+			w->activation_key = 0x100u | ev->key.scancode |
+			                    ((ev->key.modifiers & OS64_GUI_MOD_HID) ? 0x200u : 0);
+			w->pressed = true;
+			os64_ui_mark_dirty(ui, w);
+		}
+		return true;
+	}
+	case OS64_GUI_EVENT_KEY_UP: {
+		uint16_t key = 0x100u | ev->key.scancode |
+		               ((ev->key.modifiers & OS64_GUI_MOD_HID) ? 0x200u : 0);
+		if (key != w->activation_key) return false;
+		w->activation_key = 0;
+		w->pressed = false;
+		os64_ui_mark_dirty(ui, w);
+		if (w->on_click) w->on_click(w, w->user);
 		return true;
 	}
 	default:
@@ -567,9 +855,14 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
-const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0 };
-const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0 };
-const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event };
+const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
+	0, 0, 0, 0, 0, 0, true };
+const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics, 0,
+	false };
+const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics,
+	0, false };
 
 static void widget_zero(os64_ui_widget_t *w)
 {
@@ -587,6 +880,9 @@ void os64_ui_label(os64_ui_widget_t *w, const char *text)
 	widget_zero(w);
 	w->cls = &os64_ui_label_class;
 	w->text = text;
+	// One row of text, sized by whatever face the window is wearing, until
+	// the application says otherwise with os64_ui_widget_fixed_height.
+	w->auto_h = true;
 }
 
 void os64_ui_button(os64_ui_widget_t *w, const char *text,
@@ -594,7 +890,9 @@ void os64_ui_button(os64_ui_widget_t *w, const char *text,
 {
 	widget_zero(w);
 	w->cls = &os64_ui_button_class;
+	w->focusable = true;
 	w->text = text;
 	w->on_click = on_click;
 	w->user = user;
+	w->auto_h = true;
 }

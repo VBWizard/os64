@@ -1,0 +1,29 @@
+{
+  "commit": "a699fb16767be39ba3e61a8e8b6bef60383f08ee",
+  "viewport": [
+    800,
+    600
+  ],
+  "files": {
+    "svg/painting/reftests/non-scaling-stroke-non-uniform-scale.html": "17eb7f13c7e2b9ca2c81c9d42a3526250e3e45603441998262db30a5a76444a7",
+    "svg/painting/reftests/non-scaling-stroke-non-uniform-scale-ref.html": "86aa5bab1cc11da8119ea7ba48efb676be07d980f27ab22661deba36b72f95eb",
+    "svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio.html": "979051c22b768c30baaf5b6be2212be614d888b7989bcc1be6731c773ceea7ed",
+    "svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio-ref.html": "6fef956f57fe87b706b3da75c3a6c6549a05f7831fc8cfdcb2a62531550280b9",
+    "svg/painting/reftests/small-nested-viewbox.html": "f93f7a088ef8f221499bdae7cfef57c671c6e30f98dbbe1759acc5a36e282d66",
+    "svg/painting/reftests/small-nested-viewbox-ref.html": "871bcf0b8b9fdb35030863a18b456ca6047bd022dc1c5a51672285605b1eb972"
+  },
+  "cases": [
+    {
+      "url": "/svg/painting/reftests/non-scaling-stroke-non-uniform-scale.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio.html",
+      "kind": "fixture"
+    },
+    {
+      "url": "/svg/painting/reftests/small-nested-viewbox.html",
+      "kind": "fixture"
+    }
+  ]
+}

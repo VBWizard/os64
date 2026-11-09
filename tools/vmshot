@@ -1,0 +1,37 @@
+#!/bin/bash
+# vmshot — save what is on the guest's screen as a PNG you can look at.
+#
+#   tools/vmshot <file.png> [port]        (default port 55556)
+#   tools/vmshot /tmp/screen.png
+#
+# QEMU's screendump writes a PPM, which most viewers and agents cannot read,
+# so this converts it. The text console is 1024x768 with the shell at the
+# top; a utility's output is usually in the top half.
+set -u
+
+OUT=${1:-}
+PORT=${2:-55556}
+if [ -z "$OUT" ]; then
+    echo "usage: vmshot <file.png> [port]" >&2
+    exit 2
+fi
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+PPM=/tmp/os64-vm-$PORT/screen.ppm
+
+rm -f "$PPM"
+"$ROOT/tools/vmcmd" "$PORT" screendump "$PPM" > /dev/null
+for _ in $(seq 20); do
+    [ -s "$PPM" ] && break
+    sleep 0.3
+done
+if [ ! -s "$PPM" ]; then
+    echo "vmshot: no screendump — is the VM running on port $PORT?" >&2
+    exit 1
+fi
+
+python3 - "$PPM" "$OUT" <<'EOF'
+import sys
+from PIL import Image
+Image.open(sys.argv[1]).save(sys.argv[2])
+EOF
+echo "vmshot: wrote $OUT"

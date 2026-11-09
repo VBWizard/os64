@@ -1,0 +1,4 @@
+# test262 intl402/BigInt, held by tools/test262/run.py (its docstring says how).
+[excluded]
+intl402/BigInt/prototype/toLocaleString/de-DE.js	a locale other than en (de, tr, az, lt, ...): data not held (INTL.md § 7)
+intl402/BigInt/prototype/toLocaleString/de-DE.js (strict)	a locale other than en (de, tr, az, lt, ...): data not held (INTL.md § 7)

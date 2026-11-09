@@ -1,0 +1,11 @@
+<!doctype html>
+<meta name="variant" content="?first">
+<meta name="variant" content="?second">
+<title>The runner's own: variants</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+test(function() {
+  assert_true(location.search === "?first" || location.search === "?second");
+}, "each variant is a page of its own, at its own address " + location.search);
+</script>

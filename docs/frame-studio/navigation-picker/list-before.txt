@@ -1,0 +1,2 @@
+test_appearance: tools/test_appearance_host.c:526: list_keyboard_contracts: Assertion `list.top==6 && list.selected==9 && list_changes==before' failed.
+tools/test_appearance_host.sh: line 41:    89 Aborted                 (core dumped) "$appearance_test_dir/test_appearance"

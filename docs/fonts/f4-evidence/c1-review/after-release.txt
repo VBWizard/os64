@@ -1,0 +1,2 @@
+release while the caller still holds the candidate: status=7 (7=BUSY, owner kept)
+after releasing the candidate: status=0

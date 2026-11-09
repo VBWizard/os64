@@ -1,0 +1,293 @@
+// A script's effects (garb_effect_t, WEB_ANIMATIONS.md § 2): laid
+// over an element's CSS animations by the environment's script_effects,
+// on clocks of their own, read back as getComputedStyle reads them.
+// Included by test_libflow_host.c.
+
+typedef struct {
+    const os64_html_node_t *target;
+    const garb_effect_t *const *effects;
+    int32_t n;
+} ScriptEffects;
+
+static int32_t script_effects_hook(void *ctx, const os64_html_node_t *node, const garb_effect_t *const **out)
+{
+    const ScriptEffects *x = ((Sheeted *)ctx)->script;
+    if (x == NULL || node != x->target)
+        return 0;
+    *out = x->effects;
+    return x->n;
+}
+
+// `text` read as a declaration block into longhands, as libdom reads a
+// script's keyframe: each into `out`, how many.
+static int32_t script_sets(garb_parsed_t *owner, const char *text, garb_set_t *out, int32_t cap)
+{
+    if (garb_parse_block(text, strlen(text), owner) != GARB_OK)
+        return 0;
+    int32_t n = 0;
+    for (int32_t i = 0; i < owner->nitems; i++) {
+        if (owner->items[i].kind != GARB_ITEM_DECL)
+            continue;
+        garb_set_t sets[64];
+        int32_t k = garb_read_declaration(owner, &owner->items[i].decl, (garb_reading_t){0}, sets);
+        for (int32_t j = 0; j < k && n < cap; j++)
+            out[n++] = sets[j];
+    }
+    return n;
+}
+
+static void script_effect_cases(void)
+{
+    // The sign-in page's animation key, as the 2026-11-08 record makes it: a box animated
+    // from one colour and turn to another over 4096 ms, every keyframe
+    // eased by cubic-bezier(0.23, -0.07, 0.53, 0.55), paused and set to
+    // 440 ms, then read.
+    garb_parsed_t from_p = {0}, to_p = {0};
+    garb_set_t from_s[8], to_s[8];
+    int32_t nfrom = script_sets(&from_p, "color: #62df76; transform: rotate(0deg)", from_s, 8);
+    int32_t nto = script_sets(&to_p, "color: #31a6fd; transform: rotate(165deg)", to_s, 8);
+    expect("script effects: the keyframes read", nfrom == 2 && nto == 2, NULL);
+    garb_easing_t ease = {GARB_EASE_CUBIC, {0.23, -0.07, 0.53, 0.55}, 0, GARB_JUMP_END, false};
+    garb_effect_keyframe_t frames[2] = {{0, true, ease, from_s, nfrom}, {1, true, ease, to_s, nto}};
+    garb_effect_t fx;
+    memset(&fx, 0, sizeof(fx));
+    fx.frames = frames;
+    fx.nframes = 2;
+    fx.timing.duration_ms = 4096;
+    fx.timing.iterations = 1;
+    fx.held = true;
+    fx.hold_ms = 440;
+    fx.rate = 1;
+    const garb_effect_t *list[1] = {&fx};
+
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><div id=key>x</div>", 800, 600);
+    ScriptEffects se = {computed_find(p.doc->document, "key"), list, 1};
+    p.script = &se;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    flow_computed_t *c = tree != NULL ? flow_computed_new(tree, &p.env, se.target, NULL) : NULL;
+    // The want worked independently (the eased progress 0.0116461 by
+    // halving the curve, each channel rounded, the turn's cosine and sine
+    // to six significant digits); Chrome's own strings are the validation
+    // page's to hold.
+    computed_is(c, "script effects: the sign-in key's colour held at 440 of 4096", GARB_COLOR, "rgb(97, 222, 120)");
+    computed_is(c, "script effects: and its turn", GARB_TRANSFORM,
+                "matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)");
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+
+    // Under display: none, on the element and on an ancestor, where no box
+    // is made and CSS animations end: a script's effect is still its
+    // computed style.
+    static const char *const kHidden[] = {
+        "<!doctype html><div id=key style=display:none>x</div>",
+        "<!doctype html><div style=display:none><div id=key>x</div></div>",
+    };
+    for (int h = 0; h < 2; h++) {
+        sheeted_open(&p, kHidden[h], 800, 600);
+        se.target = computed_find(p.doc->document, "key");
+        p.script = &se;
+        p.env.script_effects = script_effects_hook;
+        p.env.ctx = &p;
+        tree = flow_layout(p.doc, p.page, 800, &p.env);
+        c = tree != NULL ? flow_computed_new(tree, &p.env, se.target, NULL) : NULL;
+        computed_is(c, h == 0 ? "script effects: on a display:none element" : "script effects: under a display:none one",
+                    GARB_COLOR, "rgb(97, 222, 120)");
+        flow_computed_free(c);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+
+    // A running clock: (now - start) * rate, here 1000 ms into 2000 of an
+    // opacity from 0 to 1.
+    garb_parsed_t o0 = {0}, o1 = {0};
+    garb_set_t s0[2], s1[2];
+    int32_t n0 = script_sets(&o0, "opacity: 0", s0, 2), n1 = script_sets(&o1, "opacity: 1", s1, 2);
+    garb_effect_keyframe_t fade[2] = {{0, false, {0}, s0, n0}, {1, false, {0}, s1, n1}};
+    garb_effect_t run;
+    memset(&run, 0, sizeof(run));
+    run.frames = fade;
+    run.nframes = 2;
+    run.timing.duration_ms = 2000;
+    run.timing.iterations = 1;
+    run.start_ms = 4000;
+    run.rate = 1;
+    const garb_effect_t *one[1] = {&run};
+    static const struct {
+        const char *what, *css, *want;
+        double now, rate, start;
+        garb_fill_t fill;
+        bool held;
+    } kRuns[] = {
+        {"script effects: a running clock is (now - start) at rate 1", "", "0.5", 5000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: at rate 2, 500 ms in is half way", "", "0.5", 4500, 2, 4000, GARB_FILL_NONE, false},
+        {"script effects: and 1000 ms in is its end, filled forwards its last", "", "1", 5000, 2, 4000,
+         GARB_FILL_FORWARDS, false},
+        {"script effects: past its end, unfilled, it shows nothing", "", "1", 7000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: past its end, filled forwards, its last", "#k{opacity:.3}", "1", 7000, 1, 4000,
+         GARB_FILL_FORWARDS, false},
+        {"script effects: before its start it shows nothing, the rule's value",
+         "#k{opacity:.3}", "0.3", 3000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: backwards from its end, a quarter run", "", "0.75", 4500, -1, 6000, GARB_FILL_NONE, false},
+        {"script effects: laid after a CSS animation of the same property, it wins",
+         "@keyframes a{from{opacity:.1}to{opacity:.1}}#k{animation:a 10s}", "0.5", 5000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: an !important rule beats it, as it beats a CSS animation",
+         "#k{opacity:.2 !important}", "0.2", 5000, 1, 4000, GARB_FILL_NONE, false},
+        /* Held at 0 going backwards (paused or finished there): the far
+         * side of its start, so unfilled it shows nothing. */
+        {"script effects: a reversed one held at its start shows the rule's value", "#k{opacity:.3}", "0.3", 5000,
+         -1, 4000, GARB_FILL_NONE, true},
+    };
+    for (size_t i = 0; i < sizeof(kRuns) / sizeof(kRuns[0]); i++) {
+        char html[256];
+        snprintf(html, sizeof(html), "<!doctype html><style>%s</style><div id=k>x</div>", kRuns[i].css);
+        run.rate = kRuns[i].rate;
+        run.start_ms = kRuns[i].start;
+        run.timing.fill = kRuns[i].fill;
+        run.held = kRuns[i].held;
+        run.hold_ms = 0;
+        sheeted_open(&p, html, 800, 600);
+        ScriptEffects re = {computed_find(p.doc->document, "k"), one, 1};
+        p.script = &re;
+        p.env.script_effects = script_effects_hook;
+        p.env.ctx = &p;
+        p.env.now_ms = (uint64_t)kRuns[i].now;
+        tree = flow_layout(p.doc, p.page, 800, &p.env);
+        c = tree != NULL ? flow_computed_new(tree, &p.env, re.target, NULL) : NULL;
+        computed_is(c, kRuns[i].what, GARB_OPACITY, kRuns[i].want);
+        flow_computed_free(c);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+    run.held = false;
+
+    // An effect easing bends progress, so an interval whose ends hold one
+    // value is left early: 0 at 0 and 0.5, 1 at 1, eased out over 1000 ms,
+    // leaves 0.5 at about 349 ms, where its linear far end is 500; asked at
+    // 300 it is due at once.
+    garb_effect_keyframe_t flat[3] = {{0, false, {0}, s0, n0}, {0.5, false, {0}, s0, n0}, {1, false, {0}, s1, n1}};
+    garb_effect_t bent = run;
+    bent.frames = flat;
+    bent.nframes = 3;
+    bent.timing.duration_ms = 1000;
+    bent.timing.fill = GARB_FILL_NONE;
+    bent.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, 0, 0.58, 1}, 0, GARB_JUMP_END, true};
+    bent.start_ms = 4000;
+    bent.rate = 1;
+    const garb_effect_t *bentl[1] = {&bent};
+    sheeted_open(&p, "<!doctype html><div id=k>x</div>", 800, 600);
+    ScriptEffects be = {computed_find(p.doc->document, "k"), bentl, 1};
+    p.script = &be;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4300;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    uint64_t due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("script effects: an eased effect's held interval is due at once, not at its linear end", due == 4300,
+           NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+
+    // An overshooting effect easing carries a shadow past its keyframes'
+    // span: from below the view, into it. Asked 1 ms in, while it has not
+    // yet moved, so only the bound on where it can go puts it in view.
+    garb_parsed_t t0 = {0}, t1 = {0};
+    garb_set_t ts0[2], ts1[2];
+    int32_t nt0 = script_sets(&t0, "text-shadow: 0 0 black", ts0, 2);
+    int32_t nt1 = script_sets(&t1, "text-shadow: 0 -100px black", ts1, 2);
+    garb_effect_keyframe_t lift[2] = {{0, false, {0}, ts0, nt0}, {1, false, {0}, ts1, nt1}};
+    garb_effect_t over = bent;
+    over.frames = lift;
+    over.nframes = 2;
+    over.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, 3, 1, 3}, 0, GARB_JUMP_END, false};
+    const garb_effect_t *overl[1] = {&over};
+    sheeted_open(&p, "<!doctype html><div id=k style='position:absolute;top:760px'>x</div>", 800, 600);
+    ScriptEffects oe = {computed_find(p.doc->document, "k"), overl, 1};
+    p.script = &oe;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4001;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("script effects: a shadow an effect easing overshoots into view is asked for", due == 4001, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+    // A transform's side effect (a containing block for fixed descendants)
+    // lasts while the effect is current or in effect: held backwards at
+    // its start, unfilled, it is neither; held forwards there it is.
+    garb_parsed_t r0 = {0}, r1 = {0};
+    garb_set_t rs0[2], rs1[2];
+    int32_t nr0 = script_sets(&r0, "transform: rotate(0deg)", rs0, 2);
+    int32_t nr1 = script_sets(&r1, "transform: rotate(90deg)", rs1, 2);
+    garb_effect_keyframe_t turn[2] = {{0, false, {0}, rs0, nr0}, {1, false, {0}, rs1, nr1}};
+    garb_effect_t spin = run;
+    spin.frames = turn;
+    spin.nframes = 2;
+    spin.timing.duration_ms = 1000;
+    spin.timing.fill = GARB_FILL_NONE;
+    spin.held = true;
+    spin.hold_ms = 0;
+    const garb_effect_t *spinl[1] = {&spin};
+    for (int dir = 0; dir < 2; dir++) {
+        spin.rate = dir ? -1 : 1;
+        sheeted_open(&p, "<!doctype html><style>body{margin:0}</style><div id=k style='margin:50px 0 0 200px;width:100px;"
+                         "height:50px'><div id=f style='position:fixed;left:0;top:0;width:10px;height:10px'></div></div>",
+                     800, 600);
+        ScriptEffects ke = {computed_find(p.doc->document, "k"), spinl, 1};
+        p.script = &ke;
+        p.env.script_effects = script_effects_hook;
+        p.env.ctx = &p;
+        p.env.now_ms = 5000;
+        tree = flow_layout(p.doc, p.page, 800, &p.env);
+        const flow_box_t *fb = tree != NULL ? flow_box_for(tree, computed_find(p.doc->document, "f")) : NULL;
+        expect(dir ? "script effects: held backwards at its start, a transform holds no fixed box"
+                   : "script effects: held forwards at its start, a transform holds its fixed box",
+               fb != NULL && (fb->rect.x == 200) == !dir, NULL);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+    // Below 0 with several keyframes at 0, the first alone (§ 5.3.4):
+    // margin-left 100px, 200px at 0 and 300px at 1, eased below 0 by
+    // cubic-bezier(0,-1,1,-1), held half way, is 100px.
+    garb_parsed_t m0 = {0}, m1 = {0}, m2 = {0};
+    garb_set_t ms0[2], ms1[2], ms2[2];
+    int32_t nm0 = script_sets(&m0, "margin-left: 100px", ms0, 2);
+    int32_t nm1 = script_sets(&m1, "margin-left: 200px", ms1, 2);
+    int32_t nm2 = script_sets(&m2, "margin-left: 300px", ms2, 2);
+    garb_effect_keyframe_t twice[3] = {{0, false, {0}, ms0, nm0}, {0, false, {0}, ms1, nm1}, {1, false, {0}, ms2, nm2}};
+    garb_effect_t under = run;
+    under.frames = twice;
+    under.nframes = 3;
+    under.timing.duration_ms = 1000;
+    under.timing.fill = GARB_FILL_NONE;
+    under.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, -1, 1, -1}, 0, GARB_JUMP_END, false};
+    under.held = true;
+    under.hold_ms = 500;
+    under.rate = 1;
+    const garb_effect_t *underl[1] = {&under};
+    sheeted_open(&p, "<!doctype html><div id=k>x</div>", 800, 600);
+    ScriptEffects ue = {computed_find(p.doc->document, "k"), underl, 1};
+    p.script = &ue;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, ue.target, NULL) : NULL;
+    computed_is(c, "script effects: below 0 with keyframes twice at 0, the first", GARB_MARGIN_LEFT, "100px");
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&m0);
+    garb_free(&m1);
+    garb_free(&m2);
+    garb_free(&r0);
+    garb_free(&r1);
+    garb_free(&t0);
+    garb_free(&t1);
+    garb_free(&o0);
+    garb_free(&o1);
+    garb_free(&from_p);
+    garb_free(&to_p);
+}

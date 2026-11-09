@@ -10,6 +10,7 @@
 #include "gdt.h"
 #include "strcpy.h"
 #include "strlen.h"   // packed argv blob measures each argument before copying
+#include "syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — the per-argument cap the blob honours
 #include "strstr.h"
 #include "time.h"
 #include "memcpy.h"
@@ -31,6 +32,8 @@
 #include "allocator.h"
 #include "memset.h"
 #include "kworker.h"
+#include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
+#include "knet.h"                // knet_thread — the "/knet" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -165,7 +168,7 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 		return false;
 
 	core_local_storage_t* cls = get_core_local_storage();
-	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t own_cpu = cls ? cls->cpu : BSP_CPU;
 
 	// UNDER signalLock, same reason as task_signal_all_threads above (Codex
 	// #29 rd4). Holding it across send_ipi is safe: the IPI is lock-free APIC
@@ -191,9 +194,9 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 
 		// Same exemptions as the sibling sweep: this core is already inside
 		// the scheduler's reach, and the BSP's timer is never masked.
-		if (kSMPInitDone && th->lastRunApicID != own_apic &&
-		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
-			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+		if (kSMPInitDone && th->lastRunCPU != own_cpu &&
+		    th->lastRunCPU != BSP_CPU)
+			send_ipi(th->lastRunCPU, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
 	spinlock_release_irqrestore(&task->signalLock, f);
 	return true;
@@ -234,7 +237,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		return;
 
 	core_local_storage_t* cls = get_core_local_storage();
-	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t own_cpu = cls ? cls->cpu : BSP_CPU;
 	uint32_t marked = 0;
 
 	// UNDER signalLock, like the other broadcast producers (Codex #29 rd7):
@@ -258,18 +261,18 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: marking sibling thread 0x%08lx of %s (state %u, last ran on AP %lu) for termination\n",
 		       th->threadID, task->exename, (uint32_t)th->threadState,
-		       th->lastRunApicID);
+		       th->lastRunCPU);
 
 		// Knock on the core it was last seen on, unless that is this core
 		// (we are already inside the scheduler's reach) or the BSP (whose
 		// timer is never masked, so it will notice on its own next tick).
-		if (kSMPInitDone && th->lastRunApicID != own_apic &&
-		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
+		if (kSMPInitDone && th->lastRunCPU != own_cpu &&
+		    th->lastRunCPU != BSP_CPU)
 		{
 			printd(DEBUG_TASK | DEBUG_THREAD,
 			       "task_exit: nudging AP %lu so its scheduler can redirect thread 0x%08lx into the exit trampoline\n",
-			       th->lastRunApicID, th->threadID);
-			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+			       th->lastRunCPU, th->threadID);
+			send_ipi(th->lastRunCPU, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		}
 	}
 	spinlock_release_irqrestore(&task->signalLock, slf);
@@ -296,7 +299,10 @@ uintptr_t task_reserve_task_virt(task_t* task, size_t size)
 /// @param stackSize Size of usable stack (guard pages are added automatically)
 /// @param isRing3 true for user stack (PAGE_USER set), false for kernel stack
 /// @return Virtual address of stack base (bottom), or NULL on failure
-void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+/// `optional`: a stack the caller can do without (a program's declared main
+/// stack, SCRIPT_STACK.md), asked of allocate_memory_try, which refuses with
+/// 0 where allocate_memory_aligned panics; nothing is reserved on a refusal.
+static void* guarded_stack(task_t* task, size_t stackSize, bool isRing3, bool optional)
 {
 	if (!task || stackSize == 0) {
 		return NULL;
@@ -307,7 +313,7 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 	size_t aligned_size = (total_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
 	// Allocate physical memory for entire region (including guards)
-	uintptr_t phys = allocate_memory_aligned(aligned_size);
+	uintptr_t phys = optional ? allocate_memory_try(aligned_size) : allocate_memory_aligned(aligned_size);
 	if (phys == 0) {
 		printd(DEBUG_TASK, "task_alloc_guarded_stack: Failed to allocate %lu bytes\n", aligned_size);
 		return NULL;
@@ -338,6 +344,16 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 		virt_stack_start + stackSize, virt_base + aligned_size);
 
 	return (void*)virt_stack_start;
+}
+
+void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, false);
+}
+
+void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, true);
 }
 
 void task_idle_loop()
@@ -389,15 +405,18 @@ void task_idle_loop()
 // sweep calls scheduler_remove_task while holding it), never after. Nothing in
 // scheduler.c touches a deadChild list — they are private to task.c, which is
 // what makes that ordering safe by construction rather than by convention. The
-// one place that WOULD have inverted it is the parent-wake below, and that is
-// deliberately performed after the release.
+// parent-wake below takes the queue lock INSIDE this one, which is that order;
+// what it must never do inside it is trigger a pass (scheduler_trigger
+// halt-waits for a pass that needs the queue lock), so the trigger comes after
+// the release.
 static spinlock_t kDeadChildLock = 0;
 
-// The list append, caller holding kDeadChildLock. Returns the parent's
-// WAITING THREAD if it has one and must be woken, NULL otherwise — the wake
-// itself happens OUTSIDE the lock (see the wrapper), because
-// scheduler_wake_task_waiter takes scheduler queue locks and doing that from
-// inside this one is the one lock inversion this design has to avoid.
+// The list append, caller holding kDeadChildLock. Wakes the parent's WAITING
+// THREAD if it has one, or owes it the wake if it has registered and not yet
+// parked (WAKE_OWED.md), and returns it so the caller can trigger a pass once
+// the lock is released; NULL when there is nobody to wake. The wake is aimed
+// UNDER this lock, the one task_wait registers and voids under, so a debt can
+// never be owed to whatever the waiter parks in after its wait.
 //
 // A thread, not a bool (2026-08-25): the wake used to aim at
 // `parent->threads`, the FIRST thread, and the first thread is not always
@@ -426,6 +445,7 @@ static thread_t *task_enqueue_dead_child_locked(task_t *child)
 		return NULL;
 	}
 	parent->waitingForChild = false;
+	scheduler_wake_task_waiter(parent, parent->waitThread);
 	return parent->waitThread;
 }
 
@@ -442,9 +462,9 @@ static void task_enqueue_dead_child(task_t *child)
 	spinlock_release_irqrestore(&kDeadChildLock, flags);
 
 	if (waiter != NULL) {
-		// Wake the parent to re-check its children. The wake is unconditional
-		// on ANY child death; task_wait's own scan decides whether THIS death
-		// matches what the parent is waiting for.
+		// The parent re-checks its children when it runs. The wake is
+		// unconditional on ANY child death; task_wait's own scan decides
+		// whether THIS death matches what the parent is waiting for.
 		//
 		// THE BACKSTOP IS NOT OURS TO CANCEL (fixed 2026-08-09; this cost a
 		// shell). Until today these three lines cleared the parent's SIGSLEEP
@@ -463,17 +483,15 @@ static void task_enqueue_dead_child(task_t *child)
 		// that test waits on a child too. Periodic just splits the window far
 		// more often than tickless does; it is not a periodic-only bug.
 		//
-		// scheduler_wake_task_waiter delegates to the helper that has had
-		// this right all along (scheduler_wake_isleep_thread_locked): the
-		// ISLEEP test, the SIGSLEEP cancel and the relink are ONE atomic act
-		// under the queue lock, and a thread that has not parked yet is left
-		// completely untouched — so its backstop survives to fire a tick later
-		// and re-run the scan. Worst case the parent notices one second late
-		// instead of never, which is precisely what a backstop is for.
-		//
-		// And it wakes THE WAITER — the thread captured under kDeadChildLock
-		// above — not the task's first thread (2026-08-25, waitThread).
-		scheduler_wake_task_waiter(parent, waiter);
+		// The wake was aimed under the lock (task_enqueue_dead_child_locked,
+		// through scheduler_wake_or_owe): the ISLEEP test, the SIGSLEEP cancel
+		// and the relink are ONE atomic act under the queue lock, and a thread
+		// that has not parked yet keeps its backstop and is OWED the wake,
+		// which the requeue that parks it pays (WAKE_OWED.md). It aims at THE
+		// WAITER — the thread captured under kDeadChildLock — not the task's
+		// first thread (2026-08-25, waitThread). What is left here, outside
+		// every lock, is the pass that runs it.
+		scheduler_trigger(NULL);
 	}
 }
 
@@ -518,16 +536,12 @@ static void task_remove_dead_child_locked(task_t *parent, task_t *child)
 // Burial is TWO-PHASE, one kworker pass apart:
 //   pass N:   unlink the corpse from the deadChild list AND the kTaskList
 //             spine (scheduler_remove_task) and park it on kBurialList.
-//             From this instant no walker can newly reach it.
+//             From this instant a fresh walk cannot reach it by the lists.
 //   pass N+1: task_destroy() actually frees everything.
-// The gap is a grace period for LOCKLESS kTaskList walkers (procfs follows
-// ->next with no lock, by design — see scheduler_submit_new_task's publish
-// comment): a walker standing ON the corpse when it is unlinked can still
-// follow its intact ->next out; by the time the memory is freed a full
-// kworker period later, any such walk has long finished. A reader parked
-// mid-walk for 2+ seconds is already a wedged reader with bigger problems.
-// (The grown-up fix — snapshot-under-lock or generation counts — is booked
-// in DEBTS.md; this discipline is correct until /proc grows teeth.)
+// Consecutive passes need not sleep, so this deferral is not a guaranteed
+// elapsed-time grace period. Lockless list-walker lifetime remains booked
+// in DEBTS.md. A publisher retaining a task pointer takes a lifetime hold
+// before submission; held tasks cannot enter phase 1, even after collection.
 
 // Corpses between phase 1 and phase 2, linked through task->burialNext.
 // kworker-only (single consumer, single producer, same thread) — no lock.
@@ -788,18 +802,26 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 // (see elf_resolve_dynamic_dependencies). It happens to be the list head
 // today — task_map_shared_object_closure adds it before recursing — but
 // depending on that would be depending on a traversal order nobody promised.
+//
+// THE RELEASE GOES LAST, after the walk and after the list is gone, and that
+// ordering is load-bearing: dropping this task's one edge can unload the main
+// image, which cascades into its dependencies — and those dependencies are
+// entries in THIS list. Identifying the edge and dropping it inside the same
+// walk would leave the walk reading shared_object_t structs the drop had
+// already freed, on every burial of the last task using a program.
 static void task_release_shared_objects(task_t *t)
 {
 	if (t->shared_objects == NULL)
 		return;
 
+	shared_object_t *owned = NULL;
 	dlist_node_t *node = t->shared_objects->head;
 	while (node != NULL) {
 		dlist_node_t *next = node->next;
 		shared_object_t *so = (shared_object_t *)node->data;
 
 		if (so != NULL && t->elf != NULL && so->image == (elf_image_t *)t->elf)
-			shared_object_release(so);
+			owned = so;
 
 		kfree(node);
 		node = next;
@@ -807,6 +829,11 @@ static void task_release_shared_objects(task_t *t)
 
 	kfree(t->shared_objects);
 	t->shared_objects = NULL;
+
+	shared_object_release(owned);   // no-op on NULL: a task whose main image
+	                                // is not in its own closure cannot happen,
+	                                // and would be a bookkeeping bug, not a
+	                                // reason to skip the rest of the funeral
 }
 
 // THE ORPHANAGE (the night's second lesson, 2026-08-06): when a task is
@@ -849,8 +876,8 @@ static void task_reparent_orphans_locked(task_t *dying)
 		// Return value deliberately ignored: the new parent is ALWAYS
 		// kKernelTask, which has no wait loop and never will (see the decree
 		// above), so waitingForChild is never set on it and there is never a
-		// deferred wake to perform. If ktask ever learns to wait, this must
-		// grow the same wake-after-unlock treatment as the wrapper.
+		// pass to trigger. If ktask ever learns to wait, this must trigger
+		// one after the release, as the wrapper does.
 		(void)task_enqueue_dead_child_locked(c);   // returns the (never-set) waiter
 	}
 	dying->deadChildTail = NULL;
@@ -889,8 +916,11 @@ static void task_reparent_orphans(task_t *dying)
 //     page-refcount conversation stays booked to the fork/CoW arc — that is
 //     the day ownership stops being answerable by registry lookup.
 // A dynamic task's elf points INTO the shared_object cache (task.c sets
-// task->elf = main_so->image) — never freed here; the cache owns it. What IS
-// dropped for a dynamic task is the reference, not the image.
+// task->elf = main_so->image), so what burial drops for such a task is the
+// REFERENCE, not the image. The cache owns the image — and frees it, here and
+// now, if this was the last reference to it (shared_object_release). That is
+// why the release is the last of the three teardown steps and why t->elf is
+// cleared right after: from that point the pointer names freed memory.
 // The burial's file-close hop (see the essay at its call site below). Closing
 // a file is disk work, and disk work belongs in the kernel address space —
 // kworker has its own PML4, and the storage drivers' DMA buffers are mapped
@@ -986,12 +1016,13 @@ static void task_destroy(task_t *t)
 	}
 
 	// The VMA apparatus — structs, lists, AND backing frames, the whole thing
-	// since 2026-08-15 — and the shared-object edge. BOTH must precede
-	// arena_destroy: each walks the corpse's page tables or its elf pointer,
-	// and arena_destroy takes the tables away.
+	// since 2026-08-15. Must precede arena_destroy: the walk reads the
+	// corpse's page tables, and arena_destroy takes them away. It must also
+	// precede the shared-object release below, which is the OTHER order that
+	// matters: the walk asks the page cache whether it owns each frame, and
+	// dropping this task's edge first could unload the cache it is asking.
 	uint64_t shared_retained = 0;
 	uint64_t reclaimed = task_release_vmas(t, &shared_retained);
-	task_release_shared_objects(t);
 
 	// Static ELF only: the loader kept the file open for file-backed demand
 	// paging, and with every thread retired no fault can ever need it again.
@@ -1043,6 +1074,20 @@ static void task_destroy(task_t *t)
 		// static image (2026-08-06; see kfree's comment for the story).
 		elf_image_free(image);
 	}
+
+	// The shared-object edge, LAST of the three because releasing it can now
+	// free the image it names. A dynamic task's t->elf points INTO the cached
+	// object (elf_resolve_dynamic_dependencies sets it), and a release that
+	// drops the object's final reference unloads it — image, tables, backing
+	// file and all. Read t->elf after that and you are reading freed memory,
+	// which is exactly what the `image->is_dynamic` test above would have
+	// done when this call still stood in front of it.
+	//
+	// Nothing here contradicts the block above: an image is either dynamic
+	// (owned by the registry, closed and freed by the unload) or static (owned
+	// by this task, closed and freed above), never both.
+	task_release_shared_objects(t);
+	t->elf = NULL;
 
 	// The whole address space back in one motion: PML4 and every PDPT/PD/PT
 	// this task ever drew (PAGING_ARENA.md). Safe HERE because phase 2 runs a
@@ -1101,12 +1146,21 @@ static void task_destroy(task_t *t)
 	kTaskBurialCount++;
 }
 
+void task_hold(task_t *task)
+{
+	__sync_fetch_and_add(&task->lifetimeHolds, 1);
+}
+
+void task_release(task_t *task)
+{
+	__sync_fetch_and_sub(&task->lifetimeHolds, 1);
+}
+
 int task_reap_eligible_zombies(size_t max_to_reap)
 {
 	size_t reaped = 0;
 
-	// Phase 2 FIRST: bury whatever last pass unlinked. These corpses have
-	// been invisible to every walker for a full kworker period.
+	// Phase 2 FIRST: bury whatever the previous pass unlinked.
 	task_t *corpse = kBurialList;
 	kBurialList = NULL;
 	while (corpse != NULL) {
@@ -1128,8 +1182,9 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 	// logging.c); scheduler_remove_task is safe because the lock order is
 	// kDeadChildLock → scheduler queue lock and NOTHING in scheduler.c ever
 	// touches a deadChild list, so the reverse order does not exist to collide
-	// with. The one call that WOULD have inverted it — the parent wake — is in
-	// task_enqueue_dead_child, deliberately after its release.
+	// with. The parent wake in task_enqueue_dead_child_locked takes the queue
+	// lock inside this one too, the same order; its pass is triggered after
+	// the release.
 	uint64_t sweep_flags = spinlock_acquire_irqsave(&kDeadChildLock);
 	task_t *task = kTaskList;
 	while (task != NO_TASK && task != NULL && reaped < max_to_reap) {
@@ -1167,7 +1222,11 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 				}
 			}
 
-			if (collected && task_threads_all_retired(child)) {
+			// A publisher may still need the task after a sibling collects
+			// its exit status. Holds are taken before publication (or under
+			// another hold), so zero permits unlinking without resurrection.
+			if (collected && task_threads_all_retired(child) &&
+			    __atomic_load_n(&child->lifetimeHolds, __ATOMIC_ACQUIRE) == 0) {
 				printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 					"task_reap_eligible_zombies: unlinking child task 0x%08x (%s), parent=0x%08x (%s), collected=%u autoReap=%u parentExited=%u\n",
 					child->taskID,
@@ -1336,12 +1395,15 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	if (task) {
 		// SIBLINGS FIRST, before the handles go. "Exit means exit" (Chris's
 		// ruling, 2026-08-02): when a task dies its threads die with it, and
-		// they must be TOLD before their handles are pulled out from under
-		// them — a worker mid-read on a pipe whose end just closed underneath
-		// it is a race, and telling it to die first makes the ordering
-		// honest. They will not all be gone by the time we return; each dies
-		// at its own next boundary, in its own context, which is the whole
-		// design (see task_terminate_sibling_threads).
+		// they are TOLD before their handles are closed so that a worker
+		// parked in a read wakes to its death promptly rather than at its
+		// backstop. They will not all be gone by the time we return; each
+		// dies at its own next boundary, in its own context, which is the
+		// whole design (see task_terminate_sibling_threads). The ordering is
+		// for promptness, not for safety: a sibling still inside a syscall
+		// on one of these handles holds its own pinned reference on the
+		// object (handle.c § The pin), so handle_close_all below only drops
+		// the table's, and the object outlives the sleeper.
 		task_terminate_sibling_threads(task, thread);
 
 		// Windows first, then handles, both before pages: any window this
@@ -1470,11 +1532,11 @@ void task_exit(void)
 	__builtin_unreachable();
 }
 
-// Backstop sleep for task_wait: a child exit normally wakes the parent
-// immediately (task_enqueue_dead_child), but the backstop guarantees liveness
-// if that wake is ever lost to the classic check-then-sleep race — the parent
-// re-checks its dead children within a second regardless. (Same discipline as
-// console_read.)
+// Backstop sleep for task_wait: a child exit wakes the parent at once, or owes
+// it the wake if it is between registering and parking (task_enqueue_dead_child,
+// WAKE_OWED.md). The backstop is the house rule that a missed edge costs a
+// tick, never a hang: whatever the wake misses, the parent re-checks its dead
+// children within a second.
 #define TASK_WAIT_BACKSTOP_TICKS TICKS_PER_SECOND
 
 // Find the first dead child matching targetPid (0 = any) on the parent's
@@ -1504,10 +1566,8 @@ static task_t *task_find_dead_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-// Find a LIVE child matching targetPid (0 = any), or NULL. Two callers, two
-// jobs: task_wait uses NULL-ness to fail fast when the caller asks for a child
-// that doesn't exist / was already reaped, and uses the task itself to hand
-// the console over (the child being waited on IS the foreground task).
+// Find a live child for task_wait's foreground hand-off. The caller holds
+// the terminal's foreground lock while choosing and publishing the pointer.
 static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 {
 	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
@@ -1515,6 +1575,40 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 			if (targetPid == 0 || t->taskID == targetPid)
 				return t;
 	return NULL;
+}
+
+// Called under kDeadChildLock alongside the dead-child probe. A task can
+// have exited without reaching its parent's dead list yet; it remains a
+// wait target until collection. This lock excludes collection and unlinking
+// during the walk, so neither transition can fall between the two probes.
+static bool task_has_uncollected_child_locked(task_t *parent, uint64_t targetPid)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+		if (t->parentTask == parent && !t->retValCollected &&
+		    (targetPid == 0 || t->taskID == targetPid))
+			return true;
+	return false;
+}
+
+// Is `candidate` — a value read from a terminal's fgTask — a live child of
+// `parent`? ASKED ONLY UNDER THAT TERMINAL'S fg_lock, and it dereferences
+// the candidate on the strength of two facts: a task's departure clears
+// itself from the pointer under the same lock before its burial can free
+// it, so whatever the pointer names while we hold the lock is not freed;
+// and the candidate may be a child the spawn has published but not yet
+// submitted — not on kTaskList yet — so a list walk would call a live,
+// about-to-run child dead and let an older wait take its console back.
+static bool task_is_live_child(task_t *parent, task_t *candidate)
+{
+	return candidate != NULL && candidate->parentTask == parent && !candidate->exited;
+}
+
+bool task_is_live(const task_t *candidate)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
+		if (t == candidate)
+			return !t->exited;
+	return false;
 }
 
 uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
@@ -1527,27 +1621,99 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	}
 
 	// The console changes hands HERE — the foreground task is by definition
-	// "the task the controlling shell is currently blocked waiting on." Keyed
-	// on wait, not spawn, so a future backgrounded (&) child never takes the
-	// console. Restored to the shell on every return path that FINISHES the
-	// wait (a corpse collected, or no child to wait for): a Ctrl+C at the
-	// prompt after this wait must find the shell foreground again (where it
-	// is a harmless line-kill byte), never a stale pointer at a dead child.
-	// NOT on the interrupted return — the child is still the foreground job.
+	// "the task the current foreground is blocked waiting on": the
+	// controlling shell waiting on a job, or that job itself waiting on a
+	// child of its own (env(1) running the program it carries variables to,
+	// a script's husk running a line). The hand-off follows the wait DOWN
+	// so Ctrl+C reaches the program actually running; aimed at the
+	// middleman it killed `env X=1 sleep 30` at once and left sleep alive,
+	// ownerless, still writing to the terminal. The spawn syscall already
+	// moved the console to a foreground child the moment it was submitted
+	// (a child can reach a syscall before its parent reaches this wait, and
+	// tty_set_raw asks "am I the foreground?" at startup); this is the
+	// re-affirmation, and the one that follows a wait DOWN through a
+	// middleman. A backgrounded (&) child never takes the console at
+	// either point — a background job is not the foreground, so its own
+	// waits move nothing. Restored to
+	// the WAITER on every return path that FINISHES the wait (a corpse
+	// collected, or no child to wait for): a Ctrl+C at the prompt after this
+	// wait must find the shell foreground again (where it is a harmless
+	// line-kill byte), never a stale pointer at a dead child. NOT on the
+	// interrupted return — the child is still the foreground job. (When the
+	// child dies, tty_task_departed already points the console at the shell;
+	// a middleman's finishing wait then takes it back for the instant it
+	// needs to exit, after which its own departure hands it to the shell.)
 	//
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
 	// nobody else's — the Ctrl+C you type on tty1 cannot reach across.
-	tty_t *console = task_tty(parent);
-	bool movesConsole = parent->controllingShell;
-	if (movesConsole) {
-		task_t *fg = task_find_live_child(parent, targetPid);
-		if (fg != NULL)
-			console->fgTask = fg;
+	// "Is the waiter the foreground?" has a third spelling since the spawn
+	// began handing the console down: the foreground may already be one of
+	// the waiter's own children — which is exactly the case the finishing
+	// paths below must hand BACK to the waiter (a middleman going cooked
+	// after its helper exits was refused as "not the foreground" the day
+	// this test read only the first two).
+	//
+	// A WAIT ON A NAMED CHILD MAKES THAT CHILD THE FOREGROUND. This is
+	// what a pipeline needs: husk spawns every stage (each spawn hands the
+	// console down, so the LAST stage holds it) and then waits on the
+	// stages in launch order — `sleep 30 | true` must aim Ctrl+C at the
+	// sleep the shell is waiting on, not at a `true` that exits at once
+	// and hands the console back to a shell that is still blocked. The
+	// pointer naming some other live child is not a reason to leave it:
+	// a named wait is the program's explicit statement of which job it is
+	// attending, and it outranks the hand-off a spawn made in passing. (A
+	// program that waits on A from one thread while spawning B from
+	// another has said two things; the terminal believes the later one.)
+	// A WILDCARD wait names nobody and moves nothing at its entry — a
+	// reaper thread collecting whatever ends is not attending a job.
+	//
+	// EVERY CHECK-THEN-STORE ON THE POINTER, here and at the finish, runs
+	// under the terminal's foreground lock (tty.h): a sibling thread's
+	// spawn publishes its child under the same lock, so the finish's "not
+	// a live child" and "then store" cannot be split by a publication.
+	//
+	// The terminal is HELD for the whole wait (tty.h task_tty_hold), park
+	// included: the finish hands the console back through this pointer,
+	// and a sibling thread's teardown can bury a pty slave while we sleep.
+	// A terminal already gone (NULL) moves nothing, at entry or at finish.
+	tty_t *console = task_tty_hold(parent);
+	bool movesConsole = false;
+	if (console != NULL) {
+		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+		movesConsole = parent->controllingShell || console->fgTask == parent ||
+		               task_is_live_child(parent, (task_t *)console->fgTask);
+		if (movesConsole && targetPid != 0) {
+			task_t *fg = task_find_live_child(parent, targetPid);
+			if (fg != NULL)
+				console->fgTask = fg;
+		}
+		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 	}
 
 	while (1==1)
 	{
+		// Awake at the top of a pass: the registration the last park made is
+		// void, and so is any wake owed for it (WAKE_OWED.md). A debt found
+		// here was owed while this thread was already awake, and the scan
+		// below finds what it announced. Under the lock the dead-child wake
+		// is aimed under, so no wake can be owed to this wait after it, and
+		// before the signal check, so no way out of this loop leaves either
+		// behind. The slot is voided only if it names this thread: a sibling
+		// thread's wait is its own. The thread is read from GS with the lock
+		// held, interrupts off, for the migration reason the park below
+		// spells out.
+		{
+			uint64_t top_flags = spinlock_acquire_irqsave(&kDeadChildLock);
+			thread_t *self = get_core_local_storage()->currentThread;
+			if (parent->waitThread == self) {
+				parent->waitingForChild = false;
+				parent->waitThread = NULL;
+			}
+			scheduler_forget_owed_wake(self);
+			spinlock_release_irqrestore(&kDeadChildLock, top_flags);
+		}
+
 		// Level-triggered like every park in this kernel: the sweep in
 		// processSignals wakes us for a signal this park must end for, and
 		// this is where a woken waiter LEAVES — without it the loop below
@@ -1560,8 +1726,10 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// must keep Ctrl+C aimed at the job. Handing the console back here
 		// would aim the next Ctrl+C at the shell, the one party that did
 		// not ask for it. The other returns below are the wait FINISHING.
-		if (signal_park_must_end(get_core_local_storage()->currentThread))
+		if (signal_park_must_end(get_core_local_storage()->currentThread)) {
+			task_tty_release(console);
 			return TASK_WAIT_INTERRUPTED;
+		}
 
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
@@ -1586,6 +1754,20 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			endedRetVal = child->retVal;
 			child->retValCollected = true;
 		}
+		bool childPending = endedPid == 0 &&
+		    task_has_uncollected_child_locked(parent, targetPid);
+		// A wait that will park registers HERE, in the same hold as the scan
+		// that found nothing to collect: a child that exits after the release
+		// then finds the registration and wakes this thread, or owes it the
+		// wake (WAKE_OWED.md). Registered in a later hold, a child exiting
+		// between the two found nobody waiting, and the park slept out its
+		// backstop. The rest of the registration's story is at the park.
+		thread_t *waiter = NULL;
+		if (childPending) {
+			waiter = get_core_local_storage()->currentThread;
+			parent->waitThread = waiter;
+			parent->waitingForChild = true;
+		}
 		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
 
 		if (endedPid != 0) {
@@ -1596,21 +1778,40 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			if (exitCode != NULL) {
 				*exitCode = endedRetVal;
 			}
-			if (movesConsole)
-				console->fgTask = parent;
+			// Take the console back — unless it already names a LIVE child
+			// of ours: a sibling thread may have spawned one while this
+			// wait was finishing, and its hand-off must not be undone by an
+			// older wait's restore. Under the foreground lock, so that
+			// check and this store are one transition against that spawn.
+			if (movesConsole) {
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
+			task_tty_release(console);
 			return endedPid;
 		}
 
-		// No dead match. If there is no matching LIVE child either, there is
-		// nothing to wait for — fail rather than sleep forever.
-		if (task_find_live_child(parent, targetPid) == NULL) {
-			if (movesConsole)
-				console->fgTask = parent;
+		// Neither a collectible status nor an uncollected child existed
+		// under the graveyard lock: fail rather than sleep forever.
+		if (!childPending) {
+			// Take the console back — same rule and same lock as the
+			// collected-corpse return above.
+			if (movesConsole) {
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
+			task_tty_release(console);
 			return 0;
 		}
 
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
-		// backstop fires; then loop and re-check. SIGSLEEP parks atomically.
+		// backstop fires; then loop and re-check. A child that exits between
+		// the registration above and the park is owed to it, and the park is
+		// paid instead of slept (WAKE_OWED.md).
 		//
 		// PARK THE CALLING THREAD, and say which one it is (2026-08-25). This
 		// used to park `parent->threads` — the task's FIRST thread — which is
@@ -1619,22 +1820,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// the main thread to sleep and came straight back to loop here,
 		// hot, for as long as any child lived. The waiter is published
 		// under kDeadChildLock, the same lock the flag travels under, so the
-		// dead-child wake reads a consistent (flag, thread) pair.
-		lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
-		// Re-read CLS on EVERY pass: a thread that parked on one core can
-		// resume on another, and the `cls` captured at entry then names some
-		// other core's current thread — which the first cut of this fix
-		// parked by mistake, making every waiter in the system spin after its
-		// first wake (and putting strangers to sleep). GS is per-core; read
-		// it where you stand.
-		parent->waitThread = get_core_local_storage()->currentThread;
-		parent->waitingForChild = true;
-		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
-		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->waitThread);
-		lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
-		parent->waitingForChild = false;
-		parent->waitThread = NULL;
-		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
+		// dead-child wake reads a consistent (flag, thread) pair. It is read
+		// from GS on EVERY pass, with that lock held and interrupts off: a
+		// thread that parked on one core can resume on another, and the `cls`
+		// captured at entry then names some other core's current thread —
+		// which the first cut of this fix parked by mistake, making every
+		// waiter in the system spin after its first wake (and putting
+		// strangers to sleep). GS is per-core; read it where you stand.
+		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, waiter);
 	}
 }
 
@@ -1734,7 +1927,39 @@ static void task_table_bracket_close(void)
 	}
 }
 
-task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
+// THIS TASK'S TABLES DIE WITH IT (PAGING_ARENA.md): the PML4 and every
+// PDPT/PD/PT drawn while mapping this address space come from a per-task
+// arena, returned wholesale at burial. The pool serves only the kernel's
+// own (eternal) tables — which is what made its sizing deterministic and
+// ended the watch(1) bleed-out. 16KB covers a typical task's dozen tables
+// without growth; the arena chains more when demand paging tours wider.
+// kmalloc backing means the HHDM math (virt - kHHDMOffset) is exact, the
+// same way the argv/env blobs rely on it.
+void task_init_page_tables(task_t *task)
+{
+    // The private tables share one lifetime with the task. Upper-half
+    // entries refer to the kernel's tables; the low NULL guard is private.
+    task->tableArena = arena_create(16 * PAGE_SIZE);
+    if (task->tableArena == NULL)
+        panic("task_init_page_tables: cannot allocate a table arena\n");
+
+    task->pml4v = arena_alloc_aligned(task->tableArena, PAGE_SIZE, PAGE_SIZE);
+    if (task->pml4v == NULL)
+        panic("task_init_page_tables: table arena could not fund a PML4\n");
+    task->pml4 = (uintptr_t *)((uintptr_t)task->pml4v - kHHDMOffset);
+    memset(task->pml4v, 0, PAGE_SIZE);
+
+    uintptr_t *kernelPML4 = (uintptr_t *)kKernelPML4v;
+    for (int i = 256; i < 512; i++)
+        task->pml4v[i] = kernelPML4[i];
+
+    paging_init_null_guard(task->pml4v, task->tableArena);
+}
+
+// `userStack`: the main thread's stack the program declared (elf_can_load),
+// 0 for the default; createThread decides what it gets.
+task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU,
+                        uint64_t userStack)
 {
     printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
            "task_initialize: Initializing task\n");
@@ -1799,35 +2024,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	}
 	else
 	{
-		// THIS TASK'S TABLES DIE WITH IT (PAGING_ARENA.md): the PML4 and every
-		// PDPT/PD/PT drawn while mapping this address space come from a
-		// per-task arena, returned wholesale at burial. The pool serves only
-		// the kernel's own (eternal) tables now — which is what made its
-		// sizing deterministic and ended the watch(1) bleed-out. 16KB covers
-		// a typical task's dozen tables without growth; the arena chains more
-		// when demand paging tours wider.
-		newTask->tableArena = arena_create(16 * PAGE_SIZE);
-		if (newTask->tableArena == NULL)
-			panic("task_initialize: cannot allocate a table arena for a new task\n");
-
-		// Allocate new PML4 for this task — the arena's first page. kmalloc
-		// backing means the HHDM math (virt - kHHDMOffset) is exact, same as
-		// the argv/env blobs already rely on.
-		newTask->pml4v = (uintptr_t*)arena_alloc_aligned(newTask->tableArena, PAGE_SIZE, PAGE_SIZE);
-		if (newTask->pml4v == NULL)
-			panic("task_initialize: table arena could not fund a PML4\n");
-		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v - kHHDMOffset);
-
-		// Clear the new PML4
-		memset(newTask->pml4v, 0, PAGE_SIZE);
-
-		// Copy upper-half PML4 entries (256-511) from kKernelPML4
-		// This shares the kernel page table structures (not the data, just the pointers)
-		uintptr_t* kernelPML4 = (uintptr_t*)kKernelPML4v;
-		for (int i = 256; i < 512; i++) {
-			newTask->pml4v[i] = kernelPML4[i];
-		}
-
+		task_init_page_tables(newTask);
 		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
 			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
@@ -1850,14 +2047,14 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		}
 	}
 
-	newTask->threads = createThread((void*)newTask, kernelTask);
+	newTask->threads = createThread((void*)newTask, kernelTask, userStack);
 	newTask->threads->idleThread = idleTask;
-	newTask->threads->mp_apic = pinnedAPICId;
+	newTask->threads->pinnedCPU = pinnedCPU;
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 		"task_initialize: thread 0x%08x affinity set to %s0x%08lx\n",
 		newTask->threads->threadID,
-		pinnedAPICId == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
-		pinnedAPICId);
+		pinnedCPU == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedCPU);
 	newTask->taskID = newTask->threads->threadID;
 	newTask->exited = false;
 	newTask->autoReap = false;
@@ -1995,6 +2192,22 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 		return false;
 	}
 
+	// The entry point becomes the first thread's RIP, and IRETQ checks a new
+	// RIP before it leaves ring 0: a non-canonical one would be the KERNEL's
+	// #GP, a panic, on the program's first dispatch. The sum is the address
+	// the thread will run (why it is a sum: the entryPoint assignment below);
+	// one that wraps, or lands at or above USER_CANONICAL_MAX, is not a user
+	// address.
+	// Refused BEFORE the closure is mapped, so the one reference the load
+	// took is all there is to give back.
+	uint64_t entry = main_so->load_bias + main_so->image->ehdr.e_entry;
+	if (entry < main_so->load_bias || entry >= USER_CANONICAL_MAX) {
+		printd(DEBUG_TASK, "task_create: '%s' has entry point 0x%016lx, not a user address — not spawning\n",
+		       path, entry);
+		shared_object_release(main_so);
+		return false;
+	}
+
 	if (!task_map_shared_object_closure(task, main_so)) {
 		printd(DEBUG_TASK, "task_create: cannot map '%s' and its libraries — not spawning\n", path);
 		// The load above took this task's ONE reference (the pairing rule in
@@ -2047,12 +2260,12 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 	}
 
 	task->elf = main_so->image;
-	// Uniform for both image kinds: an ET_DYN image's e_entry is
-	// load_bias-relative and its bias is its window slot; an ET_EXEC image's
-	// e_entry is already absolute and its bias is 0. One expression, because
-	// load_bias carries the difference.
+	// `entry` is load_bias + e_entry, uniform for both image kinds: an ET_DYN
+	// image's e_entry is load_bias-relative and its bias is its window slot;
+	// an ET_EXEC image's e_entry is already absolute and its bias is 0. One
+	// expression, because load_bias carries the difference.
 	task->loadBias = main_so->load_bias;
-	task->entryPoint = main_so->load_bias + main_so->image->ehdr.e_entry;
+	task->entryPoint = entry;
 	if (task->threads != NULL) {
 		task->threads->regs.RIP = task->entryPoint;
 	}
@@ -2211,8 +2424,98 @@ static void task_setup_entry(task_t *task)
 	}
 }
 
-task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
+// Include pointer slots and terminators in the final child layout. This runs
+// on kernel-owned arguments, including each interpreter rewrite, before task
+// resources exist; a size refusal therefore has nothing to tear down.
+static bool task_measure_argv(const char *path, int argc, char **argv, size_t *bytes)
 {
+	int count = argc > 0 ? argc : 1;
+	if (count > TASK_ARGV_MAX_ARGS)
+		return false;
+	size_t total = (size_t)(count + 1) * sizeof(char *);
+	for (int i = 0; i < count; i++)
+	{
+		const char *src = argc > 0 ? argv[i] : path;
+		size_t length = strlen(src);
+		if (length >= OS64_SPAWN_ARG_MAX ||
+		    length + 1 > TASK_ARGV_MAX_BYTES - total)
+			return false;
+		total += length + 1;
+	}
+	*bytes = total;
+	return true;
+}
+
+// PINCPU=<n> in the environment a user program is born with pins it, and
+// every thread it makes, to CPU n: `env PINCPU=3 coreprobe`. The number is a
+// CPU number, the one /proc's `cpu` and `affinity` lines and coreprobe's
+// `cpu` column print, so what you read is what you type. It is read at birth
+// only, and a child inherits the variable with the rest of the environment,
+// so a pinned shell pins everything it runs. A value that is not a running
+// CPU leaves the program unpinned, and a DEBUG_TASK line says why; an empty
+// one means unset.
+//
+// PINCORE=<n> is the name this had while it took an APIC ID. It is still
+// read when PINCPU is absent, and now means a CPU number too — the same
+// number on every machine whose APIC IDs are dense, a different CPU on one
+// whose are not (a 3900X). Its notice is a DEBUG_TASK line rather than the
+// glass because it would print at every spawn under a pinned shell.
+static uint64_t task_env_pin(const envpage_t *env, const char *path)
+{
+	const char *name = "PINCPU";
+	const char *pin = env_get(env, "PINCPU");
+	if (pin == NULL)
+	{
+		name = "PINCORE";
+		pin = env_get(env, "PINCORE");
+		if (pin == NULL)
+			return THREAD_NO_AFFINITY;
+		printd(DEBUG_TASK, "PINCORE: %s - PINCORE= is now PINCPU=, and is read as a CPU number\n", path);
+	}
+
+	// Four digits is past any CPU number this kernel can bring up, and
+	// bounding the length is what keeps the accumulator from wrapping onto a
+	// real CPU.
+	uint64_t cpu = 0;
+	int digits = 0;
+	for (const char *c = pin; *c != '\0'; c++, digits++)
+	{
+		if (*c < '0' || *c > '9' || digits == 4)
+		{
+			printd(DEBUG_TASK, "%s: '%s' for %s is not a CPU number - not pinned\n", name, pin, path);
+			return THREAD_NO_AFFINITY;
+		}
+		cpu = cpu * 10 + (uint64_t)(*c - '0');
+	}
+	if (digits == 0)
+		return THREAD_NO_AFFINITY;   // `PINCPU=` with nothing after it: unpinned
+
+	if (cpu < kCPUCount)
+	{
+		printd(DEBUG_TASK, "%s: %s pinned to CPU %lu (APIC %u)\n", name, path, cpu, kCPUs[cpu].apic.id);
+		return cpu;
+	}
+	printd(DEBUG_TASK, "%s: CPU %lu for %s is not a running CPU (%u running) - not pinned\n",
+	       name, cpu, path, kCPUCount);
+	return THREAD_NO_AFFINITY;
+}
+
+task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU)
+{
+	return task_create_checked(path, argc, argv, parentTaskPtr, isKernelTask,
+	                           pinnedCPU, NULL);
+}
+
+task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTaskPtr,
+                            bool isKernelTask, uint64_t pinnedCPU, int64_t *error)
+{
+	if (error) *error = -1;
+	size_t argvBlobBytes;
+	if (!task_measure_argv(path, argc, argv, &argvBlobBytes))
+	{
+		if (error) *error = OS64_SPAWN_TOO_LONG;
+		return NULL;
+	}
 	uintptr_t mapPages;
 	// The kernel's built-in tasks are recognized by the START of their path —
 	// they carry no ELF image, so a match means "skip the loader, this task's
@@ -2243,6 +2546,45 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isGuiCompTask = (path != NULL && strncmp(path, "/guicomp", 8) == 0);
 	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
+	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
+	bool isKnetTask    = (path != NULL && strncmp(path, "/knet", 5) == 0);
+
+	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
+	// asked in more than one place and the copies drifted. The list used to be
+	// re-spelled at each site, so adding /latetests to the loader's copy and
+	// not to the can-load gate's produced a builtin task that was refused for
+	// having no ELF file — a real file it was never going to have. The two
+	// sites now cannot disagree, and the next builtin is one line, not three.
+	//
+	// AND IT TAKES `isKernelTask`. A name is something the CALLER chose, and
+	// one of the callers is ring 3:
+	// spawn_do_create hands the user's path straight in with isKernelTask
+	// false. Matching on the path ALONE therefore let a program ask to BE a
+	// kernel builtin — task_create skipped the ELF check, stamped the kernel
+	// code selector and a kernel entry point onto a thread createThread had
+	// just given ring-3 selectors, and the scheduler's first iretq took a #GP
+	// on the mismatched SS. Typing `/kworker` at the husk prompt killed the
+	// machine, and had since long before /latetests existed — verified on
+	// userland 2026-08-29: "Excepting task: kworker (id 56)", error 0x38,
+	// which is the selector. Codex found it here because a seventh name made
+	// the family worth a second look.
+	//
+	// PROVENANCE, NOT SPELLING: only a caller that ASKED for a kernel task
+	// can get one, and every real builtin creator passes true. A ring-3 spawn
+	// of one of these names falls through to the loader — which answers
+	// "cannot run" when nothing is there, and RUNS THE PROGRAM when something
+	// is. A user who puts an ELF at /kworker gets their ELF; the name carries
+	// no privilege it did not earn from the caller.
+	//
+	// THIS FLAG IS NECESSARY AND WAS NOT SUFFICIENT. Gating the ELF-skip here
+	// while the CS override below still keyed on the raw names left the hole
+	// open by a longer road (Codex, PR #42 rd2) — see the one-gate comment at
+	// that override, which is where the selector is actually stamped.
+	bool isKernelBuiltinTask = isKernelTask &&
+	                          (isIdleTask || isLogdTask || isKWorkerTask ||
+	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
+	                           isLateTestTask || isKnetTask);
+
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
@@ -2259,8 +2601,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// clean: there is no task-teardown path in this tree to unwind with (see
 	// DEBTS), so the only way to fail without leaking is to fail before we
 	// build. spawn() now returns -1 and husk prints "cannot run <path>".
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask &&
-	    !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	uint64_t declaredStack = 0;
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		// ── #! — a script names its interpreter (2026-08-22) ────────────────
 		// If the file starts "#!", it is not the program; line one says who
@@ -2306,17 +2648,48 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 			printd(DEBUG_TASK, "task_create: '%s' is a #! script — running %s%s%s with it\n",
 			       path, interp, iarg[0] ? " " : "", iarg);
-			return task_create(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedAPICID);
+			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedCPU, error);
 		}
 
-		if (!elf_can_load(path))
+		// The same look answers the main thread's stack size the program
+		// asks for (SCRIPT_STACK.md § 4), carried into task_initialize.
+		if (!elf_can_load(path, &declaredStack))
 		{
 			printd(DEBUG_TASK, "task_create: cannot load '%s' — not spawning\n", path);
 			return NULL;
 		}
 	}
 
-	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
+	// Snapshot the parent's complete environment BEFORE task construction.
+	// Besides making every child inherit parent->page_count pages, this order
+	// makes allocation failure clean: no task, stacks, page tables, argv, or
+	// loader state exist yet to unwind. A sibling thread may grow and replace
+	// the parent's block, so the copy shares syscall_setenv's swap lock.
+	envpage_t *inheritedEnv;
+	{
+		uint64_t envIrq = spinlock_acquire_irqsave(&kTaskEnvLock);
+		inheritedEnv = env_inherit(parentTaskPtr->env);
+		spinlock_release_irqrestore(&kTaskEnvLock, envIrq);
+	}
+	if (inheritedEnv == NULL) {
+		// Starting successfully with no environment would turn allocator
+		// pressure into a delayed, misleading PATH failure in this task and
+		// every descendant. User spawns get the ordinary cannot-run result;
+		// required kernel infrastructure names the boot-stopping failure.
+		printd(DEBUG_TASK, "task_create: cannot copy %s's environment for %s — out of memory\n",
+		       parentTaskPtr->exename, path);
+		if (isKernelTask)
+			panic("task_create: cannot copy the environment for kernel task %s\n", path);
+		return NULL;
+	}
+
+	// A pin the caller chose is part of that task's design, and a kernel task
+	// takes no orders from an environment; only an unpinned user program asks.
+	if (!isKernelTask && pinnedCPU == THREAD_NO_AFFINITY)
+		pinnedCPU = task_env_pin(inheritedEnv, path);
+
+	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU, declaredStack);
+	newTask->env = inheritedEnv;
 
     //Copy the path (parameter) value from the parentTask's memory.
     newTask->path=kmalloc(TASK_MAX_PATH_LEN); 
@@ -2325,10 +2698,10 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 	           "task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
+		"task_create: path=%s pinnedCPU=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
 		newTask->path,
-		pinnedAPICID == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
-		pinnedAPICID,
+		pinnedCPU == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedCPU,
 		isIdleTask,
 		isLogdTask,
 		isKWorkerTask,
@@ -2349,43 +2722,47 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
     strcpy(newTask->exename, slash2);
 	printd(DEBUG_TASK, "task_create: Executable name is %s\n", newTask->exename);
 
-	if (isIdleTask)
+	// THE KERNEL CODE SELECTOR IS STAMPED IN EXACTLY ONE PLACE, and the gate
+	// is `isKernelBuiltinTask` — the provenance answer — never a raw name.
+	//
+	// These were seven independent `if (isXTask)` blocks, each writing CS and
+	// RIP on its own authority, and gating only the ELF-skip on provenance
+	// (as the first pass at this did) LEFT THEM OPEN: root is writable, so
+	// ring 3 could put a genuine ELF at /latetests and spawn it. Provenance
+	// said "not a builtin", the loader validated and loaded the image
+	// happily — and then the raw-name block stamped kernel CS anyway. The
+	// loader overwrites RIP but not CS, so the task went to the scheduler
+	// with kernel CS beside the user SS createThread gave it, which is the
+	// same first-dispatch #GP by a longer road. (Codex, PR #42 rd2. The
+	// round-1 comment claiming provenance was "the whole security of it" was
+	// half true, which is the dangerous kind.)
+	//
+	// One gate and a switch on the name makes the class impossible rather
+	// than fixing an instance: there is now no path that writes CS without
+	// having answered the provenance question first.
+	if (isKernelBuiltinTask)
 	{
 		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+
+		if (isIdleTask)
+			newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+		else if (isLogdTask)
+			newTask->threads->regs.RIP = (uint64_t)&logd_thread;
+		else if (isKWorkerTask)
+			newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
+		else if (isGuiCompTask)
+			newTask->threads->regs.RIP = (uint64_t)&guicomp_thread;
+		else if (isGBounceTask)
+			newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
+		else if (isGKeysTask)
+			newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
+		else if (isKnetTask)
+			newTask->threads->regs.RIP = (uint64_t)&knet_thread;
+		else if (isLateTestTask)
+			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}
 
-	if (isLogdTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&logd_thread;
-	}
-
-	if (isKWorkerTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
-	}
-
-	if (isGuiCompTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&guicomp_thread;
-	}
-
-	if (isGBounceTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
-	}
-
-	if (isGKeysTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
-	}
-
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask && !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		if (elf_is_dynamic(newTask->path)) {
 			if (!elf_resolve_dynamic_dependencies(newTask, newTask->path)) {
@@ -2443,7 +2820,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        // A pty terminal is COUNTED (PTY.md's seats): inheritance takes one,
        // teardown returns it, and the slave is buried only when the master
        // is closed AND the last seat empties. No-op for the kTTY[] fleet.
-       tty_pty_ref((tty_t *)newTask->tty);
+       // The seat is taken by pointer against the registry (tty.h): the
+       // parent's slave can be buried by a sibling's teardown while this
+       // spawn is in flight, and a child of a dead line gets the system
+       // console rather than a pointer to freed memory.
+       if (!tty_pty_ref((tty_t *)newTask->tty))
+           newTask->tty = NULL;
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)
@@ -2496,43 +2878,19 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// TASK_MAX_PATH_LEN slot, so `cat` (four bytes) reserved 128 and a 44-entry
 	// glob reserved 5.6KB to hold 660 bytes. Strings now sit end to end, each
 	// costing strlen+1, exactly the way a real execve argv block is laid out.
-	// That is what makes the 512-argument / 256-byte ceiling FREE: those are
-	// caps now, not reservations, so an ordinary two-argument command still
-	// allocates a couple of hundred bytes and maps a single page. Wildcards are
-	// what forced the question — `cat /tmp/*` has to survive a busy directory.
+	// That is what makes the generous ceilings FREE — OS64_SPAWN_MAX_ARGS
+	// arguments, each up to OS64_SPAWN_ARG_MAX: caps, not reservations, so an ordinary
+	// two-argument command still allocates a couple of hundred bytes and maps
+	// a single page. Wildcards are what forced the question — `cat /tmp/*` has
+	// to survive a busy directory — and a whole command line carried as one
+	// argument (`husk -c`) is what made one argument large.
 	int effectiveArgc = (argc > 0) ? argc : 1;
 	newTask->argc = effectiveArgc;
 
 	size_t argvPtrBytes = (size_t)(effectiveArgc + 1) * sizeof(char*);
 
-	// Measure first, then allocate exactly what the strings need (each capped
-	// at TASK_MAX_PATH_LEN including its NUL, matching the copy below).
-	size_t argvStrBytes = 0;
-	for (int cnt = 0; cnt < effectiveArgc; cnt++)
-	{
-		const char *src = (argc > 0) ? argv[cnt] : path;
-		size_t len = strlen(src);
-		if (len > TASK_MAX_PATH_LEN - 1)
-			len = TASK_MAX_PATH_LEN - 1;
-		argvStrBytes += len + 1;
-	}
-	size_t argvBlobBytes = argvPtrBytes + argvStrBytes;
-
-	// THE GUARD THAT DID NOT EXIST. The blob is mapped at a FIXED address whose
-	// neighbour is also fixed, so an oversized blob does not fail an allocation
-	// — paging_map_pages cheerfully maps it straight over TASK_ENV_VIRT, and the
-	// child's environment silently becomes the tail of its own argv. Nothing
-	// checked this while the ceiling was 32 args; raising it to 512 without the
-	// check would have turned a distant theoretical into a live footgun. Refuse
-	// loudly instead, naming the number, and let the caller report "cannot run".
-	if (argvBlobBytes > TASK_ARGV_MAX_BYTES)
-	{
-		printd(DEBUG_TASK, "task_create: argv blob for %s is %lu bytes, over the %lu-byte "
-			"window between TASK_ARGV_VIRT and TASK_ENV_VIRT (%d arguments) — refusing to spawn\n",
-			newTask->path, argvBlobBytes, (uint64_t)TASK_ARGV_MAX_BYTES, effectiveArgc);
-		task_table_bracket_close();
-		return NULL;
-	}
+	// The final layout was measured before task construction, after any
+	// interpreter rewrite. The private argv strings remain stable here.
 
 	newTask->argv = (char**)kmalloc_aligned(argvBlobBytes);
 	char *argvStrBase = (char*)newTask->argv + argvPtrBytes;   // kernel view of the string area
@@ -2542,8 +2900,6 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		//Source string: caller-provided argv[cnt], or the path for the implicit argv[0].
 		const char *src = (argc > 0) ? argv[cnt] : path;
 		size_t len = strlen(src);
-		if (len > TASK_MAX_PATH_LEN - 1)
-			len = TASK_MAX_PATH_LEN - 1;
 
 		char *dst = argvStrBase + argvStrUsed;
 		memcpy(dst, src, len);
@@ -2566,18 +2922,6 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);   // argv is data
 
 	newTask->kernelTask=isKernelTask;
-
-	// Inherit the parent's environment.  env_inherit makes a full independent copy
-	// so parent and child can diverge freely.  True CoW (sharing the physical page
-	// until first write) is a future optimisation.
-	// Under kTaskEnvLock since env growth (2026-08-14): a sibling thread of the
-	// parent could setenv mid-spawn, and growth SWAPS AND FREES the parent's
-	// block — without the lock this memcpy can chase a freed pointer.
-	{
-		uint64_t envIrq = spinlock_acquire_irqsave(&kTaskEnvLock);
-		newTask->env = env_inherit(parentTaskPtr->env);
-		spinlock_release_irqrestore(&kTaskEnvLock, envIrq);
-	}
 
 	// Now that argc/argv are built and mapped (TASK_ARGV_VIRT) and env is
 	// inherited, latch the ELF entry registers: RDI=argc, RSI=argv, RDX=env.

@@ -1,0 +1,79 @@
+gallery focus handle=3 gained=1 other=0
+gallery windows=1 font-bytes=101002 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=226 mods=132
+gallery focus handle=3 gained=0 other=0
+gallery focus handle=3 gained=1 other=0
+gallery key handle=3 edge=2 ascii=0 scan=226 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=2 ascii=0 scan=67 mods=128
+gallery key handle=3 edge=1 ascii=10 scan=40 mods=128
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery key handle=4 edge=2 ascii=10 scan=40 mods=128
+gallery windows=2 font-bytes=112808 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery surface handle=4 width=248 height=101 pitch=248
+gallery key handle=4 edge=1 ascii=0 scan=224 mods=130
+gallery key handle=4 edge=1 ascii=4 scan=7 mods=130
+gallery invoke=1 menus=0 target=0
+gallery focus handle=3 gained=1 other=4
+gallery windows=1 font-bytes=102314 target-hits=1,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery key handle=3 edge=2 ascii=0 scan=224 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=100 scan=7 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=226 mods=132
+gallery focus handle=3 gained=0 other=0
+gallery focus handle=3 gained=1 other=0
+gallery key handle=3 edge=2 ascii=0 scan=226 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=226 mods=132
+gallery key handle=3 edge=1 ascii=97 scan=4 mods=132
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery key handle=4 edge=2 ascii=97 scan=4 mods=132
+gallery windows=2 font-bytes=112808 target-hits=1,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery surface handle=4 width=248 height=101 pitch=248
+gallery key handle=4 edge=2 ascii=0 scan=226 mods=128
+gallery key handle=4 edge=1 ascii=0 scan=224 mods=130
+gallery key handle=4 edge=1 ascii=4 scan=7 mods=130
+gallery invoke=1 menus=0 target=0
+gallery focus handle=3 gained=1 other=4
+gallery key handle=3 edge=2 ascii=4 scan=7 mods=130
+gallery windows=1 font-bytes=102642 target-hits=2,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery key handle=3 edge=2 ascii=0 scan=224 mods=128
+gallery key handle=3 edge=1 ascii=0 scan=224 mods=130
+gallery key handle=3 edge=1 ascii=17 scan=20 mods=130
+gallery invoke=7 menus=0 target=2
+gallery exit font-bytes=0 refs=0,0 hits=2,0

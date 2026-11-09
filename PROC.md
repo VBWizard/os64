@@ -77,7 +77,10 @@ fact that a kernel write through the HHDM bypasses every protection in the
 task's own page table gets written down beside it). A read stops at the first
 page that is not present and returns what came before; a request whose first
 byte is unmapped is an **error**, not an empty read — an address space has no
-end-of-file to mistake it for. `SEEK_END` is refused for the same reason.
+end-of-file to mistake it for. `SEEK_END` is refused for the same reason. The
+offsets do stop at `USER_CANONICAL_MAX`, the top of the task's half: a seek
+past it is refused and a read stops at it, because the page walk would answer
+a non-canonical offset with the kernel's own memory.
 Pages a task owns but has never touched read as unmapped in this v1; `maps`
 says they exist, `mem` says they don't, and a hex editor paints `??`.
 Populating them on the reader's behalf is booked. **Security: none, and none
@@ -321,10 +324,10 @@ is real and now has a place where it can be seen.
 |---|---|
 | `sigind` shows a keyboard interrupt nobody typed | The old `SIGKILL = 9` in a bitmask enum: 9 == `SIGHALT\|SIGINT`. Fixed 2026-07-25 to a free bit |
 | A `/proc` file reads as an empty file | The snapshot generator returned 0 bytes at open — the task vanished between path resolution and generation. Legal and expected; a task that exits mid-`cat` is not a bug |
-| `cat /proc/N/cmdline` prints ANOTHER task's name (`/idle7` for husk) | Dereferencing `task->argv[i]` from kernel context. The pointer ARRAY is a kmalloc'd kernel object but every pointer INSIDE it is a task VA (`TASK_ARGV_VIRT + …`). Translate through the task's own page tables and read via the HHDM (`proc_copy_task_string`) |
+| `cat /proc/N/cmdline` prints ANOTHER task's name (`/idle7` for husk) | Dereferencing `task->argv[i]` from kernel context. The pointer ARRAY is a kmalloc'd kernel object but every pointer INSIDE it is a task VA (`TASK_ARGV_VIRT + …`). Translate through the task's own page tables and read via the HHDM (`proc_add_task_string`) |
 | `cmdline` still says `/idle7` for tasks 32–40 AFTER that fix | Not a procfs bug — a KERNEL one, and the real reason the read above "succeeded" instead of faulting. `task_initialize` gives ktask `kKernelPML4v` (task.c:455) and every idle task its parent's (task.c:436-440) — **nine tasks, one address space** — while `task_create` maps each task's argv blob at the FIXED VA `TASK_ARGV_VIRT` (task.c:930). Each creation clobbers the last; idle7 is created last, so `0x6f000000` in the kernel page table really does hold idle7's blob. Latent only because `task_setup_entry` is gated on `loadedElfProgram` and kernel tasks load no ELF. Same shape threatens `TASK_ENV_VIRT` and `TASK_EXIT_TRAMPOLINE_VIRT`. Found by Chris, 2026-07-25, reading `/proc` — the first thing in os64 that ever displayed the argv mapping |
 | `ls /proc/N` fails on a task that `ls /proc` just listed | Correct behavior, not a bug: the task WAS the previous command, and it exited and was reaped in between. Target a long-lived task (husk) when testing |
-| A thread's core reads `18446744073709551615` | That is `THREAD_NO_AFFINITY`, and `mp_apic` is the thread's *pinned affinity*, not the core it runs on. Rendered as `affinity any`. The current core lives in each core's CLS and would have to be found by scanning them |
+| A thread's core reads `18446744073709551615` | That is `THREAD_NO_AFFINITY`, and `pinnedCPU` (`mp_apic` then) is the thread's *pinned affinity*, not the CPU it runs on. Rendered as `affinity any`. The current CPU lives in each CPU's CLS and would have to be found by scanning them |
 | `echo kill > /proc/N/ctl` returns success, the bit is set, and the task keeps running | Almost certainly **tickless mode** (the default; formerly the BSPSCHED flag), not ctl. Under tickless AP timers are masked, so a thread spinning on an AP is never descheduled and the scheduler's forced-syscall checkpoint never runs for it. Diagnose with `/proc/N/thread/T/status`: `signals` shows the pending bit, `ring 3` shows the seatbelt is satisfied, and `ticks` **frozen** while `state` says `running` is the tell. A task that makes ANY syscall dies normally — the pull path needs no scheduler |
 | A refused `ctl` write reports `$? = 0` | Not procfs — `echo` ignored every `os64_write` return and exited 0 unconditionally. /proc's ctl is the first thing in os64 that ever answers a write with "no", so it is the first thing that ever caught this. Fixed in echo.c |
 

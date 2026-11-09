@@ -17,10 +17,11 @@
 //   /proc/<id>/maps             the address space, one row per VMA
 //   /proc/<id>/ctl              WRITE: control.  READ: the vocabulary.
 //   /proc/<id>/thread/<tid>/status
+//   /proc/<id>/syscalls and /proc/<id>/thread/<tid>/syscalls
 //
-// Every file is TEXT, "key<TAB>value", one record per line — Plan 9's tradition
-// rather than Solaris's binary structs, because `cat` and `ls` already exist and
-// a report is not an ABI.
+// Every file is text, one record per line: keyed reports use "key<TAB>value"
+// and syscalls uses a column table. `cat` and `ls` already exist, and a
+// report is not a binary ABI.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -49,13 +50,17 @@
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
-#include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
+#include "smp_core.h"        // mpAcctSettleAll — status and syscall table freshness
+#include "accounting.h"
+#include "syscall.h"          // syscall_table names for the timing rows
 #include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
+#include "os64/syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — how long a cmdline argument can be
 
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 
 extern uint64_t kTicksSinceStart;
 extern uintptr_t kHHDMOffset;
+extern bool kUseOldExceptions;
 
 // A task's VMA list and handle table are walked WITHOUT a lock (os64 has no
 // per-task lock to take). A corrupted or concurrently-spliced list must not
@@ -101,10 +106,10 @@ typedef struct
 // The file names a task directory offers, in listing order. The order is the
 // order `ls /proc/7` prints, so it is arranged most-useful-first rather than
 // alphabetically.
-static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "mem", "heap", "tty", "ctl" };
+static const char *kProcTaskFiles[] = { "status", "syscalls", "cmdline", "cwd", "handles", "maps", "mem", "heap", "tty", "ctl" };
 #define PROC_TASK_FILE_COUNT (sizeof(kProcTaskFiles) / sizeof(kProcTaskFiles[0]))
 
-static const char *kProcThreadFiles[] = { "status" };
+static const char *kProcThreadFiles[] = { "status", "syscalls" };
 #define PROC_THREAD_FILE_COUNT (sizeof(kProcThreadFiles) / sizeof(kProcThreadFiles[0]))
 
 // Classify an fs-local path. Purely syntactic, with ONE deliberate
@@ -280,6 +285,46 @@ static uint64_t proc_task_run_cycles(task_t *t)
 	return cycles;
 }
 
+// Each thread tuple is copied coherently. The task's several threads can
+// advance between copies; the whole-machine snapshot plan addresses that
+// wider observation problem.
+static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
+                                 bool *has_idle)
+{
+	accounting_thread_cycles_t sum = {0};
+	*has_idle = false;
+	for (thread_t *th = task ? task->threads : NULL; th != NULL; th = th->taskNext)
+	{
+		accounting_thread_cycles_t one;
+		if (!accounting_read_thread(th, &one))
+			return false;
+		if (UINT64_MAX - sum.runtime < one.runtime ||
+		    UINT64_MAX - sum.user < one.user ||
+		    UINT64_MAX - sum.system < one.system ||
+		    UINT64_MAX - sum.idle < one.idle ||
+		    UINT64_MAX - sum.fault < one.fault ||
+		    UINT64_MAX - sum.syscall < one.syscall ||
+		    UINT64_MAX - sum.interrupt < one.interrupt ||
+		    UINT64_MAX - sum.interrupt_count < one.interrupt_count ||
+		    UINT64_MAX - sum.self_ipi_halt < one.self_ipi_halt ||
+		    UINT64_MAX - sum.self_ipi_halt_count < one.self_ipi_halt_count)
+			return false;
+		sum.runtime += one.runtime;
+		sum.user += one.user;
+		sum.system += one.system;
+		sum.idle += one.idle;
+		sum.fault += one.fault;
+		sum.syscall += one.syscall;
+		sum.interrupt += one.interrupt;
+		sum.interrupt_count += one.interrupt_count;
+		sum.self_ipi_halt += one.self_ipi_halt;
+		sum.self_ipi_halt_count += one.self_ipi_halt_count;
+		*has_idle |= th->idleThread;
+	}
+	*out = sum;
+	return true;
+}
+
 // The old `ticks` counter, summed the same way runtime_us is — the two
 // CPU-time fields in the status file must describe the same set of threads
 // or they contradict each other under load.
@@ -344,44 +389,48 @@ static thread_t *proc_task_liveliest_thread(task_t *t)
 //
 // So: walk the TASK'S OWN page tables to get the physical page, then read
 // through the HHDM alias, which is the technique CLAUDE.md prescribes for
-// exactly this. Byte at a time — the strings are short (TASK_MAX_PATH_LEN),
-// and per-byte translation makes a string that straddles a page boundary
-// correct for free instead of correct by luck.
-static bool proc_copy_task_string(task_t *task, uintptr_t task_va,
-                                  char *out, size_t outlen)
+// exactly this. The string is appended to `t` as it is read, never gathered
+// on the stack first: a spawn argument may be OS64_SPAWN_ARG_MAX long, which
+// is more than a kernel stack holds.
+//
+// Chunks through the fault-proof reader (PR #26, round seven — this copier
+// had the same walk-vs-burial window as its heap sibling since birth, booked
+// in DEBTS and paid the day the ruling arrived), each no wider than the rest
+// of its page, so a string that straddles a boundary is read correctly and
+// an unreadable page ends it there: truncated but honest. Stops at the
+// terminator or after `max` bytes. Returns whether any of it was readable —
+// an empty string that was is still an argument.
+static bool proc_add_task_string(synth_text_t *t, task_t *task,
+                                 uintptr_t task_va, size_t max)
 {
-	size_t n = 0;
-
-	if (out == NULL || outlen == 0)
-		return false;
-	out[0] = '\0';
 	if (task == NULL || task->pml4v == NULL || task_va == 0)
 		return false;
 
-	// Page-sized chunks through the fault-proof reader (PR #26, round seven
-	// — this copier had the same walk-vs-burial window as its heap sibling
-	// since birth, booked in DEBTS and paid the day the ruling arrived):
-	// copy what a page offers, scan for the terminator, stop at NUL or at
-	// the first unreadable page — truncated but honest, as it always was.
-	while (n + 1 < outlen)
+	char chunk[256];
+	size_t n = 0;
+	bool readable = false;
+	while (n < max)
 	{
 		uintptr_t va = task_va + n;
 		size_t want = PAGE_SIZE - (size_t)(va & 0xFFF);
-		if (want > outlen - 1 - n)
-			want = outlen - 1 - n;
+		if (want > sizeof(chunk))
+			want = sizeof(chunk);
+		if (want > max - n)
+			want = max - n;
 
-		if (!allocator_copy_from_task_va(task->pml4v, va, out + n, want))
+		if (!allocator_copy_from_task_va(task->pml4v, va, chunk, want))
 			break;   // unmapped or mid-burial — the string ends here
+		readable = true;
 
 		size_t k = 0;
-		while (k < want && out[n + k] != '\0')
+		while (k < want && chunk[k] != '\0')
 			k++;
+		synth_text_add(t, chunk, k);
 		n += k;
 		if (k < want)
 			break;   // found the NUL inside this chunk
 	}
-	out[n] = '\0';
-	return n > 0;
+	return readable;
 }
 
 static const char *proc_state_name(eThreadState s)
@@ -410,7 +459,15 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_PIPE_WRITE:  return "pipe-write";
 		case HANDLE_FILE:        return "file";
 		case HANDLE_DIR:         return "dir";
+		case HANDLE_THREAD:      return "thread";
+		case HANDLE_NET_UDP:     return "udp";
+		case HANDLE_NET_TCP:     return "tcp";
+		case HANDLE_NET_ICMP:    return "icmp";
 		case HANDLE_PTY_MASTER:  return "pty-master";
+		case HANDLE_NET_LISTENER: return "listener";
+		case HANDLE_GLASS:        return "glass";
+		case HANDLE_RESERVED:    return "reserved";
+		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";
 	}
 }
@@ -427,6 +484,30 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 {
 	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
 	return per_us ? cycles / per_us : 0;
+}
+
+static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
+                                   uint64_t system_us)
+{
+	uint64_t fault_us = proc_cycles_to_us(cycles->fault);
+	uint64_t syscall_us = proc_cycles_to_us(cycles->syscall);
+	uint64_t interrupt_us = proc_cycles_to_us(cycles->interrupt);
+	uint64_t halt_us = proc_cycles_to_us(cycles->self_ipi_halt);
+	if (!kUseOldExceptions)
+		synth_text_addf(t, "fault_us\t%lu\n", fault_us);
+	synth_text_addf(t, "syscall_us\t%lu\n", syscall_us);
+	synth_text_addf(t, "interrupts\t%lu\n", cycles->interrupt_count);
+	synth_text_addf(t, "interrupt_us\t%lu\n", interrupt_us);
+	synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles->self_ipi_halt_count);
+	synth_text_addf(t, "self_ipi_halt_us\t%lu\n", halt_us);
+	if (!kUseOldExceptions)
+	{
+		// The raw counters are disjoint and bounded by system cycles. Derive
+		// the displayed remainder after conversion so these printed fields
+		// also sum exactly to system_us despite per-bucket truncation.
+		uint64_t other_us = system_us - fault_us - syscall_us - interrupt_us - halt_us;
+		synth_text_addf(t, "other_system_us\t%lu\n", other_us);
+	}
 }
 
 // The per-core CPU-time ledger lived here as proc_gen_cores until 2026-08-12;
@@ -458,33 +539,70 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// A pty says so by name — "pty0", 0-based, its own namespace (PTY.md):
 	// there is no Alt+F key to agree with, and the master's holder knows
 	// its ptys by creation order.
-	if (task_tty(task)->is_pty)
-		synth_text_addf(t, "tty\tpty%u\n", task_tty(task)->index);
+	// HELD (tty.h task_tty_hold): this task is somebody else's — a session
+	// child that has exited, say — and its pty may be buried already while
+	// its pointer still says where it was. A buried terminal reports as
+	// gone rather than being read.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+	{
+		synth_text_addf(t, "tty\tgone\n");
+		synth_text_addf(t, "foreground\tno\n");
+	}
 	else
-		synth_text_addf(t, "tty\t%u\n", task_tty(task)->index + 1);
-	synth_text_addf(t, "foreground\t%s\n",
-	           (task_tty(task)->fgTask == task) ? "yes" : "no");
+	{
+		if (tty->is_pty)
+			synth_text_addf(t, "tty\tpty%u\n", tty->index);
+		else
+			synth_text_addf(t, "tty\t%u\n", tty->index + 1);
+		synth_text_addf(t, "foreground\t%s\n", (tty->fgTask == task) ? "yes" : "no");
+		task_tty_release(tty);
+	}
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
 	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
-	synth_text_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
+	uint64_t minor_faults = 0, major_faults = 0, anon_zero_pages = 0;
+	for (thread_t *fault_th = task->threads; fault_th != NULL; fault_th = fault_th->taskNext)
+	{
+		minor_faults += __atomic_load_n(&fault_th->minorFaults, __ATOMIC_RELAXED);
+		major_faults += __atomic_load_n(&fault_th->majorFaults, __ATOMIC_RELAXED);
+		anon_zero_pages += __atomic_load_n(&fault_th->anonZeroPages, __ATOMIC_RELAXED);
+	}
+	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
+	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
-	// Where the task's thread last ran — the answer to "whose plate did
-	// this time come off", without which per-core arithmetic is guesswork.
+	// Which CPU the task's thread last ran on — the answer to "whose plate
+	// did this time come off", without which per-CPU arithmetic is guesswork.
 	if (th != NULL)
-		synth_text_addf(t, "core\t%u\n", th->lastRunApicID);
-	// Real CPU time, charged at context-switch boundaries (thread.h has the
-	// doctrine). `ticks` below is the old sampling counter — kept because
-	// removing a field is an ABI event, but runtime_us is the honest one.
+		synth_text_addf(t, "cpu\t%u\n", th->lastRunCPU);
+	// CPU time committed at privilege and scheduler boundaries. `ticks`
+	// below is the old sampling counter, retained for the text ABI.
 	//
 	// SUMMED ACROSS THE TASK'S THREADS, which is what makes this number mean
 	// "what this program cost" rather than "what its first thread cost" —
 	// and on a threaded program those differ wildly, because the first
 	// thread is usually the one waiting.
-	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
+	accounting_thread_cycles_t cycles;
+	bool has_idle;
+	if (proc_task_accounting(task, &cycles, &has_idle))
+	{
+		// Convert user, system, and idle separately; runtime is their printed sum.
+		uint64_t user = proc_cycles_to_us(cycles.user);
+		uint64_t system = proc_cycles_to_us(cycles.system);
+		uint64_t idle = proc_cycles_to_us(cycles.idle);
+		uint64_t runtime = user + system + idle;
+		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
+		synth_text_addf(t, "user_us\t%lu\n", user);
+		synth_text_addf(t, "system_us\t%lu\n", system);
+		proc_add_system_causes(t, &cycles, system);
+		if (has_idle)
+			synth_text_addf(t, "idle_us\t%lu\n", idle);
+	}
+	else
+		synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
 	if (th != NULL)
 		synth_text_addf(t, "ticks\t%lu\n", proc_task_run_ticks(task));
 	// A live task has no exit status; saying "-" beats printing a zero that
@@ -510,10 +628,9 @@ static void proc_gen_cmdline(synth_text_t *t, task_t *task)
 	for (int i = 0; i < task->argc && i < PROC_MAX_LIST_WALK; i++)
 	{
 		// argv[i] is a TASK virtual address, not a kernel one — it must be
-		// translated, never dereferenced. See proc_copy_task_string.
-		char arg[TASK_MAX_PATH_LEN];
-		if (proc_copy_task_string(task, (uintptr_t)task->argv[i], arg, sizeof(arg)))
-			synth_text_addf(t, "%s\n", arg);
+		// translated, never dereferenced. See proc_add_task_string.
+		if (proc_add_task_string(t, task, (uintptr_t)task->argv[i], OS64_SPAWN_ARG_MAX - 1))
+			synth_text_add(t, "\n", 1);
 	}
 }
 
@@ -533,9 +650,17 @@ static void proc_gen_cwd(synth_text_t *t, task_t *task)
 // per open: the day GUI terminal windows resize, this file is already right.
 static void proc_gen_tty(synth_text_t *t, task_t *task)
 {
-	tty_t *tty = task_tty(task);
+	// HELD (tty.h task_tty_hold): the task whose file this is may be one
+	// whose pty a sibling's teardown has buried; a buried terminal has no
+	// geometry to report and the file says so in one line.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+	{
+		synth_text_addf(t, "tty\tgone\n");
+		return;
+	}
 
-	// The geometry is ONE fact read under the grid lock, because tty_resize_grid
+	// The geometry is ONE fact read under the grid lock, because tty_resize
 	// stores rows and cols as two words under that same lock: a handler that
 	// opens this file during back-to-back resizes must never see the old row
 	// count paired with the new column count — a shape no grid ever had, and
@@ -559,15 +684,81 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	// How much history Shift+PgUp can reach right now — a pager that knows
 	// the terminal already holds N lines can choose not to repeat them.
 	synth_text_addf(t, "scrollback\t%u\n", hist);
-	synth_text_addf(t, "fg_task\t%lu\n",
-	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
+	// ONE read of the foreground for every line that derives from it: the
+	// pointer changes hands at a spawn, a wait and a departure, and a
+	// report that read it twice could say `mode raw` and then name a
+	// cooked task as raw_task — a pair no terminal was ever in.
+	task_t *fg = (task_t *)tty->fgTask;
+	synth_text_addf(t, "fg_task\t%lu\n", fg ? fg->taskID : 0);
+	// The line discipline, such as it is: `cooked` means Ctrl+C is SIGINT
+	// and Ctrl+D is end-of-input; `raw` means both are bytes, and raw_task
+	// names the foreground task whose wish that is (SIGINT.md § Raw mode).
+	// The same two words are what a write to this file accepts — a control
+	// surface that describes itself.
+	bool raw = fg != NULL && fg->wantsRaw;
+	synth_text_addf(t, "mode\t%s\n", raw ? "raw" : "cooked");
+	synth_text_addf(t, "raw_task\t%lu\n", raw ? fg->taskID : 0);
+	task_tty_release(tty);
+}
+
+// A write to /proc/self/tty is a COMMAND, the ctl file's rule: the first
+// word is the verb, the whole write is consumed. Two verbs, and only the
+// terminal's foreground task may speak them (tty.c says why). -1 for a word
+// this kernel does not know or a caller the terminal does not answer to.
+static int proc_tty_command(task_t *task, const char *word, size_t consumed)
+{
+	bool raw;
+	if (strcmp(word, "raw") == 0)
+		raw = true;
+	else if (strcmp(word, "cooked") == 0)
+		raw = false;
+	else
+		return -1;
+	// Held (tty.h task_tty_hold): a buried terminal takes no mode.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+		return -1;
+	int rc = tty_set_raw(tty, task, raw);
+	task_tty_release(tty);
+	if (rc != 0)
+		return -1;
+	printd(DEBUG_SYSCALL, "proc: tty '%s' by task %lu (%s)\n", word, task->taskID, task->exename);
+	return (int)consumed;
+}
+
+// The leading "handle<TAB>type<TAB><escaped mount><escaped path>" of a file
+// or directory row, in several addf calls because one fully-escaped path can
+// fill synth_text_addf's per-call line buffer on its own (synthfs.c), and an
+// overflowing row is truncated mid-field. The caller finishes the line —
+// what follows the path differs by handle type.
+static void proc_add_handle_path(synth_text_t *t, int handle, const char *type,
+                                 const char *prefix, const char *path)
+{
+	char eprefix[VFS_MOUNT_PREFIX_MAX * 4];
+	char epath[VFS_REG_PATH_MAX * 4];
+	synth_text_escape(prefix, eprefix, sizeof(eprefix));
+	synth_text_escape(path, epath, sizeof(epath));
+	synth_text_addf(t, "%d\t%s\t", handle, type);
+	synth_text_addf(t, "%s", eprefix);
+	synth_text_addf(t, "%s", epath);
 }
 
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
-	// "handle<TAB>type<TAB>detail" — the detail column is whatever the tag
-	// makes meaningful, and is simply absent for the console tags (they
-	// reference no object at all; see handle.h).
+	// "handle<TAB>type[<TAB>detail]" — files and directories expose their
+	// full path, and FILE rows append the fs-local identity (vfs.h f_ident:
+	// ext2 inode, FAT start cluster) so lsof can join a task's handle to a
+	// /sys/openfiles row by IDENTITY rather than by path string — a path can
+	// be renamed while the file is open, the identity cannot be recycled.
+	// Pipes expose the shared object identity that ties their ends together.
+	// Other tags currently have no public detail to append.
+	//
+	// THE PATH IS DATA AND IS ESCAPED, the same rule and the same transform
+	// the /sys reports use (synth_text_escape in synthfs.h). An ext2
+	// filename may hold a newline or a tab, and this report is delimited by
+	// both: one such name turns a row into two, and lsof — which rejects a
+	// malformed row rather than guess — loses the whole task's handles.
+	// The reader reverses it with os64_unescape_field after splitting.
 	for (int i = 0; i < TASK_MAX_HANDLES; i++)
 	{
 		handle_t *h = &task->handles[i];
@@ -577,17 +768,24 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 		if (h->type == HANDLE_FILE && h->object != NULL)
 		{
 			vfs_file_t *f = (vfs_file_t *)h->object;
-			// f_path is the fs-local TAIL the mount router handed the driver,
-			// so it has lost its mount prefix — "/bin/ls" here could be on any
-			// mounted filesystem. Printing what we have beats printing nothing.
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (f->f_path != NULL) ? f->f_path : "(unnamed)");
+			// f_path is the fs-local TAIL the mount router handed the driver;
+			// the mount prefix is recovered from the owning fs, so the column
+			// is a FULL path again. That lets userland correlate an open file
+			// with the namespace spelling its callers use.
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)f->owner, prefix, sizeof(prefix));
+			proc_add_handle_path(t, i, proc_handle_type_name(h->type), prefix,
+			                     (f->f_path != NULL) ? f->f_path : "(unnamed)");
+			synth_text_addf(t, "\t%lu\n", f->f_ident);
 		}
 		else if (h->type == HANDLE_DIR && h->object != NULL)
 		{
 			vfs_directory_t *d = (vfs_directory_t *)h->object;
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (d->f_path != NULL) ? d->f_path : "(unnamed)");
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)d->owner, prefix, sizeof(prefix));
+			proc_add_handle_path(t, i, proc_handle_type_name(h->type), prefix,
+			                     (d->f_path != NULL) ? d->f_path : "(unnamed)");
+			synth_text_addf(t, "\n");
 		}
 		else if (h->type == HANDLE_PIPE_READ || h->type == HANDLE_PIPE_WRITE)
 		{
@@ -764,7 +962,9 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 			char name[32];
 			if (th->esp3BaseV != 0)
 			{
-				uintptr_t s = th->esp3BaseV, e = s + THREAD_USER_STACK_SIZE;
+				// The size it got: a main thread's is what its program
+				// declared (SCRIPT_STACK.md), and yonder reads it here.
+				uintptr_t s = th->esp3BaseV, e = s + th->esp3Size;
 				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
@@ -803,7 +1003,7 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 }
 
 // Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling
-// of proc_copy_task_string. Per-page, because a struct that straddles a page
+// of proc_add_task_string. Per-page, because a struct that straddles a page
 // boundary must be correct for free rather than by luck, and because an
 // untouched (demand-paged) page must end the copy honestly.
 //
@@ -847,8 +1047,8 @@ static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
 // regions have gone home to the kernel — is known only to the allocator that
 // owns it, and that allocator is libos64's malloc. So malloc publishes the
 // address of one struct at startup and the kernel renders the file: procfs
-// keeps the pen, the format, and the key<TAB>value grammar every other file
-// here uses, and the application writes not one line of it.
+// keeps the pen and the keyed-report grammar used by status and heap; the
+// application writes not one line of it.
 //
 // A program with no libos64 heap (a raw fixture, a foreign binary) says so
 // plainly rather than pretending to have an empty heap.
@@ -969,29 +1169,92 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "thread\t%lu\n", th->threadID);
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
 	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
-	// mp_apic is the thread's PINNED AFFINITY, not the core it is running on —
+	// pinnedCPU is the thread's PINNED AFFINITY, not the CPU it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed
 	// 18446744073709551615 for every ordinary thread during bring-up (that is
-	// THREAD_NO_AFFINITY, which means "any core", not core number 2^64-1).
-	// Which core a thread is on RIGHT NOW lives in each core's CLS and would
+	// THREAD_NO_AFFINITY, which means "any CPU", not CPU number 2^64-1).
+	// Which CPU a thread is on RIGHT NOW lives in each CPU's CLS and would
 	// have to be found by scanning them; it joins this file when something
 	// needs it.
-	if (th->mp_apic == THREAD_NO_AFFINITY)
+	if (th->pinnedCPU == THREAD_NO_AFFINITY)
 		synth_text_addf(t, "affinity\tany\n");
 	else
-		synth_text_addf(t, "affinity\t%lu\n", th->mp_apic);
+		synth_text_addf(t, "affinity\t%lu\n", th->pinnedCPU);
 	synth_text_addf(t, "idle\t%s\n", th->idleThread ? "yes" : "no");
-	synth_text_addf(t, "core\t%u\n", th->lastRunApicID);   // last dispatched here
+	synth_text_addf(t, "cpu\t%u\n", th->lastRunCPU);   // last dispatched here
 	synth_text_addf(t, "ring\t%u\n", (unsigned)(th->regs.CS & 3));
 	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
 	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
-	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
+	synth_text_addf(t, "faults\t%lu minor %lu major\n",
+	                __atomic_load_n(&th->minorFaults, __ATOMIC_RELAXED),
+	                __atomic_load_n(&th->majorFaults, __ATOMIC_RELAXED));
+	synth_text_addf(t, "anon_zero_pages\t%lu\n",
+	                __atomic_load_n(&th->anonZeroPages, __ATOMIC_RELAXED));
+	accounting_thread_cycles_t cycles;
+	if (accounting_read_thread(th, &cycles))
+	{
+		// Keep the same monotonic text partition as task status.
+		uint64_t user = proc_cycles_to_us(cycles.user);
+		uint64_t system = proc_cycles_to_us(cycles.system);
+		uint64_t idle = proc_cycles_to_us(cycles.idle);
+		uint64_t runtime = user + system + idle;
+		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
+		synth_text_addf(t, "user_us\t%lu\n", user);
+		synth_text_addf(t, "system_us\t%lu\n", system);
+		proc_add_system_causes(t, &cycles, system);
+		if (th->idleThread)
+			synth_text_addf(t, "idle_us\t%lu\n", idle);
+	}
+	else
+		synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
 	// The pending SET, as the bitmask it is. `.bits` because the set is a
 	// tagged type now (signals.h) — the wrapper is what made the 2026-08-23
 	// renumbering safe, and reaching through it here is the one place a reader
 	// legitimately wants the raw word.
 	synth_text_addf(t, "signals\t%p\n", (void *)(uintptr_t)th->signals.sigind.bits);
+}
+
+// Each thread table is a coherent snapshot. Task rows are sums of those
+// snapshots, like the task status clocks; the threads can advance between
+// copies, so the task file does not claim one simultaneous instant.
+static void proc_gen_syscalls(synth_text_t *t, task_t *task, thread_t *single)
+{
+	// Match status: settle open spans before taking coherent row copies.
+	// mpAcctSettleAll coalesces nearby /proc reads to one request per tick.
+	mpAcctSettleAll();
+	accounting_syscall_row_t sums[ACCOUNTING_SYSCALL_ROWS] = {0};
+	accounting_syscall_row_t rows[ACCOUNTING_SYSCALL_ROWS];
+	for (thread_t *th = single ? single : task->threads; th != NULL;
+	     th = single ? NULL : th->taskNext)
+	{
+		if (!accounting_read_syscalls(th, rows))
+		{
+			synth_text_addf(t, "unavailable\n");
+			return;
+		}
+		for (unsigned i = 0; i < ACCOUNTING_SYSCALL_ROWS; i++)
+		{
+			if (UINT64_MAX - sums[i].calls < rows[i].calls ||
+			    UINT64_MAX - sums[i].cycles < rows[i].cycles)
+			{
+				synth_text_addf(t, "unavailable\n");
+				return;
+			}
+			sums[i].calls += rows[i].calls;
+			sums[i].cycles += rows[i].cycles;
+		}
+	}
+	synth_text_addf(t, "# number name calls us\n");
+	for (unsigned i = 0; i < ACCOUNTING_SYSCALL_ROWS; i++)
+	{
+		if (sums[i].calls == 0 && sums[i].cycles == 0)
+			continue;
+		const char *name = i == ACCOUNTING_SYSCALL_OVERFLOW ? ">=128" :
+		                   (syscall_table[i].name ? syscall_table[i].name : "-");
+		synth_text_addf(t, "%u %s %lu %lu\n", i, name, sums[i].calls,
+		                proc_cycles_to_us(sums[i].cycles));
+	}
 }
 
 // ── ctl ─────────────────────────────────────────────────────────────────────
@@ -1070,7 +1333,8 @@ typedef struct
 {
 	synth_snapshot_t snap;  // MUST be first — the generic fops see only this
 	                        // head, and close frees the whole struct by it
-	bool     is_ctl;        // writes to this handle are commands
+	bool     is_ctl;        // writes to this handle are commands (signals)
+	bool     is_tty;        // writes to this handle are commands (raw/cooked)
 	bool     is_mem;        // reads come from the task's address space, live
 	uint64_t mem_pos;       // mem's cursor: a virtual address in the task
 	uint64_t taskID;        // ctl's/mem's target, re-resolved at every use
@@ -1114,9 +1378,14 @@ typedef struct
 // don't, which a hex editor shows as ??. Populating them on the reader's
 // behalf is v2, booked — "depending on whether ?? is annoying".
 //
-// The stream has no end. SEEK_END is refused (there is nothing to measure
-// from); SEEK_SET/SEEK_CUR land anywhere in 0..INT64_MAX and the walk
-// answers for whether anything is there.
+// The stream ends where the task's address space does: USER_CANONICAL_MAX.
+// Above it lies non-canonical space, which the page walk would answer for
+// with some OTHER slot — the kernel half's, the HHDM among them — so a seek
+// past the ceiling is refused and a read stops at it (and
+// allocator_copy_from_task_va refuses it besides). SEEK_SET/SEEK_CUR land
+// anywhere in 0..USER_CANONICAL_MAX and the walk answers for whether anything
+// is there. SEEK_END stays refused: that end is the hardware's, not the
+// task's, and no program wants to count back from it.
 static int proc_mem_read(proc_file_handle_t *h, void *buffer, size_t size)
 {
 	if (buffer == NULL || size == 0)
@@ -1132,8 +1401,8 @@ static int proc_mem_read(proc_file_handle_t *h, void *buffer, size_t size)
 	while (done < size)
 	{
 		uintptr_t va = (uintptr_t)h->mem_pos + done;
-		if (va < (uintptr_t)h->mem_pos)
-			break;                                  // wrapped the address space
+		if (va >= USER_CANONICAL_MAX)
+			break;                                  // the task's address space ends here
 		size_t in_page = (size_t)(va & (PAGE_SIZE - 1));
 		size_t chunk = PAGE_SIZE - in_page;
 		if (chunk > size - done)
@@ -1163,7 +1432,7 @@ static int proc_mem_seek(proc_file_handle_t *h, long offset, int whence)
 	    (offset < 0 && base < INT64_MIN - offset))
 		return -1;
 	int64_t target = base + offset;
-	if (target < 0)
+	if (target < 0 || (uint64_t)target > USER_CANONICAL_MAX)
 		return -1;
 	h->mem_pos = (uint64_t)target;
 	return 0;
@@ -1224,8 +1493,18 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	bool is_ctl = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "ctl") == 0);
 	bool is_mem = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "mem") == 0);
-	if (mode[0] == 'w' && !is_ctl)
-		return -1;   // only ctl accepts a write, ever — mem included (see it)
+	bool is_tty = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "tty") == 0);
+	// A write is a command, and two files take one: ctl (signals) and tty
+	// (raw/cooked). tty's is the task's OWN terminal mode, so a write to
+	// another task's tty file is refused at the boundary: only /proc/self.
+	if (mode[0] == 'w' && !is_ctl && !is_tty)
+		return -1;   // nothing else accepts a write, ever — mem included (see it)
+	if (mode[0] == 'w' && is_tty)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		if (cls == NULL || cls->task != task)
+			return -1;
+	}
 
 	// Generate the whole file NOW, into a snapshot (PROC.md: an internally
 	// consistent file beats a fresh one — you can never read the first half of
@@ -1236,9 +1515,13 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	if (pp.type == PROC_NODE_THREAD_FILE)
 	{
-		proc_gen_thread_status(&text, task, th);
+		if (strcmp(pp.name, "status") == 0)
+			proc_gen_thread_status(&text, task, th);
+		else
+			proc_gen_syscalls(&text, task, th);
 	}
 	else if (strcmp(pp.name, "status") == 0)   proc_gen_task_status(&text, task);
+	else if (strcmp(pp.name, "syscalls") == 0) proc_gen_syscalls(&text, task, NULL);
 	else if (strcmp(pp.name, "cmdline") == 0)  proc_gen_cmdline(&text, task);
 	else if (strcmp(pp.name, "cwd") == 0)      proc_gen_cwd(&text, task);
 	else if (strcmp(pp.name, "handles") == 0)  proc_gen_handles(&text, task);
@@ -1263,13 +1546,15 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 
 	h->is_ctl = is_ctl;
+	h->is_tty = is_tty;
 	h->is_mem = is_mem;
 	h->mem_pos = 0;
 	h->taskID = pp.taskID;
 	return 0;
 }
 
-// Writing to a /proc file is a COMMAND, not a store. Only ctl accepts one.
+// Writing to a /proc file is a COMMAND, not a store. ctl takes one (a
+// signal) and the task's own tty file takes one (raw/cooked).
 //
 // The buffer arrives as whatever the writer sent — `echo kill` sends "kill\n",
 // a program might send "kill" with no newline, husk might one day send several.
@@ -1282,7 +1567,7 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	char word[PROC_NAME_MAX];
 	size_t i = 0, n = 0;
 
-	if (!h->is_ctl || buffer == NULL || size == 0)
+	if ((!h->is_ctl && !h->is_tty) || buffer == NULL || size == 0)
 		return -1;
 
 	const char *b = (const char *)buffer;
@@ -1308,6 +1593,20 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (task == NULL)
 		return -1;   // the task is gone — the command has no target
 
+	// A tty command is spoken by THE TASK THAT WRITES, never by the task
+	// that opened: `echo raw > /proc/self/tty &` has the shell open the
+	// file and a background child write through the inherited handle, and
+	// attributing that to the opener would make the shell the holder of a
+	// mode nobody it seated asked for. A handle that changed hands carries
+	// no authority here — the writer must be the task the file names.
+	if (h->is_tty)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		task_t *writer = cls ? cls->task : NULL;
+		if (writer == NULL || writer != task)
+			return -1;
+		return proc_tty_command(writer, word, size);
+	}
 	return proc_ctl_command(task, word, size);
 }
 

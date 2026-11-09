@@ -10,13 +10,18 @@
 // arrangement lost-wakeup-free — same argument, word for word, as pipes.
 //
 // CONTEXT MAP (who runs where — the part worth being pedantic about):
-//   udp_conn_rx        RX context (inside the processSignals NIC poll, or a
-//                      test injecting at the seam): enqueue only, never wake
-//                      directly — a test-context injection isn't under the
-//                      scheduler lock, and queue surgery without that lock
-//                      is the exact bug class 9badced buried.
-//   udp_conn_wake_if_ready  processSignals, UNDER the scheduler lock, after
-//                      the polls: the only place waiters get woken.
+//   udp_conn_rx        THREAD context: knet draining a card (DOORBELL.md),
+//                      or a test injecting at net_device_rx from a test
+//                      thread. Enqueues, then WAKES THE PARKED READER
+//                      itself — a thread may take the scheduler's queue
+//                      lock the way pipe_read and tcp_input do. No ISR
+//                      reaches this function: the ISR rings the bell and
+//                      leaves (the 9badced rule, untouched).
+//   udp_conn_wake_if_ready  processSignals, UNDER the scheduler lock: the
+//                      BACKSTOP, not the common path. It catches the one
+//                      arrival the wake above cannot — a reader that had
+//                      registered but not yet parked when its datagram
+//                      landed — exactly as pipe_wake_if_ready does.
 //   read/write/dial/close   task context (syscall handlers, kernel tests).
 
 #include <stdint.h>
@@ -29,7 +34,8 @@
 #include "memory/kmalloc.h"
 #include "smp_core.h"        // get_core_local_storage — who is reading
 #include "signals.h"         // signal_raise(SIGSLEEP) — how a reader parks
-#include "scheduler.h"       // scheduler_change_thread_queue — how it wakes
+#include "scheduler.h"       // scheduler_wake_isleep_thread — how it wakes
+#include "driver/system/x86_64.h"   // rdtsc — the arrival stamp
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
 #include "driver/net/udp.h"
@@ -37,8 +43,10 @@
 #include "time.h"            // wait() — the ARP-retry nap in udp_conn_write
 
 // One second, same value and same meaning as PIPE_BACKSTOP_TICKS: a
-// liveness backstop against a missed wake, NOT a poll interval — the sweep
-// normally wakes a reader the same scheduler pass its datagram arrives.
+// liveness backstop against a missed wake, NOT a poll interval — the
+// arrival wake in udp_conn_rx normally wakes a reader the moment its
+// datagram lands, and the sweep covers the registered-not-yet-parked case
+// a pass later.
 #define UDP_CONN_BACKSTOP_TICKS (TICKS_PER_SECOND)
 
 // The live-conversation list, walked by the wake sweep. Guarded by its own
@@ -84,13 +92,28 @@ static void udp_conn_rx(net_device_t* dev, uint32_t src_ip, uint16_t src_port,
 	memcpy(c->slots[slot], (void*)data, n);
 	c->lens[slot] = n;
 	c->count++;
+	c->last_arrival_tsc = rdtsc();
+
+	// WAKE ON ARRIVAL (ARRIVAL_WAKE.md, the shape of tcp_input's tail):
+	// claim a parked reader under the conn lock, release, then wake — the
+	// conn lock and the scheduler's queue lock are never held together,
+	// and past the release only the captured thread pointer is touched.
+	// The ISLEEP test is part of the CONDITION: a reader that registered
+	// but has not parked yet is left registered for the sweep, because
+	// clearing its slot now would lose the wake (the primitive only moves
+	// parked threads) and cost it the full backstop second.
+	thread_t* w = NULL;
+	if (c->waiter != NULL && c->waiter->threadState == THREAD_STATE_ISLEEP)
+	{
+		w = c->waiter;
+		c->waiter = NULL;
+	}
 	spinlock_release_irqrestore(&c->lock, irqflags);
-	// No wake here — see the context map up top. The sweep runs later in
-	// the SAME processSignals pass for real NIC traffic, so the latency
-	// cost of this discipline is zero.
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
 }
 
-// ── The wake sweep ──────────────────────────────────────────────────────────
+// ── The wake sweep: the backstop behind the arrival wake ───────────────────
 void udp_conn_wake_if_ready(void)
 {
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
@@ -104,7 +127,9 @@ void udp_conn_wake_if_ready(void)
 		// moves ISLEEP threads), and the sleeper then eats its full
 		// backstop second. See the long note in icmp_conn.c, where a
 		// measured 100-tick "round trip" made it visible.
-		if (c->waiter != NULL && c->count > 0 &&
+		// A closed conn is a condition too: the close's own wake misses a
+		// reader still mid-park, and this pass is what delivers it.
+		if (c->waiter != NULL && (c->count > 0 || c->closed) &&
 		    c->waiter->threadState == THREAD_STATE_ISLEEP)
 		{
 			w = c->waiter;
@@ -145,6 +170,7 @@ udp_conn_t* udp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
+	c->holders = 1;   // the handle's; pins add theirs (udp_conn.h LIFETIME)
 
 	// Claim an ephemeral port. udp_bind refuses doubles, so "walk until a
 	// bind sticks" is the whole allocator; 200 tries covers pathological
@@ -204,6 +230,13 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return UDP_CONN_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us — a sibling thread closed the handle while we
+		// waited. Our pin kept the memory; the conversation is over.
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return UDP_CONN_ERR_CLOSED;
+		}
 		if (c->count > 0)
 		{
 			uint16_t slot = c->head;
@@ -231,9 +264,10 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return UDP_CONN_ERR_TIMEOUT;
 		}
 
-		// Nothing yet: register, drop the lock, park. The sweep may fire
-		// between the release and the sigaction — that's the race the
-		// backstop tick and the loop-and-retest exist to make harmless.
+		// Nothing yet: register, drop the lock, park. An arrival (or the
+		// sweep) may fire between the release and the sigaction — that's
+		// the race the backstop tick and the loop-and-retest exist to make
+		// harmless.
 		// Park until the backstop OR the caller's deadline, first to land.
 		c->waiter = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
@@ -255,10 +289,30 @@ long udp_conn_write(udp_conn_t* c, const void* buf, size_t len)
 	// HERE (unlike the RX-context responders) we can simply wait out the
 	// resolution: retry for up to ~500ms, which is geological time for an
 	// ARP round trip on any link this OS has met.
+	//
+	// EVERY attempt re-asks whether a sibling has hung up meanwhile, and
+	// counts itself in `sending` while the datagram is on its way out: the
+	// close waits for that count before it unbinds the port, so a datagram
+	// can never leave from a port a later dial already owns (Codex #101
+	// rd7).
 	for (int tries = 0; tries < 50; tries++)
 	{
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return UDP_CONN_ERR_CLOSED;   // hung up under us; the port is (being) unbound
+		}
+		c->sending++;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		int32_t rc = udp_send(c->dev, c->peer_ip, c->local_port, c->peer_port,
 		                      buf, (uint16_t)len);
+
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		c->sending--;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (rc == 0)
 			return (long)len;
 		if (rc != -2)
@@ -274,10 +328,51 @@ long udp_conn_write(udp_conn_t* c, const void* buf, size_t len)
 // ── Close ───────────────────────────────────────────────────────────────────
 void udp_conn_close(udp_conn_t* c)
 {
-	// Stop arrivals first: after udp_unbind returns, udp.c can never call
-	// udp_conn_rx with this conn again, so the frees below race nothing.
+	// Hang up FIRST, then wait out any writer already past its own check
+	// (udp_conn.h sending) before the port is given back: a writer that
+	// saw "not closed" sends from THIS port, and the port must still be
+	// ours while it does. A send is microseconds; the wait is a few spins.
+	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	c->closed = true;
+	// And tell a reader parked on the ring — a SIBLING THREAD of the
+	// closer, holding the conn through its pin — that the conversation is
+	// over. A reader still mid-park is left registered for the sweep,
+	// whose condition now includes `closed` (the pipe.c claim discipline).
+	thread_t* w = NULL;
+	if (c->waiter != NULL && c->waiter->threadState == THREAD_STATE_ISLEEP)
+	{
+		w = c->waiter;
+		c->waiter = NULL;
+	}
+	while (c->sending != 0)
+	{
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		wait(1);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+	}
+	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
+
+	// Stop arrivals: after udp_unbind returns, udp.c can never call
+	// udp_conn_rx with this conn again, and no writer can start a send.
 	udp_unbind(c->local_port);
 
+	udp_conn_release(c);   // the handle's hold; the last one frees
+}
+
+void udp_conn_ref(udp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->holders, 1);
+}
+
+void udp_conn_release(udp_conn_t* c)
+{
+	if (__sync_sub_and_fetch(&c->holders, 1) > 0)
+		return;
+
+	// Last holder: off the sweep list, then the memory. No RX can reach it
+	// (unbound at the close) and no reader is inside it (they hold it).
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	udp_conn_t** pp = &kUdpConnList;
 	while (*pp != NULL && *pp != c)
@@ -286,9 +381,6 @@ void udp_conn_close(udp_conn_t* c)
 		*pp = c->next;
 	spinlock_release_irqrestore(&s_list_lock, lf);
 
-	// A task can't be parked in read() and closing at once (one thread),
-	// and exit's handle_close_all only runs after the thread left the
-	// syscall — so no waiter can exist here. Stated, not assumed silently.
 	kfree(c->slots);
 	kfree(c);
 }

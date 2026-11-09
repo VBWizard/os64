@@ -81,7 +81,7 @@ buffer is large enough that logd drains it long before it fills.
 The drain loop performs a **k-way merge** across all core buffers, sorted by
 `tsc`. On each step:
 
-1. Scan all `kMPCoreCount` buffers; find the non-empty one whose oldest entry
+1. Scan all `kCPUCount` buffers (one per CPU on the roster); find the non-empty one whose oldest entry
    has the smallest `tsc` value.
 2. Call `logd_drain_one()` on that buffer, which prints the entry and advances
    `tail`.

@@ -1,0 +1,3 @@
+family cache: 7306 checks, allocator peak 211550 bytes, zero leaks
+Expired list: expected ASan heap-use-after-free verified
+Artifacts: /tmp/web-faces-family-slices

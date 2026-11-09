@@ -1,0 +1,332 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>crypto.subtle, tier 3</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.pass{color:#080}.fail{color:#c00}
+button{margin:.2em}
+</style>
+</head><body>
+<h1>crypto.subtle, tier 3</h1>
+<p>WEB_CRYPTO.md's tier 3, what fewer pages want, built in slices. Each line
+is a check against a published value or the behaviour Web Cryptography
+requires; another browser shows every line PASS, and so should yonder.</p>
+<p><b>3a, derivation and AES-KW:</b> HKDF (RFC 5869's test cases), PBKDF2
+(RFC 6070's), <code>deriveBits</code> and <code>deriveKey</code>, and AES-KW
+(RFC 3394's) wrapping and unwrapping keys.</p>
+<p><b>3b, the elliptic curves:</b> ECDSA (RFC 6979's signatures) and ECDH
+(RFC 5903's exchanges) on P-256, P-384 and P-521, key pairs, and the spki,
+pkcs8, raw and JWK formats.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+<h2>How long PBKDF2 holds the page</h2>
+<p>yonder does a derivation's work on the call (WEB_CRYPTO.md § 5), and the
+page chooses PBKDF2's iteration count, so the page waits while it runs. Each
+button derives 256 bits with PBKDF2 over SHA-256 at that many iterations and
+prints the time. Sign-in pages use from about a hundred thousand to six
+hundred thousand.</p>
+<p id="counts"></p>
+<pre id="timing">Pick a count.</pre>
+<h2>How long the curves take</h2>
+<p>A key pair's generation, a signature and an exchange are done on the call
+too. The button times each on every curve, five times, and prints the mean;
+P-521 runs on BearSSL's generic code, so it is the slow one.</p>
+<p><button id="curves">Time the curves</button></p>
+<pre id="curve-timing">Not yet run.</pre>
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const subtle = crypto.subtle;
+const enc = s => new TextEncoder().encode(s);
+function hex(b) { return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join(''); }
+function unhex(s) { return new Uint8Array(s.match(/../g).map(x => parseInt(x, 16))); }
+async function is(what, make, want) {
+  try {
+    const got = await make();
+    record(got === want, what, 'got ' + got + ', want ' + want);
+  } catch (e) { record(false, what, 'rejected: ' + e.name + ' ' + e.message); }
+}
+async function rejectsWith(what, make, name) {
+  let promise;
+  try { promise = make(); } catch (e) { record(false, what, 'threw instead of rejecting: ' + e.name); return; }
+  if (!(promise instanceof Promise)) { record(false, what, 'no promise'); return; }
+  try { await promise; record(false, what, 'resolved; want ' + name); }
+  catch (e) { record(e.name === name, what, 'rejected with ' + e.name + ', want ' + name); }
+}
+
+async function hkdf() {
+  const cases = [
+    ['RFC 5869 A.1', '0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', '000102030405060708090a0b0c',
+     'f0f1f2f3f4f5f6f7f8f9', 42,
+     '3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865'],
+    ['RFC 5869 A.2 (longer inputs and output)',
+     '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f' +
+     '303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f',
+     '606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f' +
+     '909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf',
+     'b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf' +
+     'e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff', 82,
+     'b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09' +
+     'da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87'],
+    ['RFC 5869 A.3 (empty salt and info)', '0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', '', '', 42,
+     '8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8'],
+  ];
+  for (const [what, ikm, salt, info, length, okm] of cases) {
+    const key = await subtle.importKey('raw', unhex(ikm), 'HKDF', false, ['deriveBits']);
+    await is('HKDF-SHA-256, ' + what,
+             async () => hex(await subtle.deriveBits({name: 'HKDF', hash: 'SHA-256',
+                                                      salt: salt ? unhex(salt) : new Uint8Array(0),
+                                                      info: info ? unhex(info) : new Uint8Array(0)}, key, length * 8)), okm);
+  }
+  const key = await subtle.importKey('raw', unhex(cases[0][1]), 'HKDF', false, ['deriveBits', 'deriveKey']);
+  const params = {name: 'HKDF', hash: 'SHA-256', salt: unhex(cases[0][2]), info: unhex(cases[0][3])};
+  await is('an HKDF key is secret, never extractable, and has no length',
+           async () => [key.type, key.extractable, key.algorithm.name, key.algorithm.length].join(), 'secret,false,HKDF,');
+  await is('a length of 0 derives nothing', async () => (await subtle.deriveBits(params, key, 0)).byteLength, 0);
+  await rejectsWith('a null length: OperationError', () => subtle.deriveBits(params, key, null), 'OperationError');
+  await rejectsWith('a length within a byte: OperationError', () => subtle.deriveBits(params, key, 230), 'OperationError');
+  await rejectsWith('an HKDF key that is extractable: SyntaxError',
+                    () => subtle.importKey('raw', new Uint8Array(4), 'HKDF', true, ['deriveBits']), 'SyntaxError');
+  await rejectsWith('exporting an HKDF key: NotSupportedError', () => subtle.exportKey('raw', key), 'NotSupportedError');
+  await rejectsWith('a hash that is no digest: NotSupportedError',
+                    () => subtle.deriveBits({...params, hash: 'AES-GCM'}, key, 256), 'NotSupportedError');
+  const aes = await subtle.deriveKey(params, key, {name: 'AES-GCM', length: 256}, true, ['encrypt']);
+  await is('deriveKey makes an AES key of the derivation\'s first 256 bits',
+           async () => hex(await subtle.exportKey('raw', aes)), cases[0][5].slice(0, 64));
+  const mac = await subtle.deriveKey(params, key, {name: 'HMAC', hash: 'SHA-512'}, false, ['sign']);
+  await is('deriveKey makes an HMAC key the hash\'s block size long',
+           async () => mac.algorithm.hash.name + ' ' + mac.algorithm.length, 'SHA-512 1024');
+  await rejectsWith('an AES length of 512: OperationError',
+                    () => subtle.deriveKey(params, key, {name: 'AES-GCM', length: 512}, true, ['encrypt']), 'OperationError');
+  await rejectsWith('an AES key type with no length: TypeError',
+                    () => subtle.deriveKey(params, key, {name: 'AES-GCM'}, true, ['encrypt']), 'TypeError');
+  const bitsOnly = await subtle.importKey('raw', new Uint8Array(4), 'HKDF', false, ['deriveBits']);
+  await rejectsWith('deriveKey with a key that may only derive bits: InvalidAccessError',
+                    () => subtle.deriveKey(params, bitsOnly, {name: 'AES-GCM', length: 128}, true, ['encrypt']),
+                    'InvalidAccessError');
+}
+
+async function pbkdf2() {
+  const cases = [
+    ['c=1', 'password', 'salt', 1, 20, '0c60c80f961f0e71f3a9b524af6012062fe037a6'],
+    ['c=2', 'password', 'salt', 2, 20, 'ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957'],
+    ['c=4096', 'password', 'salt', 4096, 20, '4b007901b765489abead49d926f721d065a429c1'],
+    ['two output blocks', 'passwordPASSWORDpassword', 'saltSALTsaltSALTsaltSALTsaltSALTsalt', 4096, 25,
+     '3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038'],
+    ['NUL bytes', 'pass\0word', 'sa\0lt', 4096, 16, '56fa6aa75548099dcc37d7f03425e0c3'],
+  ];
+  for (const [what, password, salt, iterations, length, dk] of cases) {
+    const key = await subtle.importKey('raw', enc(password), 'PBKDF2', false, ['deriveBits']);
+    await is('PBKDF2-HMAC-SHA1, RFC 6070 ' + what,
+             async () => hex(await subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-1', salt: enc(salt), iterations},
+                                                     key, length * 8)), dk);
+  }
+  const key = await subtle.importKey('raw', enc('password'), 'PBKDF2', false, ['deriveBits']);
+  await rejectsWith('no iterations: OperationError',
+                    () => subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-1', salt: enc('salt'), iterations: 0}, key, 160),
+                    'OperationError');
+  await rejectsWith('a PBKDF2 key used for HKDF: InvalidAccessError',
+                    () => subtle.deriveBits({name: 'HKDF', hash: 'SHA-256', salt: enc('s'), info: enc('i')}, key, 256),
+                    'InvalidAccessError');
+}
+
+async function aesKw() {
+  const kek = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
+  const data = '00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f';
+  const cases = [
+    ['4.1, 128 bits under a 128-bit KEK', 32, 32, '1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5'],
+    ['4.2, 128 bits under a 192-bit KEK', 48, 32, '96778b25ae6ca435f92b5b97c050aed2468ab8a17ad84e5d'],
+    ['4.3, 128 bits under a 256-bit KEK', 64, 32, '64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7'],
+    ['4.4, 192 bits under a 192-bit KEK', 48, 48, '031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2'],
+    ['4.5, 192 bits under a 256-bit KEK', 64, 48, 'a8f9bc1612c68b3ff6e6f4fbe30e71e4769c8b80a32cb8958cd5d17d6b254da1'],
+    ['4.6, 256 bits under a 256-bit KEK', 64, 64,
+     '28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21'],
+  ];
+  for (const [what, kekHex, dataHex, wrapped] of cases) {
+    const wrapper = await subtle.importKey('raw', unhex(kek.slice(0, kekHex)), 'AES-KW', false, ['wrapKey', 'unwrapKey']);
+    const key = await subtle.importKey('raw', unhex(data.slice(0, dataHex)), 'AES-CBC', true, ['encrypt']);
+    await is('AES-KW, RFC 3394 ' + what, async () => hex(await subtle.wrapKey('raw', key, wrapper, 'AES-KW')), wrapped);
+    await is('AES-KW, RFC 3394 ' + what.slice(0, 3) + ' unwraps back', async () => hex(await subtle.exportKey('raw',
+             await subtle.unwrapKey('raw', unhex(wrapped), wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']))),
+             data.slice(0, dataHex));
+  }
+  const wrapper = await subtle.importKey('raw', unhex(kek.slice(0, 32)), 'AES-KW', true, ['wrapKey', 'unwrapKey']);
+  const altered = unhex(cases[0][3]);
+  altered[23] ^= 1;
+  await rejectsWith('an altered wrapped key: OperationError',
+                    () => subtle.unwrapKey('raw', altered, wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']), 'OperationError');
+  const key = await subtle.importKey('raw', unhex(data.slice(0, 32)), 'AES-CBC', true, ['encrypt']);
+  const wrappedJwk = await subtle.wrapKey('jwk', key, wrapper, 'AES-KW');
+  await is('a JWK wraps under AES-KW and unwraps back',
+           async () => hex(await subtle.exportKey('raw',
+             await subtle.unwrapKey('jwk', wrappedJwk, wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']))), data.slice(0, 32));
+  await rejectsWith('AES-KW does not encrypt: NotSupportedError',
+                    () => subtle.encrypt({name: 'AES-KW'}, wrapper, new Uint8Array(16)), 'NotSupportedError');
+  await rejectsWith('an AES-KW key that would encrypt: SyntaxError',
+                    () => subtle.generateKey({name: 'AES-KW', length: 128}, true, ['encrypt']), 'SyntaxError');
+  await is('an AES-KW key exports as an A128KW JWK', async () => (await subtle.exportKey('jwk', wrapper)).alg, 'A128KW');
+}
+
+// RFC 6979 A.2.5-A.2.7: each curve's key and its signatures of "sample" (SHA-256) and "test" (SHA-512).
+const kRfc6979 = [
+  {curve: 'P-256', d: 'ya-p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE', x: 'YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y', y: 'eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk',
+   spki: '3059301306072a8648ce3d020106082a8648ce3d0301070342000460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299',
+   sample256: 'efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8',
+   test512: '461d93f31b6540894788fd206c07cfa0cc35f46fa3c91816fff1040ad1581a0439af9f15de0db8d97e72719c74820d304ce5226e32dedae67519e840d1194e55'},
+  {curve: 'P-384', d: 'a509rS4bjBwFsZh1tmWfTeI8O2Z78pe6mqR3QHhxN9iW1XJOTHCoJfhyyepg0u31', x: '7DpOQVtOGaRWhhgCn0J_pdqai8SukuAuBqrlKGswDGTe-PDqkFWGYGSiVFFUgLwT', y: 'gBXZty19VyROqO-awMYhiWcIpZNn-d-59UyoSz8cnbEoiyMcOuDU_nNE_SUzJkcg',
+   spki: '3076301006072a8648ce3d020106052b8104002203620004ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64def8f0ea9055866064a254515480bc138015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1288b231c3ae0d4fe7344fd2533264720',
+   sample256: '21b13d1e013c7fa1392d03c5f99af8b30c570c6f98d4ea8e354b63a21d3daa33bde1e888e63355d92fa2b3c36d8fb2cdf3aa443fb107745bf4bd77cb3891674632068a10ca67e3d45db2266fa7d1feebefdc63eccd1ac42ec0cb8668a4fa0ab0',
+   test512: 'a0d5d090c9980faf3c2ce57b7ae951d31977dd11c775d314af55f76c676447d06fb6495cd21b4b6e340fc236584fb277976984e59b4c77b0e8e4460dca3d9f20e07b9bb1f63beefaf576f6b2e8b224634a2092cd3792e0159ad9cee37659c736'},
+  {curve: 'P-521', d: 'APrQbapiujsl0vtAEz2nVyBd5n9bsAGP7oyG4baMfnXKqJbrMvH0fHCFWDam0W_MFGb22PvsZ9uJ7AwIsOmWuDU4', x: 'AYlFUNB4WTLgDqojtpTyE_jDEh-G3JegTlpxZ9tOW803ESPUbkXba11TcKfyD7YzFV04_6FtK9dh3KxHS5ovUCOk', y: 'AEkxAclizU0v3feCKF5kWEE5wvkbR_h_-CNU1mMPdGoooNsldBtbNKgoAIsirMI_kk-q-9TTP4HqZpVt_qor_fz1',
+   spki: '30819b301006072a8648ce3d020106052b81040023038186000401894550d0785932e00eaa23b694f213f8c3121f86dc97a04e5a7167db4e5bcd371123d46e45db6b5d5370a7f20fb633155d38ffa16d2bd761dcac474b9a2f5023a400493101c962cd4d2fddf782285e64584139c2f91b47f87ff82354d6630f746a28a0db25741b5b34a828008b22acc23f924faafbd4d33f81ea66956dfeaa2bfdfcf5',
+   sample256: '01511bb4d675114fe266fc4372b87682baecc01d3cc62cf2303c92b3526012659d16876e25c7c1e57648f23b73564d67f61c6f14d527d54972810421e7d87589e1a7004a171143a83163d6df460aaf61522695f207a58b95c0644d87e52aa1a347916e4f7a72930b1bc06dbe22ce3f58264afd23704cbb63b29b931f7de6c9d949a7ecfc',
+   test512: '013e99020abf5cee7525d16b69b229652ab6bdf2affcaef38773b4b7d08725f10cdb93482fdcc54edcee91eca4166b2a7c6265ef0ce2bd7051b7cef945babd47ee6d01fbd0013c674aa79cb39849527916ce301c66ea7ce8b80682786ad60f98f7e78a19ca69eff5c57400e3b3a0ad66ce0978214d13baf4e9ac60752f7b155e2de4dce3'},
+];
+// RFC 5903 § 8.1-8.3: the initiator's key i (with g^i), the responder's public g^r, and the shared girx.
+const kRfc5903 = [
+  {curve: 'P-256', d: 'yI8B9RDZrD9wopLaojFt5UTpqriv6EBJxiqcV4YtFDM', x: '2tC2U5QiHPmwUeH-yleH0Jjf5jf8kLnvlF0MN3JYEYA', y: 'UnGgRhzbglLWHxxFb6PlmrH0WzOsz19YOJ4Fd7iZC7M',
+   peer: '04d12dfb5289c8d4f81208b70270398c342296970a0bccb74c736fc7554494bf6356fbf3ca366cc23e8157854c13c58d6aac23f046ada30f8353e74f33039872ab',
+   shared: 'd6840f6b42f6edafd13116e0e12565202fef8e9ece7dce03812464d04b9442de'},
+  {curve: 'P-384', d: 'CZ88cDTUosaZiE1zo3Wmf3Yk73xrPA8WBke2dBTc5lXjW1OAQeZJ7j-u-JZ4OrGU', x: 'ZnhC19GArCzeb3TzdVH1V1XHZFwg73PjFjT-crTFXubeOsgIrLS9tMiHMq7pX0Gq', y: 'lILtH8Duucr8SYRiXM_CP2UDIUng4UStoCQYFTWg847rn8_zwslH2uabTGNFc6gc',
+   peer: '04e558dbef53eecde3d3fccfc1aea08a89a987475d12fd950d83cfa41732bc509d0d1ac43a0336def96fda41d0774a3571dcfbec7aacf3196472169e838430367f66eebe3c6e70c416dd5f0c68759dd1fff83fa40142209dff5eaad96db9e6386c',
+   shared: '11187331c279962d93d604243fd592cb9d0a926f422e47187521287e7156c5c4d603135569b9e9d09cf5d4a270f59746'},
+  {curve: 'P-521', d: 'ADet6TGaifTavbPvQRqszKUSPGGsq1e1OT3OR2CBcqCVqoWjD-HClSxncdk3upd39ZV7Jjm6sHJGL2jCelc4LUpS', x: 'ABVBfoTb8owK08J4cTNJ3H3xU8iXoYkb2YurQ1fJ7L7h479C4AuOOArq5XwtEHVklBiFlCr1p_RgFyPEGV0XbO0-', y: 'AXyuILZkHS7raVeG2MlGFGI50Jnhjh1aUUxznXy0oQrYp4gBWsQF13mdx157fVts8iYaan8VB0OL8BvrbKOSb5WC',
+   peer: '0400d0b3975ac4b799f5bea16d5e13e9af971d5e9b984c9f39728b5e5739735a219b97c356436adc6e95bb0352f6be64a6c2912d4ef2d0433ced2b6171640012d9460f015c68226383956e3bd066e797b623c27ce0eac2f551a10c2c724d9852077b87220b6536c5c408a1d2aebb8e86d678ae49cb57091f4732296579ab44fcd17f0fc56a',
+   shared: '01144c7d79ae6956bc8edb8e7c787c4521cb086fa64407f97894e5e6b2d79b04d1427e73ca4baa240a34786859810c06b3c715a3a8cc3151f2bee417996d19f3ddea'},
+];
+
+async function ec() {
+  for (const v of kRfc6979) {
+    const algorithm = {name: 'ECDSA', namedCurve: v.curve};
+    const pub = await subtle.importKey('jwk', {kty: 'EC', crv: v.curve, x: v.x, y: v.y}, algorithm, true, ['verify']);
+    const priv = await subtle.importKey('jwk', {kty: 'EC', crv: v.curve, x: v.x, y: v.y, d: v.d}, algorithm, true, ['sign']);
+    await is('ECDSA ' + v.curve + ', RFC 6979\'s SHA-256 signature of "sample" verifies',
+             () => subtle.verify({name: 'ECDSA', hash: 'SHA-256'}, pub, unhex(v.sample256), enc('sample')), true);
+    await is('ECDSA ' + v.curve + ', RFC 6979\'s SHA-512 signature of "test" verifies',
+             () => subtle.verify({name: 'ECDSA', hash: 'SHA-512'}, pub, unhex(v.test512), enc('test')), true);
+    const bent = unhex(v.sample256);
+    bent[5] ^= 1;
+    await is('ECDSA ' + v.curve + ', a signature with a bit changed does not',
+             () => subtle.verify({name: 'ECDSA', hash: 'SHA-256'}, pub, bent, enc('sample')), false);
+    await is('ECDSA ' + v.curve + ', a signature this key makes verifies', async () => {
+      const signature = await subtle.sign({name: 'ECDSA', hash: 'SHA-384'}, priv, enc('a message'));
+      return signature.byteLength + ',' + await subtle.verify({name: 'ECDSA', hash: 'SHA-384'}, pub, signature, enc('a message'));
+    }, unhex(v.sample256).length + ',true');
+    await is('ECDSA ' + v.curve + ', the public key exports as its spki',
+             async () => hex(await subtle.exportKey('spki', pub)), v.spki);
+    await is('ECDSA ' + v.curve + ', the private key round-trips through pkcs8', async () => {
+      const once = await subtle.exportKey('pkcs8', priv);
+      const back = await subtle.importKey('pkcs8', once, algorithm, true, ['sign']);
+      return hex(await subtle.exportKey('pkcs8', back)) === hex(once) && (await subtle.exportKey('jwk', back)).d === v.d;
+    }, true);
+  }
+  for (const v of kRfc5903) {
+    const algorithm = {name: 'ECDH', namedCurve: v.curve};
+    const mine = await subtle.importKey('jwk', {kty: 'EC', crv: v.curve, x: v.x, y: v.y, d: v.d}, algorithm, false, ['deriveBits']);
+    const theirs = await subtle.importKey('raw', unhex(v.peer), algorithm, true, []);
+    await is('ECDH ' + v.curve + ', RFC 5903\'s shared secret',
+             async () => hex(await subtle.deriveBits({name: 'ECDH', public: theirs}, mine, null)), v.shared);
+    await is('ECDH ' + v.curve + ', its first 128 bits',
+             async () => hex(await subtle.deriveBits({name: 'ECDH', public: theirs}, mine, 128)), v.shared.slice(0, 32));
+    await rejectsWith('ECDH ' + v.curve + ', more bits than the secret has: OperationError',
+                      () => subtle.deriveBits({name: 'ECDH', public: theirs}, mine, v.shared.length * 4 + 8), 'OperationError');
+  }
+  const alice = await subtle.generateKey({name: 'ECDH', namedCurve: 'P-256'}, false, ['deriveKey']);
+  const bob = await subtle.generateKey({name: 'ECDH', namedCurve: 'P-256'}, false, ['deriveKey']);
+  await is('a generated pair: types, extractability and usages', async () =>
+           [alice.publicKey.type, alice.publicKey.extractable, alice.publicKey.usages.length,
+            alice.privateKey.type, alice.privateKey.extractable, alice.privateKey.usages.join('/'),
+            alice.privateKey.algorithm.namedCurve].join(), 'public,true,0,private,false,deriveKey,P-256');
+  await is('two parties derive one AES-GCM key and read each other', async () => {
+    const aesA = await subtle.deriveKey({name: 'ECDH', public: bob.publicKey}, alice.privateKey,
+                                        {name: 'AES-GCM', length: 256}, false, ['encrypt']);
+    const aesB = await subtle.deriveKey({name: 'ECDH', public: alice.publicKey}, bob.privateKey,
+                                        {name: 'AES-GCM', length: 256}, false, ['decrypt']);
+    const iv = new Uint8Array(12);
+    const sealed = await subtle.encrypt({name: 'AES-GCM', iv}, aesA, enc('hello, Bob'));
+    return new TextDecoder().decode(await subtle.decrypt({name: 'AES-GCM', iv}, aesB, sealed));
+  }, 'hello, Bob');
+  const other = await subtle.generateKey({name: 'ECDH', namedCurve: 'P-384'}, false, ['deriveBits']);
+  await rejectsWith('ECDH between two curves: InvalidAccessError',
+                    () => subtle.deriveBits({name: 'ECDH', public: other.publicKey}, alice.privateKey, 128), 'InvalidAccessError');
+  const signer = await subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, true, ['sign', 'verify']);
+  await rejectsWith('signing with a public key: InvalidAccessError',
+                    () => subtle.sign({name: 'ECDSA', hash: 'SHA-256'}, signer.publicKey, enc('x')), 'InvalidAccessError');
+  await rejectsWith('a public key as pkcs8: InvalidAccessError',
+                    () => subtle.exportKey('pkcs8', signer.publicKey), 'InvalidAccessError');
+  await rejectsWith('a curve not here: NotSupportedError',
+                    () => subtle.generateKey({name: 'ECDSA', namedCurve: 'P-512'}, true, ['sign']), 'NotSupportedError');
+  await rejectsWith('a pair whose private key would have no usage: SyntaxError',
+                    () => subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, true, ['verify']), 'SyntaxError');
+  await rejectsWith('a point off the curve: DataError', () => {
+    const point = unhex(kRfc5903[0].peer);
+    point[64] ^= 1;
+    return subtle.importKey('raw', point, {name: 'ECDH', namedCurve: 'P-256'}, true, []);
+  }, 'DataError');
+  await is('a JWK private key wrapped under AES-KW comes back', async () => {
+    const kek = await subtle.generateKey({name: 'AES-KW', length: 256}, false, ['wrapKey', 'unwrapKey']);
+    const wrapped = await subtle.wrapKey('jwk', signer.privateKey, kek, 'AES-KW');
+    const back = await subtle.unwrapKey('jwk', wrapped, kek, 'AES-KW', {name: 'ECDSA', namedCurve: 'P-256'}, true, ['sign']);
+    return hex(await subtle.exportKey('pkcs8', back)) === hex(await subtle.exportKey('pkcs8', signer.privateKey));
+  }, true);
+}
+
+async function checks() {
+  record(window.isSecureContext === true, 'this page is a secure context');
+  await hkdf();
+  await pbkdf2();
+  await aesKw();
+  await ec();
+}
+checks().catch(e => record(false, 'the checks themselves', e.name + ' ' + e.message)).then(() => {
+  document.getElementById('checks').textContent = lines.join('\n');
+  const summary = document.getElementById('summary');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed ? 'fail' : 'pass';
+});
+
+async function time(iterations) {
+  const out = document.getElementById('timing');
+  out.textContent = 'Deriving with ' + iterations.toLocaleString() + ' iterations...';
+  const key = await subtle.importKey('raw', enc('correct horse battery staple'), 'PBKDF2', false, ['deriveBits']);
+  const t0 = performance.now();
+  await subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: enc('a salt'), iterations}, key, 256);
+  const ms = performance.now() - t0;
+  out.textContent = iterations.toLocaleString() + ' iterations: ' + ms.toFixed(1) + ' ms (' +
+                    Math.round(iterations / (ms / 1000)).toLocaleString() + ' iterations a second)';
+}
+async function timeCurves() {
+  const out = document.getElementById('curve-timing');
+  const rows = [];
+  for (const curve of ['P-256', 'P-384', 'P-521']) {
+    out.textContent = rows.concat('Timing ' + curve + '...').join('\n');
+    const mean = async make => {
+      const t0 = performance.now();
+      for (let i = 0; i < 5; i++) await make();
+      return ((performance.now() - t0) / 5).toFixed(1) + ' ms';
+    };
+    const pair = await subtle.generateKey({name: 'ECDSA', namedCurve: curve}, false, ['sign', 'verify']);
+    const signature = await subtle.sign({name: 'ECDSA', hash: 'SHA-256'}, pair.privateKey, enc('timing'));
+    const dh = await subtle.generateKey({name: 'ECDH', namedCurve: curve}, false, ['deriveBits']);
+    rows.push(curve + ': generate ' + await mean(() => subtle.generateKey({name: 'ECDSA', namedCurve: curve}, false, ['sign'])) +
+              ', sign ' + await mean(() => subtle.sign({name: 'ECDSA', hash: 'SHA-256'}, pair.privateKey, enc('timing'))) +
+              ', verify ' + await mean(() => subtle.verify({name: 'ECDSA', hash: 'SHA-256'}, pair.publicKey, signature, enc('timing'))) +
+              ', exchange ' + await mean(() => subtle.deriveBits({name: 'ECDH', public: dh.publicKey}, dh.privateKey, null)));
+  }
+  out.textContent = rows.join('\n');
+}
+document.getElementById('curves').onclick = () => timeCurves().catch(e => {
+  document.getElementById('curve-timing').textContent = 'Failed: ' + e.name + ' ' + e.message;
+});
+for (const n of [100000, 310000, 600000, 1000000]) {
+  const b = document.createElement('button');
+  b.textContent = n.toLocaleString();
+  b.onclick = () => time(n);
+  document.getElementById('counts').appendChild(b);
+}
+</script>
+</body></html>

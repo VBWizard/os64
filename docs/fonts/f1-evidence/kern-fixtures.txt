@@ -1,0 +1,29 @@
+
+DejaVuSans.ttf  unitsPerEm=2048  kern=yes  GPOS=yes  -> reads from: kern  (2727 accepted pairs)
+  pair   gids           units    16px (26.6)    32px (26.6)
+  'AV'   36->57          -131         -65.50        -131.00
+  'AT'   36->55          -159         -79.50        -159.00
+  'To'   55->82          -348        -174.00        -348.00
+  'LT'   47->55          -282        -141.00        -282.00
+
+DejaVuSansMono.ttf  unitsPerEm=2048  kern=no  GPOS=no  -> reads from: none  (0 accepted pairs)
+  pair   gids           units    16px (26.6)    32px (26.6)
+  'AV'   36->57             0           0.00           0.00
+  'AT'   36->55             0           0.00           0.00
+  'To'   55->82             0           0.00           0.00
+  'LT'   47->55             0           0.00           0.00
+
+SourceSans3-Regular.otf  unitsPerEm=1000  kern=no  GPOS=yes  -> reads from: GPOS  (228491 accepted pairs)
+  pair   gids           units    16px (26.6)    32px (26.6)
+  'AV'   2->23            -14         -14.34         -28.67
+  'AT'   2->21            -55         -56.32        -112.64
+  'To'   21->42           -66         -67.58        -135.17
+  'LT'   13->21          -120        -122.88        -245.76
+
+SourceCodePro-Regular.otf  unitsPerEm=1000  kern=no  GPOS=no  -> reads from: none  (0 accepted pairs)
+  pair   gids           units    16px (26.6)    32px (26.6)
+  'AV'   2->23              0           0.00           0.00
+  'AT'   2->21              0           0.00           0.00
+  'To'   21->42             0           0.00           0.00
+  'LT'   13->21             0           0.00           0.00
+

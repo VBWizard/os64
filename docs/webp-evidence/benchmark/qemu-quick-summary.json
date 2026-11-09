@@ -1,0 +1,87 @@
+{
+  "scope": "quick",
+  "modes": {
+    "sse2": {
+      "serial_median_us": {
+        "alpha_512": {
+          "call_us": 197203,
+          "gate_us": 3,
+          "allocate_us": 424,
+          "scratch_free_us": 119062,
+          "other_decode_us": 78729,
+          "verify_us": 4895,
+          "output_free_us": 89845
+        },
+        "lossless_512": {
+          "call_us": 136894,
+          "gate_us": 3,
+          "allocate_us": 328,
+          "scratch_free_us": 92854,
+          "other_decode_us": 42600,
+          "verify_us": 4921,
+          "output_free_us": 89850
+        },
+        "lossy_512": {
+          "call_us": 95288,
+          "gate_us": 3,
+          "allocate_us": 156,
+          "scratch_free_us": 812,
+          "other_decode_us": 94320,
+          "verify_us": 4949,
+          "output_free_us": 90459
+        }
+      },
+      "contention": {
+        "mode": "sse2",
+        "fixture": "alpha_512",
+        "workers": "6",
+        "elapsed_us": "1674826",
+        "process_cpu_us": "2842172",
+        "cpu_valid": "1",
+        "result": "0"
+      },
+      "maximum_gate_us": 1297845
+    },
+    "scalar": {
+      "serial_median_us": {
+        "alpha_512": {
+          "call_us": 172100,
+          "gate_us": 3,
+          "allocate_us": 425,
+          "scratch_free_us": 119560,
+          "other_decode_us": 52101,
+          "verify_us": 4912,
+          "output_free_us": 90880
+        },
+        "lossless_512": {
+          "call_us": 119161,
+          "gate_us": 3,
+          "allocate_us": 323,
+          "scratch_free_us": 93179,
+          "other_decode_us": 25601,
+          "verify_us": 4914,
+          "output_free_us": 89287
+        },
+        "lossy_512": {
+          "call_us": 78686,
+          "gate_us": 3,
+          "allocate_us": 149,
+          "scratch_free_us": 701,
+          "other_decode_us": 77820,
+          "verify_us": 5069,
+          "output_free_us": 91410
+        }
+      },
+      "contention": {
+        "mode": "scalar",
+        "fixture": "alpha_512",
+        "workers": "6",
+        "elapsed_us": "1566920",
+        "process_cpu_us": "2580666",
+        "cpu_valid": "1",
+        "result": "0"
+      },
+      "maximum_gate_us": 1200896
+    }
+  }
+}

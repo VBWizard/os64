@@ -42,12 +42,13 @@ static uint64_t kNmiStackTop[MAX_CPUS];
 // faulting at once must not land on the same page.
 //
 // Called ONCE by the BSP, after the allocator is up and on a real kernel
-// stack. kmalloc_aligned returns a zeroed, page-aligned HHDM address, which
+// stack, for every CPU on the roster (a CPU a cap left parked never runs
+// here, so it needs no stack). kmalloc_aligned returns a zeroed, page-aligned HHDM address, which
 // lives in the shared upper half and therefore resolves under every task's
 // CR3 — a property a fault stack absolutely requires.
 void tss_init_ist_stacks(void)
 {
-	for (uint32_t i = 0; i < MAX_CPUS; i++)
+	for (uint32_t i = 0; i < kCPUCount; i++)
 	{
 		void *p = kmalloc_aligned(IST_STACK_SIZE);
 		// Stacks grow DOWN: point at the top, 16-byte aligned.
@@ -57,14 +58,16 @@ void tss_init_ist_stacks(void)
 		kNmiStackTop[i] = n ? (((uint64_t)n + IST_STACK_SIZE - 16) & ~0xFULL) : 0;
 	}
 	printd(DEBUG_BOOT, "tss: allocated %u double-fault (IST1) stacks, CPU0's at 0x%016lx\n",
-	       (uint32_t)MAX_CPUS, kIstStackTop[0]);
+	       kCPUCount, kIstStackTop[0]);
 	printd(DEBUG_BOOT, "tss: allocated %u NMI (IST2) stacks, CPU0's at 0x%016lx\n",
-	       (uint32_t)MAX_CPUS, kNmiStackTop[0]);
+	       kCPUCount, kNmiStackTop[0]);
 }
 
 extern uintptr_t kKernelStack;
 
 static tss_t kTSSPerCPU[MAX_CPUS];
+_Static_assert(GDT_FIRST_TSS_ENTRY + 2 * MAX_CPUS <= GDT_ENTRIES,
+               "the GDT must hold a two-slot TSS descriptor for every CPU");
 static uint16_t kTSSSelector[MAX_CPUS];
 
 static inline int tss_descriptor_index(uint32_t cpu_index)

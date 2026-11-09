@@ -79,8 +79,9 @@ static void kernel_read_file(kernel_read_params_t *params)
 
 // Resolves and returns the physical address of a page for the given faulting address.
 // This function handles anonymous and file-backed memory only (CoW later).
-uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
+uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr, bool *did_read)
 {
+    *did_read = false;
     uintptr_t page_offset = (fault_addr & ~(PAGE_SIZE - 1)) - vma->start;
     uintptr_t phys = 0;
 
@@ -169,6 +170,9 @@ uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
             params->size = page_valid;
             params->result = 0;
 
+            // A backed page counts as major when resolving it requires a
+            // file read, even if the filesystem serves that read from cache.
+            *did_read = true;
             // Switch to kernel context (kernel stack + kKernelPML4) and read file
             call_in_kernel_context((void (*)(void*))kernel_read_file, params);
 

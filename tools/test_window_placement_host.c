@@ -1,0 +1,295 @@
+/* Production placement and checked config writer; deterministic storage/native
+ * boundaries exercise failures without executing Os64 syscalls on the host. */
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "os64/ui_window.h"
+#include "os64/conf.h"
+#include "os64/io.h"
+
+static char data[OS64_CONF_MAX+8], temporary[OS64_CONF_MAX*2];
+static size_t data_len, cursor, temporary_len;
+static bool exists, inherited, unreadable, read_failure, write_failure, sync_failure, rename_failure, no_memory;
+static bool temporary_exists, destroy_busy, draw_failure, native_alive;
+static bool create_failure;
+static bool state_failure;
+static uint32_t state_flags;
+static uint64_t created_flags;
+static unsigned publications, ui_inits, creates;
+static uint32_t screen_w=1024, screen_h=768;
+static os64_window_geometry_t created;
+void *os64_malloc(size_t n) { return no_memory ? NULL : malloc(n); }
+void os64_free(void *p) { free(p); }
+uint64_t os64_taskid(void) { return 42; }
+int64_t os64_open(const char *path,const char *mode)
+{
+    (void)path;
+    if (!strcmp(mode,"w")) { temporary_len=0; temporary_exists=true; return 12; }
+    assert(!strcmp(mode,"r"));
+    if (!exists || unreadable) return -1;
+    cursor=0; return 11;
+}
+int64_t os64_read(int32_t fd,void *out,uint64_t count)
+{
+    assert(fd==11);
+    if (read_failure) return -1;
+    if (count>data_len-cursor) count=data_len-cursor;
+    if (count>7) count=7;
+    memcpy(out,data+cursor,(size_t)count);cursor+=(size_t)count;return (int64_t)count;
+}
+int64_t os64_write(int32_t fd,const void *in,uint64_t count)
+{
+    assert(fd==12);
+    if (write_failure) return -1;
+    if (count>7) count=7;
+    assert(temporary_len+count<sizeof(temporary));
+    memcpy(temporary+temporary_len,in,(size_t)count);temporary_len+=(size_t)count;
+    temporary[temporary_len]=0;return (int64_t)count;
+}
+int64_t os64_close(int32_t fd) { (void)fd;return 0; }
+int64_t os64_sync(int32_t fd) { assert(fd==12);return sync_failure ? -1 : 0; }
+int64_t os64_unlink(const char *path) { (void)path;temporary_exists=false;return 0; }
+int64_t os64_rename_with_flags(const char *from,const char *to,uint64_t flags)
+{
+    (void)from; assert(!strcmp(to,"/config/window.conf"));
+    assert(flags==OS64_RENAME_NOREPLACE || flags==OS64_RENAME_REQUIRE_ATOMIC_REPLACE);
+    if (rename_failure || (flags==OS64_RENAME_NOREPLACE && exists && !inherited)) return -1;
+    assert(temporary_len<sizeof(data)); memcpy(data,temporary,temporary_len+1);data_len=temporary_len;
+    exists=true;inherited=false;temporary_exists=false;++publications;return 0;
+}
+int64_t os64_rename(const char *a,const char *b)
+{ return os64_rename_with_flags(a,b,OS64_RENAME_REQUIRE_ATOMIC_REPLACE); }
+uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f)
+{
+    switch (nr) {
+    case SYSCALL_CONF_RESOLVE:
+        assert(!strcmp((const char *)(uintptr_t)a,"window.conf"));
+        if (!e && !exists) return (uint64_t)-1;
+        snprintf((char *)(uintptr_t)b,(size_t)c,"/%s/window.conf",!e && inherited ? "etc" : "config");
+        return 1;
+    case SYSCALL_GUI_SCREEN_INFO:
+        *(uint32_t *)(uintptr_t)a=screen_w;*(uint32_t *)(uintptr_t)b=screen_h;return 0;
+    case SYSCALL_GUI_WINDOW_CREATE:
+        if (create_failure) return (uint64_t)OS64_GUI_ERR_NOT_RUNNING;
+        assert(!native_alive); assert(f & OS64_GUI_CREATE_FIT_SCREEN);
+        created=(os64_window_geometry_t){(int32_t)b,(int32_t)c,(uint32_t)d,(uint32_t)e};
+        created_flags=f;
+        native_alive=true;++creates;return 17;
+    case SYSCALL_GUI_WINDOW_DESTROY:
+        assert(a==17); if (destroy_busy) return (uint64_t)OS64_GUI_ERR_BUSY;
+        native_alive=false;return 0;
+    case SYSCALL_GUI_WINDOW_GET_STATE:
+        if (state_failure) return (uint64_t)-1;
+        *(os64_gui_window_state_t *)(uintptr_t)b=(os64_gui_window_state_t){.flags=state_flags};
+        return 0;
+    default: assert(!"unexpected native call");return (uint64_t)-1;
+    }
+}
+int64_t os64_draw_ctx_init(os64_draw_ctx_t *ctx,int64_t win)
+{ if (draw_failure) return -1;ctx->win=win;return 0; }
+void os64_ui_init(os64_ui_t *ui,os64_draw_ctx_t *ctx)
+{ *ui=(os64_ui_t){.ctx=ctx};++ui_inits; }
+static void record(const char *s)
+{
+    strcpy(data,s);data_len=strlen(s);exists=true;inherited=false;
+}
+static os64_window_placement_t tracker(os64_window_remember_mode_t mode)
+{
+    os64_window_placement_t p;
+    assert(os64_window_placement_init(&p,(os64_window_remember_t){"window.conf",mode},
+        (os64_window_geometry_t){10,20,640,440}));
+    return p;
+}
+static void edit(os64_window_placement_t *p,uint32_t mask,int32_t x,uint32_t w,uint32_t h)
+{
+    os64_gui_event_t e={.type=OS64_GUI_EVENT_WINDOW_PLACEMENT,
+        .placement={.x=x,.y=-20,.width=w,.height=h,.changed=mask}};
+    assert(os64_window_placement_event(p,&e));
+}
+static void geometry_tests(void)
+{
+    record("# keep\nother = yes\ngeometry = 1,-10,20,2500,1360\n");inherited=true;
+    os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(!p.status && p.preferred.width==2500);
+    os64_window_geometry_t live=os64_window_placement_prepare(&p);
+    assert(live.width==1024 && live.height==768 && !publications);
+    edit(&p,OS64_GUI_PLACEMENT_X,80,1024,768);
+    assert(!p.status && strstr(data,"1,80,20,2500,1360") && strstr(data,"# keep") && strstr(data,"other = yes"));
+    edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,1024,600);
+    assert(strstr(data,"1,80,20,2500,600"));
+    screen_w=2560;screen_h=1440;live=os64_window_placement_prepare(&p);
+    assert(live.width==2500 && live.height==600);
+    os64_window_placement_t old=p;
+    edit(&p,OS64_GUI_PLACEMENT_WIDTH,0,900,0);
+    edit(&old,OS64_GUI_PLACEMENT_X,100,0,0);
+    assert(strstr(data,"1,100,20,900,600"));
+    unsigned saved=publications;
+    unsigned automatic[]={OS64_GUI_EVENT_WINDOW_RESIZE,OS64_GUI_EVENT_APPEARANCE,OS64_GUI_EVENT_WINDOW_CLOSE};
+    for (unsigned i=0;i<3;++i) {
+        os64_gui_event_t e={.type=automatic[i]};assert(!os64_window_placement_event(&old,&e));
+    }
+    assert(publications==saved);
+    record("size = 1900,1000\n");p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    edit(&p,OS64_GUI_PLACEMENT_X,50,0,0);assert(publications==saved);
+    edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+    assert(strstr(data,"size = 1900,700"));
+}
+static void setting_case_tests(void)
+{
+    const char *size_keys[]={"size","SIZE","SiZe"};
+    const char *geometry_keys[]={"geometry","GEOMETRY","GeOmEtRy"};
+    for (unsigned i=0;i<3;++i) {
+        char text[160];
+        snprintf(text,sizeof(text),"# keep\n%s = 1900,1000\n",size_keys[i]);record(text);
+        os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+        assert(!p.status && p.preferred.width==1900 && p.preferred.height==1000);
+        edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+        assert(!p.status && strstr(data,"1900,700") && strstr(data,"# keep"));
+        p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+        assert(p.preferred.width==1900 && p.preferred.height==700);
+
+        snprintf(text,sizeof(text),"%s = 1,-30,40,1900,1000\n",geometry_keys[i]);record(text);
+        p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+        assert(!p.status && p.preferred.x==-30 && p.preferred.y==40 &&
+            p.preferred.width==1900 && p.preferred.height==1000);
+        edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+        assert(!p.status && strstr(data,"1,-30,40,1900,700"));
+        p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+        assert(p.preferred.x==-30 && p.preferred.y==40 &&
+            p.preferred.width==1900 && p.preferred.height==700);
+    }
+    // A save must also reread mixed-case settings changed since initialization.
+    record("size = 900,600\n");
+    os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    record("SiZe = 1900,1000\n");edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+    assert(!p.status && p.preferred.width==1900 && strstr(data,"1900,700"));
+
+    // Duplicate keys keep last-setting precedence regardless of letter case.
+    record("size = 900,600\nSIZE = 1900,1000\n");p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    assert(p.preferred.width==1900 && p.preferred.height==1000);
+    record("geometry = 1,1,2,900,600\nGEOMETRY = 1,-30,40,1900,1000\n");
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.preferred.x==-30 && p.preferred.width==1900);
+    record("size = 1900,1000\nSiZe = invalid\n");p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    assert(p.preferred.width==640 && p.preferred.height==440);
+    record("geometry = 1,-30,40,1900,1000\nGeOmEtRy = invalid\n");
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.preferred.x==10 && p.preferred.width==640 && p.preferred.height==440);
+}
+static void failure_tests(void)
+{
+    const char *bad[]={"", "2,1,2,640,440", "1,2147483648,2,640,440", "1,-2147483649,2,640,440",
+        "1,1,2,0,440", "1,1,2,32768,440", "1,1,2,640,440,5", "1,1,2,640,99999999999999999999999"};
+    for (size_t i=0;i<sizeof(bad)/sizeof(*bad);++i) {
+        char text[160];snprintf(text,sizeof(text),"geometry = %s\n",bad[i]);record(text);
+        os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+        assert(p.preferred.width==640 && p.preferred.x==10);
+        edit(&p,OS64_GUI_PLACEMENT_X,30,0,0);
+        assert(!p.status && strstr(data,"1,30,20,640,440"));
+    }
+    record("geometry = 1,-2147483648,2147483647,32767,32767\n");
+    os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.preferred.x==INT32_MIN && p.preferred.y==INT32_MAX);
+    bool *failures[]={&unreadable,&read_failure,&write_failure,&sync_failure,&rename_failure,&no_memory};
+    for (unsigned i=0;i<sizeof(failures)/sizeof(*failures);++i) {
+        record("geometry = 1,1,2,900,700\n");char before[128];strcpy(before,data);unsigned saved=publications;
+        p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);*failures[i]=true;
+        edit(&p,OS64_GUI_PLACEMENT_X,99,0,0);*failures[i]=false;
+        assert(p.status && publications==saved && !strcmp(before,data) && !temporary_exists);
+    }
+    record("broken setting\ngeometry = 1,1,2,900,700\n");p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.status);unsigned saved=publications;edit(&p,1,99,0,0);assert(publications==saved);
+    record("geometry = 1,1,2,900,700\n");data[4]=0;p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.status);edit(&p,1,99,0,0);assert(publications==saved);
+    memset(data,'x',OS64_CONF_MAX);data_len=OS64_CONF_MAX;p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.status==OS64_CONF_TRUNCATED);edit(&p,1,99,0,0);assert(publications==saved);
+    exists=false;p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);edit(&p,1,55,0,0);
+    assert(!p.status && strstr(data,"1,55,20,640,440"));
+    os64_conf_pair_t pair={"geometry","1,99,20,640,440"};saved=publications;
+    assert(os64_conf_create_checked("/config/window.conf",&pair,1,NULL,NULL)!=0);
+    unreadable=true;assert(os64_conf_create_checked("/config/window.conf",&pair,1,NULL,NULL)!=0);unreadable=false;
+    assert(publications==saved && strstr(data,"1,55,20,640,440") && !temporary_exists);
+}
+static void ownership_tests(void)
+{
+    os64_ui_t ui;os64_draw_ctx_t ctx;int64_t win=0;
+    char name[]="window.conf";
+    os64_ui_window_options_t o={.title="test",.content_width=640,.content_height=440,
+        .remember={name,OS64_WINDOW_REMEMBER_POSITION_AND_SIZE}};
+    record("geometry = 1,30,40,900,700\n");
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_OK);
+    name[0]='X';assert(!strcmp(ui.placement.config,"window.conf"));name[0]='w';
+    assert(win==17 && ui_inits==1 && created.x==30 && created.width==900 && ui.placement_event);
+    assert(os64_gui_window_destroy(win)==0);
+    draw_failure=true;destroy_busy=true;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_ERROR && win==17 && native_alive);
+    assert(ui.ctx==&ctx && ctx.win==win && ui_inits==2);
+    destroy_busy=false;assert(os64_gui_window_destroy(win)==0);
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_ERROR && !win && !native_alive);
+    draw_failure=false;
+    o.content_width=0;unsigned before=creates;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_INVALID && !win && creates==before);
+    o.content_width=640;o.remember.config=NULL;
+    create_failure=true;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_ERROR && win==OS64_GUI_ERR_NOT_RUNNING && !native_alive);
+    create_failure=false;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_OK && !ui.placement_event && created.width==640);
+    assert(os64_gui_window_destroy(win)==0);
+}
+static void maximized_tests(void)
+{
+    // The new bit occupies existing padding; UI storage shared with older
+    // applications must retain its layout when they use the original modes.
+    _Static_assert(offsetof(os64_window_placement_t,status)==152, "placement status ABI");
+    _Static_assert(sizeof(os64_window_placement_t)==160, "placement storage ABI");
+    record("# keep\ngeometry = 1,30,40,1900,1000\nMaximized = TrUe\nother = yes\n");
+    os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED);
+    assert(p.maximized && p.preferred.width==1900 && p.preferred.x==30);
+    edit(&p,OS64_GUI_PLACEMENT_X,80,0,0);
+    assert(strstr(data,"TrUe") && strstr(data,"1,80,40,1900,1000"));
+    // Closing an older window merges only state, retaining a newer rectangle.
+    record("# keep\ngeometry = 1,90,100,1800,900\nmaximized = true\nother = yes\n");
+    state_flags=OS64_GUI_WINDOW_MINIMIZED;
+    assert(!os64_window_placement_save_state(&p,17));
+    assert(strstr(data,"maximized = false") && strstr(data,"1,90,100,1800,900") &&
+        strstr(data,"# keep") && strstr(data,"other = yes"));
+    state_flags=OS64_GUI_WINDOW_MAXIMIZED|OS64_GUI_WINDOW_MINIMIZED;
+    assert(!os64_window_placement_save_state(&p,17));
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED);
+    assert(p.maximized && p.preferred.width==1800);
+    os64_ui_t ui;os64_draw_ctx_t ctx;int64_t win;
+    os64_ui_window_options_t o={.title="test",.content_width=640,.content_height=440,
+        .remember={"window.conf",OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED}};
+    unsigned saved=publications;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_OK);
+    assert((created_flags & OS64_GUI_CREATE_MAXIMIZED) && created.width==1800 &&
+        created.x==90 && publications==saved);
+    assert(!os64_gui_window_destroy(win));
+    // Opted-out consumers ignore the stored bit and do not save it on exit.
+    o.remember.mode=OS64_WINDOW_REMEMBER_POSITION_AND_SIZE;
+    assert(os64_ui_window_open(&ui,&ctx,&win,&o)==OS64_UI_OK);
+    assert(!(created_flags & OS64_GUI_CREATE_MAXIMIZED));
+    assert(!os64_window_placement_save_state(&ui.placement,win) && publications==saved);
+    assert(!os64_gui_window_destroy(win));
+    bool *failures[]={&state_failure,&unreadable,&read_failure,&write_failure,&sync_failure,&rename_failure,&no_memory};
+    for (unsigned i=0;i<sizeof(failures)/sizeof(*failures);++i) {
+        char before[256];strcpy(before,data);saved=publications;
+        *failures[i]=true;
+        assert(os64_window_placement_save_state(&p,17));
+        *failures[i]=false;
+        assert(publications==saved && !strcmp(before,data) && !temporary_exists);
+    }
+    record("maximized = true\nMAXIMIZED = invalid\n");
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED);
+    assert(!p.maximized && p.preferred.width==640);
+    exists=false;p=tracker(OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED);
+    assert(!os64_window_placement_save_state(&p,17));
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED);
+    assert(p.maximized && p.preferred.width==640);
+}
+int main(void)
+{
+    geometry_tests();setting_case_tests();failure_tests();ownership_tests();maximized_tests();
+    puts("placement: real parser/writer, case-insensitive settings, component merge, display fitting, failures, NOREPLACE and initializer ownership passed");
+}

@@ -22,7 +22,7 @@ extern bool kEnableKWorker;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;
 extern volatile uint64_t kTicksSinceStart;
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -32,9 +32,11 @@ extern volatile struct limine_module_request module_request;
 extern volatile struct limine_smp_request smp_request;
 extern struct limine_module_response *limine_module_response;
 extern struct limine_memmap_response *memmap_response;
-extern int kTimeZone;
 extern BasicRenderer kRenderer;
 extern uint64_t kCPUCyclesPerSecond;
+// rdtsc at kernel_main's first line — the zero of micros() (syscall 59), so
+// "since boot" means since THIS kernel started and not since power-on.
+extern uint64_t kBootTSC;
 
 // BOOTMARK: boot-phase mile-markers, printed via printf (direct to screen +
 // serial, unqueued — visible even when the log path itself is the suspect).

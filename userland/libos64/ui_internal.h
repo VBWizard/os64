@@ -1,0 +1,69 @@
+#ifndef OS64_UI_INTERNAL_H
+#define OS64_UI_INTERNAL_H
+#include "os64/ui.h"
+void ui_gesture_canceled(os64_ui_t *, os64_ui_widget_t *);
+// Apply signed row motion without wrapping at either end of size_t.
+static inline size_t ui_scroll_rows(size_t top, int32_t delta)
+{
+	if (delta < 0) {
+		size_t amount = (size_t)-(int64_t)delta;
+		return top > amount ? top - amount : 0;
+	}
+	size_t amount = (size_t)delta;
+	return amount > SIZE_MAX - top ? SIZE_MAX : top + amount;
+}
+// Shared escape-burst decoder for text widgets and numeric controls.
+typedef enum
+{
+	K_NONE,        // consumed mid-burst, or ignorable
+	K_CHAR,        // printable; the byte is in *ch
+	K_ENTER, K_BACKSPACE, K_TAB, K_ESC,
+	K_UP, K_DOWN, K_LEFT, K_RIGHT,
+	K_HOME, K_END, K_PGUP, K_PGDN, K_DELETE,
+} ui_key_t;
+
+ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch);
+
+// The role a widget measures and draws in: its class's own, or the face the
+// application lent the window when the widget asked for that one.
+static inline os64_font_role_t ui_role(const os64_ui_widget_t *w, os64_font_role_t usual)
+{
+	return w && w->app_face ? OS64_UI_FONT_APP : usual;
+}
+// Whether a widget holds the point: inside its bounds, and inside its clip
+// when it is `clipped`. What is clipped away is not there to be pressed, to
+// be released over or to be chosen from.
+static inline bool ui_widget_holds(const os64_ui_widget_t *w, int32_t x, int32_t y)
+{
+	os64_gui_rect_t r = w->bounds, c = w->clip;
+	return x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w && (int64_t)y < (int64_t)r.y + r.h &&
+	       (!w->clipped || (x >= c.x && y >= c.y && (int64_t)x < (int64_t)c.x + c.w && (int64_t)y < (int64_t)c.y + c.h));
+}
+// os64_ui_control_min_height for a control drawn in `role`.
+__attribute__((visibility("hidden")))
+int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role);
+
+// The cluster starting at `at` (after) or ending there (before), if it is at
+// most `limit` bytes long; false when it is longer. `at` must be a cluster
+// edge. Each costs at most about `limit` bytes of scanning, however long the
+// cluster really is — which is how an editor notices a cluster too long to
+// lay out without walking all of it.
+bool ui_text_cluster_after(const char *s, size_t len, size_t at, size_t limit,
+                           size_t *out_end);
+bool ui_text_cluster_before(const char *s, size_t len, size_t at, size_t limit,
+                            size_t *out_start);
+// Detailed decode status lets the session cache retry allocation failures.
+int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text,
+                                  size_t length, bool session);
+int os64_ui_theme_preserve_session(void);
+// During adoption, compare the candidate's interface row with the installed
+// row without switching measurement away from the candidate or allocating.
+__attribute__((visibility("hidden")))
+bool ui_font_interface_row_unchanged(const os64_ui_t *ui);
+int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap);
+int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length);
+void os64_ui_theme_merge_fields(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                                uint64_t fields);
+int64_t os64_ui_theme_parse_saved_status(os64_ui_theme_t *t, const char *text, size_t length);
+#endif

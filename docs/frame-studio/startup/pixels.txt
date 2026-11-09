@@ -1,0 +1,1 @@
+PASS 1242x45 active titlebar pixels identical after cold boot (including embedded 30px font and grain). Window created at y=60 on boot; prior Apply preserved content and placed top at y=36.

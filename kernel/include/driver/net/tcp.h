@@ -36,19 +36,44 @@
 //      collapse, and Van Jacobson's answer to it).
 //
 // V1 SCOPE, stated plainly so the omissions are decisions:
-//   - ACTIVE open only (we dial out). Listeners — ruling #3's "read a
-//     listener handle to accept" — are the next slice, and the state
-//     machine below already carries their states.
-//   - STOP-AND-WAIT sending: one unacknowledged segment at a time. This
-//     is honest for what os64 sends today (an HTTP request is one small
-//     segment) and it costs nothing on the RECEIVE side, which is where
-//     a page fetch's bytes actually flow. A real send window is a booked
-//     DEBT, not a pretense.
-//   - Out-of-order arrivals are DROPPED (the sender will resend them in
-//     order). Legal — RFC 793 permits a receiver to discard anything it
-//     cannot use — and it means no reassembly queue in v1. Booked.
-//   - Congestion control: fixed window. Also booked. os64 on slirp is
-//     not going to melt the internet, but silence would still be a lie.
+//   - ACTIVE open (we dial out) and PASSIVE open (an announced port,
+//     SERVERS.md): a listener is a row of its own (tcp_listener_t below),
+//     a SYN that finds one becomes an ordinary conn born in SYN_RECEIVED,
+//     and accept is a read on the listener handle (ruling #3). What is NOT
+//     offered: SYN cookies (a full backlog drops SYNs and counts them —
+//     the threat model is a LAN), and announce on one card's address of
+//     several (there is one NIC; the one specific address a door may name
+//     is loopback's, tcp_listener_t.ip). Both are in SERVERS.md's booked
+//     list.
+//   - A SEND WINDOW (tcp.c § the sender): write() queues into a ring and
+//     returns; as many segments as the peer's window and our congestion
+//     window allow are in flight at once; the oldest is what the timer
+//     resends. Congestion control is RFC 5681's — slow start, congestion
+//     avoidance, fast retransmit and fast recovery, with NewReno's
+//     partial-ack rule (RFC 6582) and limited transmit (RFC 3042) —
+//     because a window with no congestion window is a full-window burst
+//     into whatever bottleneck the path has, which is the 1986 collapse
+//     in miniature.
+//     What is NOT offered: Nagle (RFC 896 — a keystroke goes out as its
+//     own segment, which is what a terminal wants and what a bulk writer
+//     never notices because it fills segments anyway) and SACK. Each
+//     booked in DEBTS.md.
+//   - WINDOW SCALING (RFC 7323, tcp_options.h): both windows are read and
+//     written through a shift count each side names in its SYN, so a
+//     connection is bounded by the rings below and the round trip, not by
+//     the sixteen bits of the header field. A peer that does not send the
+//     option gets the unscaled field, which is the 64KB the field can say.
+//     A dial parses the SYN-ACK's options; a listener parses the SYN's,
+//     and its SYN-ACK offers a shift ONLY if the SYN did (RFC 7323 §2.2 —
+//     a shift the peer is not applying would have every window it sends
+//     read 32× too large).
+//   - Out-of-order arrivals are HELD, not dropped, since 2026-09-04: a
+//     segment inside the window is written into the receive ring at its
+//     own offset and absorbed when the gap closes (tcp_hold / tcp_absorb
+//     in tcp.c). What is NOT offered is SACK (RFC 2018): the sender is
+//     told where we are, never what we hold, so it refills a hole by its
+//     own retransmit rules — fast retransmit on our duplicate acks, or its
+//     RTO. Booked.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -72,9 +97,11 @@
 typedef enum tcp_state
 {
 	TCP_CLOSED = 0,
-	TCP_LISTEN,        // (next slice: the listener handle, ruling #3)
+	TCP_LISTEN,        // never a conn's state: a listener is its own row
+	                   // (tcp_listener_t), and /sys/net/tcp names it so
 	TCP_SYN_SENT,      // we dialed; waiting for SYN+ACK
-	TCP_SYN_RECEIVED,  // (next slice)
+	TCP_SYN_RECEIVED,  // they dialed an announced port; our SYN+ACK is out,
+	                   // waiting for the ACK that completes the handshake
 	TCP_ESTABLISHED,   // the stream is open in both directions
 	TCP_FIN_WAIT_1,    // we closed; waiting for our FIN to be acknowledged
 	TCP_FIN_WAIT_2,    //   ...acknowledged; waiting for THEIR FIN
@@ -84,55 +111,282 @@ typedef enum tcp_state
 	TCP_TIME_WAIT,     // the wait that protects the NEXT connection (see tcp.c)
 } tcp_state_t;
 
-// Buffers. 8KB of receive window is plenty for a hobby OS fetching pages
-// (and it is also what we advertise, so it directly sets how much the peer
-// may have in flight toward us). MSS 1460 = the classic ethernet number:
-// 1500 MTU - 20 IP - 20 TCP, the reason so much of the internet's traffic
-// arrives in 1460-byte pieces.
-#define TCP_RCV_BUF  8192
+// Buffers. The receive buffer IS the advertised window, so it bounds what the
+// peer may have in flight toward us — and a window that never grows is a
+// THROUGHPUT CEILING of window ÷ ROUND TRIP, whatever the link can carry.
+// The P5 measured that ceiling at 64KB on 2026-09-09: a fetch from a host
+// 28ms away flattened at 87% of 64KB/28ms, the same machine against a LAN
+// server ran the same ceiling at a 2.9ms round trip, and a Windows browser
+// across the same wifi pulled ~200 Mb/s from the 28ms host because every
+// stack built since 1992 scales its window past the header field.
+//
+// 1MB is the size because it is the bandwidth-delay product the P5 was
+// measured against with headroom: 200 Mb/s at 28ms is 700KB, and 1MB at
+// 28ms is 300 Mb/s, about what the P5's own link carries on a LAN (the
+// 300 Mbit/s download DOORBELL.md's bottom-half work was measured against).
+// The advertised
+// field is this window shifted down by TCP_RCV_WSCALE (tcp_options.h), the
+// smallest shift under which the whole ring fits in sixteen bits; a peer
+// that did not send the option sees the unscaled field, 64KB at most,
+// which is the old ceiling and not a regression.
+//
+// A NIC WITH NO INTERRUPT OF ITS OWN carries a second ceiling: it is
+// drained when the TICK rings the doorbell, so it can take at most a window
+// per pass — or its own receive ring per pass, whichever is smaller, and at
+// 1MB the ring is: virtio's 64 slots are ~93KB a tick, ~9MB/s, and what a
+// scaling peer sends past them in a tick is dropped and recovered as loss
+// (DOORBELL.md; virtio is the one that keeps this cadence; DEBTS § the
+// tick-driven ring). A NIC that rings its own doorbell is drained on
+// arrival and answers only to the round trip.
+//
+// It costs 1MB of kmalloc per open connection for this ring and as much
+// again for the send ring below, freed when the connection is stripped. MSS 1460 = the classic ethernet number: 1500 MTU - 20 IP -
+// 20 TCP, the reason so much of the internet's traffic arrives in
+// 1460-byte pieces.
+#define TCP_RCV_BUF  (1024 * 1024)
 #define TCP_MSS      1460
 
-// Timers, in ticks (100/s). Fixed RTO with exponential backoff — a real
-// stack measures round-trip time and adapts (Jacobson/Karels, 1988); ours
-// is booked as a DEBT and stated here so nobody mistakes 1 second for
-// measurement. TIME_WAIT is 2×MSL, and MSL ("maximum segment lifetime")
+// Our shift count: the smallest under which the whole receive ring fits
+// the sixteen-bit field. Smaller would clamp the window below the ring;
+// larger would coarsen the granularity for nothing.
+#define TCP_RCV_WSCALE 5
+_Static_assert((TCP_RCV_BUF >> TCP_RCV_WSCALE) <= 0xFFFF, "the receive ring does not fit the scaled window field");
+_Static_assert((TCP_RCV_BUF >> (TCP_RCV_WSCALE - 1)) > 0xFFFF, "TCP_RCV_WSCALE is larger than the ring needs");
+_Static_assert(TCP_RCV_WSCALE <= 14, "RFC 7323 caps the shift at 14");
+
+// The smallest MSS a peer may talk us into. The option is the peer's word
+// for what it can take, and a peer can say anything — zero included, which
+// would make our congestion window zero and the first congestion-avoidance
+// step a division by it, in the kernel, from the wire. Below this the
+// value is refused and RFC 879's 536 stands. 48 is Linux's floor
+// (tcp_min_snd_mss, after the 2019 SACK-panic advisories): a segment that
+// small is a resource attack, not a network.
+#define TCP_SND_MSS_MIN 48
+
+// The send ring holds everything written and not yet acknowledged —
+// the segments in flight AND the bytes waiting behind them — so it is
+// also how far a write() can run ahead of the wire before it parks. Its
+// size is the receive buffer's on purpose: a scaling peer grows the window
+// it offers as a transfer runs (Linux starts near 128KB and autotunes into
+// the megabytes), so an upload is bounded by the same round-trip
+// arithmetic as a download, and a smaller ring here would cap uploads
+// below downloads for no reason.
+#define TCP_SND_BUF  TCP_RCV_BUF
+
+// The initial congestion window, in segments, also the ceiling a sender
+// restarts at after an idle spell: RFC 6928's ten (2013), which is what
+// the servers of the internet open with today. The hazard the number
+// guards against is the first burst into a bottleneck queue, and ten
+// 1460-byte segments is a burst every path built this century absorbs;
+// RFC 5681's three would cost a 100KB upload two more round trips of slow
+// start for no safety anybody has measured. Loss starts recovery from one
+// segment regardless of this choice.
+#define TCP_INIT_CWND_SEGMENTS 10
+
+// Timers, in ticks (100/s). THE RETRANSMIT TIMER IS MEASURED: Jacobson
+// and Karels' 1988 estimator — a smoothed round trip and its deviation,
+// the timer at the mean plus four deviations — with Karn's 1987 rule that
+// a retransmitted segment yields no sample (its ack could be for either
+// copy); the backed-off timer lasts until the peer acknowledges new data,
+// 4.4BSD's rule rather than Karn's own (tcp.c's ack path says why). RFC
+// 6298 spells the arithmetic; the scaled integers in tcp_conn_t (srtt ×8,
+// rttvar ×4) are the paper's own, and keep some precision at a 10ms tick.
+// THE FLOOR IS 200ms, LINUX'S, NOT THE RFC'S "SHOULD 1 second" — on
+// merit: one second was the fixed timer this stack had until 2026-09-04,
+// and on a millisecond wire it made every lost segment cost a second; the
+// floor exists so a peer's delayed ack is not read as loss, and 200ms
+// clears that with thirty years of evidence behind it. Before the first
+// sample the timer is the RFC's initial second. TIME_WAIT is 2×MSL, and
+// MSL ("maximum segment lifetime")
 // is the assumption that no packet outlives 15 seconds on this network —
 // RFC 793 suggests 2 minutes for the internet at large; a virtual wire and
 // a home LAN are not the 1981 ARPAnet, and 30 seconds of TIME_WAIT is
 // already deep paranoia by our standards.
-#define TCP_RTO_TICKS       (1 * TICKS_PER_SECOND)
-#define TCP_RTO_MAX_TICKS   (8 * TICKS_PER_SECOND)
+#define TCP_RTO_INITIAL_TICKS (1 * TICKS_PER_SECOND)
+#define TCP_RTO_MIN_TICKS     (TICKS_PER_SECOND / 5)
+#define TCP_RTO_MAX_TICKS     (8 * TICKS_PER_SECOND)
 #define TCP_MAX_RETRIES     6
+// The persist timer: how long a sender with data and a peer advertising a
+// ZERO window waits before probing. A window update the peer sends when
+// its reader drains can be lost like any other segment, and nothing
+// retransmits it — a pure ACK is never acknowledged — so the sender has to
+// ask. The probe is one byte past the window (RFC 793 §3.7; the peer drops
+// it and answers with its current window), asked again at doubling
+// intervals up to the retransmit ceiling for as long as the window stays
+// shut. Answered or not, a probe spends no retries and does not restart
+// this clock: the wait is the peer's reader, not the network, and a
+// persist wait has no death in it (4.4BSD's never did) while somebody owns
+// the connection. The first wait is at least a second: a reader that
+// drains within a round trip will say so unprompted, and probing a paused
+// reader five times a second is noise.
+#define TCP_PERSIST_MIN_TICKS (1 * TICKS_PER_SECOND)
+// Once the handle is closed nobody is waiting, and a peer that shut its
+// window and vanished — or never sent the FIN a FIN_WAIT_2 is waiting for
+// — would otherwise hold the ring, the receive buffer and the port
+// forever. A detached connection that makes no ACK progress for this long
+// is given up, whatever its probes or retransmissions are doing.
+#define TCP_DETACHED_IDLE_TICKS (30 * TICKS_PER_SECOND)
+
+typedef enum
+{
+	TCP_TIMER_IDLE,
+	TCP_TIMER_RETRANSMIT,
+	TCP_TIMER_PERSIST,
+} tcp_send_timer_t;
+
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
+
+// The morgue: how long a CLOSED, detached connection stays listed before
+// the poll reaps it. DISPLAY policy, not protocol — TIME_WAIT's linger is
+// TCP's own law (see tcp_poll), this one exists so /sys/net/tcp can answer
+// "what just happened" after a dial fails or a fetch ends. A human who ran
+// a command that died gets this long to cat the aftermath.
+//
+// A MORGUE ROW OWNS NOTHING. Whatever killed the connection — a dial
+// refused or timed out, a reset after it was established, a close the
+// peer began — the moment it is CLOSED and detached it is a TOMBSTONE:
+// buffers freed, port returned, only the row left (state, peer, rst —
+// all the observer ever read). The port goes because there is nothing
+// for a held port to protect: TIME_WAIT is the protocol's linger, and a
+// reset or passive close never enters it. Tombstones are CAPPED, oldest
+// evicted, because a refused dial returns at once and costs no handle
+// and a peer that accepts-then-resets costs one for a moment, so either
+// can fill the morgue faster than it drains — and a capful of rows says
+// "refused, again" as well as sixty thousand would.
+//
+// TIME_WAIT is stripped the same way but keeps its port: 2×MSL of port
+// protection is what the state IS, and a header-only ACK to a late FIN
+// needs no buffer. (Linux's timewait sock is the same economy.)
+#define TCP_MORGUE_TICKS      (15 * TICKS_PER_SECOND)
+#define TCP_MORGUE_TOMBSTONES 64
 
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
-#define TCP_ERR_TIMEOUT     (-5L)   // caller's read deadline expired, no bytes
+#define TCP_ERR_TIMEOUT     (-5L)   // caller's read/write wait expired, no bytes
+#define TCP_ERR_CLOSED      (-6L)   // the last handle was closed under the wait (a sibling thread's close)
+
+// One ahead-of-sequence range held in the receive ring (tcp_conn_t.held).
+#define TCP_HELD_MAX 16
+typedef struct
+{
+	uint32_t seq;
+	uint32_t len;
+} tcp_held_t;
 
 typedef struct tcp_conn
 {
 	tcp_state_t state;
 	net_device_t* dev;
 	uint32_t peer_ip;
+	// OUR address in this conversation. Zero means the machine's address,
+	// read live from kNetIPv4Address on every segment, because a DHCP lease
+	// can change it under a connection. A loopback conversation carries its
+	// 127/8 address instead — on the answering side the one the peer dialed,
+	// so replies come FROM the address the peer is talking to; on the dialing
+	// side 127.0.0.1 (tcp_local_ip).
+	uint32_t local_ip;
 	uint16_t peer_port, local_port;
 
-	// ── SEND state (RFC 793's SND.* variables, same names on purpose) ──
-	uint32_t snd_una;      // oldest byte sent but not yet acknowledged
-	uint32_t snd_nxt;      // next sequence number we will send
-	uint16_t snd_wnd;      // the peer's advertised receive window
-	uint16_t snd_mss;      // the peer's advertised MSS (or 536, the RFC floor)
-
-	// The retransmit slot: v1 holds ONE unacknowledged segment. Its
-	// presence (snd_len > 0) is what arms the RTO timer.
+	// ── SEND state (RFC 793's SND.* names on purpose) ──
+	// THE SEND RING. Byte snd_head of the ring is the byte numbered
+	// snd_una, and snd_count bytes follow it: the ones submitted (up to
+	// snd_max), then the ones write() queued and nobody has sent yet. An
+	// acknowledgement advances snd_head and shrinks snd_count together —
+	// the ring is the retransmit queue, and what recovery resends is
+	// whatever sits at its head. snd_max is the submission high-water mark
+	// (a local drop counts: TCP owns its recovery like any loss), snd_nxt
+	// is the output cursor and rewinds to snd_una for go-back-N after a
+	// timeout. Their span differs during recovery: flight uses snd_max,
+	// output uses snd_nxt. A SYN and a FIN each consume a sequence number
+	// while occupying no ring byte, which is why "bytes in flight" is a
+	// computation (tcp.c tcp_bytes_in_flight) and not a field, and why the
+	// timer's armed test is snd_una trailing snd_max, never the byte count:
+	// judged by bytes, a lost bare SYN or FIN was never resent. Probe
+	// offers are separate (probe_seq). See TCP_SENDER.md.
+	uint32_t snd_una, snd_nxt, snd_max;
+	uint32_t snd_wnd;          // the peer's window, already shifted by snd_wscale
+	uint16_t snd_mss;
+	// The shift counts from the SYN exchange (tcp_options.h): snd_wscale
+	// is applied to every window field the peer sends after its SYN,
+	// rcv_wscale to every field we send after ours. Both stay 0 unless
+	// the peer offered a shift, since scaling is only in force when both
+	// sides asked for it.
+	uint8_t  snd_wscale, rcv_wscale;
+	uint32_t snd_wl1, snd_wl2; // sequence and ACK of the last window update
 	uint8_t* snd_buf;
-	uint32_t snd_len;
-	uint32_t snd_seq;      // sequence number of snd_buf[0]
-	uint8_t  snd_flags;    // the FIN/SYN riding this segment, if any
-	uint64_t rto_deadline; // kTicksSinceStart when we resend
-	uint32_t rto_ticks;    // current timeout (doubles on each retry)
-	uint8_t  retries;
+	uint32_t snd_head, snd_count;
+	bool snd_fin;
+	bool snd_fin_sent;       // FIN submitted normally or its probe acknowledged
+	uint32_t snd_fin_seq;    // fixed when close queues FIN; no ring byte
+
+	tcp_send_timer_t send_timer;
+	uint64_t send_deadline;
+	uint32_t rto_ticks, persist_ticks;
+	uint8_t retries;         // RTOs without advancing acknowledgment
+	bool probe_pending;     // probe_seq + 1 is also an acceptable ACK
+	uint32_t probe_seq;
+	uint64_t detached_deadline; // elapsed no-progress bound after handle close
+	// THE ARP HOLD. The waiting room holds one frame per neighbour and a
+	// later frame replaces it (ipv4.c), so after a PARKED submission the
+	// sender must not offer that neighbour another frame until the parked
+	// one has left: output pauses while the hold is set AND something is
+	// unacknowledged, and resumes on that unit's ACK or the timer's resend.
+	// No clock: how long ARP takes is the neighbour's business (a delayed
+	// link or a sleeping station answers in hundreds of milliseconds), and
+	// an unacknowledged flight keeps the RTO armed, so nothing is stranded.
+	// A SENT submission clears it — the neighbour has answered.
+	bool arp_hold;
+	// A bare ACK the hold withheld. The parked frame's ACK field predates
+	// whatever arrived after it was built, so the debt is remembered and
+	// paid the moment the hold is moot — unless a segment carrying the
+	// current ACK went first, which pays it on the way.
+	bool ack_owed;
+
+	// CONGESTION CONTROL (RFC 5681). cwnd caps what may be in flight
+	// alongside the peer's window; ssthresh is where slow start's doubling
+	// hands over to congestion avoidance's one-segment-per-round-trip.
+	// dup_acks counts the peer saying "still here" — three of them is fast
+	// retransmit's cue, and past three cwnd inflates one segment per
+	// duplicate (fast recovery) because each one means a segment LEFT the
+	// network even if we cannot tell which.
+	uint32_t cwnd, ssthresh;
+	uint8_t dup_acks;
+	uint32_t limited_bytes;  // new bytes solicited by the first two dup ACKs
+	bool fast_recovery;
+	// Where the window stood when recovery began: an ack short of it is a
+	// PARTIAL ack — the hole it filled had another behind it — and NewReno
+	// (RFC 6582) resends that next hole at once instead of waiting for
+	// three more duplicates that may never come, because everything that
+	// could have provoked them is already on the wire. Without this,
+	// several losses in one window cost one backed-off timeout each (the
+	// rig's 10%-loss upload read 6.7s the day the window landed, slower
+	// than stop-and-wait's 3.3s). The mark is retired once the peer is
+	// past it, so a stale one cannot win a half-space comparison after
+	// gigabytes of loss-free progress.
+	bool recover_valid;
+	uint32_t recover;       // exclusive end of the recovery flight
+	bool data_sent;
+	uint64_t last_data_sent; // idle restart, distinct from the RTT stopwatch
+
+	// The measured round trip (Jacobson/Karels; the timer constants above
+	// say why): srtt in eighths of a tick, rttvar in quarters, so
+	// (srtt_x8 >> 3) + rttvar_x4 is the mean plus FOUR deviations in whole
+	// ticks. ONE segment at a time is timed: rtt_timing says a stopwatch
+	// is running, rtt_seq names the acknowledgement that stops it (the
+	// sequence number after the timed segment), snd_sent_at is when it
+	// started. Karn's rule is that ANY retransmission cancels the running
+	// stopwatch — an ack arriving after a resend could be for either copy.
+	// A timeout's doubled timer stays in force (rto_backed_off) until the
+	// peer acknowledges new data.
+	uint32_t srtt_x8, rttvar_x4;
+	uint32_t rto;          // ticks: what the next fresh arming uses
+	uint64_t snd_sent_at;
+	uint32_t rtt_seq;
+	uint32_t rtt_samples;
+	bool     rtt_timing;
+	bool     rto_backed_off;
 
 	// ── RECEIVE state (RCV.*) ──
 	uint32_t rcv_nxt;      // next sequence number we expect — the ACK we send
@@ -141,17 +395,81 @@ typedef struct tcp_conn
 	bool     rcv_fin;      // their FIN arrived: after the buffer drains, EOF
 	bool     zero_window;  // we advertised 0; owe a window update when drained
 
+	// AHEAD-OF-SEQUENCE DATA IS HELD IN THE RING ITSELF. The ring spans the
+	// whole window we advertise (its free space IS the window), so a
+	// segment at seq > rcv_nxt has a slot waiting at offset seq - rcv_nxt
+	// past the in-order bytes — a slot no in-order byte can reach without
+	// first becoming that very byte. Writing it there costs no allocation
+	// under the lock; what must be remembered is only WHICH offsets are
+	// filled, and that is this list: sorted by seq, disjoint, absorbed into
+	// rcv_count as rcv_nxt reaches each. The list is small and fixed
+	// because a hole is a rare event with a short life (one retransmit
+	// closes it); a segment arriving with every slot taken is dropped and
+	// counted, never silently.
+	tcp_held_t held[TCP_HELD_MAX];
+	uint8_t  held_count;
+	bool     held_fin;     // their FIN arrived ahead of sequence; it takes effect...
+	uint32_t held_fin_seq; // ...when rcv_nxt reaches this
+
 	bool     reset;        // RST received or fatal error: reads/writes fail
 	uint64_t time_wait_until;
+	uint64_t closed_at;    // the morgue clock: when the poll first saw this
+	                       // conn CLOSED and detached (0 = not yet)
 
 	spinlock_t lock;
 	thread_t* volatile reader;   // parked in tcp_conn_read
 	thread_t* volatile writer;   // parked in tcp_conn_write
 	bool detached;               // handle closed; poll may reap after TIME_WAIT
+	// HOW MANY HANDLES NAME THIS CONN. One at dial or accept; spawn's
+	// redirection takes another for the child (the inetd shape: a session
+	// program whose 0 and 1 ARE the connection); every handle close drops
+	// one, and the LAST drop is what sends the FIN (tcp_conn_release). The
+	// reader/writer slots above are still single: two holders reading at
+	// once contend for the slot exactly as two threads of one task do.
+	uint32_t handles;
+	// OPERATIONS INSIDE THE CONN — the pin's count (handle.c § The pin),
+	// kept apart from `handles` on purpose: a pin keeps the ROW from being
+	// reaped while a read or write is inside it, and says nothing about
+	// hanging up. So a sibling thread closing the last handle still sends
+	// the FIN and detaches, and a reader or writer parked on the conn is
+	// woken to TCP_ERR_CLOSED rather than left waiting on a silent peer
+	// (Codex #101 rd7). The reaper frees only at zero.
+	uint32_t pins;
+	// OWNERSHIP, because it is where lifetime bugs live: a conn belongs to
+	// exactly one of a listener (this is set — born of its SYN, not yet
+	// read out of its accept queue), a handle, or nobody (detached). Accept
+	// moves it from the first to the second. The reaper frees a CLOSED row
+	// that is listener-owned as it would a detached one, but the
+	// no-progress abort a closed HANDLE earns does not apply: a queued conn
+	// nobody has read yet is not making progress, and that is fine. Both
+	// under kTcpListLock (the listener's queue links ride `accept_next`).
+	struct tcp_listener* listener;
+	struct tcp_conn* accept_next;
+	// Born of a SYN to an announced port. Its local port is the LISTENER's,
+	// never drawn from the ephemeral bitmap, so its funeral must not give
+	// that port back — the listener still holds it.
+	bool passive;
+	// Whether our SYN (a dial's) or SYN-ACK (a passive conn's) carries a
+	// window-scale option: always for a dial, and for a passive conn only
+	// if the peer's SYN did (tcp.h's V1 scope says why).
+	bool syn_offers_wscale;
+	bool stripped;               // buffers freed; the row and (in TIME_WAIT) the port remain
+	bool tombstone;              // a morgue row: stripped, port returned, in the capped queue
 
-	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
+	uint64_t rx_bytes, tx_bytes, retransmits;
+	uint64_t out_of_order_held;     // ahead-of-sequence segments kept in the ring
+	uint64_t out_of_order_dropped;  // ahead-of-sequence segments there was no room to keep
 
+	// The connection list is doubly linked so an unlink is O(1) from
+	// anywhere — the tombstone cap evicts from the middle of the list on
+	// every failed dial, and rediscovering a predecessor by walking a
+	// list of thousands with kTcpListLock held irqsave is the scan the
+	// cap must never do (Codex, PR #46). tomb_next threads the tombstones
+	// through a FIFO of their own, oldest at the head, so the cap knows
+	// its next eviction without looking. All three under kTcpListLock.
 	struct tcp_conn* next;
+	struct tcp_conn* prev;
+	struct tcp_conn* tomb_next;
 } tcp_conn_t;
 
 typedef struct tcp_stats
@@ -159,12 +477,144 @@ typedef struct tcp_stats
 	uint64_t connections_opened;
 	uint64_t connections_refused;   // RST to our SYN — nobody listening
 	uint64_t connect_timeouts;
+	// Funerals: connections unlisted and freed — by the poll's reap, or
+	// by the tombstone cap's eviction. It answers "is the reaper alive?"
+	// while corpses linger in /sys/net/tcp.
+	uint64_t connections_reaped;
+	// THE HEAP INVARIANT, in one number. Every TCP heap allocation and
+	// free happens under kTcpListLock, through tcp_heap_alloc_locked /
+	// tcp_heap_free_locked, and each ticks this once in the same critical
+	// section. So a reader that takes the list lock sees either a move
+	// and its tick or neither — never bytes that moved without a tick —
+	// and task_teardown_leak's bracket, which must know whether TCP
+	// moved memory inside its window with no task burial to account for
+	// it, asks this one number instead of a counter per edge. Five
+	// review rounds of finding one more uncounted edge (a reap, an
+	// eviction, an entomb, a port-exhausted dial, an unpublished
+	// allocation) are why it is one number and one door (Codex, PR #46).
+	uint64_t heap_moves;
 	uint64_t segments_in, segments_out, retransmits;
+	// Of the retransmits, how many the peer's duplicate acks cued (a loss
+	// found in one round trip) as against the timer (a loss found the slow
+	// way); and how many segments were sent to ASK about a zero window
+	// rather than to carry data. A rising window_probes beside a stalled
+	// upload is a peer that stopped reading, not a network eating segments.
+	uint64_t fast_retransmits;
+	uint64_t window_probes;
+	// TCP attempts rejected by a driver; retained for normal loss recovery.
+	uint64_t tx_local_drops;
+	uint64_t rtt_samples;           // clean round trips measured (Karn's rule counts the rest out)
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;
+	// The inbound door's tally, machine-wide (a listener's own row carries
+	// its share and takes it to the grave when closed): handshakes an
+	// announced port completed, and SYNs turned away because a listener's
+	// backlog was full — the number that says "you are being flooded, or
+	// nobody is reading the accept queue".
+	uint64_t connections_accepted;
+	uint64_t syns_dropped_full;
+	// Current passive connections whose rings remain allocated, and SYNs
+	// refused by their storage cap. Both change under kTcpListLock.
+	uint64_t passive_buffered;
+	uint64_t syns_dropped_storage;
+	// The machine-wide twins of the per-conn counters, because a reaped
+	// connection takes its copy to the grave: "has this stack EVER seen
+	// reordering" has to survive the connections that answered it. HELD is
+	// the reordering count — every ahead-of-sequence segment the ring kept.
+	// DROPPED is the ones it could not keep: past the window we advertised,
+	// or every hold slot taken. A rising DROPPED beside a small HELD is a
+	// sender ignoring our window; beside a large one it is TCP_HELD_MAX
+	// being too small for the weather.
+	uint64_t out_of_order_held;
+	uint64_t out_of_order_dropped;
+	// Bytes we already took, sent again: OUR ack was lost or late, and the
+	// peer resent from where it last heard from us. Not reordering — kept
+	// apart so out_of_order_held answers only "is the network reordering",
+	// while this one answers "is the network eating our acks".
+	uint64_t duplicates_dropped;
 } tcp_stats_t;
 extern tcp_stats_t kTcpStats;
+
+// The connection list, exported for /sys/net/tcp. The discipline is
+// tcp_poll's: hold kTcpListLock across the walk (it guards the links),
+// take each conn's own lock to read its fields. Readers outside tcp.c
+// observe; they never unlink, retire, or wake anything.
+extern tcp_conn_t* kTcpConnList;
+extern spinlock_t kTcpListLock;
+
+// ── The listener (SERVERS.md § 1; NETWORK.md ruling #3) ─────────────────────
+// An announced port. A row on kTcpListenerList under kTcpListLock — the same
+// lock the demux already holds when it finds no conn for a SYN, which is the
+// only moment a listener is consulted. Its accept queue is a FIFO of
+// ESTABLISHED conns threaded through their accept_next; `pending` counts
+// those AND the half-open ones still in SYN_RECEIVED, because both are
+// promises this port has made and the backlog bounds the promises.
+//
+// LIFETIME is the tombstone discipline: close marks the row `closed`,
+// unlinks it (no new SYN can find it), resets what it still owns and wakes
+// its parked reader — and does NOT free it. `busy` counts accept calls
+// inside the row; tcp_poll frees a closed row once that reaches zero, so a
+// reader woken by the close is never handed freed memory.
+#define TCP_LISTEN_BACKLOG 16
+// Machine-wide across listeners, accepted sessions and detached closes:
+// 32 pairs of 1 MiB rings = 64 MiB. Capacity returns at buffer stripping,
+// not when accept dequeues a connection or a server child exits.
+#define TCP_PASSIVE_BUFFER_LIMIT 32
+
+typedef struct tcp_listener
+{
+	spinlock_t lock;
+	uint16_t port;
+	// Which of our addresses this door answers on: 0 for every address the
+	// machine has (loopback included, as BSD's INADDR_ANY always did), or one
+	// 127/8 address for a service this machine alone may reach. A port has
+	// one listener whatever its address — two on one port is refused as
+	// PORT_TAKEN, not ranked.
+	uint32_t ip;
+	bool closed;
+	uint32_t busy;                   // accept calls inside this row
+	uint32_t pending;                // half-open + queued, bounded by the backlog
+	tcp_conn_t* queue_head;          // ESTABLISHED, waiting to be read out
+	tcp_conn_t* queue_tail;
+	thread_t* volatile waiter;       // parked in tcp_listener_accept
+	uint64_t accepted;               // handshakes completed on this port
+	uint64_t syns_dropped;           // turned away by backlog or passive storage cap
+	uint64_t closed_at;              // the morgue clock, once closed
+	struct tcp_listener* next;       // kTcpListenerList, or the closed rows
+	                                 // awaiting tcp_poll; under kTcpListLock
+} tcp_listener_t;
+
+extern tcp_listener_t* kTcpListenerList;
+
+// Open the door on `ip` (0 = every address; the syscall layer has already
+// refused anything but 0 or 127/8). Refusals in `why` (OS64_NET_ERR_*):
+// PORT_TAKEN when a listener or a dialed conn holds the port, NO_RESOURCES
+// otherwise.
+tcp_listener_t* tcp_listener_announce(uint32_t ip, uint16_t port, int64_t* why);
+// ACCEPT: block until a handshake has completed on this port, hand its conn
+// out. NULL with TCP_ERR_INTERRUPTED / TCP_ERR_TIMEOUT / TCP_ERR_RESET (the
+// listener was closed under us) in `why`. Task context only.
+tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why);
+// The handle-table close hook: stop answering, reset what is queued, let
+// tcp_poll free the row once nobody is inside it.
+void tcp_listener_close(tcp_listener_t* l);
+// The pin's hold on a listener (handle.c § The pin): `busy` up for the whole
+// of an operation resolved through the handle, so a sibling's close cannot
+// have the row freed between the resolve and accept's own busy count.
+void tcp_listener_hold(tcp_listener_t* l);
+void tcp_listener_release(tcp_listener_t* l);
+
+// Another handle names the conn (spawn hands one to a child); a handle
+// stops naming it (the handle-table close hook) — the last release is the
+// orderly close above.
+void tcp_conn_ref(tcp_conn_t* c);
+void tcp_conn_release(tcp_conn_t* c);
+// The pin's hold on a conn (`pins` in the struct): the row stays out of the
+// reaper's hands while an operation is inside it; hanging up is `handles`'
+// business alone.
+void tcp_conn_pin(tcp_conn_t* c);
+void tcp_conn_unpin(tcp_conn_t* c);
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);
@@ -183,12 +633,19 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 // outrank an expired clock).
 long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 
-// Stream write: blocks until every byte is acknowledged (v1 stop-and-wait),
-// returns the count written. Negative = interrupted or reset.
-long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len);
+// Stream write: queues the bytes into the send ring and returns the count
+// QUEUED — on their way, not yet acknowledged; the ring, the timer and the
+// ack clock carry them from here, and close() drains what remains before
+// its FIN. Blocks only while the ring is full (the peer is slower than the
+// writer, by a whole window). Negative = interrupted, reset or timeout.
+// deadline is an absolute tick count; 0 waits forever, as for reads.
+// Queue while room exists; a full ring past the deadline returns progress
+// or TCP_ERR_TIMEOUT when no bytes were queued. Timeout preserves ownership.
+long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadline);
 
-// Orderly shutdown: sends FIN, detaches from the handle, and lets the poll
-// finish the closing dance (and the TIME_WAIT nap) in the background — a
+// Orderly shutdown: queues a FIN behind whatever the ring still holds,
+// detaches from the handle, and lets the ack clock and the poll finish
+// sending, the closing dance and the TIME_WAIT nap in the background — a
 // close() must not block a program for 30 seconds of protocol politeness.
 void tcp_conn_close(tcp_conn_t* c);
 
@@ -199,6 +656,10 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 // Timers: retransmission, connect timeout, TIME_WAIT reaping. From
 // processSignals beside dhcp_poll.
 void tcp_poll(void);
+
+// task_teardown_leak's bracket: heap_moves, read under kTcpListLock (the
+// invariant its comment states is what makes one locked read exact).
+uint64_t tcp_leak_bracket_snapshot(void);
 
 // Level-triggered wake sweep, beside udp_conn_wake_if_ready.
 void tcp_wake_if_ready(void);

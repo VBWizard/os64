@@ -1,0 +1,2 @@
+# Preserve review evidence despite the repository-wide log exclusion.
+!*.log

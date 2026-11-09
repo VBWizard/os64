@@ -1,0 +1,54 @@
+gallery focus handle=2 gained=1 other=0
+gallery windows=1 font-bytes=101002 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=102 scan=33 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery focus handle=2 gained=0 other=3
+gallery key handle=3 edge=2 ascii=102 scan=33 mods=4
+gallery windows=2 font-bytes=105784 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=3 edge=1 ascii=27 scan=77 mods=0
+gallery key handle=3 edge=1 ascii=91 scan=77 mods=0
+gallery key handle=3 edge=1 ascii=67 scan=77 mods=0
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery windows=3 font-bytes=112129 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery surface handle=4 width=202 height=50 pitch=202
+gallery key handle=4 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=3 gained=1 other=4
+gallery key handle=3 edge=2 ascii=27 scan=1 mods=0
+gallery windows=2 font-bytes=105784 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery key handle=3 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=101986 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=2 ascii=27 scan=1 mods=0
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=108 scan=38 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery key handle=2 edge=2 ascii=108 scan=38 mods=4
+gallery key handle=2 edge=2 ascii=0 scan=56 mods=0
+gallery focus handle=2 gained=0 other=3
+gallery windows=2 font-bytes=333786 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=458 height=766 pitch=458
+gallery key handle=3 edge=1 ascii=27 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=91 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=66 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=10 scan=28 mods=0
+gallery key handle=3 edge=2 ascii=10 scan=28 mods=0
+gallery invoke=118 menus=0 target=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=104209 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=1 ascii=0 scan=29 mods=2
+gallery key handle=2 edge=1 ascii=17 scan=16 mods=2
+gallery invoke=7 menus=0 target=2
+gallery exit font-bytes=0 refs=0,0 hits=0,0

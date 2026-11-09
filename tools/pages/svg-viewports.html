@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: a room of its own</title>
+<style>
+body { margin:24px; background:#edf2f8; color:#243952; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b8c9dd; border-radius:12px; }
+.card > svg { display:block; width:280px; height:168px; background:#f4f7fb; }
+button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: a room of its own</h1>
+<p>Reusable symbols now bring their own coordinate system. Their frames can resize, crop and rotate while the artwork stays crisp. Enable scripts for the button; try 400% zoom.</p>
+<div class="card"><h2>1. Give it more room</h2>
+<svg viewBox="0 0 140 84">
+<defs><symbol id="room" viewBox="0 0 20 20"><rect x="-30" y="-30" width="80" height="80" fill="#dbeaf8"/><circle cx="10" cy="10" r="8" fill="#2091de"/><path d="M5 10L9 14L16 6" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol></defs>
+<use id="resized" href="#room" x="14" y="16" width="40" height="52"/>
+<rect id="frame" x="14" y="16" width="40" height="52" fill="none" stroke="#243952" stroke-width="1"/>
+</svg><p>The button widens the frame. The circle stays round and centered; the pale background fills the room.</p>
+<button id="resize">Make room</button><p id="result">Narrow room. Click to widen it.</p></div>
+<div class="card"><h2>2. Fit or fill</h2>
+<svg viewBox="0 0 140 84">
+<defs><symbol id="fit" viewBox="0 0 20 30"><rect width="20" height="30" fill="#2091de"/><circle cx="10" cy="15" r="8" fill="#f4c55e"/></symbol>
+<symbol id="fill" viewBox="0 0 20 30" preserveAspectRatio="xMidYMid slice"><rect width="20" height="30" fill="#2091de"/><circle cx="10" cy="15" r="8" fill="#f4c55e"/></symbol></defs>
+<use href="#fit" x="10" y="22" width="52" height="40"/><use href="#fill" x="78" y="22" width="52" height="40"/>
+<path d="M10 22H62V62H10ZM78 22H130V62H78Z" fill="none" stroke="#243952"/>
+</svg><p>Left: fit the whole drawing inside. Right: fill the frame and crop what extends beyond it.</p></div>
+<div class="card"><h2>3. Permission to stretch</h2>
+<svg viewBox="0 0 140 84">
+<defs><symbol id="stretch" viewBox="0 0 20 20" preserveAspectRatio="none"><circle cx="10" cy="10" r="9" fill="currentColor"/></symbol></defs>
+<use href="#stretch" x="8" y="22" width="32" height="40" color="#2091de"/>
+<use href="#stretch" x="50" y="12" width="24" height="60" color="#e87925"/>
+<use href="#stretch" x="84" y="28" width="48" height="28" color="#338363"/>
+</svg><p>Three copies of one circle. These symbols deliberately stretch to match their frames.</p></div>
+<div class="card"><h2>4. Windows inside windows</h2>
+<svg viewBox="0 0 140 84">
+<svg x="14" y="12" width="112" height="60" viewBox="0 0 112 60">
+<rect width="112" height="60" fill="#dbeaf8"/>
+<svg x="18" y="10" width="88" height="40" viewBox="0 0 88 40">
+<circle cx="12" cy="20" r="28" fill="#2091de"/><circle cx="44" cy="20" r="28" fill="#e87925"/><circle cx="76" cy="20" r="28" fill="#338363"/>
+</svg></svg>
+<rect x="14" y="12" width="112" height="60" fill="none" stroke="#243952"/>
+</svg><p>The inner window crops three overlapping circles. Its surrounding pale frame remains visible.</p></div>
+<div class="card"><h2>5. Turn the frame</h2>
+<svg viewBox="0 0 140 84">
+<svg x="30" y="22" width="80" height="40" transform="rotate(-15 70 42)">
+<rect x="-40" y="-40" width="160" height="120" fill="#2091de"/>
+<path d="M-20 0L100 60M-20 -20L100 40M-20 20L100 80" stroke="#f4c55e" stroke-width="10"/>
+</svg>
+</svg><p>The stripes extend beyond their window. The clipping frame rotates with them, keeping four clean edges.</p></div>
+<div class="card"><h2>6. Keep it in, or let it out</h2>
+<svg viewBox="0 0 140 84">
+<defs><symbol id="contained" viewBox="0 0 20 20"><circle cx="10" cy="10" r="14" fill="#e87925"/></symbol>
+<symbol id="open" viewBox="0 0 20 20" overflow="visible"><circle cx="10" cy="10" r="14" fill="#338363"/></symbol></defs>
+<use href="#contained" x="18" y="24" width="36" height="36"/><use href="#open" x="86" y="24" width="36" height="36"/>
+<path d="M18 24H54V60H18ZM86 24H122V60H86Z" fill="none" stroke="#243952"/>
+</svg><p>Orange stays inside its frame. Green has visible overflow and can reach beyond the border.</p></div>
+<script>
+var wide = false;
+document.getElementById('resize').addEventListener('click', function () {
+    wide = !wide;
+    var width = wide ? '112' : '40';
+    document.getElementById('resized').setAttribute('width', width);
+    document.getElementById('frame').setAttribute('width', width);
+    document.getElementById('result').textContent = wide ?
+        'Room to spread out. Click again to narrow it.' : 'Narrow room restored.';
+});
+</script></body></html>

@@ -3,7 +3,7 @@
 *The design record for the userland graphics stack: how a ring-3 program
 draws into its window without touching a pixel — and eventually without
 touching a primitive. Companion to GRAPHICS.md (which designs the KERNEL
-side: compositor, windows, the 7-syscall boundary) and LIBOS64.md (the C
+side: compositor, windows, the GUI syscall boundary) and LIBOS64.md (the C
 library this links beside). Design settled 2026-07-10. Naming — `libdraw`
 for the drawing core, `libui` for the toolkit — deliberately echoes Plan 9's
 `libdraw`: minimalist lineage, zero Win32 baggage.*
@@ -18,17 +18,21 @@ One of each mode, all in `userland/apps/`:
 |---|---|---|
 | **glogo** | immediate (libdraw) | you repaint most of the window anyway: animation, custom drawing. YOU are the painter — clear, draw everything, publish, every frame. Its numbered steps [1]-[9] are the whole liturgy, including the frame clock done right (dt-scaled state, boundary-anchored cadence). xlogo's heir, and exactly as ambitious. |
 | **gclock** | retained (libui) | furniture that mostly sits still: labels, buttons, panels. Describe widgets once; then change state → mark dirty → `os64_ui_paint()`. Also the model for TIME-driven UIs (`os64_ui_run` blocks on events; a ticking app runs the paint loop itself). Chris's — the first user-authored g-app, and it found a window-manager bug before it could tell time. |
-| **gterm** | hybrid (libdraw, one full-bleed surface) | the window IS one custom-drawn thing (a grid, a canvas, a plot). No widgets to retain, no frame-clear ceremony beyond your own — and a documented example of choosing libdraw over libui on purpose. |
+| **gterm** | hybrid (libdraw grid and libui controls) | custom terminal cells beside a themed scrollbar, with a modeless settings dialog; see GTERM.md. |
 
 (uiprobe exercises libui's whole contract — dispatch, grab, theme — and is
 worth reading, but it is a FIXTURE: it proves the toolkit, where gclock
 teaches the app author.)
 
+For background work that needs to wake a window, see
+[Window doorbell](GUI_DOORBELL.md#using-the-callback): callback setup,
+worker notification, result handoff, repainting and shutdown order.
+
 ## What this is
 
 The library that turns os64's raw window surface into something a person
 wants to program against. GRAPHICS.md hands an app a shared pixel canvas,
-seven syscalls, and `publish(damage)`; by itself that means hand-blitting
+window syscalls, and `publish(damage)`; by itself that means hand-blitting
 every line and glyph forever. libdraw/libui exists so **no app author ever
 sets a pixel by hand, and eventually never draws a primitive by hand
 either.**
@@ -43,13 +47,14 @@ tested kernel code** into ring 3, not a new rasterizer.
 
 | Layer | Name | Job | Kills |
 |---|---|---|---|
-| L0 | (libos64) | window lifecycle + shared canvas + events — thin wrappers over syscalls 16-22 | — |
+| L0 | (libos64) | window lifecycle + shared canvas + events — thin wrappers over GUI syscalls | — |
 | L1 | **libdraw** | immediate-mode drawing on the canvas: primitives, text, clipping, a draw context, a real-time frame loop | pixel-pushing |
 | L2 | **libui** | retained widgets on top of L1: widget/container/dispatch model | primitive-pushing |
 
 L1 is the immediate relief; L2 is the "I described a UI instead of drawing
 one" endgame. **L1 is designed in full here; L2 is designed as a *model*,
-not an enumerated toolkit** — widgets grow app-driven (see below).
+not an enumerated toolkit** — widgets grow through applications and the
+Appearance Workshop gallery (see APPEARANCE.md).
 
 ## L0 — the boundary it stands on (recap, owned by GRAPHICS.md)
 
@@ -58,22 +63,23 @@ Syscalls 16-22: `window_create`, `window_destroy`, `window_get_surface`
 `event_poll`, `screen_info`, `event_wait`. Drawing happens in the app's
 address space on that canvas — **zero syscalls per draw**; only `publish`
 crosses to the kernel, and the compositor snapshots the damage rect for a
-tear-free frame (GRAPHICS.md "Atomic frames"). libdraw never talks to the
-compositor except through `publish`.
+tear-free frame (GRAPHICS.md "Atomic frames"). Window operations use the
+public GUI wrappers; drawing primitives stay in userland.
+
+The boundary also provides `window_get_state` (48),
+`window_set_min_size` (57), and `event_ring` (58).
 
 ## L1 — libdraw (the drawing core)
 
-**A near-direct port of `surface.c`.** Everything except
-`surface_flush_rect` comes across (apps never flush hardware — they
-publish). Shared types (`rect_t`, `surface_t`, XRGB8888, the color
-constants, `rect_union`/`intersect`/`contains`) come from the dependency-
-free types header, dual-homed into `abi/include/` so kernel and userland
-share ONE definition.
+**Software drawing into userland canvases.** The primitives in `os64/draw.h`
+operate on GUI surfaces and clip to their bounds. Applications publish
+finished pixels through `os64_draw_publish`; the kernel compositor flushes
+the display.
 
-The ported primitives, all clipping to the surface (a caller may pass rects
-hanging off any edge):
-`fill_rect`, `blit`, `blit_masked` (shaped art — the cursor uses it),
-`draw_hline`/`draw_vline`, `draw_rect` (outline), `draw_text` (glyph run).
+The userland operations include rectangle fills/outlines, rounded rectangles,
+lines, text, verbatim `os64_draw_blit`, and straight-alpha `os64_draw_blend`.
+The kernel cursor uses `surface_blit_masked` separately; that mask operation
+is not part of the userland drawing API.
 
 **The draw context (`draw_ctx`)** — decided per #4: a light handle holding
 the target surface, a clip rect, current fg/bg, and a text pen position. It
@@ -82,13 +88,13 @@ advances the pen) WITHOUT hiding the explicit primitives — the raw
 surface.c-style calls stay available underneath for when you want them. The
 context is convenience, never a mandate.
 
-**Text — one embedded font, by design (#3).** libdraw ships its OWN PSF1
-glyph data (8×`charsize`, opaque fg-on-bg, ported from `surface_draw_text`)
-and renders text entirely in userland — the kernel stays out of app text.
-os64's aesthetic is "one good font, possibly forever" (an intentional lack
-of flash) — so proportional fonts / multiple faces are a documented future
-slot, present-tense scope is one bitmap font. `draw_text` does pen-advance
-only; wrapping and flow live in helpers / L2.
+**Text — the current renderer.** libdraw ships embedded PSF1 glyph data
+(8x16, opaque foreground/background cells) and renders app text in userland.
+The embedded face is an implementation constraint, not a design restriction
+against other fonts. Font selection, proportional faces, and scaling need
+rendering and layout support; changing a theme's cell metrics does not add
+that support. `draw_text` advances the pen; wrapping and flow live in helpers
+and L2. The later font/display investigation is tracked in APPEARANCE.md.
 
 **Publish helper.** `draw_publish(ctx, dirty_rect)` wraps `window_publish`,
 translating the app's content-local damage the way GRAPHICS.md specifies.
@@ -146,12 +152,13 @@ allowed interim), NOT a libdraw bug. Crispness arrives when
 snapshot-on-publish is actually implemented — it's designed, not
 necessarily coded yet.
 
-## L2 — libui (the toolkit MODEL, grown app-driven)
+## L2 — libui (the toolkit model)
 
 The endgame: instantiate a button, don't draw one. Designed here as a
-*contract*, not a catalog — because widgets should come into existence the
-same way syscalls and libos64 calls do: **when a real app needs one.** The
-first GUI app that wants a textbox is what brings the textbox into being.
+*contract*, with a catalog developed through both applications and the
+Appearance Workshop gallery. Reusable controls may be built before their
+first production consumer. Their input behavior, visual states, and theme
+support are developed together.
 
 The model:
 - **A widget** = `{ bounds (rect), draw(ctx) callback, event(ev) handler,
@@ -167,8 +174,73 @@ The model:
 - **The app loop** at L2: `event_wait` → `ui_dispatch` → if anything marked
   itself dirty, `ui_draw(root, ctx)` the dirty region → `draw_publish`.
 
-Starter widgets when the first apps demand them: `label`, `button`,
-`panel`, `textbox`. Not built speculatively.
+The toolkit includes panels, labels, buttons, checkboxes, integer sliders,
+text fields, text views, scrollbars, swatch lists, and an HSV color picker. APPEARANCE.md describes their gallery
+and the appearance editor's remaining slices.
+
+`os64_ui_render` draws and consumes a UI's pending damage without publishing.
+This lets separate UI contexts share a canvas and publish one composed frame.
+`os64_ui_paint` retains the usual render-and-publish behavior. The Workshop
+uses two contexts so experimenting with a preview does not recolor its editor.
+
+`os64_ui_theme_palette` selects a color building block while preserving
+metrics, including button treatment. `button.bevel` values 0 and 1 are flat;
+values 2 through 4 include the outer border and add inner relief using
+`button.highlight` and `button.shadow`. The painter caps the bevel at four
+pixels and half the control's dimensions; negative values draw no relief.
+Stock defaults remain flat and square. `control.radius` (0..8) rounds button,
+checkbox, slider/scrollbar thumb, and text-field painting without changing
+widget bounds. The Workshop's gently rounded choice is six pixels. The
+rounded primitives clip to the surface and clamp radius to the smaller half
+extent; rounded button captions stay inside the straight center strip.
+
+`ui_theme.c` owns the property schema, supported ranges, parsing, and session
+serialization. Startup `theme.conf` uses the shared configuration search and
+parser. Invalid configuration leaves the compiled defaults in place.
+Apply payloads contain the full color set, button relief, and corner radius. Startup preservation
+payloads begin with `inherit = startup` and carry the configured live keys,
+leaving absent keys at each application's defaults. Both forms exclude layout metrics;
+decoding is validated before replacing the caller's theme.
+
+`ui_session.c` overlays `/sys/appearance` at initialization and handles
+`OS64_GUI_EVENT_APPEARANCE` through libui dispatch. Reads and validation are
+cached per process; each UI context installs its own generation and repaints.
+Colors, button relief, and corner radius merge without copying geometry or resetting widget
+state. Set `follow_session = false` for an independent draft. Custom consumers
+initialize supplied defaults through `os64_ui_theme_current`, and use
+`os64_ui_theme_session` for live updates. The initializer keeps disk geometry
+but resolves colors against the pinned override when startup selection has
+changed the file. Disk-only startup APIs read the next-boot choice. Grootmenu
+repaints its open cascade levels after adoption. Invalid payloads retain the last usable theme. `os64_ui_theme_apply`
+merges selected components against the current session and reports publication
+conflicts; it does not save persistent files. These APIs are not signal-safe.
+
+Buttons and checkboxes activate on left-button release inside the control,
+or on release of Space/Enter while focused; key repeat does not repeat the
+activation. Sliders support dragging, arrow steps, and Home/End. Programmatic
+checkbox/slider setters repaint without firing interaction callbacks.
+Tab/Shift+Tab traverse enabled, visible controls in tree order. Editable text
+views accept literal Tab and use Ctrl+Tab/Ctrl+Shift+Tab for traversal.
+
+`os64_ui_set_enabled` and `os64_ui_set_hidden` reconcile focus and grabs,
+including descendants. Resize cancels held gestures and hover while retaining
+valid keyboard focus; layout that hides/disables/removes the target clears it.
+`os64_ui_cancel_gestures` retains focus, while `os64_ui_cancel_interaction` also
+clears focus for tree replacement or modal transitions. Window focus loss
+cancels gestures but retains the
+logical focus target for return. A class's optional `cancel` hook resets its
+private gesture state. Hover uses the compositor's coalesced pointer snapshot;
+ungrabbed motion does not invoke a widget's drag handler.
+
+Interaction colors are `button.face.hover`, `hover.border`, `focus.ring`,
+`disabled.bg`, and `disabled.fg`. Disabled descendants receive a muted theme
+for painting and do not accept input. `os64_draw_text_clipped` bounds captions
+to a supplied rectangle; empty outline rectangles paint nothing.
+`checkbox.size` sets the square indicator size; `slider.track.h` sets track
+thickness. Both clip to the control's bounds. The slider thumb uses `scroll.w`,
+bounded to 4–40 pixels and the available control width.
+Disabled slider tracks retain an outline in `disabled.fg` so their shape
+remains visible against the disabled background.
 
 ## The canonical app loop (L0+L1, what gbounce/gkeys use)
 
@@ -231,11 +303,54 @@ App-driven from the very first line.
 
 ## Known gaps / future work
 
-- L2 widget catalog (grows app-driven; only the model is fixed here).
+- L2 widget catalog expansion (applications and the Workshop gallery).
 - Proportional / multiple fonts (present scope is one embedded bitmap font).
-- Alpha/translucency (GRAPHICS.md future item; `blit_masked` already does
-  shaped, not blended).
+- Window translucency remains GRAPHICS.md's compositor work. Straight-alpha
+  images over opaque canvases use `os64_draw_blend`; see
+  [SOURCE_OVER.md](SOURCE_OVER.md).
 - ~~The `SMP_MAGIC_NUMBER` wake-cadence fix~~ — DONE 2026-07-11; the frame
   ceiling is now ~100 fps (SCHEDULER.md autopsy).
 - Everything rides the userland roadmap: libos64 scaffolding → the GUI
   syscalls (16-22) land in the dispatch table → gbounce/gkeys port.
+
+### Named appearance compositions
+
+Appearance Workshop lists compiled presets and personal saved themes, loads a
+selection into its preview, saves full schema snapshots, and chooses an independent
+startup snapshot. Save is separate from live Apply. The reusable `os64_ui_listbox`
+uses application-owned labels, supports keyboard navigation and pointer
+selection, and can be paired with `os64_ui_scrollbar`. Saved themes use
+`ui_saved.c`; full encoding and startup validation share the theme schema in
+`ui_theme.c`. Publication and failure contracts are recorded in APPEARANCE.md.
+
+### Color editing controls
+
+`os64_ui_colorpicker` provides a saturation/value square and hue strip using
+integer HSV conversion. Pointer gestures clamp to their starting area, and
+focus loss/hiding/disablement cancels the drag. Arrow keys change saturation
+and value; Shift+Left/Right changes hue. Programmatic color setters preserve
+the exact opaque RGB input and do not notify callbacks. User gestures notify
+when the resulting RGB value changes. The caller owns hex entry and history.
+
+A listbox may supply a `swatch` callback to draw color chips before its labels;
+the chip and label share the row's existing mouse and keyboard behavior.
+Palette-role and schema color accessors live in `ui_palette.c` / `ui_theme.c`.
+APPEARANCE.md records role inference, persistence compatibility, and Undo scope.
+
+## Application settings windows
+
+`os64/ui_settings.h` provides an app-owned, modeless dialog with a content
+container, status line, and Apply / Save as default / Close buttons. Call
+`open`, populate `body`, then `ready`; service `pump` in the application loop
+and `close` before releasing the app widgets. Opening an existing dialog
+focuses/restores it and retains its draft.
+
+The app supplies layout and apply callbacks and owns validation, runtime
+changes and persistence. The helper supplies theme/font adoption, keyboard
+focus and button behavior. Its font planner stages layout before adopting
+a changed Interface font; a size that cannot fit is refused intact.
+
+A main window opts into the titlebar action with
+`OS64_GUI_WINDOW_HAS_SETTINGS` and handles `OS64_GUI_EVENT_SETTINGS` by
+opening this helper. The dialog itself does not opt in. Ctrl+Alt+S requests
+settings even when the titlebar is hidden or a composition omits the button.

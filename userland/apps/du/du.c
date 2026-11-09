@@ -1,12 +1,12 @@
 // du.c — summarize apparent file sizes beneath directory trees.
 
 #include "os64/os64.h"
+#include "os64/walk.h"
 
 #define DU_PATH_MAX       256
-#define DU_MAX_OPERANDS   512
-// A task owns sixteen handles. Standard input/output/error plus twelve open
-// directory ancestors leaves one honest spare instead of failing mysteriously.
-#define DU_MAX_TREE_DEPTH 12
+// One open directory ancestor per level: the walk's depth (os64/walk.h),
+// which leaves room in the handle table.
+#define DU_MAX_TREE_DEPTH OS64_WALK_MAX_DEPTH
 
 typedef struct {
     bool humanReadable;
@@ -21,26 +21,6 @@ typedef struct {
     bool complete;
 } du_result_t;
 
-static bool parse_depth(const char *text, uint64_t *depth)
-{
-    if (text == NULL || *text == '\0')
-        return false;
-
-    uint64_t value = 0;
-    for (const char *p = text; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (value > (UINT64_MAX - digit) / 10)
-            return false;
-        value = value * 10 + digit;
-    }
-
-    *depth = value;
-    return true;
-}
-
 static int join_path(char *out, size_t capacity, const char *directory,
                      const char *name)
 {
@@ -51,35 +31,13 @@ static int join_path(char *out, size_t capacity, const char *directory,
     return wanted >= 0 && (size_t)wanted < capacity ? 0 : -1;
 }
 
-static void format_human_size(uint64_t bytes, char *out, size_t capacity)
-{
-    if (bytes < 1024)
-    {
-        os64_snprintf(out, capacity, "%luB", bytes);
-        return;
-    }
-
-    static const char *units[] = {"K", "M", "G", "T", "P", "E"};
-    uint64_t divisor = 1024;
-    int32_t unit = 0;
-    while (unit < 5 && bytes >= divisor * 1024)
-    {
-        divisor *= 1024;
-        unit++;
-    }
-
-    uint64_t whole = bytes / divisor;
-    uint64_t tenth = (bytes % divisor) * 10 / divisor;
-    os64_snprintf(out, capacity, "%lu.%lu%s", whole, tenth, units[unit]);
-}
-
 static void print_usage(uint64_t bytes, const char *path,
                         const du_options_t *options)
 {
     if (options->humanReadable)
     {
         char amount[32];
-        format_human_size(bytes, amount, sizeof(amount));
+        os64_format_binary_size(bytes, amount, sizeof(amount));
         os64_printf("%s\t%s\n", amount, path);
         return;
     }
@@ -193,7 +151,12 @@ int main(int argc, char **argv)
 {
     du_options_t options = {.maxDepth = UINT64_MAX};
     os64_args_t args = {0};
-    const char *operands[DU_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "du: out of memory\n");
+        return 2;
+    }
     const char *depthText = NULL;
     const os64_optspec_t specs[] = {
         {'h', "human-readable", false, "print sizes in powers of 1024",
@@ -213,15 +176,22 @@ int main(int argc, char **argv)
     args.details = "Allocated-block counts are not exposed yet; default sizes carry a K suffix.";
 
     int32_t operandCount = os64_args_parse(
-        &args, "du [-ahsc] [-d N] [PATH ...]", operands, DU_MAX_OPERANDS);
+        &args, "du [-ahsc] [-d N] [PATH ...]", operands, OS64_SPAWN_MAX_ARGS);
     if (operandCount == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operandCount < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
 
-    if (depthText != NULL && !parse_depth(depthText, &options.maxDepth))
+    if (depthText != NULL && !os64_parse_u64(depthText, &options.maxDepth))
     {
         os64_hprintf(OS64_STDERR, "du: invalid maximum depth: %s\n", depthText);
+        os64_free(operands);
         return 2;
     }
     if (options.summarize)
@@ -229,6 +199,7 @@ int main(int argc, char **argv)
     if (options.summarize && options.allFiles)
     {
         os64_hprintf(OS64_STDERR, "du: -a and -s cannot be combined\n");
+        os64_free(operands);
         return 2;
     }
 
@@ -251,5 +222,6 @@ int main(int argc, char **argv)
 
     if (options.grandTotal && complete)
         print_usage(grandTotal, "total", &options);
+    os64_free(operands);
     return complete ? 0 : 1;
 }

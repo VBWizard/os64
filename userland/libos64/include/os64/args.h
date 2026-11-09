@@ -137,7 +137,8 @@ int32_t os64_args_next(os64_args_t *a);
 //                    than max_positionals, or a spec os64_args_parse reached
 //                    that has no destination (that last one is a programmer
 //                    error, surfaced loudly rather than silently dropped).
-//                    Help has been printed. Exit nonzero.
+//                    A diagnostic has been printed to stderr, without help.
+//                    Exit nonzero.
 // A program taking no positionals (pwd-shaped) passes NULL, 0.
 int32_t os64_args_parse(os64_args_t *a, const char *usage,
                         const char **positionals, int32_t max_positionals);

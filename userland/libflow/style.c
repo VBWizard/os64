@@ -1,0 +1,5323 @@
+// style.c — pass 1: the tree in, a computed style per element out.
+//
+// THE FIRST PRODUCER OF flow_style_t. What it compiles is the WHATWG HTML
+// standard's Rendering chapter — the browsers' shared user-agent style
+// sheet written down — plus the presentational attributes the chapter maps
+// onto properties, and the quirks-mode rules it states. Within each stage
+// below the rules follow the chapter's sections and name them, so a reader
+// can hold this file against the standard line by line; where a rule is
+// deliberately not honoured the reason is at the rule.
+//
+// The order inside one element is the cascade's: inheritance first, then
+// the user-agent sheet, then the presentational hints (which an author's
+// sheet outranks and the user-agent sheet does not), then the quirks-mode
+// user-agent rules that the chapter states in prose, then the page's own
+// sheets — libgarb's author winners, computed into the same fields.
+//
+// The walk is iterative, over the tree's own parent pointers, so a page as
+// deep as libhtml allows is styled without a stack as deep as the page.
+
+#include <math.h>
+
+#include "internal.h"
+#include "garb/cascade.h"
+
+// ── Lengths while an element is being styled ────────────────────────────
+//
+// The sheet writes `1em` before the element's font size is known, so a
+// length is held as written and resolved once, after the font.
+// UNSET is what nothing wrote: a margin or padding of 0, a width of auto.
+typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM, L_FIT, L_CONTENT } LKind;
+typedef struct {
+    LKind kind;
+    int32_t v;      // PX: 26.6 px; PCT: 1/64 percent; EM: 1/1000 em
+    int32_t off;    // PCT: 26.6 px added to it, a calc()'s fixed part
+} Len;
+
+static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
+static const Len kAuto = {L_AUTO, 0, 0};
+static const Len kFitContent = {L_FIT, 0, 0};
+static const Len kContent = {L_CONTENT, 0, 0};
+
+static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset);
+
+// How the font size was written, resolved against the parent's.
+typedef enum {
+    FS_INHERIT = 0,
+    FS_PX,          // v: 26.6
+    FS_EM,          // v: 1/1000 of the parent's
+    FS_KEYWORD,     // v: 0 xx-small … 7 xxx-large
+    FS_SMALLER,
+    FS_LARGER,
+} FsKind;
+
+typedef struct {
+    flow_style_t s;             // everything that needs no font to resolve
+    Len margin[4], padding[4], inset[4], width, height;
+    Len clip[4];
+    Len radius[4][2];
+    Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
+    Len min_width, max_width, min_height, max_height;
+    Len text_indent;                // UNSET: as inherited
+    Len letter_spacing;             // UNSET: as inherited
+    Len object_position[2];         // UNSET: 50%
+    FsKind fs_kind;
+    int32_t fs_v;
+    bool border_color_set[4];
+    bool outline_color_set;     // false: currentColor (or auto), resolved in finish
+    int32_t outline_px;         // the declared width in 26.6; the style decides if drawn
+    Len outline_offset;
+    int32_t border_px[4];       // declared widths in 26.6; style decides if drawn
+    bool bolder;
+    FProps taken;               // FStyled.taken
+} Spec;
+
+#include "style_copy.inc"
+
+typedef struct {
+    const os64_html_document_t *doc;
+    const os64_page_t *model;
+    const flow_env_t *env;
+    FStyles *out;
+    const FStyles *previous;
+    FStyleCopy copies;
+    bool quirks;                // full quirks mode
+    // `body link=` recolours every link, and the body is styled before any
+    // link it contains is.
+    bool has_body_link;
+    uint32_t body_link;
+    flow_unit_t root_font;      // the html element's font size: what `rem` is
+    double zoom;                // device pixels per CSS pixel (flow_env_t.zoom)
+    // A list refused for the budget since lay_sets last looked
+    // (list_alloc), and, while a keyframe is resolved (keyframe_resolved),
+    // the longhands whose lists were: its mix leaves them as they were.
+    bool spent;
+    FProps *refused;
+    // Tree-order state (GENERATED_CONTENT.md § 8.2): the live counters,
+    // innermost last, the quote depth, and whether room for a counter
+    // could not be had.
+    struct FCounter *counters;
+    int32_t ncounters, cap_counters;
+    int32_t quote_depth;
+    bool counters_failed;
+    // The replaced element whose subtree the walk is in (a canvas's
+    // fallback), which counts and quotes for nothing: none of it is drawn.
+    const os64_html_node_t *inert;
+} Ctx;
+
+// A live counter: its name (the sheet's bytes), its value, and the element
+// whose end ends its scope.
+typedef struct FCounter {
+    const char *name;
+    size_t len;
+    int32_t value;
+    const os64_html_node_t *scope;
+} FCounter;
+
+// How many counters may be live at once (GENERATED_CONTENT.md § 8.2):
+// past it a reset makes none, and a use reads 0.
+#define F_COUNTERS_MAX 1024
+
+// `n` CSS pixels in the tree's units, which are device pixels' (zoomed).
+static flow_unit_t css(const Ctx *c, double n)
+{
+    double u = n * FLOW_UNITS_PER_PX * c->zoom;
+    return (flow_unit_t)(u >= 0 ? u + 0.5 : u - 0.5);
+}
+
+static Len px(const Ctx *c, int32_t n) { return (Len){L_PX, css(c, n), 0}; }
+
+// ── Reading the tree ────────────────────────────────────────────────────
+
+static bool is(const os64_html_node_t *n, os64_html_tag_t tag)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+           n->tag == tag;
+}
+
+static const char *attr(const os64_html_node_t *n, const char *name)
+{
+    const os64_html_attr_t *a = os64_html_attr(n, name);
+    return a != NULL ? a->value : NULL;
+}
+
+static bool has(const os64_html_node_t *n, const char *name)
+{
+    return os64_html_attr(n, name) != NULL;
+}
+
+// `[name=value i]`
+static bool attr_is(const os64_html_node_t *n, const char *name, const char *value)
+{
+    return f_eq_nocase(attr(n, name), value);
+}
+
+static bool is_heading(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_H1) || is(n, OS64_HTML_TAG_H2) || is(n, OS64_HTML_TAG_H3) ||
+           is(n, OS64_HTML_TAG_H4) || is(n, OS64_HTML_TAG_H5) || is(n, OS64_HTML_TAG_H6);
+}
+
+static bool is_list(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_DIR) || is(n, OS64_HTML_TAG_MENU) || is(n, OS64_HTML_TAG_OL) ||
+           is(n, OS64_HTML_TAG_UL);
+}
+
+static bool is_table_part(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_THEAD) || is(n, OS64_HTML_TAG_TBODY) ||
+           is(n, OS64_HTML_TAG_TFOOT) || is(n, OS64_HTML_TAG_TR) || is(n, OS64_HTML_TAG_TD) ||
+           is(n, OS64_HTML_TAG_TH);
+}
+
+static bool is_row_group(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_THEAD) || is(n, OS64_HTML_TAG_TBODY) || is(n, OS64_HTML_TAG_TFOOT);
+}
+
+static bool is_li(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_LI);
+}
+
+static bool is_list_or_dl(const os64_html_node_t *n)
+{
+    return is_list(n) || is(n, OS64_HTML_TAG_DL);
+}
+
+// The record of the element `n` inherits from: its flat parent's
+// (internal.h).
+static const FStyled *above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, f_flat_parent(c->doc, n));
+}
+
+// The record of `n`'s parent in the document's own tree, where a selector
+// matches: what the chapter's selectors are answered from (`ul ul`, `li
+// ul`, `nobr wbr` from the counts a record keeps of itself and everything
+// above it, FStyled.lists; `tr > td` from its parent's style), rather than
+// by walking up from every element. A shadow root's child has none, so a
+// shadow tree's counts start again, as a selector's match does; a slotted
+// node's is its host's.
+static const FStyled *selector_above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, n->parent);
+}
+
+static int32_t lists_above(const Ctx *c, const os64_html_node_t *n)
+{
+    const FStyled *up = selector_above(c, n);
+    return up != NULL ? up->lists : 0;
+}
+
+// The table a cell belongs to by the chapter's selectors: `table > tr > td`
+// or `table > thead|tbody|tfoot > tr > td`, and nothing looser — a cell of
+// a nested table is that table's.
+static const os64_html_node_t *cell_table(const os64_html_node_t *cell)
+{
+    const os64_html_node_t *row = cell->parent;
+    if (!is(row, OS64_HTML_TAG_TR))
+        return NULL;
+    const os64_html_node_t *up = row->parent;
+    if (is_row_group(up))
+        up = up->parent;
+    return is(up, OS64_HTML_TAG_TABLE) ? up : NULL;
+}
+
+// `table[border]` counts when the attribute is present and is not
+// "equivalent to zero": a parse error counts, a zero does not.
+static bool border_not_zero(const os64_html_node_t *table)
+{
+    const char *b = attr(table, "border");
+    if (b == NULL)
+        return false;
+    int32_t v;
+    return !f_parse_nonnegative(b, &v) || v != 0;
+}
+
+// Margin collapsing quirks (§15.3.9) speak of SUBSTANTIAL nodes: an element,
+// or text that is not inter-element white space.
+static bool substantial(const os64_html_node_t *n)
+{
+    if (n->kind == OS64_HTML_ELEMENT)
+        return true;
+    if (n->kind != OS64_HTML_TEXT)
+        return false;
+    for (size_t i = 0; i < n->text_len; i++) {
+        char c = n->text[i];
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\f' && c != '\r')
+            return true;
+    }
+    return false;
+}
+
+static bool blank(const os64_html_node_t *n)
+{
+    for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next)
+        if (substantial(c))
+            return false;
+    return true;
+}
+
+static bool substantial_before(const os64_html_node_t *n)
+{
+    for (const os64_html_node_t *p = n->prev; p != NULL; p = p->prev)
+        if (substantial(p))
+            return true;
+    return false;
+}
+
+static bool substantial_after(const os64_html_node_t *n)
+{
+    for (const os64_html_node_t *p = n->next; p != NULL; p = p->next)
+        if (substantial(p))
+            return true;
+    return false;
+}
+
+static bool default_margins(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_BLOCKQUOTE) || is(n, OS64_HTML_TAG_DIR) ||
+           is(n, OS64_HTML_TAG_DL) || is_heading(n) || is(n, OS64_HTML_TAG_LISTING) ||
+           is(n, OS64_HTML_TAG_MENU) || is(n, OS64_HTML_TAG_OL) || is(n, OS64_HTML_TAG_P) ||
+           is(n, OS64_HTML_TAG_PLAINTEXT) || is(n, OS64_HTML_TAG_PRE) ||
+           is(n, OS64_HTML_TAG_UL) || is(n, OS64_HTML_TAG_XMP);
+}
+
+// ── Setting properties ──────────────────────────────────────────────────
+
+static void margin_block(Spec *sp, Len v)
+{
+    sp->margin[FLOW_TOP] = sp->margin[FLOW_BOTTOM] = v;
+}
+
+static void margin_inline(Spec *sp, Len v)
+{
+    sp->margin[FLOW_LEFT] = sp->margin[FLOW_RIGHT] = v;
+}
+
+static void padding_all(Spec *sp, Len v)
+{
+    for (int i = 0; i < 4; i++)
+        sp->padding[i] = v;
+}
+
+static void border(const Ctx *c, Spec *sp, flow_border_style_t style, int32_t width_px)
+{
+    for (int i = 0; i < 4; i++) {
+        sp->s.border_style[i] = style;
+        sp->border_px[i] = css(c, width_px);
+    }
+}
+
+static void border_color(Spec *sp, uint32_t rgb)
+{
+    for (int i = 0; i < 4; i++) {
+        sp->s.border_color[i] = rgb;
+        sp->border_color_set[i] = true;
+    }
+}
+
+static void monospace(Spec *sp)
+{
+    sp->s.family = (flow_family_list_t){.generic = FLOW_GENERIC_MONO};
+}
+
+// "Maps to the dimension property": the attribute, read as a dimension,
+// sets the property — a length in CSS pixels, zoomed — and one that does
+// not parse sets nothing.
+static void map_dimension(const Ctx *c, const os64_html_node_t *n, const char *name, bool nonzero,
+                          Len *out)
+{
+    int32_t v;
+    f_dim_kind_t kind = f_parse_dimension(attr(n, name), nonzero, &v);
+    if (kind == F_DIM_PERCENT)
+        *out = (Len){L_PCT, v, 0};
+    else if (kind == F_DIM_PX)
+        *out = (Len){L_PX, css(c, (double)v / FLOW_UNITS_PER_PX), 0};
+}
+
+// "Maps to the pixel length property": a non-negative integer, in px.
+static bool pixel_length(const Ctx *c, const os64_html_node_t *n, const char *name, Len *out)
+{
+    int32_t v;
+    if (!f_parse_nonnegative(attr(n, name), &v))
+        return false;
+    *out = px(c, v);
+    return true;
+}
+
+static bool legacy_color(const os64_html_node_t *n, const char *name, uint32_t *out)
+{
+    const char *v = attr(n, name);
+    return v != NULL && f_parse_legacy_color(v, out);
+}
+
+static void background(Spec *sp, uint32_t rgb)
+{
+    sp->s.has_background = true;
+    sp->s.background = rgb;
+    sp->s.current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
+}
+
+// ── The initial style, and inheritance ──────────────────────────────────
+
+// One layer of nothing: no picture, repeated from the padding box's
+// corner at its own size, cut to the border box.
+static const flow_bg_image_t kNoImage = {NULL, 0, -1, NULL};
+static const flow_repeat_t kRepeat = FLOW_REPEAT;
+static const flow_length_t kAtStart = {FLOW_LENGTH_PERCENT, 0, 0};
+static const flow_bg_size_t kOwnSize = {FLOW_FIT_LENGTHS, {{FLOW_LENGTH_AUTO, 0, 0},
+                                                           {FLOW_LENGTH_AUTO, 0, 0}}};
+static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE_BORDER;
+static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
+                                                &kOwnSize, &kPaddingBox, &kBorderBox,
+                                                1, 1, 1, 1, 1, 1, 1};
+
+static flow_style_t initial(const Ctx *c)
+{
+    flow_style_t s;
+    os64_memset(&s, 0, sizeof(s));
+    s.display = FLOW_DISPLAY_INLINE;
+    s.family = (flow_family_list_t){.generic = c->env->default_generic};
+    s.font_weight = 400;
+    s.font_style = FLOW_FONT_NORMAL;
+    s.font_size = css(c, c->env->viewport_font_px);
+    s.color = c->env->ink;
+    s.fill = s.color;
+    s.current_colours = FLOW_CURRENT_FILL;
+    s.backgrounds = kBackgrounds;
+    s.opacity = 1000;
+    s.flex_shrink = 1000;
+    s.align_self = FLOW_PLACE_AUTO;
+    s.justify_self = FLOW_PLACE_AUTO;
+    // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
+    for (int i = 0; i < 4; i++) {
+        s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+        s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    }
+    s.transform_origin[0] = s.transform_origin[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    s.object_position[0] = s.object_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    // Everything else starts at zero bytes, which is each property's
+    // initial value: auto width and height, no borders, left, baseline,
+    // normal, disc outside, separate, top, no float, static with auto
+    // insets, z-index auto, and a row that does not wrap, its alignments
+    // normal, its items growing by nothing from an auto basis, order 0,
+    // and gaps of normal; no grid tracks or areas, auto-placement by rows,
+    // and auto lines; no transform; the cursor and user-select auto;
+    // normal word breaking and spacing; no outline, ratio or ellipsis; and
+    // a picture filling its box.
+    return s;
+}
+
+// What a child takes from its parent before any rule of its own: the
+// inherited properties, and the initial value of every other.
+static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
+{
+    flow_style_t s = initial(c);
+    if (parent == NULL)
+        return s;
+    s.family = parent->family;
+    s.font_weight = parent->font_weight;
+    s.font_style = parent->font_style;
+    s.font_size = parent->font_size;
+    s.color = parent->color;
+    s.fill = parent->fill;
+    s.current_colours = (uint8_t)((s.current_colours & ~FLOW_CURRENT_FILL) |
+                                  (parent->current_colours & FLOW_CURRENT_FILL));
+    s.text_align = parent->text_align;
+    s.white_space = parent->white_space;
+    s.line_height = parent->line_height;
+    s.text_indent = parent->text_indent;
+    s.text_transform = parent->text_transform;
+    s.word_break = parent->word_break;
+    s.overflow_wrap = parent->overflow_wrap;
+    s.letter_spacing = parent->letter_spacing;
+    s.text_shadows = parent->text_shadows;
+    s.ntext_shadows = parent->ntext_shadows;
+    s.pixelated = parent->pixelated;
+    s.visibility = parent->visibility;
+    s.pointer_events_none = parent->pointer_events_none;
+    s.cursor = parent->cursor;
+    s.list_style_type = parent->list_style_type;
+    s.list_style_position = parent->list_style_position;
+    s.border_spacing[0] = parent->border_spacing[0];
+    s.border_spacing[1] = parent->border_spacing[1];
+    s.border_collapse = parent->border_collapse;
+    s.caption_side = parent->caption_side;
+    return s;
+}
+
+// ── Fonts ───────────────────────────────────────────────────────────────
+
+// The absolute-size keywords as CSS Fonts' scaling factors on `medium`:
+// xx-small … xxx-large.
+static const struct { int32_t num, den; } s_keyword[8] = {
+    {3, 5}, {3, 4}, {8, 9}, {1, 1}, {6, 5}, {3, 2}, {2, 1}, {3, 1},
+};
+
+// A size times a ratio, held to F_INT_MAX pixels either way: sizes compound
+// down the tree (each nested <big> is 6/5 of its parent's), so a page can
+// ask for more than a 26.6 int32_t holds, and a wrapped one is negative.
+static int32_t scale(int32_t v, int32_t num, int32_t den)
+{
+    int64_t r = ((int64_t)v * num + den / 2) / den;
+    int64_t most = (int64_t)F_INT_MAX * FLOW_UNITS_PER_PX;
+    return (int32_t)(r > most ? most : r < -most ? -most : r);
+}
+
+static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *parent)
+{
+    flow_unit_t medium = css(c, c->env->viewport_font_px);
+    flow_unit_t base = parent != NULL ? parent->font_size : medium;
+    switch (sp->fs_kind) {
+    case FS_PX: return sp->fs_v;
+    case FS_EM: return scale(base, sp->fs_v, 1000);
+    case FS_KEYWORD: return scale(medium, s_keyword[sp->fs_v].num, s_keyword[sp->fs_v].den);
+    // CSS Fonts' suggested ratio between neighbouring sizes.
+    case FS_SMALLER: return scale(base, 5, 6);
+    case FS_LARGER: return scale(base, 6, 5);
+    case FS_INHERIT: break;
+    }
+    return base;
+}
+
+// CSS Fonts' `bolder`, from the parent's weight.
+// CSS Fonts 4 § 2.2's table: a weight at or above 900 stays as it is.
+static uint16_t bolder(uint16_t w)
+{
+    return w < 350 ? 400 : w < 550 ? 700 : w < 900 ? 900 : w;
+}
+
+// Which generic a named face stands for, when the page spelled no generic
+// of its own: a monospace face by its name, a serif face by its name, and
+// sans for the rest, which is what most faces a page names are.
+static bool contains_nocase(const char *s, uint32_t len, const char *word)
+{
+    size_t wl = os64_strlen(word);
+    for (uint32_t i = 0; i + wl <= len; i++) {
+        size_t k = 0;
+        while (k < wl) {
+            char ch = s[i + k];
+            if (ch >= 'A' && ch <= 'Z')
+                ch = (char)(ch + 32);
+            if (ch != word[k])
+                break;
+            k++;
+        }
+        if (k == wl)
+            return true;
+    }
+    return false;
+}
+
+static bool generic_named(const char *s, uint32_t len, flow_generic_t *out)
+{
+    static const struct { const char *name; flow_generic_t g; } k[] = {
+        {"serif", FLOW_GENERIC_SERIF}, {"sans-serif", FLOW_GENERIC_SANS},
+        {"monospace", FLOW_GENERIC_MONO},
+    };
+    for (int32_t i = 0; i < F_ARRAY(k); i++) {
+        size_t wl = os64_strlen(k[i].name);
+        if (wl == len && contains_nocase(s, len, k[i].name)) {
+            *out = k[i].g;
+            return true;
+        }
+    }
+    return false;
+}
+
+static flow_generic_t guess_generic(const char *s, uint32_t len)
+{
+    if (contains_nocase(s, len, "mono") || contains_nocase(s, len, "courier"))
+        return FLOW_GENERIC_MONO;
+    if (contains_nocase(s, len, "sans"))
+        return FLOW_GENERIC_SANS;
+    if (contains_nocase(s, len, "serif") || contains_nocase(s, len, "times") ||
+        contains_nocase(s, len, "georgia"))
+        return FLOW_GENERIC_SERIF;
+    return FLOW_GENERIC_SANS;
+}
+
+// `<font face="Verdana, Arial, sans-serif">`: the names as written, each a
+// slice of the attribute, and the generic the list ends in — the first
+// generic keyword the page wrote, else a guess from the first name. A
+// generic keyword is a family, not a name, so it is not passed as one;
+// the list as written keeps it where it stood.
+static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
+{
+    uint32_t count = 0;
+    for (const char *p = v; *p != '\0'; p++)
+        if (*p == ',')
+            count++;
+    count++;
+    flow_family_name_t *names = f_arena_alloc(&c->out->arena, count * sizeof(*names));
+    flow_family_written_t *written = names != NULL ? f_arena_alloc(&c->out->arena, count * sizeof(*written)) : NULL;
+    if (written == NULL)
+        return false;
+    uint32_t n = 0, nwritten = 0;
+    bool have_generic = false;
+    flow_generic_t generic = FLOW_GENERIC_SANS;
+    const char *p = v;
+    for (;;) {
+        const char *start = p;
+        while (*p != '\0' && *p != ',')
+            p++;
+        const char *end = p;
+        while (start < end && (*start == ' ' || *start == '\t' || *start == '\n' ||
+                               *start == '\f' || *start == '\r'))
+            start++;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' ||
+                               end[-1] == '\f' || end[-1] == '\r'))
+            end--;
+        uint32_t len = (uint32_t)(end - start);
+        flow_generic_t g;
+        if (len > 0 && generic_named(start, len, &g)) {
+            if (!have_generic) {
+                generic = g;
+                have_generic = true;
+            }
+            written[nwritten++] = (flow_family_written_t){start, len, true};
+        } else if (len > 0) {
+            names[n++] = (flow_family_name_t){start, len};
+            written[nwritten++] = (flow_family_written_t){start, len, false};
+        }
+        if (*p == '\0')
+            break;
+        p++;
+    }
+    // A face of nothing but commas and space declares no family at all.
+    if (!have_generic && n == 0)
+        return true;
+    if (!have_generic)
+        generic = guess_generic(names[0].name, names[0].len);
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, written, nwritten};
+    return true;
+}
+
+// "The rules for parsing a legacy font size" (§15.3.4).
+static bool legacy_font_size(const char *v, int32_t *keyword)
+{
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\f' || *v == '\r')
+        v++;
+    if (*v == '\0')
+        return false;
+    int mode = 0;
+    if (*v == '+') {
+        mode = 1;
+        v++;
+    } else if (*v == '-') {
+        mode = -1;
+        v++;
+    }
+    if (*v < '0' || *v > '9')
+        return false;
+    int32_t value = 0;
+    for (; *v >= '0' && *v <= '9'; v++)
+        if (value < 1000)
+            value = value * 10 + (*v - '0');
+    if (mode > 0)
+        value = 3 + value;
+    else if (mode < 0)
+        value = 3 - value;
+    if (value > 7)
+        value = 7;
+    if (value < 1)
+        value = 1;
+    // 1 → x-small … 7 → xxx-large; the keyword table starts at xx-small.
+    *keyword = value;
+    return true;
+}
+
+// ── The user-agent sheet ────────────────────────────────────────────────
+
+static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
+{
+    flow_style_t *s = &sp->s;
+
+    // §15.3.1 Hidden elements.
+    switch (n->tag) {
+    case OS64_HTML_TAG_AREA: case OS64_HTML_TAG_BASE: case OS64_HTML_TAG_BASEFONT:
+    case OS64_HTML_TAG_DATALIST: case OS64_HTML_TAG_HEAD: case OS64_HTML_TAG_LINK:
+    case OS64_HTML_TAG_META: case OS64_HTML_TAG_NOEMBED: case OS64_HTML_TAG_NOFRAMES:
+    case OS64_HTML_TAG_PARAM: case OS64_HTML_TAG_RP: case OS64_HTML_TAG_SCRIPT:
+    case OS64_HTML_TAG_STYLE: case OS64_HTML_TAG_TEMPLATE: case OS64_HTML_TAG_TITLE:
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    default:
+        break;
+    }
+    // `[hidden=until-found]` is content-visibility: hidden — found by a
+    // search, drawn by nothing — and with no search to find it, it is laid
+    // out as the hidden thing it is.
+    if (has(n, "hidden") && !is(n, OS64_HTML_TAG_EMBED)) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
+    if (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "hidden")) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
+    // §15.3.3 `[popover]:not(:popover-open):not(dialog[open])`: opening a
+    // popover takes script, which this browser does not run, so every one
+    // but an open dialog is hidden, as a browser shows it until something
+    // opens it.
+    if (has(n, "popover") && !(is(n, OS64_HTML_TAG_DIALOG) && has(n, "open"))) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
+    if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
+
+    switch (n->tag) {
+    // §15.3.2 The page, §15.3.3 Flow content.
+    case OS64_HTML_TAG_HTML: case OS64_HTML_TAG_BODY:
+    case OS64_HTML_TAG_CENTER: case OS64_HTML_TAG_DIV:
+    case OS64_HTML_TAG_FIGCAPTION: case OS64_HTML_TAG_FOOTER: case OS64_HTML_TAG_FORM:
+    case OS64_HTML_TAG_HEADER: case OS64_HTML_TAG_MAIN:
+    case OS64_HTML_TAG_SEARCH:
+    // §15.3.6 Sections and headings.
+    case OS64_HTML_TAG_ARTICLE: case OS64_HTML_TAG_ASIDE: case OS64_HTML_TAG_HGROUP:
+    case OS64_HTML_TAG_NAV: case OS64_HTML_TAG_SECTION:
+    // §15.3.7 Lists.
+    case OS64_HTML_TAG_DD: case OS64_HTML_TAG_DT:
+    // §15.5.5 details; §15.5.16 option and optgroup, laid out only by a
+    // select, which is the face's widget.
+    case OS64_HTML_TAG_DETAILS: case OS64_HTML_TAG_SUMMARY:
+    case OS64_HTML_TAG_OPTION: case OS64_HTML_TAG_OPTGROUP:
+    // §15.6: a frameset is a surface its frames divide. The first cut draws
+    // each frame as the link to what it shows (LAYOUT.md § Pass 2), so the
+    // frameset is a block they stack in.
+    case OS64_HTML_TAG_FRAMESET: case OS64_HTML_TAG_FRAME:
+        s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    case OS64_HTML_TAG_ADDRESS:
+        s->display = FLOW_DISPLAY_BLOCK;
+        s->font_style = FLOW_FONT_ITALIC;
+        break;
+    case OS64_HTML_TAG_BLOCKQUOTE: case OS64_HTML_TAG_FIGURE:
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_block(sp, em(1000));
+        margin_inline(sp, px(c, 40));
+        break;
+    case OS64_HTML_TAG_P:
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_block(sp, em(1000));
+        break;
+    case OS64_HTML_TAG_LISTING: case OS64_HTML_TAG_PLAINTEXT: case OS64_HTML_TAG_PRE:
+    case OS64_HTML_TAG_XMP:
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_block(sp, em(1000));
+        monospace(sp);
+        s->white_space = FLOW_WS_PRE;
+        break;
+    case OS64_HTML_TAG_DIALOG:
+        // Open, it is positioned over the page where it was written,
+        // centred between its containing block's sides and as wide as its
+        // content wants. The block-axis insets are the modal dialog's,
+        // which only script opens.
+        if (!has(n, "open")) {
+            s->display = FLOW_DISPLAY_NONE;
+            return;
+        }
+        s->display = FLOW_DISPLAY_BLOCK;
+        s->position = FLOW_POSITION_ABSOLUTE;
+        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(c, 0);
+        for (int i = 0; i < 4; i++)
+            sp->margin[i] = kAuto;
+        sp->width = kFitContent;
+        border(c, sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
+        padding_all(sp, em(1000));
+        background(sp, c->env->paper);
+        s->color = c->env->ink;
+        break;
+    case OS64_HTML_TAG_SLOT:
+        s->display = FLOW_DISPLAY_CONTENTS;
+        break;
+
+    // §15.3.4 Phrasing content.
+    case OS64_HTML_TAG_CITE: case OS64_HTML_TAG_DFN: case OS64_HTML_TAG_EM:
+    case OS64_HTML_TAG_I: case OS64_HTML_TAG_VAR:
+        s->font_style = FLOW_FONT_ITALIC;
+        break;
+    case OS64_HTML_TAG_B: case OS64_HTML_TAG_STRONG:
+        sp->bolder = true;
+        break;
+    case OS64_HTML_TAG_CODE: case OS64_HTML_TAG_KBD: case OS64_HTML_TAG_SAMP:
+    case OS64_HTML_TAG_TT:
+        monospace(sp);
+        break;
+    case OS64_HTML_TAG_BIG:
+        sp->fs_kind = FS_LARGER;
+        break;
+    case OS64_HTML_TAG_SMALL:
+        sp->fs_kind = FS_SMALLER;
+        break;
+    case OS64_HTML_TAG_SUB: case OS64_HTML_TAG_SUP:
+        s->vertical_align = n->tag == OS64_HTML_TAG_SUB ? FLOW_VALIGN_SUB : FLOW_VALIGN_SUPER;
+        sp->fs_kind = FS_SMALLER;
+        break;
+    case OS64_HTML_TAG_MARK:
+        background(sp, 0xFFFF00);
+        s->color = 0x000000;
+        break;
+    case OS64_HTML_TAG_ABBR: case OS64_HTML_TAG_ACRONYM:
+        // `dotted underline`; the dotted line is drawn as a line.
+        if (has(n, "title"))
+            s->text_decoration |= FLOW_DECORATION_UNDERLINE;
+        break;
+    case OS64_HTML_TAG_INS: case OS64_HTML_TAG_U:
+        s->text_decoration |= FLOW_DECORATION_UNDERLINE;
+        break;
+    case OS64_HTML_TAG_DEL: case OS64_HTML_TAG_S: case OS64_HTML_TAG_STRIKE:
+        s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
+        break;
+    case OS64_HTML_TAG_NOBR:
+        s->white_space = FLOW_WS_NOWRAP;
+        break;
+    // `nobr wbr { white-space: normal }`: the one break a nowrap run
+    // allows, which pass 3 honours only if the wbr's own style says so.
+    case OS64_HTML_TAG_WBR: {
+        const FStyled *up = selector_above(c, n);
+        if (up != NULL && up->in_nobr)
+            s->white_space = FLOW_WS_NORMAL;
+        break;
+    }
+    // `ruby` and `rt` are the chapter's `display: ruby` and `ruby-text`,
+    // which this struct does not have: both are laid out inline, the
+    // annotation reading after its base (LAYOUT.md § Booked).
+
+    // §15.3.6 headings.
+    case OS64_HTML_TAG_H1: case OS64_HTML_TAG_H2: case OS64_HTML_TAG_H3:
+    case OS64_HTML_TAG_H4: case OS64_HTML_TAG_H5: case OS64_HTML_TAG_H6: {
+        static const int32_t size[6] = {2000, 1500, 1170, 1000, 830, 670};
+        static const int32_t margin[6] = {670, 830, 1000, 1330, 1670, 2330};
+        int32_t level = n->tag - OS64_HTML_TAG_H1;
+        s->display = FLOW_DISPLAY_BLOCK;
+        s->font_weight = 700;
+        sp->fs_kind = FS_EM;
+        sp->fs_v = size[level];
+        margin_block(sp, em(margin[level]));
+        break;
+    }
+
+    // §15.3.7 Lists.
+    case OS64_HTML_TAG_DL:
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_block(sp, em(1000));
+        break;
+    case OS64_HTML_TAG_DIR: case OS64_HTML_TAG_MENU: case OS64_HTML_TAG_OL:
+    case OS64_HTML_TAG_UL: {
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_block(sp, em(1000));
+        sp->padding[FLOW_LEFT] = px(c, 40);
+        if (n->tag == OS64_HTML_TAG_OL) {
+            s->list_style_type = FLOW_LIST_DECIMAL;
+        } else {
+            int32_t depth = lists_above(c, n);
+            s->list_style_type = depth >= 2 ? FLOW_LIST_SQUARE
+                               : depth == 1 ? FLOW_LIST_CIRCLE : FLOW_LIST_DISC;
+        }
+        break;
+    }
+    case OS64_HTML_TAG_LI:
+        s->display = FLOW_DISPLAY_LIST_ITEM;
+        break;
+
+    // §15.3.8 Tables.
+    case OS64_HTML_TAG_TABLE:
+        s->display = FLOW_DISPLAY_TABLE;
+        s->border_spacing[0] = s->border_spacing[1] = css(c, 2);
+        s->border_collapse = FLOW_SEPARATE;
+        break;
+    case OS64_HTML_TAG_CAPTION:
+        s->display = FLOW_DISPLAY_TABLE_CAPTION;
+        s->text_align = FLOW_ALIGN_CENTER;
+        break;
+    case OS64_HTML_TAG_COLGROUP:
+        s->display = FLOW_DISPLAY_TABLE_COLUMN_GROUP;
+        break;
+    case OS64_HTML_TAG_COL:
+        s->display = FLOW_DISPLAY_TABLE_COLUMN;
+        break;
+    case OS64_HTML_TAG_THEAD: case OS64_HTML_TAG_TBODY: case OS64_HTML_TAG_TFOOT:
+        s->display = n->tag == OS64_HTML_TAG_THEAD ? FLOW_DISPLAY_TABLE_HEADER_GROUP
+                   : n->tag == OS64_HTML_TAG_TFOOT ? FLOW_DISPLAY_TABLE_FOOTER_GROUP
+                   : FLOW_DISPLAY_TABLE_ROW_GROUP;
+        s->vertical_align = FLOW_VALIGN_MIDDLE;
+        break;
+    case OS64_HTML_TAG_TR:
+        s->display = FLOW_DISPLAY_TABLE_ROW;
+        break;
+    case OS64_HTML_TAG_TD: case OS64_HTML_TAG_TH:
+        s->display = FLOW_DISPLAY_TABLE_CELL;
+        padding_all(sp, px(c, 1));
+        if (n->tag == OS64_HTML_TAG_TH)
+            s->font_weight = 700;
+        break;
+
+    // §15.3.10 Form controls: laid out as boxes the face's widgets fill.
+    // The chapter's `text-align` for an input and `white-space` for a
+    // textarea place the text INSIDE the widget, which the face draws. A
+    // button's centring is declared, because a button the page draws is
+    // laid out (f_button_faced) and its content centred the chapter's way;
+    // the face's own button centres its caption either way.
+    case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT:
+    case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
+        s->display = FLOW_DISPLAY_INLINE_BLOCK;
+        if (n->tag == OS64_HTML_TAG_BUTTON)
+            s->text_align = FLOW_ALIGN_CENTER;
+        break;
+    // §15.5.13: a marquee that does not move (booked) is the box it moves in.
+    case OS64_HTML_TAG_MARQUEE:
+        s->display = FLOW_DISPLAY_INLINE_BLOCK;
+        s->text_align = FLOW_ALIGN_LEFT;
+        break;
+
+    // §15.3.11 The hr element.
+    case OS64_HTML_TAG_HR:
+        s->display = FLOW_DISPLAY_BLOCK;
+        s->color = 0x808080;
+        border(c, sp, FLOW_BORDER_INSET, 1);
+        margin_block(sp, em(500));
+        margin_inline(sp, kAuto);
+        break;
+
+    // §15.3.12 fieldset and legend. A legend drawn ON the fieldset's border
+    // is not CSS 2.1's; it is laid out inside, first, which is where it
+    // reads (LAYOUT.md § Booked).
+    case OS64_HTML_TAG_FIELDSET:
+        s->display = FLOW_DISPLAY_BLOCK;
+        margin_inline(sp, px(c, 2));
+        border(c, sp, FLOW_BORDER_GROOVE, 2);
+        border_color(sp, 0xC0C0C0);     // ThreeDFace, the classic 3D grey
+        sp->padding[FLOW_TOP] = em(350);
+        sp->padding[FLOW_BOTTOM] = em(625);
+        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = em(750);
+        break;
+    case OS64_HTML_TAG_LEGEND:
+        s->display = FLOW_DISPLAY_BLOCK;
+        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(c, 2);
+        break;
+
+    // §15.4.1 Embedded content.
+    case OS64_HTML_TAG_IFRAME:
+        border(c, sp, FLOW_BORDER_INSET, 2);
+        break;
+    default:
+        break;
+    }
+
+    // A form inside table structure is an empty marker the parser left
+    // there: its controls belong to it by owner, not by nesting.
+    if (is(n, OS64_HTML_TAG_FORM) &&
+        (is(n->parent, OS64_HTML_TAG_TABLE) || is_row_group(n->parent) ||
+         is(n->parent, OS64_HTML_TAG_TR)))
+        s->display = FLOW_DISPLAY_NONE;
+
+    // §15.3.7: a list inside a list keeps no block margins.
+    if (is_list_or_dl(n) && selector_above(c, n) != NULL && selector_above(c, n)->lists_or_dls > 0)
+        margin_block(sp, px(c, 0));
+    // `dd { margin-inline-start: 40px }`
+    if (is(n, OS64_HTML_TAG_DD))
+        sp->margin[FLOW_LEFT] = px(c, 40);
+
+    // §15.3.8: cells take their vertical alignment from the row, and the
+    // row from the group; `table > tr` without a group is middle itself.
+    const FStyled *parent = selector_above(c, n);
+    if (is(n, OS64_HTML_TAG_TR) || is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH))
+        s->vertical_align = parent != NULL ? parent->style.vertical_align : FLOW_VALIGN_BASELINE;
+    if (is(n, OS64_HTML_TAG_TR) && is(n->parent, OS64_HTML_TAG_TABLE))
+        s->vertical_align = FLOW_VALIGN_MIDDLE;
+    // …and their border colour from the table, through the groups and rows.
+    if ((is_row_group(n) || is(n, OS64_HTML_TAG_TR)) && parent != NULL)
+        for (int i = 0; i < 4; i++) {
+            s->border_color[i] = parent->style.border_color[i];
+            sp->border_color_set[i] = true;
+        }
+    // A th centres its text when its parent's alignment was never set: the
+    // chapter states this rule as a condition, not a selector.
+    if (is(n, OS64_HTML_TAG_TH) && parent != NULL &&
+        parent->style.text_align == FLOW_ALIGN_LEFT)
+        s->text_align = FLOW_ALIGN_CENTER;
+
+    // §15.3.8 `rules` and `frame`: the borders a table's attributes ask for.
+    if (is(n, OS64_HTML_TAG_TABLE)) {
+        const char *rules = attr(n, "rules");
+        const char *frame = attr(n, "frame");
+        static const char *const rule_values[] = {"none", "groups", "rows", "cols", "all"};
+        static const char *const frame_values[] = {"void", "above", "below", "hsides", "lhs",
+                                                    "rhs", "vsides", "box", "border"};
+        bool ruled = false, framed = false;
+        for (int32_t i = 0; i < F_ARRAY(rule_values); i++)
+            ruled |= f_eq_nocase(rules, rule_values[i]);
+        for (int32_t i = 0; i < F_ARRAY(frame_values); i++)
+            framed |= f_eq_nocase(frame, frame_values[i]);
+        if (ruled || framed)
+            border_color(sp, 0x000000);
+    }
+    // The cells' half of the same rule names `rules` alone: a table's
+    // `frame` blackens the table's own border, not its cells'.
+    if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
+        const os64_html_node_t *table = cell_table(n);
+        const char *rules = table != NULL ? attr(table, "rules") : NULL;
+        static const char *const any[] = {"none", "groups", "rows", "cols", "all"};
+        for (int32_t i = 0; i < F_ARRAY(any); i++)
+            if (f_eq_nocase(rules, any[i]))
+                border_color(sp, 0x000000);
+    }
+
+    // §15.3.9 is prose and applies after the hints; §15.3.7's and §15.3.8's
+    // quirks-mode sheets apply here, at user-agent level.
+    if (c->quirks) {
+        if (is(n, OS64_HTML_TAG_FORM) && s->display != FLOW_DISPLAY_NONE)
+            sp->margin[FLOW_BOTTOM] = em(1000);
+        if (is(n, OS64_HTML_TAG_TABLE)) {
+            s->font_weight = 400;
+            s->font_style = FLOW_FONT_NORMAL;
+            sp->fs_kind = FS_KEYWORD;
+            sp->fs_v = 3;
+            s->white_space = FLOW_WS_NORMAL;
+            s->text_align = FLOW_ALIGN_LEFT;
+            // The Quirks Mode standard's 3.12: a table takes the BODY's
+            // colour, not its parent's — Netscape's tables inherited no
+            // font, which is why old pages repeat <font> in every cell.
+            const FStyled *body = f_map_get(&c->out->map, c->doc->body);
+            s->color = body != NULL ? body->style.color : c->env->ink;
+        }
+        // `li { inside }`, `li :is(lists) { outside }`, and
+        // `:is(lists) :is(lists, li) { unset }` — the last wins on order.
+        bool in_list = lists_above(c, n) > 0;
+        if (is_li(n) && !in_list)
+            s->list_style_position = FLOW_LIST_INSIDE;
+        if (is_list(n) && !in_list && selector_above(c, n) != NULL && selector_above(c, n)->items > 0)
+            s->list_style_position = FLOW_LIST_OUTSIDE;
+    }
+}
+
+// ── The presentational hints ────────────────────────────────────────────
+
+static void align_block(const os64_html_node_t *n, flow_style_t *s)
+{
+    // `align` on div (§15.3.3) and the table parts (§15.3.8): text aligned
+    // AND block descendants aligned.
+    if (attr_is(n, "align", "center") || attr_is(n, "align", "middle"))
+        s->text_align = FLOW_ALIGN_HTML_CENTER;
+    else if (attr_is(n, "align", "left"))
+        s->text_align = FLOW_ALIGN_HTML_LEFT;
+    else if (attr_is(n, "align", "right"))
+        s->text_align = FLOW_ALIGN_HTML_RIGHT;
+    else if (attr_is(n, "align", "justify"))
+        s->text_align = FLOW_ALIGN_HTML_JUSTIFY;
+}
+
+static bool is_embedded_aligned(const os64_html_node_t *n)
+{
+    return is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IFRAME) ||
+           is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
+           (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"));
+}
+
+// §15.3.4: a link's colour, where libpage says the node IS a link. The
+// user-agent rule is `:link`, and `body link=` is a hint on the same
+// selector, so it wins over the sheet and loses to anything the link's own
+// descendants say. It is applied with the hints for that reason, and
+// without the hint to the user-agent origin `revert` goes back to.
+static void link_rule(const Ctx *c, const os64_html_node_t *n, Spec *sp, bool hint)
+{
+    if ((is(n, OS64_HTML_TAG_A) || is(n, OS64_HTML_TAG_AREA)) && c->model != NULL &&
+        os64_page_link_for(c->model, n) >= 0) {
+        sp->s.color = hint && c->has_body_link ? c->body_link : c->env->link_ink;
+        sp->s.text_decoration |= FLOW_DECORATION_UNDERLINE;
+    }
+}
+
+static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
+{
+    flow_style_t *s = &sp->s;
+    uint32_t rgb;
+
+    switch (n->tag) {
+    // §15.3.2 The page.
+    case OS64_HTML_TAG_BODY: {
+        // The FIRST of the attributes that exists decides, and one that
+        // will not parse means the 8px default — not the next attribute.
+        Len v = px(c, 8);
+        if (has(n, "marginheight") ? !pixel_length(c, n, "marginheight", &v)
+                                   : has(n, "topmargin") && !pixel_length(c, n, "topmargin", &v))
+            v = px(c, 8);
+        margin_block(sp, v);
+        v = px(c, 8);
+        if (has(n, "marginwidth") ? !pixel_length(c, n, "marginwidth", &v)
+                                  : has(n, "leftmargin") && !pixel_length(c, n, "leftmargin", &v))
+            v = px(c, 8);
+        margin_inline(sp, v);
+        if (legacy_color(n, "bgcolor", &rgb))
+            background(sp, rgb);
+        if (legacy_color(n, "text", &rgb))
+            s->color = rgb;
+        if (legacy_color(n, "link", &rgb)) {
+            c->has_body_link = true;
+            c->body_link = rgb;
+        }
+        break;
+    }
+    // §15.3.3
+    case OS64_HTML_TAG_PRE:
+        if (has(n, "wrap"))
+            s->white_space = FLOW_WS_PRE_WRAP;
+        break;
+    case OS64_HTML_TAG_CENTER:
+        s->text_align = FLOW_ALIGN_HTML_CENTER;
+        break;
+    case OS64_HTML_TAG_DIV:
+        align_block(n, s);
+        break;
+    // §15.3.4
+    case OS64_HTML_TAG_BR:
+        if (attr_is(n, "clear", "left"))
+            s->clear = FLOW_CLEAR_LEFT;
+        else if (attr_is(n, "clear", "right"))
+            s->clear = FLOW_CLEAR_RIGHT;
+        else if (attr_is(n, "clear", "all") || attr_is(n, "clear", "both"))
+            s->clear = FLOW_CLEAR_BOTH;
+        break;
+    case OS64_HTML_TAG_FONT: {
+        if (legacy_color(n, "color", &rgb))
+            s->color = rgb;
+        const char *face = attr(n, "face");
+        if (face != NULL && !font_face(c, face, &s->family))
+            return false;
+        int32_t keyword;
+        const char *size = attr(n, "size");
+        if (size != NULL && legacy_font_size(size, &keyword)) {
+            sp->fs_kind = FS_KEYWORD;
+            sp->fs_v = keyword;
+        }
+        break;
+    }
+    // §15.3.6
+    case OS64_HTML_TAG_P: case OS64_HTML_TAG_H1: case OS64_HTML_TAG_H2:
+    case OS64_HTML_TAG_H3: case OS64_HTML_TAG_H4: case OS64_HTML_TAG_H5:
+    case OS64_HTML_TAG_H6:
+        if (attr_is(n, "align", "left"))
+            s->text_align = FLOW_ALIGN_LEFT;
+        else if (attr_is(n, "align", "right"))
+            s->text_align = FLOW_ALIGN_RIGHT;
+        else if (attr_is(n, "align", "center"))
+            s->text_align = FLOW_ALIGN_CENTER;
+        else if (attr_is(n, "align", "justify"))
+            s->text_align = FLOW_ALIGN_JUSTIFY;
+        break;
+    // §15.3.7 Lists. The letter types are case-SENSITIVE: `a` and `A` are
+    // two different lists.
+    case OS64_HTML_TAG_OL: case OS64_HTML_TAG_UL: case OS64_HTML_TAG_LI: {
+        const char *type = attr(n, "type");
+        if (type == NULL)
+            break;
+        if (n->tag != OS64_HTML_TAG_UL) {
+            if (os64_streq(type, "1"))
+                s->list_style_type = FLOW_LIST_DECIMAL;
+            else if (os64_streq(type, "a"))
+                s->list_style_type = FLOW_LIST_LOWER_ALPHA;
+            else if (os64_streq(type, "A"))
+                s->list_style_type = FLOW_LIST_UPPER_ALPHA;
+            else if (os64_streq(type, "i"))
+                s->list_style_type = FLOW_LIST_LOWER_ROMAN;
+            else if (os64_streq(type, "I"))
+                s->list_style_type = FLOW_LIST_UPPER_ROMAN;
+        }
+        if (n->tag != OS64_HTML_TAG_OL) {
+            if (f_eq_nocase(type, "none"))
+                s->list_style_type = FLOW_LIST_NONE;
+            else if (f_eq_nocase(type, "disc"))
+                s->list_style_type = FLOW_LIST_DISC;
+            else if (f_eq_nocase(type, "circle"))
+                s->list_style_type = FLOW_LIST_CIRCLE;
+            else if (f_eq_nocase(type, "square"))
+                s->list_style_type = FLOW_LIST_SQUARE;
+        }
+        break;
+    }
+    // §15.3.8 Tables.
+    case OS64_HTML_TAG_TABLE: {
+        if (attr_is(n, "align", "left"))
+            s->float_side = FLOW_FLOAT_LEFT;
+        else if (attr_is(n, "align", "right"))
+            s->float_side = FLOW_FLOAT_RIGHT;
+        else if (attr_is(n, "align", "center"))
+            margin_inline(sp, kAuto);
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
+        if (legacy_color(n, "bgcolor", &rgb))
+            background(sp, rgb);
+        if (legacy_color(n, "bordercolor", &rgb))
+            border_color(sp, rgb);
+        Len spacing;
+        if (pixel_length(c, n, "cellspacing", &spacing))
+            s->border_spacing[0] = s->border_spacing[1] = spacing.v;
+        const char *rules = attr(n, "rules");
+        static const char *const rule_values[] = {"none", "groups", "rows", "cols", "all"};
+        for (int32_t i = 0; i < F_ARRAY(rule_values); i++)
+            if (f_eq_nocase(rules, rule_values[i])) {
+                for (int k = 0; k < 4; k++)
+                    s->border_style[k] = FLOW_BORDER_HIDDEN;
+                s->border_collapse = FLOW_COLLAPSE_BORDERS;
+            }
+        if (has(n, "border")) {
+            int32_t width;
+            if (!f_parse_nonnegative(attr(n, "border"), &width))
+                width = 1;
+            for (int k = 0; k < 4; k++)
+                sp->border_px[k] = css(c, width);
+            if (border_not_zero(n))
+                for (int k = 0; k < 4; k++)
+                    s->border_style[k] = FLOW_BORDER_OUTSET;
+        }
+        const char *frame = attr(n, "frame");
+        if (frame != NULL) {
+            // top right bottom left
+            static const struct { const char *v; uint8_t on; } f[] = {
+                {"void", 0x0}, {"above", 0x8}, {"below", 0x2}, {"hsides", 0xA},
+                {"lhs", 0x1}, {"rhs", 0x4}, {"vsides", 0x5}, {"box", 0xF}, {"border", 0xF},
+            };
+            for (int32_t i = 0; i < F_ARRAY(f); i++)
+                if (f_eq_nocase(frame, f[i].v)) {
+                    static const uint8_t bit[4] = {0x8, 0x4, 0x2, 0x1};
+                    for (int k = 0; k < 4; k++)
+                        s->border_style[k] = (f[i].on & bit[k]) ? FLOW_BORDER_OUTSET
+                                                                : FLOW_BORDER_HIDDEN;
+                }
+        }
+        break;
+    }
+    case OS64_HTML_TAG_CAPTION:
+        if (attr_is(n, "align", "bottom"))
+            s->caption_side = FLOW_CAPTION_BOTTOM;
+        break;
+    // A column group's width is its columns' when they give none (and a
+    // group with no `col` in it is its `span` of columns).
+    case OS64_HTML_TAG_COL: case OS64_HTML_TAG_COLGROUP:
+        map_dimension(c, n, "width", false, &sp->width);
+        break;
+    default:
+        break;
+    }
+
+    if (is_table_part(n)) {
+        if (attr_is(n, "align", "absmiddle"))
+            s->text_align = FLOW_ALIGN_CENTER;
+        else
+            align_block(n, s);
+        if (attr_is(n, "valign", "top"))
+            s->vertical_align = FLOW_VALIGN_TOP;
+        else if (attr_is(n, "valign", "middle"))
+            s->vertical_align = FLOW_VALIGN_MIDDLE;
+        else if (attr_is(n, "valign", "bottom"))
+            s->vertical_align = FLOW_VALIGN_BOTTOM;
+        else if (attr_is(n, "valign", "baseline"))
+            s->vertical_align = FLOW_VALIGN_BASELINE;
+        if (legacy_color(n, "bgcolor", &rgb))
+            background(sp, rgb);
+        if (is_row_group(n) || is(n, OS64_HTML_TAG_TR))
+            map_dimension(c, n, "height", false, &sp->height);
+    }
+    if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
+        if (has(n, "nowrap"))
+            s->white_space = FLOW_WS_NOWRAP;
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", true, &sp->height);
+        const os64_html_node_t *table = cell_table(n);
+        if (table != NULL) {
+            Len pad;
+            if (pixel_length(c, table, "cellpadding", &pad))
+                padding_all(sp, pad);
+            if (has(table, "border") && border_not_zero(table))
+                border(c, sp, FLOW_BORDER_INSET, 1);
+            const char *rules = attr(table, "rules");
+            if (f_eq_nocase(rules, "none") || f_eq_nocase(rules, "groups") ||
+                f_eq_nocase(rules, "rows")) {
+                border(c, sp, FLOW_BORDER_NONE, 1);
+            } else if (f_eq_nocase(rules, "cols")) {
+                border(c, sp, FLOW_BORDER_SOLID, 1);
+                s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_NONE;
+            } else if (f_eq_nocase(rules, "all")) {
+                border(c, sp, FLOW_BORDER_SOLID, 1);
+            }
+        }
+        // In quirks mode a nowrap cell with a width in PIXELS wraps after
+        // all: the width was the page's way of saying how wide it is.
+        int32_t w;
+        if (c->quirks && has(n, "nowrap") &&
+            f_parse_dimension(attr(n, "width"), true, &w) == F_DIM_PX)
+            s->white_space = FLOW_WS_NORMAL;
+    }
+    if (is(n, OS64_HTML_TAG_TR) || is_row_group(n)) {
+        const os64_html_node_t *table = is(n, OS64_HTML_TAG_TR) && is_row_group(n->parent)
+                                            ? n->parent->parent : n->parent;
+        if (is(table, OS64_HTML_TAG_TABLE)) {
+            const char *rules = attr(table, "rules");
+            bool rows_rule = f_eq_nocase(rules, "rows") && is(n, OS64_HTML_TAG_TR);
+            bool groups_rule = f_eq_nocase(rules, "groups") && is_row_group(n);
+            if (rows_rule || groups_rule) {
+                sp->border_px[FLOW_TOP] = sp->border_px[FLOW_BOTTOM] = css(c, 1);
+                s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_SOLID;
+            }
+        }
+    }
+    if (is(n, OS64_HTML_TAG_COLGROUP) && is(n->parent, OS64_HTML_TAG_TABLE) &&
+        attr_is(n->parent, "rules", "groups")) {
+        sp->border_px[FLOW_LEFT] = sp->border_px[FLOW_RIGHT] = css(c, 1);
+        s->border_style[FLOW_LEFT] = s->border_style[FLOW_RIGHT] = FLOW_BORDER_SOLID;
+    }
+
+    // §15.3.11 The hr element.
+    if (is(n, OS64_HTML_TAG_HR)) {
+        if (attr_is(n, "align", "left")) {
+            sp->margin[FLOW_LEFT] = px(c, 0);
+            sp->margin[FLOW_RIGHT] = kAuto;
+        } else if (attr_is(n, "align", "right")) {
+            sp->margin[FLOW_LEFT] = kAuto;
+            sp->margin[FLOW_RIGHT] = px(c, 0);
+        } else if (attr_is(n, "align", "center")) {
+            margin_inline(sp, kAuto);
+        }
+        bool solid = has(n, "color") || has(n, "noshade");
+        if (solid)
+            for (int k = 0; k < 4; k++)
+                s->border_style[k] = FLOW_BORDER_SOLID;
+        int32_t size;
+        if (f_parse_nonnegative(attr(n, "size"), &size)) {
+            if (solid) {
+                for (int k = 0; k < 4; k++)
+                    sp->border_px[k] = css(c, size / 2.0);
+            } else if (size == 1) {
+                sp->border_px[FLOW_BOTTOM] = 0;
+            } else if (size > 1) {
+                sp->height = px(c, size - 2);
+            }
+        }
+        map_dimension(c, n, "width", false, &sp->width);
+        if (legacy_color(n, "color", &rgb))
+            s->color = rgb;
+    }
+
+    // §15.4.3 Attributes for embedded content and images.
+    if (is_embedded_aligned(n)) {
+        if (attr_is(n, "align", "left"))
+            s->float_side = FLOW_FLOAT_LEFT;
+        else if (attr_is(n, "align", "right"))
+            s->float_side = FLOW_FLOAT_RIGHT;
+        else if (attr_is(n, "align", "top"))
+            s->vertical_align = FLOW_VALIGN_TOP;
+        else if (attr_is(n, "align", "baseline"))
+            s->vertical_align = FLOW_VALIGN_BASELINE;
+        else if (attr_is(n, "align", "texttop"))
+            s->vertical_align = FLOW_VALIGN_TEXT_TOP;
+        else if (attr_is(n, "align", "absmiddle") || attr_is(n, "align", "abscenter"))
+            s->vertical_align = FLOW_VALIGN_MIDDLE;
+        else if (attr_is(n, "align", "bottom"))
+            s->vertical_align = FLOW_VALIGN_BOTTOM;
+        else if (attr_is(n, "align", "center") || attr_is(n, "align", "middle"))
+            s->vertical_align = FLOW_VALIGN_HTML_MIDDLE;
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
+    }
+    if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
+        (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
+        Len v = {L_UNSET, 0, 0};
+        map_dimension(c, n, "hspace", false, &v);
+        if (v.kind != L_UNSET)
+            margin_inline(sp, v);
+        v = (Len){L_UNSET, 0, 0};
+        map_dimension(c, n, "vspace", false, &v);
+        if (v.kind != L_UNSET)
+            margin_block(sp, v);
+        if (!is(n, OS64_HTML_TAG_EMBED)) {
+            int32_t b;
+            if (f_parse_nonnegative(attr(n, "border"), &b) && b > 0)
+                border(c, sp, FLOW_BORDER_SOLID, b);
+        }
+    }
+    if (is(n, OS64_HTML_TAG_IFRAME)) {
+        int32_t fb;
+        if (has(n, "frameborder") && (!f_parse_integer(attr(n, "frameborder"), &fb) || fb == 0))
+            for (int k = 0; k < 4; k++)
+                sp->border_px[k] = 0;
+    }
+    if (is(n, OS64_HTML_TAG_EMBED) && has(n, "hidden")) {
+        sp->width = px(c, 0);
+        sp->height = px(c, 0);
+    }
+
+    // §15.3.4: a link's colour, where libpage says the node IS a link
+    // (link_rule): `body link=` is a hint on the same selector as the
+    // user-agent rule, so it wins over the sheet and loses to anything the
+    // link's own descendants say.
+    link_rule(c, n, sp, true);
+    return true;
+}
+
+// §15.4.2: in quirks mode an image floated by its align attribute keeps
+// 3px of margin from the text beside it. User-agent level: an `hspace`
+// the page wrote outranks it.
+static void image_quirk(const Ctx *c, const os64_html_node_t *n, Spec *sp)
+{
+    if (!c->quirks || !is(n, OS64_HTML_TAG_IMG) || has(n, "hspace"))
+        return;
+    if (attr_is(n, "align", "left"))
+        sp->margin[FLOW_RIGHT] = px(c, 3);
+    else if (attr_is(n, "align", "right"))
+        sp->margin[FLOW_LEFT] = px(c, 3);
+}
+
+// §15.3.9 Margin collapsing quirks.
+static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
+{
+    if (!c->quirks || !default_margins(n))
+        return;
+    const os64_html_node_t *p = n->parent;
+    bool in_cell = is(p, OS64_HTML_TAG_TD) || is(p, OS64_HTML_TAG_TH);
+    bool first = !substantial_before(n);
+    if ((in_cell || is(p, OS64_HTML_TAG_BODY)) && first) {
+        sp->margin[FLOW_TOP] = px(c, 0);
+        if (blank(n))
+            sp->margin[FLOW_BOTTOM] = px(c, 0);
+    }
+    if (in_cell && !substantial_after(n) && blank(n))
+        sp->margin[FLOW_TOP] = px(c, 0);
+    if (in_cell && is(n, OS64_HTML_TAG_P) && !substantial_after(n))
+        sp->margin[FLOW_BOTTOM] = px(c, 0);
+}
+
+// ── The page's own sheets ───────────────────────────────────────────────
+//
+// A list a declaration hands ONE element — its font families, grid tracks
+// and areas, gradient stops, shadows, background layers — copied for every
+// element the declaration reaches (most hold lengths worked out at that
+// element's font size). That is the one cost of styling a page can
+// multiply: a sheet's long list times the elements it matches, without
+// end. So its bytes come out of a budget (F_STYLE_LISTS_BUDGET, far past
+// any real page's) as well as the arena; when the budget is spent, the
+// declaration is dropped as one libflow cannot read is — a hostile page is
+// styled plainly, and still laid out. NULL with *spent set for that; NULL
+// alone for no memory.
+static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
+{
+    *spent = bytes > c->out->lists_left;
+    if (*spent) {
+        c->spent = true;
+        c->out->lists_refused = true;
+        return NULL;
+    }
+    void *p = f_arena_alloc(&c->out->arena, bytes);
+    if (p != NULL)
+        c->out->lists_left -= bytes;
+    return p;
+}
+
+// libgarb's cascade hands each element its AUTHOR-origin winners: declared
+// values, checked against their grammars, var() already replaced. Here
+// they are computed into the Spec the chapter and the hints wrote, which
+// they outrank. A property flow_style_t has no field for waits for the
+// layout that needs it (GARB.md § Booked); a value its grammar allows and
+// libflow cannot draw takes the nearest value libflow has, named where the
+// value is read.
+
+typedef struct {
+    Ctx *c;
+    const flow_style_t *parent;
+    flow_unit_t font;           // the element's own font size, once it is known
+    garb_env_t view;
+    int32_t sheet;              // the winner being read: the sheet it came from
+} Author;
+
+// Not `word`: built -masm=intel, a function GCC leaves out of line is
+// named in the assembly, and a symbol named word reads as WORD there.
+static bool is_word(const garb_val_t *v, const char *w)
+{
+    return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, w);
+}
+
+// A length in 26.6 px, `font` being the em it is relative to — the
+// element's own, or its parent's for font-size (Values 4 § 6). A font is
+// already in device pixels; every other unit is CSS pixels, zoomed here.
+static double length_px(const Author *a, const garb_val_t *v, double font)
+{
+    double n = v->number, css;
+    switch (v->unit) {
+    case GARB_U_EM: return n * font;
+    case GARB_U_REM: return n * a->c->root_font;
+    // No face metrics reach the style pass: an ex and a ch are taken as
+    // half an em, the fallback Values 4 gives for both.
+    case GARB_U_EX: case GARB_U_CH: return n * font / 2;
+    case GARB_U_PX: css = n; break;
+    case GARB_U_VW: css = n * a->view.width / 100; break;
+    case GARB_U_VH: css = n * a->view.height / 100; break;
+    case GARB_U_VMIN:
+        css = n * (a->view.width < a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_VMAX:
+        css = n * (a->view.width > a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_PT: css = n * 96 / 72; break;
+    case GARB_U_PC: css = n * 16; break;
+    case GARB_U_IN: css = n * 96; break;
+    case GARB_U_CM: css = n * 96 / 2.54; break;
+    case GARB_U_MM: css = n * 96 / 25.4; break;
+    case GARB_U_Q: css = n * 96 / 101.6; break;
+    default: return 0;              // a track's share (fr), never a length
+    }
+    return css * FLOW_UNITS_PER_PX * a->c->zoom;
+}
+
+// A calc() as a fixed part and a percentage part — what libflow's lengths
+// carry — or a plain number.
+typedef struct {
+    double px, pct;             // px in 26.6
+    bool number;
+} Lp;
+
+static bool calc(const Author *a, const garb_calc_t *k, double font, Lp *out)
+{
+    *out = (Lp){0, 0, false};
+    switch (k->op) {
+    case GARB_CALC_LEAF:
+        // A number, or a percentage, held to the domain (values.h) before
+        // any arithmetic, as Chrome holds each leaf at a float's range:
+        // calc(1e400 - 1e400) is 0 and calc(1e400 / 1e400) is 1.
+        if (k->leaf.kind == GARB_V_NUMBER)
+            *out = (Lp){garb_hold(k->leaf.number, GARB_TRANSFORM_NUMBER_MAX), 0, true};
+        else if (k->leaf.kind == GARB_V_PERCENTAGE)
+            out->pct = garb_hold(k->leaf.number, GARB_TRANSFORM_NUMBER_MAX * 100);
+        else if (k->leaf.kind == GARB_V_LENGTH)
+            out->px = length_px(a, &k->leaf, font);
+        else
+            return false;
+        return true;
+    case GARB_CALC_SUM:
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            if (!calc(a, k->args[i], font, &t))
+                return false;
+            double sign = k->invert != NULL && k->invert[i] ? -1 : 1;
+            out->px += sign * t.px;
+            out->pct += sign * t.pct;
+            out->number = t.number;
+        }
+        return true;
+    case GARB_CALC_PRODUCT:
+        *out = (Lp){1, 0, true};
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            if (!calc(a, k->args[i], font, &t))
+                return false;
+            bool divide = k->invert != NULL && k->invert[i];
+            // The grammar let at most one factor be a length, and no divisor.
+            double f = t.number ? t.px : 0;
+            if (divide && (!t.number || f == 0))
+                return false;
+            if (t.number) {
+                double m = divide ? 1 / f : f;
+                out->px *= m;
+                out->pct *= m;
+            } else if (out->number) {
+                *out = (Lp){t.px * out->px, t.pct * out->px, false};
+            } else {
+                return false;
+            }
+        }
+        return true;
+    case GARB_CALC_MIN: case GARB_CALC_MAX: case GARB_CALC_CLAMP: {
+        // Comparing needs one unit: a percentage against a length can only
+        // be settled at layout, which flow_length_t cannot carry.
+        // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)), so its arguments
+        // are taken VAL, MAX, MIN: a min of the first two, then a max.
+        static const int32_t clamp_order[3] = {1, 2, 0};
+        if (k->op == GARB_CALC_CLAMP && k->nargs != 3)
+            return false;
+        Lp best = {0, 0, false};
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            int32_t at = k->op == GARB_CALC_CLAMP ? clamp_order[i] : i;
+            if (!calc(a, k->args[at], font, &t))
+                return false;
+            if (t.pct != 0 && t.px != 0)
+                return false;
+            if (i == 0) {
+                best = t;
+                continue;
+            }
+            if ((best.pct != 0) != (t.pct != 0) && (best.px != 0 || t.px != 0))
+                return false;
+            double bv = best.px + best.pct, tv = t.px + t.pct;
+            bool smaller = k->op == GARB_CALC_MIN || (k->op == GARB_CALC_CLAMP && i == 1);
+            if (smaller ? tv < bv : tv > bv)
+                best = t;
+        }
+        *out = best;
+        return true;
+    }
+    }
+    return false;
+}
+
+bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
+                     const garb_val_t *value, FNumeric *out)
+{
+    Ctx c = {.env = env, .root_font = root_font,
+             .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    Author a = {.c = &c, .font = font, .view = garb_cascade_env(env->cascade)};
+    Lp r = {0};
+    switch (value->kind) {
+    case GARB_V_NUMBER: r = (Lp){value->number, 0, true}; break;
+    case GARB_V_PERCENTAGE: r.pct = value->number; break;
+    case GARB_V_LENGTH: r.px = length_px(&a, value, font); break;
+    case GARB_V_CALC:
+        if (!calc(&a, value->calc, font, &r))
+            return false;
+        break;
+    default: return false;
+    }
+    double scale = r.number ? 1 : FLOW_UNITS_PER_PX * c.zoom;
+    *out = (FNumeric){garb_hold(r.px / scale, GARB_TRANSFORM_NUMBER_MAX),
+                     garb_hold(r.pct, GARB_TRANSFORM_NUMBER_MAX * 100), r.number};
+    return true;
+}
+
+// A length as an int32_t: held, and a NaN — calc(1e400px - 1e400px), its
+// leaves past a double — 0, as Values 4 censors a calculation's NaN.
+static int32_t round_i32(double v)
+{
+    if (v > 2e9)
+        return 2000000000;
+    if (v < -2e9)
+        return -2000000000;
+    if (!(v == v))
+        return 0;
+    return (int32_t)(v < 0 ? v - 0.5 : v + 0.5);
+}
+
+// A length-percentage (or `auto`, where `allow_auto`) into a Len; false
+// for anything else, which leaves the property as it was.
+static bool author_len(const Author *a, const garb_val_t *v, bool allow_auto, Len *out)
+{
+    switch (v->kind) {
+    case GARB_V_KEYWORD:
+        if (allow_auto && is_word(v, "auto")) {
+            *out = kAuto;
+            return true;
+        }
+        return false;
+    case GARB_V_LENGTH:
+        *out = (Len){L_PX, round_i32(length_px(a, v, a->font)), 0};
+        return true;
+    case GARB_V_PERCENTAGE:
+        *out = (Len){L_PCT, round_i32(v->number * 64), 0};
+        return true;
+    case GARB_V_CALC: {
+        Lp r;
+        if (v->calc == NULL || !calc(a, v->calc, a->font, &r) || r.number)
+            return false;
+        if (r.pct == 0)
+            *out = (Len){L_PX, round_i32(r.px), 0};
+        else
+            *out = (Len){L_PCT, round_i32(r.pct * 64), round_i32(r.px)};
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static int32_t channel(double v)
+{
+    return v <= 0 ? 0 : v >= 255 ? 255 : (int32_t)(v + 0.5);
+}
+
+// sRGB with alpha, as a flow colour (flow.h): its alpha kept, as how
+// transparent it is, for the face to blend over whatever is under it.
+static uint32_t colour_of(garb_color_t k)
+{
+    double al = k.a < 0 ? 0 : k.a > 1 ? 1 : k.a;
+    return (uint32_t)(255 - channel(al * 255)) << 24 | (uint32_t)channel(k.r) << 16 |
+           (uint32_t)channel(k.g) << 8 | (uint32_t)channel(k.b);
+}
+
+uint32_t f_style_colour(garb_color_t color)
+{
+    return colour_of(color);
+}
+
+// One keyword of a table, by index; -1 when `v` is none of them.
+static int32_t pick(const garb_val_t *v, const char *const *words, int32_t n)
+{
+    if (v->kind != GARB_V_KEYWORD)
+        return -1;
+    for (int32_t i = 0; i < n; i++)
+        if (os64_streq(v->keyword, words[i]))
+            return i;
+    return -1;
+}
+
+static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_root)
+{
+    static const char *const words[] = {
+        "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
+        "table-row-group", "table-header-group", "table-footer-group", "table-row",
+        "table-column-group", "table-column", "table-cell", "table-caption", "contents",
+        "flow-root", "flex", "inline-flex", "grid", "inline-grid",
+    };
+    // An inline table is laid out as a table (GARB.md § Booked).
+    static const flow_display_t as[] = {
+        FLOW_DISPLAY_NONE, FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE, FLOW_DISPLAY_INLINE_BLOCK,
+        FLOW_DISPLAY_LIST_ITEM, FLOW_DISPLAY_TABLE, FLOW_DISPLAY_TABLE,
+        FLOW_DISPLAY_TABLE_ROW_GROUP, FLOW_DISPLAY_TABLE_HEADER_GROUP,
+        FLOW_DISPLAY_TABLE_FOOTER_GROUP, FLOW_DISPLAY_TABLE_ROW,
+        FLOW_DISPLAY_TABLE_COLUMN_GROUP, FLOW_DISPLAY_TABLE_COLUMN, FLOW_DISPLAY_TABLE_CELL,
+        FLOW_DISPLAY_TABLE_CAPTION, FLOW_DISPLAY_CONTENTS, FLOW_DISPLAY_BLOCK,
+        FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_GRID,
+        FLOW_DISPLAY_INLINE_GRID,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i < 0)
+        return false;
+    *out = as[i];
+    *flow_root = os64_streq(words[i], "flow-root");
+    return true;
+}
+
+static bool author_border_style(const garb_val_t *v, flow_border_style_t *out)
+{
+    static const char *const words[] = {"none", "hidden", "dotted", "dashed", "solid",
+                                        "double", "groove", "ridge", "inset", "outset"};
+    static const flow_border_style_t as[] = {
+        FLOW_BORDER_NONE,   FLOW_BORDER_HIDDEN, FLOW_BORDER_DOTTED, FLOW_BORDER_DASHED,
+        FLOW_BORDER_SOLID,  FLOW_BORDER_DOUBLE, FLOW_BORDER_GROOVE, FLOW_BORDER_RIDGE,
+        FLOW_BORDER_INSET,  FLOW_BORDER_OUTSET,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i < 0)
+        return false;
+    *out = as[i];
+    return true;
+}
+
+// `thin`, `medium`, `thick`: 1, 3 and 5px (Backgrounds 3 § 4.3).
+static bool author_border_width(const Author *a, const garb_val_t *v, int32_t *out)
+{
+    static const char *const words[] = {"thin", "medium", "thick"};
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0) {
+        *out = css(a->c, 1 + 2 * i);
+        return true;
+    }
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v < 0 ? 0 : l.v;
+    return true;
+}
+
+// A generic family by its keyword. The families this machine has no face
+// for fall to the nearest of the three it has.
+static bool author_generic(const char *k, flow_generic_t *out)
+{
+    static const struct { const char *name; flow_generic_t g; } map[] = {
+        {"serif", FLOW_GENERIC_SERIF}, {"sans-serif", FLOW_GENERIC_SANS},
+        {"monospace", FLOW_GENERIC_MONO}, {"cursive", FLOW_GENERIC_SERIF},
+        {"fantasy", FLOW_GENERIC_SERIF}, {"system-ui", FLOW_GENERIC_SANS},
+        {"ui-serif", FLOW_GENERIC_SERIF}, {"ui-sans-serif", FLOW_GENERIC_SANS},
+        {"ui-monospace", FLOW_GENERIC_MONO}, {"ui-rounded", FLOW_GENERIC_SANS},
+        {"math", FLOW_GENERIC_SERIF}, {"emoji", FLOW_GENERIC_SANS},
+        {"fangsong", FLOW_GENERIC_SERIF},
+    };
+    for (int32_t i = 0; i < F_ARRAY(map); i++)
+        if (os64_streq(k, map[i].name)) {
+            *out = map[i].g;
+            return true;
+        }
+    return false;
+}
+
+// `font-family`: the names in order and the first generic, as `<font
+// face>` builds them, and the list as written. The names point into the
+// sheet.
+// The lists are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one pair an element (96 bytes for
+// three families), out of the lists' budget (list_alloc), past which the
+// element keeps the family it inherited; one list per winning set would
+// cost it once.
+static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
+{
+    if (v->items == NULL || v->nitems <= 0)
+        return true;
+    bool spent;
+    // One allocation: the names, then the list as written.
+    flow_family_name_t *names =
+        list_alloc(a->c, (size_t)v->nitems * (sizeof(*names) + sizeof(flow_family_written_t)), &spent);
+    if (names == NULL)
+        return spent;
+    flow_family_written_t *written = (flow_family_written_t *)(names + v->nitems);
+    uint32_t n = 0, nwritten = 0;
+    bool have_generic = false;
+    flow_generic_t generic = FLOW_GENERIC_SANS;
+    for (int32_t i = 0; i < v->nitems; i++) {
+        const garb_val_t *it = &v->items[i];
+        flow_generic_t g;
+        if (it->kind == GARB_V_KEYWORD && author_generic(it->keyword, &g)) {
+            if (!have_generic) {
+                generic = g;
+                have_generic = true;
+            }
+            written[nwritten++] = (flow_family_written_t){it->keyword, (uint32_t)os64_strlen(it->keyword), true};
+        } else if (it->kind == GARB_V_STRING && it->len > 0) {
+            names[n++] = (flow_family_name_t){it->text, (uint32_t)it->len};
+            written[nwritten++] = (flow_family_written_t){it->text, (uint32_t)it->len, false};
+        }
+    }
+    if (!have_generic && n > 0)
+        generic = guess_generic(names[0].name, names[0].len);
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, nwritten > 0 ? written : NULL, nwritten};
+    return true;
+}
+
+// `font-size`: its em and its percentage are the PARENT's font (Fonts 4 §
+// 2.5), and so are a calc()'s.
+static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
+{
+    static const char *const words[] = {"xx-small", "x-small", "small", "medium",
+                                        "large", "x-large", "xx-large", "xxx-large"};
+    double base = a->parent != NULL ? a->parent->font_size
+                                    : (double)css(a->c, a->c->env->viewport_font_px);
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0) {
+        sp->fs_kind = FS_KEYWORD;
+        sp->fs_v = i;
+    } else if (is_word(v, "larger")) {
+        sp->fs_kind = FS_LARGER;
+    } else if (is_word(v, "smaller")) {
+        sp->fs_kind = FS_SMALLER;
+    } else if (v->kind == GARB_V_PERCENTAGE) {
+        sp->fs_kind = FS_EM;
+        sp->fs_v = round_i32(v->number * 10);
+    } else if (v->kind == GARB_V_LENGTH) {
+        double px = length_px(a, v, base);
+        sp->fs_kind = FS_PX;
+        sp->fs_v = px < 0 ? 0 : round_i32(px);
+    } else if (v->kind == GARB_V_CALC) {
+        Lp r;
+        if (v->calc == NULL || !calc(a, v->calc, base, &r) || r.number)
+            return;
+        double px = r.px + base * r.pct / 100;
+        sp->fs_kind = FS_PX;
+        sp->fs_v = px < 0 ? 0 : round_i32(px);
+    }
+}
+
+static void author_font_weight(Author *a, Spec *sp, const garb_val_t *v)
+{
+    uint16_t up = a->parent != NULL ? a->parent->font_weight : 400;
+    sp->bolder = false;
+    if (is_word(v, "normal"))
+        sp->s.font_weight = 400;
+    else if (is_word(v, "bold"))
+        sp->s.font_weight = 700;
+    else if (is_word(v, "bolder"))
+        sp->s.font_weight = bolder(up);
+    else if (is_word(v, "lighter"))    // Fonts 4 § 2.2's table
+        sp->s.font_weight = up < 100 ? up : up < 550 ? 100 : up < 750 ? 400 : 700;
+    else if (v->kind == GARB_V_NUMBER)
+        sp->s.font_weight = (uint16_t)(v->number < 1 ? 1 : v->number > 1000 ? 1000
+                                                             : v->number + 0.5);
+}
+
+// The counter style a keyword names, or false for one this browser does
+// not define.
+static bool list_type_named(const garb_val_t *v, flow_list_style_type_t *out)
+{
+    static const char *const words[] = {
+        "disc", "circle", "square", "decimal", "lower-alpha", "upper-alpha", "lower-roman",
+        "upper-roman", "disclosure-closed", "disclosure-open", "none", "lower-latin",
+        "upper-latin", "decimal-leading-zero",
+    };
+    static const flow_list_style_type_t as[] = {
+        FLOW_LIST_DISC, FLOW_LIST_CIRCLE, FLOW_LIST_SQUARE, FLOW_LIST_DECIMAL,
+        FLOW_LIST_LOWER_ALPHA, FLOW_LIST_UPPER_ALPHA, FLOW_LIST_LOWER_ROMAN,
+        FLOW_LIST_UPPER_ROMAN, FLOW_LIST_DISCLOSURE_CLOSED, FLOW_LIST_DISCLOSURE_OPEN,
+        FLOW_LIST_NONE, FLOW_LIST_LOWER_ALPHA, FLOW_LIST_UPPER_ALPHA, FLOW_LIST_DECIMAL,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0)
+        *out = as[i];
+    return i >= 0;
+}
+
+static void author_list_type(Spec *sp, const garb_val_t *v)
+{
+    if (list_type_named(v, &sp->s.list_style_type))
+        return;
+    if (v->kind == GARB_V_KEYWORD)
+        // A counter style this browser does not define is decimal (Counter
+        // Styles 3 § 2); a string marker is booked with the markers.
+        sp->s.list_style_type = FLOW_LIST_DECIMAL;
+}
+
+// The side a longhand names, in libgarb's top-right-bottom-left order.
+static int side(garb_prop_t p, garb_prop_t top)
+{
+    return (int)(p - top);
+}
+
+// Copies the fields `prop` sets from one Spec to another: how a CSS-wide
+// keyword takes a value from the parent, the initial values, or the
+// user-agent origin.
+static void take(Spec *dst, const Spec *src, garb_prop_t prop)
+{
+    flow_style_t *d = &dst->s;
+    const flow_style_t *s = &src->s;
+    switch (prop) {
+    case GARB_DISPLAY:
+        d->display = s->display;
+        d->flow_root = s->flow_root;
+        break;
+    case GARB_COLOR: d->color = s->color; break;
+    case GARB_TEXT_FILL_COLOR:
+        d->fill = s->fill;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_FILL) |
+                                       (s->current_colours & FLOW_CURRENT_FILL));
+        break;
+    case GARB_BACKGROUND_COLOR:
+        d->has_background = s->has_background;
+        d->background = s->background;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
+                                       (s->current_colours & FLOW_CURRENT_BACKGROUND));
+        break;
+    // A list is the style's, kept as long as any style is, so it is shared
+    // and not copied.
+    case GARB_BACKGROUND_IMAGE:
+        d->backgrounds.image = s->backgrounds.image;
+        d->backgrounds.nimage = s->backgrounds.nimage;
+        break;
+    case GARB_BACKGROUND_REPEAT:
+        d->backgrounds.repeat = s->backgrounds.repeat;
+        d->backgrounds.nrepeat = s->backgrounds.nrepeat;
+        break;
+    case GARB_BACKGROUND_POSITION_X:
+        d->backgrounds.x = s->backgrounds.x;
+        d->backgrounds.nx = s->backgrounds.nx;
+        break;
+    case GARB_BACKGROUND_POSITION_Y:
+        d->backgrounds.y = s->backgrounds.y;
+        d->backgrounds.ny = s->backgrounds.ny;
+        break;
+    case GARB_BACKGROUND_SIZE:
+        d->backgrounds.size = s->backgrounds.size;
+        d->backgrounds.nsize = s->backgrounds.nsize;
+        break;
+    case GARB_BACKGROUND_ORIGIN:
+        d->backgrounds.origin = s->backgrounds.origin;
+        d->backgrounds.norigin = s->backgrounds.norigin;
+        break;
+    case GARB_BACKGROUND_CLIP:
+        d->backgrounds.clip = s->backgrounds.clip;
+        d->backgrounds.nclip = s->backgrounds.nclip;
+        break;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
+        break;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        dst->padding[side(prop, GARB_PADDING_TOP)] = src->padding[side(prop, GARB_PADDING_TOP)];
+        break;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH: {
+        int i = side(prop, GARB_BORDER_TOP_WIDTH);
+        dst->border_px[i] = src->border_px[i];
+        break;
+    }
+    case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
+    case GARB_BORDER_LEFT_STYLE: {
+        int i = side(prop, GARB_BORDER_TOP_STYLE);
+        d->border_style[i] = s->border_style[i];
+        break;
+    }
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR: {
+        int i = side(prop, GARB_BORDER_TOP_COLOR);
+        dst->border_color_set[i] = src->border_color_set[i];
+        d->border_color[i] = s->border_color[i];
+        break;
+    }
+    case GARB_WIDTH: dst->width = src->width; break;
+    case GARB_HEIGHT: dst->height = src->height; break;
+    case GARB_MIN_WIDTH: dst->min_width = src->min_width; break;
+    case GARB_MAX_WIDTH: dst->max_width = src->max_width; break;
+    case GARB_MIN_HEIGHT: dst->min_height = src->min_height; break;
+    case GARB_MAX_HEIGHT: dst->max_height = src->max_height; break;
+    case GARB_BOX_SIZING: d->box_sizing = s->box_sizing; break;
+    case GARB_OVERFLOW_X: d->overflow_x = s->overflow_x; break;
+    case GARB_OVERFLOW_Y: d->overflow_y = s->overflow_y; break;
+    case GARB_FONT_FAMILY: d->family = s->family; break;
+    case GARB_FONT_SIZE:
+        dst->fs_kind = src->fs_kind;
+        dst->fs_v = src->fs_v;
+        d->font_size = s->font_size;
+        break;
+    case GARB_FONT_WEIGHT:
+        d->font_weight = s->font_weight;
+        dst->bolder = src->bolder;
+        break;
+    case GARB_FONT_STYLE: d->font_style = s->font_style; break;
+    case GARB_TEXT_ALIGN: d->text_align = s->text_align; break;
+    case GARB_VERTICAL_ALIGN: d->vertical_align = s->vertical_align; break;
+    case GARB_WHITE_SPACE: d->white_space = s->white_space; break;
+    case GARB_LINE_HEIGHT: d->line_height = s->line_height; break;
+    case GARB_TEXT_INDENT:
+        dst->text_indent = src->text_indent;
+        d->text_indent = s->text_indent;
+        break;
+    case GARB_TEXT_TRANSFORM: d->text_transform = s->text_transform; break;
+    case GARB_WORD_BREAK: d->word_break = s->word_break; break;
+    case GARB_OVERFLOW_WRAP: d->overflow_wrap = s->overflow_wrap; break;
+    case GARB_LETTER_SPACING:
+        dst->letter_spacing = src->letter_spacing;
+        d->letter_spacing = s->letter_spacing;
+        break;
+    case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
+    case GARB_VISIBILITY: d->visibility = s->visibility; break;
+    case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
+    case GARB_LIST_STYLE_POSITION: d->list_style_position = s->list_style_position; break;
+    case GARB_BORDER_SPACING:
+        d->border_spacing[0] = s->border_spacing[0];
+        d->border_spacing[1] = s->border_spacing[1];
+        break;
+    case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
+    case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
+    case GARB_FLOAT: d->float_side = s->float_side; break;
+    case GARB_CLEAR: d->clear = s->clear; break;
+    case GARB_POSITION: d->position = s->position; break;
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        dst->inset[side(prop, GARB_TOP)] = src->inset[side(prop, GARB_TOP)];
+        break;
+    case GARB_Z_INDEX:
+        d->has_z_index = s->has_z_index;
+        d->z_index = s->z_index;
+        break;
+    case GARB_CLIP:
+        d->legacy_clip_set = s->legacy_clip_set;
+        os64_memcpy(dst->clip,src->clip,sizeof(dst->clip));
+        break;
+    case GARB_OPACITY: d->opacity = s->opacity; break;
+    case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
+    case GARB_CURSOR: d->cursor = s->cursor; break;
+    case GARB_OUTLINE_WIDTH: dst->outline_px = src->outline_px; break;
+    case GARB_OUTLINE_STYLE:
+        d->outline_style = s->outline_style;
+        d->outline_auto = s->outline_auto;
+        break;
+    case GARB_OUTLINE_COLOR:
+        dst->outline_color_set = src->outline_color_set;
+        d->outline_color = s->outline_color;
+        break;
+    case GARB_OUTLINE_OFFSET: dst->outline_offset = src->outline_offset; break;
+    case GARB_OBJECT_FIT: d->object_fit = s->object_fit; break;
+    case GARB_TEXT_OVERFLOW: d->text_overflow = s->text_overflow; break;
+    case GARB_ASPECT_RATIO:
+        d->aspect_ratio = s->aspect_ratio;
+        d->aspect_natural = s->aspect_natural;
+        break;
+    case GARB_OBJECT_POSITION:
+        dst->object_position[0] = src->object_position[0];
+        dst->object_position[1] = src->object_position[1];
+        break;
+    case GARB_USER_SELECT: d->user_select = s->user_select; break;
+    case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
+    case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
+    case GARB_JUSTIFY_CONTENT: d->justify_content = s->justify_content; break;
+    case GARB_ALIGN_ITEMS: d->align_items = s->align_items; break;
+    case GARB_ALIGN_SELF: d->align_self = s->align_self; break;
+    case GARB_ALIGN_CONTENT: d->align_content = s->align_content; break;
+    case GARB_FLEX_GROW: d->flex_grow = s->flex_grow; break;
+    case GARB_FLEX_SHRINK: d->flex_shrink = s->flex_shrink; break;
+    case GARB_FLEX_BASIS: dst->flex_basis = src->flex_basis; break;
+    case GARB_ORDER: d->order = s->order; break;
+    case GARB_ROW_GAP: dst->row_gap = src->row_gap; break;
+    case GARB_COLUMN_GAP: dst->column_gap = src->column_gap; break;
+    case GARB_GRID_TEMPLATE_COLUMNS: d->grid_template_columns = s->grid_template_columns; break;
+    case GARB_GRID_TEMPLATE_ROWS: d->grid_template_rows = s->grid_template_rows; break;
+    case GARB_GRID_AUTO_COLUMNS: d->grid_auto_columns = s->grid_auto_columns; break;
+    case GARB_GRID_AUTO_ROWS: d->grid_auto_rows = s->grid_auto_rows; break;
+    case GARB_GRID_TEMPLATE_AREAS:
+        d->grid_areas = s->grid_areas;
+        d->ngrid_areas = s->ngrid_areas;
+        d->grid_area_rows = s->grid_area_rows;
+        d->grid_area_cols = s->grid_area_cols;
+        break;
+    case GARB_GRID_AUTO_FLOW:
+        d->grid_auto_flow_column = s->grid_auto_flow_column;
+        d->grid_dense = s->grid_dense;
+        break;
+    case GARB_GRID_ROW_START: d->grid_row_start = s->grid_row_start; break;
+    case GARB_GRID_ROW_END: d->grid_row_end = s->grid_row_end; break;
+    case GARB_GRID_COLUMN_START: d->grid_column_start = s->grid_column_start; break;
+    case GARB_GRID_COLUMN_END: d->grid_column_end = s->grid_column_end; break;
+    case GARB_JUSTIFY_ITEMS: d->justify_items = s->justify_items; break;
+    case GARB_JUSTIFY_SELF: d->justify_self = s->justify_self; break;
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS: {
+        int i = prop - GARB_BORDER_TOP_LEFT_RADIUS;
+        dst->radius[i][0] = src->radius[i][0];
+        dst->radius[i][1] = src->radius[i][1];
+        break;
+    }
+    case GARB_BOX_SHADOW:
+        d->box_shadows = s->box_shadows;
+        d->nbox_shadows = s->nbox_shadows;
+        break;
+    case GARB_TEXT_SHADOW:
+        d->text_shadows = s->text_shadows;
+        d->ntext_shadows = s->ntext_shadows;
+        break;
+    case GARB_FILTER:
+        d->filter = s->filter;
+        d->nfilter = s->nfilter;
+        break;
+    case GARB_BACKDROP_FILTER:
+        d->backdrop_filter = s->backdrop_filter;
+        d->nbackdrop_filter = s->nbackdrop_filter;
+        break;
+    case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
+    case GARB_ISOLATION: d->isolate = s->isolate; break;
+    case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
+    case GARB_TRANSFORM:
+        d->transform = s->transform;
+        d->ntransform = s->ntransform;
+        break;
+    case GARB_TRANSFORM_ORIGIN:
+        d->transform_origin[0] = s->transform_origin[0];
+        d->transform_origin[1] = s->transform_origin[1];
+        d->transform_origin_z = s->transform_origin_z;
+        break;
+    case GARB_TRANSLATE: d->translate = s->translate; break;
+    case GARB_ROTATE: d->rotate = s->rotate; break;
+    case GARB_SCALE: d->scale = s->scale; break;
+    case GARB_ANIMATION_NAME:
+        d->animations.name = s->animations.name;
+        d->animations.nname = s->animations.nname;
+        break;
+    case GARB_ANIMATION_DURATION:
+        d->animations.duration = s->animations.duration;
+        d->animations.nduration = s->animations.nduration;
+        break;
+    case GARB_ANIMATION_TIMING_FUNCTION:
+        d->animations.easing = s->animations.easing;
+        d->animations.neasing = s->animations.neasing;
+        break;
+    case GARB_ANIMATION_ITERATION_COUNT:
+        d->animations.iterations = s->animations.iterations;
+        d->animations.niterations = s->animations.niterations;
+        break;
+    case GARB_ANIMATION_DIRECTION:
+        d->animations.direction = s->animations.direction;
+        d->animations.ndirection = s->animations.ndirection;
+        break;
+    case GARB_ANIMATION_PLAY_STATE:
+        d->animations.paused = s->animations.paused;
+        d->animations.npaused = s->animations.npaused;
+        break;
+    case GARB_ANIMATION_DELAY:
+        d->animations.delay = s->animations.delay;
+        d->animations.ndelay = s->animations.ndelay;
+        break;
+    case GARB_ANIMATION_FILL_MODE:
+        d->animations.fill = s->animations.fill;
+        d->animations.nfill = s->animations.nfill;
+        break;
+    case GARB_WILL_CHANGE: d->will_change = s->will_change; break;
+    default: break;
+    }
+}
+
+static Len len_of(flow_length_t l)
+{
+    switch (l.kind) {
+    case FLOW_LENGTH_PX: return (Len){L_PX, l.value, 0};
+    case FLOW_LENGTH_PERCENT: return (Len){L_PCT, l.value, l.offset};
+    case FLOW_LENGTH_FIT_CONTENT: return kFitContent;
+    case FLOW_LENGTH_CONTENT: return kContent;
+    case FLOW_LENGTH_AUTO: break;
+    }
+    return kAuto;
+}
+
+// What `initial` gives every property, as a Spec.
+static void initial_spec(const Ctx *c, Spec *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->s = initial(c);
+    for (int i = 0; i < 4; i++) {
+        out->margin[i] = px(c, 0);
+        out->padding[i] = px(c, 0);
+        out->inset[i] = kAuto;
+        out->border_px[i] = css(c, 3);     // medium
+    }
+    out->width = out->height = kAuto;
+    out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
+    out->flex_basis = out->row_gap = out->column_gap = kAuto;
+    out->text_indent = px(c, 0);
+    out->letter_spacing = px(c, 0);
+    out->outline_px = css(c, 3);                        // medium
+    out->outline_offset = px(c, 0);
+    out->fs_kind = FS_KEYWORD;
+    out->fs_v = 3;                                      // medium
+}
+
+// What `inherit` gives every property: the parent's computed values.
+static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
+{
+    if (parent == NULL) {
+        initial_spec(c, out);
+        return;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->s = *parent;
+    for (int i = 0; i < 4; i++) {
+        out->margin[i] = len_of(parent->margin[i]);
+        out->padding[i] = len_of(parent->padding[i]);
+        out->inset[i] = len_of(parent->inset[i]);
+        out->clip[i] = len_of(parent->legacy_clip[i]);
+        out->border_px[i] = parent->border_width[i];
+        // currentColor stays currentColor: finish resolves it against the
+        // child's own colour.
+        out->border_color_set[i] = !(parent->current_colours & FLOW_CURRENT_BORDER(i));
+        out->radius[i][0] = len_of(parent->radius[i][0]);
+        out->radius[i][1] = len_of(parent->radius[i][1]);
+    }
+    out->width = len_of(parent->width);
+    out->height = len_of(parent->height);
+    out->min_width = len_of(parent->min_width);
+    out->max_width = len_of(parent->max_width);
+    out->min_height = len_of(parent->min_height);
+    out->max_height = len_of(parent->max_height);
+    out->flex_basis = len_of(parent->flex_basis);
+    out->row_gap = len_of(parent->row_gap);
+    out->column_gap = len_of(parent->column_gap);
+    out->text_indent = len_of(parent->text_indent);
+    out->letter_spacing = (Len){L_PX, parent->letter_spacing, 0};
+    out->outline_px = parent->outline_width;
+    out->object_position[0] = len_of(parent->object_position[0]);
+    out->object_position[1] = len_of(parent->object_position[1]);
+    out->outline_offset = (Len){L_PX, parent->outline_offset, 0};
+    out->outline_color_set = !(parent->current_colours & FLOW_CURRENT_OUTLINE);
+    out->fs_kind = FS_PX;
+    out->fs_v = parent->font_size;
+}
+
+// ── Grid values (GRID.md § Pass 1) ──────────────────────────────────────
+
+// A track's sizing function at one end: a flexible share, a keyword, or a
+// length-percentage, resolved here as any other length is.
+static bool author_breadth(const Author *a, const garb_val_t *v, flow_breadth_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_LENGTH && v->unit == GARB_U_FR) {
+        out->kind = FLOW_TRACK_FR;
+        out->fr = round_i32((v->number > 1e6 ? 1e6 : v->number) * 1000);
+        return true;
+    }
+    if (v->kind == GARB_V_KEYWORD) {
+        out->kind = is_word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
+                    : is_word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
+                                             : FLOW_TRACK_AUTO;
+        return true;
+    }
+    Len l;
+    if (!author_len(a, v, false, &l))
+        return false;
+    out->kind = FLOW_TRACK_FIXED;
+    out->len = resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
+    return true;
+}
+
+// A track size (§ 7.2.1): minmax(min, max), fit-content(len), or one
+// breadth that is both ends — except `<n>fr`, whose minimum is `auto`.
+static bool author_track(const Author *a, const garb_val_t *v, flow_track_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "minmax") && v->nitems == 2)
+        return author_breadth(a, &v->items[0], &out->min) &&
+               author_breadth(a, &v->items[1], &out->max);
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "fit-content") && v->nitems == 1) {
+        out->min.kind = FLOW_TRACK_AUTO;
+        out->fit = true;
+        return author_breadth(a, &v->items[0], &out->max);
+    }
+    if (!author_breadth(a, v, &out->max))
+        return false;
+    out->min = out->max;
+    if (out->min.kind == FLOW_TRACK_FR)
+        out->min = (flow_breadth_t){FLOW_TRACK_AUTO, {FLOW_LENGTH_AUTO, 0, 0}, 0};
+    return true;
+}
+
+// How many times a repeat() repeats: its count, held to the bound before
+// it is made an integer (a count may be any size the page writes); an
+// auto-repeat's tracks once.
+static int64_t repeat_times(const garb_val_t *count)
+{
+    if (count->kind != GARB_V_NUMBER)
+        return 1;
+    return count->number > F_GRID_MAX ? F_GRID_MAX : (int64_t)count->number;
+}
+
+// What reading a grid value came to: a value to keep, one to leave the
+// property as it was for, or no memory — which fails the element, as any
+// allocation of the style pass does.
+typedef enum { GRID_READ_OK, GRID_READ_UNUSABLE, GRID_READ_NO_MEMORY } GridRead;
+
+// A track list with each repeat(n) written out, into the styles arena, and
+// held to F_GRID_MAX tracks; an auto-repeat's tracks are kept once and
+// marked (flow_tracks_t).
+static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_KEYWORD)
+        return is_word(v, "none") || is_word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+    // A single size (grid-auto-*) is a list of one.
+    const garb_val_t *items = v->kind == GARB_V_TRACKS ? v->items : v;
+    int32_t n = v->kind == GARB_V_TRACKS ? v->nitems : 1;
+    int64_t total = 0;
+    for (int32_t i = 0; i < n; i++) {
+        const garb_val_t *t = &items[i];
+        if (t->kind == GARB_V_FUNCTION && os64_streq(t->keyword, "repeat") && t->nitems == 2)
+            total += repeat_times(&t->items[0]) * t->items[1].nitems;
+        else
+            total++;
+    }
+    if (total > F_GRID_MAX)
+        total = F_GRID_MAX;
+    bool spent;
+    flow_track_t *tracks = list_alloc(a->c, (size_t)total * sizeof(*tracks), &spent);
+    if (tracks == NULL)
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
+    int32_t k = 0;
+    for (int32_t i = 0; i < n && k < total; i++) {
+        const garb_val_t *t = &items[i];
+        if (!(t->kind == GARB_V_FUNCTION && os64_streq(t->keyword, "repeat") && t->nitems == 2)) {
+            if (!author_track(a, t, &tracks[k++]))
+                return GRID_READ_UNUSABLE;
+            continue;
+        }
+        const garb_val_t *inner = &t->items[1];
+        bool automatic = t->items[0].kind == GARB_V_KEYWORD;
+        int64_t times = repeat_times(&t->items[0]);
+        if (automatic) {
+            out->repeat_at = k;
+            out->repeat_n = inner->nitems;
+            out->repeat_fit = is_word(&t->items[0], "auto-fit");
+        }
+        for (int64_t r = 0; r < times && k < total; r++)
+            for (int32_t j = 0; j < inner->nitems && k < total; j++)
+                if (!author_track(a, &inner->items[j], &tracks[k++]))
+                    return GRID_READ_UNUSABLE;
+    }
+    if (out->repeat_n > 0 && out->repeat_at + out->repeat_n > k)
+        out->repeat_n = 0;      // held to the bound before it was met
+    out->tracks = tracks;
+    out->n = k;
+    return GRID_READ_OK;
+}
+
+// grid-template-areas' strings into rectangles, one per name (the grammar
+// checked that each name is one).
+static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
+{
+    s->grid_areas = NULL;
+    s->ngrid_areas = s->grid_area_rows = s->grid_area_cols = 0;
+    if (v->kind != GARB_V_STRING || v->nitems <= 0)
+        return is_word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+    int32_t rows = v->nitems;
+    int32_t cols = garb_area_cells(v->items[0].text, (uint32_t)v->items[0].len, NULL, 0);
+    if (cols <= 0 || (int64_t)rows * cols > F_GRID_AREA_CELLS)
+        return GRID_READ_UNUSABLE;
+    garb_area_cell_t cells[F_GRID_AREA_CELLS];
+    for (int32_t r = 0; r < rows; r++)
+        if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
+                            cols) != cols)
+            return GRID_READ_UNUSABLE;
+    bool spent;
+    flow_grid_area_t *areas = list_alloc(a->c, (size_t)rows * cols * sizeof(*areas), &spent);
+    if (areas == NULL)
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
+    int32_t n = 0;
+    for (int32_t k = 0; k < rows * cols; k++) {
+        garb_area_cell_t name = cells[k];
+        if (name.len == 0)
+            continue;
+        int32_t found = -1;
+        for (int32_t j = 0; j < n && found < 0; j++)
+            if (areas[j].name_len == name.len &&
+                os64_memcmp(areas[j].name, name.text, name.len) == 0)
+                found = j;
+        int32_t r = k / cols, c = k % cols;
+        if (found < 0) {
+            char *copy = list_alloc(a->c, name.len, &spent);
+            if (copy == NULL)
+                return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
+            os64_memcpy(copy, name.text, name.len);
+            areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
+            continue;
+        }
+        flow_grid_area_t *ar = &areas[found];
+        ar->row1 = r + 1 > ar->row1 ? r + 1 : ar->row1;
+        ar->col1 = c + 1 > ar->col1 ? c + 1 : ar->col1;
+    }
+    s->grid_areas = areas;
+    s->ngrid_areas = n;
+    s->grid_area_rows = rows;
+    s->grid_area_cols = cols;
+    return GRID_READ_OK;
+}
+
+// A grid line (§ 8.3). A span of a NAME is a span of one: it counts lines
+// of that name, and names in brackets are dropped (GRID.md, decision 3).
+static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_KEYWORD)
+        return GRID_READ_OK;            // auto
+    if (v->kind == GARB_V_NUMBER) {
+        double n = v->number;
+        out->kind = FLOW_GRID_LINE_NUMBER;
+        out->n = n > 10000 ? 10000 : n < -10000 ? -10000 : (int32_t)n;
+        return GRID_READ_OK;
+    }
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span") && v->nitems == 1) {
+        out->kind = FLOW_GRID_LINE_SPAN;
+        out->n = 1;
+        if (v->items[0].kind == GARB_V_NUMBER)
+            out->n = v->items[0].number > F_GRID_MAX ? F_GRID_MAX : (int32_t)v->items[0].number;
+        return GRID_READ_OK;
+    }
+    if (v->kind == GARB_V_STRING && v->len > 0) {
+        bool spent;
+        char *copy = list_alloc(a->c, v->len, &spent);
+        if (copy == NULL)
+            return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
+        os64_memcpy(copy, v->text, v->len);
+        out->kind = FLOW_GRID_LINE_NAME;
+        out->name = copy;
+        out->name_len = (uint32_t)v->len;
+        return GRID_READ_OK;
+    }
+    return GRID_READ_UNUSABLE;
+}
+
+// One winner that is not a CSS-wide keyword.
+// A length-percentage as flow's, at the element's font size; `unset` for
+// what will not read.
+static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length_t unset)
+{
+    Len l;
+    return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
+}
+
+// An angle in degrees as thousandths in [0, 360000). libgarb hands it
+// already taken round the turn (values.h: in [0, 360), reduced in its own
+// unit so no unit overflows it); a value outside that would overflow the
+// narrowing, and is 0 rather than a guess.
+static int32_t angle_thousandths(double deg)
+{
+    if (!(deg >= 0 && deg < 360))
+        return 0;
+    int64_t t = (int64_t)(deg * 1000 + 0.5);
+    return (int32_t)(t >= 360000 ? t - 360000 : t);
+}
+
+// libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
+// stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
+// is left as it was; a currentColor stop is marked `current`, for the box
+// it is drawn on to resolve. False only when memory runs out.
+static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                            const flow_gradient_t **out)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    // The gradient and its stops in one piece of the lists' budget; past
+    // it, the layer has no picture (*out stays NULL).
+    bool spent;
+    flow_gradient_t *g =
+        list_alloc(a->c, sizeof(*g) + (size_t)v->nitems * sizeof(flow_gradient_stop_t), &spent);
+    if (g == NULL)
+        return spent;
+    flow_gradient_stop_t *stops = (flow_gradient_stop_t *)(g + 1);
+    os64_memset(g, 0, sizeof(*g));
+    const char *name = v->text;             // one of libgarb's own names
+    g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
+                                    os64_streq(name, "repeating-radial-gradient"));
+    const garb_val_t *geo = &v->items[0];
+    if (geo->kind == GARB_V_NUMBER) {
+        g->kind = FLOW_GRADIENT_LINEAR;
+        g->angle = angle_thousandths(geo->number);
+    } else if (geo->kind == GARB_V_KEYWORD && geo->nitems == 0) {
+        // "to top right" and the rest, libgarb's eight names: the side or
+        // corner each points toward.
+        static const struct { const char *name; int8_t x, y; } kTo[] = {
+            {"to top", 0, -1},          {"to right", 1, 0},         {"to bottom", 0, 1},
+            {"to left", -1, 0},         {"to top left", -1, -1},    {"to top right", 1, -1},
+            {"to bottom left", -1, 1},  {"to bottom right", 1, 1},
+        };
+        g->kind = FLOW_GRADIENT_LINEAR;
+        for (size_t k = 0; k < F_ARRAY(kTo); k++)
+            if (is_word(geo, kTo[k].name)) {
+                g->to_x = kTo[k].x;
+                g->to_y = kTo[k].y;
+            }
+    } else {
+        g->kind = FLOW_GRADIENT_RADIAL;
+        g->circle = is_word(geo, "circle");
+        g->extent = FLOW_EXTENT_FARTHEST_CORNER;
+        g->radii[0] = g->radii[1] = kUnwritten;
+        g->centre[0] = g->centre[1] = kHalf;
+        if (geo->nitems == 4) {
+            static const char *const kExtents[] = {"farthest-corner", "closest-side",
+                                                   "farthest-side", "closest-corner"};
+            int32_t e = pick(&geo->items[0], kExtents, F_ARRAY(kExtents));
+            if (e >= 0) {
+                g->extent = (flow_extent_t)e;
+            } else {
+                g->extent = FLOW_EXTENT_SIZE;
+                g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
+                g->radii[1] = is_word(&geo->items[1], "auto") ? g->radii[0]
+                                                            : author_lp(a, &geo->items[1], kUnwritten);
+            }
+            g->centre[0] = author_lp(a, &geo->items[2], kHalf);
+            g->centre[1] = author_lp(a, &geo->items[3], kHalf);
+        }
+    }
+    int32_t n = 0;
+    for (int32_t i = 1; i < v->nitems; i++) {
+        const garb_val_t *st = &v->items[i];
+        flow_gradient_stop_t *o = &stops[n++];
+        o->at = kUnwritten;
+        if (st->kind != GARB_V_COLOR) {
+            o->hint = true;
+            o->at = author_lp(a, st, kUnwritten);
+            continue;
+        }
+        o->current = st->color.current;
+        o->colour = st->color.current ? s->color : colour_of(st->color);
+        if (st->nitems > 0)
+            o->at = author_lp(a, &st->items[0], kUnwritten);
+    }
+    g->stops = stops;
+    g->nstops = n;
+    *out = g;
+    return true;
+}
+
+// `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
+// there, four lengths and a colour. Lengths in pixels, at the element's
+// own font size, which is known by now; a currentColor shadow is marked
+// `current`, for the box it is drawn for to resolve. False only when
+// memory runs out.
+static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v, bool box)
+{
+    const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
+    int32_t *count = box ? &s->nbox_shadows : &s->ntext_shadows;
+    if (is_word(v, "none") || v->nitems == 0) {
+        *list = NULL;
+        *count = 0;
+        return true;
+    }
+    bool spent;
+    flow_shadow_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;                       // past the lists' budget: as it was
+    for (int32_t i = 0; i < v->nitems; i++) {
+        const garb_val_t *one = &v->items[i];
+        int32_t k = 0;
+        flow_shadow_t *sh = &out[i];
+        os64_memset(sh, 0, sizeof(*sh));
+        if (k < one->nitems && is_word(&one->items[k], "inset")) {
+            sh->inset = true;
+            k++;
+        }
+        int32_t *len[4] = {&sh->x, &sh->y, &sh->blur, &sh->spread};
+        for (int j = 0; j < 4 && k < one->nitems; j++, k++) {
+            Len l;
+            // To the nearest pixel, a negative offset as a positive one.
+            *len[j] = !author_len(a, &one->items[k], false, &l) || l.kind != L_PX ? 0
+                      : l.v >= 0 ? (l.v + 32) / 64 : -((-l.v + 32) / 64);
+        }
+        if (sh->blur < 0)
+            sh->blur = 0;
+        const garb_val_t *c = k < one->nitems ? &one->items[k] : NULL;
+        sh->current = c == NULL || c->kind != GARB_V_COLOR || c->color.current;
+        sh->colour = sh->current ? s->color : colour_of(c->color);
+    }
+    *list = out;
+    *count = v->nitems;
+    return true;
+}
+
+// A length to the nearest pixel, a negative one as a positive one is, as
+// a shadow's are read; false when it is no length libflow can settle.
+static bool filter_px(const Author *a, const garb_val_t *v, int32_t *out)
+{
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v >= 0 ? (l.v + 32) / 64 : -((-l.v + 32) / 64);
+    return true;
+}
+
+static bool author_number(const Author *a, const garb_val_t *v, double *out);
+
+// One function of libgarb's filter list (values.h's GARB_FILTER) into `f`;
+// false for one libflow cannot work out — a calc() it cannot settle —
+// which leaves the property as it was, as a value it cannot read does.
+static bool author_filter_fn(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                             flow_filter_t *f)
+{
+    static const struct {
+        const char *name;
+        flow_filter_fn_t fn;
+    } kFns[] = {
+        {"blur", FLOW_FILTER_BLUR}, {"brightness", FLOW_FILTER_BRIGHTNESS},
+        {"contrast", FLOW_FILTER_CONTRAST}, {"grayscale", FLOW_FILTER_GRAYSCALE},
+        {"invert", FLOW_FILTER_INVERT}, {"opacity", FLOW_FILTER_OPACITY},
+        {"sepia", FLOW_FILTER_SEPIA}, {"saturate", FLOW_FILTER_SATURATE},
+        {"hue-rotate", FLOW_FILTER_HUE_ROTATE}, {"drop-shadow", FLOW_FILTER_DROP_SHADOW},
+    };
+    os64_memset(f, 0, sizeof(*f));
+    if (v->kind == GARB_V_URL) {
+        f->fn = FLOW_FILTER_URL;
+        f->url = v->text;
+        f->url_len = v->len;
+        return true;
+    }
+    if (v->kind != GARB_V_FUNCTION || v->keyword == NULL)
+        return false;
+    int32_t k = 0;
+    while (k < (int32_t)F_ARRAY(kFns) && !os64_streq(v->keyword, kFns[k].name))
+        k++;
+    if (k == (int32_t)F_ARRAY(kFns))
+        return false;
+    f->fn = kFns[k].fn;
+    const garb_val_t *arg = v->nitems > 0 ? &v->items[0] : NULL;
+    switch (f->fn) {
+    case FLOW_FILTER_BLUR:
+        if (arg != NULL) {
+            Len l;
+            if (!author_len(a, arg, false, &l) || l.kind != L_PX || l.v < 0)
+                return false;
+            f->amount = (double)l.v / 64;
+        }
+        f->shadow.blur = (int32_t)(f->amount * 2 + 0.5);
+        return true;
+    case FLOW_FILTER_HUE_ROTATE:
+        if (arg == NULL)
+            return true;
+        if (arg->kind != GARB_V_ANGLE)
+            return false;
+        f->amount = arg->unit == GARB_U_TURN ? arg->number * 360
+                  : arg->unit == GARB_U_GRAD ? arg->number * 0.9
+                  : arg->unit == GARB_U_RAD  ? arg->number * (180 / 3.14159265358979323846)
+                  : arg->number;
+        return true;
+    case FLOW_FILTER_DROP_SHADOW: {
+        // The colour, then two or three lengths (values.h).
+        if (v->nitems < 3)
+            return false;
+        int32_t *len[3] = {&f->shadow.x, &f->shadow.y, &f->shadow.blur};
+        for (int32_t i = 1; i < v->nitems && i <= 3; i++)
+            if (!filter_px(a, &v->items[i], len[i - 1]))
+                return false;
+        if (f->shadow.blur < 0)
+            return false;
+        // The third length is a standard deviation (Filter Effects 1 §
+        // 13, unlike a box shadow's blur radius), kept as blur() keeps
+        // one: as the shadow blur of twice it.
+        f->shadow.blur = f->shadow.blur < INT32_MAX / 2 ? 2 * f->shadow.blur : INT32_MAX;
+        const garb_val_t *c = &v->items[0];
+        f->shadow.current = c->kind != GARB_V_COLOR || c->color.current;
+        f->shadow.colour = f->shadow.current ? s->color : colour_of(c->color);
+        return true;
+    }
+    default:
+        break;
+    }
+    // A number or a percentage, a calc() of either worked out and held to
+    // the domain (author_number), 1 when omitted; a calc() below 0 held at
+    // 0, and four of them held at 1 (Filter Effects 1 § 13). A written
+    // negative never arrives: libgarb refuses it.
+    f->amount = 1;
+    if (arg != NULL && !author_number(a, arg, &f->amount))
+        return false;
+    if (f->amount < 0)
+        f->amount = 0;
+    if ((f->fn == FLOW_FILTER_GRAYSCALE || f->fn == FLOW_FILTER_INVERT ||
+         f->fn == FLOW_FILTER_OPACITY || f->fn == FLOW_FILTER_SEPIA) && f->amount > 1)
+        f->amount = 1;
+    return true;
+}
+
+// `none`, or libgarb's filter list (values.h's GARB_FILTER), for `filter`
+// or `backdrop-filter`. False only when memory runs out.
+static bool author_filter(const Author *a, flow_style_t *s, const garb_val_t *v, bool backdrop)
+{
+    const flow_filter_t **list = backdrop ? &s->backdrop_filter : &s->filter;
+    int32_t *count = backdrop ? &s->nbackdrop_filter : &s->nfilter;
+    if (is_word(v, "none") || v->kind != GARB_V_FUNCTIONS || v->nitems == 0) {
+        if (is_word(v, "none")) {
+            *list = NULL;
+            *count = 0;
+        }
+        return true;
+    }
+    flow_filter_t one[GARB_FILTERS_MAX];
+    int32_t n = v->nitems < GARB_FILTERS_MAX ? v->nitems : GARB_FILTERS_MAX;
+    for (int32_t i = 0; i < n; i++)
+        if (!author_filter_fn(a, s, &v->items[i], &one[i]))
+            return true;                    // one it cannot work out: as it was
+    bool spent;
+    flow_filter_t *out = list_alloc(a->c, (size_t)n * sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;                       // past the lists' budget: as it was
+    os64_memcpy(out, one, (size_t)n * sizeof(*out));
+    *list = out;
+    *count = n;
+    return true;
+}
+
+// ── Transforms (CSS Transforms 1 § 9, 2 § 12) ──────────────────────────
+//
+// Each function is read here, at the element's font, once, into its
+// primitive and arguments (flow_transform_t), and made its matrix by
+// f_transform_fn_matrix — what an animation's mixed functions are made by
+// too, so a keyframe's matrix and the style's are one; only a
+// translation's percentages wait for the box. A function libflow cannot
+// work out — a calc() it cannot settle — leaves the property as it was, as
+// a value it cannot read does.
+
+static const flow_length_t kNoLength = {FLOW_LENGTH_AUTO, 0, 0};
+
+static void identity(double m[16])
+{
+    os64_memset(m, 0, 16 * sizeof(double));
+    m[0] = m[5] = m[10] = m[15] = 1;
+}
+
+// An angle's unit, as the function keeps it (flow_transform_t): its matrix
+// is worked in it (motion.c's f_transform_fn_matrix).
+static flow_angle_unit_t angle_unit(const garb_val_t *v)
+{
+    switch (v->unit) {
+    case GARB_U_GRAD: return FLOW_ANGLE_GRAD;
+    case GARB_U_RAD: return FLOW_ANGLE_RAD;
+    case GARB_U_TURN: return FLOW_ANGLE_TURN;
+    default: return FLOW_ANGLE_DEG;
+    }
+}
+
+// A number, a percentage as its hundredth, or a calc() of either, which
+// libgarb lets hold no length where a number or a percentage is. Held to
+// the domain (values.h) here, where a calc() settles.
+static bool author_number(const Author *a, const garb_val_t *v, double *out)
+{
+    Lp r;
+    if (v->kind == GARB_V_NUMBER)
+        *out = v->number;
+    else if (v->kind == GARB_V_PERCENTAGE)
+        *out = v->number / 100;
+    else if (v->kind != GARB_V_CALC || v->calc == NULL || !calc(a, v->calc, a->font, &r))
+        return false;
+    else
+        *out = r.number ? r.px : r.pct / 100;
+    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);
+    return true;
+}
+
+// An ANGLE as the function keeps it, in its own unit, held to the domain's
+// degrees (values.h).
+static void author_angle(const garb_val_t *v, double *out, flow_angle_unit_t *unit)
+{
+    *unit = angle_unit(v);
+    *out = garb_hold(v->number, f_angle_in_unit(GARB_ANGLE_DEG_MAX, FLOW_ANGLE_DEG, *unit));
+}
+
+// A length, in 26.6.
+static bool author_px(const Author *a, const garb_val_t *v, double *out)
+{
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v;
+    return true;
+}
+
+static bool is_fn(const char *n, const char *a, const char *b)
+{
+    return os64_streq(n, a) || (b != NULL && os64_streq(n, b));
+}
+
+// One function of a transform list, by libgarb's name for it (values.h):
+// its primitive and arguments (flow_transform_t), and the matrix they make.
+static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *out)
+{
+    const char *n = f->keyword;
+    const garb_val_t *v = f->items;
+    int32_t k = f->nitems;
+    double *m = out->m, unit = FLOW_UNITS_PER_PX * a->c->zoom, d[16];
+    os64_memset(out, 0, sizeof(*out));
+    out->x = out->y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    identity(m);
+    if (k < 1)
+        return false;
+    if (is_fn(n, "translate", "translatex") || is_fn(n, "translatey", "translate3d")) {
+        bool y_only = os64_streq(n, "translatey");
+        out->fn = FLOW_FN_TRANSLATE;
+        out->three_d = os64_streq(n, "translate3d");
+        if (!y_only)
+            out->x = author_lp(a, &v[0], kNoLength);
+        if (y_only || (k > 1 && !os64_streq(n, "translatex")))
+            out->y = author_lp(a, &v[y_only ? 0 : 1], kNoLength);
+        if (out->x.kind == FLOW_LENGTH_AUTO || out->y.kind == FLOW_LENGTH_AUTO ||
+            (out->three_d && !(k == 3 && author_px(a, &v[2], &out->a[2]))))
+            return false;
+        f_transform_fn_matrix(out);
+        return true;
+    }
+    if (os64_streq(n, "translatez")) {
+        out->fn = FLOW_FN_TRANSLATE;
+        out->three_d = true;
+        if (!author_px(a, &v[0], &out->a[2]))
+            return false;
+        f_transform_fn_matrix(out);
+        return true;
+    }
+    if (os64_streq(n, "perspective")) {
+        // `none` is no perspective; a distance below 1px is 1px
+        // (Transforms 2 § 12.2).
+        double dist;
+        out->fn = FLOW_FN_PERSPECTIVE;
+        out->three_d = true;
+        if (v[0].kind == GARB_V_KEYWORD)
+            return true;
+        if (!author_px(a, &v[0], &dist))
+            return false;
+        out->a[0] = dist > unit ? dist : unit;
+        f_transform_fn_matrix(out);
+        return true;
+    }
+    for (int32_t i = 0; i < k && i < 16; i++)
+        if (v[i].kind != GARB_V_ANGLE && !author_number(a, &v[i], &d[i]))
+            return false;
+    out->fn = FLOW_FN_SCALE;
+    out->a[0] = out->a[1] = out->a[2] = 1;
+    if (is_fn(n, "scale", "scale3d")) {
+        out->three_d = os64_streq(n, "scale3d");
+        out->a[0] = d[0];
+        out->a[1] = k > 1 ? d[1] : d[0];
+        out->a[2] = k > 2 ? d[2] : 1;
+    } else if (is_fn(n, "scalex", NULL)) {
+        out->a[0] = d[0];
+    } else if (is_fn(n, "scaley", NULL)) {
+        out->a[1] = d[0];
+    } else if (is_fn(n, "scalez", NULL)) {
+        out->three_d = true;
+        out->a[2] = d[0];
+    } else if (is_fn(n, "rotate", "rotatez") || is_fn(n, "rotatex", "rotatey") ||
+               (is_fn(n, "rotate3d", NULL) && k == 4)) {
+        const garb_val_t *angle = &v[os64_streq(n, "rotate3d") ? 3 : 0];
+        out->fn = FLOW_FN_ROTATE;
+        out->three_d = !is_fn(n, "rotate", "rotatez");
+        out->a[0] = os64_streq(n, "rotate3d") ? d[0] : os64_streq(n, "rotatex");
+        out->a[1] = os64_streq(n, "rotate3d") ? d[1] : os64_streq(n, "rotatey");
+        out->a[2] = os64_streq(n, "rotate3d") ? d[2] : is_fn(n, "rotate", "rotatez");
+        author_angle(angle, &out->a[3], &out->unit);
+    } else if (is_fn(n, "skew", "skewx") || is_fn(n, "skewy", NULL)) {
+        out->fn = os64_streq(n, "skew") ? FLOW_FN_SKEW : os64_streq(n, "skewx") ? FLOW_FN_SKEW_X
+                                                                              : FLOW_FN_SKEW_Y;
+        out->a[1] = 0;
+        author_angle(&v[0], &out->a[0], &out->unit);
+        // skew(a, b) keeps one unit (f_angle_common).
+        if (k > 1) {
+            flow_angle_unit_t second, to;
+            author_angle(&v[1], &out->a[1], &second);
+            to = f_angle_common(out->unit, second);
+            out->a[0] = f_angle_in_unit(out->a[0], out->unit, to);
+            out->a[1] = f_angle_in_unit(out->a[1], second, to);
+            out->unit = to;
+        }
+    } else if (is_fn(n, "matrix", NULL) && k == 6) {
+        out->fn = FLOW_FN_MATRIX;
+        m[0] = d[0], m[1] = d[1], m[4] = d[2], m[5] = d[3];
+        m[12] = d[4] * unit, m[13] = d[5] * unit;
+        return true;
+    } else if (is_fn(n, "matrix3d", NULL) && k == 16) {
+        // Its lengths are CSS pixels: the translation is scaled into 26.6,
+        // and the perspective row, which divides by a length, out of it.
+        out->fn = FLOW_FN_MATRIX;
+        out->three_d = true;
+        for (int i = 0; i < 16; i++)
+            m[i] = d[i];
+        m[12] *= unit, m[13] *= unit, m[14] *= unit;
+        m[3] /= unit, m[7] /= unit, m[11] /= unit;
+        return true;
+    } else {
+        return false;
+    }
+    f_transform_fn_matrix(out);
+    return true;
+}
+
+// `none`, or a FUNCTIONS list (values.h). Past the lists' budget, or with a
+// function libflow cannot work out, the property is as it was; false only
+// when memory runs out.
+static bool author_transform(const Author *a, flow_style_t *s, const garb_val_t *v)
+{
+    if (is_word(v, "none")) {
+        s->transform = NULL;
+        s->ntransform = 0;
+        return true;
+    }
+    if (v->kind != GARB_V_FUNCTIONS || v->nitems <= 0)
+        return true;
+    bool spent;
+    flow_transform_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!author_fn(a, &v->items[i], &out[i]))
+            return true;
+    s->transform = out;
+    s->ntransform = v->nitems;
+    return true;
+}
+
+// `translate`, `rotate` or `scale` (libgarb's G_TRANSLATE, G_ROTATE and
+// G_SCALE): `none`, or the one function it is, what it leaves out its
+// initial value.
+static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
+                              const garb_val_t *v)
+{
+    const flow_transform_t **slot = p == GARB_TRANSLATE ? &s->translate
+                                  : p == GARB_ROTATE ? &s->rotate : &s->scale;
+    if (is_word(v, "none")) {
+        *slot = NULL;
+        return true;
+    }
+    flow_transform_t t;
+    os64_memset(&t, 0, sizeof(t));
+    t.x = t.y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    const garb_val_t *it = v->items;
+    int32_t n = v->nitems;
+    bool ok = true;
+    if (p == GARB_TRANSLATE) {
+        t.fn = FLOW_FN_TRANSLATE;
+        t.three_d = n >= 3;
+        ok = n >= 1;
+        if (n >= 1)
+            t.x = author_lp(a, &it[0], kNoLength);
+        if (n >= 2)
+            t.y = author_lp(a, &it[1], kNoLength);
+        if (n >= 3)
+            ok = author_px(a, &it[2], &t.a[2]);
+        ok = ok && t.x.kind != FLOW_LENGTH_AUTO && t.y.kind != FLOW_LENGTH_AUTO;
+    } else if (p == GARB_SCALE) {
+        double sc[3] = {1, 1, 1};
+        t.fn = FLOW_FN_SCALE;
+        t.three_d = n >= 3;
+        ok = n >= 1;
+        for (int32_t i = 0; i < n && i < 3 && ok; i++)
+            ok = author_number(a, &it[i], &sc[i]);
+        t.a[0] = sc[0];
+        t.a[1] = n == 1 ? sc[0] : sc[1];
+        t.a[2] = sc[2];
+    } else if (v->kind == GARB_V_ANGLE) {
+        t.fn = FLOW_FN_ROTATE;
+        t.a[2] = 1;
+        author_angle(v, &t.a[3], &t.unit);
+    } else {
+        t.fn = FLOW_FN_ROTATE;
+        t.three_d = true;
+        ok = n == 4 && it[3].kind == GARB_V_ANGLE;
+        for (int i = 0; i < 3 && ok; i++)
+            ok = author_number(a, &it[i], &t.a[i]);
+        if (ok)
+            author_angle(&it[3], &t.a[3], &t.unit);
+    }
+    if (!ok)
+        return true;
+    f_transform_fn_matrix(&t);
+    bool spent;
+    flow_transform_t *out = list_alloc(a->c, sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;
+    *out = t;
+    *slot = out;
+    return true;
+}
+
+// A background property's list, one entry per layer libgarb read (a
+// LAYERS value, or one value for one layer); an entry flow cannot read is
+// the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); a conic gradient or an
+// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// (list_alloc), the property's list is left as it was.
+static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    if (n <= 0)
+        return true;
+    flow_backgrounds_t *b = &s->backgrounds;
+    Len l, two[2];
+    int32_t w;
+    bool spent;                             // past the lists' budget: the list as it was
+    switch (p) {
+    case GARB_BACKGROUND_IMAGE: {
+        flow_bg_image_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kNoImage;
+            if (one->kind == GARB_V_URL && one->len > 0) {
+                list[k].url = one->text;
+                list[k].len = (uint32_t)one->len;
+                list[k].sheet = a->sheet;
+            } else if (one->kind == GARB_V_IMAGE && one->nitems > 0 &&
+                       !author_gradient(a, s, one, &list[k].gradient)) {
+                return false;
+            }
+        }
+        b->image = list;
+        b->nimage = n;
+        return true;
+    }
+    case GARB_BACKGROUND_REPEAT: {
+        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        flow_repeat_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], words, F_ARRAY(words))) >= 0 ? (flow_repeat_t)w : kRepeat;
+        b->repeat = list;
+        b->nrepeat = n;
+        return true;
+    }
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        flow_length_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = author_len(a, &items[k], false, &l)
+                          ? resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0})
+                          : kAtStart;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->x : &b->y) = list;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->nx : &b->ny) = n;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE: {
+        // A keyword, or libgarb's pair of width and height.
+        static const char *const fits[] = {"cover", "contain"};
+        flow_bg_size_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kOwnSize;
+            if ((w = pick(one, fits, F_ARRAY(fits))) >= 0) {
+                list[k].fit = (flow_bg_fit_t)(FLOW_FIT_COVER + w);
+            } else if (one->kind == GARB_V_LENGTH && one->nitems == 2 &&
+                       author_len(a, &one->items[0], true, &two[0]) &&
+                       author_len(a, &one->items[1], true, &two[1])) {
+                for (int j = 0; j < 2; j++)
+                    list[k].size[j] =
+                        resolve(two[j], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
+            }
+        }
+        b->size = list;
+        b->nsize = n;
+        return true;
+    }
+    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        bool origin = p == GARB_BACKGROUND_ORIGIN;
+        flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
+                      : origin ? kPaddingBox : kBorderBox;
+        *(origin ? &b->origin : &b->clip) = list;
+        *(origin ? &b->norigin : &b->nclip) = n;
+        return true;
+    }
+    default:
+        return true;
+    }
+}
+
+// A time, in milliseconds (libgarb held it to the domain, values.h).
+static double ms_of(const garb_val_t *v)
+{
+    if (v->kind != GARB_V_TIME)
+        return 0;
+    return v->unit == GARB_U_S ? v->number * 1000 : v->number;
+}
+
+// An `animation-*` longhand's list (values.h): one item an animation, an
+// item libflow cannot read the property's initial value. Past the lists'
+// budget (list_alloc), the list is left as it was.
+static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1, w;
+    flow_animations_t *an = &s->animations;
+    bool spent;
+    size_t each = p == GARB_ANIMATION_NAME ? sizeof(flow_name_t)
+                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(garb_easing_t)
+                : p == GARB_ANIMATION_DIRECTION ? sizeof(garb_direction_t)
+                : p == GARB_ANIMATION_FILL_MODE ? sizeof(garb_fill_t)
+                : p == GARB_ANIMATION_PLAY_STATE ? sizeof(bool) : sizeof(double);
+    void *list = n > 0 ? list_alloc(a->c, (size_t)n * each, &spent) : NULL;
+    if (list == NULL)
+        return n <= 0 || spent;
+    for (int32_t k = 0; k < n; k++) {
+        const garb_val_t *one = &items[k];
+        switch (p) {
+        case GARB_ANIMATION_NAME:
+            ((flow_name_t *)list)[k] = one->kind == GARB_V_STRING
+                                           ? (flow_name_t){one->text, (uint32_t)one->len}
+                                           : (flow_name_t){NULL, 0};
+            break;
+        case GARB_ANIMATION_DURATION:
+        case GARB_ANIMATION_DELAY:
+            ((double *)list)[k] = ms_of(one);
+            break;
+        case GARB_ANIMATION_TIMING_FUNCTION:
+            if (!garb_easing_of(one, &((garb_easing_t *)list)[k]))
+                (void)garb_easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
+                                &((garb_easing_t *)list)[k]);
+            break;
+        case GARB_ANIMATION_ITERATION_COUNT:
+            ((double *)list)[k] = is_word(one, "infinite") ? INFINITY
+                                : one->kind == GARB_V_NUMBER ? one->number : 1;
+            break;
+        case GARB_ANIMATION_DIRECTION: {
+            static const char *const words[] = {"normal", "reverse", "alternate",
+                                                "alternate-reverse"};
+            ((garb_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                                ? (garb_direction_t)w : GARB_DIRECTION_NORMAL;
+            break;
+        }
+        case GARB_ANIMATION_FILL_MODE: {
+            static const char *const words[] = {"none", "forwards", "backwards", "both"};
+            ((garb_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                           ? (garb_fill_t)w : GARB_FILL_NONE;
+            break;
+        }
+        case GARB_ANIMATION_PLAY_STATE:
+            ((bool *)list)[k] = is_word(one, "paused");
+            break;
+        default:
+            break;
+        }
+    }
+    switch (p) {
+    case GARB_ANIMATION_NAME: an->name = list, an->nname = n; break;
+    case GARB_ANIMATION_DURATION: an->duration = list, an->nduration = n; break;
+    case GARB_ANIMATION_DELAY: an->delay = list, an->ndelay = n; break;
+    case GARB_ANIMATION_TIMING_FUNCTION: an->easing = list, an->neasing = n; break;
+    case GARB_ANIMATION_ITERATION_COUNT: an->iterations = list, an->niterations = n; break;
+    case GARB_ANIMATION_DIRECTION: an->direction = list, an->ndirection = n; break;
+    case GARB_ANIMATION_FILL_MODE: an->fill = list, an->nfill = n; break;
+    case GARB_ANIMATION_PLAY_STATE: an->paused = list, an->npaused = n; break;
+    default: break;
+    }
+    return true;
+}
+
+// `will-change`'s effects (FLOW_WILL_*): what it names, compared as a
+// property's name is, without case.
+static uint8_t will_change_of(const garb_val_t *v)
+{
+    static const struct { const char *name; uint8_t bit; } kBits[] = {
+        {"transform", FLOW_WILL_TRANSFORM}, {"translate", FLOW_WILL_TRANSFORM},
+        {"rotate", FLOW_WILL_TRANSFORM}, {"scale", FLOW_WILL_TRANSFORM},
+        {"opacity", FLOW_WILL_OPACITY},
+    };
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    uint8_t bits = 0;
+    for (int32_t k = 0; k < n; k++)
+        for (int32_t j = 0; items[k].kind == GARB_V_STRING && j < F_ARRAY(kBits); j++) {
+            const char *name = kBits[j].name;
+            size_t i = 0;
+            while (i < items[k].len && name[i] != '\0' &&
+                   (items[k].text[i] | 0x20) == name[i])
+                i++;
+            if (i == items[k].len && name[i] == '\0')
+                bits |= kBits[j].bit;
+        }
+    return bits;
+}
+
+const char *const f_cursor_words[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
+    "grab", "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize",
+    "se-resize", "sw-resize", "w-resize", "ew-resize", "ns-resize", "nesw-resize",
+    "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out"};
+_Static_assert(F_ARRAY(f_cursor_words) == FLOW_CURSOR_ZOOM_OUT + 1, "flow_cursor_t");
+
+static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
+{
+    const garb_val_t *v = &set->value;
+    flow_style_t *s = &sp->s;
+    garb_prop_t p = set->prop;
+    int32_t i;
+    switch (p) {
+    case GARB_DISPLAY: author_display(v, &s->display, &s->flow_root); break;
+    case GARB_COLOR:
+        if (v->kind == GARB_V_COLOR && v->color.current)
+            s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;
+        else if (v->kind == GARB_V_COLOR)
+            s->color = colour_of(v->color);
+        break;
+    case GARB_TEXT_FILL_COLOR:
+        if (v->kind != GARB_V_COLOR)
+            break;
+        // currentColor is resolved in finish, as the background's is.
+        if (v->color.current) {
+            s->current_colours |= FLOW_CURRENT_FILL;
+        } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_FILL;
+            s->fill = colour_of(v->color);
+        }
+        break;
+    case GARB_BACKGROUND_COLOR:
+        if (v->kind != GARB_V_COLOR)
+            break;
+        // currentColor is resolved in finish, which knows the final colour.
+        if (v->color.current) {
+            s->current_colours |= FLOW_CURRENT_BACKGROUND;
+        } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
+            s->has_background = v->color.a > 0;
+            s->background = colour_of(v->color);
+        }
+        break;
+    case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
+    case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
+    case GARB_BACKGROUND_CLIP:
+        if (!author_layers(a, s, p, v))
+            return false;
+        break;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
+        break;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        author_len(a, v, false, &sp->padding[side(p, GARB_PADDING_TOP)]);
+        break;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH:
+        author_border_width(a, v, &sp->border_px[side(p, GARB_BORDER_TOP_WIDTH)]);
+        break;
+    case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
+    case GARB_BORDER_LEFT_STYLE:
+        author_border_style(v, &s->border_style[side(p, GARB_BORDER_TOP_STYLE)]);
+        break;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        i = side(p, GARB_BORDER_TOP_COLOR);
+        if (v->kind != GARB_V_COLOR)
+            break;
+        // currentColor is left for finish, which knows the final colour.
+        sp->border_color_set[i] = !v->color.current;
+        s->border_color[i] = colour_of(v->color);
+        break;
+    case GARB_WIDTH: case GARB_HEIGHT: case GARB_MIN_WIDTH: case GARB_MAX_WIDTH:
+    case GARB_MIN_HEIGHT: case GARB_MAX_HEIGHT: {
+        Len *l = p == GARB_WIDTH ? &sp->width : p == GARB_HEIGHT ? &sp->height
+               : p == GARB_MIN_WIDTH ? &sp->min_width : p == GARB_MAX_WIDTH ? &sp->max_width
+               : p == GARB_MIN_HEIGHT ? &sp->min_height : &sp->max_height;
+        // `auto`, a limit's `none`, and the content-sized keywords — which
+        // are auto until libflow sizes by content on request (GARB.md §
+        // Booked) — are all no size of the page's own.
+        if (v->kind == GARB_V_KEYWORD)
+            *l = kAuto;
+        else
+            author_len(a, v, true, l);
+        break;
+    }
+    case GARB_LINE_HEIGHT:
+        if (is_word(v, "normal")) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_NORMAL, 0};
+        } else if (v->kind == GARB_V_NUMBER && v->number >= 0) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_NUMBER, round_i32(v->number * 1000)};
+        } else if (v->kind == GARB_V_PERCENTAGE && v->number >= 0) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_PX,
+                                                  round_i32(a->font * v->number / 100)};
+        } else {
+            Len l;
+            if (author_len(a, v, false, &l) && l.kind == L_PX && l.v >= 0)
+                s->line_height = (flow_line_height_t){FLOW_LINE_PX, l.v};
+        }
+        break;
+    case GARB_TEXT_INDENT:
+        // `hanging` and `each-line` are read and not drawn.
+        if (v->kind == GARB_V_LENGTH || v->kind == GARB_V_PERCENTAGE || v->kind == GARB_V_CALC)
+            author_len(a, v, false, &sp->text_indent);
+        break;
+    case GARB_LETTER_SPACING:
+        // `normal` is no spacing (Text 3 § 7.2).
+        if (v->kind == GARB_V_KEYWORD)
+            sp->letter_spacing = (Len){L_PX, 0, 0};
+        else
+            author_len(a, v, false, &sp->letter_spacing);
+        break;
+    case GARB_TEXT_TRANSFORM: {
+        static const char *const words[] = {"none", "uppercase", "lowercase", "capitalize"};
+        i = pick(v, words, F_ARRAY(words));
+        s->text_transform = i >= 0 ? (flow_text_transform_t)i : FLOW_TRANSFORM_NONE;
+        break;
+    }
+    case GARB_WORD_BREAK: {
+        static const char *const words[] = {"normal", "keep-all", "break-all", "break-word"};
+        _Static_assert(F_ARRAY(words) == FLOW_WORD_BREAK_BREAK_WORD + 1, "flow_word_break_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->word_break = (flow_word_break_t)i;
+        break;
+    }
+    case GARB_OVERFLOW_WRAP: {
+        static const char *const words[] = {"normal", "break-word", "anywhere"};
+        _Static_assert(F_ARRAY(words) == FLOW_OVERFLOW_WRAP_ANYWHERE + 1, "flow_overflow_wrap_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->overflow_wrap = (flow_overflow_wrap_t)i;
+        break;
+    }
+    case GARB_OVERFLOW_X: case GARB_OVERFLOW_Y: {
+        static const char *const words[] = {"visible", "hidden", "clip", "scroll", "auto"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            *(p == GARB_OVERFLOW_X ? &s->overflow_x : &s->overflow_y) = (flow_overflow_t)i;
+        break;
+    }
+    case GARB_BOX_SIZING:
+        s->box_sizing = is_word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
+        break;
+    case GARB_FONT_FAMILY: return author_family(a, v, &s->family);
+    case GARB_FONT_SIZE: break;         // read first, by author()
+    case GARB_FONT_WEIGHT: author_font_weight(a, sp, v); break;
+    case GARB_FONT_STYLE:
+        s->font_style = is_word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
+        break;
+    case GARB_TEXT_ALIGN: {
+        static const char *const words[] = {"left", "right", "center", "justify", "start", "end"};
+        static const flow_text_align_t as[] = {FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT,
+                                               FLOW_ALIGN_CENTER, FLOW_ALIGN_JUSTIFY,
+                                               FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->text_align = as[i];
+        else if (is_word(v, "match-parent") && a->parent != NULL)
+            s->text_align = a->parent->text_align;
+        break;
+    }
+    case GARB_VERTICAL_ALIGN: {
+        // text-bottom is drawn as bottom, and a length or a percentage
+        // raises nothing yet (GARB.md § Booked).
+        static const char *const words[] = {"baseline", "sub", "super", "text-top",
+                                            "text-bottom", "middle", "top", "bottom"};
+        static const flow_vertical_align_t as[] = {
+            FLOW_VALIGN_BASELINE, FLOW_VALIGN_SUB, FLOW_VALIGN_SUPER, FLOW_VALIGN_TEXT_TOP,
+            FLOW_VALIGN_BOTTOM, FLOW_VALIGN_MIDDLE, FLOW_VALIGN_TOP, FLOW_VALIGN_BOTTOM};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->vertical_align = as[i];
+        else
+            s->vertical_align = FLOW_VALIGN_BASELINE;
+        break;
+    }
+    case GARB_WHITE_SPACE: {
+        // break-spaces is drawn as pre-wrap: a space it keeps at a line's
+        // end hangs rather than taking room (GARB.md § Booked).
+        static const char *const words[] = {"normal", "pre", "nowrap", "pre-wrap",
+                                            "pre-line", "break-spaces"};
+        static const flow_white_space_t as[] = {FLOW_WS_NORMAL, FLOW_WS_PRE, FLOW_WS_NOWRAP,
+                                                FLOW_WS_PRE_WRAP, FLOW_WS_PRE_LINE,
+                                                FLOW_WS_PRE_WRAP};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->white_space = as[i];
+        break;
+    }
+    case GARB_TEXT_DECORATION_LINE:
+        // An overline and blink are not drawn.
+        s->text_decoration = 0;
+        for (int32_t k = 0; k < v->nitems; k++) {
+            if (is_word(&v->items[k], "underline"))
+                s->text_decoration |= FLOW_DECORATION_UNDERLINE;
+            else if (is_word(&v->items[k], "line-through"))
+                s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
+        }
+        break;
+    case GARB_IMAGE_RENDERING: {
+        // The crisp spellings; every other keyword libgarb takes smooths.
+        static const char *const crisp[] = {"pixelated", "crisp-edges", "-moz-crisp-edges",
+                                            "-webkit-optimize-contrast", "optimizespeed"};
+        if (v->kind == GARB_V_KEYWORD)
+            s->pixelated = pick(v, crisp, F_ARRAY(crisp)) >= 0;
+        break;
+    }
+    case GARB_VISIBILITY: {
+        static const char *const words[] = {"visible", "hidden", "collapse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->visibility = (flow_visibility_t)i;
+        break;
+    }
+    case GARB_LIST_STYLE_TYPE: author_list_type(sp, v); break;
+    case GARB_LIST_STYLE_POSITION:
+        s->list_style_position = is_word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
+        break;
+    case GARB_BORDER_SPACING:
+        for (int32_t k = 0; k < 2 && k < v->nitems; k++) {
+            Len l;
+            if (author_len(a, &v->items[k], false, &l) && l.kind == L_PX)
+                s->border_spacing[k] = l.v < 0 ? 0 : l.v;
+        }
+        break;
+    case GARB_BORDER_COLLAPSE:
+        s->border_collapse = is_word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
+        break;
+    case GARB_CAPTION_SIDE:
+        s->caption_side = is_word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
+        break;
+    case GARB_FLOAT: {
+        static const char *const words[] = {"none", "left", "right", "inline-start",
+                                            "inline-end"};
+        static const flow_float_t as[] = {FLOW_FLOAT_NONE, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT,
+                                          FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->float_side = as[i];
+        break;
+    }
+    case GARB_CLEAR: {
+        static const char *const words[] = {"none", "left", "right", "both", "inline-start",
+                                            "inline-end"};
+        static const flow_clear_t as[] = {FLOW_CLEAR_NONE, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT,
+                                          FLOW_CLEAR_BOTH, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->clear = as[i];
+        break;
+    }
+    case GARB_CLIP:
+        s->legacy_clip_set = v->kind == GARB_V_FUNCTION && v->nitems == 4;
+        if (s->legacy_clip_set) for (int k = 0; k < 4; k++)
+            author_len(a,&v->items[k],true,&sp->clip[k]);
+        break;
+    case GARB_POSITION: {
+        static const char *const words[] = {"static", "relative", "absolute", "fixed", "sticky"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->position = (flow_position_t)i;
+        break;
+    }
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        author_len(a, v, true, &sp->inset[side(p, GARB_TOP)]);
+        break;
+    case GARB_Z_INDEX:
+        s->has_z_index = v->kind == GARB_V_NUMBER;
+        s->z_index = s->has_z_index ? round_i32(v->number) : 0;
+        break;
+    case GARB_POINTER_EVENTS:
+        // SVG's values are auto to an HTML box.
+        s->pointer_events_none = is_word(v, "none");
+        break;
+    case GARB_OUTLINE_WIDTH: author_border_width(a, v, &sp->outline_px); break;
+    case GARB_OUTLINE_STYLE:
+        // `auto` is the platform's ring; here it is drawn solid.
+        s->outline_auto = is_word(v, "auto");
+        if (s->outline_auto)
+            s->outline_style = FLOW_BORDER_SOLID;
+        else
+            author_border_style(v, &s->outline_style);
+        break;
+    case GARB_OUTLINE_COLOR:
+        // currentColor and auto are left for finish, which knows the colour.
+        sp->outline_color_set = v->kind == GARB_V_COLOR && !v->color.current;
+        if (sp->outline_color_set)
+            s->outline_color = colour_of(v->color);
+        break;
+    case GARB_OUTLINE_OFFSET: author_len(a, v, false, &sp->outline_offset); break;
+    case GARB_ASPECT_RATIO:
+        // A degenerate ratio is `auto` (Sizing 4 § 4.1); one past what a
+        // layout could use either way is held where a length is.
+        s->aspect_ratio = 0;
+        s->aspect_natural = v->kind != GARB_V_RATIO || v->keyword != NULL;
+        if (v->kind == GARB_V_RATIO && v->nitems == 2 && v->items[0].number > 0 &&
+            v->items[1].number > 0) {
+            double r = v->items[0].number / v->items[1].number;
+            s->aspect_ratio = r > F_INT_MAX ? F_INT_MAX : r < 1.0 / F_INT_MAX ? 1.0 / F_INT_MAX : r;
+        }
+        break;
+    case GARB_TEXT_OVERFLOW:
+        s->text_overflow = is_word(v, "ellipsis") ? FLOW_TEXT_OVERFLOW_ELLIPSIS
+                                                  : FLOW_TEXT_OVERFLOW_CLIP;
+        break;
+    case GARB_OBJECT_FIT: {
+        static const char *const words[] = {"fill", "contain", "cover", "none", "scale-down"};
+        _Static_assert(F_ARRAY(words) == FLOW_OBJECT_SCALE_DOWN + 1, "flow_object_fit_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->object_fit = (flow_object_fit_t)i;
+        break;
+    }
+    case GARB_OBJECT_POSITION:
+        for (int32_t k = 0; k < 2 && v->kind == GARB_V_LENGTH && k < v->nitems; k++)
+            author_len(a, &v->items[k], false, &sp->object_position[k]);
+        break;
+    case GARB_CURSOR:
+        if ((i = pick(v, f_cursor_words, F_ARRAY(f_cursor_words))) >= 0)
+            s->cursor = (flow_cursor_t)i;
+        break;
+    case GARB_USER_SELECT: {
+        static const char *const words[] = {"auto", "text", "none", "contain", "all"};
+        _Static_assert(F_ARRAY(words) == FLOW_USER_SELECT_ALL + 1, "flow_user_select_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->user_select = (flow_user_select_t)i;
+        break;
+    }
+    case GARB_FLEX_DIRECTION: {
+        static const char *const words[] = {"row", "row-reverse", "column", "column-reverse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->flex_direction = (flow_flex_direction_t)i;
+        break;
+    }
+    case GARB_FLEX_WRAP: {
+        static const char *const words[] = {"nowrap", "wrap", "wrap-reverse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->flex_wrap = (flow_flex_wrap_t)i;
+        break;
+    }
+    case GARB_JUSTIFY_CONTENT: case GARB_ALIGN_ITEMS: case GARB_ALIGN_SELF:
+    case GARB_ALIGN_CONTENT: {
+        // One table for all four: each grammar admits only its own words.
+        static const char *const words[] = {
+            "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
+            "start", "end", "self-start", "self-end", "left", "right", "space-between",
+            "space-around", "space-evenly"};
+        _Static_assert(F_ARRAY(words) == FLOW_PLACE_SPACE_EVENLY + 1, "flow_place_t");
+        if ((i = pick(v, words, F_ARRAY(words))) < 0)
+            break;
+        flow_place_t *field = p == GARB_JUSTIFY_CONTENT ? &s->justify_content
+                            : p == GARB_ALIGN_ITEMS ? &s->align_items
+                            : p == GARB_ALIGN_SELF ? &s->align_self : &s->align_content;
+        *field = (flow_place_t)i;
+        break;
+    }
+    case GARB_FLEX_GROW: case GARB_FLEX_SHRINK:
+        if (v->kind == GARB_V_NUMBER) {
+            // In thousandths, held where a sum of many cannot overflow.
+            double f = v->number < 0 ? 0 : v->number > 1e6 ? 1e6 : v->number;
+            *(p == GARB_FLEX_GROW ? &s->flex_grow : &s->flex_shrink) = round_i32(f * 1000);
+        }
+        break;
+    case GARB_FLEX_BASIS:
+        // `content` is the content's size, and so, here, are the three
+        // sizing keywords: max-content exactly, min-content and fit-content
+        // as the nearest this reads (FLEX.md § Booked).
+        if (v->kind == GARB_V_KEYWORD && !is_word(v, "auto"))
+            sp->flex_basis = kContent;
+        else
+            author_len(a, v, true, &sp->flex_basis);
+        break;
+    case GARB_ORDER:
+        if (v->kind == GARB_V_NUMBER)
+            s->order = round_i32(v->number);
+        break;
+    case GARB_GRID_TEMPLATE_COLUMNS: case GARB_GRID_TEMPLATE_ROWS:
+    case GARB_GRID_AUTO_COLUMNS: case GARB_GRID_AUTO_ROWS: {
+        flow_tracks_t t;
+        GridRead r = author_tracks(a, v, &t);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r != GRID_READ_OK)
+            break;
+        *(p == GARB_GRID_TEMPLATE_COLUMNS ? &s->grid_template_columns
+          : p == GARB_GRID_TEMPLATE_ROWS  ? &s->grid_template_rows
+          : p == GARB_GRID_AUTO_COLUMNS   ? &s->grid_auto_columns
+                                          : &s->grid_auto_rows) = t;
+        break;
+    }
+    case GARB_GRID_TEMPLATE_AREAS:
+        if (author_areas(a, v, s) == GRID_READ_NO_MEMORY)
+            return false;
+        break;
+    case GARB_GRID_AUTO_FLOW:
+        if (v->kind == GARB_V_KEYWORD) {
+            s->grid_auto_flow_column = is_word(v, "column") || is_word(v, "column dense");
+            s->grid_dense = is_word(v, "row dense") || is_word(v, "column dense");
+        }
+        break;
+    case GARB_GRID_ROW_START: case GARB_GRID_ROW_END:
+    case GARB_GRID_COLUMN_START: case GARB_GRID_COLUMN_END: {
+        flow_grid_line_t l;
+        GridRead r = author_line(a, v, &l);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r == GRID_READ_OK)
+            *(p == GARB_GRID_ROW_START      ? &s->grid_row_start
+              : p == GARB_GRID_ROW_END      ? &s->grid_row_end
+              : p == GARB_GRID_COLUMN_START ? &s->grid_column_start
+                                            : &s->grid_column_end) = l;
+        break;
+    }
+    case GARB_JUSTIFY_ITEMS: case GARB_JUSTIFY_SELF: {
+        // The alignment table, and `legacy` read as `normal`: all it adds
+        // is taking an ancestor's `legacy center`, which is not read (Box
+        // Alignment 3 § 6.1).
+        static const char *const words[] = {
+            "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
+            "start", "end", "self-start", "self-end", "left", "right"};
+        i = pick(v, words, F_ARRAY(words));
+        if (i < 0 && is_word(v, "legacy"))
+            i = FLOW_PLACE_NORMAL;
+        if (i >= 0)
+            *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
+        break;
+    }
+    case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW:
+        if (!author_shadows(a, s, v, p == GARB_BOX_SHADOW))
+            return false;
+        break;
+    case GARB_FILTER: case GARB_BACKDROP_FILTER:
+        if (!author_filter(a, s, v, p == GARB_BACKDROP_FILTER))
+            return false;
+        break;
+    case GARB_MIX_BLEND_MODE: {
+        // libgarb's spellings, in flow_blend_t's order.
+        static const char *const words[] = {
+            "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+            "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue",
+            "saturation", "color", "luminosity", "plus-lighter", "plus-darker"};
+        int32_t i = pick(v, words, F_ARRAY(words));
+        if (i >= 0)
+            s->mix_blend = (flow_blend_t)i;
+        break;
+    }
+    case GARB_ISOLATION:
+        if (is_word(v, "isolate") || is_word(v, "auto"))
+            s->isolate = is_word(v, "isolate");
+        break;
+    case GARB_TRANSFORM:
+        if (!author_transform(a, s, v))
+            return false;
+        break;
+    case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE:
+        if (!author_individual(a, s, p, v))
+            return false;
+        break;
+    case GARB_TRANSFORM_ORIGIN: {
+        // x, y and z (values.h).
+        flow_length_t x = v->nitems == 3 ? author_lp(a, &v->items[0], kNoLength) : kNoLength;
+        flow_length_t y = v->nitems == 3 ? author_lp(a, &v->items[1], kNoLength) : kNoLength;
+        double z;
+        if (x.kind != FLOW_LENGTH_AUTO && y.kind != FLOW_LENGTH_AUTO &&
+            author_px(a, &v->items[2], &z)) {
+            s->transform_origin[0] = x;
+            s->transform_origin[1] = y;
+            s->transform_origin_z = round_i32(z);
+        }
+        break;
+    }
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        // A corner is two items, horizontal and vertical (libgarb's G_RADIUS).
+        for (int32_t k = 0; k < 2 && k < v->nitems; k++)
+            author_len(a, &v->items[k], false, &sp->radius[p - GARB_BORDER_TOP_LEFT_RADIUS][k]);
+        break;
+    case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
+        Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
+        if (is_word(v, "normal"))
+            *gap = kAuto;
+        else
+            author_len(a, v, false, gap);
+        break;
+    }
+    case GARB_OPACITY: {
+        // Clamped to 0..1 now that it is computed (Color 4 § 4.2).
+        double o = -1;
+        Lp r;
+        if (v->kind == GARB_V_NUMBER)
+            o = v->number;
+        else if (v->kind == GARB_V_PERCENTAGE)
+            o = v->number / 100;
+        else if (v->kind == GARB_V_CALC && v->calc != NULL && calc(a, v->calc, a->font, &r))
+            o = r.number ? r.px : r.pct / 100;
+        else
+            break;
+        s->opacity = (uint16_t)(o <= 0 ? 0 : o >= 1 ? 1000 : (int32_t)(o * 1000 + 0.5));
+        break;
+    }
+    case GARB_ANIMATION_NAME: case GARB_ANIMATION_DURATION: case GARB_ANIMATION_TIMING_FUNCTION:
+    case GARB_ANIMATION_ITERATION_COUNT: case GARB_ANIMATION_DIRECTION:
+    case GARB_ANIMATION_PLAY_STATE: case GARB_ANIMATION_DELAY: case GARB_ANIMATION_FILL_MODE:
+        if (!author_animations(a, s, p, v))
+            return false;
+        break;
+    case GARB_WILL_CHANGE: s->will_change = will_change_of(v); break;
+    default:
+        break;
+    }
+    return true;
+}
+
+static bool author_sets(garb_style_t st, int32_t prop)
+{
+    for (int32_t i = 0; i < st.n; i++)
+        if ((int32_t)st.sets[i].prop == prop)
+            return true;
+    return false;
+}
+
+// Whether an author set gives `prop` a value of its own: anything but
+// `revert`, which hands it back to the user-agent origin.
+static bool author_declares(garb_style_t st, int32_t prop)
+{
+    for (int32_t i = 0; i < st.n; i++)
+        if ((int32_t)st.sets[i].prop == prop)
+            return !(st.sets[i].value.kind == GARB_V_WIDE &&
+                     (os64_streq(st.sets[i].value.keyword, "revert") ||
+                      os64_streq(st.sets[i].value.keyword, "revert-layer")));
+    return false;
+}
+
+// Whether a declaration takes its value from the parent by keyword:
+// `inherit`, or `unset` on an inherited property (FStyled.taken).
+static bool takes_parent(const garb_set_t *set)
+{
+    const char *k = set->value.keyword;
+    return set->value.kind == GARB_V_WIDE &&
+           (os64_streq(k, "inherit") || (os64_streq(k, "unset") && garb_prop_inherited(set->prop)));
+}
+
+// The element's author winners over what the chapter and the hints wrote.
+// `ua` is the Spec as the user-agent origin left it, which `revert` goes
+// back to. False on no memory only.
+// Declarations laid over `sp` as the author's are: `sets` (`n` of them),
+// each from the sheet `sheets` names — or, with `sheets` NULL, all from
+// `sheet` (-1: the element's `style` attribute's place) — but those `skip`
+// names (NULL: none). False on no memory.
+static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *parent,
+                     const garb_set_t *sets, const int32_t *sheets, int32_t sheet, int32_t n,
+                     const FProps *skip)
+{
+    Author a = {c, parent, 0, garb_cascade_env(c->env->cascade), -1};
+    Spec init, inh;
+    bool have_init = false, have_inh = false;
+    // font-size and color before the rest: every other em on the element
+    // is its font size, and every currentColor its colour.
+    for (int pass = 0; pass < 2; pass++) {
+        for (int32_t i = 0; i < n; i++) {
+            const garb_set_t *set = &sets[i];
+            if (skip != NULL && f_props_has(skip, set->prop))
+                continue;
+            a.sheet = sheets != NULL ? sheets[i] : sheet;
+            bool font = set->prop == GARB_FONT_SIZE;
+            bool first = font || set->prop == GARB_COLOR;
+            if (first != (pass == 0))
+                continue;
+            if (set->value.kind != GARB_V_WIDE) {
+                c->spent = false;
+                if (font)
+                    author_font_size(&a, sp, &set->value);
+                else if (!author_value(&a, sp, set))
+                    return false;
+                if (c->spent && c->refused != NULL)
+                    f_props_add(c->refused, set->prop);
+                continue;
+            }
+            const char *k = set->value.keyword;
+            bool inherits = takes_parent(set);
+            if (inherits)
+                f_props_add(&sp->taken, set->prop);
+            if (os64_streq(k, "revert") || os64_streq(k, "revert-layer")) {
+                // No user origin, and no layers: both go back to the
+                // user-agent origin (Cascade 5 § 7.3, § 7.4).
+                take(sp, ua, set->prop);
+            } else if (inherits) {
+                if (!have_inh)
+                    inherited_spec(c, parent, &inh);
+                have_inh = true;
+                take(sp, &inh, set->prop);
+            } else {
+                if (!have_init)
+                    initial_spec(c, &init);
+                have_init = true;
+                take(sp, &init, set->prop);
+            }
+        }
+        if (pass == 0)
+            a.font = sp->fs_kind != FS_INHERIT ? font_size(c, sp, parent) : sp->s.font_size;
+    }
+    return true;
+}
+
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st);
+static bool author_draws_box(garb_style_t st);
+
+static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+                   const flow_style_t *parent)
+{
+    if (c->env->cascade == NULL)
+        return true;
+    garb_style_t st = garb_style_for(c->env->cascade, n);
+    if (st.n == 0)
+        return true;
+    if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
+        return false;
+    medium_widths(c, sp, st);
+    sp->s.author_box = author_draws_box(st);
+    return true;
+}
+
+// Whether the author's winners give what a box is drawn with a value of
+// their own: its background's colour or image, a border's style, width or
+// colour, a corner's radius (flow_style_t.author_box). A `revert` does
+// not: it hands the property back to the user agent, whose button it is.
+static bool author_draws_box(garb_style_t st)
+{
+    if (author_declares(st, GARB_BACKGROUND_COLOR) || author_declares(st, GARB_BACKGROUND_IMAGE))
+        return true;
+    for (int i = 0; i < 4; i++)
+        if (author_declares(st, GARB_BORDER_TOP_WIDTH + i) || author_declares(st, GARB_BORDER_TOP_STYLE + i) ||
+            author_declares(st, GARB_BORDER_TOP_COLOR + i) ||
+            author_declares(st, GARB_BORDER_TOP_LEFT_RADIUS + i))
+            return true;
+    return false;
+}
+
+// A border style the author drew with no width from any origin has the
+// initial width, medium. The Spec's declared width starts at 0, not
+// medium, because the chapter always declares the width it draws — so a
+// 0 there means NO origin declared one, which is also what `revert`
+// leaves where the chapter declared none: a width reverted is not a
+// width declared.
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st)
+{
+    for (int i = 0; i < 4; i++)
+        if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
+            !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
+            sp->border_px[i] = css(c, 3);
+    // The outline the same: no origin but the author declares one, and its
+    // initial width is medium too.
+    if (sp->outline_px == 0 && author_sets(st, GARB_OUTLINE_STYLE) &&
+        !author_declares(st, GARB_OUTLINE_WIDTH))
+        sp->outline_px = css(c, 3);
+}
+
+// ── Resolving ───────────────────────────────────────────────────────────
+
+static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
+{
+    switch (l.kind) {
+    case L_PX: return (flow_length_t){FLOW_LENGTH_PX, l.v, 0};
+    case L_PCT: return (flow_length_t){FLOW_LENGTH_PERCENT, l.v, l.off};
+    case L_EM: return (flow_length_t){FLOW_LENGTH_PX, scale(font, l.v, 1000), 0};
+    case L_AUTO: return (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    case L_FIT: return (flow_length_t){FLOW_LENGTH_FIT_CONTENT, 0, 0};
+    case L_CONTENT: return (flow_length_t){FLOW_LENGTH_CONTENT, 0, 0};
+    case L_UNSET: break;
+    }
+    return unset;
+}
+
+// CSS 2.1 § 9.7's table, and Display 3's blockification: the block-level
+// display an inline-level one becomes, keeping the one bit of the old
+// (flow_style_t.specified_inline). A box that makes none keeps its display.
+// False when there was nothing to do.
+static bool blockify(flow_style_t *s)
+{
+    switch (s->display) {
+    case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_CONTENTS:
+        return false;
+    case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_INLINE_BLOCK:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    case FLOW_DISPLAY_INLINE_FLEX:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_FLEX;
+        break;
+    case FLOW_DISPLAY_INLINE_GRID:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_GRID;
+        break;
+    case FLOW_DISPLAY_TABLE: case FLOW_DISPLAY_LIST_ITEM: case FLOW_DISPLAY_BLOCK:
+    case FLOW_DISPLAY_FLEX: case FLOW_DISPLAY_GRID:
+        break;
+    default:
+        // A table's parts: § 9.7's table makes each a block.
+        s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    }
+    return true;
+}
+
+// What positioning does to the rest of a style (CSS 2.1 § 9.7), once every
+// origin has spoken. A face asking for the page as it reads in document
+// order (flow_env_t.static_only) gets every box static and none floated
+// (FLOATS.md, Ruling 1). Position wins over float: a box that leaves the
+// flow positioned (f_out_of_flow) floats nowhere. It, and a float, are
+// BLOCKIFIED — laid out as the block they compute to — keeping one bit of
+// the display they were given (flow_style_t.specified_inline). A float on
+// a box that makes none, or makes no box of its own, is no float.
+static void positioning(const Ctx *c, flow_style_t *s)
+{
+    if (c->env->static_only) {
+        s->position = FLOW_POSITION_STATIC;
+        s->float_side = FLOW_FLOAT_NONE;
+    }
+    if (f_out_of_flow(s))
+        s->float_side = FLOW_FLOAT_NONE;
+    if ((f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE) && !blockify(s))
+        s->float_side = FLOW_FLOAT_NONE;
+}
+
+// What a style's display, float, position and overflow make of each
+// other once every origin has spoken: an item floats nowhere, positioning
+// blockifies (positioning), an item or the root is blockified, and visible
+// or clip does not stand beside an axis that scrolls or hides (CSS
+// Overflow 3 § 3). From the display, float and overflow as specified —
+// and for an animated element's final style, from its computed style with
+// each keyframe's values laid over it as written (animate, unsettled),
+// since the float, the position and each axis may each be animated.
+static void settle_box(const Ctx *c, flow_style_t *s, bool item, bool root)
+{
+    if (item)
+        s->float_side = FLOW_FLOAT_NONE;
+    positioning(c, s);
+    if ((item || root) && !f_out_of_flow(s))
+        (void)blockify(s);
+    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
+    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    if (x_scrolls != y_scrolls) {
+        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
+        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
+    }
+}
+
+// `item`: the element's box is its parent's flex or grid item, and is
+// blockified (Flexbox 1 § 4, Grid 2 § 6) — as an out-of-flow one already
+// was — and floats nowhere (CSS 2.1 § 9.7's float row does not apply to an
+// item: the container places it). `root`: the element is the root, which
+// is blockified too (Display 3 § 2.7), so that what reads its display —
+// whether its transform applies (f_transformed) — reads the block it is.
+static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item, bool root)
+{
+    flow_style_t *s = &sp->s;
+    if (sp->fs_kind != FS_INHERIT)
+        s->font_size = font_size(c, sp, parent);
+    if (sp->bolder)
+        s->font_weight = bolder(parent != NULL ? parent->font_weight : 400);
+    const flow_length_t zero = {FLOW_LENGTH_PX, 0, 0};
+    const flow_length_t automatic = {FLOW_LENGTH_AUTO, 0, 0};
+    for (int i = 0; i < 4; i++) {
+        s->margin[i] = resolve(sp->margin[i], s->font_size, zero);
+        s->padding[i] = resolve(sp->padding[i], s->font_size, zero);
+        s->radius[i][0] = resolve(sp->radius[i][0], s->font_size, zero);
+        s->radius[i][1] = resolve(sp->radius[i][1], s->font_size, zero);
+        bool drawn = s->border_style[i] != FLOW_BORDER_NONE &&
+                     s->border_style[i] != FLOW_BORDER_HIDDEN;
+        s->border_width[i] = drawn ? sp->border_px[i] : 0;
+        if (!sp->border_color_set[i])
+            s->border_color[i] = s->color;
+        s->current_colours = (uint8_t)(sp->border_color_set[i]
+                                           ? s->current_colours & ~FLOW_CURRENT_BORDER(i)
+                                           : s->current_colours | FLOW_CURRENT_BORDER(i));
+    }
+    if (s->current_colours & FLOW_CURRENT_BACKGROUND) {
+        s->has_background = flow_alpha(s->color) > 0;
+        s->background = s->color;
+    }
+    if (s->current_colours & FLOW_CURRENT_FILL)
+        s->fill = s->color;
+    if (!sp->outline_color_set)
+        s->outline_color = s->color;
+    s->current_colours = (uint8_t)(sp->outline_color_set
+                                       ? s->current_colours & ~FLOW_CURRENT_OUTLINE
+                                       : s->current_colours | FLOW_CURRENT_OUTLINE);
+    // The computed width, whatever the style: a style of none draws
+    // nothing (flow_outline_rect), and `inherit` passes on the width.
+    s->outline_width = sp->outline_px;
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    for (int k = 0; k < 2; k++)
+        s->object_position[k] = resolve(sp->object_position[k], s->font_size, half);
+    if (sp->outline_offset.kind != L_UNSET) {
+        flow_length_t off = resolve(sp->outline_offset, s->font_size, zero);
+        s->outline_offset = off.kind == FLOW_LENGTH_PX ? off.value : 0;
+    }
+    s->width = resolve(sp->width, s->font_size, automatic);
+    s->height = resolve(sp->height, s->font_size, automatic);
+    for (int i = 0; i < 4; i++) {
+        s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
+        s->legacy_clip[i] = resolve(sp->clip[i], s->font_size, automatic);
+    }
+    settle_box(c, s, item, root);
+    if (sp->text_indent.kind != L_UNSET)
+        s->text_indent = resolve(sp->text_indent, s->font_size, zero);
+    if (sp->letter_spacing.kind != L_UNSET) {
+        flow_length_t ls = resolve(sp->letter_spacing, s->font_size, zero);
+        s->letter_spacing = ls.kind == FLOW_LENGTH_PX ? ls.value : 0;
+    }
+    s->min_width = resolve(sp->min_width, s->font_size, automatic);
+    s->max_width = resolve(sp->max_width, s->font_size, automatic);
+    s->min_height = resolve(sp->min_height, s->font_size, automatic);
+    s->max_height = resolve(sp->max_height, s->font_size, automatic);
+    s->flex_basis = resolve(sp->flex_basis, s->font_size, automatic);
+    s->row_gap = resolve(sp->row_gap, s->font_size, automatic);
+    s->column_gap = resolve(sp->column_gap, s->font_size, automatic);
+}
+
+// ── Animations (motion.c; PILE3.md § Animations) ───────────────────────
+
+// What an element's animations are mixed with (f_motion_style). The lists
+// an animated value makes come out of the styles' arena, within the lists'
+// budget (list_alloc): past the budget the value is dropped, as a
+// declaration's is. Each keyframe is resolved (keyframe_resolved) over the
+// element's Spec before `finish`, against its parent, with its winners
+// `st` for a side's own width and the longhands an `!important` winner
+// holds left out — once for the font size and colour, once for the rest
+// (`resolved`, two to a keyframe, `first` each animation's first) — and
+// counts what the mix's own lists spent (`mixed`), which a tick may spend
+// again. Out of memory, the style pass fails.
+typedef struct {
+    Ctx *c;
+    bool no_memory;
+    size_t mixed;
+    const FMotion *m;
+    const Spec *sp, *ua;
+    const flow_style_t *parent;
+    bool item, root;
+    garb_style_t st;
+    FProps important;
+    const FResolved **resolved;
+    int32_t *first;
+} Mixing;
+
+static void *motion_alloc(void *ctx, size_t bytes)
+{
+    Mixing *ml = ctx;
+    bool spent;
+    void *p = list_alloc(ml->c, bytes, &spent);
+    if (p == NULL && !spent)
+        ml->no_memory = true;
+    if (p != NULL)
+        ml->mixed += bytes;
+    return p;
+}
+
+// A side's own width, which the animations' inputs keep whatever its style
+// — finish makes it 0 for a side drawn as none or hidden, and the side's
+// style may itself be animated: the width an origin declared (the chapter,
+// the element's winners `st`, a keyframe's `sets`), or, declared by none,
+// the initial `medium` (Chrome's answers: a style an animation turns solid
+// draws 3px, and a width animated from nowhere starts at 3px).
+static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb_style_t sets, int side)
+{
+    int32_t w = GARB_BORDER_TOP_WIDTH + side;
+    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))
+        return sp->border_px[side];
+    return css(c, 3);
+}
+
+// An outline's own width, the same way: the width an origin declared, or,
+// declared by none, the initial `medium`.
+static flow_unit_t own_outline_width(const Ctx *c, const Spec *sp, garb_style_t st,
+                                     garb_style_t sets)
+{
+    if (sp->outline_px != 0 || author_declares(st, GARB_OUTLINE_WIDTH) ||
+        author_declares(sets, GARB_OUTLINE_WIDTH))
+        return sp->outline_px;
+    return css(c, 3);
+}
+
+// Whether two easings are one where keyframes are grouped: a keyword curve
+// is itself and not the same curve written as cubic-bezier(), and steps
+// are their count and where they jump however written (Chrome's answer,
+// as libgarb groups the blocks).
+static bool easing_same(const garb_easing_t *a, const garb_easing_t *b)
+{
+    if (a->kind != b->kind)
+        return false;
+    if (a->kind == GARB_EASE_CUBIC)
+        return a->named == b->named && a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] &&
+               a->p[3] == b->p[3];
+    if (a->kind == GARB_EASE_STEPS)
+        return a->steps == b->steps && a->jump == b->jump;
+    return true;
+}
+
+// Whether keyframe `f` eases as the element's own easing `own` does: it
+// names none (or one libflow cannot read, which is none), or names `own`.
+static bool eases_own(const garb_keyframe_t *f, const garb_easing_t *own)
+{
+    garb_easing_t e;
+    return f->easing == NULL || !garb_easing_of(f->easing, &e) || easing_same(&e, own);
+}
+
+// Keyframes at one offset that ease as the element's own easing — one
+// naming it, one naming none — are one keyframe (Animations 2 § 3.2;
+// Chrome's answer), which libgarb cannot see, not knowing the element:
+// they cascade here, each longhand's last written declaration winning
+// (garb_keyframe_t.order), at the place of the first. One pass, each
+// longhand found by its number, however many blocks a page repeats. `*kf`
+// is replaced when any are joined; false on no memory.
+static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const garb_easing_t *own)
+{
+    const garb_keyframe_t *in = *kf;
+    int32_t n = *nk, joins = 0;
+    for (int32_t j = 0, owners = 0; j < n; j++) {
+        if (j > 0 && in[j].offset != in[j - 1].offset)
+            owners = 0;
+        if (eases_own(&in[j], own) && owners++ > 0)
+            joins++;
+    }
+    if (joins == 0)
+        return true;
+    garb_keyframe_t *out = f_arena_alloc(&c->out->arena, (size_t)(n - joins) * sizeof(*out));
+    const garb_set_t **best = os64_malloc((size_t)GARB_NPROPS * sizeof(*best));
+    uint64_t *written = os64_malloc((size_t)GARB_NPROPS * sizeof(*written));
+    int32_t *seen = os64_calloc((size_t)GARB_NPROPS, sizeof(*seen));
+    bool ok = out != NULL && best != NULL && written != NULL && seen != NULL;
+    int32_t m = 0, run = 0;
+    for (int32_t lo = 0, hi; ok && lo < n; lo = hi) {
+        int32_t owners = 0, first = -1;
+        for (hi = lo; hi < n && in[hi].offset == in[lo].offset; hi++)
+            if (eases_own(&in[hi], own) && owners++ == 0)
+                first = hi;
+        garb_keyframe_t joined = first >= 0 ? in[first] : (garb_keyframe_t){0};
+        if (owners > 1) {
+            // Each longhand's last written declaration among them.
+            run++;
+            int32_t count = 0;
+            for (int32_t j = lo; j < hi; j++) {
+                if (!eases_own(&in[j], own))
+                    continue;
+                for (int32_t k = 0; k < in[j].nsets; k++) {
+                    garb_prop_t p = in[j].sets[k].prop;
+                    uint64_t at = in[j].order != NULL ? in[j].order[k] : 0;
+                    if (seen[p] != run) {
+                        seen[p] = run;
+                        count++;
+                    } else if (at <= written[p]) {
+                        continue;
+                    }
+                    best[p] = &in[j].sets[k];
+                    written[p] = at;
+                }
+            }
+            garb_set_t *sets = count > 0 ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*sets)) : NULL;
+            ok = count == 0 || sets != NULL;
+            int32_t w = 0;
+            for (int32_t p = 0; ok && p < GARB_NPROPS; p++)
+                if (seen[p] == run)
+                    sets[w++] = *best[p];
+            joined.sets = sets;
+            joined.order = NULL;
+            joined.nsets = w;
+        }
+        for (int32_t j = lo; ok && j < hi; j++)
+            if (j == first)
+                out[m++] = joined;
+            else if (!eases_own(&in[j], own))
+                out[m++] = in[j];
+    }
+    os64_free(best);
+    os64_free(written);
+    os64_free(seen);
+    if (!ok)
+        return false;
+    *kf = out;
+    *nk = m;
+    return true;
+}
+
+// A keyframe's display, float and overflow as its declarations left them
+// (`specified`), before settle_box made what it does of them: the float,
+// the position and each overflow axis may come from different animations,
+// laid over the element's computed style, and settle_box decides once from
+// what they make together — Chrome's answers: a keyframe's own
+// `overflow-x: hidden` does not turn its `overflow-y: visible` to `auto`
+// when another animation sets `overflow-x` back, while the element's own
+// rules' settling stays, so a span its rules float is still a block when an
+// animation takes the float away.
+static void unsettled(flow_style_t *s, const flow_style_t *specified)
+{
+    s->display = specified->display;
+    s->specified_inline = specified->specified_inline;
+    s->float_side = specified->float_side;
+    s->overflow_x = specified->overflow_x;
+    s->overflow_y = specified->overflow_y;
+}
+
+// Animation `a`'s keyframe `j` resolved (FResolve): its declarations laid
+// over the element's own, as the author's are, but where an `!important`
+// winner holds — the walk never mixes those (animate) — and only those its
+// pass mixes (the font size and colour without `over`, the rest with it);
+// then finished, each side keeping its own width, and its
+// display, float and overflow as it left them (unsettled); and the
+// longhands whose lists found no room. Against `over`, the font size and
+// colour every animation made are the element's, and the keyframe's own
+// are not laid: a keyframe's `em` is of the font the animations make, not
+// of its own font size (Chrome, 10/15).
+static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const flow_style_t *over)
+{
+    Mixing *x = ctx;
+    const FKeyframe *f = &x->m->anims[a].frames[j];
+    const FResolved **slot = &x->resolved[2 * (x->first[a] + j) + (over != NULL)];
+    if (*slot != NULL)
+        return *slot;
+    // Each resolution lays only what its pass mixes, and what an
+    // `!important` winner holds never: anything else would spend the lists'
+    // budget on a value nobody reads.
+    Spec k = *x->sp;
+    FProps skip = x->important;
+    if (over != NULL) {
+        k.fs_kind = FS_INHERIT;
+        k.s.font_size = over->font_size;
+        k.s.color = over->color;
+        f_props_add(&skip, GARB_FONT_SIZE);
+        f_props_add(&skip, GARB_COLOR);
+    } else {
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            skip.w[w] = ~(uint64_t)0;
+        f_props_remove(&skip, GARB_FONT_SIZE);
+        f_props_remove(&skip, GARB_COLOR);
+    }
+    FResolved *r = f_arena_alloc(&x->c->out->arena, sizeof(*r));
+    if (r == NULL) {
+        x->no_memory = true;
+        return NULL;
+    }
+    x->c->refused = &r->refused;
+    bool laid = lay_sets(x->c, &k, x->ua, x->parent, f->decls, NULL, f->sheet, f->ndecls, &skip);
+    x->c->refused = NULL;
+    if (!laid) {
+        x->no_memory = true;
+        return NULL;
+    }
+    flow_style_t specified = k.s;
+    finish(x->c, &k, x->parent, x->item, x->root);
+    for (int side = 0; side < 4; side++)
+        k.s.border_width[side] = own_width(x->c, &k, x->st, (garb_style_t){f->decls, NULL, NULL, f->ndecls}, side);
+    k.s.outline_width = own_outline_width(x->c, &k, x->st,
+                                          (garb_style_t){f->decls, NULL, NULL, f->ndecls});
+    unsettled(&k.s, &specified);
+    r->style = k.s;
+    *slot = r;
+    return r;
+}
+
+// Whether the element's animations TICK (PILE3.md § Animations in place,
+// What ticks), `s` its style at the layout's time: every property they set
+// is of the tick set, none of their lists was dropped, and its background
+// is not cut to its text; then every keyframe is resolved — once each, as
+// the mix resolves it, against the font size and colour the animations
+// leave, which they do not move — and kept for the ticks, none of their
+// lists refused. A child's `inherit` of one of them takes the ticks away
+// later (style_element). False on no memory.
+static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
+{
+    if (!f_motion_ticks(m))
+        return true;
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            if (m->anims[a].dropped.w[w] != 0)
+                return true;
+    for (int32_t i = 0; i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
+            return true;
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int32_t j = 0; j < m->anims[a].nframes; j++) {
+            const FResolved *r = keyframe_resolved(mix, a, j, s);
+            if (r == NULL)
+                return false;
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (r->refused.w[w] != 0)
+                    return true;
+        }
+    double now = (double)c->env->now_ms;
+    m->ticks = true;
+    m->resolved = mix->resolved;
+    m->first = mix->first;
+    m->edge = f_motion_next_of(m, now, NULL, F_NEXT_EDGES);
+    m->at = now;
+    return true;
+}
+
+// The least and most of a style's text shadows' offsets, x then y, joined
+// into `lo` and `hi`.
+static void shadow_extremes(const flow_style_t *s, double lo[2], double hi[2])
+{
+    for (int32_t i = 0; i < s->ntext_shadows; i++) {
+        double v[2] = {s->text_shadows[i].x, s->text_shadows[i].y};
+        for (int k = 0; k < 2; k++) {
+            lo[k] = fmin(lo[k], v[k]);
+            hi[k] = fmax(hi[k], v[k]);
+        }
+    }
+}
+
+// FMotion.text_reach, `s` the element's style at the layout's time: how far
+// any frame's text shadow can be offset, worked along the animations as the
+// mix lays them, each over what the ones before it make. The values start
+// as the one underneath and 0 (a shorter list is padded with shadows of no
+// offset). Each animation that sets `text-shadow` mixes its keyframes,
+// each resolved as the mix resolves it (keyframe_resolved, against `s` as
+// ticks does), and at an implicit end whatever the ones before it can
+// make. An easing carries a frame past either end of what it mixes by their
+// span times its overshoot (f_easing_overshoot), so that animation can make
+// anything in its values' range widened so. The next animation's values
+// underneath are anything either could make, so an overshoot over an
+// overshoot is counted. A keyframe whose shadow list found no room in the
+// lists' budget holds the value underneath instead of its own, which no
+// bound can see past: that reach is the farthest an offset can say. False
+// on no memory.
+static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
+{
+    double lo[2] = {0, 0}, hi[2] = {0, 0};
+    shadow_extremes(&m->base, lo, hi);
+    bool sets = false, unbounded = false;
+    for (int32_t a = 0; a < m->nanims && !unbounded; a++) {
+        const FAnimation *an = &m->anims[a];
+        if (!f_props_has(&an->props, GARB_TEXT_SHADOW))
+            continue;
+        sets = true;
+        double over = f_easing_overshoot(&an->timing.easing);
+        /* A script effect's own easing overshoots the progress itself,
+         * which an interval then carries past its ends as far as its
+         * width is narrow: no span bounds that. */
+        unbounded |= an->script != NULL && f_easing_overshoot(&an->script->timing.easing) > 0;
+        double alo[2] = {lo[0], lo[1]}, ahi[2] = {hi[0], hi[1]};
+        for (int32_t j = 0; j < an->nframes; j++) {
+            if (an->frames[j].has_easing)
+                over = fmax(over, f_easing_overshoot(&an->frames[j].easing));
+            const FResolved *r = keyframe_resolved(mix, a, j, s);
+            if (r == NULL)
+                return false;
+            unbounded |= f_props_has(&r->refused, GARB_TEXT_SHADOW);
+            shadow_extremes(&r->style, alo, ahi);
+        }
+        for (int k = 0; k < 2; k++) {
+            double span = ahi[k] - alo[k];
+            lo[k] = fmin(lo[k], alo[k] - span * over);
+            hi[k] = fmax(hi[k], ahi[k] + span * over);
+        }
+    }
+    if (!sets)
+        return true;
+    double reach = 0;
+    for (int k = 0; k < 2; k++)
+        reach = fmax(reach, fmax(-lo[k], hi[k]));
+    // Held to what an offset can say: no frame's shadow is drawn farther.
+    reach = unbounded ? INFINITY : ceil(reach);
+    m->text_reach = reach < INT32_MAX ? (int32_t)reach : INT32_MAX;
+    return true;
+}
+
+// The page's script effects on `n` (flow_env_t.script_effects): how many,
+// `*out` pointing at them.
+static int32_t script_effects_of(const Ctx *c, const os64_html_node_t *n,
+                                 const garb_effect_t *const **out)
+{
+    *out = NULL;
+    if (c->env->script_effects == NULL)
+        return 0;
+    int32_t k = c->env->script_effects(c->env->ctx, n, out);
+    return k > 0 && *out != NULL ? k : 0;
+}
+
+// An element's animations at the layout's time: unless its display is
+// none, for each name whose @keyframes exist, every keyframe's declarations and the longhands they
+// set but where an `!important` winner holds, and the name's record on the
+// timeline; after them each of a script's effects on it, read the same
+// way and on its own clock; then the element's style at `now`, each
+// keyframe resolved
+// where it is mixed (keyframe_resolved), and what its animations make it
+// (flow_style_t.animating). `sp` is the element's Spec before `finish`.
+// With animations, `*out` is the element's FMotion and `sp`'s style is
+// computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
+// url() is read against the sheet its @keyframes rule was written in, as a
+// winner's is against its own. False on no memory.
+static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+                    const flow_style_t *parent, bool item, bool root, FMotion **out)
+{
+    *out = NULL;
+    flow_timeline_t *tl = c->out->timeline;
+    // CSS animations run on the timeline; a script's effects on clocks of
+    // their own, so they are laid whether the face gave a timeline or not.
+    int32_t count = tl != NULL && c->env->cascade != NULL && sp->s.display != FLOW_DISPLAY_NONE
+                  ? f_animations(&sp->s) : 0;
+    const garb_effect_t *const *fx = NULL;
+    int32_t nfx = script_effects_of(c, n, &fx);
+    if (count == 0 && nfx == 0)
+        return true;
+    FProps important;
+    os64_memset(&important, 0, sizeof(important));
+    const garb_style_t none_st = {NULL, NULL, NULL, 0};
+    garb_style_t st = c->env->cascade != NULL ? garb_style_for(c->env->cascade, n) : none_st;
+    for (int32_t i = 0; st.important != NULL && i < st.n; i++)
+        if (st.important[i])
+            f_props_add(&important, st.sets[i].prop);
+    FMotion *m = f_arena_alloc(&c->out->arena, sizeof(*m));
+    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*anims))
+                                  : NULL;
+    if (anims == NULL)
+        return false;
+    m->anims = anims;
+    // The animations' inputs keep each side's own width (own_width), and
+    // the outline its own (own_outline_width), each settled once every
+    // animation is laid over (f_motion_style).
+    const garb_style_t none = {NULL, NULL, NULL, 0};
+    Spec base = *sp;
+    finish(c, &base, parent, item, root);
+    m->base = base.s;
+    for (int side = 0; side < 4; side++)
+        m->base.border_width[side] = own_width(c, &base, st, none, side);
+    m->base.outline_width = own_outline_width(c, &base, st, none);
+    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*first));
+    if (first == NULL)
+        return false;
+    int32_t nframes = 0;
+    for (int32_t i = 0; i < count; i++) {
+        flow_animation_t timing = f_animation_at(&m->base, i);
+        const garb_keyframe_t *kf = NULL;
+        int32_t nk = timing.name.text == NULL ? -1
+                   : garb_keyframes(c->env->cascade, n, timing.name.text, timing.name.len, &kf);
+        if (nk < 0)
+            continue;               // no rule of that name: it starts nothing
+        if (!join_own_easing(c, &kf, &nk, &timing.easing))
+            return false;
+        FAnimation *an = &anims[m->nanims];
+        an->timing = timing;
+        an->frames = nk > 0 ? f_arena_alloc(&c->out->arena, (size_t)nk * sizeof(FKeyframe))
+                            : NULL;
+        if (nk > 0 && an->frames == NULL)
+            return false;
+        for (int32_t j = 0; j < nk; j++) {
+            FKeyframe *f = &an->frames[j];
+            f->offset = kf[j].offset;
+            f->has_easing = kf[j].easing != NULL && garb_easing_of(kf[j].easing, &f->easing);
+            f->decls = kf[j].sets;
+            f->ndecls = kf[j].nsets;
+            f->sheet = kf[j].sheet;
+            for (int32_t s = 0; s < kf[j].nsets; s++)
+                if (!f_props_has(&important, kf[j].sets[s].prop)) {
+                    f_props_add(&f->sets, kf[j].sets[s].prop);
+                    f_props_add(&an->props, kf[j].sets[s].prop);
+                    // A keyframe's `inherit` takes from the parent as the
+                    // element's own declaration does (FStyled.taken).
+                    if (takes_parent(&kf[j].sets[s]))
+                        f_props_add(&sp->taken, kf[j].sets[s].prop);
+                }
+        }
+        an->nframes = nk;
+        first[m->nanims++] = nframes;
+        nframes += nk;
+    }
+    m->ncss = m->nanims;
+    // A script's effects after them, in the order they were made (Web
+    // Animations 1 § 5.4's composite order): each keyframe as a @keyframes
+    // block is, read against the document as the `style` attribute is.
+    for (int32_t i = 0; i < nfx; i++) {
+        const garb_effect_t *x = fx[i];
+        FAnimation *an = &anims[m->nanims];
+        os64_memset(an, 0, sizeof(*an));
+        an->script = x;
+        an->timing.duration_ms = x->timing.duration_ms;
+        an->timing.delay_ms = x->timing.delay_ms;
+        an->timing.iterations = x->timing.iterations;
+        an->timing.direction = x->timing.direction;
+        an->timing.fill = x->timing.fill;
+        an->timing.paused = x->held;
+        an->frames = x->nframes > 0 ? f_arena_alloc(&c->out->arena, (size_t)x->nframes * sizeof(FKeyframe))
+                                    : NULL;
+        if (x->nframes > 0 && an->frames == NULL)
+            return false;
+        for (int32_t j = 0; j < x->nframes; j++) {
+            FKeyframe *f = &an->frames[j];
+            f->offset = x->frames[j].offset;
+            f->has_easing = x->frames[j].has_easing;
+            f->easing = x->frames[j].easing;
+            f->decls = x->frames[j].sets;
+            f->ndecls = x->frames[j].nsets;
+            f->sheet = -1;
+            for (int32_t k = 0; k < x->frames[j].nsets; k++)
+                if (!f_props_has(&important, x->frames[j].sets[k].prop)) {
+                    f_props_add(&f->sets, x->frames[j].sets[k].prop);
+                    f_props_add(&an->props, x->frames[j].sets[k].prop);
+                    if (takes_parent(&x->frames[j].sets[k]))
+                        f_props_add(&sp->taken, x->frames[j].sets[k].prop);
+                }
+        }
+        an->nframes = x->nframes;
+        first[m->nanims++] = nframes;
+        nframes += x->nframes;
+    }
+    if (m->nanims == 0)
+        return true;
+    m->in_place = f_motion_in_place(m);
+    double now = (double)c->env->now_ms;
+    if (m->ncss > 0 && !f_timeline_element(tl, n, m, now))
+        return false;
+    flow_style_t s = m->base;
+    // A list past the budget leaves its property as it was, named in its
+    // animation's `dropped`, so nothing is due for that one's motion of it.
+    Mixing mix = {c, false, 0, m, sp, ua, parent, item, root, st, important,
+                  f_arena_alloc(&c->out->arena, (size_t)(2 * nframes + 1) * sizeof(*mix.resolved)), first};
+    if (mix.resolved == NULL)
+        return false;
+    (void)f_motion_style(m, now, &s, motion_alloc, keyframe_resolved, &mix, NULL, true);
+    if (mix.no_memory)
+        return false;
+    m->mixed = mix.mixed;
+    if (m->in_place && !text_reach(m, &s, &mix))
+        return false;
+    if (c->env->ticks && !ticks(c, m, &s, &mix))
+        return false;
+    settle_box(c, &s, item, root);
+    s.animating = f_motion_effects(m, now);
+    sp->s = s;
+    *out = m;
+    return true;
+}
+
+// ── The walk ────────────────────────────────────────────────────────────
+
+// `details > summary:first-of-type`.
+static bool first_summary(const os64_html_node_t *n)
+{
+    if (!is(n, OS64_HTML_TAG_SUMMARY))
+        return false;
+    for (const os64_html_node_t *p = n->prev; p != NULL; p = p->prev)
+        if (is(p, OS64_HTML_TAG_SUMMARY))
+            return false;
+    return true;
+}
+
+// Whether an element keeps its ancestors' decorations off its content (an
+// atomic inline; a table, in full quirks) — its own still reach it.
+static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bool quirks)
+{
+    return f_display_atomic(s->display) ||
+           (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
+}
+
+static const garb_val_t *winner(garb_style_t st, garb_prop_t prop);
+
+// `quotes` as an element or pseudo-element has it: its own winner, else the
+// value it inherits; NULL for auto, initial's value too. It is inherited
+// and the chapter's sheet declares none, so every CSS-wide keyword but
+// `initial` (`revert` and `revert-layer` too) takes the inherited value.
+static const garb_val_t *own_quotes(const garb_val_t *v, const garb_val_t *inherited)
+{
+    if (v == NULL)
+        return inherited;
+    if (v->kind == GARB_V_WIDE)
+        return os64_streq(v->keyword, "initial") ? NULL : inherited;
+    return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, "auto") ? NULL : v;
+}
+
+// What a child takes by keyword moves only when it is laid out, so a
+// parent whose animation it takes moves by layouts too.
+static void taken_from(const FStyled *up, const FProps *taken)
+{
+    if (up != NULL && up->motion != NULL && up->motion->ticks)
+        for (int32_t a = 0; a < up->motion->nanims; a++)
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (up->motion->anims[a].props.w[w] & taken->w[w])
+                    up->motion->ticks = false;
+}
+
+static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
+{
+    const FStyled *up = above(c, n);
+    const flow_style_t *parent = up != NULL ? &up->style : NULL;
+    FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
+    if (out == NULL)
+        return NULL;
+    size_t before_lists = c->out->lists_left;
+    // The previous tree pins the document: a removed node cannot be
+    // reclaimed and have its address mistaken for this node in its map.
+    const FStyled *old = c->previous ? f_style_of(c->previous, n) : NULL;
+    bool untouched = old && !garb_style_updated_since(c->env->cascade, n, c->previous->cascade_updates);
+    bool ancestry = !up || up->reuse_safe;
+    // A script's effect on it moves it whatever the cascade did, and so may
+    // one made since the old style was computed, which that style knew
+    // nothing of.
+    const garb_effect_t *const *effects;
+    bool copied = untouched && ancestry && !old->motion && !old->style.animations.nname &&
+                  script_effects_of(c, n, &effects) == 0 && !c->out->lists_refused &&
+                  old->list_cost <= c->out->lists_left && n != c->doc->html && !is(n, OS64_HTML_TAG_BODY);
+    Spec sp;
+    os64_memset(&sp, 0, sizeof(sp));
+    if (copied) {
+        sp.s = old->style;
+        if (!style_copy_value(&c->copies, &sp.s)) return NULL;
+        sp.taken = old->taken;
+        c->out->lists_left -= old->list_cost;
+        ++c->out->reused;
+    } else sp.s = inherit(c, parent);
+    bool item = up != NULL && up->lays_out_items, root = n == c->doc->html;
+    FMotion *motion = NULL;
+    bool svg_root = c->env->svg && flow_svg_root(n);
+    if (copied) {
+        // The scalar style and its lists are already computed.
+    } else if (n->ns != OS64_HTML_NS_HTML && !svg_root) {
+        // SVG descendants still need computed fonts and colors for CSSOM's
+        // relative lengths/currentColor. Their outer viewport owns the
+        // graphics; they do not become HTML boxes through author display.
+        if (c->env->svg && n->ns == OS64_HTML_NS_SVG) {
+            Spec ua = sp;
+            if (!author(c, n, &sp, &ua, parent))
+                return NULL;
+        }
+        sp.s.display = FLOW_DISPLAY_CONTENTS;
+    } else {
+        if (svg_root)
+            sp.s.display = FLOW_DISPLAY_INLINE;
+        else
+            sheet(c, n, &sp);
+        if (is(n->parent, OS64_HTML_TAG_DETAILS) && sp.s.display != FLOW_DISPLAY_NONE) {
+            // §15.5.5: the first summary is the disclosure the person
+            // presses; the rest of a closed details is not drawn.
+            if (first_summary(n)) {
+                sp.s.display = FLOW_DISPLAY_LIST_ITEM;
+                sp.s.list_style_type = has(n->parent, "open") ? FLOW_LIST_DISCLOSURE_OPEN
+                                                              : FLOW_LIST_DISCLOSURE_CLOSED;
+                sp.s.list_style_position = FLOW_LIST_INSIDE;
+            } else if (!has(n->parent, "open")) {
+                sp.s.display = FLOW_DISPLAY_NONE;
+            }
+        }
+        // What `revert` goes back to: the user-agent origin, which is the
+        // chapter's sheet, its link rule and its quirks, without the hints.
+        Spec ua = sp;
+        if (sp.s.display != FLOW_DISPLAY_NONE) {
+            if (!hints(c, n, &sp))
+                return NULL;
+            image_quirk(c, n, &sp);
+            margin_quirks(c, n, &sp);
+            link_rule(c, n, &ua, false);
+            image_quirk(c, n, &ua);
+            margin_quirks(c, n, &ua);
+        }
+        if (!author(c, n, &sp, &ua, parent))
+            return NULL;
+        // The scripting-mode noscript rule has user-agent importance;
+        // author display declarations must not reveal its raw fallback text.
+        if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
+            sp.s.display = FLOW_DISPLAY_NONE;
+        // CSS Display 3 Appendix B: `contents` on a replaced element (a
+        // picture, a frame, a canvas, a form control) computes to `none`,
+        // so a canvas's fallback is not shown that way either. A button's
+        // `contents` works as any element's there, so it is left alone.
+        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n, &sp.s) &&
+            !is(n, OS64_HTML_TAG_BUTTON))
+            sp.s.display = FLOW_DISPLAY_NONE;
+        // `display: none` ends its CSS animations (Animations 1 § 2): the
+        // timeline drops what no layout styles. A script's effects go on
+        // (Web Animations 1 applies an effect to its target's computed
+        // style whatever is rendered), so animate lays them alone.
+        if (!animate(c, n, &sp, &ua, parent, item, root, &motion))
+            return NULL;
+    }
+    if (motion == NULL && !copied)
+        finish(c, &sp, parent, item, root);
+    out->style = sp.s;
+    out->motion = motion;
+    out->list_cost = before_lists - c->out->lists_left;
+    out->steady = copied || (old && !old->motion && !motion &&
+                             f_style_equal(&old->style, &out->style));
+    out->subtree_steady = out->steady;
+    out->reuse_safe = untouched && ancestry && out->steady;
+    if (motion != NULL) {
+        FStyles *st = c->out;
+        if (st->nanimated == st->cap_animated) {
+            int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
+            const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
+            if (more == NULL)
+                return NULL;
+            st->animated = more;
+            st->cap_animated = cap;
+        }
+        st->animated[st->nanimated++] = n;
+    }
+    out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
+                          (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
+                           up->lays_out_items);
+    if (n == c->doc->html)
+        c->root_font = sp.s.font_size;
+    out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
+    if (out->link < 0 && up != NULL)
+        out->link = up->link;
+    // The selectors' counts go down the document's own tree (selector_above).
+    const FStyled *sel = selector_above(c, n);
+    out->lists = (sel != NULL ? sel->lists : 0) + is_list(n);
+    out->lists_or_dls = (sel != NULL ? sel->lists_or_dls : 0) + is_list_or_dl(n);
+    out->items = (sel != NULL ? sel->items : 0) + is_li(n);
+    out->in_nobr = (sel != NULL && sel->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
+    out->quotes = own_quotes(c->env->cascade != NULL
+                                 ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
+                             up != NULL ? up->quotes : NULL);
+    out->anchor = f_anchors(&sp.s, root, false) ? n : up != NULL ? up->anchor : NULL;
+    out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
+                      : up != NULL ? up->fixed_anchor : NULL;
+    // An opacity an animation moves is the painter's to judge as it paints
+    // (PILE3.md § Animations): none of it is gone for the layout.
+    out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
+                       (up != NULL && up->transparent);
+    out->taken = sp.taken;
+    taken_from(up, &sp.taken);
+    FStyled *holder = f_map_get(&c->out->map, f_flat_parent(c->doc, n));
+    if (holder != NULL && is(n, OS64_HTML_TAG_RP))
+        holder->has_rp = true;
+    out->decoration = sp.s.text_decoration;
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (up != NULL && !decoration_edge(n, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, up->decoration,
+                             up->decoration_colors);
+    if (!f_map_put(&c->out->map, n, out))
+        return NULL;
+    return out;
+}
+
+// Whether a child makes its parent hold an IN-FLOW block: it is block-level
+// itself, or it is inline (or makes no box) and holds one inside. A box
+// that leaves the flow (f_leaves_flow) is neither, so an absolute badge or
+// a floated picture inside an `<a>` splits nothing round it.
+static bool contributes_block(const FStyled *child)
+{
+    if (f_leaves_flow(&child->style))
+        return false;
+    switch (child->style.display) {
+    case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK: case FLOW_DISPLAY_INLINE_FLEX:
+    case FLOW_DISPLAY_INLINE_GRID:
+        return false;
+    case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_CONTENTS:
+        return child->holds_block;
+    default:
+        return true;
+    }
+}
+
+// ── ::before and ::after (GENERATED_CONTENT.md § 4) ─────────────────────
+
+// The names a synthetic node carries, compared by address: no document's
+// node can hold them.
+static const char kBeforeName[] = "::before", kAfterName[] = "::after";
+
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    if (n == NULL || n->kind != OS64_HTML_ELEMENT)
+        return GARB_PSEUDO_NONE;
+    return n->name == kBeforeName ? GARB_PSEUDO_BEFORE : n->name == kAfterName ? GARB_PSEUDO_AFTER : GARB_PSEUDO_NONE;
+}
+
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    return f_pseudo_of(n) != GARB_PSEUDO_NONE ? n->parent : NULL;
+}
+
+// The winner `prop` in `st`, or NULL.
+static const garb_val_t *winner(garb_style_t st, garb_prop_t prop)
+{
+    for (int32_t k = 0; k < st.n; k++)
+        if (st.sets[k].prop == prop)
+            return &st.sets[k].value;
+    return NULL;
+}
+
+// The innermost live counter named `name`, or NULL.
+static FCounter *innermost(Ctx *c, const garb_val_t *name)
+{
+    for (int32_t i = c->ncounters - 1; i >= 0; i--)
+        if (c->counters[i].len == name->len && os64_memcmp(c->counters[i].name, name->text, name->len) == 0)
+            return &c->counters[i];
+    return NULL;
+}
+
+// A counter made (Lists 3 § 4.4.2), its scope ending with `scope`: when
+// the innermost of its name has that scope, a previous sibling made it,
+// and the new one replaces it, since siblings replace rather than nest.
+// NULL past F_COUNTERS_MAX, or, marked, when there is no room.
+static FCounter *instantiate(Ctx *c, const garb_val_t *name, int32_t value, const os64_html_node_t *scope)
+{
+    c->out->ordered = true;
+    FCounter *in = innermost(c, name);
+    if (in != NULL && in->scope == scope) {
+        in->value = value;
+        return in;
+    }
+    if (c->ncounters == c->cap_counters) {
+        if (c->cap_counters == F_COUNTERS_MAX)
+            return NULL;
+        int32_t cap = c->cap_counters == 0 ? 16 : c->cap_counters * 2;
+        FCounter *grown = os64_realloc(c->counters, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            c->counters_failed = true;
+            return NULL;
+        }
+        c->counters = grown;
+        c->cap_counters = cap;
+    }
+    FCounter *made = &c->counters[c->ncounters++];
+    *made = (FCounter){name->text, name->len, value, scope};
+    return made;
+}
+
+static int32_t counter_clamp(double v)
+{
+    return v >= (double)INT32_MAX ? INT32_MAX : v <= (double)INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+// A counter property's list as an element or pseudo-element has it: its
+// own winner, `inherit` taking `from`'s (the parent's, or the originating
+// element's), and that one's parent's when it inherits too; NULL for none
+// or any other CSS-wide keyword.
+static const garb_val_t *counter_list(Ctx *c, garb_style_t st, garb_prop_t prop, const os64_html_node_t *from)
+{
+    const garb_val_t *v = winner(st, prop);
+    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {
+        v = winner(garb_style_for(c->env->cascade, from), prop);
+        const os64_html_node_t *up = f_flat_parent(c->doc, from);
+        from = up != NULL && up->kind == OS64_HTML_ELEMENT ? up : NULL;
+    }
+    return v != NULL && v->kind == GARB_V_STRING ? v : NULL;
+}
+
+// An element's or a pseudo-element's counter properties, in Lists 3 § 4's
+// order: reset, increment, set. A counter one makes has its scope end with
+// `scope`; an increment or a set of a name with no counter makes one, as a
+// reset would.
+static void count_on(Ctx *c, garb_style_t st, const os64_html_node_t *from, const os64_html_node_t *scope)
+{
+    static const garb_prop_t kOrder[] = {GARB_COUNTER_RESET, GARB_COUNTER_INCREMENT, GARB_COUNTER_SET};
+    for (int k = 0; k < 3; k++) {
+        const garb_val_t *v = counter_list(c, st, kOrder[k], from);
+        for (int32_t i = 0; v != NULL && i + 1 < v->nitems; i += 2) {
+            const garb_val_t *name = &v->items[i];
+            int32_t n = counter_clamp(v->items[i + 1].number);
+            if (kOrder[k] == GARB_COUNTER_RESET) {
+                (void)instantiate(c, name, n, scope);
+                continue;
+            }
+            FCounter *f = innermost(c, name);
+            if (f == NULL)
+                f = instantiate(c, name, 0, scope);
+            if (f != NULL)
+                f->value = kOrder[k] == GARB_COUNTER_SET ? n : counter_clamp((double)f->value + n);
+        }
+    }
+}
+
+// An open or a close quote mark (Content 3 § 4.2): an open takes the pair
+// at the depth and deepens it, a close shallows it and takes the pair
+// there, and a close at depth 0 is nothing and stays at 0. Past the pairs
+// the last is taken; auto's are English's. `drawn` false for the `no-`
+// words, which only move the depth.
+static void quote_mark(Ctx *c, const garb_val_t *quotes, bool open, bool drawn, const char **text, size_t *len)
+{
+    static const char *const kAuto[4] = {"\xe2\x80\x9c", "\xe2\x80\x9d", "\xe2\x80\x98", "\xe2\x80\x99"};
+    c->out->ordered = true;
+    *text = NULL;
+    *len = 0;
+    int32_t depth;
+    if (open) {
+        depth = c->quote_depth;
+        if (c->quote_depth < INT32_MAX)
+            c->quote_depth++;
+    } else {
+        if (c->quote_depth == 0)
+            return;
+        depth = --c->quote_depth;
+    }
+    if (!drawn)
+        return;
+    if (quotes == NULL) {
+        *text = kAuto[(depth < 1 ? 0 : 2) + !open];
+        *len = 3;
+        return;
+    }
+    if (quotes->kind != GARB_V_STRING || quotes->nitems < 2)
+        return;                 // none
+    int32_t pairs = quotes->nitems / 2;
+    const garb_val_t *mark = &quotes->items[2 * (depth < pairs ? depth : pairs - 1) + !open];
+    *text = mark->text;
+    *len = mark->len;
+}
+
+// One item's text, as content_text resolves it.
+typedef struct {
+    const char *text;
+    size_t len;
+    char *owned;                            // counters()'s, freed once copied
+    char spelled[F_COUNTER_SPELL_MAX];      // counter()'s
+} Piece;
+
+// counter() or counters() (Lists 3 § 4.7) into `p`: the innermost counter
+// of the name, or every one from the outermost in, joined, in the style
+// given or decimal. A name with no counter is given one, at 0, scoped to
+// `el`, the pseudo-element's originating element. `counters()`' spelling is
+// made only when it fits in `room`, what is left of the lists' budget, and
+// *spent says it did not. False when memory ran out.
+static bool counter_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *it, size_t room, Piece *p,
+                         bool *spent)
+{
+    bool all = os64_streq(it->keyword, "counters");
+    const garb_val_t *name = &it->items[0];
+    flow_list_style_type_t type = FLOW_LIST_DECIMAL;
+    if (it->nitems > (all ? 2 : 1) && !list_type_named(&it->items[it->nitems - 1], &type))
+        type = FLOW_LIST_DECIMAL;
+    if (innermost(c, name) == NULL)
+        (void)instantiate(c, name, 0, el);
+    int32_t n = 0;
+    for (int32_t i = 0; all && i < c->ncounters; i++)
+        n += c->counters[i].len == name->len && os64_memcmp(c->counters[i].name, name->text, name->len) == 0;
+    if (n <= 1) {
+        const FCounter *f = innermost(c, name);
+        p->len = f_counter_spell(type, f != NULL ? f->value : 0, p->spelled);
+        p->text = p->spelled;
+        return true;
+    }
+    const garb_val_t *joiner = &it->items[1];
+    size_t need = (size_t)n * (F_COUNTER_SPELL_MAX + joiner->len);
+    if (need > room) {
+        *spent = true;
+        return true;
+    }
+    p->owned = os64_malloc(need);
+    if (p->owned == NULL)
+        return false;
+    size_t at = 0;
+    for (int32_t i = 0, k = 0; i < c->ncounters; i++) {
+        const FCounter *f = &c->counters[i];
+        if (f->len != name->len || os64_memcmp(f->name, name->text, name->len) != 0)
+            continue;
+        if (k++ > 0) {
+            os64_memcpy(p->owned + at, joiner->text, joiner->len);
+            at += joiner->len;
+        }
+        at += f_counter_spell(type, f->value, p->owned + at);
+    }
+    p->text = p->owned;
+    p->len = at;
+    return true;
+}
+
+// The text `content` makes for a pseudo-element of `el`, into the arena:
+// its strings, `attr()`s, quote marks (in `quotes`) and counters,
+// concatenated. Each item is resolved once and in order, since quote words
+// and counters move the pass's tree-order state. An item drawn as nothing
+// adds nothing. NULL when the lists' budget is spent, and out of memory,
+// *failed.
+static char *content_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *v, const garb_val_t *quotes,
+                          size_t *len, bool *failed)
+{
+    *len = 0;
+    Piece *pieces = os64_calloc((size_t)(v->nitems > 0 ? v->nitems : 1), sizeof(*pieces));
+    if (pieces == NULL) {
+        *failed = true;
+        return NULL;
+    }
+    size_t total = 0;
+    bool spent = false;
+    for (int32_t k = 0; k < v->nitems && !*failed && !spent; k++) {
+        const garb_val_t *it = &v->items[k];
+        Piece *p = &pieces[k];
+        if (it->kind == GARB_V_STRING) {
+            p->text = it->text;
+            p->len = it->len;
+        } else if (it->kind == GARB_V_FUNCTION && os64_streq(it->keyword, "attr") && it->nitems == 1) {
+            char name[64];
+            size_t nl = it->items[0].len < sizeof(name) - 1 ? it->items[0].len : sizeof(name) - 1;
+            for (size_t i = 0; i < nl; i++) {
+                char ch = it->items[0].text[i];
+                name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;
+            }
+            name[nl] = '\0';
+            const os64_html_attr_t *a = os64_html_attr(el, name);
+            if (a != NULL && a->value != NULL) {
+                p->text = a->value;
+                p->len = os64_strlen(a->value);
+            }
+        } else if (it->kind == GARB_V_KEYWORD) {
+            bool open = os64_streq(it->keyword, "open-quote") || os64_streq(it->keyword, "no-open-quote");
+            bool drawn = os64_streq(it->keyword, "open-quote") || os64_streq(it->keyword, "close-quote");
+            quote_mark(c, quotes, open, drawn, &p->text, &p->len);
+        } else if (it->kind == GARB_V_FUNCTION && it->nitems >= 1 &&
+                   (os64_streq(it->keyword, "counter") || os64_streq(it->keyword, "counters"))) {
+            size_t left = c->out->lists_left;
+            *failed = !counter_text(c, el, it, left > total ? left - total : 0, p, &spent);
+        }
+        total += p->len;
+    }
+    *failed = *failed || c->counters_failed;
+    char *out = NULL;
+    if (!*failed && !spent) {
+        // Charged to the lists' budget: one sheet's string copied into
+        // every element its rule reaches is what a page can multiply.
+        // Past it the content is lost, and the pseudo-element with it.
+        out = list_alloc(c, total + 1, &spent);
+        *failed = out == NULL && !spent;
+    }
+    size_t at = 0;
+    for (int32_t k = 0; k < v->nitems; k++) {
+        if (out != NULL && pieces[k].len > 0)
+            os64_memcpy(out + at, pieces[k].text, pieces[k].len);
+        at += pieces[k].len;
+        os64_free(pieces[k].owned);
+    }
+    os64_free(pieces);
+    if (out == NULL)
+        return NULL;
+    out[total] = '\0';
+    *len = total;
+    return out;
+}
+
+// `el`'s ::before or ::after (`which`), when the author's rules give it
+// content (GARB_CONTENT) it draws as something: a synthetic element under
+// `el`, holding the content's text, styled as `el`'s child is, from the
+// pseudo-element's own winners (garb_style_for_pseudo). False only when
+// memory ran out. Called at its place in the document: the ::before before
+// `el`'s children, the ::after once they are done.
+static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_pseudo_t which)
+{
+    // The chapter's sheet gives a `q` its marks (HTML § 15.3.6): `q::before
+    // { content: open-quote }`, `q::after { content: close-quote }`, which
+    // an author's `content` replaces.
+    static const garb_val_t kOpen = {.kind = GARB_V_KEYWORD, .keyword = "open-quote"};
+    static const garb_val_t kClose = {.kind = GARB_V_KEYWORD, .keyword = "close-quote"};
+    static const garb_val_t kQuoted[2] = {{.kind = GARB_V_STRING, .items = &kOpen, .nitems = 1},
+                                          {.kind = GARB_V_STRING, .items = &kClose, .nitems = 1}};
+    garb_style_t st = {0};
+    if (c->env->cascade != NULL)
+        st = garb_style_for_pseudo(c->env->cascade, el, which);
+    bool q = is(el, OS64_HTML_TAG_Q);
+    if (st.n == 0 && !q)
+        return true;
+    const garb_val_t *content = winner(st, GARB_CONTENT);
+    int bit = which == GARB_PSEUDO_BEFORE ? 0 : 1;
+    if (content != NULL)
+        of->pseudo_declared |= (uint8_t)(1u << bit);
+    else if (q)
+        content = &kQuoted[bit];
+    if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)
+        return true;
+    Spec sp;
+    os64_memset(&sp, 0, sizeof(sp));
+    sp.s = inherit(c, &of->style);
+    Spec ua = sp;
+    if (!lay_sets(c, &sp, &ua, &of->style, st.sets, st.sheet, -1, st.n, NULL))
+        return false;
+    medium_widths(c, &sp, st);
+    if (sp.s.display == FLOW_DISPLAY_NONE)
+        return true;
+    // It exists: its own counters, then its content, at its place in the
+    // document (GENERATED_CONTENT.md § 8.2).
+    count_on(c, st, el, el);
+    const garb_val_t *quotes = own_quotes(winner(st, GARB_QUOTES), of->quotes);
+    bool failed = false;
+    size_t len = 0;
+    char *text = content_text(c, el, content, quotes, &len, &failed);
+    if (text == NULL)
+        return !failed;
+    os64_html_node_t *node = f_arena_alloc(&c->out->arena, sizeof(*node));
+    os64_html_node_t *words = f_arena_alloc(&c->out->arena, sizeof(*words));
+    FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
+    if (node == NULL || words == NULL || out == NULL)
+        return false;
+    node->kind = OS64_HTML_ELEMENT;
+    node->ns = OS64_HTML_NS_HTML;
+    node->tag = OS64_HTML_TAG_UNKNOWN;
+    node->document_id = el->document_id;
+    node->name = which == GARB_PSEUDO_BEFORE ? kBeforeName : kAfterName;
+    node->parent = (os64_html_node_t *)el;
+    words->kind = OS64_HTML_TEXT;
+    words->document_id = el->document_id;
+    words->text = text;
+    words->text_len = len;
+    words->parent = node;
+    node->first_child = node->last_child = len > 0 ? words : NULL;
+    finish(c, &sp, &of->style, of->lays_out_items, false);
+    out->style = sp.s;
+    out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display);
+    out->link = of->link;
+    out->lists = of->lists;
+    out->lists_or_dls = of->lists_or_dls;
+    out->items = of->items;
+    out->in_nobr = of->in_nobr;
+    out->quotes = quotes;
+    out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
+    out->fixed_anchor = f_contains_fixed(&sp.s) ? node : of->fixed_anchor;
+    out->transparent = sp.s.opacity == 0 || of->transparent;
+    out->taken = sp.taken;
+    taken_from(of, &sp.taken);
+    out->decoration = sp.s.text_decoration;
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (!decoration_edge(node, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, of->decoration,
+                             of->decoration_colors);
+    if (!f_map_put(&c->out->map, node, out))
+        return false;
+    of->pseudo[bit] = node;
+    if (contributes_block(out))
+        of->holds_block = true;
+    // The ::after comes last among the children: the walk of box
+    // generation reaches it from the last child (boxes.c, kids), so the
+    // ::before's sibling is the element's first child, or the ::after.
+    return true;
+}
+
+// Whether `el`, styled `s`, has pseudo-elements: only when pass 2 draws
+// what is inside it (f_draws_inside), and not outside HTML.
+static bool generates(const Ctx *c, const os64_html_node_t *el, const flow_style_t *s)
+{
+    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, s);
+}
+
+// Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
+// counters, then its ::before (a `q`'s open mark too). An element whose
+// display is none counts for nothing and generates nothing, and nor does
+// an element that makes no box (f_boxless), or anything inside an element
+// pass 2 draws nothing inside (f_draws_inside: a replaced element's
+// fallback). False when memory ran out.
+static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
+{
+    if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
+        return true;
+    if (f_boxless(el)) {
+        c->inert = el;
+        return true;
+    }
+    if (c->env->cascade != NULL) {
+        // Counters scope by the flat tree (CSS Lists 3 § 4.1).
+        const os64_html_node_t *parent = f_flat_parent(c->doc, el);
+        const os64_html_node_t *up = parent != NULL && parent->kind == OS64_HTML_ELEMENT ? parent : NULL;
+        count_on(c, garb_style_for(c->env->cascade, el), up, parent);
+    }
+    if (!f_draws_inside(c->env, el, &of->style))
+        c->inert = el;
+    else if (generates(c, el, &of->style) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+        return false;
+    return !c->counters_failed;
+}
+
+// Steps 4 and 5, once everything under `el` is styled: its ::after (a `q`'s
+// close mark too), then the end of the counters scoped to it.
+static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
+{
+    if (c->inert != NULL && c->inert != el)
+        return true;
+    c->inert = NULL;
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, &of->style) &&
+        !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
+        return false;
+    while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)
+        c->ncounters--;
+    return !c->counters_failed;
+}
+
+// `n`, or the first element among its flat siblings after it.
+static const os64_html_node_t *next_element(const os64_html_document_t *doc, const os64_html_node_t *n)
+{
+    while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+        n = os64_html_flat_next_sibling(doc, n);
+    return n;
+}
+
+FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
+                       const flow_env_t *env)
+{
+    return f_style_build_reusing(doc, model, env, NULL);
+}
+
+FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
+                              const flow_env_t *env, const FStyles *previous)
+{
+    if (doc == NULL || env == NULL)
+        return NULL;
+    if (previous) {
+        const flow_env_t *had = &previous->inputs;
+        if (previous->doc != doc || previous->lists_refused || doc->quirks == OS64_HTML_QUIRKS ||
+            !env->cascade || previous->cascade_generation != garb_cascade_generation(env->cascade) ||
+            garb_cascade_version(env->cascade) != os64_html_version(doc) ||
+            had->viewport_font_px != env->viewport_font_px || had->default_generic != env->default_generic ||
+            had->ink != env->ink || had->link_ink != env->link_ink || had->paper != env->paper ||
+            had->zoom != env->zoom || had->static_only != env->static_only || had->svg != env->svg ||
+            had->scripting != env->scripting) previous = NULL;
+    }
+    FStyles *out = os64_calloc(1, sizeof(*out));
+    if (out == NULL)
+        return NULL;
+    out->doc = doc;
+    out->env = env;
+    out->inputs = *env;
+    out->cascade_generation = garb_cascade_generation(env->cascade);
+    out->cascade_updates = garb_cascade_updates(env->cascade);
+    // One record per element and the family names a `face` wrote are
+    // bounded by the document libhtml admitted, so the arena has no cap —
+    // pass 1 is all or nothing, and a cap here would blank a large page
+    // that the boxes' budget would merely cut short. What a page CAN
+    // multiply — a sheet's list copied into every element it reaches — has
+    // a budget of its own (list_alloc), whose end costs a property, never
+    // the page.
+    out->arena.cap = SIZE_MAX;
+    out->lists_left = F_STYLE_LISTS_BUDGET;
+    // A layout is a style change event for the page's animations: it
+    // builds their timeline anew from the one the page shows (motion.c).
+    if (env->timeline != NULL && (out->timeline = f_timeline_begin(env->timeline)) == NULL) {
+        f_style_free(out);
+        return NULL;
+    }
+    Ctx c = {.doc = doc, .model = model, .env = env, .out = out, .previous = previous,
+             .copies = {.arena = &out->arena},
+             .quirks = doc->quirks == OS64_HTML_QUIRKS,
+             .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    c.root_font = css(&c, env->viewport_font_px);
+
+    // Pre-order down the flat tree (internal.h), and each element FINISHED
+    // on the way back up, when everything under it has been styled — which
+    // is when its holds_block can be told to its parent.
+    const os64_html_node_t *top = doc->document;
+    const os64_html_node_t *cur = top != NULL ? next_element(doc, os64_html_flat_first_child(doc, top)) : doc->html;
+    while (cur != NULL) {
+        FStyled *styled = style_element(&c, cur);
+        if (styled != NULL && !open_element(&c, cur, styled))
+            styled = NULL;
+        if (styled == NULL) {
+            bool retry = c.copies.budget && previous;
+            f_map_free(&c.copies.slices);
+            os64_free(c.counters);
+            f_style_free(out);
+            return retry ? f_style_build(doc, model, env) : NULL;
+        }
+        const os64_html_node_t *child = styled->style.display == FLOW_DISPLAY_NONE
+                                            ? NULL : next_element(doc, os64_html_flat_first_child(doc, cur));
+        if (child != NULL) {
+            cur = child;
+            continue;
+        }
+        while (cur != NULL) {
+            FStyled *done = f_map_get(&out->map, cur);
+            if (!close_element(&c, cur, done)) {
+                f_map_free(&c.copies.slices);
+                os64_free(c.counters);
+                f_style_free(out);
+                return NULL;
+            }
+            const FStyled *old = previous ? f_style_of(previous, cur) : NULL;
+            // Generated text depends on tree-order counters and quote depth,
+            // and its synthetic nodes belong to this style pass. Rebuild the
+            // containing layout subtree when either pass has generated nodes.
+            if (done && (done->pseudo[0] || done->pseudo[1] ||
+                         (old && (old->pseudo[0] || old->pseudo[1]))))
+                done->subtree_steady = false;
+            FStyled *parent = f_map_get(&out->map, f_flat_parent(doc, cur));
+            if (parent != NULL && done != NULL) {
+                if (contributes_block(done)) parent->holds_block = true;
+                parent->subtree_steady &= done->subtree_steady;
+            }
+            // A document with no document node was walked from its html
+            // element, and that element's siblings are not the page's.
+            if (top == NULL && cur == doc->html) {
+                cur = NULL;
+                break;
+            }
+            const os64_html_node_t *sibling = next_element(doc, os64_html_flat_next_sibling(doc, cur));
+            if (sibling != NULL) {
+                cur = sibling;
+                break;
+            }
+            cur = f_flat_parent(doc, cur);
+            if (cur == top)
+                cur = NULL;
+        }
+    }
+    f_map_free(&c.copies.slices);
+    os64_free(c.counters);
+    return out;
+}
+
+void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
+                       flow_display_t display, flow_style_t *out)
+{
+    Ctx c = {.doc = styles->doc, .env = styles->env};
+    *out = inherit(&c, parent);
+    out->display = display;
+    for (int i = 0; i < 4; i++)
+        out->border_color[i] = out->color;
+}
+
+const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)
+{
+    return styles != NULL ? f_map_get(&styles->map, node) : NULL;
+}
+
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element)
+{
+    // The nearest ancestor the build styled, and the elements between.
+    int32_t depth = 0;
+    const os64_html_node_t *styled = element;
+    while (styled != NULL && styled->kind == OS64_HTML_ELEMENT && f_style_of(styles, styled) == NULL) {
+        styled = f_flat_parent(styles->doc, styled);
+        depth++;
+    }
+    if (styled == NULL || styled->kind != OS64_HTML_ELEMENT || depth == 0)
+        return depth == 0 ? f_style_of(styles, element) : NULL;
+    // The ancestor's record is copied in, so styling its children reads it
+    // and writes nothing of the tree's (a child `rp` marks its parent).
+    FStyled *seed = f_arena_alloc(&extra->arena, sizeof(*seed));
+    if (seed == NULL)
+        return NULL;
+    *seed = *f_style_of(styles, styled);
+    if (!f_map_put(&extra->map, styled, seed))
+        return NULL;
+    const FStyled *root = f_style_of(styles, extra->doc->html);
+    Ctx c = {.doc = extra->doc, .model = model, .env = extra->env, .out = extra,
+             .quirks = extra->doc->quirks == OS64_HTML_QUIRKS,
+             .zoom = extra->env->zoom != 0 ? extra->env->zoom / 1000.0 : 1.0};
+    c.root_font = root != NULL ? root->style.font_size : css(&c, extra->env->viewport_font_px);
+    // Outermost first, each from the parent styled before it.
+    for (int32_t d = depth; d > 0; d--) {
+        const os64_html_node_t *n = element;
+        for (int32_t up = 1; up < d; up++)
+            n = f_flat_parent(extra->doc, n);
+        if (style_element(&c, n) == NULL)
+            return NULL;
+    }
+    return f_map_get(&extra->map, element);
+}
+
+void f_style_free(FStyles *styles)
+{
+    if (styles == NULL)
+        return;
+    f_map_free(&styles->map);
+    f_arena_free(&styles->arena);
+    os64_free(styles->animated);
+    flow_timeline_free(styles->timeline);
+    os64_free(styles);
+}

@@ -20,6 +20,9 @@
 #include "thread_join.h"
 #include "BasicRenderer.h"   // renderer_flush_if_dirty — the blit-throttle rider
 #include "driver/system/usb/xhci.h"
+#include "doorbell.h"   // the net drainer's bell — rung once per tick
+#include "random.h"     // the entropy pool's tick source — stirred once per tick
+#include "knet.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
@@ -52,6 +55,21 @@ _Static_assert(SIGPIPE == OS64_SIGPIPE, "SIGPIPE disagrees with the ABI (os64/si
 _Static_assert(SIGTERM == OS64_SIGTERM, "SIGTERM disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGCONT == OS64_SIGCONT, "SIGCONT disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/signal.h)");
+
+// And the exit codes, because a program that CATCHES a signal and exits
+// itself has to write the same number this kernel would have written for it.
+// The ABI publishes the 128+signo rule; these pin the codes to it.
+//
+// SIGSEGV is in the list even though nothing here raises it — the page-fault
+// handler kills the task at the fault — because an assertion block is only
+// worth what it COVERS, and a status spelled as a literal somewhere else is
+// exactly the one that would survive a change to the rule.
+_Static_assert(SIGNALS_EXIT_SIGHUP  == OS64_EXIT_FOR_SIGNAL(OS64_SIGHUP),  "SIGHUP exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGINT  == OS64_EXIT_FOR_SIGNAL(OS64_SIGINT),  "SIGINT exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGKILL == OS64_EXIT_FOR_SIGNAL(OS64_SIGKILL), "SIGKILL exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGSEGV == OS64_EXIT_FOR_SIGNAL(OS64_SIGSEGV), "SIGSEGV exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGPIPE == OS64_EXIT_FOR_SIGNAL(OS64_SIGPIPE), "SIGPIPE exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGTERM == OS64_EXIT_FOR_SIGNAL(OS64_SIGTERM), "SIGTERM exit code disagrees with the ABI");
 _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGWINCH == OS64_SIGWINCH, "SIGWINCH disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
@@ -887,58 +905,59 @@ void processSignals()
 	// (guard branch + one cached-RAM read); does nothing before USB init.
 	xhci_poll();
 
-	// Same liveness ride for the NIC: drain TX completions and deliver RX
-	// arrivals once per pass. Same economics as xhci_poll — a guard branch
-	// and two ring-index compares when idle; interrupt wiring is a future
-	// slice (NETWORK.md), and this path is what makes packets move today.
-	virtio_net_poll();
-	// Every registered NIC needs its own drainer — this is a per-DRIVER
-	// call, not a per-device one, and each is a guard branch away from free
-	// when its hardware is absent. (A generic "poll every net_device" verb
-	// through the seam is the obvious tidy-up; it waits for a third driver
-	// to make the abstraction pay, the same way the seam itself waited for
-	// a second one.)
+	// THE NETWORK LEFT THIS PASS (2026-09-05, DOORBELL.md). The NIC drains,
+	// the protocol stack they feed and the TCP/DHCP timers all used to run
+	// right here, under this lock, once per tick — which made "once per
+	// tick" the throughput ceiling of every connection (tcp.h's window-per-
+	// pass arithmetic) and made this lock's hold time scale with traffic.
+	// They run in knet now, a kernel thread parked on a doorbell that a
+	// NIC's interrupt handler rings on arrival. The tick still rings it here:
+	// that is what keeps a NIC with no interrupt at exactly the cadence it
+	// always had, and what runs the timers when the wire is quiet. One store;
+	// the pass answers it at its service point (scheduler.c).
 	//
-	// Since 2026-08-06 the e1000 drain is DOORBELL-GATED when INTx is live:
-	// the ISR (vector 0x45) raises kE1000RxWork and this pass consumes it.
-	// Clear BEFORE draining — a packet that lands mid-drain re-raises the
-	// flag and schedules the next pass, instead of vanishing into a
-	// cleared-after window (the classic lost-wakeup shape, same reason the
-	// wake sweeps re-evaluate conditions instead of remembering edges).
-	// No confirmed wire = unconditional poll, yesterday's behavior exactly.
-	if (!kE1000UsesIntx || kE1000RxWork)
+	// ONCE PER TICK, NOT ONCE PER PASS. This function runs in EVERY BSP pass,
+	// and a pass is also what knet's own park provokes — so ringing here
+	// unconditionally rang the bell on the very pass that parked the thread,
+	// which woke it, which parked it, which rang it: 5,800 wakes a second on
+	// an idle link, measured in /sys/net/knet the first time it existed.
+	static uint64_t s_net_rung_at_tick;
+	if (kKnetTask != NULL && kTicksSinceStart != s_net_rung_at_tick)
 	{
-		// If the ISR divorced the wire at runtime (shared line gone hostile
-		// — see storm breaker #2 in e1000.c), announce it exactly once. The
-		// fallback itself already happened in interrupt context; this is
-		// the no-silent-fallbacks receipt.
-		if (kE1000IntxDivorced)
-		{
-			kE1000IntxDivorced = false;
-			printf("e1000: INTx wire went hostile (stranger storm) — back to polling\n");
-		}
-		kE1000RxWork = false;
-		e1000_poll();
+		s_net_rung_at_tick = kTicksSinceStart;
+		doorbell_ring_in_pass(&kNetDoorbell);
 	}
 
-	// And the RTL8125's drainer. Wired in from its FIRST slice, before it
-	// has any rings to drain, precisely so that adding them needs no
-	// scheduler surgery later — same economics as the two calls above: one
-	// guard branch away from free when the hardware is absent, which on
-	// every machine here except the P5 is always.
-	r8125_poll();
+	// The tick is the entropy pool's one guaranteed timing source: a NIC
+	// interrupt needs traffic, this fires a hundred times a second on every
+	// boot (RANDOM.md). Once per tick, same guard as the bell, a few
+	// instructions and no lock.
+	static uint64_t s_random_stirred_at_tick;
+	if (kTicksSinceStart != s_random_stirred_at_tick)
+	{
+		s_random_stirred_at_tick = kTicksSinceStart;
+		random_add_timing(RANDOM_SOURCE_TICK);
+	}
 
-	// DHCP's retry timer rides the same pass (one state compare when the
-	// lease is settled). Delivery of DHCP replies happens inside the poll
-	// above (UDP demux → dhcp_rx); this call only handles the wire going
-	// QUIET — resend, and eventually give up honestly.
-	dhcp_poll();
+	// The doorbell fixture (test_doorbell_wakes_sleeper) arms this so the
+	// next pass — this one — rings its bell from inside a pass, which is the
+	// half of the primitive an interrupt cannot rehearse in QEMU.
+	if (kDoorbellTestArm)
+	{
+		kDoorbellTestArm = false;
+		doorbell_ring_in_pass(&kDoorbellTestBell);
+	}
 
-	// TCP's clock: retransmission deadlines, connect timeouts, and the
-	// TIME_WAIT reaper. THIS is what makes the stream reliable — a stack
-	// with no timer is a stack that hangs the first time a packet is
-	// lost. Walks only live connections (usually none).
-	tcp_poll();
+	// The owed-wake fixture (test_wake_owed) names a thread and a tick: the
+	// first pass at or after that tick aims the wake at it from inside a
+	// pass, under the queue lock this pass holds, as a deliverer on another
+	// core would.
+	thread_t *owedTarget = kWakeOwedTestTarget;
+	if (owedTarget != NULL && kTicksSinceStart >= kWakeOwedTestTick)
+	{
+		kWakeOwedTestTarget = NULL;
+		scheduler_wake_or_owe_locked(owedTarget);
+	}
 
 	// Blit-throttle flush: if a console scroll burst left the glass behind
 	// its shadow (BasicRenderer's ~30Hz throttle), deliver the finished
@@ -977,20 +996,21 @@ void processSignals()
 	pipe_wake_if_ready();
 
 	// And for dialed network conversations: wake any reader whose datagram
-	// ring is non-empty. Placed AFTER virtio_net_poll above on purpose —
-	// a packet delivered this pass wakes its reader this same pass, so
-	// blocking-read latency is one scheduler pass, not two. (UDP conns
-	// have NO fast-path wake at all — their enqueue runs in RX context,
-	// which may not hold this lock — so this sweep is their only waker;
-	// see the context map in udp_conn.c.)
+	// ring is non-empty. udp_conn_rx wakes a parked reader on arrival
+	// (ARRIVAL_WAKE.md); this sweep is the backstop for a reader that had
+	// registered but not yet parked when its datagram landed — the same
+	// race, and the same cure, as pipes.
 	udp_conn_wake_if_ready();
 
 	// Same for TCP streams: a reader wakes for bytes, EOF, or death; a
-	// writer wakes when its segment is acknowledged. Same level-triggered
-	// re-evaluation, same reason.
+	// writer wakes when its segment is acknowledged. tcp_input wakes both
+	// on arrival now (DOORBELL.md); this sweep is the backstop for a waiter
+	// that had registered but not yet parked when its bytes landed — the
+	// same race, and the same cure, as pipes.
 	tcp_wake_if_ready();
 
-	// And echo conversations: a reader wakes when its reply lands.
+	// And echo conversations: icmp_conn_deliver wakes on arrival too; same
+	// backstop, same reason.
 	icmp_conn_wake_if_ready();
 
 	// And threads: wake anyone blocked reading a thread handle whose
@@ -1017,9 +1037,9 @@ void processSignals()
 			if (mp_rflagsTripValue[core] != 0)
 			{
 				printd(DEBUG_EXCEPTIONS,
-					"RFLAGS TRIPWIRE: core %u had mp_isrSavedRFlags = 0x%016lx (sanitized to 0x202; see SCHEDULER_STRAY_WRITE.md)\n",
+					"RFLAGS TRIPWIRE: CPU %u had mp_isrSavedRFlags = 0x%016lx (sanitized to 0x202; see SCHEDULER_STRAY_WRITE.md)\n",
 					core, mp_rflagsTripValue[core]);
-				printf("RFLAGS TRIPWIRE: core %u caught the stray write! value 0x%016lx\n",
+				printf("RFLAGS TRIPWIRE: CPU %u caught the stray write! value 0x%016lx\n",
 					core, mp_rflagsTripValue[core]);
 				mp_rflagsTripValue[core] = 0;   // impound reported; re-arm the slot
 			}

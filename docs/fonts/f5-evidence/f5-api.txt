@@ -1,0 +1,5 @@
+F5 PASS: command 0 serial 3 ui=16 terminal=24 document=28 status=0 font=0
+F5 PASS: command 3 serial 3 ui=16 terminal=24 document=28 status=0 font=2
+F5 PASS: command 7 serial 3 ui=16 terminal=24 document=28 status=0 font=0
+F5 PASS: command 8 serial 5 ui=16 terminal=24 document=28 status=0 font=0
+F5 PASS: command 4 serial 5 ui=16 terminal=24 document=28 status=0 font=0

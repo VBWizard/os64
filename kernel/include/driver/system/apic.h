@@ -50,7 +50,6 @@ uint8_t acpiGetAPICVersion();
 uint64_t apicGetAPICBase(void);
 uint32_t apicReadRegister(uint32_t reg);
 void apicWriteRegister(uint64_t reg, uint32_t value);
-void apicSetAPICBase(uintptr_t apic);
 uint32_t apicGetHZ();
 void apicDisable();
 void apicEnable();
@@ -60,14 +59,16 @@ void remap_irq0_to_apic(uint32_t vector);
 
 // Move an ISA IRQ from the legacy PIC to the IOAPIC (see apic.c for why any
 // IRQ we depend on must do this once the IMCR is switched to APIC mode).
-// dest_apic_id picks which core's LAPIC receives it; pass the handler's
-// k*UsesLapic flag so its EOI path follows the routing.
-void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id, volatile bool *uses_lapic_flag);
+// dest_cpu is the CPU NUMBER that receives it (the door translates it to an
+// APIC ID); pass the handler's k*UsesLapic flag so its EOI path follows the
+// routing.
+void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint32_t dest_cpu, volatile bool *uses_lapic_flag);
 
 // Route a GSI directly — the PCI INTx door (level-triggered/active-low is
 // PCI's dialect; ISA's is edge/high). No override lookup: the caller names
-// the IOAPIC input itself. Returns false when there is no IOAPIC.
-bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
+// the IOAPIC input itself; dest_cpu is a CPU number. Returns false when there
+// is no IOAPIC.
+bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint32_t dest_cpu,
                       bool level_triggered, bool active_low);
 
 // Mask a GSI's redirection entry — the probe loop's eraser (see apic.c).

@@ -1,0 +1,874 @@
+# WPT's xhr in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh xhr --update
+# rewrites [passing].
+[required]
+XMLHttpRequest-withCredentials.any.html	can also be set in OPEN state
+XMLHttpRequest-withCredentials.any.html	default value is false, set value is true
+XMLHttpRequest-withCredentials.any.html	setting on synchronous XHR
+XMLHttpRequest-withCredentials.any.html	setting withCredentials when not in UNSENT, OPENED state (asynchronous)
+data-uri.htm	XHR method DELETE with MIME type text/plain
+data-uri.htm	XHR method GET with MIME type image/png
+data-uri.htm	XHR method GET with MIME type text/html
+data-uri.htm	XHR method GET with MIME type text/html;charset=UTF-8
+data-uri.htm	XHR method GET with MIME type text/plain
+data-uri.htm	XHR method GET with MIME type text/plain (base64)
+data-uri.htm	XHR method HEAD with MIME type text/plain
+data-uri.htm	XHR method POST with MIME type text/plain
+data-uri.htm	XHR method PUT with MIME type text/plain
+data-uri.htm	XHR method UNICORN with MIME type text/plain
+formdata/append-formelement.html	testFormDataAppendToForm1
+formdata/append-formelement.html	testFormDataAppendToForm2
+formdata/append-formelement.html	testFormDataAppendToFormNull1
+formdata/append-formelement.html	testFormDataAppendToFormNull2
+formdata/append-formelement.html	testFormDataAppendToFormString
+formdata/append-formelement.html	testFormDataAppendToFormUndefined1
+formdata/append-formelement.html	testFormDataAppendToFormUndefined2
+formdata/append-formelement.html	testFormDataAppendToFormWrongPlatformObject
+formdata/append.any.html	testFormDataAppend1
+formdata/append.any.html	testFormDataAppend2
+formdata/append.any.html	testFormDataAppendEmptyBlob
+formdata/append.any.html	testFormDataAppendNull1
+formdata/append.any.html	testFormDataAppendNull2
+formdata/append.any.html	testFormDataAppendUndefined1
+formdata/append.any.html	testFormDataAppendUndefined2
+formdata/constructor-submitter.html	FormData construction should allow a null submitter
+formdata/constructor-submitter.html	FormData construction should allow an undefined form and a null submitter
+formdata/constructor-submitter.html	FormData construction should allow an undefined form and an undefined submitter
+formdata/constructor.any.html	Constructors should throw a type error
+formdata/delete-formelement.html	testFormDataDeleteFromEmptyForm
+formdata/delete-formelement.html	testFormDataDeleteFromForm
+formdata/delete-formelement.html	testFormDataDeleteFromFormNonExistentKey
+formdata/delete-formelement.html	testFormDataDeleteFromFormOtherKey
+formdata/delete.any.html	testFormDataDelete
+formdata/delete.any.html	testFormDataDeleteNonExistentKey
+formdata/delete.any.html	testFormDataDeleteOtherKey
+formdata/foreach.any.html	Entries iterator should return duplicate keys and non-deleted values
+formdata/foreach.any.html	Iterator should return duplicate keys and non-deleted values
+formdata/foreach.any.html	Keys iterator should return duplicates
+formdata/foreach.any.html	Values iterator should return non-deleted values
+formdata/get-formelement.html	testFormDataGetAllFromEmptyForm
+formdata/get-formelement.html	testFormDataGetAllFromForm
+formdata/get-formelement.html	testFormDataGetAllFromFormNull
+formdata/get-formelement.html	testFormDataGetFromEmptyForm
+formdata/get-formelement.html	testFormDataGetFromForm
+formdata/get-formelement.html	testFormDataGetFromFormNull
+formdata/get.any.html	testFormDataGet
+formdata/get.any.html	testFormDataGetAll
+formdata/get.any.html	testFormDataGetAllEmpty1
+formdata/get.any.html	testFormDataGetAllEmpty2
+formdata/get.any.html	testFormDataGetNull1
+formdata/get.any.html	testFormDataGetNull2
+formdata/has-formelement.html	testFormDataHasFromEmptyForm
+formdata/has-formelement.html	testFormDataHasFromForm
+formdata/has-formelement.html	testFormDataHasFromFormNull
+formdata/has.any.html	testFormDataHas
+formdata/has.any.html	testFormDataHasEmpty1
+formdata/has.any.html	testFormDataHasEmpty2
+formdata/iteration.any.html	Appending a value pair during iteration causes it to be reached during iteration
+formdata/iteration.any.html	Iteration skips elements removed while iterating
+formdata/iteration.any.html	Removing elements already iterated over causes an element to be skipped during iteration
+formdata/set-blob.any.html	append() should create a single File for each Blob
+formdata/set-blob.any.html	blob with custom name
+formdata/set-blob.any.html	blob with type
+formdata/set-blob.any.html	blob without type
+formdata/set-blob.any.html	file with lastModified and custom name
+formdata/set-blob.any.html	file without lastModified or custom name
+formdata/set-formelement.html	testFormDataSetToForm1
+formdata/set-formelement.html	testFormDataSetToForm2
+formdata/set-formelement.html	testFormDataSetToFormNull1
+formdata/set-formelement.html	testFormDataSetToFormNull2
+formdata/set-formelement.html	testFormDataSetToFormString
+formdata/set-formelement.html	testFormDataSetToFormUndefined1
+formdata/set-formelement.html	testFormDataSetToFormUndefined2
+formdata/set-formelement.html	testFormDataSetToFormWrongPlatformObject
+formdata/set.any.html	testFormDataSet1
+formdata/set.any.html	testFormDataSet2
+formdata/set.any.html	testFormDataSetEmptyBlob
+formdata/set.any.html	testFormDataSetNull1
+formdata/set.any.html	testFormDataSetNull2
+formdata/set.any.html	testFormDataSetUndefined1
+formdata/set.any.html	testFormDataSetUndefined2
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods ( GET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods ()
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (>)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (@GET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (G T)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (G:ET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (GET?)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (GET\n)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (CONNECT)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (TRACE)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (TRACK)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (connECT)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (connect)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (trAck)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (traCE)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (trace)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (track)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (arraybuffer)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (blob)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (document)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (json)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (text)
+progressevent-constructor.any.html	Basic test.
+progressevent-constructor.any.html	Decimal number test.
+progressevent-constructor.any.html	Default event values.
+progressevent-constructor.any.html	ECMAScript value conversion test.
+progressevent-constructor.any.html	Mixed integer and decimal number test.
+progressevent-constructor.any.html	Negative number.
+progressevent-constructor.any.html	Positive integer number test.
+progressevent-constructor.any.html	ProgressEventInit members must be matched case-sensitively.
+progressevent-constructor.any.html	There must not be a initProgressEvent().
+progressevent-constructor.any.html	Zero test.
+progressevent-interface.html	Should be able to delete ProgressEvent.
+progressevent-interface.html	The ProgressEvent interface
+progressevent-interface.html	The ProgressEvent interface 1
+progressevent-interface.html	The ProgressEvent interface 2
+progressevent-interface.html	The ProgressEvent interface 3
+progressevent-interface.html	interface prototype object
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (JSON)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (arrayBuffer)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (glob)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (text/html)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (txt)
+responseurl-after-abort.any.html	abort() during DONE clears responseURL (async)
+responseurl-after-abort.any.html	abort() during DONE clears responseURL (sync)
+responseurl-after-abort.any.html	abort() during HEADERS_RECEIVED clears responseURL
+responseurl-after-abort.any.html	abort() during LOADING clears responseURL
+responseurl-after-abort.any.html	responseURL reflects the new response after abort() and reuse
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (arraybuffer)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (blob)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (document)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (json)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (text)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (301 GET with explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (307 FOO with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (307 POST with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (308 FOO with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (308 POST with string and explicit Content-Type)
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name " ".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name " tt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "(".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "()[]{}".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ")".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ",".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "/".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ":".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ":tt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ";".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "<".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "=".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ">".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "?".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "@".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "X-ﾃｽﾄ".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "[".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\"".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\0".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\\\".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\b".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\n".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\r".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\ttt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\v".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\vtt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x01".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x02".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x03".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x04".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x05".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x06".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x07".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x0e".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x0f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x10".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x11".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x12".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x13".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x14".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x15".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x16".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x17".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x18".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x19".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1a".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1b".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1c".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1d".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1e".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "]".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "a=B".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "a?B".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t,t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t: t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t:t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t;t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t<t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\"t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\0t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\nt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\rt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "{".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "}".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "ﾃｽﾄ".
+setrequestheader-bogus-value.htm	Omitted value argument
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 1
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 2
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 3
+# P2a: an error thrown in a request's load listener or handler reaches
+# window.onerror. Each fails with the switch off.
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): a base's href, which a
+# page sets. Fails with the switch off.
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.any.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Document includes NonElementParentNode: member names are unique
+idlharness.any.html	Document includes ParentNode: member names are unique
+idlharness.any.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.any.html	FormData interface object length
+idlharness.any.html	FormData interface object name
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: existence and properties of interface object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData must be primary interface of new FormData()
+idlharness.any.html	FormData must be primary interface of new FormData(form)
+idlharness.any.html	Partial interface Document: member names are unique
+idlharness.any.html	Partial interface Document[2]: member names are unique
+idlharness.any.html	ProgressEvent interface object length
+idlharness.any.html	ProgressEvent interface object name
+idlharness.any.html	ProgressEvent interface: existence and properties of interface object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "lengthComputable" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "loaded" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "total" with the proper type
+idlharness.any.html	ProgressEvent must be primary interface of new ProgressEvent("type")
+idlharness.any.html	Stringification of (new XMLHttpRequest()).upload
+idlharness.any.html	Stringification of new FormData()
+idlharness.any.html	Stringification of new FormData(form)
+idlharness.any.html	Stringification of new ProgressEvent("type")
+idlharness.any.html	Stringification of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequest interface object length
+idlharness.any.html	XMLHttpRequest interface object name
+idlharness.any.html	XMLHttpRequest interface: calling getResponseHeader(ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString, boolean, optional USVString?, optional USVString?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling overrideMimeType(DOMString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling send(optional (Document or XMLHttpRequestBodyInit)?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling setRequestHeader(ByteString, ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface object
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "DONE" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "HEADERS_RECEIVED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "LOADING" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "OPENED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "UNSENT" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "abort()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getAllResponseHeaders()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getResponseHeader(ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "onreadystatechange" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString, boolean, optional USVString?, optional USVString?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "overrideMimeType(DOMString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "readyState" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "response" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseType" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseURL" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseXML" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "send(optional (Document or XMLHttpRequestBodyInit)?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "setRequestHeader(ByteString, ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "status" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "statusText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "timeout" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "upload" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "withCredentials" with the proper type
+idlharness.any.html	XMLHttpRequest must be primary interface of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequestEventTarget interface object length
+idlharness.any.html	XMLHttpRequestEventTarget interface object name
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestUpload interface object length
+idlharness.any.html	XMLHttpRequestUpload interface object name
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestUpload must be primary interface of (new XMLHttpRequest()).upload
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
+[excluded]
+[passing]
+XMLHttpRequest-withCredentials.any.html	can also be set in OPEN state
+XMLHttpRequest-withCredentials.any.html	default value is false, set value is true
+XMLHttpRequest-withCredentials.any.html	setting on synchronous XHR
+XMLHttpRequest-withCredentials.any.html	setting withCredentials when not in UNSENT, OPENED state (asynchronous)
+abort-after-receive.any.html	XMLHttpRequest: abort() after successful receive should not fire "abort" event
+abort-after-send.any.html	XMLHttpRequest: abort() after send()
+abort-during-headers-received.window.html	XMLHttpRequest: abort() during HEADERS_RECEIVED
+abort-during-loading.window.html	XMLHttpRequest: abort() during LOADING
+abort-during-open.any.html	XMLHttpRequest: abort() during OPEN
+abort-during-readystatechange.any.html	abort-during-readystatechange
+abort-during-unsent.any.html	XMLHttpRequest: abort() during UNSENT
+abort-during-upload.any.html	XMLHttpRequest: abort() while sending data
+abort-event-abort.any.html	XMLHttpRequest: The abort() method: do not fire abort event in OPENED state when send() flag is unset.
+abort-event-listeners.any.html	XMLHttpRequest: abort() should not reset event listeners
+abort-event-loadend.any.html	XMLHttpRequest: The abort() method: Fire a progress event named loadend
+abort-event-order.htm	XMLHttpRequest: The abort() method: abort and loadend events
+abort-progress-events.any.html	Calling open/abort in readystatechange should not crash
+abort-progress-events.any.html	Events must not fire when state is UNSENT after abort()
+abort-upload-event-abort.any.html	XMLHttpRequest: The abort() method: Fire a progress event named abort on the XMLHttpRequestUpload object
+abort-upload-event-loadend.any.html	XMLHttpRequest: The abort() method: Fire a progress event named loadend on the XMLHttpRequestUpload object
+access-control-and-redirects-async-same-origin.any.html	Request with credentials is redirected to a cross-origin response with Access-Control-Allow-Origin=* (with star)
+access-control-and-redirects-async-same-origin.any.html	Request with credentials is redirected to a cross-origin response with a specific Access-Control-Allow-Origin (no credentials)
+access-control-and-redirects-async.any.html	Preflighted request is redirected to a response with Access-Control-Allow-Origin=*
+access-control-and-redirects-async.any.html	Preflighted request is redirected to a response with Access-Control-Allow-Origin=* and header allowed
+access-control-and-redirects-async.any.html	Request is redirect to a bad URL
+access-control-and-redirects-async.any.html	Request is redirected without CORS headers to a response with Access-Control-Allow-Origin=*
+access-control-and-redirects-async.any.html	Request with user info is redirected to a response with Access-Control-Allow-Origin=*
+access-control-and-redirects.any.html	Local async redirect to remote origin
+access-control-and-redirects.any.html	Remote async redirect to local origin
+access-control-and-redirects.any.html	Remote async redirect to same remote origin
+access-control-basic-denied.htm	Cross-origin request denied
+access-control-basic-get-fail-non-simple.htm	Preflighted cross-origin request denied
+access-control-basic-post-with-non-cors-safelisted-content-type.htm	CORS request with non-safelisted content type sends preflight and fails
+access-control-basic-preflight-denied.htm	Tests async XHR preflight denial due to lack of CORS headers
+access-control-preflight-request-invalid-status-301.htm	Request with 301 preflight response
+access-control-preflight-request-invalid-status-400.htm	Request with 400 preflight response
+access-control-preflight-request-invalid-status-501.htm	Request with 501 preflight response
+access-control-recursive-failed-request.htm	Recursively repeated CORS requests with failed preflights should never result in unexpected behavior
+data-uri.htm	XHR method DELETE with MIME type text/plain
+data-uri.htm	XHR method GET with MIME type image/png
+data-uri.htm	XHR method GET with MIME type text/html
+data-uri.htm	XHR method GET with MIME type text/html;charset=UTF-8
+data-uri.htm	XHR method GET with MIME type text/plain
+data-uri.htm	XHR method GET with MIME type text/plain (base64)
+data-uri.htm	XHR method HEAD with MIME type text/plain
+data-uri.htm	XHR method POST with MIME type text/plain
+data-uri.htm	XHR method PUT with MIME type text/plain
+data-uri.htm	XHR method UNICORN with MIME type text/plain
+event-abort.any.html	XMLHttpRequest: abort event
+event-error-order.sub.html	XMLHttpRequest: event - error (order of events)
+event-error.sub.any.html	error while reading body should report zeros for loaded and total
+event-error.sub.any.html	onerror should be called
+event-load.any.html	XMLHttpRequest: The send() method: Fire an event named load (synchronous flag is unset)
+event-loadend.any.html	XMLHttpRequest: loadend event
+event-loadstart-upload.any.html	XMLHttpRequest: The send() method: Fire a progress event named loadstart on upload object (synchronous flag is unset)
+event-loadstart.any.html	XMLHttpRequest: loadstart event
+event-readystate-sync-open.any.html	XMLHttpRequest: open() call fires sync readystate event (async)
+event-readystate-sync-open.any.html	XMLHttpRequest: open() call fires sync readystate event (sync)
+formdata.html	formdata.append() should throw if value is string and file name is given
+formdata/append-formelement.html	testFormDataAppendToForm1
+formdata/append-formelement.html	testFormDataAppendToForm2
+formdata/append-formelement.html	testFormDataAppendToFormNull1
+formdata/append-formelement.html	testFormDataAppendToFormNull2
+formdata/append-formelement.html	testFormDataAppendToFormString
+formdata/append-formelement.html	testFormDataAppendToFormUndefined1
+formdata/append-formelement.html	testFormDataAppendToFormUndefined2
+formdata/append-formelement.html	testFormDataAppendToFormWrongPlatformObject
+formdata/append.any.html	testFormDataAppend1
+formdata/append.any.html	testFormDataAppend2
+formdata/append.any.html	testFormDataAppendEmptyBlob
+formdata/append.any.html	testFormDataAppendNull1
+formdata/append.any.html	testFormDataAppendNull2
+formdata/append.any.html	testFormDataAppendUndefined1
+formdata/append.any.html	testFormDataAppendUndefined2
+formdata/constructor-submitter.html	FormData construction should allow a null submitter
+formdata/constructor-submitter.html	FormData construction should allow an undefined form and a null submitter
+formdata/constructor-submitter.html	FormData construction should allow an undefined form and an undefined submitter
+formdata/constructor.any.html	Constructors should throw a type error
+formdata/delete-formelement.html	testFormDataDeleteFromEmptyForm
+formdata/delete-formelement.html	testFormDataDeleteFromForm
+formdata/delete-formelement.html	testFormDataDeleteFromFormNonExistentKey
+formdata/delete-formelement.html	testFormDataDeleteFromFormOtherKey
+formdata/delete.any.html	testFormDataDelete
+formdata/delete.any.html	testFormDataDeleteNonExistentKey
+formdata/delete.any.html	testFormDataDeleteOtherKey
+formdata/foreach.any.html	Entries iterator should return duplicate keys and non-deleted values
+formdata/foreach.any.html	Iterator should return duplicate keys and non-deleted values
+formdata/foreach.any.html	Keys iterator should return duplicates
+formdata/foreach.any.html	Values iterator should return non-deleted values
+formdata/get-formelement.html	testFormDataGetAllFromEmptyForm
+formdata/get-formelement.html	testFormDataGetAllFromForm
+formdata/get-formelement.html	testFormDataGetAllFromFormNull
+formdata/get-formelement.html	testFormDataGetFromEmptyForm
+formdata/get-formelement.html	testFormDataGetFromForm
+formdata/get-formelement.html	testFormDataGetFromFormNull
+formdata/get.any.html	testFormDataGet
+formdata/get.any.html	testFormDataGetAll
+formdata/get.any.html	testFormDataGetAllEmpty1
+formdata/get.any.html	testFormDataGetAllEmpty2
+formdata/get.any.html	testFormDataGetNull1
+formdata/get.any.html	testFormDataGetNull2
+formdata/has-formelement.html	testFormDataHasFromEmptyForm
+formdata/has-formelement.html	testFormDataHasFromForm
+formdata/has-formelement.html	testFormDataHasFromFormNull
+formdata/has.any.html	testFormDataHas
+formdata/has.any.html	testFormDataHasEmpty1
+formdata/has.any.html	testFormDataHasEmpty2
+formdata/iteration.any.html	Appending a value pair during iteration causes it to be reached during iteration
+formdata/iteration.any.html	Iteration skips elements removed while iterating
+formdata/iteration.any.html	Removing elements already iterated over causes an element to be skipped during iteration
+formdata/set-blob.any.html	append() should create a single File for each Blob
+formdata/set-blob.any.html	blob with custom name
+formdata/set-blob.any.html	blob with type
+formdata/set-blob.any.html	blob without type
+formdata/set-blob.any.html	file with lastModified and custom name
+formdata/set-blob.any.html	file without lastModified or custom name
+formdata/set-formelement.html	testFormDataSetToForm1
+formdata/set-formelement.html	testFormDataSetToForm2
+formdata/set-formelement.html	testFormDataSetToFormNull1
+formdata/set-formelement.html	testFormDataSetToFormNull2
+formdata/set-formelement.html	testFormDataSetToFormString
+formdata/set-formelement.html	testFormDataSetToFormUndefined1
+formdata/set-formelement.html	testFormDataSetToFormUndefined2
+formdata/set-formelement.html	testFormDataSetToFormWrongPlatformObject
+formdata/set.any.html	testFormDataSet1
+formdata/set.any.html	testFormDataSet2
+formdata/set.any.html	testFormDataSetEmptyBlob
+formdata/set.any.html	testFormDataSetNull1
+formdata/set.any.html	testFormDataSetNull2
+formdata/set.any.html	testFormDataSetUndefined1
+formdata/set.any.html	testFormDataSetUndefined2
+getallresponseheaders-status.htm	XMLHttpRequest: getAllResponseHeaders() excludes status
+getresponseheader-error-state.htm	XMLHttpRequest: getResponseHeader() in error state (failing cross-origin test)
+getresponseheader-unsent-opened-state.htm	XMLHttpRequest: getResponseHeader() in unsent, opened states
+headers-normalize-response.htm	Header value: \\0
+headers-normalize-response.htm	Header value: \\0hello world
+headers-normalize-response.htm	Header value: hello world\\0
+headers-normalize-response.htm	Header value: hello\\0world
+historical.html	Support for responseType = moz-blob
+historical.html	Support for responseType = moz-chunked-arraybuffer
+historical.html	Support for responseType = moz-chunked-text
+idlharness.any.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.any.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Document includes NonElementParentNode: member names are unique
+idlharness.any.html	Document includes ParentNode: member names are unique
+idlharness.any.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.any.html	FormData interface object length
+idlharness.any.html	FormData interface object name
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: existence and properties of interface object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData must be primary interface of new FormData()
+idlharness.any.html	FormData must be primary interface of new FormData(form)
+idlharness.any.html	Partial interface Document: member names are unique
+idlharness.any.html	Partial interface Document[2]: member names are unique
+idlharness.any.html	ProgressEvent interface object length
+idlharness.any.html	ProgressEvent interface object name
+idlharness.any.html	ProgressEvent interface: existence and properties of interface object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "lengthComputable" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "loaded" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "total" with the proper type
+idlharness.any.html	ProgressEvent must be primary interface of new ProgressEvent("type")
+idlharness.any.html	Stringification of (new XMLHttpRequest()).upload
+idlharness.any.html	Stringification of new FormData()
+idlharness.any.html	Stringification of new FormData(form)
+idlharness.any.html	Stringification of new ProgressEvent("type")
+idlharness.any.html	Stringification of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequest interface object length
+idlharness.any.html	XMLHttpRequest interface object name
+idlharness.any.html	XMLHttpRequest interface: calling getResponseHeader(ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString, boolean, optional USVString?, optional USVString?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling overrideMimeType(DOMString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling send(optional (Document or XMLHttpRequestBodyInit)?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling setRequestHeader(ByteString, ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface object
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "DONE" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "HEADERS_RECEIVED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "LOADING" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "OPENED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "UNSENT" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "abort()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getAllResponseHeaders()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getResponseHeader(ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "onreadystatechange" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString, boolean, optional USVString?, optional USVString?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "overrideMimeType(DOMString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "readyState" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "response" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseType" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseURL" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseXML" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "send(optional (Document or XMLHttpRequestBodyInit)?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "setRequestHeader(ByteString, ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "status" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "statusText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "timeout" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "upload" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "withCredentials" with the proper type
+idlharness.any.html	XMLHttpRequest must be primary interface of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequestEventTarget interface object length
+idlharness.any.html	XMLHttpRequestEventTarget interface object name
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestUpload interface object length
+idlharness.any.html	XMLHttpRequestUpload interface object name
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestUpload must be primary interface of (new XMLHttpRequest()).upload
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
+json.any.html	Ensure UTF-16 results in an error
+json.any.html	Ensure the correct JSON parser is used
+loadstart-and-state.html	abort() during loadstart
+loadstart-and-state.html	open() during loadstart
+open-after-abort.htm	XMLHttpRequest: open() after abort()
+open-after-setrequestheader.htm	XMLHttpRequest: open() after setRequestHeader()
+open-during-abort.htm	XMLHttpRequest: open() during abort()
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods ( GET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods ()
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (>)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (@GET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (G T)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (G:ET)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (GET?)
+open-method-bogus.htm	XMLHttpRequest: open() - bogus methods (GET\n)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (CONNECT)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (TRACE)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (TRACK)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (connECT)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (connect)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (trAck)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (traCE)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (trace)
+open-method-insecure.htm	XMLHttpRequest: open() - "insecure" methods (track)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (arraybuffer)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (blob)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (document)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (json)
+open-method-responsetype-set-sync.htm	XMLHttpRequest: open() sync request not allowed if responseType is set (text)
+open-open-send.htm	XMLHttpRequest: open() - open() - send()
+open-open-sync-send.htm	XMLHttpRequest: open() - open() (sync) - send()
+open-parameters-toString.htm	XMLHttpRequest: open() attempts to toString its string parameters
+open-send-during-abort.htm	XMLHttpRequest: open() during abort()
+open-send-open.htm	XMLHttpRequest: open() - send() - open()
+open-sync-open-send.htm	XMLHttpRequest: open() (sync) - send() - open()
+open-url-base-inserted-after-open.htm	XMLHttpRequest: open() resolving URLs - insert <base> after open()
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
+open-url-base.htm	XMLHttpRequest: open() resolving URLs - <base>
+open-url-fragment.htm	XMLHttpRequest: open() resolving URLs - fragment identifier
+open-user-password-non-same-origin.htm	XMLHttpRequest: open() - user/pass argument and non same-origin URL doesn't throw
+over-1-meg.any.html	over-1-meg
+overridemimetype-loading-state.htm	XMLHttpRequest: overrideMimeType() in LOADING state
+progressevent-constructor.any.html	Basic test.
+progressevent-constructor.any.html	Decimal number test.
+progressevent-constructor.any.html	Default event values.
+progressevent-constructor.any.html	ECMAScript value conversion test.
+progressevent-constructor.any.html	Mixed integer and decimal number test.
+progressevent-constructor.any.html	Negative number.
+progressevent-constructor.any.html	Positive integer number test.
+progressevent-constructor.any.html	ProgressEventInit members must be matched case-sensitively.
+progressevent-constructor.any.html	There must not be a initProgressEvent().
+progressevent-constructor.any.html	Zero test.
+progressevent-interface.html	Interface objects properties should not be Enumerable
+progressevent-interface.html	Should be able to delete ProgressEvent.
+progressevent-interface.html	The ProgressEvent interface
+progressevent-interface.html	The ProgressEvent interface 1
+progressevent-interface.html	The ProgressEvent interface 2
+progressevent-interface.html	The ProgressEvent interface 3
+progressevent-interface.html	interface prototype object
+response-body-errors.any.html	Asynchronous XMLHttpRequest should clear response on bad chunk
+response-body-errors.any.html	Synchronous XMLHttpRequest should throw on bad chunk
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (JSON)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (arrayBuffer)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (glob)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (text/html)
+response-invalid-responsetype.htm	XMLHttpRequest: response is plain text if responseType is set to an invalid string (txt)
+responseurl-after-abort.any.html	abort() during DONE clears responseURL (async)
+responseurl-after-abort.any.html	abort() during DONE clears responseURL (sync)
+responseurl-after-abort.any.html	abort() during HEADERS_RECEIVED clears responseURL
+responseurl-after-abort.any.html	abort() during LOADING clears responseURL
+responseurl-after-abort.any.html	responseURL reflects the new response after abort() and reuse
+responseurl.html	404 response has proper responseURL
+responsexml-invalid-type.html	XMLHttpRequest: response with an invalid responseXML document
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (arraybuffer)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (blob)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (document)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (json)
+responsexml-non-document-types.htm	XMLHttpRequest: responseXML/responseText on other responseType (text)
+security-consideration.sub.html	ProgressEvent: security consideration
+send-authentication-basic-cors-not-enabled.htm	XMLHttpRequest: send() - "Basic" authenticated CORS requests with user name and password passed to open() (asserts failure)
+send-authentication-basic-cors.htm	XMLHttpRequest: send() - "Basic" authenticated CORS requests with user name and password passed to open() (asserts failure)
+send-network-error-async-events.sub.htm	XMLHttpRequest: The send() method: Fire a progress event named error when Network error happens (synchronous flag is unset)
+send-network-error-sync-events.sub.htm	data URL
+send-network-error-sync-events.sub.htm	http URL
+send-no-response-event-loadend.htm	XMLHttpRequest: The send() method: Fire a progress event named loadend (no response entity body)
+send-no-response-event-loadstart.htm	XMLHttpRequest: The send() method: Fire a progress event named loadstart (no response entity body and the state is LOADING)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (about:blank)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (blob:bogusidentifier)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (folder.txt)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (http://www1.wpt.test)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (javascript:alert('FAIL'))
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (mailto:test@example.org)
+send-non-same-origin.htm	XMLHttpRequest: send() - non same-origin (tel:+31600000000)
+send-redirect-bogus-sync.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header; sync) (301: foobar://abcd)
+send-redirect-bogus-sync.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header; sync) (302: http://{{hosts[][nonexistent]}})
+send-redirect-bogus-sync.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header; sync) (302: mailto:someone@example.org)
+send-redirect-bogus-sync.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header; sync) (303: http://{{hosts[][nonexistent]}})
+send-redirect-bogus-sync.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header; sync) (303: tel:1234567890)
+send-redirect-bogus.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header) (302: http://{{hosts[][nonexistent]}})
+send-redirect-bogus.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header) (302: mailto:someone@example.org)
+send-redirect-bogus.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header) (303: foobar:someone@example.org)
+send-redirect-bogus.sub.htm	XMLHttpRequest: send() - Redirects (bogus Location header) (303: http://{{hosts[][nonexistent]}})
+send-redirect-infinite-sync.htm	XMLHttpRequest: send() - Redirects (infinite loop; sync) (301)
+send-redirect-infinite.htm	XMLHttpRequest: send() - Redirects (infinite loop)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (301 GET with explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (307 FOO with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (307 POST with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (308 FOO with string and explicit Content-Type)
+send-redirect-to-cors.htm	XMLHttpRequest: send() - Redirect to CORS-enabled resource (308 POST with string and explicit Content-Type)
+send-redirect-to-non-cors.htm	XMLHttpRequest: send() - Redirect to cross-origin resource, not CORS-enabled (301)
+send-redirect-to-non-cors.htm	XMLHttpRequest: send() - Redirect to cross-origin resource, not CORS-enabled (302)
+send-redirect-to-non-cors.htm	XMLHttpRequest: send() - Redirect to cross-origin resource, not CORS-enabled (303)
+send-redirect-to-non-cors.htm	XMLHttpRequest: send() - Redirect to cross-origin resource, not CORS-enabled (307)
+send-response-upload-event-loadend.htm	XMLHttpRequest: The send() method: Fire a progress event named loadend on the XMLHttpRequestUpload (synchronous flag is unset)
+send-response-upload-event-loadstart.htm	XMLHttpRequest: The send() method: Fire a progress event named loadstart on the XMLHttpRequestUpload (synchronous flag is unset)
+send-send.any.html	XMLHttpRequest: send() - send()
+send-sync-timeout.htm	XMLHttpRequest: timeout during sync send() should not run
+setrequestheader-after-send.htm	XMLHttpRequest: setRequestHeader() after send()
+setrequestheader-before-open.htm	setRequestHeader invoked before open()
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name " ".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name " tt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "(".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "()[]{}".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ")".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ",".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "/".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ":".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ":tt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ";".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "<".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "=".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name ">".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "?".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "@".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "X-ﾃｽﾄ".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "[".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\"".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\0".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\\\".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\b".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\n".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\r".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\ttt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\v".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\vtt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x01".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x02".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x03".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x04".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x05".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x06".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x07".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x0e".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x0f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x10".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x11".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x12".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x13".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x14".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x15".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x16".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x17".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x18".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x19".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1a".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1b".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1c".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1d".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1e".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "\\x1f".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "]".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "a=B".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "a?B".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t,t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t: t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t:t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t;t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t<t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\"t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\0t".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\nt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "t\\rt".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "{".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "}".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "".
+setrequestheader-bogus-name.htm	setRequestHeader should throw with header name "ﾃｽﾄ".
+setrequestheader-bogus-value.htm	Omitted value argument
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 1
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 2
+setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 3
+status-error.htm	Unknown scheme
+sync-xhr-and-window-onload.html	sync XHR should not fire window.onload synchronously
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
+timeout-sync.htm	open() with async false when timeout is set
+timeout-sync.htm	setting timeout attribute on sync request
+xhr-timeout-longtask.any.html	Long tasks should not trigger load timeout
+xmlhttprequest-basic.htm	XMLHttpRequest: prototype and members
+xmlhttprequest-eventtarget.htm	XMLHttpRequest: implements EventTarget
+xmlhttprequest-network-error-sync.htm	XMLHttpRequest: members during network errors (sync)
+xmlhttprequest-network-error.htm	XMLHttpRequest: members during network errors
+xmlhttprequest-sync-block-scripts.html	Check that while a sync XHR is in flight async script loads don't complete and run script
+xmlhttprequest-timeout-aborted.html?aborted immediately after send()	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?aborted immediately after send()	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-aborted.html?call abort() after TIME_NORMAL_LOAD	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?call abort() after TIME_NORMAL_LOAD	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-aborted.html?only open()ed, not aborted	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?only open()ed, not aborted	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-synconmain.html?timeout after open	Timeout test: Synchronous XHR must not allow a timeout to be set - calling open() after timeout is set must throw
+xmlhttprequest-timeout-synconmain.html?timeout after open	Timeout test: Synchronous XHR must not allow a timeout to be set - setting timeout must throw
+xmlhttprequest-timeout-synconmain.html?timeout before open	Timeout test: Synchronous XHR must not allow a timeout to be set - calling open() after timeout is set must throw
+xmlhttprequest-timeout-synconmain.html?timeout before open	Timeout test: Synchronous XHR must not allow a timeout to be set - setting timeout must throw
+xmlhttprequest-unsent.htm	XMLHttpRequest: members during UNSENT

@@ -1,0 +1,7 @@
+PASS sse2: 35 sources; external imports: os64_memcmp, os64_memcpy, os64_memmove, os64_memset, webp_port_calloc, webp_port_free, webp_port_malloc
+PASS scalar: 28 sources; external imports: os64_memcmp, os64_memcpy, os64_memmove, os64_memset, webp_port_calloc, webp_port_free, webp_port_malloc
+PASS 71 pristine files, exact manifest inventory
+Scope: relocatable decoder core; production shared-library ABI and packaging need their own audit.
+PASS shared WebP: four exports, seven OS imports, decoder closure, notice bytes, public header, W^X and supported relocations
+PASS libimage dependency and gview/desktop/Yonder/webptest loading
+PASS ext2/FAT: 13 library, test, notice and visual-fixture payloads match source bytes

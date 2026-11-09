@@ -1,0 +1,2374 @@
+| <html>
+|   lang="en"
+|   op="news"
+|   <head>
+|     <meta>
+|       content="origin"
+|       name="referrer"
+|     <meta>
+|       content="width=device-width, initial-scale=1.0"
+|       name="viewport"
+|     <link>
+|       href="news.css?e1A2H4cHxVYFl1HF3Snj"
+|       rel="stylesheet"
+|       type="text/css"
+|     <link>
+|       href="y18.svg"
+|       rel="icon"
+|     <link>
+|       href="rss"
+|       rel="alternate"
+|       title="RSS"
+|       type="application/rss+xml"
+|     <title>
+|       "Hacker News"
+|   <body>
+|     <center>
+|       <table>
+|         bgcolor="#f6f6ef"
+|         border="0"
+|         cellpadding="0"
+|         cellspacing="0"
+|         id="hnmain"
+|         width="85%"
+|         <tbody>
+|           <tr>
+|             <td>
+|               bgcolor="#ff6600"
+|               <table>
+|                 border="0"
+|                 cellpadding="0"
+|                 cellspacing="0"
+|                 style="padding:2px"
+|                 width="100%"
+|                 <tbody>
+|                   <tr>
+|                     <td>
+|                       style="width:18px;padding-right:4px"
+|                       <a>
+|                         href="https://news.ycombinator.com"
+|                         <img>
+|                           height="18"
+|                           src="y18.svg"
+|                           style="border:1px white solid; display:block"
+|                           width="18"
+|                     <td>
+|                       style="line-height:12pt; height:10px;"
+|                       <span>
+|                         class="pagetop"
+|                         <b>
+|                           class="hnname"
+|                           <a>
+|                             href="news"
+|                             "Hacker News"
+|                         <a>
+|                           href="newest"
+|                           "new"
+|                         " | "
+|                         <a>
+|                           href="front"
+|                           "past"
+|                         " | "
+|                         <a>
+|                           href="newcomments"
+|                           "comments"
+|                         " | "
+|                         <a>
+|                           href="ask"
+|                           "ask"
+|                         " | "
+|                         <a>
+|                           href="show"
+|                           "show"
+|                         " | "
+|                         <a>
+|                           href="jobs"
+|                           "jobs"
+|                         " | "
+|                         <a>
+|                           href="submit"
+|                           rel="nofollow"
+|                           "submit"
+|                     <td>
+|                       style="text-align:right;padding-right:4px;"
+|                       <span>
+|                         class="pagetop"
+|                         <a>
+|                           href="login?goto=news"
+|                           "login"
+|           <tr>
+|             style="height:10px"
+|           <tr>
+|             id="bigbox"
+|             <td>
+|               <table>
+|                 border="0"
+|                 cellpadding="0"
+|                 cellspacing="0"
+|                 <tbody>
+|                   <tr>
+|                     class="athing submission"
+|                     id="49658311"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "1."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49658311&how=up&goto=news"
+|                           id="up_49658311"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://earendil.com/posts/measuring-code-sloppiness/"
+|                           "If coding is solved, what now?: Measuring the sloppiness of code"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=earendil.com"
+|                             <span>
+|                               class="sitestr"
+|                               "earendil.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49658311"
+|                           "37 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=doppp"
+|                           "doppp"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:42:28.000000Z"
+|                           <a>
+|                             href="item?id=49658311"
+|                             "44 minutes ago"
+|                         " "
+|                         <span>
+|                           id="unv_49658311"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49658311&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49658311"
+|                           "20 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49656496"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "2."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49656496&how=up&goto=news"
+|                           id="up_49656496"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.researchagenda.news/articles/the-waymo-effect.html"
+|                           "The Waymo effect: how AI is quietly making research less collaborative"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=researchagenda.news"
+|                             <span>
+|                               class="sitestr"
+|                               "researchagenda.news"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49656496"
+|                           "224 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=JohnHammersley"
+|                           "JohnHammersley"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T11:17:50.000000Z"
+|                           <a>
+|                             href="item?id=49656496"
+|                             "3 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49656496"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49656496&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49656496"
+|                           "165 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49658299"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "3."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49658299&how=up&goto=news"
+|                           id="up_49658299"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.bbc.com/news/live/cmd683p01eljt"
+|                           "Houthis 'take control' of key island in global shipping route"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=bbc.com"
+|                             <span>
+|                               class="sitestr"
+|                               "bbc.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49658299"
+|                           "81 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=consumer451"
+|                           "consumer451"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:41:38.000000Z"
+|                           <a>
+|                             href="item?id=49658299"
+|                             "44 minutes ago"
+|                         " "
+|                         <span>
+|                           id="unv_49658299"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49658299&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49658299"
+|                           "45 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49622406"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "4."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49622406&how=up&goto=news"
+|                           id="up_49622406"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://el.media.mit.edu/logo-foundation/what_is_logo/logo_programming.html"
+|                           "Logo Programming Language"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=media.mit.edu"
+|                             <span>
+|                               class="sitestr"
+|                               "media.mit.edu"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49622406"
+|                           "25 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=azhenley"
+|                           "azhenley"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-09T07:07:26.000000Z"
+|                           <a>
+|                             href="item?id=49622406"
+|                             "1 hour ago"
+|                         " "
+|                         <span>
+|                           id="unv_49622406"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49622406&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49622406"
+|                           "3 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49621546"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "5."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49621546&how=up&goto=news"
+|                           id="up_49621546"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://mmoustafa.com/blog/so-you-want-to-use-openrouter/"
+|                           "So you want to use OpenRouter?"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=mmoustafa.com"
+|                             <span>
+|                               class="sitestr"
+|                               "mmoustafa.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49621546"
+|                           "353 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=player85"
+|                           "player85"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-09T05:37:21.000000Z"
+|                           <a>
+|                             href="item?id=49621546"
+|                             "7 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49621546"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49621546&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49621546"
+|                           "88 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49655286"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "6."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49655286&how=up&goto=news"
+|                           id="up_49655286"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="http://www.iaea.org/newscenter/news/what-is-cherenkov-radiation"
+|                           "Cherenkov Radiation - traveling faster than light"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=iaea.org"
+|                             <span>
+|                               class="sitestr"
+|                               "iaea.org"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49655286"
+|                           "147 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=andsoitis"
+|                           "andsoitis"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T08:42:04.000000Z"
+|                           <a>
+|                             href="item?id=49655286"
+|                             "5 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49655286"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49655286&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49655286"
+|                           "75 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49656471"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "7."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49656471&how=up&goto=news"
+|                           id="up_49656471"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://quesma.com/blog/does-rtk-make-ai-coding-cheaper/"
+|                           "RTK reports token savings, but our cost benchmarks disagree"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=quesma.com"
+|                             <span>
+|                               class="sitestr"
+|                               "quesma.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49656471"
+|                           "73 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=michalwarda"
+|                           "michalwarda"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T11:15:13.000000Z"
+|                           <a>
+|                             href="item?id=49656471"
+|                             "3 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49656471"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49656471&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49656471"
+|                           "42 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49658302"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "8."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49658302&how=up&goto=news"
+|                           id="up_49658302"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.collabora.com/news-and-blog/news-and-events/re-engineering-youtube-for-the-living-room-bringing-%E2%80%9Cchrobalt%E2%80%9D-to-rdk.html"
+|                           rel="nofollow"
+|                           "Re-Engineering YouTube for the Living Room: Bringing "Chrobalt" to RDK"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=collabora.com"
+|                             <span>
+|                               class="sitestr"
+|                               "collabora.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49658302"
+|                           "6 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=losgehts"
+|                           "losgehts"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:41:58.000000Z"
+|                           <a>
+|                             href="item?id=49658302"
+|                             "44 minutes ago"
+|                         " "
+|                         <span>
+|                           id="unv_49658302"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49658302&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49658302"
+|                           "discuss"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49643982"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "9."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49643982&how=up&goto=news"
+|                           id="up_49643982"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://shopify.engineering/back-to-native"
+|                           "Shopify is moving from React Native back to Swift and Kotlin"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=shopify.engineering"
+|                             <span>
+|                               class="sitestr"
+|                               "shopify.engineering"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49643982"
+|                           "1163 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=fnthawar2"
+|                           "fnthawar2"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T14:09:31.000000Z"
+|                           <a>
+|                             href="item?id=49643982"
+|                             "1 day ago"
+|                         " "
+|                         <span>
+|                           id="unv_49643982"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49643982&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49643982"
+|                           "848 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49657850"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "10."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49657850&how=up&goto=news"
+|                           id="up_49657850"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="item?id=49657850"
+|                           "Ask HN: Can we please limit the AI news flood?"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49657850"
+|                           "295 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=cromka"
+|                           "cromka"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:11:04.000000Z"
+|                           <a>
+|                             href="item?id=49657850"
+|                             "1 hour ago"
+|                         " "
+|                         <span>
+|                           id="unv_49657850"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49657850&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49657850"
+|                           "159 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49611240"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "11."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49611240&how=up&goto=news"
+|                           id="up_49611240"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.reddit.com/r/emulation/s/VL4Au2HGxq"
+|                           "iPod Classic 6G in QEMU"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=reddit.com"
+|                             <span>
+|                               class="sitestr"
+|                               "reddit.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49611240"
+|                           "81 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=dmonterocrespo"
+|                           "dmonterocrespo"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-08T14:54:57.000000Z"
+|                           <a>
+|                             href="item?id=49611240"
+|                             "6 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49611240"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49611240&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49611240"
+|                           "12 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49658328"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "12."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49658328&how=up&goto=news"
+|                           id="up_49658328"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://github.com/Field-Logic-Ltd/ClaudeStatsBar"
+|                           rel="nofollow"
+|                           "Show HN: ClaudeStatsBar: your session is 486k deep and nothing told you"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=github.com/field-logic-ltd"
+|                             <span>
+|                               class="sitestr"
+|                               "github.com/field-logic-ltd"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49658328"
+|                           "9 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=edf13"
+|                           "edf13"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:43:53.000000Z"
+|                           <a>
+|                             href="item?id=49658328"
+|                             "42 minutes ago"
+|                         " "
+|                         <span>
+|                           id="unv_49658328"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49658328&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49658328"
+|                           "5 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49645393"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "13."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49645393&how=up&goto=news"
+|                           id="up_49645393"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://blog.jim-nielsen.com/2026/hands-off-my-cables/"
+|                           "Don't let anyone take away your big box of cables"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=jim-nielsen.com"
+|                             <span>
+|                               class="sitestr"
+|                               "jim-nielsen.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49645393"
+|                           "658 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=Brajeshwar"
+|                           "Brajeshwar"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T15:27:22.000000Z"
+|                           <a>
+|                             href="item?id=49645393"
+|                             "22 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49645393"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49645393&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49645393"
+|                           "406 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49603397"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "14."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49603397&how=up&goto=news"
+|                           id="up_49603397"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://github.com/WerWolv/riscv-emulator"
+|                           "RISC-V Emulator and Linux System from Scratch"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=github.com/werwolv"
+|                             <span>
+|                               class="sitestr"
+|                               "github.com/werwolv"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49603397"
+|                           "22 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=Bluestein"
+|                           "Bluestein"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-07T21:57:15.000000Z"
+|                           <a>
+|                             href="item?id=49603397"
+|                             "4 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49603397"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49603397&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49603397"
+|                           "2 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49609169"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "15."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49609169&how=up&goto=news"
+|                           id="up_49609169"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://programmingsimplicity.substack.com/p/experiment-projectional-viewer"
+|                           "Experiment – Projectional Viewer"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=programmingsimplicity.substack.com"
+|                             <span>
+|                               class="sitestr"
+|                               "programmingsimplicity.substack.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49609169"
+|                           "8 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=surprisetalk"
+|                           "surprisetalk"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-08T12:03:33.000000Z"
+|                           <a>
+|                             href="item?id=49609169"
+|                             "3 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49609169"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49609169&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49609169"
+|                           "1 comment"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49654962"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "16."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49654962&how=up&goto=news"
+|                           id="up_49654962"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://vale.rocks/posts/css-relics"
+|                           "CSS Curiosities of the Past"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=vale.rocks"
+|                             <span>
+|                               class="sitestr"
+|                               "vale.rocks"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49654962"
+|                           "45 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=robin_reala"
+|                           "robin_reala"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T07:57:17.000000Z"
+|                           <a>
+|                             href="item?id=49654962"
+|                             "6 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49654962"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49654962&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49654962"
+|                           "27 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49649213"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "17."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49649213&how=up&goto=news"
+|                           id="up_49649213"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://developers.openai.com/api/docs/guides/agents-api/overview"
+|                           "OpenAI Agents API"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=developers.openai.com"
+|                             <span>
+|                               class="sitestr"
+|                               "developers.openai.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49649213"
+|                           "302 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=aquir"
+|                           "aquir"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T19:43:22.000000Z"
+|                           <a>
+|                             href="item?id=49649213"
+|                             "18 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49649213"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49649213&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49649213"
+|                           "161 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49606281"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "18."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49606281&how=up&goto=news"
+|                           id="up_49606281"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://emacsredux.com/blog/2026/09/02/working-with-git-worktrees-in-magit/"
+|                           "Working with Git Worktrees in Magit"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=emacsredux.com"
+|                             <span>
+|                               class="sitestr"
+|                               "emacsredux.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49606281"
+|                           "82 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=srijan4"
+|                           "srijan4"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-08T06:31:59.000000Z"
+|                           <a>
+|                             href="item?id=49606281"
+|                             "9 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49606281"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49606281&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49606281"
+|                           "34 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49656225"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "19."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49656225&how=up&goto=news"
+|                           id="up_49656225"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://support.claude.com/en/articles/15171100-age-assurance-on-claude"
+|                           "Claude is no longer available for minors"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=claude.com"
+|                             <span>
+|                               class="sitestr"
+|                               "claude.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49656225"
+|                           "230 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=Muhammad523"
+|                           "Muhammad523"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T10:48:00.000000Z"
+|                           <a>
+|                             href="item?id=49656225"
+|                             "3 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49656225"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49656225&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49656225"
+|                           "303 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49645437"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "20."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49645437&how=up&goto=news"
+|                           id="up_49645437"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://spinoff.nasa.gov/Manipulating_Satellite_Photos_Now_Reveals_Ancient_Images"
+|                           "Technique for Manipulating Satellite Photos Now Reveals Ancient Images (2025)"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=nasa.gov"
+|                             <span>
+|                               class="sitestr"
+|                               "nasa.gov"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49645437"
+|                           "357 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=gumby"
+|                           "gumby"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T15:29:30.000000Z"
+|                           <a>
+|                             href="item?id=49645437"
+|                             "22 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49645437"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49645437&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49645437"
+|                           "58 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49652237"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "21."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49652237&how=up&goto=news"
+|                           id="up_49652237"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.upsocl.com/en/16-year-old-mexican-student-creates-an-acoustic-fire-extinguisher-that-uses-sound-waves-to-put-out-fires-in-seconds/"
+|                           "Mexican student creates an acoustic fire extinguisher to put out fire in seconds"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=upsocl.com"
+|                             <span>
+|                               class="sitestr"
+|                               "upsocl.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49652237"
+|                           "301 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=rguiscard"
+|                           "rguiscard"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T01:00:56.000000Z"
+|                           <a>
+|                             href="item?id=49652237"
+|                             "13 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49652237"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49652237&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49652237"
+|                           "97 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49649124"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "22."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49649124&how=up&goto=news"
+|                           id="up_49649124"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://auberon.xyz/blog/posts/deathray/"
+|                           "The Deathray: A simple way for an untrusted site to freeze a Mac"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=auberon.xyz"
+|                             <span>
+|                               class="sitestr"
+|                               "auberon.xyz"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49649124"
+|                           "238 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=auberonedu"
+|                           "auberonedu"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T19:34:20.000000Z"
+|                           <a>
+|                             href="item?id=49649124"
+|                             "16 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49649124"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49649124&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49649124"
+|                           "160 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49658192"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "23."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49658192&how=up&goto=news"
+|                           id="up_49658192"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.cbsnews.com/news/rising-diesel-prices-consumer-impact/"
+|                           "Diesel prices in U.S. top $6 a gallon for first time"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=cbsnews.com"
+|                             <span>
+|                               class="sitestr"
+|                               "cbsnews.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49658192"
+|                           "61 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=ck2"
+|                           "ck2"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-11T13:35:30.000000Z"
+|                           <a>
+|                             href="item?id=49658192"
+|                             "51 minutes ago"
+|                         " "
+|                         <span>
+|                           id="unv_49658192"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49658192&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49658192"
+|                           "75 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49610596"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "24."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49610596&how=up&goto=news"
+|                           id="up_49610596"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://vincent.bernat.ch/en/blog/2026-spanning-tree"
+|                           "An interactive tour of the spanning tree protocol"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=bernat.ch"
+|                             <span>
+|                               class="sitestr"
+|                               "bernat.ch"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49610596"
+|                           "42 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=zdw"
+|                           "zdw"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-08T14:10:33.000000Z"
+|                           <a>
+|                             href="item?id=49610596"
+|                             "6 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49610596"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49610596&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49610596"
+|                           "4 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49639408"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "25."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49639408&how=up&goto=news"
+|                           id="up_49639408"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://mathstodon.xyz/@andreasthom/117240535270608201"
+|                           "More questions about whether researchers can trust OpenAI with unpublished math"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=mathstodon.xyz/andreasthom"
+|                             <span>
+|                               class="sitestr"
+|                               "mathstodon.xyz/andreasthom"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49639408"
+|                           "838 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=pred_"
+|                           "pred_"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T06:49:43.000000Z"
+|                           <a>
+|                             href="item?id=49639408"
+|                             "1 day ago"
+|                         " "
+|                         <span>
+|                           id="unv_49639408"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49639408&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49639408"
+|                           "781 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49647134"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "26."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49647134&how=up&goto=news"
+|                           id="up_49647134"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://musictheory.pugetsound.edu/mt21c/MusicTheory.html"
+|                           "Music Theory for the 21st-Century Classroom"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=pugetsound.edu"
+|                             <span>
+|                               class="sitestr"
+|                               "pugetsound.edu"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49647134"
+|                           "254 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=aanet"
+|                           "aanet"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T17:14:12.000000Z"
+|                           <a>
+|                             href="item?id=49647134"
+|                             "21 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49647134"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49647134&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49647134"
+|                           "118 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49650418"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "27."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49650418&how=up&goto=news"
+|                           id="up_49650418"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://www.ntsb.gov:443/news/press-releases/Pages/NR20260909.aspx"
+|                           "NTSB issues investigative update on B-767 runway excursion accident in Miami"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=ntsb.gov"
+|                             <span>
+|                               class="sitestr"
+|                               "ntsb.gov"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49650418"
+|                           "132 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=mckn1ght"
+|                           "mckn1ght"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T21:30:55.000000Z"
+|                           <a>
+|                             href="item?id=49650418"
+|                             "16 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49650418"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49650418&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49650418"
+|                           "232 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49645686"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "28."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49645686&how=up&goto=news"
+|                           id="up_49645686"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://planetscale.com/blog/introducing-neki"
+|                           "Neki – Sharded Postgres"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=planetscale.com"
+|                             <span>
+|                               class="sitestr"
+|                               "planetscale.com"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49645686"
+|                           "259 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=simon_weber"
+|                           "simon_weber"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T15:43:49.000000Z"
+|                           <a>
+|                             href="item?id=49645686"
+|                             "22 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49645686"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49645686&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49645686"
+|                           "140 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49645907"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "29."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49645907&how=up&goto=news"
+|                           id="up_49645907"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://codeberg.org/forgejo/forgejo/src/branch/forgejo/release-notes-published/16.0.4.md"
+|                           "Forgejo <=16.0.3 Critical RCE"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=codeberg.org/forgejo"
+|                             <span>
+|                               class="sitestr"
+|                               "codeberg.org/forgejo"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49645907"
+|                           "199 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=weierstass"
+|                           "weierstass"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T15:57:40.000000Z"
+|                           <a>
+|                             href="item?id=49645907"
+|                             "22 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49645907"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49645907&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49645907"
+|                           "77 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="athing submission"
+|                     id="49651221"
+|                     <td>
+|                       align="right"
+|                       class="title"
+|                       valign="top"
+|                       <span>
+|                         class="rank"
+|                         "30."
+|                     <td>
+|                       class="votelinks"
+|                       valign="top"
+|                       <center>
+|                         <a>
+|                           href="vote?id=49651221&how=up&goto=news"
+|                           id="up_49651221"
+|                           <div>
+|                             class="votearrow"
+|                             title="upvote"
+|                     <td>
+|                       class="title"
+|                       <span>
+|                         class="titleline"
+|                         <a>
+|                           href="https://nasutton.notion.site/Nine-coding-harnesses-vs-your-laptop-3d139990182b80d59fa3cf500f0450ba?pvs=74"
+|                           "Nine coding harnesses vs. your laptop"
+|                         <span>
+|                           class="sitebit comhead"
+|                           " ("
+|                           <a>
+|                             href="from?site=nasutton.notion.site"
+|                             <span>
+|                               class="sitestr"
+|                               "nasutton.notion.site"
+|                           ")"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="subtext"
+|                       <span>
+|                         class="subline"
+|                         <span>
+|                           class="score"
+|                           id="score_49651221"
+|                           "140 points"
+|                         " by "
+|                         <a>
+|                           class="hnuser"
+|                           href="user?id=nasutton12"
+|                           "nasutton12"
+|                         " "
+|                         <span>
+|                           class="age"
+|                           title="2026-09-10T22:54:01.000000Z"
+|                           <a>
+|                             href="item?id=49651221"
+|                             "11 hours ago"
+|                         " "
+|                         <span>
+|                           id="unv_49651221"
+|                         " | "
+|                         <a>
+|                           href="hide?id=49651221&goto=news"
+|                           "hide"
+|                         " | "
+|                         <a>
+|                           href="item?id=49651221"
+|                           "46 comments"
+|                   <tr>
+|                     class="spacer"
+|                     style="height:5px"
+|                   <tr>
+|                     class="morespace"
+|                     style="height:10px"
+|                   <tr>
+|                     <td>
+|                       colspan="2"
+|                     <td>
+|                       class="title"
+|                       <a>
+|                         class="morelink"
+|                         href="?p=2"
+|                         rel="next"
+|                         "More"
+|           <tr>
+|             <td>
+|               <img>
+|                 height="10"
+|                 src="s.gif"
+|                 width="0"
+|               <table>
+|                 cellpadding="1"
+|                 cellspacing="0"
+|                 width="100%"
+|                 <tbody>
+|                   <tr>
+|                     <td>
+|                       bgcolor="#ff6600"
+|               <br>
+|               "
+"
+|               <center>
+|                 <span>
+|                   class="yclinks"
+|                   <a>
+|                     href="newsguidelines.html"
+|                     "Guidelines"
+|                   " | "
+|                   <a>
+|                     href="newsfaq.html"
+|                     "FAQ"
+|                   " | "
+|                   <a>
+|                     href="lists"
+|                     "Lists"
+|                   " | "
+|                   <a>
+|                     href="https://github.com/HackerNews/API"
+|                     "API"
+|                   " | "
+|                   <a>
+|                     href="security.html"
+|                     "Security"
+|                   " | "
+|                   <a>
+|                     href="https://www.ycombinator.com/legal/"
+|                     "Legal"
+|                   " | "
+|                   <a>
+|                     href="https://www.ycombinator.com/apply/"
+|                     "Apply to YC"
+|                   " | "
+|                   <a>
+|                     href="mailto:hn@ycombinator.com"
+|                     "Contact"
+|                 <br>
+|                 <br>
+|                 "
+"
+|                 <form>
+|                   action="//hn.algolia.com/"
+|                   method="get"
+|                   "Search: "
+|                   <input>
+|                     autocapitalize="off"
+|                     autocomplete="off"
+|                     autocorrect="off"
+|                     name="q"
+|                     size="17"
+|                     spellcheck="false"
+|                     type="text"
+|     <script>
+|       src="hn.js?e1A2H4cHxVYFl1HF3Snj"
+|       type="text/javascript"

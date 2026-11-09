@@ -12,8 +12,24 @@
 #define MAX_THREADS (1024 * 1024 - 1)
 #define RESERVED_THREADS 32
 
+// Syscalls 0..127 have individual accounting rows; higher numbers, including
+// rejected ones, share row 128 so a new ABI number remains visible.
+#define ACCOUNTING_SYSCALL_OVERFLOW 128
+#define ACCOUNTING_SYSCALL_ROWS 129
+#define ACCOUNTING_CAUSE_NESTING 16
+
+typedef enum {
+	ACCOUNTING_CAUSE_FAULT = 1,
+	ACCOUNTING_CAUSE_INTERRUPT = 2,
+} accounting_nested_cause_t;
+
 #define THREAD_USER_STACK_VIRTUAL_START 0x1000
-#define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack
+#define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack: every thread's, unless a program asks more
+// The most a program may ask for its main thread (SCRIPT_STACK.md § 4): a
+// PT_GNU_STACK size from THREAD_USER_STACK_SIZE up to this is kept, any
+// other gets the default. The stack is physical and contiguous, so the cap
+// keeps one program from asking for the machine.
+#define THREAD_USER_STACK_MAX   0x1000000	//16MB
 #define THREAD_USER_STACK_INITIAL_VIRT_ADDRESS THREAD_USER_STACK_VIRTUAL_START + THREAD_USER_STACK_SIZE - 8
 
 #define THREAD_KERNEL_STACK_VIRTUAL_START 0x20000
@@ -54,7 +70,7 @@ typedef struct
 typedef struct s_thread
 {
 	uint64_t threadID;
-	uint64_t mp_apic;
+	uint64_t pinnedCPU;   // the CPU number it may run on, or THREAD_NO_AFFINITY
 	// THE TWO HALVES OF DYING (split 2026-08-09; they were one flag, and the
 	// seam cost a day). `exited` means RETIRED — nothing left to run, the
 	// scheduler may file this thread under ZOMBIE and never wake it again.
@@ -72,6 +88,15 @@ typedef struct s_thread
 	volatile bool exited;
 	volatile bool exiting;
 	bool idleThread, execDontSaveRegisters;
+	// A doorbell answered for this thread this pass: the pick takes it over
+	// aging, once, and the dispatch clears it (doorbell.h). Not a priority.
+	bool expedite;
+	// A wake that found this thread registered as a waiter but not yet
+	// parked (scheduler_wake_or_owe): the requeue that would park it in
+	// ISLEEP makes it RUNNABLE instead, and the wait voids it at the top of
+	// each pass. Read and written only under the scheduler queue lock
+	// (WAKE_OWED.md).
+	bool wakeOwed;
 	volatile uint64_t retVal;
 	thread_context_t regs;
 	// The x87/MMX/SSE register file belongs to the thread just as regs does.
@@ -132,14 +157,14 @@ typedef struct s_thread
 	// The core this thread was most recently DISPATCHED on — stamped by
 	// scheduler_load_thread, one store, no locking (single writer: the
 	// dispatching core). This is "where did it last run", not affinity
-	// (mp_apic is the pin; this is the history). Surfaced in /proc so a
+	// (pinnedCPU is the pin; this is the history). Surfaced in /proc so a
 	// human summing per-core books can tell whose plate the time came off
 	// — the question that broke Chris's idle0 arithmetic the night the
 	// accounting converged (kworker's 0.5% was on core 1 all along).
 	// Since 2026-08-13 it is also load-bearing: the cache-home rule in
 	// scheduler_find_thread_to_run reads it as "where this thread's caches
 	// are warm" and keeps the thread there until waiting beats migrating.
-	uint32_t lastRunApicID;
+	uint32_t lastRunCPU;
 	// When this thread last ENTERED qRunnable (kTicksSinceStart units),
 	// stamped by scheduler_change_thread_queue_locked under the queue lock.
 	// The cache-home rule's other operand: a thread warm on another core is
@@ -149,22 +174,56 @@ typedef struct s_thread
 	// varies with core count and backstop activity; a threshold in it would
 	// mean a different real duration on every machine).
 	uint64_t runnableSinceTick;
-	// CPU time actually spent running, in TSC cycles — charged at context-
-	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
-	// runs 2ms slices between ticks is invisible to sampling but not to
-	// this). Written only by the core the thread runs on, using that core's
-	// own TSC for both endpoints of every delta — cross-core TSC math is
-	// the desync landmine and this field never commits it. Converted to
-	// microseconds at /proc read time (kCPUCyclesPerSecond); raw cycles
-	// never leave the kernel. Idle threads accumulate here like everyone
-	// else — that is what makes "idle %" a measurement, not an assumption.
+	// Committed CPU time, split at privilege and scheduler boundaries rather
+	// than sampled at ticks. A charge adds one same-core TSC delta to this
+	// total and to exactly one of the three buckets below. The sequence lets
+	// a remote /proc reader copy the tuple without seeing a half-written
+	// charge. Idle occupancy belongs to the idle bucket, including a
+	// compositor hlt redirected to this core's idle thread.
+	uint64_t acctSequence;
 	uint64_t runCycles;
+	uint64_t userCycles;
+	uint64_t systemCycles;
+	uint64_t idleCycles;
+	// Recoverable faults and IRQs can nest in either order. The top cause
+	// owns each committed kernel span; a blocked resolver keeps the stack
+	// on its thread across dispatch and migration. Excess nesting is charged
+	// to the remainder until it unwinds instead of misnaming the owner.
+	uint8_t acctCauseStack[ACCOUNTING_CAUSE_NESTING];
+	uint8_t acctCauseDepth;
+	uint16_t acctCauseOverflow;
+	uint64_t faultCycles;
+	uint16_t acctSyscallNumber;
+	bool acctInSyscall;
+	bool acctSelfIpiHalt;
+	// A running syscall keeps its row across a scheduler block and migration.
+	// Nested fault and IRQ time and the self-IPI halt span are excluded.
+	// The total is copied with systemCycles for a raw remainder.
+	uint64_t syscallCyclesTotal;
+	uint64_t interruptCycles;
+	uint64_t interruptCount;
+	uint64_t selfIpiHaltCycles;
+	uint64_t selfIpiHaltCount;
+	uint64_t acctSyscallCalls[ACCOUNTING_SYSCALL_ROWS];
+	uint64_t acctSyscallCycles[ACCOUNTING_SYSCALL_ROWS];
+	// Resolved page faults belong to the faulting thread. A major fault
+	// needed a file read; anonZeroPages counts demand-zero pages allocated
+	// while resolving faults, including a discarded twin resolution.
+	uint64_t minorFaults;
+	uint64_t majorFaults;
+	uint64_t anonZeroPages;
+	// Next handle index for task-window wait fairness; used by this thread.
+	uint32_t gui_wait_cursor;
 } thread_t;
 
 _Static_assert(offsetof(thread_t, fpuState) % 16 == 0,
 		"thread FXSAVE state must begin on a 16-byte boundary");
 
-thread_t* createThread(void* parentTask, bool kernelThread);
+// `userStack` is the ring-3 stack the program asked for, 0 for the default
+// (THREAD_USER_STACK_SIZE): a task's main thread takes its PT_GNU_STACK
+// size, a spawned thread 0. The size it got is the thread's esp3Size, which
+// every reader of the stack's bounds uses.
+thread_t* createThread(void* parentTask, bool kernelThread, uint64_t userStack);
 uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);
 // Return a thread ID to the pool (thread.c owns the TID bitmap). Called by
 // the undertaker (task_destroy) — a buried thread's ID is reusable.

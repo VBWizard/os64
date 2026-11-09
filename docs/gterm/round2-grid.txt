@@ -1,0 +1,15 @@
+Before: 93331ec8 UI, scrollbar 40 px
+[user] F3 grid 98x35 cell 14x29
+[user] F3 child startup 98x35
+[user] F3 child input usable, exiting
+[user] F3 PASS: fixture finished
+
+After: corrected UI, scrollbar 40 px then 4 px
+[user] F3 grid 100x35 cell 14x29
+[user] F3 child startup 100x35
+[user] F3 child input usable, exiting
+[user] F3 PASS: fixture finished
+[user] F3 grid 100x35 cell 14x29
+[user] F3 child startup 100x35
+[user] F3 child input usable, exiting
+[user] F3 PASS: fixture finished

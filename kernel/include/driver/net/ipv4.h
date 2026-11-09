@@ -66,6 +66,7 @@ typedef struct ipv4_stats
 	uint64_t rx_truncated;         // lengths don't add up
 	uint64_t rx_fragment_dropped;  // the loud fragment drop (see stance above)
 	uint64_t rx_not_for_us;        // unicast to someone else's address
+	uint64_t rx_martian;           // a 127/8 source or destination on a real card — forged
 	uint64_t rx_unknown_proto;     // protocol we don't parse yet
 	uint64_t tx_sent;
 	uint64_t tx_awaiting_arp;      // DROPPED: next hop unresolved and no room to hold it
@@ -96,9 +97,9 @@ void ipv4_arp_resolved(net_device_t* dev, uint32_t ip);
 
 // Wrap `payload` in an IPv4 header and send it toward dst_ip. Handles the
 // host routing decision (on-link vs gateway) and ARP resolution. Returns
-// 0 = handed to the wire; -2 = next hop not yet resolved (an ARP query was
-// just broadcast — retry shortly; see the first-packet note at the
-// implementation); other negatives = refused.
+// 0 = accepted by the driver; negatives include unresolved ARP, construction
+// errors and driver refusal. Driver codes overlap the ARP -2 result; callers
+// needing the distinction use ipv4_send_from_ex and its disposition.
 int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
                   const void* payload, uint16_t length);
 
@@ -109,5 +110,26 @@ int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
 // in kNetIPv4Address.
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length);
+
+// Submission disposition, decided with the send. PARKED may be held for
+// ARP or dropped if no pending slot is free; the slot holds one frame per
+// neighbour and a later PARKED frame replaces it, which is why TCP holds
+// its output after one until that unit is acknowledged or resent by its
+// timer. DROPPED is a driver failure
+// (possibly transient); INVALID is rejected by IPv4's construction checks.
+// TCP retains lost-packet responsibility for PARKED and DROPPED, but stops
+// the output pass. No driver API change or post-send ARP lookup is needed.
+typedef enum
+{
+	IPV4_TX_SENT,
+	IPV4_TX_PARKED,
+	IPV4_TX_DROPPED,
+	IPV4_TX_INVALID,
+} ipv4_tx_t;
+
+// ipv4_send_from, with the disposition (may be NULL). Same return values.
+int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
+                          uint8_t protocol, const void* payload, uint16_t length,
+                          ipv4_tx_t* how);
 
 #endif // IPV4_H

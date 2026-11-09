@@ -35,12 +35,24 @@
 // Booted without the GUI. Moved from -4 to make room for the common
 // INTERRUPTED sentinel above — every consumer names it symbolically.
 #define GUI_ERR_NOT_RUNNING     (-6)
+#define GUI_ERR_BUSY            (-7)
+#define GUI_ERR_NOT_FOCUSED     (-8)
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,
                           uint32_t w, uint32_t h, uint64_t flags);
 
 int64_t gui_window_destroy(int64_t handle);
+
+// Rename an owned window. `title` is a KERNEL string (the syscall copies it
+// in first); `flags` is GUI_WINDOW_TITLE_UTF8 or 0. os64/gui.h carries the
+// contract.
+int64_t gui_window_set_pinned(int64_t handle,uint64_t pinned);
+int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags);
+
+// Owner-only content floors; os64/gui.h defines normalization and growth.
+int64_t gui_window_focus(int64_t handle);
+int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height);
 
 // Get the window's drawable CANVAS (the client-owned back buffer). Draw at
 // will — nothing shows until publish() snapshots your damage rect into the
@@ -62,6 +74,10 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage);
 // Mouse coordinates in events are CONTENT-local.
 int64_t gui_event_poll(int64_t handle, input_event_t *out);
 
+// Coalesce a nonzero mask for a window owned by the calling task and wake
+// its event waiter. No user pointers; GUI_ERR_* on failure, zero on success.
+int64_t gui_event_ring(int64_t handle, uint32_t mask);
+
 // Block until an event arrives on the window (1 = event copied out), the
 // window dies under us (GUI_ERR_INVALID_HANDLE), or the caller has a signal
 // pending that ends the wait (GUI_ERR_INTERRUPTED — signal_park_must_end:
@@ -72,6 +88,10 @@ int64_t gui_event_poll(int64_t handle, input_event_t *out);
 // again. The idle answer to a
 // poll loop: an app that waits costs NOTHING until somebody types at it.
 int64_t gui_event_wait(int64_t handle, input_event_t *out);
+
+// Nonconsuming task-wide readiness; see os64/gui.h for conflicts and lifetime.
+int64_t gui_event_wait_any(int64_t *out_handle);
+int64_t gui_window_get_content_rect(int64_t handle, rect_t *out);
 
 int64_t gui_screen_info(uint32_t *width, uint32_t *height);
 

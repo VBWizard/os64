@@ -1,0 +1,10 @@
+<!doctype html>
+<title>The runner's own: a harness that times out</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// The harness's own ten seconds end this page, so it fails whole: the
+// first test's pass is not one.
+test(function() {}, "a pass on a page whose harness timed out");
+async_test(function(t) {}, "a test that never ends");
+</script>

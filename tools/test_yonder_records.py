@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""tools/yonder_records.py, the one reader of page files: every way a file
+can fail to be a whole record is named, and never read as a record of what
+could be read of it; a whole record is read, and its REPLAY lines give its
+state by the State order. Run with `python3 -I tools/test_yonder_records.py`;
+tools/test_yonder_replay_host.sh runs it with the replay's own cases."""
+import importlib.util
+import os
+import pathlib
+import tempfile
+import unittest
+
+
+def load(name):
+    path = pathlib.Path(__file__).resolve().parent / f'{name}.py'
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+records = load('yonder_records')
+
+WHOLE = b'address: https://a.test/\nverdict: 1 MISSING, 1 FAILED\nMISSING global fetch (2)\nFAILED page: no (1)\n'
+
+# Each malformation, and the words its reason must hold.
+MALFORMED = {
+    'empty': (b'', 'not a page file'),
+    'byte order mark': (b'\xef\xbb\xbf' + WHOLE, 'byte order mark'),
+    'carriage returns': (WHOLE.replace(b'\n', b'\r\n'), 'control byte'),
+    'no address': (b'verdict: clean\n', 'not a page file'),
+    'cut after the address': (b'address: https://a.test/\n', 'second line is not a verdict'),
+    'a verdict of nothing it knows': (b'address: https://a.test/\nverdict: fine\n', 'second line is not a verdict'),
+    'two verdict lines': (b'address: https://a.test/\nverdict: clean\nverdict: clean\n', 'a second verdict line'),
+    'a line short of its verdict': (b'address: https://a.test/\nverdict: 2 MISSING\nMISSING global fetch (1)\n',
+                                    'counts 2 MISSING and 0 FAILED lines, and it holds 1 and 0'),
+    'a line past its verdict': (b'address: https://a.test/\nverdict: clean\nFAILED page: no (1)\n',
+                                'counts 0 MISSING and 0 FAILED lines, and it holds 0 and 1'),
+    'a record line with no count': (b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global fetch\n',
+                                    'a record line with no count'),
+    'a REPLAY line on a record yonder wrote': (b'address: https://a.test/\nverdict: clean\nREPLAY lost its way\n',
+                                               'a REPLAY line of no kind this reader knows'),
+    'a NUL': (WHOLE + b'bytes: 1\x002\n', 'control byte'),
+    'bytes that are not UTF-8': (WHOLE + b'title: caf\xe9\n', 'not UTF-8'),
+    'an escape to bytes that are not UTF-8': (b'address: https://a.test/\\xff\nverdict: clean\n',
+                                              'escapes to bytes that are not UTF-8'),
+    'a verdict spelled with a sign': (b'address: https://a.test/\nverdict: +1 MISSING\nMISSING global x (1)\n',
+                                      'second line is not a verdict'),
+    "a replay's record cut before its end": (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n',
+                                             'without its `end`'),
+    "a replay's record with lines past its end": (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
+                                                  b'end\nFAILED page: no (1)\nend\n', 'past its `end`'),
+    'a state of nothing it knows': (b'address: https://a.test/\nREPLAY state: fine\nverdict: clean\nend\n',
+                                    'a REPLAY line of no kind this reader knows'),
+    'a verdict state with an incomplete line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
+                                                b'REPLAY incomplete script x\nend\n', 'do not agree with its state'),
+    'an incomplete state with nothing incomplete': (b'address: https://a.test/\nREPLAY state: incomplete x\n'
+                                                    b'verdict: clean\nend\n', 'do not agree with its state'),
+    "a judged replay's record that does not say its budget": (
+        b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
+        b'REPLAY not reproduced: image\nend\n', 'does not say its budget'),
+    "a judged replay's record that does not say what it does not reproduce": (
+        b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\nend\n', 'does not say what it does not reproduce'),
+    'a count of 5000 digits': (b'address: https://a.test/\nverdict: ' + b'9' * 5000 + b' MISSING\n',
+                               'a count no record holds'),
+    'a count past UINT32_MAX': (b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global x (4294967296)\n',
+                                'a count no record holds'),
+    "a kept page's record cut before its end": (b'address: https://a.test/\nverdict: clean\nagent: a\nbytes: 3\nkept: whole\n',
+                                                "a kept page's record without its `end`"),
+    "a kept page's record cut after its claim, before its kept": (
+        b'address: https://a.test/\nverdict: clean\nagent: a\nkept lines: 0\nbytes: 3\n', "a kept page's record without its `end`"),
+    'lines past a record\'s end': (b'address: https://a.test/\nverdict: clean\nend\nkept: whole\nend\n',
+                                   'lines past its `end`'),
+    'a control byte': (WHOLE + b'note: a\x01b\n', 'control byte'),
+    'a carriage return mid-line': (WHOLE + b'note: a\rb\n', 'control byte'),
+    'a second address': (b'address: https://a.test/\nverdict: clean\naddress: https://b.test/\n', 'a second `address:`'),
+    "a version 2 record cut before its end": (b'address: https://a.test/\nverdict: clean\nagent: a\nkept: whole\n',
+                                              "without its `end`"),
+    # Any input version 2 added marks it, so one that lost its agent is
+    # still held to the end rule.
+    "a version 2 record without its agent, cut before its end": (
+        b'address: https://a.test/\nverdict: clean\nclock: 1\nkept: whole\n', "without its `end`"),
+    'a control byte in the address': (b'address: https://a.test/\x01\nverdict: clean\n', 'control byte'),
+    "an unjudged replay's record with lines beside its state": (
+        b'address: https://a.test/\nREPLAY state: unjudged gone\nverdict: clean\nend\n', 'lines beside its state'),
+    'a stray kind on the not-reproduced line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
+                                                b'REPLAY not reproduced: image global\nend\n',
+                                                'naming what a replay does reproduce: global'),
+}
+
+
+def replayed(state, body=b'verdict: clean\n', detail=b'', why=b''):
+    """A record as the replay runner writes it."""
+    head = b'address: https://a.test/\nREPLAY state: ' + state + (b' ' + why if why else b'') + b'\n'
+    return head + (b'end\n' if state == b'unjudged' else body + detail + b'REPLAY not reproduced: image\nREPLAY budget: 60 s\nend\n')
+
+
+class ReaderCases(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.dir.name)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def read(self, data, name='a.test-0001.txt'):
+        path = self.root / name
+        path.write_bytes(data)
+        return records.read(path)
+
+    def test_a_whole_record(self):
+        rec = self.read(WHOLE)
+        self.assertIsInstance(rec, records.Record)
+        self.assertEqual(rec.missing, {('global', 'fetch'): 2})
+        self.assertEqual(rec.failed, {('page', 'no'): 1})
+        self.assertEqual(rec.state, records.State.VERDICT)
+
+    def test_every_malformation_is_named(self):
+        for what, (data, words) in MALFORMED.items():
+            with self.subTest(what):
+                rec = self.read(data)
+                self.assertIsInstance(rec, records.Unjudged)
+                self.assertIn(words, str(rec))
+
+    def test_a_directory_is_not_a_page_file(self):
+        (self.root / 'odd.txt').mkdir()
+        rec = records.read(self.root / 'odd.txt')
+        self.assertIsInstance(rec, records.Unjudged)
+        self.assertIn('not a file', str(rec))
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root reads any file')
+    def test_a_file_that_cannot_be_read(self):
+        path = self.root / 'locked.txt'
+        path.write_bytes(WHOLE)
+        path.chmod(0)
+        try:
+            rec = records.read(path)
+        finally:
+            path.chmod(0o644)
+        self.assertIsInstance(rec, records.Unjudged)
+        self.assertIn('cannot be read', str(rec))
+
+    def test_the_state_is_the_one_the_record_says(self):
+        incomplete = b'REPLAY incomplete script https://a.test/M%49SSING.js\n'
+        unfinished = b'REPLAY unfinished it never arrived\n'
+        rec = self.read(replayed(b'incomplete', detail=incomplete, why=b'script'))
+        self.assertEqual((rec.state, rec.incomplete), (records.State.INCOMPLETE, ['script https://a.test/MISSING.js']))
+        rec = self.read(replayed(b'unfinished', detail=unfinished, why=b'it never arrived'))
+        self.assertEqual((rec.state, rec.unfinished, rec.reason),
+                         (records.State.UNFINISHED, ['it never arrived'], 'it never arrived'))
+        # Both: unfinished, the incomplete line kept as detail.
+        for lines in (incomplete + unfinished, unfinished + incomplete):
+            rec = self.read(replayed(b'unfinished', detail=lines, why=b'it never arrived'))
+            self.assertEqual(rec.state, records.State.UNFINISHED)
+            self.assertEqual(len(rec.incomplete), 1)
+        rec = self.read(replayed(b'unjudged', why=b'its record could not be written'))
+        self.assertEqual((rec.state, rec.reason), (records.State.UNJUDGED, 'its record could not be written'))
+
+    def test_kinds_not_reproduced_are_read_and_are_no_state(self):
+        rec = self.read(replayed(b'verdict'))
+        self.assertEqual((rec.state, rec.not_reproduced), (records.State.VERDICT, {'image'}))
+
+    def test_lines_lost_and_never_written_are_unjudged(self):
+        # One marker, whatever the cause: a record that lost a line, even
+        # past a full table, may have lost the one a change made.
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nfailures not kept: 12728\n'
+                        b'REPLAY unjudged: lines lost\n')
+        self.assertEqual((rec.state, rec.reason), (records.State.UNJUDGED, 'its record lost lines it could not keep'))
+        self.assertTrue(rec.lost)
+        self.assertEqual(rec.missing, {})
+        rec = self.read(b'address: https://a.test/\nverdict: unwritten\n')
+        self.assertEqual((rec.state, rec.unwritten, rec.replay), (records.State.UNJUDGED, True, False))
+
+    def test_counts_up_to_uint32_max_and_end(self):
+        rec = self.read(b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global x (4294967295)\nkept: whole\nend\n')
+        self.assertEqual(rec.missing, {('global', 'x'): 4294967295})
+        # A census record written before yonder wrote `end` may lack it.
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nbytes: 3\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+        # A load let go mid-stream: claimed for keeping, never kept, whole.
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nkept lines: 0\nend\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+
+    def test_a_version_1_kept_record_reads_without_end(self):
+        # Kept before `agent:` and `end` were written (REPLAY.md § 3).
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nkept lines: 0\nkept: whole\nbytes: 3\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+
+    def test_display_spells_control_bytes(self):
+        self.assertEqual(records.display('a\x1b[2J\\b\nc\x85\u00e9'), 'a\\x1B[2J\\\\b\\x0Ac\\x85\u00e9')
+
+    def test_the_grammar_vectors(self):
+        # tools/yonder_record_grammar.txt: every vector's line is its kind,
+        # as the replay runner's C reader must also find.
+        path = pathlib.Path(__file__).resolve().parent / 'yonder_record_grammar.txt'
+        seen = 0
+        for raw in path.read_bytes().split(b'\n'):
+            if not raw or raw.startswith(b'#'):
+                continue
+            kind, _, line = raw.partition(b'\t')
+            kind = kind.decode()
+            with self.subTest(line=line[:60]):
+                if kind.startswith('escape:'):
+                    self.assertEqual(records.unescape_bytes(line), bytes.fromhex(kind[len('escape:'):]))
+                elif kind.startswith(('record:', 'replay:')):
+                    # A whole record, its lines joined by `¶`: read, or
+                    # refused with a reason holding the vector's words.
+                    rec = self.read(line.replace('¶'.encode(), b'\n') + b'\n')
+                    expect = kind.split(':', 1)[1]
+                    if expect == 'read':
+                        self.assertIsInstance(rec, records.Record, str(rec))
+                        self.assertEqual(rec.replay, kind.startswith('replay:'))
+                    else:
+                        self.assertTrue(expect.startswith('REFUSED '), kind)
+                        self.assertIsInstance(rec, records.Unjudged)
+                        self.assertIn(expect[len('REFUSED '):], str(rec))
+                else:
+                    self.assertEqual(records.classify(line, index=kind.startswith('index:'))[0], kind)
+            seen += 1
+        self.assertGreater(seen, 100)
+
+    def test_every_txt_is_listed(self):
+        (self.root / 'b.txt').write_bytes(b'')
+        (self.root / 'a.txt').mkdir()
+        (self.root / 'a.html').write_bytes(b'')
+        self.assertEqual([p.name for p in records.page_files(self.root)], ['a.txt', 'b.txt'])
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root lists any directory')
+    def test_a_directory_that_cannot_be_listed(self):
+        locked = self.root / 'locked'
+        locked.mkdir()
+        locked.chmod(0)
+        try:
+            with self.assertRaises(records.Unreadable):
+                records.page_files(locked)
+        finally:
+            locked.chmod(0o755)
+
+
+if __name__ == '__main__':
+    unittest.main()

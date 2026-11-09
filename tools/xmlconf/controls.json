@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "cases": [
+    {"input": "<r/>", "expected": "valid", "actual": "DONE"},
+    {"input": "<r></s>", "expected": "not-wf", "actual": "MALFORMED"},
+    {"input": "<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", "expected": "valid", "actual": "UNSUPPORTED"},
+    {"input": "<r>", "expected": "not-wf", "actual": "MALFORMED"}
+  ]
+}

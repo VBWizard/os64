@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Uploads outside the script heap</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; }
+  .row { margin: 6px 0; }
+  #verdict { font-weight: bold; margin-top: 16px; }
+</style>
+<h1>Uploads outside the script heap</h1>
+<p>A speed test's upload: a string of 25 MiB, four Blobs made of it, each
+sent by an XMLHttpRequest. The string is the page's, but the Blobs' bytes
+are the page's body bound's (XHR_BYTES.md § 7), so four of them, 100 MiB,
+fit beside a 64 MiB script heap and the scripts keep running after. Run
+it with <code>script_memory_mb = 64</code> in yonder.conf: under the
+default heap the bytes would fit in the heap either way.</p>
+<p>Serve this page over http from a server that answers a POST (yonder, like
+other browsers, refuses a request for a file: address), for example
+<code>python3 -c "import http.server as h
+class S(h.SimpleHTTPRequestHandler):
+  def do_POST(s):
+    n=int(s.headers['Content-Length']);s.rfile.read(n);b=str(n).encode()
+    s.send_response(200);s.send_header('Content-Length',len(b));s.end_headers();s.wfile.write(b)
+h.ThreadingHTTPServer(('',8000),S).serve_forever()"</code>, which answers
+each upload with the length it received.</p>
+<div class="row">Sent: <span id="sent">0</span> of <span id="asked">4</span></div>
+<div class="row">Failed: <span id="failed">0</span></div>
+<div class="row">The server received: <span id="received">nothing yet</span></div>
+<div class="row">Ticks after the last upload: <span id="ticks">0</span></div>
+<div id="verdict">waiting</div>
+<script>
+  const asked = 4, length = 25 * 1048576, received = [];
+  let sent = 0, failed = 0, ticks = 0;
+  const say = (id, v) => { document.getElementById(id).textContent = v; };
+  function done() {
+    if (sent + failed < asked) return;
+    say('received', received.join(', '));
+    // A timer that keeps firing is the proof that the scripts still run.
+    const tick = setInterval(() => {
+      say('ticks', ++ticks);
+      if (ticks === 5) {
+        clearInterval(tick);
+        const whole = received.length === asked && received.every(n => n === length);
+        say('verdict', whole ? 'PASS: ' + asked + ' uploads of 25 MiB, every byte received, scripts running'
+                             : 'FAIL: ' + sent + ' sent, ' + failed + ' failed');
+      }
+    }, 200);
+  }
+  // One Blob a task, each sent as it is made: under an emulator a task
+  // that made all four could pass a task's script budget on time alone,
+  // which is not what this page measures. All four are held to the end.
+  let text = '0123456789abcdef'.repeat(length / 16);
+  const blobs = [];
+  function next() {
+    if (blobs.length === asked) { text = null; return; }
+    let blob;
+    try {
+      blob = new Blob([text]);
+    } catch (e) {
+      say('verdict', 'FAIL: Blob ' + blobs.length + ' could not be made: ' + e.name);
+      return;
+    }
+    const i = blobs.length;
+    blobs.push(blob);
+    const x = new XMLHttpRequest();
+    x.open('POST', 'upload-sink-' + i);
+    x.onload = () => { received.push(Number(x.responseText)); say('sent', ++sent); done(); };
+    x.onerror = () => { say('failed', ++failed); done(); };
+    x.send(blob);
+    setTimeout(next, 0);
+  }
+  setTimeout(next, 0);
+</script>

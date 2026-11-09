@@ -11,7 +11,14 @@ int main(int argc, char **argv)
     int32_t nPositionals = os64_args_parse(&args, "clear", &positional, 1);
     if (nPositionals == 0)
     {
-        os64_printf("\f");
+        // Home the cursor, then erase the screen — the ANSI clear every
+        // terminal honors (ncurses' `clear`/`tput clear` emit exactly this).
+        // A form feed cleared os64's OWN renderer and nothing else: over
+        // telnet the bytes reach a real VT100/xterm, which treats 0x0C as
+        // nothing. ESC[2J homes on os64 too, so the ESC[H is redundant here
+        // and load-bearing there (a standard terminal does not move the
+        // cursor on 2J).
+        os64_printf("\033[H\033[2J");
     }
     else if (nPositionals > 0)
     {

@@ -23,8 +23,6 @@
 
 #include "os64/os64.h"
 
-#define OUT_MAX 256   // one decoded token; matches husk's whole-line cap
-
 // Did any write fail? echo used to ignore every return value and exit 0
 // unconditionally — which meant `echo kill > /proc/32/ctl` reported success
 // for a command the kernel had refused, and `$?` said 0. A program that could
@@ -38,8 +36,17 @@ static bool gWriteFailed = false;
 // answer (LIBOS64.md).
 static void emit(const char *s, size_t n)
 {
-    if (os64_write(1, s, n) < 0)
-        gWriteFailed = true;
+    while (n > 0)
+    {
+        int64_t written = os64_write(1, s, n);
+        if (written <= 0 || (uint64_t)written > n)
+        {
+            gWriteFailed = true;
+            return;
+        }
+        s += written;
+        n -= (size_t)written;
+    }
 }
 
 static bool str_is(const char *a, const char *b)
@@ -127,9 +134,18 @@ int main(int argc, char **argv)
 
         if (doEscapes)
         {
-            char out[OUT_MAX];
-            int32_t n = decode_escapes(argv[i], out, sizeof(out), &stop);
+            // Decoding cannot grow an argument: unknown escapes retain
+            // both input bytes. Size by that argument, not the shell line.
+            size_t capacity = os64_strlen(argv[i]) + 1;
+            char *out = os64_malloc(capacity);
+            if (out == NULL)
+            {
+                os64_hprintf(OS64_STDERR, "echo: out of memory\n");
+                return 1;
+            }
+            int32_t n = decode_escapes(argv[i], out, (int32_t)capacity, &stop);
             emit(out, (size_t)n);
+            os64_free(out);
         }
         else
         {

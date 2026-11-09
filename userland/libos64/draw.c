@@ -1,16 +1,13 @@
 // draw.c — libdraw's implementation: surface.c's rasterizer, in ring 3.
 //
-// PORTED, NOT REINVENTED (LIBDRAW.md's instruction, and the house rule):
-// every clipping decision below is surface.c's, line for line where C
-// allows, because that code earned its correctness compositing a live
-// desktop. The differences are exactly three: the types wear their ABI
-// names (os64/gui.h), text comes from the EMBEDDED font instead of the
-// kernel's console font (the kernel stays out of app text, by design),
-// and there is no flush — apps publish, only the compositor touches
-// hardware.
+// Software drawing into userland canvases. Primitives clip to the surface;
+// legacy byte text may additionally clip to a widget rectangle. These glyphs
+// come from the embedded compatibility font; text_draw.c paints positioned
+// outline/bitmap runs. Publishing hands completed pixels to the compositor.
 
 #include "os64/draw.h"
 #include "os64/font_psf1.h"
+#include "os64/charset.h"
 #include "os64/proc.h"     // os64_ticks / os64_sleep — the frame clock's feet
 #include "os64/str.h"      // os64_strlen — ctx_text's measure
 
@@ -78,6 +75,29 @@ void os64_draw_fill_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
     }
 }
 
+void os64_draw_fill_rect_alpha(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               uint32_t color, uint8_t alpha)
+{
+    if (alpha == 255) {
+        os64_draw_fill_rect(dst, r, color);
+        return;
+    }
+    os64_gui_rect_t c;
+    if (alpha == 0 || !os64_rect_intersect(r, surface_bounds(dst), &c))
+        return;
+    uint32_t a = alpha, cr = (color >> 16) & 255, cg = (color >> 8) & 255, cb = color & 255;
+    for (int32_t y = c.y; y < c.y + c.h; y++) {
+        uint32_t *row = surface_row(dst, y) + c.x;
+        for (int32_t x = 0; x < c.w; x++) {
+            uint32_t d = row[x];
+            uint32_t r8 = (cr * a + ((d >> 16) & 255) * (255 - a) + 127) / 255;
+            uint32_t g8 = (cg * a + ((d >> 8) & 255) * (255 - a) + 127) / 255;
+            uint32_t b8 = (cb * a + (d & 255) * (255 - a) + 127) / 255;
+            row[x] = 0xff000000u | r8 << 16 | g8 << 8 | b8;
+        }
+    }
+}
+
 void os64_draw_hline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color)
 {
@@ -119,6 +139,47 @@ void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
     }
 }
 
+void os64_draw_blend(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                     const uint32_t *src, uint32_t w, uint32_t h,
+                     uint32_t src_pitch_px)
+{
+    if (!dst || !src || !w || !h || src_pitch_px < w ||
+        w > INT32_MAX || h > INT32_MAX)
+        return;
+    os64_gui_rect_t want = {x, y, (int32_t)w, (int32_t)h}, c;
+    if (!os64_rect_intersect(want, surface_bounds(dst), &c))
+        return;
+    // Derive source offsets after clipping, keeping extreme offscreen
+    // origins out of pointer arithmetic just as the copy operation does.
+    uint32_t skip_x = (uint32_t)((int64_t)c.x - x);
+    uint32_t skip_y = (uint32_t)((int64_t)c.y - y);
+    for (int32_t row = 0; row < c.h; row++) {
+        const uint32_t *s = src + (size_t)(skip_y + (uint32_t)row) * src_pitch_px + skip_x;
+        uint32_t *d = surface_row(dst, c.y + row) + c.x;
+        int32_t col = 0;
+        while (col < c.w) {
+            uint32_t pixel = s[col], alpha = pixel >> 24;
+            if (!alpha) {
+                col++;
+                continue;
+            }
+            // Opaque runs need neither destination reads nor blend arithmetic.
+            if (alpha == 255) {
+                do {
+                    d[col] = s[col];
+                    col++;
+                } while (col < c.w && (s[col] >> 24) == 255);
+                continue;
+            }
+            uint32_t back = d[col], inv = 255 - alpha;
+            uint32_t r = (((pixel >> 16) & 255) * alpha + ((back >> 16) & 255) * inv + 127) / 255;
+            uint32_t g = (((pixel >> 8) & 255) * alpha + ((back >> 8) & 255) * inv + 127) / 255;
+            uint32_t b = ((pixel & 255) * alpha + (back & 255) * inv + 127) / 255;
+            d[col++] = 0xff000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color)
 {
@@ -128,27 +189,106 @@ void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
 void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                     uint32_t color)
 {
+    if (r.w <= 0 || r.h <= 0) return;
     os64_draw_hline(dst, r.x, r.y, r.w, color);
     os64_draw_hline(dst, r.x, r.y + r.h - 1, r.w, color);
     os64_draw_vline(dst, r.x, r.y, r.h, color);
     os64_draw_vline(dst, r.x + r.w - 1, r.y, r.h, color);
 }
 
+static int32_t round_radius(os64_gui_rect_t r, int32_t radius)
+{
+    if (radius < 0) return 0;
+    if (radius > r.w / 2) radius = r.w / 2;
+    if (radius > r.h / 2) radius = r.h / 2;
+    return radius > 0 ? radius : 0;
+}
+
+// Test pixel centers against a circle, finding the first covered column.
+// Binary search bounds the work even for a huge, mostly offscreen rectangle.
+static int32_t round_inset(int32_t height, int32_t radius, int64_t row)
+{
+    if (!radius) return 0;
+    if (row >= height / 2) row = height - 1 - row;
+    if (row >= radius) return 0;
+    int64_t dy = 2 * (int64_t)radius - 2 * row - 1;
+    int64_t rr = 4 * (int64_t)radius * radius;
+    int32_t lo = 0, hi = radius;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        int64_t dx = 2 * (int64_t)radius - 2 * mid - 1;
+        if (dx * dx + dy * dy <= rr) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+void os64_draw_fill_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               int32_t radius, uint32_t color)
+{
+    os64_gui_rect_t clip;
+    if (os64_rect_is_empty(r) || !os64_rect_intersect(r, surface_bounds(dst), &clip)) return;
+    radius = round_radius(r, radius);
+    for (int32_t y = clip.y; y < clip.y + clip.h; ++y) {
+        int32_t inset = round_inset(r.h, radius, (int64_t)y - r.y);
+        int64_t left = (int64_t)r.x + inset, right = (int64_t)r.x + r.w - inset;
+        if (left < clip.x) left = clip.x;
+        if (right > (int64_t)clip.x + clip.w) right = (int64_t)clip.x + clip.w;
+        uint32_t *row = surface_row(dst, y);
+        for (int64_t x = left; x < right; ++x) row[x] = color;
+    }
+}
+
+void os64_draw_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                          int32_t radius, uint32_t top_left, uint32_t bottom_right)
+{
+    os64_gui_rect_t clip;
+    if (os64_rect_is_empty(r) || !os64_rect_intersect(r, surface_bounds(dst), &clip)) return;
+    radius = round_radius(r, radius);
+    for (int32_t y = clip.y; y < clip.y + clip.h; ++y) {
+        int64_t ry = (int64_t)y - r.y;
+        int32_t outer = round_inset(r.h, radius, ry);
+        bool inner = r.w > 2 && ry > 0 && ry < r.h - 1;
+        int32_t in = inner ? 1 + round_inset(r.h - 2, radius > 0 ? radius - 1 : 0, ry - 1) : 0;
+        uint32_t *row = surface_row(dst, y);
+        for (int32_t x = clip.x; x < clip.x + clip.w; ++x) {
+            int64_t rx = (int64_t)x - r.x;
+            if (rx < outer || rx >= r.w - outer) continue;
+            if (inner && rx >= in && rx < r.w - in) continue;
+            row[x] = rx * r.h + ry * r.w < (int64_t)r.w * r.h ? top_left : bottom_right;
+        }
+    }
+}
+
 int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg)
 {
-    // surface_draw_text's gait, glyphs from the embedded face: paint the
-    // opaque 8-wide cell, clipped per cell via one intersect. No layout
-    // logic beyond advancing the pen — wrapping and flow live upstairs.
+    return os64_draw_text_charset(dst, x, y, str, len, fg, bg,
+                                  OS64_CHARSET_LATIN1);
+}
+
+static int32_t text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                            int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset)
+{
+    // Intersect once with the canvas, then clip each glyph to that region.
+    if (!os64_rect_intersect(clip, surface_bounds(dst), &clip))
+        clip = (os64_gui_rect_t){0, 0, 0, 0};
     for (size_t i = 0; i < len; i++, x += OS64_FONT_GLYPH_W) {
         os64_gui_rect_t cell;
         if (!os64_rect_intersect(
                 (os64_gui_rect_t){x, y, OS64_FONT_GLYPH_W, OS64_FONT_GLYPH_H},
-                surface_bounds(dst), &cell))
+                clip, &cell))
             continue;
 
-        const uint8_t *glyph = os64_font_glyph((uint8_t)str[i]);
+        // The SAME map the kernel's painter uses, against this face rather
+        // than the console's — which is what keeps a gterm and the glass
+        // showing one terminal's bytes the same way.
+        const uint8_t *glyph = os64_charset_glyph(
+            (uint8_t)str[i], charset, os64_font_glyph(0),
+            OS64_FONT_GLYPHS, OS64_FONT_GLYPH_H);
         for (int32_t cy = cell.y; cy < cell.y + cell.h; cy++) {
             uint8_t bits = glyph[cy - y];
             uint32_t *row = surface_row(dst, cy);
@@ -157,6 +297,20 @@ int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
         }
     }
     return x;
+}
+
+int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset)
+{
+    return text_clipped(dst, surface_bounds(dst), x, y, str, len, fg, bg, charset);
+}
+
+int32_t os64_draw_text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                              int32_t x, int32_t y, const char *str, size_t len,
+                              uint32_t fg, uint32_t bg)
+{
+    return text_clipped(dst, clip, x, y, str, len, fg, bg, OS64_CHARSET_LATIN1);
 }
 
 // ── The draw context ────────────────────────────────────────────────────────

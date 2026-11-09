@@ -1,0 +1,9 @@
+guest-external.txt: 0 callbacks closed; zero font/target ownership; 4 popup observations tightly pitched
+guest-held-hid.txt: 3 callbacks closed; zero font/target ownership; 2 popup observations tightly pitched
+guest-held-ps2.txt: 3 callbacks closed; zero font/target ownership; 2 popup observations tightly pitched
+guest-hid.txt: 5 callbacks closed; zero font/target ownership; 46 popup observations tightly pitched
+guest-overflow.txt: 1 callbacks closed; zero font/target ownership; 4 popup observations tightly pitched
+guest-ps2.txt: 2 callbacks closed; zero font/target ownership; 8 popup observations tightly pitched
+heap: mapped/live/blocks/high-water/audit return to warm baseline
+hid: first fresh F10 returns to matching highlighted bar pixels
+ps2: first fresh F10 returns to matching highlighted bar pixels

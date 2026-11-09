@@ -1,0 +1,557 @@
+# Accepted native gesture generations; invalid calibration/VT attempts omitted.
+CREATE 1 2
+WAIT any
+EVENT 1 8
+WAIT any
+EVENT 1 11
+WAIT any
+EVENT 1 3
+WAIT any
+EVENT 1 3
+WAIT any
+EVENT 1 11
+WAIT any
+EVENT 1 17 mask=3 x=220 y=150 w=0 h=0
+WAIT any
+EVENT 1 1
+WAIT single
+EVENT 1 2
+WAIT single
+EVENT 1 1
+CREATE 3 2
+WAIT single
+EVENT 3 8
+WAIT single
+EVENT 3 2
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 3
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 3
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 1
+WAIT single
+EVENT 3 1
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 17 mask=3 x=200 y=140 w=0 h=0
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 2
+WAIT single
+EVENT 3 2
+WAIT single
+EVENT 3 1
+WAIT single
+EVENT 3 2
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 3
+WAIT single
+EVENT 3 11
+WAIT single
+EVENT 3 4
+WAIT single
+EVENT 3 5
+WAIT single
+EVENT 3 1
+CREATE 4 2
+WAIT single
+EVENT 4 8
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 3
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 3
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 1
+WAIT single
+EVENT 4 1
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 17 mask=15 x=90 y=80 w=530 h=320
+WAIT single
+EVENT 4 6
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 2
+WAIT single
+EVENT 4 2
+WAIT single
+EVENT 4 1
+WAIT single
+EVENT 4 2
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 3
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 3
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 3
+WAIT single
+EVENT 4 11
+WAIT single
+EVENT 4 4
+WAIT single
+EVENT 4 5
+WAIT single
+EVENT 4 1
+CREATE 5 2
+WAIT single
+EVENT 5 8
+WAIT single
+EVENT 5 2
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 1
+WAIT single
+EVENT 5 1
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 17 mask=14 x=0 y=80 w=540 h=320
+WAIT single
+EVENT 5 6
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 2
+WAIT single
+EVENT 5 2
+WAIT single
+EVENT 5 1
+WAIT single
+EVENT 5 2
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 3
+WAIT single
+EVENT 5 11
+WAIT single
+EVENT 5 4
+WAIT single
+EVENT 5 5
+WAIT single
+EVENT 5 1
+CREATE 6 2
+WAIT single
+EVENT 6 8
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 1
+WAIT single
+EVENT 6 1
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 17 mask=13 x=90 y=0 w=530 h=340
+WAIT single
+EVENT 6 6
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 2
+WAIT single
+EVENT 6 2
+WAIT single
+EVENT 6 1
+WAIT single
+EVENT 6 2
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 3
+WAIT single
+EVENT 6 11
+WAIT single
+EVENT 6 4
+WAIT single
+EVENT 6 5
+WAIT single
+EVENT 6 1
+CREATE 7 2
+WAIT single
+EVENT 7 8
+WAIT single
+EVENT 7 2
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 1
+WAIT single
+EVENT 7 1
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 17 mask=12 x=0 y=0 w=540 h=340
+WAIT single
+EVENT 7 6
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 2
+WAIT single
+EVENT 7 2
+WAIT single
+EVENT 7 1
+WAIT single
+EVENT 7 2
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 3
+WAIT single
+EVENT 7 11
+WAIT single
+EVENT 7 4
+WAIT single
+EVENT 7 5
+WAIT single
+EVENT 7 1
+CREATE 8 2
+WAIT single
+EVENT 8 8
+WAIT single
+EVENT 8 2
+WAIT single
+EVENT 8 11
+WAIT single
+EVENT 8 3
+WAIT single
+EVENT 8 11
+WAIT single
+EVENT 8 11
+WAIT single
+EVENT 8 1
+WAIT single
+EVENT 8 2
+WAIT single
+EVENT 8 3
+WAIT single
+EVENT 8 11
+WAIT single
+EVENT 8 3
+WAIT single
+EVENT 8 11
+WAIT single
+EVENT 8 4
+WAIT single
+EVENT 8 5
+WAIT single
+EVENT 8 1
+CREATE 9 2
+WAIT single
+EVENT 9 8
+WAIT single
+EVENT 9 11
+WAIT single
+EVENT 9 3
+WAIT single
+EVENT 9 11
+WAIT single
+EVENT 9 11
+WAIT single
+EVENT 9 1
+WAIT single
+EVENT 9 1
+WAIT single
+EVENT 9 17 mask=3 x=160 y=120 w=0 h=0
+WAIT single
+EVENT 9 2
+WAIT single
+EVENT 9 2
+WAIT single
+EVENT 9 1
+WAIT single
+EVENT 9 2
+WAIT single
+EVENT 9 3
+WAIT single
+EVENT 9 11
+WAIT single
+EVENT 9 3
+WAIT single
+EVENT 9 11
+WAIT single
+EVENT 9 4
+WAIT single
+EVENT 9 5
+WAIT single
+EVENT 9 1
+CREATE 10 2
+WAIT single
+EVENT 10 8
+WAIT single
+EVENT 10 2
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 1
+WAIT single
+EVENT 10 1
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 2
+WAIT single
+EVENT 10 2
+WAIT single
+EVENT 10 1
+WAIT single
+EVENT 10 2
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 3
+WAIT single
+EVENT 10 11
+WAIT single
+EVENT 10 4
+WAIT single
+EVENT 10 5
+WAIT single
+EVENT 10 1
+CREATE 11 2
+WAIT single
+EVENT 11 8
+WAIT single
+EVENT 11 2
+WAIT single
+EVENT 11 11
+WAIT single
+EVENT 11 3
+WAIT single
+EVENT 11 11
+WAIT single
+EVENT 11 11
+WAIT single
+EVENT 11 1
+CREATE 12 2
+WAIT single
+EVENT 12 8
+WAIT single
+EVENT 12 2
+WAIT single
+EVENT 12 11
+WAIT single
+EVENT 12 1
+WAIT single
+EVENT 12 2
+WAIT single
+EVENT 12 11
+WAIT single
+EVENT 12 3
+WAIT single
+EVENT 12 11
+WAIT single
+EVENT 12 3
+WAIT single
+EVENT 12 11
+WAIT single
+EVENT 12 4
+WAIT single
+EVENT 12 5
+WAIT single
+EVENT 12 1
+CREATE 13 2
+WAIT single
+EVENT 13 8
+WAIT single
+EVENT 13 2
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 1
+WAIT single
+EVENT 13 6
+WAIT single
+EVENT 13 2
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 1
+WAIT single
+EVENT 13 2
+WAIT single
+EVENT 13 3
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 3
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 3
+WAIT single
+EVENT 13 11
+WAIT single
+EVENT 13 4
+WAIT single
+EVENT 13 5
+WAIT single
+EVENT 13 1

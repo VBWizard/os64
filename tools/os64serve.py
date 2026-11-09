@@ -1,73 +1,21 @@
 #!/usr/bin/env python3
-r"""os64serve.py - the other end of os64get. Run this on the build PC.
+r"""Serve build files to os64get. Run on the build PC; stop with Ctrl+C.
 
-It is a VALET, not a daemon: you start it when you want to refresh the P5
-and you stop it with Ctrl-C when you are done. It has no config file, no
-install step, no service registration, and it serves exactly the
-directories you name on the command line — one or several, searched in the
-order given, first hit wins (grown from one on 2026-08-21, the day the
-KERNEL started traveling this way: userland/bin carries the apps,
-kernel/bin carries os64_kernel, and a kernel refresh should not require
-copying binaries between them).
+Usage, from the repository root:
+    python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages userland/bin/fonts=fonts kernel/bin=kernelbin etc frames=frames assets/icons/default=icons
 
-    python3 os64serve.py [directory ...] [--port 6464]
+Options:
+    [PATH|PATH=LOT ...] [--port 6464] [--bind 0.0.0.0]
 
-Run it on the WINDOWS side of the build PC, not inside WSL2. That is not a
-style preference: WSL2 lives behind a NAT of its own, so a listener there
-is not reachable from the P5 without port-proxy incantations, and the whole
-point of the P5 dialing OUT was to keep NAT out of the story entirely.
+Directories are searched in order, first usable file wins, without recursion.
+LOT labels describe the source; the client's os64get.conf chooses destinations.
+With no directory arguments the server offers its current directory.
+The current os64get client uses port 6464 with no override.
 
-BUT THE FILES LIVE IN WSL2, which looks like a contradiction and is not.
-Windows can read WSL2's filesystem directly over \\wsl$, so the listener
-runs as a Windows process (reachable on the LAN) while serving the build
-tree in place (no copy, no mirror, no staging directory). From a WSL2
-shell, invoking the Windows interpreter does both at once:
-
-    cd /mnt/c/temp     # a Windows-visible cwd; python.exe cannot use a Linux one
-    python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
-                '\\wsl$\<distro>\home\<you>\src\os64\userland\bin' \
-                '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin'
-
-`wsl -l` names the distro. Verified 2026-08-16 serving userland/bin to the
-P5 with zero files copied anywhere.
-
-Windows will likely prompt about the firewall the first time Python binds —
-say yes, or the P5's connections are dropped before this program ever sees
-them. (The symptom is a client that says "timed out", not "refused".)
-
-THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
-
-    client -> server:   GET <name>\n
-    server -> client:   OK <length-decimal> <crc32-hex8>\n  then <length> bytes
-                   or:  NO <reason>\n
-
-    client -> server:   LIST\n
-    server -> client:   <name> <length-decimal> <crc32-hex8>\n   (one per file)
-                        .\n
-
-LIST arrived 2026-08-22, when libos64 became a shared object and the payload
-became 66 files: `os64get -a HOST` asks what the valet has and fetches all of
-it, routing each file by /etc/os64get.conf. The lone "." terminator is SMTP's,
-from 1982 - and it is still the right answer for a line protocol a human might
-drive by hand.
-
-One connection per file. ASCII where a human might read it, binary only
-where a machine must. You can drive it by hand with telnet, which matters
-more than it sounds: a protocol you can type is a protocol you can debug
-at 1am on a machine with no tooling.
-
-The CRC is zlib.crc32 - CRC-32/ISO-HDLC, the same one in Ethernet frames
-and PNG chunks and gzip. os64's os64_crc32 computes the identical value;
-tools/test_crc32_host.c checks both against the published vectors so that
-neither end has to be told which flavour the other meant.
-
-SECURITY, stated honestly: there is none. No authentication, no encryption,
-and the only access control is the one rule below - the requested name must
-be a single path component with no separators and no "..", so the serving
-directories are the entire namespace. That is adequate for an isolated
-two-node build segment with no gateway, which is what this was designed
-for, and it is NOT adequate for anything else. Do not run it on your home
-LAN and then forget it is running.
+See OS64GET.md for the installer workflow, configuration, replacement backups,
+cleanup, Windows/WSL setup, protocol, and limits. This is the GET/LIST valet,
+not an HTTP server. It has no authentication or encryption; CRC verifies
+transfer integrity, not the identity of the source.
 """
 
 import argparse
@@ -140,10 +88,10 @@ def read_served_file(directory, name):
 
 def read_served_file_multi(directories, name):
     """The name is looked up in each directory in command-line order; the
-    first that has it wins. Order-as-priority instead of a collision error,
-    because the two real lots (userland/bin, kernel/bin) share no names
-    today — and if they ever do, the operator's ordering IS the decision."""
-    for directory in directories:
+    first that has it wins. The build checks program/test name collisions;
+    asset collections can share metadata filenames. Server ordering decides
+    which such file is offered, so serve one icon set per catalogue."""
+    for directory, _lot in directories:
         data = read_served_file(directory, name)
         if data is not None:
             return data
@@ -177,11 +125,23 @@ def serve_one(conn, addr, directories):
         # the client would be stale the first time an app was added.
         #
         #     client -> server:  LIST\n
-        #     server -> client:  <name> <length> <crc32hex>\n   (one per file)
+        #     server -> client:  <name> <length> <crc32hex> <lot>\n  (per file)
         #                        .\n
         #
         # A lone "." ends it - SMTP's terminator since 1982, and still the
         # right answer for a line protocol a human might type by hand.
+        #
+        # THE LOT is the fourth field (2026-08-29) and it is a source label,
+        # not a destination: os64get.conf maps `@<lot>` to a directory, and
+        # its name rules out-rank its lot rules so one lot can still hold
+        # files bound for different places. Files from an unlabelled
+        # directory carry "-". It is APPENDED rather than woven in because an
+        # os64get built before lots existed reads the first three fields and
+        # stops - the only thing it loses is the list's CRC (its hex parser
+        # wants exactly eight characters to end of line, and now finds more),
+        # so that one refresh re-checks each file against its own per-file
+        # header instead of skipping identical ones. Slower, never wrong, and
+        # it heals the moment the newer os64get it just fetched is installed.
         #
         # Same first-hit-wins order as GET, and the same safety rules, so
         # every name in the list is a name GET will actually serve: listing a
@@ -189,7 +149,7 @@ def serve_one(conn, addr, directories):
         if line == "LIST":
             seen = set()
             entries = []
-            for directory in directories:
+            for directory, lot in directories:
                 try:
                     for entry in sorted(os.listdir(directory)):
                         if entry in seen or not is_safe_name(entry):
@@ -201,12 +161,14 @@ def serve_one(conn, addr, directories):
                         data = read_served_file_multi(directories, entry)
                         if data is None:
                             continue
-                        entries.append((entry, len(data), zlib.crc32(data) & 0xFFFFFFFF))
+                        entries.append((entry, len(data),
+                                        zlib.crc32(data) & 0xFFFFFFFF, lot or "-"))
                 except OSError as exc:
                     print(f"  {addr[0]}: cannot list {directory}: {exc}")
-            body = "".join(f"{n} {ln} {c:08x}\n" for n, ln, c in entries) + ".\n"
+            body = "".join(f"{n} {ln} {c:08x} {lot}\n"
+                           for n, ln, c, lot in entries) + ".\n"
             conn.sendall(body.encode("ascii"))
-            total = sum(ln for _, ln, _ in entries)
+            total = sum(ln for _name, ln, _crc, _lot in entries)
             print(f"  {addr[0]}: listed {len(entries)} files ({total} bytes)")
             return
 
@@ -247,36 +209,135 @@ def serve_one(conn, addr, directories):
         conn.close()
 
 
+def split_lot(spec):
+    """A served directory is `PATH` or `PATH=LOT`.
+
+    The LOT is a short label naming WHERE THE FILE CAME FROM, and it is the
+    only thing this program knows about destinations: os64get.conf decides
+    where a lot installs (`@tests = /tests`). Keeping the label a source name
+    rather than a destination is what lets one lot hold files bound for
+    several places — kernel/bin carries fifteen fixtures for /tests, but also
+    os64_kernel for /fat/boot and libtest.so for /lib, and the client's
+    name rules out-rank its lot rules precisely so those still peel off.
+
+    A directory given with no `=LOT` is served unlabelled, which is what
+    every invocation did before lots existed and still means "route me by
+    name alone".
+    """
+    path, sep, lot = spec.partition("=")
+    if not sep:
+        return os.path.realpath(spec), None
+    if not lot or " " in lot:
+        raise ValueError(f"bad lot label in {spec!r}: must be one word after '='")
+    return os.path.realpath(path), lot
+
+
 def main():
     ap = argparse.ArgumentParser(description="Serve files to os64get.")
-    ap.add_argument("directories", nargs="*", default=["."],
-                    help="directories to serve, searched in order, first hit "
-                         "wins (default: the current one)")
+    # default=[] and NOT default=["."]: argparse fills a default in, so with
+    # ["."] there is no way afterwards to tell "the user named nothing" from
+    # "the user named the current directory" — and the first of those is the
+    # one worth shouting about. The fallback to "." happens below instead.
+    ap.add_argument("directories", nargs="*", default=[],
+                    help="directories to serve as PATH or PATH=LOT, searched "
+                         "in order, first hit wins (default: the current one)")
     ap.add_argument("--port", type=int, default=6464)
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default: everything)")
     args = ap.parse_args()
 
-    directories = [os.path.realpath(d) for d in (args.directories or ["."])]
-    for directory in directories:
+    # NO DIRECTORY NAMED MEANS THE CURRENT ONE, and that has to announce
+    # itself. The default is a convenience for a quick ad-hoc serve, but it is
+    # also what a shell hands you when the arguments went somewhere else — a
+    # multi-line command pasted into cmd.exe runs its first line alone — and
+    # the result is a valet quietly offering your home directory to anything
+    # that dials in. An `os64get -a` against that installs it. Loud, then.
+    defaulted = not args.directories
+    try:
+        directories = [split_lot(d) for d in (args.directories or ["."])]
+    except ValueError as exc:
+        print(f"os64serve: {exc}", file=sys.stderr)
+        return 2
+    if defaulted:
+        print("os64serve: NO DIRECTORY NAMED — serving the CURRENT directory:")
+        print(f"           {directories[0][0]}")
+        print("           If you meant to serve something else, stop now: everything")
+        print("           below is offered to anything that connects. (A multi-line")
+        print("           command pasted into cmd.exe runs only its first line.)")
+    for directory, _lot in directories:
         if not os.path.isdir(directory):
             print(f"os64serve: {directory} is not a directory", file=sys.stderr)
             return 2
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # So a Ctrl-C and an immediate restart does not hit TIME_WAIT and refuse
-    # to bind - which during a debugging session is every single restart.
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # A second os64serve on the same port must refuse to start: two of them
+    # each answer some of the requests, and a machine that installs from
+    # both gets a program from one tree and its libraries from the other.
+    # On Linux SO_REUSEADDR lets a Ctrl-C and an immediate restart bind past
+    # TIME_WAIT, which during a debugging session is every single restart,
+    # and still refuses a port another socket is listening on. Windows gives
+    # the same flag another meaning, binding a port another socket IS
+    # listening on, so there SO_EXCLUSIVEADDRUSE does the refusing (Windows
+    # binds past TIME_WAIT without help). Only Windows Python defines it.
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((args.bind, args.port))
     s.listen(4)
 
     print(f"os64serve: serving on {args.bind}:{args.port}, first hit wins:")
-    for directory in directories:
-        print(f"           {directory}")
+    for directory, lot in directories:
+        print(f"           {directory}" + (f"   [lot {lot}]" if lot else ""))
+
+    # A SUBDIRECTORY OF A SERVED DIRECTORY IS NOT SERVED, and saying so at
+    # startup is the difference between a five-second fix and an evening.
+    # The listing walk skips anything that is not a regular file, silently and
+    # correctly — but "silently" is how /tests came to be missing from a
+    # refresh that reported 88 files and no errors, because the fixtures live
+    # under userland/bin/tests and nobody had said that a nested directory
+    # needs naming in its own right.
+    #
+    # CAPPED, because a hint that scrolls the screen is not a hint. Serving one
+    # directory that happens to hold thirty others is ordinary; the note exists
+    # for the case where a handful are missing and one of them is the one you
+    # meant, so a few names carry the whole message and a count carries the
+    # rest.
+    served = {path for path, _lot in directories}
+    unserved = []
+    for directory, _lot in directories:
+        try:
+            for entry in sorted(os.listdir(directory)):
+                full = os.path.join(directory, entry)
+                if os.path.isdir(full) and os.path.realpath(full) not in served:
+                    unserved.append(full)
+        except OSError:
+            pass                      # unreadable is the listing walk's problem, not ours
+
+    NOTE_MAX = 4
+    if unserved:
+        print("os64serve: NOTE — these subdirectories of a served directory are NOT")
+        print("           served. A subdirectory needs its own word on the command")
+        print('           line, optionally labelled: "<directory>=<lot>"')
+        for full in unserved[:NOTE_MAX]:
+            print(f"             {full}")
+        if len(unserved) > NOTE_MAX:
+            print(f"             ... and {len(unserved) - NOTE_MAX} more")
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
+    # A short timeout on the listener is what makes Ctrl-C work on Windows:
+    # WinSock's blocking accept() does not return for a console signal, so
+    # Python can only raise the KeyboardInterrupt when the call next returns
+    # — which used to mean "on the next client", read by everyone as "does
+    # not stop". Waking once a second costs nothing and honors it at once.
+    s.settimeout(1.0)
     try:
         while True:
-            conn, addr = s.accept()
+            try:
+                conn, addr = s.accept()
+            except socket.timeout:
+                continue
+            conn.settimeout(None)     # an accepted socket inherits the listener's
+                                      # timeout; serve_one sets the one it wants
             serve_one(conn, addr, directories)
     except KeyboardInterrupt:
         print("\nos64serve: stopped.")

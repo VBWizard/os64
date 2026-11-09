@@ -1,0 +1,2009 @@
+/* A SCRIPT'S REQUESTS (libdom/fetch.c, xhr.c, abort.c, blob.c, exception.c;
+ * dom.h § A SCRIPT'S REQUESTS): the origin the binding names is libway's,
+ * byte for byte; Headers, Request and Response as a page makes them; fetch()
+ * and XMLHttpRequest against a fake host network that records each request
+ * and answers when a case says; aborting at each point a request can be;
+ * the work a page or a server can size, held to its bound by count; a body
+ * the runtime has no room for; every allocation failed in turn; and every
+ * name gone with the modern switch off. */
+
+#include <way/origin.h>
+
+/* fetch.c's count of a header list's steps (libdom/internal.h). */
+extern uint64_t d_request_steps;
+/* abort.c's count of the steps a signal's links take (libdom/internal.h). */
+extern uint64_t d_signal_steps;
+/* abort.c's count of the dependents a signal's weak set links. */
+size_t d_signal_dependents(JSValue signal);
+
+#define FETCH_ASSERT STORAGE_ASSERT
+
+/* What the fake network saw of one request. */
+typedef struct {
+    uint32_t token;
+    uint64_t id;
+    unsigned mores;             /* how often the binding asked for more of its body */
+    bool cancelled, preflight, has_body;
+    char url[512], method[32], referrer[512];
+    char headers[4096];
+    size_t headers_length;
+    char body[4096];
+    size_t body_length;
+    /* The whole body, past what `body` keeps: its length and a sum of its
+     * bytes, each times its position plus one (an upload's proof). */
+    size_t body_sent;
+    uint64_t body_sum;
+    way_mode_t mode;
+    way_credentials_t credentials;
+    way_redirect_t redirect;
+} NetSeen;
+
+typedef struct {
+    NetSeen seen[64];
+    size_t count;
+    unsigned cancels, runs, releases;
+    bool refuse;
+    /* What run answers: false is "could not be run". With run_stalls, the
+     * run plays a server that never finishes: the clock moves a second at
+     * each wait until the binding's stop says yes (run_stopped). */
+    bool run_ok, run_stalls, run_stopped;
+    os64_dom_response_t run_answer;
+} FakeNet;
+
+static void net_record(NetSeen *s, const os64_dom_request_t *q)
+{
+    memset(s, 0, sizeof(*s));
+    snprintf(s->url, sizeof(s->url), "%s", q->url != NULL ? q->url : "");
+    snprintf(s->method, sizeof(s->method), "%s", q->method != NULL ? q->method : "");
+    snprintf(s->referrer, sizeof(s->referrer), "%s", q->referrer != NULL ? q->referrer : "");
+    s->headers_length = q->headers_length < sizeof(s->headers) - 1 ? q->headers_length : sizeof(s->headers) - 1;
+    if (s->headers_length != 0) memcpy(s->headers, q->headers, s->headers_length);
+    s->has_body = q->body != NULL;
+    s->body_length = q->body_length < sizeof(s->body) - 1 ? q->body_length : sizeof(s->body) - 1;
+    if (s->body_length != 0) memcpy(s->body, q->body, s->body_length);
+    s->body_sent = q->body != NULL ? q->body_length : 0;
+    for (size_t i = 0; i < s->body_sent; i++) s->body_sum += (uint64_t)((const uint8_t *)q->body)[i] * (i + 1);
+    s->mode = q->mode;
+    s->credentials = q->credentials;
+    s->redirect = q->redirect;
+    s->preflight = q->preflight;
+}
+
+static uint64_t net_start(void *opaque, const os64_dom_request_t *q, uint32_t token)
+{
+    FakeNet *n = opaque;
+    if (n->refuse || n->count == sizeof(n->seen) / sizeof(n->seen[0])) return 0;
+    NetSeen *s = &n->seen[n->count++];
+    net_record(s, q);
+    s->token = token;
+    s->id = 1000 + n->count;
+    return s->id;
+}
+
+static void net_cancel(void *opaque, uint64_t id)
+{
+    FakeNet *n = opaque;
+    n->cancels++;
+    for (size_t i = 0; i < n->count; i++)
+        if (n->seen[i].id == id) n->seen[i].cancelled = true;
+}
+
+static bool net_run(void *opaque, const os64_dom_request_t *q, bool (*stop)(void *), void *stop_ctx,
+                    os64_dom_response_t *out)
+{
+    FakeNet *n = opaque;
+    n->runs++;
+    if (n->count < sizeof(n->seen) / sizeof(n->seen[0])) net_record(&n->seen[n->count++], q);
+    for (int wait = 0; n->run_stalls && wait < 100000; wait++) {
+        dom_clock += 1000000;
+        if (stop(stop_ctx)) {
+            n->run_stopped = true;
+            return false;
+        }
+    }
+    if (!n->run_ok) return false;
+    *out = n->run_answer;
+    return true;
+}
+
+static void net_release(void *opaque, os64_dom_response_t *r)
+{
+    FakeNet *n = opaque;
+    (void)r;
+    n->releases++;
+}
+
+static void net_more(void *opaque, uint64_t id)
+{
+    FakeNet *n = opaque;
+    for (size_t i = 0; i < n->count; i++)
+        if (n->seen[i].id == id) n->seen[i].mores++;
+}
+
+/* With the page's body bound `body_cap` (max_body_bytes). */
+static DomFixture net_fixture_bounded(const char *url, FakeNet *net, size_t engine_cap, size_t body_cap)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = url;
+    options.now_ms = storage_now;
+    options.max_body_bytes = body_cap;
+    DomFixture f = fixture_base(0, 0, engine_cap);
+    if (f.runtime != NULL && f.state != NULL) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
+    if (f.binding != NULL && net != NULL) {
+        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, net, net_more};
+        os64_dom_set_network(f.binding, &network);
+    }
+    return f;
+}
+
+static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engine_cap)
+{
+    return net_fixture_bounded(url, net, engine_cap, os64_dom_default_options().max_body_bytes);
+}
+
+static DomFixture net_fixture(const char *url, FakeNet *net)
+{
+    return net_fixture_engine(url, net, 0);
+}
+
+static os64_dom_response_t net_answer_of(int32_t status, const char *url, const char *headers, const char *body)
+{
+    return (os64_dom_response_t){
+        .ok = true, .type = WAY_TYPE_BASIC, .status = status, .status_text = "OK", .url = url,
+        .headers = headers, .headers_length = headers != NULL ? strlen(headers) : 0,
+        .has_body = body != NULL, .body = body, .body_length = body != NULL ? strlen(body) : 0,
+    };
+}
+
+/* The host's answer to the request the net saw `which`th, as its task. */
+static os64_js_status_t net_answer(DomFixture *f, FakeNet *n, size_t which, const os64_dom_response_t *r)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetched(f->binding, n->seen[which].token, r, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "fetched: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+/* A streamed answer to the request the net saw `which`th: its head, a
+ * piece of its body, its end; each a task. */
+static os64_js_status_t net_head(DomFixture *f, FakeNet *n, size_t which, const os64_dom_response_t *r)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_head(f->binding, n->seen[which].token, r, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "head: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+static os64_js_status_t net_piece_of(DomFixture *f, FakeNet *n, size_t which, const void *bytes, size_t length)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_body(f->binding, n->seen[which].token, bytes, length, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "piece: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+static os64_js_status_t net_piece(DomFixture *f, FakeNet *n, size_t which, const char *text)
+{
+    return net_piece_of(f, n, which, text, strlen(text));
+}
+
+static os64_js_status_t net_end(DomFixture *f, FakeNet *n, size_t which, bool ok)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_end(f->binding, n->seen[which].token, ok, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "end: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+/* A global's value as text (empty when it has none). */
+static void global_text(DomFixture *f, const char *name, char *out, size_t cap)
+{
+    os64_js_outcome_t outcome;
+    JSContext *ctx = os64_js_context(f->runtime, OS64_JS_ABI_ID, &outcome);
+    out[0] = '\0';
+    if (ctx == NULL) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue value = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    const char *text = JS_ToCString(ctx, value);
+    JS_FreeValue(ctx, value);
+    if (text == NULL) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return;
+    }
+    snprintf(out, cap, "%s", text);
+    JS_FreeCString(ctx, text);
+}
+
+/* ── One origin, three spellings ─────────────────────────────────────── */
+
+/* d_origin is libway's way_origin_serialize: what location.origin reads,
+ * what the storage provider is told (and so what names a store's file),
+ * and what the fetch job judges are one string for every kind of address:
+ * default and explicit ports, upper case, IP literals, opaque origins. */
+static void dom_fetch_origin_cases(void)
+{
+    static const char *const kUrls[] = {
+        "http://example.test/", "http://example.test:80/a", "http://example.test:8080/p?q#f",
+        "HTTP://EXAMPLE.TEST/", "https://example.test:443/", "https://example.test:444/",
+        "http://127.0.0.1:8000/", "http://[::1]/", "http://[2001:db8::1]:81/x", "https://user:pw@example.test/",
+        "ws://example.test/", "ftp://example.test:21/", "file:///home/page.html", "about:blank",
+        "data:text/html,hi", "blob:http://example.test/uuid",
+    };
+    for (size_t i = 0; i < sizeof(kUrls) / sizeof(kUrls[0]); i++) {
+        FakeStore store = {0};
+        DomFixture f = storage_fixture(kUrls[i], &store);
+        if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+        dom_script(&f, "globalThis.o=location.origin;try{localStorage.getItem('k')}catch(e){}", "origin: read");
+        char page[256];
+        global_text(&f, "o", page, sizeof(page));
+        way_origin_t origin;
+        way_origin_of(kUrls[i], 0, &origin);
+        char way[WAY_ORIGIN_TEXT_MAX];
+        check(way_origin_serialize(&origin, way, sizeof(way)), "origin: libway serializes it");
+        if (strcmp(page, way) != 0) fprintf(stderr, "origin %s: location %s, libway %s\n", kUrls[i], page, way);
+        check(strcmp(page, way) == 0, "origin: location.origin is libway's");
+        /* An opaque origin has no storage; a tuple's is told the same. */
+        if (store.identities != 0) {
+            if (strcmp(store.origin, way) != 0) fprintf(stderr, "origin %s: store %s\n", kUrls[i], store.origin);
+            check(strcmp(store.origin, way) == 0, "origin: the store is named by libway's origin");
+        } else check(strcmp(way, "null") == 0, "origin: only an opaque origin has no store");
+        fixture_free(&f);
+        fake_store_free(&store);
+    }
+}
+
+/* ── Headers ─────────────────────────────────────────────────────────── */
+
+static void dom_fetch_headers_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/page", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers();assert(h instanceof Headers&&Object.prototype.toString.call(h)==='[object Headers]');"
+        "h.append('B','2');h.append('a','1');h.append('b',' 3\\t');"
+        "assert(h.get('b')==='2, 3'&&h.get('A')==='1'&&h.get('c')===null&&h.has('B')&&!h.has('c'));"
+        "assert([...h].join('|')==='a,1|b,2, 3');"
+        "assert([...h.keys()].join()==='a,b'&&[...h.values()].join('|')==='1|2, 3');"
+        "h.set('B','x');assert(h.get('b')==='x');h.delete('A');assert(!h.has('a')&&[...h].length===1);"
+        "throws('TypeError',()=>h.append('bad name','v'));throws('TypeError',()=>h.append('n','a\\nb'));"
+        "throws('TypeError',()=>h.append('n','\\u0100'));throws('TypeError',()=>h.get('a b'));",
+        "headers: append, get, set, delete, iteration sorted and combined");
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers([['Set-Cookie','a=1'],['set-cookie','b=2'],['x','1']]);"
+        "assert([...h].join('|')==='set-cookie,a=1|set-cookie,b=2|x,1');"
+        "assert(h.getSetCookie().join()==='a=1,b=2'&&h.get('set-cookie')==='a=1, b=2');"
+        "var r=new Headers({z:'1',y:'2'});assert([...r.keys()].join()==='y,z');"
+        "throws('TypeError',()=>new Headers([['a']]));throws('TypeError',()=>new Headers([['a','b','c']]));"
+        "throws('TypeError',()=>new Headers(1));"
+        "var c=new Headers(r);assert(c.get('z')==='1'&&c!==r);"
+        "var seen=[];new Headers({x:'1'}).forEach(function(v,k,o){seen.push(k+'='+v,o instanceof Headers)});"
+        "assert(seen.join()==='x=1,true');",
+        "headers: set-cookie apart, records, sequences, another Headers, forEach");
+    /* A walk reads the sorted list as it stands at each step. */
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers({b:'2',d:'4'});var out=[];"
+        "for(const [k] of h){out.push(k);if(k==='b')h.append('c','3');}"
+        "assert(out.join()==='b,c,d','a name added behind the walk is reached');"
+        "var g=new Headers({a:'1',b:'2',c:'3'});out=[];for(const [k] of g){out.push(k);if(k==='a')g.delete('a');}"
+        "assert(out.join()==='a,c','a name deleted under the walk moves it on');",
+        "headers: iteration under change");
+    /* Guards: what a Request's and a Response's headers refuse. */
+    dom_script(&f, FETCH_ASSERT
+        "var q=new Request('/x',{headers:{'Accept-Charset':'x','Cookie':'c','X-Fine':'1','Proxy-A':'p','Sec-B':'s'}});"
+        "assert([...q.headers.keys()].join()==='x-fine','forbidden request headers go silently');"
+        "q.headers.set('Host','h');assert(!q.headers.has('host'));"
+        "q.headers.set('X-HTTP-Method-Override','CONNECT');assert(!q.headers.has('x-http-method-override'));"
+        "var p=new Response('',{headers:{'Set-Cookie':'a','X':'1'}});assert(!p.headers.has('set-cookie')&&p.headers.has('x'));"
+        "var e=Response.error();throws('TypeError',()=>e.headers.append('a','b'));"
+        "var n=new Request('/x',{mode:'no-cors',headers:{'Accept':'text/html','X-Not':'1','Content-Type':'text/plain'}});"
+        "assert([...n.headers.keys()].join()==='accept,content-type','no-cors keeps the safelisted');"
+        "n.headers.append('Content-Type','application/json');assert(n.headers.get('content-type')==='text/plain');"
+        "n.headers.append('Range','bytes=0-1');assert(!n.headers.has('range'));",
+        "headers: request, response, immutable and no-cors guards");
+    /* A header the binding writes itself meets the same guard: a no-cors
+     * request's body type that is not safelisted is dropped, as the page's
+     * own would be (a JSON CSRF otherwise: an opaque POST, no preflight,
+     * Content-Type: application/json); a safelisted one stays. */
+    dom_script(&f, FETCH_ASSERT
+        "var j=new Request('http://other.test/api',{mode:'no-cors',method:'POST',"
+        "body:new Blob(['{}'],{type:'application/json'})});assert(!j.headers.has('content-type'),j.headers.get('content-type'));"
+        "var t=new Request('http://other.test/api',{mode:'no-cors',method:'POST',body:'x'});"
+        "assert(t.headers.get('content-type')==='text/plain;charset=UTF-8');"
+        "var c=new Request('/x',{method:'POST',body:new Blob(['{}'],{type:'application/json'})});"
+        "assert(c.headers.get('content-type')==='application/json');",
+        "headers: the binding's own headers through the guard");
+    fixture_free(&f);
+}
+
+/* ── Request and Response, as a page makes them ──────────────────────── */
+
+static void dom_fetch_object_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/dir/page", NULL);
+    if (!fixture_ready(&f)) return;
+    /* DOMException's code is WebIDL's names table: a name with a legacy
+     * code has it, and the three codes the table names no error for
+     * (2, 6, 16) have their constants and no name. */
+    dom_script(&f, FETCH_ASSERT
+        "assert(new DOMException('','NotFoundError').code===8&&new DOMException('','DataCloneError').code===25);"
+        "assert(new DOMException('','QuotaExceededError').code===22&&new DOMException('','EncodingError').code===0);"
+        "for(const n of ['DOMStringSizeError','NoDataAllowedError','ValidationError','Bogus'])"
+        "assert(new DOMException('',n).code===0,n);"
+        "assert(DOMException.DOMSTRING_SIZE_ERR===2&&DOMException.NO_DATA_ALLOWED_ERR===6&&DOMException.VALIDATION_ERR===16);"
+        "assert(new DOMException().VALIDATION_ERR===16);"
+        /* Slice 0d's refusals go through d_error, so they are real ones. */
+        "var at=document.createAttribute('x');document.documentElement.setAttributeNode(at);var ie=null;"
+        "try{document.createElement('i').setAttributeNode(at)}catch(e){ie=e}"
+        "assert(ie instanceof DOMException&&ie.name==='InUseAttributeError'&&ie.code===10,String(ie));"
+        "var nf=null;try{document.documentElement.removeAttributeNode(document.createAttribute('y'))}catch(e){nf=e}"
+        "assert(nf instanceof DOMException&&nf.name==='NotFoundError'&&nf.code===8,String(nf));",
+        "DOMException: codes by WebIDL's names table");
+    /* A Blob's parts are converted once, before its options: a generator
+     * among them is iterated once, and "native" endings apply to what it
+     * gave; the options' getters run after the parts' toString. */
+    dom_script(&f, FETCH_ASSERT
+        "var g=function*(){yield 'a\\r\\nb\\rc';yield new Uint8Array([13,10]);};"
+        "assert(new Blob(g(),{endings:'native'}).size===7,'native '+new Blob(g(),{endings:'native'}).size);"
+        "assert(new Blob(g()).size===8&&new Blob(g(),{endings:'transparent'}).size===8);"
+        "var order=[];new Blob([{toString(){order.push('part');return 'x'}}],{get endings(){order.push('endings');return 'native'}});"
+        "assert(order.join()==='part,endings',order.join());"
+        "assert(new File(g(),'n',{endings:'native'}).size===7);",
+        "Blob: parts converted once, endings applied to them");
+    /* slice()'s offsets are [Clamp] long long, converted before the sign
+     * is judged: -0.5 is 0 (the start), a half rounds to even, NaN is 0. */
+    dom_script(&f, FETCH_ASSERT
+        "var b=new Blob(['abcd']);"
+        "assert(b.slice(-0.5).size===4&&b.slice(0,-0.5).size===0,'-0.5 '+b.slice(-0.5).size+' '+b.slice(0,-0.5).size);"
+        "assert(b.slice(-1.5).size===2&&b.slice(1.5).size===2&&b.slice(2.5).size===2&&b.slice(-0.6).size===1);"
+        "assert(b.slice(NaN).size===4&&b.slice(-Infinity).size===4&&b.slice(0,Infinity).size===4);",
+        "Blob: slice's offsets are converted, then their sign judged");
+    dom_script(&f, FETCH_ASSERT
+        "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
+        "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"
+        "assert(q.referrer==='about:client'&&q.referrerPolicy===''&&q.integrity===''&&!q.keepalive&&q.destination==='');"
+        "assert(q.signal instanceof AbortSignal&&!q.signal.aborted&&q.body===null&&!q.bodyUsed&&q.duplex==='half');"
+        "assert(new Request('/x',{method:'post'}).method==='POST'&&new Request('/x',{method:'Patch'}).method==='Patch');"
+        "throws('TypeError',()=>new Request('/x',{method:'CONNECT'}));throws('TypeError',()=>new Request('/x',{method:'a b'}));"
+        "throws('TypeError',()=>new Request('/x',{mode:'navigate'}));"
+        "throws('TypeError',()=>new Request('/x',{mode:'no-cors',method:'PUT'}));"
+        "throws('TypeError',()=>new Request('/x',{body:'b'}));throws('TypeError',()=>new Request('/x',{method:'HEAD',body:'b'}));"
+        "throws('TypeError',()=>new Request('http://a b/'));throws('TypeError',()=>new Request('/x',{window:{}}));"
+        "throws('TypeError',()=>new Request('/x',{cache:'only-if-cached'}));"
+        "throws('TypeError',()=>new Request('/x',{credentials:'bogus'}));"
+        "var r=new Request('/x',{referrer:''});assert(r.referrer==='');"
+        "r=new Request('/x',{referrer:'/elsewhere'});assert(r.referrer==='http://example.test/elsewhere');"
+        "r=new Request('/x',{referrer:'http://other.test/'});assert(r.referrer==='about:client');"
+        "r=new Request('/x',{referrerPolicy:'origin'});assert(r.referrerPolicy==='origin');"
+        "r=new Request('/x',{referrer:'about:client'});assert(r.referrer==='about:client');",
+        "request: the constructor's defaults and refusals");
+    /* From a Request: its referrer and policy are copied (Fetch's Request
+     * constructor, step 12); an init that is not empty starts them over,
+     * "client" and "" (step 13), then the init's own apply. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new Request('/x',{referrer:'/from',referrerPolicy:'origin'});"
+        "var k=new Request(o);assert(k.referrer==='http://example.test/from'&&k.referrerPolicy==='origin',k.referrer+' '+k.referrerPolicy);"
+        "var p=new Request(o,{method:'POST'});assert(p.referrer==='about:client'&&p.referrerPolicy==='',p.referrer+' '+p.referrerPolicy);"
+        "var w=new Request(o,{window:null});assert(w.referrer==='about:client'&&w.referrerPolicy==='');"
+        "var e=new Request(o,{});assert(e.referrer==='http://example.test/from'&&e.referrerPolicy==='origin');"
+        "var t=new Request(o,{referrerPolicy:'no-referrer'});assert(t.referrer==='about:client'&&t.referrerPolicy==='no-referrer');",
+        "request: a Request's referrer and policy, kept or started over");
+    /* A Request made from a Request takes its body: the input's is
+     * disturbed and its stream locked, whether the page took the stream
+     * before (it cannot read it after) or asks for it after. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new Request('/x',{method:'POST',body:'abc'});var s=o.body;var n=new Request(o);"
+        "assert(o.bodyUsed&&s.locked&&!n.bodyUsed,'taken');throws('TypeError',()=>s.getReader());"
+        "var o2=new Request('/x',{method:'POST',body:'abc'});new Request(o2);"
+        "assert(o2.body.locked);throws('TypeError',()=>o2.body.getReader());"
+        "throws('TypeError',()=>new Request(o2));"
+        "var o3=new Request('/x',{method:'POST',body:'abc'});new Request(o3,{body:'other'});"
+        "assert(!o3.bodyUsed&&!o3.body.locked,'an init body leaves the input alone');",
+        "request: a Request from a Request takes its body");
+    /* WebIDL reads a dictionary's members in name order, each once. */
+    dom_script(&f, FETCH_ASSERT
+        "var order=[];var init={};"
+        "for(const k of ['window','signal','referrerPolicy','referrer','redirect','priority','mode','method',"
+        "'keepalive','integrity','headers','duplex','credentials','cache','body'])"
+        "Object.defineProperty(init,k,{get(){order.push(k);return undefined}});"
+        "new Request('/x',init);"
+        "assert(order.join()==='body,cache,credentials,duplex,headers,integrity,keepalive,method,mode,priority,"
+        "redirect,referrer,referrerPolicy,signal,window',order.join());",
+        "request: RequestInit read in name order");
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "var q=new Request('/x',{method:'POST',body:'hi \\u00e9'});"
+        "assert(q.headers.get('content-type')==='text/plain;charset=UTF-8'&&Object.prototype.toString.call(q.body)==='[object ReadableStream]');"
+        "var c=q.clone();assert(c.url===q.url&&c.headers.get('content-type')===q.headers.get('content-type'));"
+        "q.text().then(t=>log.push('q:'+t));c.arrayBuffer().then(b=>log.push('c:'+b.byteLength));"
+        "assert(q.bodyUsed);throws('TypeError',()=>q.clone());"
+        "new Request('/x',{method:'POST',body:new URLSearchParams('a=1&b=2')}).headers.get('content-type')==="
+        "'application/x-www-form-urlencoded;charset=UTF-8'||log.push('bad params type');"
+        "var b=new Request('/x',{method:'POST',body:new Blob(['x'],{type:'Text/Plain'})});"
+        "assert(b.headers.get('content-type')==='text/plain');"
+        "assert(!new Request('/x',{method:'POST',body:new Uint8Array([1,2])}).headers.has('content-type'));"
+        "var fd=new FormData();fd.append('k','v');"
+        "assert(/^multipart\\/form-data; boundary=/.test(new Request('/x',{method:'POST',body:fd}).headers.get('content-type')));"
+        "var from=new Request('/x',{method:'POST',body:'once'});var to=new Request(from);"
+        "assert(from.bodyUsed&&!to.bodyUsed);throws('TypeError',()=>new Request(from));",
+        "request: bodies, their types, clone and taking an input's body");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='q:hi \\u00e9,c:5',log.join());", "request: bodies read");
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "var r=new Response('{\"a\":1}',{status:201,statusText:'Made',headers:{'X':'1'}});"
+        "assert(r.status===201&&r.ok&&r.statusText==='Made'&&r.type==='default'&&r.url===''&&!r.redirected);"
+        "assert(r.headers.get('content-type')==='text/plain;charset=UTF-8');"
+        "r.json().then(j=>log.push('json:'+j.a));"
+        "throws('RangeError',()=>new Response('',{status:199}));throws('RangeError',()=>new Response('',{status:600}));"
+        "throws('TypeError',()=>new Response('x',{status:204}));throws('TypeError',()=>new Response('',{statusText:'a\\nb'}));"
+        "assert(new Response(null,{status:204}).body===null);"
+        "var e=Response.error();assert(e.type==='error'&&e.status===0&&e.statusText===''&&e.body===null);"
+        "var d=Response.redirect('/to',301);assert(d.status===301&&d.headers.get('location')==='http://example.test/to');"
+        "throws('RangeError',()=>Response.redirect('/to',200));throws('TypeError',()=>Response.redirect('http://a b/'));"
+        "var j=Response.json({b:[1]},{status:202});assert(j.status===202&&j.headers.get('content-type')==='application/json');"
+        "j.text().then(t=>log.push('text:'+t));"
+        "throws('TypeError',()=>Response.json(undefined));"
+        "new Response(new Uint8Array([104,105])).text().then(t=>log.push('bytes:'+t));"
+        "new Response('abc').bytes().then(b=>log.push('u8:'+(b instanceof Uint8Array)+b.length));"
+        "new Response('abc',{headers:{'content-type':'Text/Weird; charset=x'}}).blob().then(b=>log.push('blob:'+b.type+b.size));"
+        "new Response('a=1&b=2',{headers:{'content-type':'application/x-www-form-urlencoded'}}).formData()"
+        ".then(f=>log.push('form:'+f.get('b')));"
+        "new Response('x').formData().catch(e=>log.push('form-refused:'+e.name));"
+        "new Response('{').json().catch(e=>log.push('json-bad:'+e.name));"
+        /* The type is "extract a MIME type"'s: a valid line then an
+         * invalid one is the valid one's, and a multipart type then an
+         * invalid line still finds its boundary. */
+        "new Response('x',{headers:[['content-type','text/plain;a=b'],['content-type','bogus']]}).blob()"
+        ".then(b=>log.push('last-valid:'+b.type));"
+        "new Response('--q\\r\\nContent-Disposition: form-data; name=\"k\"\\r\\n\\r\\nv\\r\\n--q--\\r\\n',"
+        "{headers:[['content-type','multipart/form-data; boundary=q'],['content-type','bogus']]}).formData()"
+        ".then(g=>log.push('multipart:'+g.get('k')));",
+        "response: the constructor, error, redirect, json and every body reader");
+    dom_script(&f, FETCH_ASSERT
+        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird;charset=x3,form:2,"
+        "form-refused:TypeError,json-bad:SyntaxError,last-valid:text/plain;a=b,multipart:v';assert(log.join()===want,log.join());",
+        "response: bodies read");
+    /* The stream a body is: one chunk, then done; a reader locks it. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];var r=new Response('chunk');var s=r.body;assert(s===r.body&&!s.locked);"
+        "var rd=s.getReader();assert(s.locked&&!r.bodyUsed);throws('TypeError',()=>s.getReader());"
+        "r.text().catch(e=>log.push('locked:'+e.name));throws('TypeError',()=>r.clone());"
+        "rd.read().then(a=>{log.push(a.done+':'+new TextDecoder().decode(a.value));return rd.read()})"
+        ".then(a=>{log.push(a.done+':'+a.value);rd.releaseLock();log.push(s.locked)});"
+        "assert(s instanceof ReadableStream);",
+        "stream: one chunk, then done");
+    /* A body's stream is a byte stream: a BYOB reader reads it into the
+     * page's own buffers, a piece at a time, then reads done with an empty
+     * view of the last buffer. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.blog=[];var by=new Response('xyz').body.getReader({mode:'byob'});"
+        "assert(by instanceof ReadableStreamBYOBReader);"
+        "by.read(new Uint8Array(2)).then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>blog.push(a.done+':'+a.value.byteLength));",
+        "stream: a body read with a BYOB reader");
+    dom_script(&f, FETCH_ASSERT "assert(blog.join()==='false:120.121,false:122,true:0',blog.join());",
+               "stream: a BYOB reader reads a body's bytes into its buffers");
+    /* A body that ends inside an element of a BYOB read (one byte, a
+     * Uint16Array) errors its stream: the read rejects with a TypeError and
+     * never throws out of read(), on the body and on a clone's branch (a
+     * body whose stream exists is teed by clone()). */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.olog=[];var p1=new Response('x').body.getReader({mode:'byob'}).read(new Uint16Array(1));"
+        "p1.then(()=>olog.push('body:read'),e=>olog.push('body:'+e.name));"
+        "var oc=new Response('xyz');oc.body;oc.clone();var orr=oc.body.getReader({mode:'byob'});"
+        "orr.read(new Uint16Array(1)).then(()=>orr.read(new Uint16Array(1)))"
+        ".then(()=>olog.push('clone:read'),e=>olog.push('clone:'+e.name));"
+        /* The tee goes on past the failed branch close: a cancelled
+         * clone's cancel() still settles. */
+        "var ox=new Response('x');ox.body;var oxc=ox.clone();oxc.body.cancel().then(()=>olog.push('cancel:settled'));"
+        "ox.body.getReader({mode:'byob'}).read(new Uint16Array(1)).catch(e=>olog.push('teed:'+e.name));",
+        "stream: a BYOB read past a body's last whole element");
+    dom_script(&f, FETCH_ASSERT
+        "assert(olog.sort().join()==='body:TypeError,cancel:settled,clone:TypeError,teed:TypeError',olog.join());",
+        "stream: a partial element rejects the read, on a body and on a clone");
+    /* The body is enqueued whole and closed: taking its one chunk closes
+     * the stream, so `closed` resolves with no further read. */
+    dom_script(&f,
+        "globalThis.slog=[];var rd5=new Response('abc').body.getReader();"
+        "rd5.read().then(a=>slog.push('chunk:'+a.value.length));rd5.closed.then(()=>slog.push('closed'));",
+        "stream: the one chunk read");
+    dom_script(&f, FETCH_ASSERT "assert(slog.join()==='chunk:3,closed',slog.join());",
+               "stream: closed once its only chunk is taken");
+    /* A body with no bytes is a stream closed at its creation: its reader's
+     * closed settles with no read, and so does an empty Blob's stream. */
+    dom_script(&f,
+        "globalThis.elog=[];new Response('').body.getReader().closed.then(()=>elog.push('response'));"
+        "new Blob([]).stream().getReader().closed.then(()=>elog.push('blob'));",
+        "stream: empty bodies");
+    dom_script(&f, FETCH_ASSERT "assert(elog.join()==='response,blob',elog.join());",
+               "stream: an empty body's stream is closed at its creation");
+    /* releaseLock(): a pending `closed` rejects with a TypeError. */
+    dom_script(&f,
+        "globalThis.rlog=[];var rd6=new Response('abc').body.getReader();rd6.closed.catch(e=>rlog.push('pending:'+e.name));"
+        "rd6.releaseLock();",
+        "stream: releaseLock");
+    dom_script(&f, FETCH_ASSERT "assert(rlog.join()==='pending:TypeError',rlog.join());",
+               "stream: a released reader's closed is a TypeError");
+    /* A body method read it whole with a reader it keeps; a FormData body
+     * reads back as one, and an empty one is the close delimiter alone
+     * (as Chrome and Firefox send it), which reads back as no entries. */
+    dom_script(&f, FETCH_ASSERT
+        "var r=new Response('x');r.text();assert(r.body.locked);throws('TypeError',()=>r.body.getReader());"
+        "var fd=new FormData();fd.append('k','v, w');fd.append('f',new File(['bytes'],'n.txt',{type:'text/plain'}));"
+        "new Request('/x',{method:'POST',body:fd}).formData().then(g=>{log.push('form:'+g.get('k')+'/'+g.get('f').name)});"
+        "var er=new Request('/x',{method:'POST',body:new FormData()});"
+        "var eb=er.headers.get('content-type').split('boundary=')[1];"
+        "er.clone().text().then(t=>log.push('empty:'+(t==='--'+eb+'--\\r\\n')));"
+        "er.formData().then(g=>log.push('entries:'+[...g].length));",
+        "stream: a body method locks it; FormData both ways");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false,form:v, w/n.txt,empty:true,entries:0',"
+               "log.join());",
+               "stream: read");
+    /* A part's parameters are read without regard to case, by one parse:
+     * Filename= makes a File, filename="" a File named "", name="" an
+     * entry named "". */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; Name=\"a\"; Filename=\"a.txt\"\\r\\n"
+        "Content-Type: text/plain\\r\\n\\r\\nA\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"e\"; filename=\"\"\\r\\n"
+        "\\r\\nE\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"\"\\r\\n\\r\\nN\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "var a=g.get('a'),e=g.get('e');mlog.push((a instanceof File)+':'+a.name+':'+(e instanceof File)+':'+e.name+':'+g.get(''))})"
+        ".catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a part's parameters");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
+    /* The urlencoded parser decodes UTF-8 WITHOUT taking a BOM off: a
+     * leading U+FEFF, written raw or percent-encoded, stays in the name and
+     * the value, as URLSearchParams' own parser keeps it. */
+    dom_script(&f,
+        "globalThis.blog=[];var ct={headers:{'content-type':'application/x-www-form-urlencoded'}};"
+        "new Response('\\ufeffkey=\\ufeffvalue',ct).formData().then(g=>blog.push('raw:'+g.get('\\ufeffkey')));"
+        "new Response('%EF%BB%BFk=%EF%BB%BFv',ct).formData().then(g=>blog.push('pct:'+g.get('\\ufeffk')));"
+        "var sp=new URLSearchParams('%EF%BB%BFk=%EF%BB%BFv');blog.push('params:'+sp.get('\\ufeffk'));"
+        "new Response(sp).formData().then(g=>blog.push('trip:'+g.get('\\ufeffk')));",
+        "formData: a BOM in a urlencoded field");
+    dom_script(&f, FETCH_ASSERT
+        "assert(blog.join()==='params:\\ufeffv,raw:\\ufeffvalue,pct:\\ufeffv,trip:\\ufeffv',escape(blog.join()));",
+        "formData: a urlencoded field keeps its BOM");
+    /* A quoted value is passed over whole when another parameter is looked
+     * for: a name holding "; filename=" names no filename, whether written
+     * by hand (an escaped quote inside) or by this FormData's encoder. */
+    dom_script(&f,
+        "globalThis.qlog=[];var q='--b\\r\\nContent-Disposition: form-data; name=\"a\\\\\"; filename=\\\\\"x\"\\r\\n\\r\\nA\\r\\n--b--\\r\\n';"
+        "new Response(q,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "var k=[...g.keys()][0];qlog.push(k+'|'+(g.get(k) instanceof File)+'|'+g.get(k))}).catch(x=>qlog.push('refused:'+x.message));"
+        "var fd=new FormData();fd.append('field; filename=not-a-file','hello');"
+        "new Response(fd).formData().then(g=>{var v=g.get('field; filename=not-a-file');qlog.push((v instanceof File)+'|'+v)});",
+        "formData: a quoted value holding a separator");
+    dom_script(&f, FETCH_ASSERT "assert(qlog.join()==='a\"; filename=\"x|false|A,false|hello',qlog.join());",
+               "formData: a quoted value is passed over whole");
+    /* A short header is a header: "Content-Type: x/y" types its File. */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; name=\"f\"; filename=\"f\"\\r\\n"
+        "Content-Type: x/y\\r\\n\\r\\nF\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(g.get('f').type)}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a short Content-Type");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='x/y',mlog.join());", "formData: a short header is read");
+    /* A delimiter is "--boundary" then the close or (padding and) CRLF: a
+     * body line "--b-extra" for boundary b is the body's, and a delimiter
+     * line with transport padding still delimits (RFC 2046 § 5.1.1). */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b \\t\\r\\nContent-Disposition: form-data; name=\"v\"\\r\\n\\r\\n"
+        "one\\r\\n--b-extra\\r\\ntwo\\r\\n--b  \\r\\nContent-Disposition: form-data; name=\"w\"\\r\\n\\r\\nW\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(JSON.stringify(g.get('v'))+'|'+g.get('w'))}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a body line that begins like the boundary");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='\"one\\\\r\\\\n--b-extra\\\\r\\\\ntwo\"|W',mlog.join());",
+               "formData: only a whole delimiter ends a part");
+    /* A preamble before the first delimiter is skipped (RFC 2046 § 5.1.1),
+     * a line in it that only begins like the boundary included. */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='notice\\r\\n--b-not\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"p\"\\r\\n\\r\\nP\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(g.get('p'))}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a preamble");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='P',mlog.join());", "formData: a preamble is skipped");
+    /* A header line or a parameter too long to read whole refuses the body
+     * rather than being read from its prefix: a filename past a 2 KiB line,
+     * and a 1,100-byte name. One that fits is read whole. */
+    dom_script(&f,
+        "globalThis.mlog=[];function mp(cd){return '--b\\r\\nContent-Disposition: form-data; '+cd+'\\r\\n\\r\\nV\\r\\n--b--\\r\\n'}"
+        "function rd(cd,tag){return new Response(mp(cd),{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData()"
+        ".then(g=>{var k=[...g.keys()][0];var v=g.get(k);mlog.push(tag+':'+k.length+':'+(v instanceof File))},"
+        "e=>mlog.push(tag+':'+e.name))}"
+        "rd('name=\"'+'n'.repeat(1500)+'\"; filename=\"'+'f'.repeat(600)+'\"','line');"
+        "rd('name=\"'+'n'.repeat(1100)+'\"','name');"
+        "rd('name=\"'+'n'.repeat(1000)+'\"; filename=\"a\"','fits');",
+        "formData: long part headers");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='line:TypeError,name:TypeError,fits:1000:true',mlog.join());",
+               "formData: a part header is read whole or refused");
+    fixture_free(&f);
+}
+
+/* ── fetch() through the host ────────────────────────────────────────── */
+
+static void dom_fetch_network_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/dir/page", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "fetch('data.json?x',{method:'POST',body:'abc',headers:{'X-One':'1','x-one':'2'},credentials:'include'})"
+        ".then(r=>{log.push(r.status,r.type,r.url,r.redirected,r.headers.get('content-type'));"
+        "throws('TypeError',()=>r.headers.set('a','b'));return r.json()}).then(j=>log.push(j.v));",
+        "fetch: a request goes to the host");
+    check(net.count == 1, "fetch: the host starts one request");
+    NetSeen *s = &net.seen[0];
+    check(!strcmp(s->url, "http://example.test/dir/data.json?x") && !strcmp(s->method, "POST"),
+          "fetch: the host gets the parsed URL and the method");
+    check(s->has_body && s->body_length == 3 && !memcmp(s->body, "abc", 3), "fetch: the host gets the body");
+    check(strstr(s->headers, "X-One: 1\r\n") != NULL && strstr(s->headers, "x-one: 2\r\n") != NULL &&
+          strstr(s->headers, "Content-Type: text/plain;charset=UTF-8\r\n") != NULL,
+          "fetch: the host gets the author headers as a block, the body's type among them");
+    check(s->mode == WAY_MODE_CORS && s->credentials == WAY_CREDENTIALS_INCLUDE && s->redirect == WAY_REDIRECT_FOLLOW &&
+          !s->preflight, "fetch: the modes reach the host");
+    check(!strcmp(s->referrer, "http://example.test/dir/page"), "fetch: about:client is the page's address");
+    check(os64_dom_fetches_pending(f.binding) == 1, "fetch: one request out");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/dir/data.json?x",
+                                               "Content-Type: application/json\r\n", "{\"v\":42}");
+    answer.type = WAY_TYPE_CORS;
+    answer.redirected = true;
+    check(net_answer(&f, &net, 0, &answer) == OS64_JS_OK, "fetch: the answer is a task");
+    check(os64_dom_fetches_pending(f.binding) == 0, "fetch: an answered request is not out");
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='200,cors,http://example.test/dir/data.json?x,true,application/json,42',log.join());",
+        "fetch: the promise resolves with the host's response");
+    check(net_answer(&f, &net, 0, &answer) == OS64_JS_OK, "fetch: a second answer for the token does nothing");
+
+    /* A network error rejects with a TypeError; so does a host that would
+     * not start the request, and a request this browser will not make. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];fetch('/fail').catch(e=>log.push('net:'+e.name+'('+e.message+')'));"
+        "fetch('/x',{integrity:'sha256-abc'}).catch(e=>log.push('sri:'+e.name));"
+        "fetch('/x',{method:'POST',keepalive:true,body:'x'.repeat(65537)}).catch(e=>log.push('keep:'+e.name));"
+        "fetch('http://a b/').catch(e=>log.push('url:'+e.name));fetch().catch(e=>log.push('none:'+e.name));",
+        "fetch: refusals");
+    check(net.count == 2, "fetch: only the network error's request reached the host");
+    os64_dom_response_t error = {.ok = false};
+    net_answer(&f, &net, 1, &error);
+    net.refuse = true;
+    dom_script(&f, "fetch('/r').catch(e=>log.push('refused:'+e.name));", "fetch: a host that will not start it");
+    net.refuse = false;
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='sri:TypeError,keep:TypeError,url:TypeError,none:TypeError,net:TypeError(Failed to fetch),refused:TypeError',"
+        "log.join());", "fetch: each refusal rejects");
+
+    /* data: goes to the host as written; the page's base resolves the
+     * rest. A no-cors request carries its mode. */
+    dom_script(&f, "fetch(' data:,hello ');fetch('/n',{mode:'no-cors',redirect:'manual'});", "fetch: data and no-cors");
+    check(!strcmp(net.seen[2].url, "data:,hello"), "fetch: a data: address goes to the host trimmed and unparsed");
+    check(net.seen[3].mode == WAY_MODE_NO_CORS && net.seen[3].redirect == WAY_REDIRECT_MANUAL,
+          "fetch: no-cors and manual reach the host");
+    /* The cold read's JSON CSRF: a credentialed no-cors POST with a body
+     * typed application/json reaches the host with no such Content-Type. */
+    dom_script(&f, "fetch('http://other.test/api',{mode:'no-cors',method:'POST',credentials:'include',"
+               "body:new Blob(['{\"transfer\":1}'],{type:'application/json'})});", "fetch: no-cors JSON");
+    check(net.seen[4].mode == WAY_MODE_NO_CORS && strstr(net.seen[4].headers, "application/json") == NULL &&
+          strstr(net.seen[4].headers, "Content-Type") == NULL,
+          "fetch: a no-cors body's type that is not safelisted never reaches the host");
+    /* Drain cancels what is out. */
+    unsigned cancels = net.cancels;
+    fixture_free(&f);
+    check(net.cancels == cancels + 3, "fetch: drain cancels each request out");
+
+    /* No network at all: a TypeError. */
+    f = net_fixture("http://example.test/", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.log=[];fetch('/x').catch(e=>log.push(e.name));", "fetch: no network");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError');", "fetch: no network rejects");
+    fixture_free(&f);
+}
+
+/* ── Aborting ────────────────────────────────────────────────────────── */
+
+static void dom_fetch_abort_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];var c=new AbortController();var s=c.signal;"
+        "assert(s instanceof AbortSignal&&s instanceof Object&&!s.aborted&&s.reason===undefined);"
+        "s.onabort=e=>log.push('onabort:'+e.type+e.isTrusted);s.addEventListener('abort',()=>log.push('listener'));"
+        "c.abort();c.abort('again');assert(s.aborted&&s.reason.name==='AbortError'&&s.reason instanceof DOMException);"
+        "throws('AbortError',()=>s.throwIfAborted());"
+        "assert(AbortSignal.abort('why').reason==='why');"
+        "var any=AbortSignal.any([new AbortController().signal,AbortSignal.abort(7)]);assert(any.aborted&&any.reason===7);"
+        "var t=AbortSignal.timeout(5);assert(!t.aborted);"
+        "throws('TypeError',()=>AbortSignal.any([1]));throws('TypeError',()=>new AbortSignal());",
+        "abort: a controller, its signal, abort, any and timeout");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='onabort:aborttrue,listener',log.join());", "abort: events");
+    storage_clock += 10;
+    os64_js_outcome_t outcome;
+    check(os64_dom_timer_fire(f.binding, storage_clock, &outcome), "abort: the timeout's timer fires");
+    dom_script(&f, FETCH_ASSERT "assert(t.aborted&&t.reason.name==='TimeoutError');", "abort: timeout aborts");
+
+    /* Before: the fetch never starts. While out: the promise rejects and
+     * the host cancels. After: the body's read rejects. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];fetch('/x',{signal:AbortSignal.abort()}).catch(e=>log.push('before:'+e.name));"
+        "globalThis.c2=new AbortController();fetch('/y',{signal:c2.signal}).catch(e=>log.push('during:'+e.name));"
+        "globalThis.c3=new AbortController();fetch('/z',{signal:c3.signal}).then(r=>{globalThis.r3=r});"
+        "c2.abort();",
+        "abort: before and during");
+    check(net.count == 2 && net.seen[0].cancelled && !net.seen[1].cancelled, "abort: during cancels with the host");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/z", "", "body");
+    net_answer(&f, &net, 1, &answer);
+    dom_script(&f, "c3.abort(new Error('late'));r3.text().catch(e=>log.push('after:'+e.message));", "abort: after");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='before:AbortError,during:AbortError,after:late',log.join());",
+               "abort: each point");
+    net_answer(&f, &net, 0, &answer);
+    dom_script(&f, FETCH_ASSERT "assert(log.length===3,'an aborted request answers nothing');", "abort: late answer");
+
+    /* A Request's signal follows its input's. */
+    dom_script(&f, FETCH_ASSERT
+        "var c=new AbortController();var q=new Request('/x',{signal:c.signal});var q2=new Request(q);"
+        "assert(q.signal!==c.signal&&q2.signal!==q.signal);c.abort('r');"
+        "assert(q.signal.aborted&&q.signal.reason==='r'&&q2.signal.aborted);",
+        "abort: a request's signal follows");
+    /* The source's event fires before its dependents', and each dependent
+     * is already aborted when it does; a chain as deep as a page likes is
+     * walked, not recursed. */
+    dom_script(&f, FETCH_ASSERT
+        "var order=[];var c=new AbortController();var q=new Request('/x',{signal:c.signal});"
+        "c.signal.onabort=()=>order.push('source:'+q.signal.aborted);q.signal.onabort=()=>order.push('dependent');"
+        "c.abort();assert(order.join()==='source:true,dependent',order.join());"
+        "var root=new AbortController();var s=root.signal;for(let i=0;i<20000;i++)s=AbortSignal.any([s]);"
+        "root.abort('deep');assert(s.aborted&&s.reason==='deep');",
+        "abort: source first, then dependents, however deep");
+    /* After an answer: the reason, every time; an empty body is closed
+     * before an abort can error it. */
+    dom_script(&f, "globalThis.c4=new AbortController();fetch('/w',{signal:c4.signal}).then(r=>{globalThis.r4=r});"
+               "globalThis.c5=new AbortController();fetch('/v',{signal:c5.signal}).then(r=>{globalThis.r5=r});",
+               "abort: two more requests");
+    os64_dom_response_t full = net_answer_of(200, "http://example.test/w", "", "full");
+    os64_dom_response_t none = net_answer_of(200, "http://example.test/v", "", "");
+    net_answer(&f, &net, net.count - 2, &full);
+    net_answer(&f, &net, net.count - 1, &none);
+    dom_script(&f, "globalThis.log=[];c4.abort();c5.abort();"
+               "r4.text().catch(e=>log.push('1:'+e.name));r4.text().catch(e=>log.push('2:'+e.name));"
+               "r5.text().then(t=>log.push('empty:'+t.length));", "abort: after the answer");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='1:AbortError,2:AbortError,empty:0',log.join());",
+               "abort: the reason twice, and an empty body read");
+    /* A body an abort errored is an errored stream: cancel() answers its
+     * error, through the stream and through a reader (ReadableStreamCancel). */
+    dom_script(&f, "globalThis.c6=new AbortController();fetch('/s6',{signal:c6.signal}).then(r=>{globalThis.r6=r});"
+               "globalThis.c7=new AbortController();fetch('/s7',{signal:c7.signal}).then(r=>{globalThis.r7=r});",
+               "abort: two requests to cancel");
+    os64_dom_response_t s6 = net_answer_of(200, "http://example.test/s6", "", "six");
+    os64_dom_response_t s7 = net_answer_of(200, "http://example.test/s7", "", "seven");
+    net_answer(&f, &net, net.count - 2, &s6);
+    net_answer(&f, &net, net.count - 1, &s7);
+    dom_script(&f, "globalThis.clog=[];c6.abort();c7.abort();"
+               "r6.body.cancel().then(()=>clog.push('stream:fulfilled'),e=>clog.push('stream:'+e.name));"
+               "var rd=r7.body.getReader();rd.closed.catch(e=>clog.push('closed:'+e.name));"
+               "rd.cancel().then(()=>clog.push('reader:fulfilled'),e=>clog.push('reader:'+e.name));",
+               "abort: cancel an errored body");
+    dom_script(&f, FETCH_ASSERT "assert(clog.join()==='stream:AbortError,closed:AbortError,reader:AbortError',clog.join());",
+               "abort: an errored stream's cancel answers its error");
+    /* A clone made after the answer and before the abort tees the one
+     * body, so the abort reaches both (Fetch's clone; the stream's
+     * source is what an abort errors). */
+    dom_script(&f, "globalThis.c8=new AbortController();fetch('/s8',{signal:c8.signal}).then(r=>{globalThis.r8=r});",
+               "abort: a request to clone");
+    os64_dom_response_t s8 = net_answer_of(200, "http://example.test/s8", "", "eight");
+    net_answer(&f, &net, net.count - 1, &s8);
+    dom_script(&f, "globalThis.klog=[];var k=r8.clone();c8.abort();"
+               "r8.text().catch(e=>klog.push('original:'+e.name));k.text().catch(e=>klog.push('clone:'+e.name));",
+               "abort: after a clone");
+    dom_script(&f, FETCH_ASSERT "assert(klog.join()==='original:AbortError,clone:AbortError',klog.join());",
+               "abort: the clone is reached too");
+    /* A read that began in the turn of the abort is still aborted: the
+     * body settles when its read ends, not when it starts. And a body an
+     * abort errored, read by a body method before its stream existed,
+     * becomes a stream errored and locked by that read. */
+    dom_script(&f, "globalThis.c10=new AbortController();fetch('/s10',{signal:c10.signal}).then(r=>{globalThis.r10=r});"
+               "globalThis.c11=new AbortController();fetch('/s11',{signal:c11.signal}).then(r=>{globalThis.r11=r});",
+               "abort: two requests to read");
+    os64_dom_response_t s10 = net_answer_of(200, "http://example.test/s10", "", "ten");
+    os64_dom_response_t s11 = net_answer_of(200, "http://example.test/s11", "", "eleven");
+    net_answer(&f, &net, net.count - 2, &s10);
+    net_answer(&f, &net, net.count - 1, &s11);
+    dom_script(&f, "globalThis.tlog=[];var k10=r10.clone();r10.text().then(t=>tlog.push('read:'+t),e=>tlog.push('original:'+e.name));"
+               "k10.text().then(t=>tlog.push('read:'+t),e=>tlog.push('clone:'+e.name));c10.abort();"
+               "c11.abort();r11.text().catch(e=>tlog.push('first:'+e.name));",
+               "abort: in the turn a read began");
+    dom_script(&f, FETCH_ASSERT "assert(tlog.join()==='first:AbortError,original:AbortError,clone:AbortError',tlog.join());"
+               "assert(r11.body.locked);throws('TypeError',()=>r11.body.getReader());",
+               "abort: a read begun in the abort's turn is aborted, and an aborted read body is locked");
+    /* A Promise chunk is a chunk: async iteration hands it over as it was
+     * enqueued, never adopted. And a page that shadows a typed array's
+     * byteLength changes nothing a body's own stream holds. */
+    dom_script(&f, "globalThis.ilog=[];var pc=Promise.resolve('payload');"
+               "new ReadableStream({start(c){c.enqueue(pc);c.close()}}).values().next()"
+               ".then(r=>ilog.push('kept:'+(r.value===pc)));"
+               "Object.defineProperty(Uint8Array.prototype,'byteLength',{value:0,configurable:true});"
+               "var shadowed=new Response('payload').body;delete Uint8Array.prototype.byteLength;"
+               "shadowed.getReader().read().then(r=>ilog.push('bytes:'+r.value.length));",
+               "stream: a promise chunk, and a shadowed byteLength");
+    dom_script(&f, FETCH_ASSERT "assert(ilog.join()==='kept:true,bytes:7',ilog.join());",
+               "stream: the promise chunk is kept, and the body keeps its bytes");
+    /* WebIDL reads `init` before the constructor asks the stream: a getter
+     * there that locks it makes the stream unusable. */
+    dom_script(&f, FETCH_ASSERT
+               "var rs=new ReadableStream();throws('TypeError',()=>new Response(rs,{get status(){rs.getReader();return 200}}));"
+               "var free=new ReadableStream();assert(new Response(free,{status:201}).status===201);",
+               "response: a stream locked while init is read is refused");
+    fixture_free(&f);
+}
+
+/* The dependents a global signal's weak set links, after a collection. */
+static size_t weak_dependents(DomFixture *f, const char *name)
+{
+    os64_js_outcome_t outcome;
+    JSContext *ctx = os64_js_context(f->runtime, OS64_JS_ABI_ID, &outcome);
+    JS_RunGC(JS_GetRuntime(ctx));
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue signal = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    size_t n = d_signal_dependents(signal);
+    JS_FreeValue(ctx, signal);
+    return n;
+}
+
+/* DOM'S WEAK SETS (abort.c): a source holds its dependents by C link, not
+ * reference, so a dependent nobody can observe is collected however many
+ * a page makes; DOM's GC clause holds one with an abort listener; and the
+ * hold is released at exactly three points, each pinned here. */
+static void dom_weak_set_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/", NULL);
+    if (!fixture_ready(&f)) return;
+    /* The bound: ten thousand dependents of one source, dropped, are
+     * gone; a Request's signal per request likewise. */
+    dom_script(&f, "globalThis.root=new AbortController();globalThis.rs=root.signal;"
+               "for(let i=0;i<10000;i++)AbortSignal.any([rs]);for(let i=0;i<10000;i++)new Request('/x',{signal:rs});",
+               "weak: ten thousand dependents, dropped");
+    check(weak_dependents(&f, "rs") == 0, "weak: dropped dependents leave the source's set");
+    /* A dependent the page keeps is linked, and an abort reaches it. */
+    dom_script(&f, "globalThis.kept=AbortSignal.any([rs]);", "weak: a dependent kept");
+    check(weak_dependents(&f, "rs") == 1, "weak: a kept dependent stays linked");
+    /* Held for its listener: dropped by the page, still there, and heard. */
+    dom_script(&f, "globalThis.heard=0;(function(){AbortSignal.any([rs]).onabort=function(){heard++}})();",
+               "weak: a dependent only its listener wants");
+    check(weak_dependents(&f, "rs") == 2, "weak: a dependent with an abort listener is held");
+    /* Release point three, the source aborts (and with it point one, each
+     * dependent is aborted): the held one is heard, then let go. */
+    dom_script(&f, FETCH_ASSERT "root.abort();assert(heard===1&&kept.aborted,'heard '+heard);", "weak: the source aborts");
+    dom_script(&f, "globalThis.kept=undefined;", "weak: the kept one dropped");
+    check(weak_dependents(&f, "rs") == 0, "weak: a source's abort releases what it held");
+    /* Release point two, the last abort listener goes. */
+    dom_script(&f, "globalThis.r2=new AbortController();globalThis.s2=r2.signal;globalThis.f2=function(){};"
+               "globalThis.d2=AbortSignal.any([s2]);d2.addEventListener('abort',f2);d2.addEventListener('abort',function(){},{once:false});",
+               "weak: a dependent with two listeners");
+    dom_script(&f, "d2.onabort=null;globalThis.d2held=d2;globalThis.d2=undefined;", "weak: still listened");
+    dom_script(&f, "d2held=undefined;", "weak: dropped while listened");
+    check(weak_dependents(&f, "s2") == 1, "weak: a listened dependent stays held");
+    dom_script(&f, "globalThis.d3=AbortSignal.any([s2]);var h=function(){};d3.addEventListener('abort',h);"
+               "d3.removeEventListener('abort',h);d3=undefined;", "weak: the last listener goes");
+    check(weak_dependents(&f, "s2") == 1, "weak: a dependent whose last listener went is let go");
+    /* Release point one, the dependent is aborted (by another source)
+     * while this source lives on. */
+    dom_script(&f, "globalThis.other=new AbortController();"
+               "(function(){AbortSignal.any([s2,other.signal]).onabort=function(){}})();",
+               "weak: a dependent of two sources");
+    check(weak_dependents(&f, "s2") == 2, "weak: held for its listener");
+    dom_script(&f, "other.abort();", "weak: aborted by its other source");
+    check(weak_dependents(&f, "s2") == 1, "weak: a dependent aborted is let go by every source");
+    /* DOM's set is ordered: the dependents' events fire in link order. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new AbortController(),seen=[];var a=AbortSignal.any([o.signal]),b=AbortSignal.any([o.signal]);"
+        "a.onabort=()=>seen.push('a');b.onabort=()=>seen.push('b');o.abort();assert(seen.join()==='a,b',seen.join());",
+        "weak: dependents abort in the order they were linked");
+    fixture_free(&f);
+}
+
+/* The steps one script's links take (abort.c's d_signal_steps), after a
+ * setup that is not counted. */
+static uint64_t signal_steps_for(DomFixture *f, const char *setup, const char *measured)
+{
+    dom_script(f, setup, "bound: signals made");
+    uint64_t before = d_signal_steps;
+    dom_script(f, measured, "bound: signals linked");
+    return d_signal_steps - before;
+}
+
+/* What a page can size in a signal's links, held to linear by count: an
+ * AbortSignal.any of distinct sources, one of N copies of a dependent
+ * with M sources (each flattened to the same M), and a Request following
+ * such a dependent. Each grows its input sixteen to two hundred and fifty
+ * six times and holds the steps to twice that, so a walk of a list per
+ * link fails by count, not by a clock. */
+static void dom_signal_bound_cases(void)
+{
+    /* Room for 65,536 controllers and their signals. */
+    DomFixture f = net_fixture_engine("http://example.test/", NULL, (size_t)256 << 20);
+    if (!fixture_ready(&f)) return;
+    char setup[512], measured[256];
+    uint64_t steps[2];
+    /* AbortSignal.any of 256, then of 65,536 (D_SEQUENCE_MAX), distinct. */
+    static const size_t kDistinct[2] = {256, 65536};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);", kDistinct[i]);
+        steps[i] = signal_steps_for(&f, setup, "globalThis.big=AbortSignal.any(cs);big=undefined;cs=undefined;");
+    }
+    fprintf(stderr, "bound: any of 256 distinct %llu steps, of 65536 %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 256 * 2, "bound: AbortSignal.any is linear in its sources");
+    /* AbortSignal.any(Array(N).fill(d)), d a dependent of M sources: N and
+     * M 64, then 1,024. */
+    static const size_t kFill[2] = {64, 1024};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);"
+                 "globalThis.dd=AbortSignal.any(cs);globalThis.fill=Array(%zu).fill(dd);", kFill[i], kFill[i]);
+        steps[i] = signal_steps_for(&f, setup, "globalThis.big=AbortSignal.any(fill);big=undefined;");
+    }
+    fprintf(stderr, "bound: any of 64 x a 64-source dependent %llu steps, of 1024 x 1024 %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 16 * 2,
+          "bound: AbortSignal.any of copies of a dependent is linear in the copies and its sources");
+    /* new Request following a dependent of M sources: 64, then 4,096. */
+    static const size_t kRequest[2] = {64, 4096};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);"
+                 "globalThis.dd=AbortSignal.any(cs);", kRequest[i]);
+        snprintf(measured, sizeof(measured), "new Request('/x',{signal:dd});");
+        steps[i] = signal_steps_for(&f, setup, measured);
+    }
+    fprintf(stderr, "bound: a Request following a 64-source dependent %llu steps, a 4096-source one %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 64 * 2, "bound: a Request's signal is linear in its sources");
+    dom_script(&f, "cs=undefined;dd=undefined;fill=undefined;", "bound: signals dropped");
+    fixture_free(&f);
+}
+
+/* ── XMLHttpRequest ──────────────────────────────────────────────────── */
+
+/* The event order WPT's xhr/resources/xmlhttprequest-event-order.js
+ * records, which the xhr event-order tests hold a browser to. */
+#define XHR_RECORDER "function rec(x){globalThis.ev=[];x.addEventListener('readystatechange',()=>ev.push(x.readyState));" \
+    "for(const t of ['loadstart','progress','abort','timeout','error','load','loadend']){" \
+    "x.addEventListener(t,e=>ev.push(e.type+'('+e.loaded+','+e.total+','+e.lengthComputable+')'));" \
+    "x.upload.addEventListener(t,e=>ev.push('upload.'+e.type+'('+e.loaded+','+e.total+','+e.lengthComputable+')'));}}"
+
+static void dom_xhr_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/dir/page", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "var x=new XMLHttpRequest();assert(x instanceof XMLHttpRequestEventTarget&&x.upload instanceof XMLHttpRequestUpload);"
+        "assert(x.readyState===0&&XMLHttpRequest.DONE===4&&x.OPENED===1&&x.status===0&&x.statusText===''&&x.response==='');"
+        "assert(x.responseType===''&&x.timeout===0&&!x.withCredentials&&x.responseURL===''&&x.getAllResponseHeaders()==='');"
+        "throws('InvalidStateError',()=>x.send());throws('InvalidStateError',()=>x.setRequestHeader('a','b'));"
+        "throws('SyntaxError',()=>x.open('a b','/x'));throws('SecurityError',()=>x.open('TRACE','/x'));"
+        "throws('SyntaxError',()=>x.open('GET','http://a b/'));"
+        "x.responseType='bogus';assert(x.responseType==='');x.responseType='json';"
+        "throws('InvalidAccessError',()=>x.open('GET','/x',false));x.responseType='';"
+        "x.open('get','/x');assert(x.readyState===1);"
+        "x.setRequestHeader('X-A','1');x.setRequestHeader('x-a',' 2 ');x.setRequestHeader('Cookie','c');"
+        "throws('SyntaxError',()=>x.setRequestHeader('a b','1'));throws('SyntaxError',()=>x.setRequestHeader('a','a\\nb'));"
+        "throws('TypeError',()=>x.setRequestHeader('a','\\u0100'));"
+        "var p=new ProgressEvent('p',{loaded:-1,total:3,lengthComputable:true,bubbles:true});"
+        "assert(p instanceof Event&&p.loaded===-1&&p.total===3&&p.lengthComputable&&p.bubbles);assert(new ProgressEvent('p',{loaded:1.5}).loaded===1.5);throws('TypeError',()=>new ProgressEvent('p',{total:NaN}));"
+        "throws('TypeError',()=>ProgressEvent.prototype.loaded);",
+        "xhr: the surface and its refusals");
+
+    /* An author Content-Type's charset says UTF-8 for the bodies XHR's
+     * send() encodes as UTF-8, a string and a URLSearchParams, and is left
+     * as written for any other (a Blob's bytes are its own). */
+    static const struct { const char *body, *want; } kCharsets[] = {
+        {"'a=1'", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
+        {"new URLSearchParams('a=1')", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
+        {"new Blob(['a=1'])", "Content-Type: application/x-www-form-urlencoded;charset=windows-1252\r\n"},
+    };
+    /* The charset parameter is found by libway's walk: a ';' inside a quoted
+     * value is the value's, and the record is serialized. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('POST','/cq');"
+               "x.setRequestHeader('Content-Type','text/plain;note=\"a;charset=latin1;x\";charset=windows-1252');x.send('t');",
+               "xhr: a quoted ';' before the charset");
+    check(strstr(net.seen[net.count - 1].headers, "Content-Type: text/plain;note=\"a;charset=latin1;x\";charset=UTF-8\r\n") != NULL,
+          "xhr: the charset rewritten is the parameter, not a quoted value's text");
+    for (size_t i = 0; i < sizeof(kCharsets) / sizeof(kCharsets[0]); i++) {
+        char script[384];
+        snprintf(script, sizeof(script),
+                 "var x=new XMLHttpRequest();x.open('POST','/cs');"
+                 "x.setRequestHeader('Content-Type','application/x-www-form-urlencoded;charset=windows-1252');x.send(%s);",
+                 kCharsets[i].body);
+        dom_script(&f, script, "xhr: an author charset");
+        check(strstr(net.seen[net.count - 1].headers, kCharsets[i].want) != NULL,
+              "xhr: a string's and a URLSearchParams' charset says UTF-8, a Blob's is kept");
+    }
+
+    /* Async, with an upload: WPT's send-response-event-order. */
+    dom_script(&f, XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','content.py');globalThis.xr=x;"
+        "x.withCredentials=true;x.send('Test Message');",
+        "xhr: an asynchronous POST");
+    size_t last = net.count - 1;
+    NetSeen *s = &net.seen[last];
+    check(!strcmp(s->url, "http://example.test/dir/content.py") && !strcmp(s->method, "POST") && s->preflight &&
+          s->credentials == WAY_CREDENTIALS_INCLUDE && strstr(s->headers, "Content-Type: text/plain;charset=UTF-8") != NULL,
+          "xhr: the request reaches the host, an upload listener asking for a preflight");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/dir/content.py#frag",
+                                               "Content-Length: 12\r\nX-B: 2\r\nx-a: 1\r\nX-A: 3\r\n", "Test Message");
+    net_answer(&f, &net, last, &answer);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,12,true)','upload.progress(12,12,true)',"
+        "'upload.load(12,12,true)','upload.loadend(12,12,true)',2,3,'progress(12,12,true)',4,'load(12,12,true)',"
+        "'loadend(12,12,true)'].join();assert(ev.join()===want,ev.join());"
+        "assert(xr.status===200&&xr.statusText==='OK'&&xr.responseText==='Test Message'&&xr.response==='Test Message');"
+        "assert(xr.responseURL==='http://example.test/dir/content.py');"
+        "assert(xr.getResponseHeader('x-a')==='1, 3'&&xr.getResponseHeader('nope')===null);"
+        "assert(xr.getAllResponseHeaders()==='content-length: 12\\r\\nx-a: 1, 3\\r\\nx-b: 2\\r\\n',xr.getAllResponseHeaders());"
+        "throws('InvalidStateError',()=>xr.responseType='text');throws('InvalidStateError',()=>xr.overrideMimeType('a/b'));",
+        "xhr: the events in order, and the response");
+
+    /* A network error: send-no-response's CORS failure. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('POST','/c');x.send('Test Message');",
+               "xhr: a request that fails");
+    os64_dom_response_t failure = {.ok = false};
+    net_answer(&f, &net, net.count - 1, &failure);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,12,true)',4,'upload.error(0,0,false)',"
+        "'upload.loadend(0,0,false)','error(0,0,false)','loadend(0,0,false)'].join();assert(ev.join()===want,ev.join());",
+        "xhr: a network error's events");
+
+    /* abort() inside loadstart: abort-event-order. */
+    dom_script(&f, XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','/a');"
+        "x.addEventListener('loadstart',()=>x.abort());x.send('Test Message');"
+        "var want=[1,'loadstart(0,0,false)',4,'upload.abort(0,0,false)','upload.loadend(0,0,false)',"
+        "'abort(0,0,false)','loadend(0,0,false)'];assert(ev.join()===want.join(),ev.join());assert(x.readyState===0);",
+        "xhr: abort inside loadstart");
+
+    /* An empty answer: no LOADING. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/e');x.send();globalThis.xe=x;",
+               "xhr: an empty answer");
+    os64_dom_response_t empty = net_answer_of(204, "http://example.test/e", "", NULL);
+    net_answer(&f, &net, net.count - 1, &empty);
+    dom_script(&f, FETCH_ASSERT
+        "assert(ev.join()===[1,'loadstart(0,0,false)',2,'progress(0,0,false)',4,'load(0,0,false)','loadend(0,0,false)'].join(),"
+        "ev.join());assert(xe.status===204&&xe.response==='');",
+        "xhr: an empty answer's events");
+
+    /* The upload's events come before the response is the object's: an
+     * upload listener reads no status, no headers and no responseURL. */
+    dom_script(&f,
+        "globalThis.ulog=[];var x=new XMLHttpRequest();x.open('POST','/u');"
+        "x.upload.onload=()=>ulog.push(x.readyState+':'+x.status+':'+x.statusText+':'+x.getAllResponseHeaders()+':'"
+        "+x.responseURL+':'+x.getResponseHeader('x-u'));"
+        "x.onreadystatechange=()=>{if(x.readyState===2)ulog.push('2:'+x.status+':'+x.getResponseHeader('x-u'))};"
+        "x.send('up');", "xhr: an upload listener");
+    os64_dom_response_t uploaded = net_answer_of(200, "http://example.test/u", "X-U: 1\r\n", "ok");
+    net_answer(&f, &net, net.count - 1, &uploaded);
+    dom_script(&f, FETCH_ASSERT "assert(ulog.join()==='1:0::::null,2:200:1',ulog.join());",
+               "xhr: the response is the object's after the upload's events");
+
+    /* A KNOWN zero is not computable (XHR § "fire a progress event": "if
+     * length is not 0"): an empty upload's events and a Content-Length: 0
+     * answer's say lengthComputable false, total 0, as browsers do. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('POST','/z');x.send('');globalThis.xz=x;",
+               "xhr: an empty upload");
+    os64_dom_response_t zero = net_answer_of(200, "http://example.test/z", "Content-Length: 0\r\n", "");
+    net_answer(&f, &net, net.count - 1, &zero);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,0,false)','upload.progress(0,0,false)',"
+        "'upload.load(0,0,false)','upload.loadend(0,0,false)',2,'progress(0,0,false)',4,'load(0,0,false)',"
+        "'loadend(0,0,false)'].join();assert(ev.join()===want,ev.join());",
+        "xhr: a known zero is not computable");
+
+    /* Response types. */
+    static const struct { const char *type, *holds; } kTypes[] = {
+        {"arraybuffer", "xt.response instanceof ArrayBuffer&&xt.response.byteLength===9&&xt.response===xt.response"},
+        {"blob", "xt.response instanceof Blob&&xt.response.size===9&&xt.response.type==='application/json;charset=utf-8'"},
+        {"json", "xt.response.k[0]===1&&xt.response===xt.response"},
+        {"text", "xt.response==='{\"k\":[1]}'&&xt.responseText===xt.response"},
+        {"document", "xt.response===null&&xt.responseXML===null"},
+    };
+    for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]); i++) {
+        char script[512];
+        snprintf(script, sizeof(script),
+                 "var x=new XMLHttpRequest();x.open('GET','/t');x.responseType='%s';x.send();globalThis.xt=x;"
+                 "assert(x.response===(x.responseType==='text'?'':null));", kTypes[i].type);
+        dom_script(&f, script, "xhr: a response type");
+        os64_dom_response_t typed = net_answer_of(200, "http://example.test/t",
+                                                  "Content-Type: application/json; charset=utf-8\r\n", "{\"k\":[1]}");
+        net_answer(&f, &net, net.count - 1, &typed);
+        snprintf(script, sizeof(script), FETCH_ASSERT "assert(%s,'%s');", kTypes[i].holds, kTypes[i].type);
+        dom_script(&f, script, "xhr: a response type's response");
+    }
+    dom_script(&f, FETCH_ASSERT
+        "assert(xt.responseXML===null);throws('InvalidStateError',()=>xt.responseText);"
+        "var x=new XMLHttpRequest();x.open('GET','/j');x.responseType='json';x.send();globalThis.xj=x;",
+        "xhr: document is null");
+    os64_dom_response_t bad_json = net_answer_of(200, "http://example.test/j", "", "{");
+    net_answer(&f, &net, net.count - 1, &bad_json);
+    dom_script(&f, FETCH_ASSERT "assert(xj.response===null&&xj.response===null);", "xhr: JSON that does not parse is null");
+
+    /* overrideMimeType decides the charset text is read in. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/l');x.overrideMimeType('text/plain;charset=windows-1252');"
+               "x.send();globalThis.xl=x;", "xhr: an override");
+    os64_dom_response_t latin = net_answer_of(200, "http://example.test/l", "Content-Type: text/plain;charset=utf-8\r\n",
+                                              "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &latin);
+    dom_script(&f, FETCH_ASSERT "assert(xl.responseText==='caf\\u00e9',escape(xl.responseText));", "xhr: the override's charset");
+    /* The final encoding is the response's charset unless the override
+     * names one (XHR § "get a final encoding"): an override with no
+     * charset leaves the answer's windows-1252 in force. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/m');x.overrideMimeType('text/plain');"
+               "x.send();globalThis.xm=x;", "xhr: an override without a charset");
+    os64_dom_response_t latin2 = net_answer_of(200, "http://example.test/m",
+                                               "Content-Type: text/plain;charset=windows-1252\r\n", "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &latin2);
+    dom_script(&f, FETCH_ASSERT "assert(xm.responseText==='caf\\u00e9',escape(xm.responseText));",
+               "xhr: the response's charset stands under an override that names none");
+    /* A blob response's type is the final MIME type serialized whole, the
+     * response's or the override's, every parameter kept. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/p');x.responseType='blob';x.send();globalThis.xp=x;"
+               "var y=new XMLHttpRequest();y.open('GET','/q2');y.responseType='blob';"
+               "y.overrideMimeType('Application/LD+JSON; Profile=\"p q\"');y.send();globalThis.yp=y;",
+               "xhr: blob types");
+    os64_dom_response_t ld = net_answer_of(200, "http://example.test/p",
+                                           "Content-Type: application/ld+json;profile=\"urn:x:a b\";charset=utf-8\r\n", "{}");
+    os64_dom_response_t ld2 = net_answer_of(200, "http://example.test/q2", "Content-Type: text/plain\r\n", "{}");
+    net_answer(&f, &net, net.count - 2, &ld);
+    net_answer(&f, &net, net.count - 1, &ld2);
+    dom_script(&f, FETCH_ASSERT
+        "assert(xp.response.type==='application/ld+json;profile=\"urn:x:a b\";charset=utf-8',xp.response.type);"
+        "assert(yp.response.type==='application/ld+json;profile=\"p q\"',yp.response.type);",
+        "xhr: a blob's type keeps every parameter");
+
+    /* The answer's type is "extract a MIME type"'s: a comma inside a
+     * quoted parameter does not split it, so the charset stands. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/q');x.send();globalThis.xq=x;", "xhr: a quoted comma");
+    os64_dom_response_t quoted = net_answer_of(200, "http://example.test/q",
+                                               "Content-Type: text/plain;charset=windows-1252;note=\"a,b\"\r\n", "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &quoted);
+    dom_script(&f, FETCH_ASSERT "assert(xq.responseText==='caf\\u00e9',escape(xq.responseText));",
+               "xhr: a quoted comma is the value's");
+
+    /* Synchronous: run by the host, no events before, a NetworkError on
+     * failure. */
+    net.run_ok = true;
+    net.run_answer = net_answer_of(200, "http://example.test/s", "Content-Length: 12\r\n", "Test Message");
+    dom_script(&f, FETCH_ASSERT XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','/s',false);"
+        "throws('InvalidAccessError',()=>{x.timeout=5});throws('InvalidAccessError',()=>{x.responseType='text'});"
+        "x.send('Test Message');assert(x.response==='Test Message');"
+        "assert(ev.join()===[1,4,'load(12,12,true)','loadend(12,12,true)'].join(),ev.join());",
+        "xhr: synchronous");
+    check(net.runs == 1 && net.releases == 1, "xhr: a synchronous request is run and released");
+    net.run_ok = false;
+    dom_script(&f, FETCH_ASSERT
+        "var x=new XMLHttpRequest();x.open('GET','/s',false);throws('NetworkError',()=>x.send());assert(x.readyState===4);",
+        "xhr: a synchronous failure throws");
+
+    /* A timeout, on the page's own timers. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/slow');x.timeout=50;x.send();",
+               "xhr: a timeout");
+    size_t slow = net.count - 1;
+    storage_clock += 60;
+    os64_js_outcome_t outcome;
+    check(os64_dom_timer_fire(f.binding, storage_clock, &outcome), "xhr: the timeout's timer fires");
+    check(net.seen[slow].cancelled, "xhr: a timeout cancels with the host");
+    dom_script(&f, FETCH_ASSERT
+        "assert(ev.join()===[1,'loadstart(0,0,false)',4,'timeout(0,0,false)','loadend(0,0,false)'].join(),ev.join());",
+        "xhr: a timeout's events");
+    /* open() again stops what was under way, with no events. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/one');x.send();x.open('GET','/two');"
+               "assert(ev.join()===[1,'loadstart(0,0,false)'].join(),ev.join());", "xhr: open again");
+    check(net.seen[net.count - 1].cancelled, "xhr: open again cancels the request out");
+    /* A request out keeps its object alive with nothing else holding it. */
+    dom_script(&f, "globalThis.done=0;(function(){var x=new XMLHttpRequest();x.onload=()=>done++;x.open('GET','/gc');x.send();})();",
+               "xhr: unreferenced while out");
+    size_t gc = net.count - 1;
+    JSContext *ctx = os64_js_context(f.runtime, OS64_JS_ABI_ID, &outcome);
+    JS_RunGC(JS_GetRuntime(ctx));
+    os64_dom_response_t ok = net_answer_of(200, "http://example.test/gc", "", "x");
+    net_answer(&f, &net, gc, &ok);
+    dom_script(&f, FETCH_ASSERT "assert(done===1);", "xhr: an object with a request out outlives its references");
+    fixture_free(&f);
+}
+
+/* A synchronous request whose server never finishes ends when the script
+ * task that made it is out of time: the run asks the binding's stop, which
+ * is the task's budget, and the task ends as any script out of time does. */
+static void dom_xhr_sync_stall_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    net.run_stalls = true;
+    static const char source[] = "var x=new XMLHttpRequest();x.open('GET','/hang',false);x.send();";
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_js_run(f.runtime, source, sizeof(source) - 1, "stall.js", &outcome);
+    check(net.run_stopped, "xhr: a stalled synchronous request is stopped by the task's budget");
+    check(status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_EXECUTION,
+          "xhr: and the task ends as a script out of time ends");
+    fixture_free(&f);
+}
+
+/* ── What a page or a server can size, held to its bound by count ───── */
+
+/* The steps a header list's work takes (fetch.c's d_request_steps): a
+ * Headers walked whole, a server's header block read into a Response, and
+ * an XMLHttpRequest's getAllResponseHeaders. Each doubles a size eight
+ * times over and holds the work to n log n, so a quadratic step fails by
+ * count, not by a clock. */
+static uint64_t fetch_steps_for(DomFixture *f, FakeNet *net, int kind, size_t n)
+{
+    char script[512];
+    if (kind == 0) {
+        snprintf(script, sizeof(script),
+                 "var a=[];for(let i=0;i<%zu;i++)a.push(['h'+((i*7919)%%%zu),'v']);globalThis.hh=new Headers(a);", n, n);
+        dom_script(f, script, "bound: a Headers made");
+        uint64_t before = d_request_steps;
+        dom_script(f, "var k=0;for(const e of hh)k++;", "bound: a Headers walked");
+        return d_request_steps - before;
+    }
+    /* A block of n lines, in reverse order. */
+    size_t cap = n * 24 + 1;
+    char *block = malloc(cap);
+    if (block == NULL) abort();
+    size_t at = 0;
+    for (size_t i = n; i > 0; i--) at += (size_t)snprintf(block + at, cap - at, "H%zu: v\r\n", i);
+    dom_script(f, kind == 1 ? "fetch('/b').then(r=>{globalThis.rb=r})"
+                            : "var x=new XMLHttpRequest();x.open('GET','/b');x.send();globalThis.xb=x;",
+               "bound: a request for a big block");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/b", block, "");
+    uint64_t before = d_request_steps;
+    net_answer(f, net, net->count - 1, &answer);
+    if (kind == 2) dom_script(f, "xb.getAllResponseHeaders();", "bound: every header of a big block");
+    uint64_t steps = d_request_steps - before;
+    free(block);
+    return steps;
+}
+
+/* ── A streamed answer (STREAMS.md § 5, S3) ──────────────────────────── */
+
+/* The head settles the fetch; the body is a stream the host fills as the
+ * pieces come, asked for one piece per read; pieces nobody asked for wait
+ * in its queue; the end closes it or errors it; an abort, the page's
+ * cancel, and the page leaving each stop the host; a body method, a clone
+ * and a BYOB reader read it as they read a whole one. */
+static void dom_fetch_stream_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.log=[];fetch('/s').then(r=>{log.push('head:'+r.status+':'+r.headers.get('x-a'));"
+        "globalThis.rd=r.body.getReader();"
+        "const go=()=>rd.read().then(c=>{if(c.done){log.push('done');return}"
+        "log.push(new TextDecoder().decode(c.value));go()},e=>log.push('error:'+e.name));go()});",
+        "stream: a fetch whose answer streams");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/s", "X-A: 1\r\n", "");
+    check(net_piece(&f, &net, 0, "early") == OS64_JS_OK, "stream: a piece before the head does nothing");
+    check(net_head(&f, &net, 0, &head) == OS64_JS_OK, "stream: the head is a task");
+    check(os64_dom_fetches_pending(f.binding) == 1, "stream: a request whose head came is still out");
+    check(net_answer(&f, &net, 0, &head) == OS64_JS_OK && os64_dom_fetches_pending(f.binding) == 1,
+          "stream: a whole answer after the head does nothing");
+    check(net.seen[0].mores == 1, "stream: the page's read asks the host for more");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='head:200:1',log.join());",
+               "stream: the promise settles at the head");
+    check(net_piece(&f, &net, 0, "abc") == OS64_JS_OK, "stream: a piece is a task");
+    check(net.seen[0].mores == 2, "stream: the next read asks again");
+    check(net_piece(&f, &net, 0, "def") == OS64_JS_OK && net_end(&f, &net, 0, true) == OS64_JS_OK,
+          "stream: another piece, and the end");
+    check(os64_dom_fetches_pending(f.binding) == 0, "stream: the end ends the request");
+    check(!net.seen[0].cancelled, "stream: an ended request is not cancelled");
+    check(net_piece(&f, &net, 0, "late") == OS64_JS_OK && net_end(&f, &net, 0, true) == OS64_JS_OK,
+          "stream: a piece or an end after the end does nothing");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='head:200:1,abc,def,done',log.join());",
+               "stream: each piece read as it came, then done");
+
+    /* Pieces nobody asked for wait in the queue; a body method reads them
+     * and what follows, to the end. A body method called while the body
+     * still streams waits for its end. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/q').then(r=>{globalThis.rq=r});"
+        "fetch('/t').then(r=>r.text()).then(t=>log.push('text:'+t));",
+        "stream: two more fetches");
+    os64_dom_response_t hq = net_answer_of(200, "http://example.test/q", "", "");
+    net_head(&f, &net, 1, &hq);
+    net_piece(&f, &net, 1, "xyz");
+    net_piece(&f, &net, 1, "123");
+    net_end(&f, &net, 1, true);
+    check(net.seen[1].mores == 0, "stream: nobody read, nothing asked");
+    dom_script(&f, "rq.text().then(t=>log.push('queued:'+t));", "stream: read what waited");
+    net_head(&f, &net, 2, &hq);
+    check(net.seen[2].mores == 1, "stream: text() asks for the body");
+    net_piece(&f, &net, 2, "one,");
+    net_piece(&f, &net, 2, "two");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='queued:xyz123',log.join());",
+               "stream: queued pieces read whole; text() waits for the end");
+    net_end(&f, &net, 2, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='queued:xyz123,text:one,two',log.join());",
+               "stream: text() of a body that streamed");
+
+    /* A network error part way errors the stream with a TypeError. */
+    dom_script(&f, "globalThis.log=[];fetch('/e').then(r=>r.arrayBuffer()).catch(e=>log.push(e.name+':'+e.message));",
+               "stream: a body that fails part way");
+    net_head(&f, &net, 3, &hq);
+    net_piece(&f, &net, 3, "partial");
+    net_end(&f, &net, 3, false);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError:Failed to fetch',log.join());",
+               "stream: a network error part way rejects the read");
+
+    /* An abort under way stops the host and errors the stream; what the
+     * host sends after does nothing. */
+    dom_script(&f,
+        "globalThis.log=[];globalThis.ca=new AbortController();"
+        "fetch('/a',{signal:ca.signal}).then(r=>{globalThis.ra=r.body.getReader();"
+        "ra.read().then(c=>{log.push('read:'+c.value.length);return ra.read()}).catch(e=>log.push('abort:'+e.name))});",
+        "stream: a fetch to abort part way");
+    net_head(&f, &net, 4, &hq);
+    net_piece(&f, &net, 4, "ab");
+    dom_script(&f, "ca.abort();", "stream: abort");
+    check(net.seen[4].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: an abort stops the host");
+    check(net_piece(&f, &net, 4, "cd") == OS64_JS_OK && net_end(&f, &net, 4, true) == OS64_JS_OK,
+          "stream: what came after the abort does nothing");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='read:2,abort:AbortError',log.join());",
+               "stream: the read after an abort rejects with its reason");
+    /* A body method on a body an abort errored part way answers the
+     * reason at once, however often it is asked; one the page's own reader
+     * holds is unusable. */
+    dom_script(&f,
+        "globalThis.log=[];globalThis.cb=new AbortController();"
+        "fetch('/m',{signal:cb.signal}).then(r=>{globalThis.rm=r});"
+        "globalThis.cl=new AbortController();fetch('/l',{signal:cl.signal}).then(r=>{globalThis.rl=r;r.body.getReader()});",
+        "stream: two fetches to abort before their bodies are read");
+    net_head(&f, &net, 5, &hq);
+    net_head(&f, &net, 6, &hq);
+    net_piece(&f, &net, 5, "ab");
+    dom_script(&f,
+        "cb.abort();cl.abort();const t=rm.text();t.catch(e=>log.push('text:'+e.name));"
+        "Promise.resolve().then(()=>log.push('next'));rm.json().catch(e=>log.push('json:'+e.name));"
+        "rl.text().catch(e=>log.push('locked:'+e.name));",
+        "stream: body methods after an abort part way");
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='text:AbortError,next,json:AbortError,locked:TypeError'&&rm.bodyUsed,log.join());",
+        "stream: the reason at once, every time; a reader the page holds is unusable");
+
+    /* The page's cancel stops the host. */
+    dom_script(&f, "fetch('/c').then(r=>{globalThis.rc=r.body.getReader();rc.read();rc.cancel('no')});",
+               "stream: a fetch the page cancels");
+    net_head(&f, &net, 7, &hq);
+    check(net.seen[7].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: the page's cancel stops the host");
+
+    /* A clone tees the stream: each branch reads every piece. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/k').then(r=>{const c=r.clone();"
+        "r.text().then(t=>log.push('r:'+t));c.text().then(t=>log.push('c:'+t))});",
+        "stream: a clone of a body that streams");
+    net_head(&f, &net, 8, &hq);
+    net_piece(&f, &net, 8, "both");
+    net_piece(&f, &net, 8, "!");
+    net_end(&f, &net, 8, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.sort().join()==='c:both!,r:both!',log.join());",
+               "stream: each branch reads every piece");
+
+    /* A BYOB reader reads a piece into its own buffer, and the rest from the
+     * queue; a body that ends inside an element of a BYOB read rejects it. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/b').then(r=>{const b=r.body.getReader({mode:'byob'});"
+        "b.read(new Uint8Array(2)).then(c=>{log.push(String.fromCharCode(...c.value));"
+        "return b.read(new Uint8Array(8))}).then(c=>log.push(String.fromCharCode(...c.value)))});"
+        "fetch('/o').then(r=>r.body.getReader({mode:'byob'}).read(new Uint16Array(1))).catch(e=>log.push('odd:'+e.name));",
+        "stream: BYOB reads of bodies that stream");
+    net_head(&f, &net, 9, &hq);
+    net_piece(&f, &net, 9, "abcd");
+    net_head(&f, &net, 10, &hq);
+    net_piece(&f, &net, 10, "x");
+    net_end(&f, &net, 10, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='ab,cd,odd:TypeError',log.join());",
+               "stream: a BYOB read fills its buffer; an odd end rejects");
+
+    /* A head with no body, or that is a network error, is the whole
+     * answer. */
+    dom_script(&f, "globalThis.log=[];fetch('/n').then(r=>log.push('null:'+r.body));"
+               "fetch('/f').catch(e=>log.push('net:'+e.name));", "stream: heads that are whole answers");
+    os64_dom_response_t empty = net_answer_of(204, "http://example.test/n", "", NULL);
+    os64_dom_response_t failed = {.ok = false};
+    net_head(&f, &net, 11, &empty);
+    net_head(&f, &net, 12, &failed);
+    check(os64_dom_fetches_pending(f.binding) == 1, "stream: those heads end their requests");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='null:null,net:TypeError',log.join());",
+               "stream: a null body and a network error at the head");
+
+    /* The page leaving cancels a body under way. */
+    unsigned cancels = net.cancels;
+    fixture_free(&f);
+    check(net.cancels == cancels + 1, "stream: drain cancels a body under way");
+
+    /* XMLHttpRequest: HEADERS_RECEIVED at the head; each piece kept, and
+     * LOADING, readystatechange and progress at most once in 50 ms; the
+     * end fires as a whole answer's does. */
+    FakeNet xnet = {0};
+    f = net_fixture("http://example.test/", &xnet);
+    if (!fixture_ready(&f)) return;
+    storage_clock = 5000;
+    dom_script(&f,
+        "globalThis.xl=[];var x=new XMLHttpRequest();x.open('GET','/x');"
+        "x.onreadystatechange=()=>xl.push('rs'+x.readyState+':'+x.responseText);"
+        "x.onprogress=e=>xl.push('p'+e.loaded+'/'+e.total);x.onload=()=>xl.push('load');x.send();",
+        "stream: an XMLHttpRequest whose answer streams");
+    os64_dom_response_t xh = net_answer_of(200, "http://example.test/x", "Content-Length: 6\r\n", "");
+    net_head(&f, &xnet, 0, &xh);
+    check(xnet.seen[0].mores == 1 && os64_dom_fetches_pending(f.binding) == 1,
+          "stream: an XMLHttpRequest asks for its body at the head");
+    net_piece(&f, &xnet, 0, "abc");
+    storage_clock += 10;
+    net_piece(&f, &xnet, 0, "de");
+    storage_clock += 50;
+    net_piece(&f, &xnet, 0, "f");
+    check(xnet.seen[0].mores == 4, "stream: each piece asks for the next");
+    net_end(&f, &xnet, 0, true);
+    dom_script(&f, FETCH_ASSERT
+        "assert(xl.join()==='rs2:,rs3:abc,p3/6,rs3:abcdef,p6/6,p6/6,rs4:abcdef,load',xl.join());",
+        "stream: an XMLHttpRequest's events as its body streams");
+    /* abort() part way stops the host. */
+    dom_script(&f, "globalThis.xa=new XMLHttpRequest();xa.open('GET','/y');xa.send();", "stream: another XHR");
+    net_head(&f, &xnet, 1, &xh);
+    net_piece(&f, &xnet, 1, "ab");
+    dom_script(&f, FETCH_ASSERT "xa.abort();assert(xa.readyState===0,xa.readyState);", "stream: abort() part way");
+    check(xnet.seen[1].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: abort() stops the host");
+    fixture_free(&f);
+
+    /* A piece past the runtime's limit is that limit, as a whole body's is. */
+    FakeNet mnet = {0};
+    f = net_fixture_engine("http://example.test/", &mnet, 4 * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "fetch('/big').then(r=>r.arrayBuffer());", "stream: a big body that streams");
+    net_head(&f, &mnet, 0, &hq);
+    size_t size = 6 * 1024 * 1024;
+    char *big = malloc(size);
+    if (big == NULL) abort();
+    memset(big, 'x', size);
+    os64_js_outcome_t outcome;
+    check(os64_dom_fetch_body(f.binding, mnet.seen[0].token, big, size, &outcome) == OS64_JS_LIMIT,
+          "stream: a piece past the limit is the runtime's limit");
+    free(big);
+    fixture_free(&f);
+}
+
+/* A streamed answer's steps (head, piece, end), with one of them cut at
+ * its `cut`th allocation, the engine's or the binding's (0: none): the
+ * allocations the cut step made. A page reads the body as it comes; an
+ * XMLHttpRequest beside it takes the same pieces. */
+static size_t stream_sweep_run(int step, bool engine, size_t cut)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return 0;
+    dom_script(&f,
+        "fetch('/s').then(r=>{const rd=r.body.getReader();const go=()=>rd.read().then(c=>{if(!c.done)go()},()=>{});go()},"
+        "()=>{});var x=new XMLHttpRequest();x.open('GET','/x');x.onprogress=()=>{};x.send();",
+        "stream sweep: a fetch and an XMLHttpRequest");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/s", "X-A: 1\r\nContent-Length: 3\r\n", "");
+    size_t *counter = engine ? &attempts : &dom_attempts;
+    size_t made = 0;
+    for (int s = 0; s < 3; s++) {
+        size_t start = *counter;
+        if (s == step && cut != 0) {
+            if (engine) fail_at = attempts + cut;
+            else dom_fail_at = dom_attempts + cut;
+        }
+        os64_js_outcome_t outcome;
+        for (size_t which = 0; which < net.count; which++) {
+            if (s == 0) os64_dom_fetch_head(f.binding, net.seen[which].token, &head, &outcome);
+            else if (s == 1) os64_dom_fetch_body(f.binding, net.seen[which].token, "abc", 3, &outcome);
+            else os64_dom_fetch_end(f.binding, net.seen[which].token, true, &outcome);
+        }
+        fail_at = 0;
+        dom_fail_at = 0;
+        if (s == step) made = *counter - start;
+    }
+    fixture_free(&f);
+    return made;
+}
+
+/* Every allocation a streamed answer's head, its piece and its end make,
+ * the engine's and the binding's, refused in turn: whatever each does (a
+ * rejection, an errored stream, the runtime's sticky failure), nothing
+ * crashes, what comes after it does no harm, and the teardown accounts
+ * for every byte (fixture_free). */
+static void dom_fetch_stream_sweep_cases(void)
+{
+    static const char *const kStep[] = {"head", "piece", "end"};
+    for (int step = 0; step < 3; step++)
+        for (int engine = 0; engine < 2; engine++) {
+            size_t count = stream_sweep_run(step, engine, 0);
+            printf("stream sweep: the %s's %s allocation points: %zu\n", kStep[step], engine ? "engine" : "binding",
+                   count);
+            for (size_t cut = 1; cut <= count; cut++) {
+                stream_sweep_run(step, engine, cut);
+                dom_sweeps++;
+            }
+        }
+}
+
+/* Each response type read from a body outside the engine (XHR_BYTES.md),
+ * streamed in two pieces with a Content-Length or chunked (`declared`):
+ * text and JSON decoded, an ArrayBuffer the page may write (it owns the
+ * body then), a Blob and a slice of it that outlive the XHR, and response
+ * ArrayBuffers detached by a structured clone's transfer and moved by
+ * transfer() at their length and at another, each of which gives the body
+ * back once (a second unref would be a use after free, ASan's to see);
+ * and the bytes counted back to zero once the page lets all of them go. */
+static void dom_xhr_body_types_case(bool declared)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.got={};globalThis.xs=[];globalThis.kept=[];"
+        "['','text','json','arraybuffer','blob','arraybuffer','arraybuffer','arraybuffer'].forEach((t,i)=>{"
+        "const x=new XMLHttpRequest();x.open('GET','/'+i);x.responseType=t;xs.push(x);x.onload=()=>{"
+        "if(t==='json')got[i]=x.response.v;"
+        "else if(t==='blob'){globalThis.part=x.response.slice(6,9,'text/x');got[i]=x.response.size+':'+part.size;}"
+        "else if(i===3){const a=new Uint8Array(x.response);a[0]=65;"
+        "got[i]=new Uint8Array(x.response)[0]+':'+x.response.byteLength;}"
+        "else if(i===5){const c=structuredClone(x.response,{transfer:[x.response]});"
+        "got[i]=c.byteLength+':'+x.response.byteLength;kept.push(c);}"
+        "else if(i===6){const m=x.response.transfer();got[i]=m.byteLength+':'+x.response.byteLength;kept.push(m);}"
+        "else if(i===7){const m=x.response.transfer(4);got[i]=m.byteLength+':'+x.response.byteLength;kept.push(m);}"
+        "else got[i]=x.responseText};x.send()});",
+        "bodies: each response type");
+    const char *body1 = "{\"v\":", *body2 = "\"abc\"}";
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/", declared ? "Content-Length: 11\r\n" : "", "");
+    for (size_t i = 0; i < 8; i++) {
+        net_head(&f, &net, i, &head);
+        net_piece(&f, &net, i, body1);
+        net_piece(&f, &net, i, body2);
+        net_end(&f, &net, i, true);
+    }
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held != 0, "bodies: held outside the engine while the page holds them");
+    dom_script(&f, FETCH_ASSERT
+        "assert(got[0]==='{\"v\":\"abc\"}'&&got[1]===got[0]&&got[2]==='abc',JSON.stringify(got));"
+        "assert(got[3]==='65:11'&&got[4]==='11:3',JSON.stringify(got));"
+        "assert(got[5]==='11:0'&&got[6]==='11:0'&&got[7]==='4:0',JSON.stringify(got));"
+        "assert(xs[3].response===xs[3].response&&xs[4].response===xs[4].response,'the same object each read');"
+        "part.text().then(t=>{got.part=t+':'+part.type});xs=null;",
+        "bodies: what each type made of them");
+    dom_script(&f, FETCH_ASSERT "assert(got.part==='abc:text/x',got.part);part=null;got=null;kept=null;",
+               "bodies: a slice outlives its XHR");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    os64_dom_body_stats(f.binding, &held, NULL);
+    if (held != 0) fprintf(stderr, "bodies: %zu bytes still held\n", held);
+    check(held == 0, "bodies: every byte let go once the page lets them all go");
+    fixture_free(&f);
+}
+
+/* A body bound of zero is a literal cap: an empty response passes it, and
+ * a byte does not. */
+static void dom_xhr_zero_bound_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 0, 0);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.said=[];for(const p of ['/empty','/one']){const x=new XMLHttpRequest();x.open('GET',p);"
+        "x.onload=()=>said.push(p+':load:'+x.responseText.length);x.onerror=()=>said.push(p+':error');x.send()}",
+        "zero bound: two requests");
+    os64_dom_response_t empty = net_answer_of(200, "http://example.test/empty", "", "");
+    os64_dom_response_t one = net_answer_of(200, "http://example.test/one", "", "x");
+    net_answer(&f, &net, 0, &empty);
+    net_answer(&f, &net, 1, &one);
+    dom_script(&f, FETCH_ASSERT "assert(said.join()==='/empty:load:0,/one:error',said.join());",
+               "zero bound: an empty body passes it, a byte does not");
+    fixture_free(&f);
+}
+
+/* A speed test's downloads (a speed test's shape): `n` XMLHttpRequests
+ * whose bodies of `mib` MiB stream in 1 MiB pieces, side by side, with a
+ * Content-Length or chunked (`declared`), in a page whose runtime holds
+ * 64 MiB and whose body bound is `bound_mib` MiB. The bytes are the body
+ * bound's, not the runtime's (XHR_BYTES.md): the first `loaded` complete,
+ * each a Blob of every byte it received, and the rest fail as network
+ * errors, and the page runs on either way. */
+static void dom_xhr_downloads_case(int n, int mib, bool declared, int bound_mib, int loaded)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 64 * 1024 * 1024,
+                                       (size_t)bound_mib * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    char script[640];
+    snprintf(script, sizeof(script),
+             "globalThis.seen=0;globalThis.loads=[];globalThis.errors=0;for(let i=0;i<%d;i++){"
+             "const x=new XMLHttpRequest();x.open('GET','/r'+i);x.responseType='blob';"
+             "x.onprogress=e=>{seen=Math.max(seen,e.loaded)};x.onload=()=>loads.push(x.response.size);"
+             "x.onerror=()=>errors++;x.send()}", n);
+    dom_script(&f, script, "downloads: a speed test's requests");
+    char length[64];
+    snprintf(length, sizeof(length), "Content-Length: %d\r\n", mib * 1024 * 1024);
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/r", declared ? length : "", "");
+    for (int i = 0; i < n; i++) net_head(&f, &net, (size_t)i, &head);
+    size_t piece = 1024 * 1024;
+    uint8_t *bytes = malloc(piece);
+    if (bytes == NULL) abort();
+    memset(bytes, 'x', piece);
+    os64_js_status_t status = OS64_JS_OK;
+    os64_js_outcome_t outcome = {0};
+    for (int k = 0; k < mib && status == OS64_JS_OK; k++)
+        for (int i = 0; i < n && status == OS64_JS_OK; i++)
+            status = os64_dom_fetch_body(f.binding, net.seen[i].token, bytes, piece, &outcome);
+    for (int i = 0; i < n && status == OS64_JS_OK; i++)
+        status = os64_dom_fetch_end(f.binding, net.seen[i].token, true, &outcome);
+    free(bytes);
+    char what[160];
+    snprintf(what, sizeof(what), "downloads: %d of %d MiB%s in a 64 MiB page with a %d MiB body bound", n, mib,
+             declared ? "" : ", chunked,", bound_mib);
+    if (status != OS64_JS_OK) fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
+    check(status == OS64_JS_OK, what);
+    char counted[512];
+    snprintf(counted, sizeof(counted),
+             FETCH_ASSERT "assert(loads.length===%d&&errors===%d,loads.length+' loads, '+errors+' errors');"
+             "assert(loads.every(s=>s===%d),String(loads));assert(seen===%d,seen);",
+             loaded, n - loaded, mib * 1024 * 1024, mib * 1024 * 1024);
+    dom_script(&f, counted, "downloads: the page runs on, its loads whole and the rest network errors");
+    size_t held = 0;
+    uint64_t refused = 0;
+    os64_dom_body_stats(f.binding, &held, &refused);
+    check(refused == (uint64_t)(n - loaded) && held >= (size_t)loaded * mib * 1024 * 1024,
+          "downloads: the binding counts what it holds and what it refused");
+    fixture_free(&f);
+}
+
+/* A speed test's uploads (fast.com's shape): a string of `mib` MiB made
+ * into `n` Blobs, each sent by an XMLHttpRequest, in a page whose runtime
+ * holds 64 MiB and whose body bound is `bound_mib` MiB. A Blob the page
+ * makes keeps its bytes outside the engine and a send refers to them
+ * (XHR_BYTES.md § 7): the first `made` Blobs are made, the next throws a
+ * QuotaExceededError the page catches, and every made one is sent whole.
+ * The string and 28 MiB of filler stay held throughout, leaving the heap
+ * no room for a copy of one Blob's bytes at any step. */
+static void dom_xhr_uploads_case(int n, int mib, int bound_mib, int made)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 64 * 1024 * 1024,
+                                       (size_t)bound_mib * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    char script[640];
+    snprintf(script, sizeof(script),
+             "globalThis.s='0123456789abcdef'.repeat(%d*65536);globalThis.fill=new ArrayBuffer(28*1048576);"
+             "globalThis.blobs=[];globalThis.thrown='';"
+             "try{for(let i=0;i<%d;i++)blobs.push(new Blob([s]))}catch(e){thrown=e.name}"
+             "blobs.forEach((b,i)=>{const x=new XMLHttpRequest();x.open('POST','/u'+i);x.send(b)});"
+             "s=null;fill=null;", mib, n);
+    char what[160];
+    snprintf(what, sizeof(what), "uploads: %d of %d MiB in a 64 MiB page with a %d MiB body bound", n, mib, bound_mib);
+    dom_script(&f, script, what);
+    size_t length = (size_t)mib * 1024 * 1024;
+    uint64_t sum = 0;
+    for (size_t i = 0; i < length; i++) sum += (uint64_t)"0123456789abcdef"[i % 16] * (i + 1);
+    bool whole = net.count == (size_t)made;
+    for (size_t i = 0; i < net.count; i++)
+        whole = whole && net.seen[i].body_sent == length && net.seen[i].body_sum == sum;
+    check(whole, "uploads: every Blob made is sent whole");
+    char counted[512];
+    snprintf(counted, sizeof(counted),
+             FETCH_ASSERT "assert(blobs.length===%d&&thrown===%s,blobs.length+' made, '+thrown);", made,
+             made < n ? "'QuotaExceededError'" : "''");
+    dom_script(&f, counted, "uploads: the page runs on, past the bound a QuotaExceededError it catches");
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held >= (size_t)made * length, "uploads: the Blobs' bytes held outside the engine");
+    fixture_free(&f);
+}
+
+/* A Blob's bytes made from each kind of part, kept outside the engine:
+ * USVString's lone surrogate, native endings, a buffer, a Blob, an object's
+ * string; and the doors that hold such bytes elsewhere — a Response, a
+ * Request, fetch()'s body, a FormData File — each read back whole. */
+static void dom_blob_kept_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.got={};"
+        "const hex=b=>b.arrayBuffer().then(a=>Array.from(new Uint8Array(a),x=>x.toString(16).padStart(2,'0')).join(''));"
+        "const inner=new Blob(['in']);"
+        "globalThis.b=new Blob(['a\\r\\nb\\rc\\u00e9\\ud800z',new Uint8Array([1,2]),inner,{toString(){return '!'}}],"
+        "{endings:'native'});"
+        "hex(b).then(h=>{got.native=h});"
+        "hex(new Blob(['a\\r\\nb'])).then(h=>{got.transparent=h});"
+        "hex(new Blob([])).then(h=>{got.empty=h+':'+new Blob([]).size});"
+        "new Response(new Blob(['hey'])).text().then(t=>{got.response=t});"
+        "new Request('/q',{method:'POST',body:new Blob(['yo'])}).text().then(t=>{got.request=t});"
+        "fetch('/f',{method:'POST',body:new Blob(['sent'])});"
+        "const fd=new FormData();fd.append('f',new Blob(['form'],{type:'text/x'}),'n.txt');"
+        "const e=fd.get('f');e.text().then(t=>{got.form=t+':'+e.name+':'+e.type+':'+e.size});"
+        // Each part converted as it is yielded: a toString that pops the
+        // next part leaves the iteration one part short.
+        "const arr=[{toString(){arr.pop();return 'P'}},{toString(){return 'F'}}];"
+        "new Blob(arr).text().then(t=>{got.order=t});",
+        "kept blobs: each kind of part, and each door");
+    dom_script(&f, FETCH_ASSERT
+        "assert(got.native==='610a620a63c3a9efbfbd7a0102696e21',got.native);"
+        "assert(got.transparent==='610d0a62',got.transparent);assert(got.empty===':0',got.empty);"
+        "assert(got.response==='hey'&&got.request==='yo',got.response+' '+got.request);"
+        "assert(got.form==='form:n.txt:text/x:4',got.form);assert(got.order==='P',got.order);",
+        "kept blobs: every byte as the File API makes it");
+    check(net.count == 1 && net.seen[0].body_sent == 4 && memcmp(net.seen[0].body, "sent", 4) == 0,
+          "kept blobs: fetch() sends a kept Blob's bytes");
+    fixture_free(&f);
+}
+
+/* A Blob's record is charged to the bound as its bytes are (a response's
+ * is not): under a bound of zero an empty Blob is refused, and under a
+ * small one a page that makes Blobs in a loop is stopped by a
+ * QuotaExceededError it can catch, every charge given back once the Blobs
+ * go. */
+static void dom_blob_records_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 0, 0);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "let refused='';try{new Blob([])}catch(e){refused=e.name}"
+        "assert(refused==='QuotaExceededError',refused);",
+        "blob records: an empty Blob past a bound of zero");
+    fixture_free(&f);
+    f = net_fixture_bounded("http://example.test/", &net, 0, 64 * 1024);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.many=[];let refused='';"
+        "try{for(let i=0;i<100000;i++)many.push(new Blob([]))}catch(e){refused=e.name}"
+        "assert(refused==='QuotaExceededError'&&many.length>0&&many.length<100000,refused+' '+many.length);"
+        "many=null;",
+        "blob records: empty Blobs in a loop stop at a small bound");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held == 0, "blob records: every record's charge given back");
+    fixture_free(&f);
+}
+
+/* An abort part way through a streamed body the page has already read
+ * from: the body is disturbed, so a body method answers a TypeError (Fetch
+ * § "consume body": unusable), not the abort's reason. */
+static void dom_fetch_abort_read_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.log=[];globalThis.cd=new AbortController();"
+        "fetch('/d',{signal:cd.signal}).then(async r=>{const rd=r.body.getReader();await rd.read();rd.releaseLock();"
+        "cd.abort();r.text().catch(e=>log.push(e.name))});",
+        "stream: a body read from, then aborted");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/d", "", "");
+    net_head(&f, &net, 0, &head);
+    net_piece(&f, &net, 0, "ab");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError',log.join());",
+               "stream: a body read from is unusable after an abort");
+    check(net.seen[0].cancelled, "stream: the abort stopped the host");
+    fixture_free(&f);
+}
+
+/* streams.c's compiled streams.js, kept for every later realm (internal.h). */
+size_t d_streams_bytecode_kept(void);
+
+/* The Encoding standard's streams: a decoder that holds a character split
+ * across chunks, its attributes and its RangeError, a fatal one's flush, a
+ * chunk that is no buffer; an encoder that pairs surrogates across chunks
+ * and writes a lead one left at the end as U+FFFD; and a body that streams
+ * piped through a decoder. The compiled streams.js still fits its cache. */
+static void dom_codec_stream_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    size_t kept = d_streams_bytecode_kept();
+    fprintf(stderr, "streams.js compiled: %zu bytes kept\n", kept);
+    check(kept != 0, "codec: the compiled streams.js fits the cache every realm reads");
+    /* One stream to a script, each in a block of its own: the fixture's
+     * runtime runs 100 jobs a turn, and a pipe takes a few a chunk. A
+     * TransformStream writes only when its readable side is read, so each
+     * case reads it. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.clog=[];const d=new TextDecoderStream('utf-8',{fatal:false});"
+        "assert(d.encoding==='utf-8'&&d.fatal===false&&d.ignoreBOM===false);"
+        "assert(d.readable instanceof ReadableStream&&d.writable instanceof WritableStream);"
+        "assert(Object.prototype.toString.call(d)==='[object TextDecoderStream]'&&TextDecoderStream.length===0);"
+        "assert(new TextDecoderStream('UTF-16LE',{ignoreBOM:true}).encoding==='utf-16le');"
+        "throws('RangeError',()=>new TextDecoderStream('nope'));"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(TextDecoderStream.prototype,'readable').get.call({}));",
+        "codec: a TextDecoderStream's attributes");
+    dom_script(&f,
+        "{const d=new TextDecoderStream();"
+        "const w=d.writable.getWriter();w.write(new Uint8Array([0xE2,0x82]));w.write(new Uint8Array([0xAC,0x41]));w.close();"
+        "d.readable.pipeTo(new WritableStream({write(c){clog.push(c)}})).then(()=>clog.push('end'));}",
+        "codec: a character split across a decoder's chunks");
+    dom_script(&f, FETCH_ASSERT
+        "{const e=new TextEncoderStream();assert(e.encoding==='utf-8'&&TextEncoderStream.length===0);"
+        "const ew=e.writable.getWriter();ew.write('a\\uD83D');ew.write('\\uDE00b');ew.write('\\uD800');ew.close();"
+        "e.readable.pipeTo(new WritableStream({write(c){clog.push('['+Array.from(c).join(' ')+']')}}));}",
+        "codec: an encoder's surrogates across chunks");
+    dom_script(&f,
+        "{const bad=new TextDecoderStream();bad.writable.getWriter().write(undefined).catch(x=>clog.push('bad:'+x.name));"
+        "bad.readable.getReader().read().catch(()=>{});}",
+        "codec: a chunk that is no buffer");
+    dom_script(&f,
+        "{const fat=new TextDecoderStream('utf-8',{fatal:true});const fw=fat.writable.getWriter();"
+        "fw.write(new Uint8Array([0xE2]));fw.close().catch(x=>clog.push('fatal:'+x.name));"
+        "fat.readable.getReader().read().catch(x=>clog.push('fatal-read:'+x.name));}",
+        "codec: a fatal decoder's flush");
+    /* Four streams settle in an order of their own; each is checked for
+     * what it said, and the encoder's chunks for their order. */
+    dom_script(&f, FETCH_ASSERT
+        "assert(clog.length===8,clog.join('|'));"
+        "for(const s of ['€A','end','bad:TypeError','fatal:TypeError','fatal-read:TypeError'])"
+        "assert(clog.includes(s),s+' in '+clog.join('|'));"
+        "assert(clog.filter(s=>s[0]==='[').join('|')==='[97]|[240 159 152 128 98]|[239 191 189]',clog.join('|'));",
+        "codec: each decoded, encoded and refused as the standard says");
+    /* The page's common pattern: a streamed body through a decoder, a
+     * character split across two pieces. */
+    dom_script(&f,
+        "globalThis.tlog=[];fetch('/u').then(r=>r.body.pipeThrough(new TextDecoderStream()).pipeTo("
+        "new WritableStream({write(c){tlog.push(c)},close(){tlog.push('closed')}})));",
+        "codec: a body that streams, through a decoder");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/u", "", "");
+    net_head(&f, &net, 0, &head);
+    net_piece(&f, &net, 0, "\xE2\x82");
+    net_piece(&f, &net, 0, "\xAC!");
+    net_end(&f, &net, 0, true);
+    dom_script(&f, FETCH_ASSERT "assert(tlog.join('|')==='€!|closed',tlog.join('|'));",
+               "codec: the split character decoded whole");
+    fixture_free(&f);
+}
+
+static void dom_fetch_bound_cases(void)
+{
+    static const char *const kWhat[] = {"a Headers walked", "a server's block read", "getAllResponseHeaders"};
+    for (int kind = 0; kind < 3; kind++) {
+        FakeNet net = {0};
+        DomFixture f = net_fixture("http://example.test/", &net);
+        if (!fixture_ready(&f)) return;
+        uint64_t small = fetch_steps_for(&f, &net, kind, 64);
+        uint64_t large = fetch_steps_for(&f, &net, kind, 64 * 256);
+        /* n log n from 64 to 16384: 256 times the entries, 256 * 14/6
+         * the steps; a quadratic walk is 65536 times. */
+        bool bounded = small > 0 && large <= small * 256 * 3;
+        if (!bounded) fprintf(stderr, "bound %s: %llu steps at 64, %llu at 16384\n", kWhat[kind],
+                              (unsigned long long)small, (unsigned long long)large);
+        check(bounded, "bound: a header list's work is n log n in its length");
+        fixture_free(&f);
+    }
+}
+
+/* ── A body the runtime has no room for (requirement B) ──────────────── */
+
+/* The answer's bytes are copied into the runtime's memory, so a body
+ * larger than the runtime's limit is that limit, met as any allocation a
+ * script makes meets it: libjs's sticky LIMIT, which ends the page's
+ * runtime (its host retires it, as for a script that allocated too much).
+ * Nothing the page sees half-made, and the teardown accounts for every
+ * byte. The same body inside the limit resolves. */
+static void dom_fetch_memory_cases(void)
+{
+    for (int fits = 0; fits < 2; fits++) {
+        FakeNet net = {0};
+        DomFixture f = net_fixture_engine("http://example.test/", &net, 4 * 1024 * 1024);
+        if (!fixture_ready(&f)) return;
+        size_t size = fits ? 512 * 1024 : 6 * 1024 * 1024;
+        char *big = malloc(size + 1);
+        if (big == NULL) abort();
+        memset(big, 'x', size);
+        big[size] = '\0';
+        dom_script(&f, "globalThis.log=[];fetch('/big').then(r=>r.arrayBuffer()).then(b=>log.push(b.byteLength));",
+                   "memory: a request for a big body");
+        os64_dom_response_t answer = net_answer_of(200, "http://example.test/big", "", big);
+        os64_js_status_t status = net_answer(&f, &net, 0, &answer);
+        if (fits) {
+            check(status == OS64_JS_OK, "memory: a body inside the limit is answered");
+            dom_script(&f, FETCH_ASSERT "assert(log.join()==='524288',log.join());", "memory: and read");
+        } else
+            check(status == OS64_JS_LIMIT, "memory: a body past the limit is the runtime's limit");
+        free(big);
+        fixture_free(&f);
+    }
+}
+
+/* ── Every allocation failed in turn ─────────────────────────────────── */
+
+static void dom_fetch_sweep_cases(void)
+{
+    static const char *const kOperations[] = {
+        "new Headers([['a','1'],['b','2']]).forEach(()=>{})",
+        "new Request('/x',{method:'POST',body:'b',headers:{x:'1'}}).clone()",
+        "new Response('a=1',{headers:{'content-type':'application/x-www-form-urlencoded'}}).formData()",
+        "fetch('/x').catch(()=>{})",
+        "var x=new XMLHttpRequest();x.open('GET','/x');x.setRequestHeader('a','b');x.send()",
+        "AbortSignal.any([new AbortController().signal]);new AbortController().abort()",
+        "var f=new FormData();f.append('a',new Blob(['x']),'n');new Response(f).text()",
+    };
+    size_t n = sizeof(kOperations) / sizeof(kOperations[0]);
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "http://example.test/";
+    binding_sweep("fetch", kOperations, n, &options);
+    engine_sweep("fetch", kOperations, n, &options);
+}
+
+/* ── With the switch off, none of it ─────────────────────────────────── */
+
+static void dom_fetch_modern_off_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.modern = false;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "for(const n of ['fetch','Headers','Request','Response','AbortController','AbortSignal','FormData','Blob',"
+        "'File','XMLHttpRequest','XMLHttpRequestEventTarget','XMLHttpRequestUpload','ProgressEvent','DOMException',"
+        "'ReadableStream'])assert(typeof window[n]==='undefined'&&!(n in window),n);",
+        "modern off: no request surface");
+    fixture_free(&f);
+}
+
+static void dom_fetch_cases(void)
+{
+    dom_fetch_origin_cases();
+    dom_fetch_headers_cases();
+    dom_fetch_object_cases();
+    dom_fetch_network_cases();
+    dom_fetch_abort_cases();
+    dom_weak_set_cases();
+    dom_signal_bound_cases();
+    dom_xhr_cases();
+    dom_xhr_sync_stall_case();
+    dom_fetch_stream_cases();
+    dom_codec_stream_cases();
+    dom_xhr_body_types_case(true);
+    dom_xhr_body_types_case(false);
+    dom_xhr_zero_bound_case();
+    /* Past the 64 MiB runtime, within the bound: three and eight. Past
+     * the bound: the request whose bytes would pass it fails, its bytes
+     * go, and the others finish in the room it left. A declared body is
+     * one block from the start; a chunked one is joined at its end, and
+     * the join's peak (pieces and block at once) counts, so of three
+     * chunked 25 MiB bodies under 64 MiB, one joins. */
+    dom_xhr_downloads_case(2, 25, true, 256, 2);
+    dom_xhr_downloads_case(1, 40, false, 256, 1);
+    dom_xhr_downloads_case(3, 25, true, 256, 3);
+    dom_xhr_downloads_case(8, 25, false, 256, 8);
+    dom_xhr_downloads_case(3, 25, true, 64, 2);
+    dom_xhr_downloads_case(3, 25, false, 64, 1);
+    /* Four 25 MiB Blobs of one string, past the 64 MiB runtime, within
+     * the bound; under a 64 MiB bound, two are made and the third is
+     * refused. */
+    dom_xhr_uploads_case(4, 25, 256, 4);
+    dom_xhr_uploads_case(4, 25, 64, 2);
+    dom_blob_kept_case();
+    dom_blob_records_case();
+    dom_fetch_abort_read_case();
+    dom_fetch_bound_cases();
+    dom_fetch_memory_cases();
+    dom_fetch_modern_off_cases();
+    dom_fetch_sweep_cases();
+    dom_fetch_stream_sweep_cases();
+}

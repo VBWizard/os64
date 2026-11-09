@@ -9,9 +9,10 @@
 //
 // Every function here draws into ordinary cacheable RAM and clips against the
 // destination surface — callers may pass rects that hang off any edge. Only
-// surface_flush_rect() ever touches the real (uncached) framebuffer, and it
-// is write-only: we NEVER read from the framebuffer (UC reads are brutally
-// slow and there is never a reason to — the backbuffer is the truth).
+// surface_flush_rect() ever touches the real framebuffer (mapped
+// write-combining), and it is write-only: we NEVER read from the framebuffer
+// (a read of write-combining memory is not cached and is brutally slow, and
+// there is never a reason to — the backbuffer is the truth).
 
 // Allocate a w×h RAM surface (pixels zeroed). Returns 0 on success, -1 on
 // allocation failure. Failure must be handled by the caller — never panic
@@ -44,7 +45,8 @@ void surface_free(surface_t *s);
 // Fill r (clipped) with a solid color.
 void surface_fill_rect(surface_t *dst, rect_t r, uint32_t color);
 
-// Copy src_rect from src onto dst at (dx,dy), clipped to both surfaces.
+// Copy src_rect from src onto dst at (dx,dy), clipped to both surfaces. The
+// two must not share pixels: each row is one memcpy.
 void surface_blit(surface_t *dst, int32_t dx, int32_t dy,
                   const surface_t *src, rect_t src_rect);
 

@@ -1,0 +1,9 @@
+active: 1484 bare-frame border pixels match #d5a650
+inactive: 1484 bare-frame border pixels match #59616b
+
+decorationtest: PASS font=24px screen=1024x768 generation=6 frame=502x277 content=500x240
+decorationtest: state frame=160,199 502x242 content=500x240 flags=257
+decorationtest: client edges down=0 up=0 close=0 layout=1
+rc=0
+
+9568 (0x003f) AP1: wm: decoration refused: window 5 (Narrow): decoration minimum width

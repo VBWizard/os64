@@ -1,0 +1,2 @@
+# Preserve raw terminal/build receipts, including CRLF and emitted padding.
+*.log -whitespace

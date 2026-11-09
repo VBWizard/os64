@@ -1,0 +1,10 @@
+<!doctype html>
+<title>The runner's own: a page that leaves a rejection unhandled</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// The page's own unhandled rejection ends the harness in ERROR; the test
+// it completed before that counts (Opus's ruling, 2026-10-24).
+test(function() {}, "a pass before the page's own rejection counts");
+Promise.reject(new Error("the page's own"));
+</script>

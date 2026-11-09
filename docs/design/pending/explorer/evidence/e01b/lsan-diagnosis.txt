@@ -1,0 +1,15 @@
+LSAN_OPTIONS=verbosity=1:log_threads=1 ASAN_OPTIONS=detect_leaks=1 /tmp/e1b-actions/test_ui_action
+==8==unpoisoning: 0x7ffda9dd8a50 14018
+==8==unpoisoning: 0x7ffda9decb70 14018
+==8==poisoning: 0x7ffda9dd8a50 14018
+==8==poisoning: 0x7ffda9decb70 14018
+==8==unpoisoning: 0x74d531900550 640
+==8==unpoisoning: 0x74d531904550 640
+==8==unpoisoning: 0x74d531908550 640
+==8==LeakSanitizer: checking for leaks==9==Could not attach to thread 8 (errno 1).
+==9==Failed suspending threads.
+==8==LeakSanitizer has encountered a fatal error.
+==8==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==8==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)
+Contemporaneous shell TracerPid: 0
+Supported reruns retained detect_leaks=1; see host-fake.txt and host-real.txt.

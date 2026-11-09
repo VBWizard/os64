@@ -91,8 +91,7 @@ int64_t os64_clip_paste(void *buf, uint64_t cap)
 
 int64_t os64_clip_length(void)
 {
-	// stat, not open: the clipboard is the one /sys node whose size is real,
-	// precisely so this question costs nothing.
+	// stat reports the stored byte count without acquiring a read snapshot.
 	os64_dirent_t entry;
 
 	if (os64_stat(OS64_CLIPBOARD_PATH, &entry) < 0)

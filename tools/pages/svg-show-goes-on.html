@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: the show goes on</title>
+<style>
+body{margin:24px;background:#edf3f4;color:#263f49;font:16px sans-serif}
+h1{margin-bottom:8px}h2{font-size:20px;margin:0 0 12px}p{max-width:760px;line-height:1.5}
+.card{display:inline-block;vertical-align:top;width:300px;margin:0 16px 20px 0;padding:18px;background:white;border:1px solid #b3cbd3;border-radius:12px}
+svg,img{display:block}button{padding:10px 18px;font:inherit}.frame{width:280px;height:180px;background:#edf3f4;border:1px dashed #7897a4}
+@media(prefers-color-scheme:dark){body{background:#172d38;color:#e5f0f4}.card{background:#29424d;border-color:#688795}}
+</style></head><body>
+<h1>SVG: the show goes on</h1>
+<p>A missing label should not sink the boat. The drawings below keep the parts Yonder can show, even when a neighboring element is beyond it.</p>
+<div class="card"><h2>1. Still sailing</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<defs>
+<linearGradient id="sea" x2="0" y2="1"><stop stop-color="#6eacc0"/><stop offset="1" stop-color="#25556e"/></linearGradient>
+<g id="boat"><rect width="280" height="180" rx="10" fill="#dceff2"/><circle cx="228" cy="36" r="20" fill="#efc77e"/><path d="M0 120Q35 108 70 120T140 120T210 120T280 120V180H0Z" fill="url(#sea)"/><path d="M75 122H208L181 146H102Z" fill="#b86d4d"/><path d="M140 24V119H81Z" fill="#fff7db"/><path d="M149 48V119H200Z" fill="#e8aa73"/><path d="M143 22V126" stroke="#435a65" stroke-width="4"/><path d="M35 154H77M198 160H247" fill="none" stroke="#c3e6ee" stroke-width="3" stroke-linecap="round"/></g>
+<text id="label-text" x="18" y="32">Still sailing</text>
+<g id="label-badge"><circle cx="32" cy="32" r="18" fill="#467d68"/><path d="M22 32L29 39L43 24" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g>
+</defs><use href="#boat"/><use id="label" href="#label-text"/>
+</svg><p>The boat stays. Switch its unsupported text label to a drawn checkmark, and back again.</p>
+<button id="badge">Change the label</button><p id="label-state">Text label: omitted in Yonder.</p></div>
+<div class="card"><h2>2. A whole subtree</h2>
+<svg width="280" height="180" viewBox="0 0 280 180"><use href="#boat"/>
+<foreignObject width="280" height="180"><div xmlns="http://www.w3.org/1999/xhtml"><svg xmlns="http://www.w3.org/2000/svg" width="280" height="180"><rect width="280" height="180" fill="red"/></svg></div></foreignObject>
+</svg><p>In Yonder, this is another boat. The unsupported embedded content, including its red cover, is omitted together.</p></div>
+<div class="card"><h2>3. A postcard arrives</h2>
+<img src="svg-show-goes-on-postcard.svg" width="280" height="180" alt="A lighthouse postcard">
+<p>A separate SVG image keeps its lighthouse despite its missing text label and embedded picture. Its sky follows light and dark pages.</p></div>
+<div class="card"><h2>4. Paint still matters</h2>
+<div class="frame"><svg width="280" height="180" viewBox="0 0 280 180">
+<defs><pattern id="stripes" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="6" height="12" fill="#467d68"/></pattern></defs>
+<text x="20" y="30">An optional label</text><rect id="paint" x="30" y="30" width="220" height="120" rx="16" fill="url(#stripes)"/>
+</svg></div><p>This frame starts empty in Yonder: pattern paint is unsupported. A solid paint makes the rounded rectangle appear.</p>
+<button id="paint-toggle">Change the paint</button><p id="paint-state">Pattern paint: drawing refused.</p></div>
+<p>Try 25%, 100% and 400% zoom. With scripts enabled, both buttons toggle. The first boat should stay visible throughout.</p>
+<script>
+var badge=false,solid=false;
+document.getElementById('badge').addEventListener('click',function(){
+ badge=!badge;document.getElementById('label').setAttribute('href',badge?'#label-badge':'#label-text');
+ document.getElementById('label-state').textContent=badge?'Drawn label: a checkmark.':'Text label: omitted in Yonder.';
+});
+document.getElementById('paint-toggle').addEventListener('click',function(){
+ solid=!solid;document.getElementById('paint').setAttribute('fill',solid?'#467d68':'url(#stripes)');
+ document.getElementById('paint-state').textContent=solid?'Solid paint: drawing displayed.':'Pattern paint: drawing refused.';
+});
+</script></body></html>

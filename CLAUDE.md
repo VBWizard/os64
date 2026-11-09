@@ -59,8 +59,12 @@ upstream of the reviewer, not a filter on it.
 - **A finding whose entire fix is text does not go to Chris.** Fix it and give
   it one line in the round summary. He reads the diff when he wants to, and
   he does.
-- **Done is a rule, not a mood.** Two consecutive rounds with no
-  code-changing finding: it merges.
+- **Done is a rule, not a mood.** A CLEAN round — no findings at all — is
+  done: Codex reads the whole commit every round (Chris's "always keep
+  looking" setting), so "nothing" is its strongest verdict, not a coin flip
+  to repeat. Two consecutive rounds whose findings were all text-only are
+  also done. (Ruled 2026-08-30 after two models read the earlier wording as
+  "two clean rounds"; Chris: "I'd rather visit the dentist.")
 - **Match the reviewer to the risk.** An outside review round costs real money
   and a chunk of Chris's day. It earns that on kernel concurrency, lifetime,
   and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
@@ -83,9 +87,19 @@ os64 is a 64-bit x86 operating system kernel built for educational purposes. It 
 - `x86_64-elf-gcc` cross-compiler
 - `x86_64-elf-ld` linker
 - `make`
-- `nasm` (for assembly files)
+- (no `nasm`: the kernel makefile still carries a rule for `.asm` files, but
+  the tree has none; every assembly source is GNU `.S` through the cross gcc)
 - `qemu-system-x86_64` (for testing)
 - `xorriso` (for ISO creation)
+- `ccache` (OPTIONAL, dev-box convenience): the kernel and userland builds
+  put it in front of the cross compiler when it is on PATH and do nothing
+  when it is not. It exists because quickjs.c is a pinned 61,000-line upstream unit that
+  takes 30-40 s at `-O2` and never changes, so every clean build recompiled
+  it for identical bytes. The first line of each build says which compiler
+  command it chose. Entries are keyed by the compiler's exact command line,
+  which carries the tree's absolute path, so each worktree warms its own
+  (about 20 MB a tree in a 5 GB cache); `CCACHE_DISABLE=1` bypasses it,
+  `CCACHE_RECACHE=1` recompiles and overwrites, `ccache -C` empties it
 
 ### Common Commands
 
@@ -141,7 +155,7 @@ make -C kernel test-elf
 
 - **Root Makefile** (`GNUmakefile`): Orchestrates kernel build, ISO creation, disk image setup
 - **Kernel Makefile** (`kernel/GNUmakefile`): Builds kernel binary and test programs
-- **Parallel builds**: Uses `-j$(nproc)` automatically in kernel makefile
+- **Parallel builds**: `-j$(nproc)` by default, added by whichever makefile is the TOP-LEVEL make (`MAKELEVEL` 0 — root, `make -C kernel`, `make -C userland`); sub-makes inherit the jobserver. A command-line `-j` wins. Never add a `-j` to a makefile that can run as a sub-make: it drops the parent's jobserver and oversubscribes (make warns "forced in makefile")
 - **Dependencies**: Run `kernel/get-deps` to fetch Limine headers and C runtime
 
 ## Kernel Architecture
@@ -164,7 +178,7 @@ make -C kernel test-elf
    - Initializes SMP (multi-core support)
    - Creates kernel task and idle tasks
    - Initializes scheduler
-   - Runs pre-boot and post-boot tests
+   - Runs pre-boot and post-boot tests (the LATE phase starts later, after the shells)
    - Loads and runs ELF test program from filesystem
 
 ### Memory Management
@@ -180,9 +194,24 @@ make -C kernel test-elf
   - `paging_walk_paging_table()`: Walk page tables to resolve virtual address
 
 **Physical Memory Allocator (`kernel/src/memory/allocator.c`):**
-- Bitmap-based allocator
-- Tracks free/used physical pages
-- Uses Limine memory map to determine usable memory
+- **Two owners of physical memory** (docs/design/pending/FRAMES.md is the
+  design). The FRAME TABLE (`frames.c`) gives every 4 KiB frame an 8-byte
+  descriptor: boundary-tagged runs on exact-length lists (1-64 frames) and
+  TLSF bins above, so allocating, freeing and "is this frame live?" never
+  search, and capacity is RAM. Page-aligned requests and anything a page or
+  larger are frame runs. The LEDGER (`kMemoryStatus`) carves the kernel's
+  small unaligned objects by exact-fit-first inside 64 KiB chunks borrowed
+  from the frame table; its 100,000-row wall is that population's own limit.
+- Seeded from the Limine memory map in `allocator_init`, which places the
+  table in the first usable region with room for it.
+- **`/sys/memory/frames` and `/sys/memory/ledger` report it all live** — the
+  books (with a balanced/DRIFT verdict), frames by owner, runs by length,
+  the ledger's rows against its wall, and each lock's waits and holds, since
+  boot and since the file was last read. Read them FIRST when memory or a
+  stall is the question; `cat` before and after a workload measures it.
+- `frames.c` has no kernel headers: `tools/test_frames_host.sh` runs it
+  under ASan/UBSan against a reference model, and
+  `tools/test_frames_mutants.py` proves the suite catches each rule broken.
 
 **Heap Allocator (`kernel/src/memory/kmalloc.c`):**
 - Kernel-space malloc/free
@@ -247,7 +276,9 @@ make -C kernel test-elf
   read-only pair survives as the forced_ro fallback for ro_compat features
   beyond the driver. THE PERSISTENCE DOCTRINE (same ruling): root is the
   SYSTEM's — the build rewrites the image, the P5 refresh script mirrors it,
-  nothing written there survives a rebuild; /home is the USER's — its own
+  nothing written there survives a rebuild, except that the refresh leaves
+  `/var/cache/` alone (a cache is the system's own and disposable: yonder's,
+  CACHE.md); /home is the USER's — its own
   partition/disk, never rebuilt, never --delete'd. **/home is ext2 too since
   2026-08-18, and 1GB** (it was a 64MB FAT32 partition in QEMU long after the
   P5 had moved, so the test rig could reproduce failures the real machine
@@ -266,35 +297,309 @@ make -C kernel test-elf
   replaced underneath it. Open DIRECTORIES still refuse. (The blanket refusal
   ruled 2026-08-04 was explicitly consumer-driven; the consumer was `os64
   refresh` replacing /bin/husk while husk runs.) NOTE for anyone adding code
-  that closes a file: a close can now do real disk I/O, so it must run in
-  KERNEL context (see `fops->mounted` in vfs.h and the burial close in
-  task.c). Verified by the in-OS test suite AND host `make fsck-ext2`
+  that closes a file: a close can now do real disk I/O. **NVMe I/O is
+  reachable from ANY address space since 2026-09-06** — every buffer the
+  path touches is an HHDM alias and so is the NVMe register window (the
+  window was the last lower-half dependency; it made the ELF loader's
+  direct opens a kernel #PF on the first block-cache miss under a task's
+  CR3 — the P5's NOCACHE and os64get-during-latetests deaths). AHCI still
+  identity-maps its window and command lists in kKernelPML4 alone, so on a
+  SATA root the old rule holds until its DEBTS row is paid. The
+  `call_in_kernel_context` wrappers on the syscall and burial paths stay
+  for the reasons that remain: a burial runs while the task's own address
+  space is being torn down, and the per-core interrupt stack is deeper than
+  a thread's. Verified by the in-OS test suite AND host `make fsck-ext2`
   (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
 - **Mount table** (vfs.c/vfs.h, since 2026-07-19): multiple filesystems in one
-  namespace, longest-prefix routed. Root claims "/"; every other recognized
-  partition auto-mounts at "/<fstype>" ("/fat", "/ext2", "/fat2"…), deduped by
+  namespace, longest-prefix routed. Root claims "/"; what else joins at boot
+  is `/etc/mounts.conf`'s call (next bullet) — absent the file, the default
+  sweep mounts every os64-authored partition at its GPT label ("/home"),
+  falling back to "/<fstype>" ("/fat", "/ext2", "/fat2"…), deduped by
   partition GUID (so RAMDisk twins never double-mount). `vfs_resolve_mount()`
   maps a canonical path → (filesystem, fs-local tail); it is pure string
   matching, safe from any CR3. Dispatch sites: syscall open/chdir, ELF loader,
   shared_object. LIFETIME RULE: whatever pointer an fs open stores as f_path
   gets kfree'd by the handle closer — always hand the fs a BASE pointer
   (syscall_open clones the TAIL, not the full path, for exactly this reason)
+- **mount/unmount at runtime** (syscalls 52/53, 2026-08-30). `mount` names a
+  PARTITION — GPT name or GUID, never a device path (`os64/mount.h` is the
+  shared vocabulary; each refusal has its own code because "busy" and "no
+  such partition" demand different next moves). The mount point's PARENT
+  must exist; the point itself is the table's (Plan 9's view, ratified —
+  DIVERGENCES). Flags: `OS64_MOUNT_RO` (mount(1)'s `-r`) mounts with the
+  write verbs absent from birth — ext2 takes its read-only pair, FAT its
+  pair minus the pens — and an unknown bit is BAD_ARGS, never silently less.
+  ANY partition the verb can name is mountable: naming it — typed, or
+  written in the boot list — IS the deliberateness (ruled 2026-08-31; the
+  foreign-refusal era lasted one day). A NULL/empty `where` (mount(1) with
+  one operand) mounts at the partition's own GPT label — `mount fat` and
+  `mount = fat` are the same ask through the same door.
+  **`/etc/mounts.conf` is WHAT joins the namespace at boot** — the not-fstab:
+  `mount = <gpt-name-or-guid> [/where] [ro]`, repeatable, in order, each
+  line through `vfs_mount_explicit` (one door). No `/where` = the
+  partition's own GPT label (the WHERE stays the disk's property; the file
+  answers only WHAT, the half that is genuinely local policy). gui.conf's
+  rule: an EXISTING file is the whole list (empty = mount nothing beyond
+  root + synthetics); an ABSENT file = the built-in default, today's sweep
+  of os64-authored GUIDs — the old Windows-safety allowlist, demoted from
+  gate to default policy. Root-only and read straight off /etc (NOT the
+  conf ladder — it decides whether /home mounts, so it is upstream of the
+  ladder, os64.conf's reasoning). Root itself stays `ROOT=` on the cmdline
+  (the file lives ON root; the lifeboat boots when root is broken). No
+  example file ships — a shipped copy of comments would mean "mount
+  nothing".
+  A mount UNDER a mount holds its parent down: `unmount /mnt` with
+  `/mnt/usb` live is refused (`OS64_UNMOUNT_HAS_MOUNTS`), never cascaded —
+  unmounting one thing must not take out a second thing nobody named.
+  **THREE LOCKS, AND EACH ANSWERS A DIFFERENT QUESTION.**
+  (1) **The namespace lock** makes mount and unmount EXCLUSIVE — one
+  mutation at a time, machine-wide. Both verbs are read-then-act on a table
+  the layer beneath re-reads nothing from, so two at once meant two unmounts
+  freeing one filesystem twice and two mounts publishing one partition
+  twice. It is held across the driver's initialize/uninitialize, which is
+  real disk I/O — affordable only because these verbs are rare and
+  human-paced.
+  (2) **THE PATH GATE** (`vfs_path_enter/exit`) is what makes unmount sound
+  against operations already in flight: the dispatcher brackets every
+  path-op syscall (`syscall_is_path_op` — open, chdir, stat, unlink, mkdir,
+  rename, spawn, conf_resolve) as a READER, so unmount's busy checks
+  (open-file registry + per-fs `open_dir_count` + task cwd walk) can't be
+  falsified by an op that resolved but hasn't opened yet. NEITHER namespace
+  verb is on that list: mount looked like a reader because it stats a
+  parent, but a reader is something the namespace may change underneath,
+  and mount is what changes it.
+  (3) **`closing` in `struct file`** covers the one door the gate cannot:
+  a CLOSE resolves no path, so it can arrive at any moment — and both glues
+  keep using the filesystem after close begins (FAT's `f_close` is disk
+  I/O; ext2 reads `fs_specific` and may reap an orphan). A closing file
+  stays ON the open-file registry until that work is done, so unmount
+  counts it as busy instead of freeing the filesystem underneath it;
+  `vfs_sync_all` skips it, which is the opposite answer and why one flag
+  serves both. (Directories were always right — `handle.c` decrements
+  `open_dir_count` after `dops->close` returns.)
+  Table entries never move:
+  `fs == NULL` is a free slot, claims publish `fs` last (`vfs_mount_claim`,
+  one door for disk and synth mounts), strikes clear it first. A directory's
+  `mount_prefix` is now a kmalloc'd canonical-path copy owned by the handle
+  (it used to point into the table — mounts unmount now), and nested mount
+  points list in their parent via the same synthetic readdir "/" always used.
+  **`/sys/mounts`** (df's data: fstype, device, GUID, mode, totals from the
+  `space` fop, open counts) and **`/sys/block`** (lsblk's data: devices by
+  their SYSTEM names — `nvme0`/`sata0`/`ram0`, `block_assign_dev_names`,
+  committed as the names /dev block nodes will reuse — plus every partition,
+  its GPT name, and where it is mounted). **`/sys/openfiles`** (lsof's deep
+  half, 2026-08-31): the open-file registry as rows — path, mount, f_ident,
+  handle count — the same list unmount's BUSY trusts, so it answers "busy
+  with WHAT?". `handles 0` = KERNEL-held (a running binary's image, a
+  resident .so, an orphan's last holder), which no /proc/<pid>/handles walk
+  can see — that's why lsof needs this file AND /proc (handles answer WHO).
+  Synthetic files never register; their story stays in the handle tables.
+  It renders `reg_path`, the registration-time copy owned by the vfs_file —
+  NEVER f_path, which is caller memory that may be long dead (vfs.h).
+  **A COLUMN THAT IS DATA IS ESCAPED** in all three files
+  (`synth_text_escape` / `os64_unescape_field`): a GPT name is arbitrary
+  bytes off somebody's disk — "Basic data partition" is what Windows writes
+  — and a mount prefix and a path may hold whatever a filename may, so a
+  whitespace-columned row cannot be split without it. Backslash becomes
+  `\\`, a byte at or below 0x20 or equal to 0x7F becomes `\xHH`, nothing
+  else changes; a reader splits FIRST and decodes the data columns after.
+  Sanitizing was rejected: `mount` matches GPT names verbatim, so printing
+  `Basic_data_partition` would show a name the machine refuses to take back.
+  `mount`(1)/`unmount`(1) ship in /bin; df/lsblk/lsof are Chris's, reading
+  these files.
+
+**The network bottom half (`kernel/src/knet.c`, `kernel/src/doorbell.c`) —
+DOORBELL.md is the design record.** A NIC's interrupt handler RINGS a
+doorbell (lock-free, a store and a self-IPI — it may never take the queue
+lock, the 9badced rule) and `knet`, a kernel daemon pinned to the BSP, wakes
+to DRAIN every registered NIC through the seam's `drain` verb (and
+loopback's queue beside them — `lo` is no card, so it is not in the table;
+`kernel/src/driver/net/loopback.c`), run the TCP/DHCP timers, and park.
+knet exists whenever networking does, card or no card; NONET is the only
+boot without it. The tick rings the same bell once per tick, which
+is what keeps a NIC with no interrupt (virtio) at its old cadence.
+`/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake,
+and how long rings waited to be answered — `wake_latency_*`, the time a
+NIC's receive ring has to cover; read it beside the NIC's `rx_overruns`)
+— read it FIRST when a transfer is slower than the wire; it caught a 5,800
+wakes-a-second loop the day it was born. The e1000 rings from its INTx
+handler, the RTL8125 from MSI (vector 0x46, P5 only), and every protocol's
+input — `tcp_input`, `udp_conn_rx`, `icmp_conn_deliver` — wakes a parked
+reader on arrival, without waiting for a scheduler pass (ARRIVAL_WAKE.md;
+the per-pass sweeps in `processSignals` are the backstop for a reader that
+registered but had not yet parked — and on an idle machine they were
+never far behind, because knet's own park after a drain IS a pass; the
+arrival wake is for the loaded drain where knet does not park). Ring 3
+measures with `micros()` (syscall 59, microseconds since boot off the TSC
+— the stopwatch's fine face, `os64/ticks.h`), which is what lets `ping`
+print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
+virtio because its drain waits for the tick.
 
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration
-- **ACPI** (`acpi.c`): ACPI table parsing (RSDP, MADT, MCFG, etc.)
+- **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
+  reachable from Limine's RSDP. **Firmware puts its tables wherever it
+  likes**, so each is mapped by its own address and Length (the header
+  first, then the whole table) through a read-only HHDM alias, and every
+  page mapped for the walk is unmapped when it ends. `acpi_tables.c` is
+  pure: `tools/test_acpi_host.sh` drives it under ASan with a `map` that
+  returns exactly the bytes asked for, so a read past them is a report. The
+  kernel takes the IOAPIC that serves GSI 0 (not the first one listed), the
+  ISA overrides, MCFG segment 0's bus range (PCI scans exactly those buses,
+  and panics by name without one), and `\_S5`. **`/sys/acpi`** shows
+  everything the walk found, used or not — every table and its checksum,
+  the FADT's power-management facts (PM timer, reset register, RTC century,
+  boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
+  firmware's boot logo, and the walk's problems. Read it FIRST on a machine
+  meeting os64 for the first time.
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
 - **Keyboard** (`keyboard.c`): PS/2 keyboard driver. Tracks shift/ctrl/alt/
-  caps/num; Ctrl+letter is translated to its ASCII control code (0x01..0x1A —
-  what Ctrl was designed to do in 1963). Ctrl+D = 0x04 = EOT, which
+  caps/num; **Ctrl is translated to the ASCII control code — what Ctrl was
+  designed to do in 1963, and not only for the letters.** 1963 ASCII placed
+  the control codes where clearing bit 6 of a printable character lands, so
+  `A-Z [ \ ] ^ _` and the lowercase letters that fold onto the same codes all
+  map: `c & 0x1F`. That is why Ctrl+[ is ESC and Ctrl+] is 0x1D, telnet's
+  escape character, which was untypeable while the rule was letters-only. The
+  backtick and `{ | } ~` are deliberately excluded — they would collide with
+  codes the column above already owns, and it is what keeps Ctrl+~ free for
+  the debug toggle. `@` is excluded for a different reason: its code is NUL,
+  and a zero byte is how a delivery path spells "this key produced no
+  character", so Ctrl+@ types `@`. The rule is written ONCE, as
+  `keyboard_has_control_code` in keyboard.h, because BOTH keyboard dialects
+  translate their own keys and it had been written twice. Ctrl is applied
+  LAST, after Shift, or `^` and `_` would never be seen.
+  Ctrl+D = 0x04 = EOT, which
   console_read (console.c) turns into end-of-input: read() returns 0 once,
-  then the console reads normally again. The framebuffer renderer
+  then the console reads normally again. **A terminal in RAW mode interprets
+  neither Ctrl+C nor Ctrl+D** — both arrive as bytes; a foreground program
+  asks by writing `raw` to `/proc/self/tty` and the kernel restores cooked
+  when it exits (SIGINT.md § Raw mode; telnet is the consumer). The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
-  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'
+  column 0 — erasure is caller overprint, the classic "\b \b") and '\r'.
+  **Arrow keys arrive as `ESC [ A/B/C/D`** — the VT100 spelling, chosen for
+  interop so that anything reading a terminal reads them unchanged
+
+### The terminal's escape sequences
+
+**A terminal that obeys a byte can be told what to do by whoever wrote it**,
+so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
+(Chris's ruling). What is read today, and nothing else: `ESC[<n>m` (SGR —
+colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>A/B/C/D`
+(move the cursor from where it is) with `ESC[s`/`ESC[u` (save it, put it
+back), `ESC[<n>J` and `ESC[<n>K` (erase display, erase line), and
+`ESC]11;#rrggbb` (OSC 11 — the terminal's own background), and `ESC ( U` /
+`ESC ( B` (which character set a byte over 0x7F draws as). The relative
+moves and the saved cursor are ANSI art's, and they arrived TOGETHER on
+purpose: `ESC[s ESC[255B ESC[6n ESC[u` is how a program asks how tall a
+terminal is, so obeying the move without the restore strands the cursor at
+the foot of the glass, which is worse than ignoring both. A relative move
+clamps at the edge and never scrolls — a terminal that scrolled to answer
+that probe would throw away a screen of output to describe its own size.
+**`ESC[2J` CLEARS AND HOMES; `ESC[0J` and `ESC[1J` clear and do not** — the
+partial erases are DEFINED by the cursor ("from here down", "from the top to
+here"), so moving it would answer a different question, while the full erase
+has no relationship to the position at all. Homing it is ANSI.SYS's
+behaviour and therefore what every DOS-era ANSI program expects: they clear
+and start painting, and a terminal that left the cursor alone puts their
+first line wherever the previous program stopped. Everything else is
+consumed and ignored, which
+is what every terminal does: printing the bytes of an unknown sequence
+spills its parameters across the screen, and logging them floods the log the
+first time a program with better taste in terminals runs.
+
+- **`kernel/src/ansi.c` is a pure state machine** — no kernel headers, no
+  locks, one byte in and one action out — so `tools/test_ansi_host.sh`
+  drives it with plain `cc` under ASan. That is not decoration: a sequence
+  arrives in whatever pieces `write()` was called with, and the harness
+  caught four real bugs (stale parameters leaking into the next sequence, a
+  leading `;` losing a parameter, an ESC mid-sequence printing as text, and
+  `ESC ( B` leaving its final letter on screen) before the kernel ever ran it.
+- **THE PEN AND THE PAPER are different things.** `t->color`/`t->bg`/
+  `t->attrs` are the pen — what the next character will look like, set by
+  SGR. `t->glass_bg` is the paper — what this terminal IS underneath,
+  including where nothing was ever written and the margins past the last
+  cell, set by OSC 11. `renderer_glass_background_locked` updates the
+  renderer's paper and remainder strips during a full tty repaint, including
+  focus changes and history views. Per tty; gterm's use of this paper is
+  deferred in DEBTS.md.
+- **A cell costs the same eight bytes it always did**: the glyph, an
+  attribute byte, a background palette INDEX, the CHARACTER SET the glyph
+  was written under, and the 32-bit foreground. No byte is spare now — the
+  charset took the padding. Size and field offsets are static-asserted
+  against `os64_pty_cell_t` because gterm renders the same cells in ring 3.
+  The background index covers the supported sixteen-colour SGR subset plus
+  default paper; extended indexed and RGB SGR colours are consumed without
+  applying them. `abi/include/os64/ansi.h` holds the palette and the two
+  functions that resolve a cell, so the glass and a gterm cannot disagree
+  about what red is.
+- A background of ZERO means "this terminal's own", not black. New grids
+  and form-feed clearing use zeroed cells; scrolling and ANSI erasure use
+  the active SGR background. Fixture: `/tests/ansiprobe` (add `paper` to
+  change the background, `cp437` for the high half both ways)
+- **WHAT A BYTE OVER 0x7F DRAWS AS IS THE TERMINAL'S ANSWER, AND THE CELL
+  REMEMBERS IT** (`abi/include/os64/charset.h`). os64 has two consumers who
+  want different things from the same byte and neither is wrong: a gopher
+  menu written in 1994 is Latin-1 (the byte IS the glyph index, which is
+  what the console has always drawn), and ANSI art is CP437 — 0xB0..0xDF
+  are the shades, half blocks and box-drawing set the whole art form is
+  made of. So the set is PER TERMINAL, chosen by the program with `ESC ( U`
+  / `ESC ( B`, and VT1 can show a Latin-1 menu while VT2 shows a board.
+  The set is part of the PEN, but it is recorded on every CELL: what is
+  already on the screen must not change meaning because a program changed
+  its mind, and a repaint, a walk back through history and gterm's ring-3
+  painter all have to draw what was written. The table is INDICES into the
+  shipped face, written down because gterm's embedded font carries no
+  Unicode table to derive them from — and `charset_verify` (video.c)
+  re-derives every entry from the console face's own table at boot and says
+  so under `DEBUG_BOOT` if one moved. Five glyphs the face lacks (the dark
+  shade and the four half blocks) are supplied as bitmaps because art
+  cannot be drawn without them; the rest of a missing entry draws BLANK,
+  which reads as missing rather than as corruption — approximating a
+  box-drawing character is a lie about what the program asked for.
+
+### The console's face (`/sys/console/font`) — CONSOLE_FONTS.md is the design
+
+**The virtual terminals can be given another font while the machine runs**:
+`vtfont terminus-24.psf`, `vtfont DejaVuSansMono 100x40` (the largest size
+that gives that grid), `vtfont boot` to go back — or `cp face.psf
+/sys/console/font` by hand, which is all `vtfont` does underneath, plus
+reading the verdict back. **`console.conf` on the ladder (`face =`, `size =`)
+is applied at boot by `vtfont --startup`, which the kernel launches only when
+the file resolves — the FILE is the switch, no token, because tokens don't
+reach the P5.** The kernel takes a **PSF2 bitmap** and nothing smarter — it is
+built `-mno-sse`, so rendering an outline face is ring 3's job, and what
+arrives is the same bytes either way.
+
+- **The cell is the face's, not a constant.** `kRenderer.face`
+  (`console_face_t`) carries width, height and the glyphs; nothing in the
+  kernel may assume 8x16. `renderer_cols()/rows()` follow it.
+- **Judged at close, installed by kworker** (`kernel/src/console_font.c`).
+  A sysfs close runs with interrupts off, and inside burials; the close
+  only VALIDATES (`psf2.c`, pure, host-tested) and queues. kworker reshapes
+  the eight grids, installs the face, repaints, and raises SIGWINCH.
+  **`cat /sys/console/font` FIRST when a font did not take** — its `last:`
+  line is the verdict, with the reason and the number that broke the rule.
+- **The text survives** (`tty_refont` → `tty_reflow.c`, pure, host-tested):
+  long lines wrap onto rows marked `TTY_ATTR_WRAPPED` (bit 7 of a cell's
+  attribute byte, the terminal's own bookkeeping) and re-join when the grid
+  widens. `tty_resize` is the opposite policy and stays the pty's.
+- **A panic draws with the BOOT face**, whatever is loaded:
+  `renderer_bust_lock` reinstalls it. Test it with a font loaded, the
+  screen FULL, and QEMU's `nmi` — a panic on a screen with room left proves
+  much less than it looks like it does.
+- Both character sets go through the face's Unicode table
+  (`psf2_build_charmap`): zap happens to keep Latin-1 in index order, and
+  nothing says the next face will.
+- **An outline face gets there through libos64**: `os64_font_render_psf2`
+  (`os64/font_psf2.h`) turns TTF/OTF bytes and a pixel size into a PSF2
+  image — `/tests/psf2probe /etc/fonts/DejaVuSansMono.ttf 24`. It is
+  written against the font BACKEND table so `tools/test_font_psf2_host.py`
+  can feed its output to the kernel's own `psf2.c`; run that after touching
+  either half, because neither suite alone can tell whether they agree.
 
 ### SMP (Symmetric Multiprocessing)
 
@@ -305,11 +610,55 @@ make -C kernel test-elf
   - Core-local storage (CLS) structure
   - Idle task
 - Inter-processor interrupts (IPIs) for scheduler coordination
-- Can be disabled via `nosmp` kernel cmdline
+- Can be disabled via `nosmp` kernel cmdline (but see DEBTS: a one-CPU boot
+  can hang on a plain spinlock waited on with interrupts off)
+- **A CPU NUMBER IS NOT AN APIC ID** (CPU_NUMBERS.md). The kernel names a
+  CPU by a dense number, 0..`kCPUCount`-1: every per-CPU array, the CLS slot
+  (`cls->cpu`), a thread's pin and history, the log's `AP%c`, `/proc`,
+  `/sys/cpu/<n>`, `PINCPU=`. The APIC ID is a hardware address, an
+  `apic_id_t` struct the compiler will not let you index with, and it
+  appears only where the hardware wants one: `send_ipi` (which takes a CPU
+  number and translates), the IOAPIC and MSI destinations, and an AP's first
+  "who am I". **`cpu_roster.c` decides the numbering, once, in
+  `kernel_main` before the log rings** (pure, `tools/test_cpu_roster_host.sh`):
+  CPU 0 is the BSP, the rest ascend by APIC ID, which puts SMT siblings side
+  by side and makes CPU n = APIC n on every dense machine (QEMU, the P5).
+  The 3900X is why: its APIC IDs are 0-5, 8-13, 16-21, 24-29, and using them
+  as indices overran every per-CPU table. `kCPUs[cpu]` holds each CPU's APIC
+  ID and Limine doorbell, `kApicToCPU[]` the reverse. **`make run-sparse`
+  boots that layout in QEMU**; anything touching bring-up, IPIs or per-CPU
+  state boots it too. `MAX_CPUS` is 64. Code that may run before this CPU's
+  CLS exists (printd, exception reports) asks `cpu_self()`.
+- **The speculation controls are written, never inherited.** `IA32_SPEC_CTRL`
+  (IBRS/STIBP/SSBD/PSFD) is per hardware thread, and the P5's firmware hands
+  the SECOND thread of every core SSBD set with the first thread clear — on
+  that core it cost ~6 cycles per branch instruction, so anything branchy on
+  an odd APIC ran at 40% (the compositor at a third of its pixel rate, yonder
+  spinning on kGuiLock: the per-boot "bad state" of 2026-10-17/18).
+  Bring-up writes `fast` (0) on every thread; **`speculation =` in
+  `/etc/os64.conf`** (`fast` | `guarded` | `0x<hex>`, read by conf_init,
+  applied to every thread through `IPI_SPEC_CTRL_VECTOR`) is the system's
+  one place to choose otherwise, and `spec_ctrl_report` prints one boot
+  line with the policy in force, how many threads confirmed it, and how
+  many arrived with controls already set. **`/sys/cpu/<n>/probe` now reports that
+  thread's configuration MSRs** (DEBUGCTL, SPEC_CTRL, HWCR, P-state/CPPC,
+  Zen's unit config registers, DR7), read on the core itself — diff thread 0
+  against thread 1 when one is inexplicably slow. **`/tests/coreprobe`** is
+  the ring-3 proof: `coreprobe -s 20` wanders and prints each core's rate for
+  a dependent multiply chain and for every branch kind; siblings must agree.
+- **`env PINCPU=<n> program` pins a program, and every thread it makes,
+  to CPU n** (`task_env_pin`, task.c). The number is the CPU number that
+  /proc's `cpu`/`affinity` lines and coreprobe's `cpu` column print. It is
+  read once, at birth, from an unpinned USER program's environment, and it
+  inherits like any variable, so a pinned shell pins everything it runs. A
+  value naming no running CPU leaves the program unpinned (DEBUG_TASK says
+  why). `PINCORE=` is its old name, still read when `PINCPU` is absent, now
+  as a CPU number too. Fixture: `/tests/pincputest`.
 
 **Core-Local Storage:**
 - Accessed via `get_core_local_storage()`
-- Contains: APIC ID, current task/thread, CPU info, TSS, etc.
+- Contains: the CPU number (`cpu`) and its APIC ID (`apic`), current
+  task/thread, TSS, etc.
 
 ### ELF Loading
 
@@ -362,11 +711,34 @@ the library serves every process). How it fits together:
   The bump allocator still serves anything arriving without a base — PIE
   executables, hand-built `.so`s.
 - **`/sys/shlib` reports every loaded object** — base, resident pages,
-  refcount, dependency edges. Read it FIRST when linking looks wrong; it is
-  also where an `ldd` would get its data.
-- Deliberately absent: lazy PLT binding, unloading, TLS/IFUNC/init_array,
-  `RPATH`/search paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See
-  DEBTS § Shared libraries.
+  refcount, file identity, dependency edges. Read it FIRST when linking looks
+  wrong; it is also where an `ldd` would get its data.
+- **AN OBJECT LIVES EXACTLY AS LONG AS SOMEBODY USES IT** (2026-08-28). Two
+  rules, and each covers what the other misses. **Unload at refcount zero:**
+  the last release frees the cached frames, the parsed tables and the open
+  file, and drops the object's own dependency edges — so `/sys/shlib` lists
+  only what is in use, and a replaced binary's orphaned inode is reaped
+  instead of waiting for a reboot. **Revalidate on every load:** each load
+  opens the path and compares the file's identity (`vfs.h` f_ident — ext2's
+  inode number, FAT's start cluster) against the resident copy's — and a
+  cache hit asks the same question of every library in the object's closure,
+  because its cached pages were relocated against them (replace libos64.so
+  ALONE and every resident program is stale, its own file unchanged). Same
+  file, same libraries, cache hit; anything different, the resident copy is
+  RETIRED — struck from every lookup, kept alive for the tasks already
+  running it — and the new file is loaded for everything started from now
+  on. Retirement is TRANSITIVE, because
+  a dependent's cached pages carry the retired object's addresses baked in
+  (and because two builds of one library share a prelink slot, so no task may
+  ever map both). The identity check is what reaches husk, logd and libos64.so
+  — the long-running things a refresh finds still RUNNING, and so never at
+  refcount zero when it matters, which is exactly why unload-at-zero alone
+  would not have been enough. A path that no longer
+  resolves now fails the load instead of serving the cached image of a deleted
+  program. Fixture: `test_shared_object_reload`.
+- Deliberately absent: lazy PLT binding, TLS/IFUNC/init_array, `RPATH`/search
+  paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See DEBTS § Shared
+  libraries.
 
 **ELF Loader (`kernel/src/elf_loader.c`):**
 - Loads ELF64 binaries from VFS
@@ -398,6 +770,26 @@ the library serves every process). How it fits together:
   turned on, `#MF` (`CR0.NE`) and `#XM` (`CR4.OSXMMEXCPT`). Exit code is
   **200 + vector** — os64 has no SIGFPE/SIGILL, and 128+signal would name a
   signal that never existed. `#DF`/`#MC` stay fatal whatever CS says.
+  **On the glass a ring-3 death is ONE line, on the terminal that ran the
+  program** — `Fatal exception: prog (task N, #XM) - exit 219` /
+  `Segmentation fault: prog (task N, why) - exit 139` — while the wire and
+  the log get the full report (registers, forensics, call chain) in order.
+  **A fault in the thread's own stack guard is headed `Stack overflow`**
+  (or `Stack underflow`), same exit, plus a forensics line placing the
+  fault against the stack (`stack_guard_side`). It lands in the guard at
+  all because userland is built `-fstack-clash-protection`: a frame larger
+  than a page is lowered a page at a time and touched as it goes, so RSP
+  cannot leap the guard however big the frame. Before the check, a 16KB
+  frame sixty calls deep landed in the guard on 2026-10-30 and was reported
+  as a plain unmapped address, with the arithmetic left to the reader; that
+  is what this pair exists to name. Fixture: `/tests/stackprobe` (passes by
+  dying 139).
+  Ruled 2026-08-28: the full dump on screen earned its place while the
+  kernel liked to die; now that a user fault kills the program and never
+  the machine, it is noise. And it goes to `task->tty`, not VT1 (the
+  kernel's own address): a death in a gterm or on VT2 was invisible where
+  the person was looking. Ring-0 panics are as loud as ever.
+  `user_death_headline` / `s_fault_glass` / `exception_glass_mute`.
 - The boot line `FPU: x87 SSE SSE2 ... enabled, FXSAVE per thread` prints to
   the glass AND the log (`fpu_report`); `kFPUFeatures` holds the answers.
 - Fixtures: `fputest` (state survives preemption, migration, and a handler
@@ -483,11 +875,16 @@ the library serves every process). How it fits together:
 - Common options:
   - `ROOTPARTUUID=<uuid>` / `ROOT=<uuid>`: Mount partition as root
   - `nosmp`: Disable multicore support (lowercase — legacy)
-  - `MAXCORES=<n>`: Cap how many cores init_SMP brings up (0/absent = all;
-    capped-off cores stay parked in Limine's AP loop)
+  - `MAXCPUS=<n>`: Bring up only the first n CPUs of the roster's order, BSP
+    first (0/absent = all; the rest stay parked in Limine's AP loop).
+    `MAXCORES=<n>` is its old name, still honoured, and says so at boot
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
+  - `NETPOLL`: every NIC stays TICK-DRIVEN — no e1000 INTx probe, no RTL8125
+    MSI — and knet wakes only when the tick rings it (DOORBELL.md's
+    flashlight, the path that carried every packet before the doorbell).
+    Like every token: it does NOT travel to the P5 by itself
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —
@@ -495,6 +892,23 @@ the library serves every process). How it fits together:
     browns out the dongle (two P5 burns learned this). See kUSBQuiet
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
+  - `CRON`: launch `/bin/cron` once userland is up. The flag decides whether
+    the scheduler EXISTS on this boot; the crontab decides what it runs, and
+    `/etc/crontab` ships with every line commented out — so this costs a
+    sleeping daemon and nothing else. Carried by every entry that runs a
+    shell, and DELIBERATELY NOT BY THE LIFEBOAT ENTRY (Chris, 2026-08-29):
+    the lifeboat exists to repair a broken system, and a scheduler running
+    jobs of its own while you do that is the opposite of what a rescue
+    environment is for. **Adding a token here does not ship it to the P5** —
+    the boot menu does not travel over the wire (DEBTS § Explicitly NOT
+    debts), so say so out loud when you add one
+  - `VNCD`: launch `/bin/vncd`, the remote desktop (REMOTE.md). It listens
+    on 127.0.0.1 ONLY (port 5900 unless `vncd.conf` says otherwise) and is
+    reached through `SSHD`'s forwarding
+    (`ssh -N -L 5900:localhost:5900`), so a boot that wants remote access
+    carries both, and a GUI flag for there to be a desktop to serve. It is
+    not in any shipped entry, and like every token it does NOT travel to
+    the P5: that boot entry is edited there
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches
@@ -556,7 +970,7 @@ the library serves every process). How it fits together:
 **Line format — ONE renderer, TWO configs.** `abi/include/os64/klog_format.h`
 holds the only copy of the layout logic (it used to be spelled in four places
 across the ring 0/3 boundary). Escapes: `%d` date, `%t` time, `%k` ticks, `%c`
-core, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
+CPU, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
 - SERIAL's format comes from `LOGFMT=<name>` on the cmdline — the only config
   channel that exists before a filesystem does.
 - The FILE's format comes from **`logd.conf`**, os64's first config file:
@@ -597,15 +1011,37 @@ design in `docs/conf_path.md`.
 - **A NAME IS A FILE NAME, NOT A PATH.** `conf_find` refuses anything with a
   `/` in it, loudly. A reader asking for `../../etc/shadow` would be walking
   the ladder somewhere the ladder does not go.
-- **`hosts` MERGES; everything else is first-hit-wins.** Chris's 2026-08-22
-  ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your machine names
-  sit over the system's list rather than erasing it. That is why the walk is
-  resumable at all. A settings file is not a database — check which kind you
-  have before reaching for `conf_find`.
+- **`hosts`, `crontab` and `bootenv.conf` MERGE; everything else is
+  first-hit-wins.** Chris's 2026-08-22 ruling: `/home/hosts` layers ON TOP of
+  `/etc/hosts` so your machine names sit over the system's list rather than
+  erasing it. That is why the walk is resumable at all. `crontab` joined it
+  on 2026-08-29 for the same reason and with the same consequence worth
+  stating out loud — a merged file can only ADD, so a `/home` copy cannot
+  turn a system entry off. `bootenv.conf` (2026-08-30) merges name by name
+  and is the exception to that consequence: `NAME =` with nothing after it
+  unsets. A settings file is not a database: check which kind you have
+  before reaching for `conf_find`.
+- **`bootenv.conf` is the environment every program is born with** — read
+  by the KERNEL (`kernel/src/bootenv.c`), the first reader on the ladder,
+  applied to the kernel task's block right after `conf_init` and before
+  anything is spawned, so logd, both shells, the desktop and cron all
+  inherit it. PATH, HOSTNAME, TZ live there; the two `env_set` lines in
+  `create_kernel_task` are the FLOOR for a boot with no file (the lifeboat),
+  not the configuration. A cmdline `TZ=` outranks the file for that boot.
+  It exists because `export TZ` in husk.rc reached only husk's children,
+  and the desktop is the kernel's child — the clock gui.conf started showed
+  UTC while the one husk started showed Eastern. The block is one page and
+  is NOT grown for it (the kernel task's window is never remapped): a file
+  that overflows it is refused loudly at the variable that did not fit.
 - **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
   saying which file it actually took. Read it FIRST when a config seems
-  ignored. Every resolve also prints one `DEBUG_BOOT` line naming the misses
-  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`).
+  ignored. Every resolve also prints one line naming the misses
+  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`) under
+  **`DEBUG_SYSTEM`** — not `DEBUG_BOOT`, since 2026-08-29: establishing the
+  ladder is a boot milestone, but ANSWERING a lookup happens whenever a reader
+  asks, and cron asks every minute forever. The bit has to say what the
+  message is. `DEBUG_SYSTEM` is off by default, so turn it on when a resolve
+  is the question; `/sys/conf` needs no bit at all.
 - husk's lifeboat spellings (`/fat/husk.rc`, `/husk.rc`) stay hardcoded and
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.
@@ -630,7 +1066,7 @@ design in `docs/conf_path.md`.
   threads saving the same file never share one (Codex #29 rd7/rd8) —
   committing it with `os64_sync`, and **renaming over** — atomic replace
   (syscall 43) is exactly what write-a-temp-then-publish is for. Anything
-  that looks for a stray temp matches `<base>.*.new`, as conftest does. `/bin/conftest` is the fixture that
+  that looks for a stray temp matches `<base>.*.new`, as conftest does. `/tests/conftest` is the fixture that
   proves all three, in the ring-3 suite.
 - **An app can read its own window back** (`os64_gui_window_get_state`, 48):
   frame rect in create's units plus the live flags. Without it no app could
@@ -670,8 +1106,45 @@ and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers
 **Test Framework (`kernel/include/test_framework.h`):**
 - `test_framework_init()`: Initialize test infrastructure
 - `test_run_preboot()`: Tests run before scheduler starts
-- `test_run_postboot()`: Tests run after scheduler enabled
+- `test_run_postboot()`: Tests run after the scheduler, BEFORE the shell is seated
+- LATE phase (`late_tests_thread`): slow tests, on a kernel thread started once the
+  shells are up — so they cost the user nothing. A late test runs beside a LIVE
+  machine: see TEST_PHASE_LATE in test_framework.h for what may move there
 - Test files in `kernel/test/`
+
+**THE PROOF HARNESS LIVES IN `/tests`, NOT `/bin`** (ruled 2026-08-29). `/bin`
+is the programs and tools a person runs; `/tests` is what proves the system
+works — the badge-code fixtures `testrun` spawns, and the acceptance probes
+you drive by hand when a feature is on trial (`gfxprobe`, `ptyprobe`,
+`ttyprobe`, `uiprobe`, `gkeys`, `keytest`). Demos that exist to be *enjoyed*
+rather than to prove something stayed in `/bin` (`gbounce`, `glogo`,
+`fpu_orbit`).
+
+- **The routing key is the SOURCE DIRECTORY, and nothing else.**
+  `userland/apps/<name>/` → `/bin`, `userland/tests/<name>/` → `/tests`,
+  `kernel/test/elf/` → `/tests`. No list of "which names are tests" exists
+  anywhere, so none can go stale — moving a directory moves the program, on
+  both the ext2 root and the FAT lifeboat.
+- **The lifeboat carries `/tests` too**: it exists to be trusted while
+  everything else is suspect, and one that cannot demonstrate the CPU, the
+  kernel and the syscall floor are sound is asking to be taken on faith at
+  the worst possible moment. ~750KB of its ~59MB spare.
+- **`PATH=/bin:/tests`, in that order** (seeded in `kernel.c`), so fixtures
+  stay typeable while a fixture can never shadow a command of the same name.
+- **Fixtures draw link bases from the same pool as apps** (`app_bases.py` is
+  fed both lists) — a fixture is an ordinary non-PIE ET_EXEC, and two
+  programs at one base is the same debugger ambiguity whichever tree they
+  came from. `app_bases.gdb` carries `add-symbol-file` lines for both.
+- **Why it was worth doing on its own:** two directories make a name
+  collision impossible rather than merely unlikely. `hog` existed twice —
+  Chris's measuring instrument in `userland/apps` and a zero-syscall spinner
+  in `kernel/test/elf` — both aimed at `/bin/hog`, and the instrument is what
+  reached the image. `test_backstop_preemption`, whose entire premise is a
+  thread that never enters the kernel, had been spawning the one that reads
+  the clock as it spins. The spinner is now `/tests/nosyscall`, named after
+  the property that makes it useful. Note the two image builders break such a
+  tie by OPPOSITE rules and neither says a word: `debugfs write` refuses an
+  existing name (first writer wins), `mcopy -o` replaces it (last one wins).
 
 ## Important Implementation Details
 
@@ -742,7 +1215,8 @@ kernel/
 
 The default QEMU configuration (in root `GNUmakefile`):
 - 8GB RAM (`-m 8g`)
-- 2 CPU cores (`-smp 2`)
+- 8 CPUs (`-smp 8`; `QEMU_SMP=<spec>` on the make command line changes it,
+  and `make run-sparse` boots the 3900X's sparse APIC layout, 24 CPUs)
 - Serial output to `qemu_com1.log`
 - Telnet monitor on port 55555
 - NVMe disk image at `disk/os64.img` (64MB FAT partition)
@@ -933,9 +1407,12 @@ page tables exactly while the allocator considers it allocated.**
   the HHDM page-faults with a "use-after-free or wild pointer?" panic. This
   is a designed tripwire (DEBUG_PAGEALLOC-style), chosen over an eager
   Linux-style full direct map.
-- Mechanics: the allocator's single alloc/free choke points call
-  `paging_hhdm_map_range()` / `paging_hhdm_unmap_range()` (see paging.h for
-  the boundary-page rules); frees broadcast a TLB-shootdown IPI. Early-boot
+- Mechanics: a frame run is mapped (`paging_hhdm_map_range()`) before the
+  frame lock is released and unmapped (`paging_hhdm_unmap_range()`) before
+  the run is freed; inside a ledger chunk the ledger maps each extent it
+  carves and unmaps what its frees fully contain (see paging.h for the
+  boundary-page rules), pinning the chunk's frames in between so liveness
+  stays a one-load answer. Frees broadcast a TLB-shootdown IPI. Early-boot
   allocations are retro-mapped when `init_os64_paging_tables()` builds the
   real tables. MMIO/reserved regions still require explicit mappings.
 
@@ -957,8 +1434,9 @@ page tables exactly while the allocator considers it allocated.**
 - Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)
 - HHDM to Physical: `hhdm - kHHDMOffset`
 
-**Locking**: all allocator entry points take an interrupts-disabled spinlock
-(`kMemoryStatusLock`) — allocations happen concurrently from page-fault
+**Locking**: two interrupts-disabled spinlocks, `kFrameLock` (the frame
+table) and `kMemoryStatusLock` (the ledger); when both are held, the
+ledger's is taken first — allocations happen concurrently from page-fault
 handlers on multiple cores. Never call allocate/free while holding another
 spinlock that a fault path might also take.
 

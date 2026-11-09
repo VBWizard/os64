@@ -1,0 +1,16 @@
+#!/bin/bash
+# vmls — list the guest's /home from the host, without touching the VM.
+#
+#   tools/vmls [port]          (default 55556)
+#
+# Sizes and dates come straight out of the filesystem, so this is how you
+# check that a test file exists and how big it is before fetching it with
+# vmget.
+set -u
+PORT=${1:-55556}
+IMG=/tmp/os64-vm-$PORT/os64_data.img
+if [ ! -f "$IMG" ]; then
+    echo "vmls: no VM images at /tmp/os64-vm-$PORT — run tools/vmboot first" >&2
+    exit 2
+fi
+debugfs -R "ls -l /" "$IMG?offset=1048576" 2>/dev/null | grep -v "^debugfs"

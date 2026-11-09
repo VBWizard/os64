@@ -1,0 +1,19 @@
+ps2: list and companion scrollbar changed on down; restored exactly on up
+usb: list and companion scrollbar changed on down; restored exactly on up
+PS/2: Scribe document viewport changed on down, restored exactly on up; caret unchanged
+Unfocused Appearance scrolled while focused Scribe remained pixel-identical
+Wheel over Scribe titlebar: screen unchanged
+Text-only boot VT1: wheel up changes history; down restores visible text
+Text-only boot VT2: wheel up changes history; down restores visible text
+Text-only boot VT3: wheel up changes history; down restores visible text
+Text-only boot VT4: wheel up changes history; down restores visible text
+Text-only boot VT5: wheel up changes history; down restores visible text
+Text-only boot VT6: wheel up changes history; down restores visible text
+Text-only boot VT7: wheel up changes history; down restores visible text
+Shift+PgUp/PgDn: existing history navigation preserved
+Oldest history: additional up notches clamp
+USB on GUI boot VT2: wheel up changes history; down restores it
+USB list at bottom: additional down notches clamp
+Final USB build: list and companion scrollbar changed on down
+Final USB build: stationary text pointer visible before, during and after history scroll
+Final USB build: six repeated up/down cycles changed history and restored visible text exactly

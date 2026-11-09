@@ -1,0 +1,54 @@
+From 1ec3406aef4f19a3808f06317280d011500ee0b5 Mon Sep 17 00:00:00 2001
+From: Mateusz Jurczyk <mjurczyk@google.com>
+Date: Thu, 7 May 2026 13:13:16 +0000
+Subject: [PATCH] * src/psaux/psstack.c (cf2_stack_roll): Process top stack
+ elements instead of bottom ones.
+
+Fixes #1431.
+---
+ src/psaux/psstack.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/psaux/psstack.c b/src/psaux/psstack.c
+index f8d1e8d44..1360ba30d 100644
+--- a/src/psaux/psstack.c
++++ b/src/psaux/psstack.c
+@@ -245,6 +245,7 @@
+     CF2_StackNumber  last = { { 0 }, CF2_NumberInt };
+ 
+     CF2_Int  start_idx, idx, i;
++    CF2_Int  offset;
+ 
+ 
+     if ( count < 2 )
+@@ -256,6 +257,8 @@
+       return;
+     }
+ 
++    offset = (CF2_Int)cf2_stack_count( stack ) - count;
++
+     /* before C99 it is implementation-defined whether    */
+     /* the result of `%' is negative if the first operand */
+     /* is negative                                        */
+@@ -303,7 +306,7 @@
+       {
+         start_idx++;
+         idx  = start_idx;
+-        last = stack->buffer[idx];
++        last = stack->buffer[idx + offset];
+       }
+ 
+       idx += shift;
+@@ -312,9 +315,9 @@
+       else if ( idx < 0 )
+         idx += count;
+ 
+-      tmp                = stack->buffer[idx];
+-      stack->buffer[idx] = last;
+-      last               = tmp;
++      tmp                         = stack->buffer[idx + offset];
++      stack->buffer[idx + offset] = last;
++      last                        = tmp;
+     }
+   }
+ 

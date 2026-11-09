@@ -13,6 +13,8 @@
 #include "paging.h"
 #include "strstr.h"
 #include "fpu.h"
+#include "doorbell.h"
+#include "accounting.h"
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -129,7 +131,7 @@ volatile uint64_t kDiagRunnableLen = 0;
 // growing count on its core), and the counter /sys/cpu can surface someday.
 volatile uint64_t kSchedBackstopFires[MAX_CPUS] = {0};
 extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
-	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateAPIC;
+	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateCPU;
 extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
 extern uint32_t apic_in_service_vector(void);
 extern uint32_t read_apic_register(uintptr_t reg);
@@ -173,7 +175,7 @@ static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storag
 		return false;
 	}
 
-	return thread->mp_apic == THREAD_NO_AFFINITY || thread->mp_apic == cls->apic_id;
+	return thread->pinnedCPU == THREAD_NO_AFFINITY || thread->pinnedCPU == cls->cpu;
 }
 
 static void scheduler_nudge_parked_aps(thread_t *thread)
@@ -183,21 +185,21 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 	}
 
 	core_local_storage_t *cls = get_core_local_storage();
-	uint64_t current_apic_id = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t current_cpu = cls ? cls->cpu : BSP_CPU;
 
 	// PINNED work nudges its designated core, as it always has.
-	if (thread->mp_apic != THREAD_NO_AFFINITY) {
-		if (thread->mp_apic == BOOTSTRAP_PROCESSOR_ID ||
-		    thread->mp_apic == current_apic_id ||
-		    mp_inScheduler[thread->mp_apic]) {
+	if (thread->pinnedCPU != THREAD_NO_AFFINITY) {
+		if (thread->pinnedCPU == BSP_CPU ||
+		    thread->pinnedCPU == current_cpu ||
+		    mp_inScheduler[thread->pinnedCPU]) {
 			return;
 		}
 		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-			"scheduler_nudge_parked_aps: nudging APIC %lu for pinned thread 0x%08x (task %s)\n",
-			thread->mp_apic, thread->threadID,
+			"scheduler_nudge_parked_aps: nudging CPU %lu for pinned thread 0x%08x (task %s)\n",
+			thread->pinnedCPU, thread->threadID,
 			((task_t*)thread->ownerTask)->exename);
 		kDiagNudgePinned++;                             // TEMP DIAG
-		send_ipi(thread->mp_apic, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+		send_ipi(thread->pinnedCPU, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
 
@@ -220,10 +222,9 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 	// its core until it blocks or dies (kworker read 0% while a hog held
 	// its core — pre-existing nudge-only semantics; AP fairness is its own
 	// future slice).
-	for (int i = 0; i < kMPCoreCount; i++)
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
 	{
-		uint32_t apic_id = kCPUInfo[i].apicID;
-		if (apic_id == BOOTSTRAP_PROCESSOR_ID || apic_id == current_apic_id)
+		if (cpu == BSP_CPU || cpu == current_cpu)
 			continue;
 		// NOT gated on mp_schedulerEnabled, deliberately: under tickless the
 		// enable ISR leaves AP timers masked and never sets that flag, so
@@ -234,10 +235,10 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		// that has never been "enabled": its pass handles the never-ran
 		// case explicitly. kSMPInitDone (checked above) is the real
 		// readiness gate.
-		if (mp_inScheduler[apic_id])
+		if (mp_inScheduler[cpu])
 			continue;
 
-		core_local_storage_t *target = get_core_local_storage_for_core(apic_id);
+		core_local_storage_t *target = get_core_local_storage_for_core(cpu);
 		if (target == NULL || target->currentThread == NULL ||
 		    target->currentThread == NO_THREAD)
 			continue;
@@ -245,11 +246,11 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 			continue;   // busy core — an idle one may still be ahead
 
 		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-			"scheduler_nudge_parked_aps: recruiting idle APIC %u for thread 0x%08x (task %s)\n",
-			apic_id, thread->threadID,
+			"scheduler_nudge_parked_aps: recruiting idle CPU %u for thread 0x%08x (task %s)\n",
+			cpu, thread->threadID,
 			((task_t*)thread->ownerTask)->exename);
 		kDiagNudgeUnpinned++;                           // TEMP DIAG
-		send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+		send_ipi(cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
 	// No idle core: the busy ones and the BSP pick it up on their own passes.
@@ -259,14 +260,14 @@ void scheduler_enable()
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	//This will enable the scheduler for the calling core
-	mp_schedulerEnabled[cls->apic_id] = true;
+	mp_schedulerEnabled[cls->cpu] = true;
 }
 
 void scheduler_disable()
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	//This will disable the scheduler for the calling core
-	mp_schedulerEnabled[cls->apic_id] = false;
+	mp_schedulerEnabled[cls->cpu] = false;
 }
 
 thread_t* scheduler_get_queue(eThreadState state)
@@ -308,7 +309,7 @@ void scheduler_init()
 	kSchedulerInitialized = true;
     printd(DEBUG_SCHEDULER,"\tInitialized kThreadList @ 0x%08x, sizeof(thread_t)=0x%02X\n",kThreadList,sizeof(thread_t));
 
-    for (int cnt=0;cnt<kMPCoreCount;cnt++)
+    for (uint32_t cnt = 0; cnt < kCPUCount;cnt++)
     {
         printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\tAllocating stack for CPU %u, 0x%04x bytes\n",cnt,SCHEDULER_STACK_SIZE);
         mp_schedStack[cnt] = (uintptr_t)kmalloc_aligned(0x4000);
@@ -555,7 +556,10 @@ void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newStat
 	        scheduler_nudge_parked_aps(thread);
 	    }
 	    else if (newState==THREAD_STATE_RUNNING)
+	    {
 	        thread->lastRunStartTicks=kTicksSinceStart;
+	        thread->expedite=false;   // the doorbell boost buys one pick — this one
+	    }
 }
 
 // Public entry: takes the queue lock (IF off — see the doctrine block up top)
@@ -571,7 +575,9 @@ void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 // Wake a thread parked in ISLEEP — the pipe/console blocking-loop wake. Only
 // a thread that has ACTUALLY parked can be woken here; one still RUNNING has
 // not finished registering as a waiter — the caller's level-triggered sweep
-// catches it next pass (pipe.c documents that contract). The ISLEEP check,
+// catches it next pass (pipe.c documents that contract). A waiter with no
+// sweep takes scheduler_wake_or_owe below instead, which leaves such a
+// thread's backstop alone too but owes it the wake. The ISLEEP check,
 // the SIGSLEEP cancel, and the relink must be one atomic act under the queue
 // lock: without it, a wake running in the WAKER's thread context (possibly
 // on an AP since the fan-out) races processSignals' tick-driven walk of the
@@ -599,6 +605,75 @@ void scheduler_wake_isleep_thread(thread_t *w)
 	scheduler_wake_isleep_thread_locked(w);
 	scheduler_queues_unlock(flags);
 }
+
+// What the owed wake has done since boot (WAKE_OWED.md § What it reports).
+// Updated under the queue lock; read without it, racy by design.
+static scheduler_wake_counts_t s_wake_counts;
+
+// The wake for a waiter that registered under its object's lock and parks
+// after releasing it, with no sweep behind it (WAKE_OWED.md). ISLEEP: woken
+// now, as scheduler_wake_isleep_thread_locked. RUNNING or RUNNABLE: the
+// thread is registered and not yet parked, so the wake is OWED, and the
+// requeue that would park it pays it (scheduler_run_new_thread). Any other
+// state is a registration that outlived its thread's wait: nothing is done,
+// and it is counted. The caller holds the queue lock and the lock its
+// waiter registers under, so a debt is never owed to a later wait (the
+// owed-wake fixture, which aims at its own thread, holds only the first).
+void scheduler_wake_or_owe_locked(thread_t *w)
+{
+	if (w == NULL)
+		return;
+	if (w->threadState == THREAD_STATE_ISLEEP)
+		scheduler_wake_isleep_thread_locked(w);
+	else if (w->threadState == THREAD_STATE_RUNNING || w->threadState == THREAD_STATE_RUNNABLE)
+	{
+		// One debt however many deliverers owe it (several events, or
+		// several windows of one gui_event_wait_any): one requeue pays it,
+		// and owed counts debts, so owed = paid + voided + outstanding.
+		if (!w->wakeOwed)
+			s_wake_counts.owed++;
+		w->wakeOwed = true;
+	}
+	else
+		s_wake_counts.refused++;
+}
+
+// Takes the queue lock and never triggers a pass: every caller holds an
+// object's lock with interrupts off, and scheduler_trigger enables them and
+// halt-waits for a pass. The woken or paid thread runs at the next pass.
+void scheduler_wake_or_owe(thread_t *w)
+{
+	if (w == NULL)
+		return;
+
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_wake_or_owe_locked(w);
+	scheduler_queues_unlock(flags);
+}
+
+// A wait voids its own debt at the top of every pass, under the lock it
+// registers under: no wake can be owed for it again until it registers, and
+// a debt from before this point announced what the pass will find.
+void scheduler_forget_owed_wake(thread_t *self)
+{
+	uint64_t flags = scheduler_queues_lock();
+	if (self->wakeOwed)
+	{
+		self->wakeOwed = false;
+		s_wake_counts.voided++;
+	}
+	scheduler_queues_unlock(flags);
+}
+
+scheduler_wake_counts_t scheduler_wake_counts(void)
+{
+	return s_wake_counts;
+}
+
+// The owed-wake fixture's aim (scheduler.h): processSignals wakes this thread
+// on the first pass at or after the tick.
+thread_t *volatile kWakeOwedTestTarget;
+volatile uint64_t kWakeOwedTestTick;
 
 void scheduler_submit_new_task(task_t *newTask)
 {
@@ -675,38 +750,40 @@ thread_t* scheduler_get_running_thread(uint64_t threadID)
 // The lesson worth keeping: a debug flag that one core can flip on behalf
 // of all cores is not a debug flag, it is a race. If a message must always
 // print, give it a level that is always on — never mutate the gate.
-void debug_print_registers(uint64_t apic_id, char* prefix)
+void debug_print_registers(uint64_t cpu, char* prefix)
 {
     printd(DEBUG_SCHEDULER | DEBUG_EXTRA_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
-			mp_isrSavedCR3[apic_id],
-            mp_isrSavedCS[apic_id],
-            mp_isrSavedRIP[apic_id],
-            mp_isrSavedSS[apic_id],
-            mp_isrSavedDS[apic_id],
-            mp_isrSavedRAX[apic_id],
-            mp_isrSavedRBX[apic_id],
-            mp_isrSavedRCX[apic_id],
-            mp_isrSavedRDX[apic_id],
-            mp_isrSavedRSI[apic_id],
-            mp_isrSavedRDI[apic_id],
-            mp_isrSavedRSP[apic_id],
-            mp_isrSavedRBP[apic_id],
-            mp_isrSavedRFlags[apic_id]);
+			mp_isrSavedCR3[cpu],
+            mp_isrSavedCS[cpu],
+            mp_isrSavedRIP[cpu],
+            mp_isrSavedSS[cpu],
+            mp_isrSavedDS[cpu],
+            mp_isrSavedRAX[cpu],
+            mp_isrSavedRBX[cpu],
+            mp_isrSavedRCX[cpu],
+            mp_isrSavedRDX[cpu],
+            mp_isrSavedRSI[cpu],
+            mp_isrSavedRDI[cpu],
+            mp_isrSavedRSP[cpu],
+            mp_isrSavedRBP[cpu],
+            mp_isrSavedRFlags[cpu]);
 }
 
 void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
 {
-    int apic_id = cls->apic_id;
-	task_t* task = (task_t*)cls->currentThread->ownerTask;
-    if (apic_id > 0 && mp_timesEnteringScheduler[apic_id]==1)
+    int cpu = cls->cpu;
+    // The first BSP save precedes scheduler_load_thread's CLS publication.
+    // The outgoing thread argument already identifies the owner to save.
+    task_t* task = (task_t*)thread->ownerTask;
+    if (cpu > 0 && mp_timesEnteringScheduler[cpu]==1)
     {
         printd(DEBUG_SCHEDULER,"storeISRSavedRegs: AP hasn't been through the scheduler before, not saving registers\n");
         return;
     }
-    if (mp_isrSavedCS[apic_id] == 0)
+    if (mp_isrSavedCS[cpu] == 0)
         panic("scheduler_store_thread: AP%u storing CS=0 into thread 0x%x (%s), RIP=0x%016lx\n",
-            apic_id, thread->threadID, task->exename, mp_isrSavedRIP[apic_id]);
+            cpu, thread->threadID, task->exename, mp_isrSavedRIP[cpu]);
 
     if (thread->execDontSaveRegisters)
     {
@@ -716,18 +793,18 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
     else
     {
 		fpu_save(&thread->fpuState);
-        thread->regs.CS=mp_isrSavedCS[apic_id];
-        thread->regs.RIP=mp_isrSavedRIP[apic_id];
-        thread->regs.SS=mp_isrSavedSS[apic_id];
-        thread->regs.DS=mp_isrSavedDS[apic_id];
-        thread->regs.RAX=mp_isrSavedRAX[apic_id];
-        thread->regs.RBX=mp_isrSavedRBX[apic_id];
-        thread->regs.RCX=mp_isrSavedRCX[apic_id];
-        thread->regs.RDX=mp_isrSavedRDX[apic_id];
-        thread->regs.RSI=mp_isrSavedRSI[apic_id];
-        thread->regs.RDI=mp_isrSavedRDI[apic_id];
-        thread->regs.RSP=mp_isrSavedRSP[apic_id];
-        thread->regs.RBP=mp_isrSavedRBP[apic_id];
+        thread->regs.CS=mp_isrSavedCS[cpu];
+        thread->regs.RIP=mp_isrSavedRIP[cpu];
+        thread->regs.SS=mp_isrSavedSS[cpu];
+        thread->regs.DS=mp_isrSavedDS[cpu];
+        thread->regs.RAX=mp_isrSavedRAX[cpu];
+        thread->regs.RBX=mp_isrSavedRBX[cpu];
+        thread->regs.RCX=mp_isrSavedRCX[cpu];
+        thread->regs.RDX=mp_isrSavedRDX[cpu];
+        thread->regs.RSI=mp_isrSavedRSI[cpu];
+        thread->regs.RDI=mp_isrSavedRDI[cpu];
+        thread->regs.RSP=mp_isrSavedRSP[cpu];
+        thread->regs.RBP=mp_isrSavedRBP[cpu];
         // R8-R15 joined the save set 2026-08-14. The asm prologue has always
         // captured them into the per-core arrays, but nothing carried them
         // into thread->regs — so a thread resuming on a DIFFERENT core ran
@@ -738,21 +815,21 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         // user segfault report — an info leak on top of the corruption).
         // Same-core resumes were accidentally correct, which is why this
         // survived every single-core test since SMP bring-up.
-        thread->regs.R8=mp_isrSavedR8[apic_id];
-        thread->regs.R9=mp_isrSavedR9[apic_id];
-        thread->regs.R10=mp_isrSavedR10[apic_id];
-        thread->regs.R11=mp_isrSavedR11[apic_id];
-        thread->regs.R12=mp_isrSavedR12[apic_id];
-        thread->regs.R13=mp_isrSavedR13[apic_id];
-        thread->regs.R14=mp_isrSavedR14[apic_id];
-        thread->regs.R15=mp_isrSavedR15[apic_id];
-        thread->regs.RFLAGS=mp_isrSavedRFlags[apic_id];
-        thread->regs.ES=mp_isrSavedES[apic_id];
-        thread->regs.FS=mp_isrSavedFS[apic_id];
-        thread->regs.GS=mp_isrSavedGS[apic_id];
-        thread->regs.CR3=mp_isrSavedCR3[apic_id];
+        thread->regs.R8=mp_isrSavedR8[cpu];
+        thread->regs.R9=mp_isrSavedR9[cpu];
+        thread->regs.R10=mp_isrSavedR10[cpu];
+        thread->regs.R11=mp_isrSavedR11[cpu];
+        thread->regs.R12=mp_isrSavedR12[cpu];
+        thread->regs.R13=mp_isrSavedR13[cpu];
+        thread->regs.R14=mp_isrSavedR14[cpu];
+        thread->regs.R15=mp_isrSavedR15[cpu];
+        thread->regs.RFLAGS=mp_isrSavedRFlags[cpu];
+        thread->regs.ES=mp_isrSavedES[cpu];
+        thread->regs.FS=mp_isrSavedFS[cpu];
+        thread->regs.GS=mp_isrSavedGS[cpu];
+        thread->regs.CR3=mp_isrSavedCR3[cpu];
     }
-    debug_print_registers(apic_id, "save (or not)");
+    debug_print_registers(cpu, "save (or not)");
 }
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
@@ -760,10 +837,10 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 	// Dispatch history for /proc (thread.h has the doctrine): cls is the
 	// TARGET core's storage, so this is correct even when the BSP loads a
 	// thread onto another core under tickless scheduling.
-	thread->lastRunApicID = cls->apic_id;
+	thread->lastRunCPU = cls->cpu;
 	//task_t* task = cls->currentThread->ownerTask;
 	//task_t* ownerTask = ((task_t*)cls->currentThread->ownerTask)->ownerTask;
-	uint64_t apic_id = cls->apic_id;
+	uint64_t cpu = cls->cpu;
 	thread_t* forkedThread = (thread_t*)thread->forkedThread;
 
 	cls->currentThread = thread;
@@ -787,29 +864,29 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 	// SOMETIMES right is a trap laid for whoever reads it next.
 	cls->task = (task_t *)thread->ownerTask;
 	fpu_restore(&thread->fpuState);
-    mp_isrSavedCS[apic_id]=thread->regs.CS;
-    mp_isrSavedRIP[apic_id]=thread->regs.RIP;
-    mp_isrSavedSS[apic_id]=thread->regs.SS;
-    mp_isrSavedDS[apic_id]=thread->regs.DS;
-    mp_isrSavedRAX[apic_id]=thread->regs.RAX;
-    mp_isrSavedRBX[apic_id]=thread->regs.RBX;
-    mp_isrSavedRCX[apic_id]=thread->regs.RCX;
-    mp_isrSavedRDX[apic_id]=thread->regs.RDX;
-    mp_isrSavedRSI[apic_id]=thread->regs.RSI;
-    mp_isrSavedRDI[apic_id]=thread->regs.RDI;
-    mp_isrSavedRSP[apic_id]=thread->regs.RSP;
-    mp_isrSavedRBP[apic_id]=thread->regs.RBP;
+    mp_isrSavedCS[cpu]=thread->regs.CS;
+    mp_isrSavedRIP[cpu]=thread->regs.RIP;
+    mp_isrSavedSS[cpu]=thread->regs.SS;
+    mp_isrSavedDS[cpu]=thread->regs.DS;
+    mp_isrSavedRAX[cpu]=thread->regs.RAX;
+    mp_isrSavedRBX[cpu]=thread->regs.RBX;
+    mp_isrSavedRCX[cpu]=thread->regs.RCX;
+    mp_isrSavedRDX[cpu]=thread->regs.RDX;
+    mp_isrSavedRSI[cpu]=thread->regs.RSI;
+    mp_isrSavedRDI[cpu]=thread->regs.RDI;
+    mp_isrSavedRSP[cpu]=thread->regs.RSP;
+    mp_isrSavedRBP[cpu]=thread->regs.RBP;
     // The restore half of the R8-R15 fix (see scheduler_store_thread): the
     // asm epilogue loads R8-R15 from these arrays, so without this a
     // dispatched thread received the core's previous tenant's values.
-    mp_isrSavedR8[apic_id]=thread->regs.R8;
-    mp_isrSavedR9[apic_id]=thread->regs.R9;
-    mp_isrSavedR10[apic_id]=thread->regs.R10;
-    mp_isrSavedR11[apic_id]=thread->regs.R11;
-    mp_isrSavedR12[apic_id]=thread->regs.R12;
-    mp_isrSavedR13[apic_id]=thread->regs.R13;
-    mp_isrSavedR14[apic_id]=thread->regs.R14;
-    mp_isrSavedR15[apic_id]=thread->regs.R15;
+    mp_isrSavedR8[cpu]=thread->regs.R8;
+    mp_isrSavedR9[cpu]=thread->regs.R9;
+    mp_isrSavedR10[cpu]=thread->regs.R10;
+    mp_isrSavedR11[cpu]=thread->regs.R11;
+    mp_isrSavedR12[cpu]=thread->regs.R12;
+    mp_isrSavedR13[cpu]=thread->regs.R13;
+    mp_isrSavedR14[cpu]=thread->regs.R14;
+    mp_isrSavedR15[cpu]=thread->regs.R15;
     // ── BORROWED-STACK TRIPWIRE (2026-08-12, the stack poisoner's headstone) ─
     // A context about to be dispatched whose saved RSP lies inside ANY core's
     // per-core scratch stack was PARKED THERE — it slept or was preempted
@@ -835,11 +912,11 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         {
             task_t *bs_task = (task_t *)thread->ownerTask;
             panic("BORROWED-STACK TRIPWIRE: thread 0x%08x (%s) was parked on core %d's scratch stack "
-                  "(saved RSP 0x%016lx) and core %u tried to resume it — a call_in_kernel_context or "
+                  "(saved RSP 0x%016lx) and CPU %u tried to resume it — a call_in_kernel_context or "
                   "exit-path function BLOCKED on a borrowed stack; the call chain in this thread's "
                   "frames names the door\n",
                   thread->threadID, bs_task ? bs_task->exename : "?", scratch_owner,
-                  thread->regs.RSP, (uint32_t)apic_id);
+                  thread->regs.RSP, (uint32_t)cpu);
         }
     }
     // ── TF TRIPWIRE ────────────────────────────────────────────────────────
@@ -865,29 +942,29 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         task_t *tf_task = (task_t *)thread->ownerTask;
         printd(DEBUG_BOOT, "TF TRIPWIRE: thread 0x%08x (%s) on AP %u had RFLAGS=0x%016lx "
                "(TF set) — cleared before dispatch\n",
-               thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)apic_id,
+               thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)cpu,
                thread->regs.RFLAGS);
         if (!tf_reported_on_screen)
         {
             tf_reported_on_screen = true;   // once per boot: the glass is not a log
             printf("TF TRIPWIRE: thread 0x%08x (%s) on AP %u: RFLAGS=0x%016lx, TF cleared\n",
-                   thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)apic_id,
+                   thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)cpu,
                    thread->regs.RFLAGS);
         }
         thread->regs.RFLAGS &= ~0x100UL;
     }
-    mp_isrSavedRFlags[apic_id]=thread->regs.RFLAGS;
-    mp_isrSavedES[apic_id]=thread->regs.ES;
-    mp_isrSavedFS[apic_id]=thread->regs.FS;
-    mp_isrSavedGS[apic_id]=thread->regs.GS;
-    mp_isrSavedCR3[apic_id]=thread->regs.CR3;
+    mp_isrSavedRFlags[cpu]=thread->regs.RFLAGS;
+    mp_isrSavedES[cpu]=thread->regs.ES;
+    mp_isrSavedFS[cpu]=thread->regs.FS;
+    mp_isrSavedGS[cpu]=thread->regs.GS;
+    mp_isrSavedCR3[cpu]=thread->regs.CR3;
     
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"scheduler_load_thread: Loading SYSENTER_ESP_MSR with value 0x%08x\n",thread->regs.RSP0);
 
 	// Update the per-core TSS so SYSCALL transitions land on the correct kernel stack
 	if (cls->tss)
 	{
-		tss_set_rsp0(cls->apic_id, thread->regs.RSP0);
+		tss_set_rsp0(cls->cpu, thread->regs.RSP0);
 	}
 
 	//TODO: Handle forked threads
@@ -895,28 +972,28 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     {
 		panic("scheduler_load_thread: Finish the fork register load\n");
         printd(DEBUG_SCHEDULER,"loadISRSavedRegs: Fork return for newly spawned child thread\n");
-        mp_isrSavedCS[apic_id] = thread->regs.CS;
-        mp_isrSavedRIP[apic_id] = thread->regs.RIP;
-        mp_isrSavedSS[apic_id] = thread->regs.SS;
-        mp_isrSavedDS[apic_id] = thread->regs.DS;
-        mp_isrSavedRAX[apic_id] = thread->regs.RAX;
-        mp_isrSavedRBX[apic_id] = thread->regs.RBX;
-        mp_isrSavedRCX[apic_id] = thread->regs.RCX;
-        mp_isrSavedRDX[apic_id] = thread->regs.RDX;
-        mp_isrSavedES[apic_id] = thread->regs.RSI;
-        mp_isrSavedRDI[apic_id] = thread->regs.RDI;
-        mp_isrSavedRSP[apic_id] = forkedThread->regs.RSP;
-        mp_isrSavedRBP[apic_id] = forkedThread->regs.RBP;
+        mp_isrSavedCS[cpu] = thread->regs.CS;
+        mp_isrSavedRIP[cpu] = thread->regs.RIP;
+        mp_isrSavedSS[cpu] = thread->regs.SS;
+        mp_isrSavedDS[cpu] = thread->regs.DS;
+        mp_isrSavedRAX[cpu] = thread->regs.RAX;
+        mp_isrSavedRBX[cpu] = thread->regs.RBX;
+        mp_isrSavedRCX[cpu] = thread->regs.RCX;
+        mp_isrSavedRDX[cpu] = thread->regs.RDX;
+        mp_isrSavedES[cpu] = thread->regs.RSI;
+        mp_isrSavedRDI[cpu] = thread->regs.RDI;
+        mp_isrSavedRSP[cpu] = forkedThread->regs.RSP;
+        mp_isrSavedRBP[cpu] = forkedThread->regs.RBP;
         //Removed line of code that was setting the EBP directly to the parent's.  The above code is correct for assigning the EBP after a fork
-        mp_isrSavedRFlags[apic_id] = thread->regs.RFLAGS;
-        mp_isrSavedES[apic_id] = thread->regs.ES;
-        mp_isrSavedFS[apic_id] = thread->regs.FS;
-        mp_isrSavedGS[apic_id] = thread->regs.GS;
+        mp_isrSavedRFlags[cpu] = thread->regs.RFLAGS;
+        mp_isrSavedES[cpu] = thread->regs.ES;
+        mp_isrSavedFS[cpu] = thread->regs.FS;
+        mp_isrSavedGS[cpu] = thread->regs.GS;
         //We need to load the CR3 because whatever CR3 the parent was using, that's what the child should use for the FIRST return from syscall.
-        mp_isrSavedCR3[apic_id] = thread->regs.CR3; 
+        mp_isrSavedCR3[cpu] = thread->regs.CR3; 
 //        memcpy((uintptr_t*)((process_t*)task->process)->stackStart, (uintptr_t*)parent->stackStart, ((process_t*)task->process)->stackSize);
     }
-	debug_print_registers(apic_id, "load");
+	debug_print_registers(cpu, "load");
 }
 
 void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
@@ -960,34 +1037,35 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
         panic("scheduler_remove_from_queue: Can't find queue entry to remove!");
 }
 
-// Wake `waiter`, a thread of `task` parked in task_wait. It was
-// scheduler_wake_isleep_task(task) and woke task->threads — the FIRST thread
-// — until 2026-08-25, when a second-thread waiter (the desktop's reaper)
-// showed that the first thread and the waiting thread are not the same
-// thing. The caller names the thread; this function's only opinion is HOW to
-// wake it safely.
+// Wake `waiter`, a thread of `task` parked in task_wait, or owe it the wake if
+// it has registered and not yet parked (scheduler_wake_or_owe, WAKE_OWED.md).
+// It was scheduler_wake_isleep_task(task) and woke task->threads — the FIRST
+// thread — until 2026-08-25, when a second-thread waiter (the desktop's
+// reaper) showed that the first thread and the waiting thread are not the
+// same thing. The caller names the thread; this function's only opinion is
+// HOW to wake it safely.
+//
+// The caller holds kDeadChildLock, the lock task_wait registers and voids
+// under, so a debt is never owed to a later wait; that lock is taken before
+// the queue lock everywhere. It does NOT trigger a pass: scheduler_trigger
+// halt-waits for a pass that needs the queue lock, so the caller triggers one
+// after releasing every lock (task_enqueue_dead_child).
+//
+// The SIGSLEEP cancel lives in the wake, never in the caller, and only for a
+// thread that has actually parked: cancelling the backstop of a thread still
+// mid-park destroys its only retry, and it lands in ISLEEP with no flag and no
+// deadline, asleep for good. task_enqueue_dead_child used to do exactly that
+// (see its comment, 2026-08-09). A not-yet-parked thread keeps its backstop;
+// the debt is paid by the requeue that parks it.
 void scheduler_wake_task_waiter(task_t *task, thread_t *waiter) {
     if (task == NULL || waiter == NULL) return; // Ensure task is valid
 
-    // Check-and-relink atomically (this runs in thread context — task_exit
-    // waking a parent — which the fan-out can place on any core). The
-    // trigger stays OUTSIDE the lock: it hlt-waits for a scheduler pass that
-    // needs this very lock, so triggering while holding it is a guaranteed
-    // self-deadlock.
-    // Delegate to the helper that already gets this exactly right (above):
-    // ISLEEP test + SIGSLEEP cancel + relink as ONE act under the lock. The
-    // cancel MUST live in here rather than in the caller, and it must be
-    // conditional on the thread having actually parked — cancelling a backstop
-    // for a thread that is still mid-park destroys the only retry the waiter
-    // has, and it lands in ISLEEP with no flag and no deadline: asleep for
-    // good. task_enqueue_dead_child used to do exactly that (see its comment,
-    // 2026-08-09). Leaving a not-yet-parked thread untouched is the whole
-    // trick: its own SIGSLEEP deadline fires a tick later and it re-checks.
     uint64_t flags = scheduler_queues_lock();
-    scheduler_wake_isleep_thread_locked(waiter);
+    scheduler_wake_or_owe_locked(waiter);
+    // The boost reaches a thread woken now; a debt paid at the park is
+    // relinked RUNNABLE from zero, and competes on aging like any wake.
     waiter->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
     scheduler_queues_unlock(flags);
-    scheduler_trigger(NULL);
 }
 
 thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrowsing)
@@ -1009,12 +1087,18 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
     // core at 50% each while a core idled six inches away.
     thread_t *warmSkipped = NO_THREAD;
     uint32_t warmSkippedTicks = 0;
+    // A doorbell answered this pass (doorbell.h): the pick takes it over aging.
+    // Remembered rather than taken on the spot so the loop still ages everyone.
+    thread_t *expedited = NO_THREAD;
     
     int queEntryNum = 0;
     while (queue!=NO_NEXT)
     {
 		thread = queue;
 		task = (task_t*)thread->ownerTask;
+		if (thread->expedite && !thread->idleThread && expedited == NO_THREAD &&
+		    scheduler_thread_can_run_on_core(thread, cls))
+			expedited = thread;
 		oldTicks=thread->prioritizedTicksInRunnable;
 		//This is where we increment all the runnable ticks, based on the process' priority
         if (!thread->idleThread && !justBrowsing)
@@ -1053,12 +1137,12 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 					// foreign core happened to LOOK during the window, which
 					// a parked idle core never did).
 					if (!thread->idleThread && thread->runCycles != 0 &&
-					    thread->lastRunApicID != cls->apic_id &&
+					    thread->lastRunCPU != cls->cpu &&
 					    (kTicksSinceStart - thread->runnableSinceTick) < SCHED_MIGRATION_COST_TICKS)
 					{
 						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-						       "*\t\tfindTaskToRun: thread 0x%08x is cache-warm on APIC %u, not migrating yet\n",
-						       thread->threadID, thread->lastRunApicID);
+						       "*\t\tfindTaskToRun: thread 0x%08x is cache-warm on CPU %u, not migrating yet\n",
+						       thread->threadID, thread->lastRunCPU);
 						if (thread->prioritizedTicksInRunnable >= warmSkippedTicks)
 						{
 							warmSkipped = thread;
@@ -1068,14 +1152,14 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 						queue=queue->next;
 						continue;
 					}
-					if (thread->mp_apic != THREAD_NO_AFFINITY && !thread->idleThread)
+					if (thread->pinnedCPU != THREAD_NO_AFFINITY && !thread->idleThread)
 						printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-							"scheduler_find_thread_to_run: APIC %u selecting pinned thread 0x%08x for APIC %u\n",
-							cls->apic_id,
+							"scheduler_find_thread_to_run: CPU %u selecting pinned thread 0x%08x for CPU %u\n",
+							cls->cpu,
 							thread->threadID,
-							thread->mp_apic);
+							thread->pinnedCPU);
 					if (thread->idleThread)
-						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t\tfindTaskToRun: Found idle thread for APIC %u\n",cls->apic_id);
+						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t\tfindTaskToRun: Found idle thread for CPU %u\n",cls->cpu);
 					threadToRun=thread;
 					mostIdleTicks=thread->prioritizedTicksInRunnable;
 				}
@@ -1095,11 +1179,13 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 	    (threadToRun == NO_THREAD || threadToRun->idleThread))
 	{
 		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-		       "scheduler_find_thread_to_run: APIC %u idle — taking cache-warm thread 0x%08x from APIC %u rather than idling\n",
-		       cls->apic_id, warmSkipped->threadID, warmSkipped->lastRunApicID);
+		       "scheduler_find_thread_to_run: CPU %u idle — taking cache-warm thread 0x%08x from CPU %u rather than idling\n",
+		       cls->cpu, warmSkipped->threadID, warmSkipped->lastRunCPU);
 		threadToRun = warmSkipped;
 	}
 
+	if (expedited != NO_THREAD)
+		threadToRun = expedited;
 	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");
 	if (!justBrowsing)
@@ -1113,15 +1199,15 @@ void scheduler_trigger(core_local_storage_t *cls)
 	if (!cls)
 		cls = get_core_local_storage();
 	//If we got here, something in the scheduler called to trigger the scheduler.  Illogical ... find it and fix it!
-	if (mp_inScheduler[cls->apic_id])
+	if (mp_inScheduler[cls->cpu])
     {
         printd(DEBUG_SCHEDULER,"scheduler_trigger: ERROR: Called but already in scheduler, exiting!\n");
         return;
     }
 //    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
     kDiagTriggerCalls++;                                // TEMP DIAG
-    mp_waitingForScheduler[cls->apic_id] = true;
-    mp_schedulerEnabled[cls->apic_id] = true;
+    mp_waitingForScheduler[cls->cpu] = true;
+    mp_schedulerEnabled[cls->cpu] = true;
 
 	//Since we're calling a different vector than the APIC timer does, we need to reset the timer count
 	// — but NOT on an AP whose timer is the backstop lease: that count is
@@ -1131,15 +1217,12 @@ void scheduler_trigger(core_local_storage_t *cls)
 	// (Backstop off = LVT still masked = the write stays the harmless phase
 	// reset it always was, so old tickless behavior is preserved exactly.)
 	if (!(kTicklessScheduler && kSchedBackstopEnabled &&
-	      cls->apic_id != BOOTSTRAP_PROCESSOR_ID))
+	      cls->cpu != BSP_CPU))
 		mp_restart_apic_timer_count();
-    send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+    send_ipi(cls->cpu, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
     // Wait until the ISR has run and cleared mp_waitingForScheduler.
-    // Using a checked loop rather than a bare sti;hlt because the ISR may
-    // fire before we reach hlt (e.g. during send_ipi's printd). If that
-    // happens the thread gets context-switched away mid-function; when it
-    // is later rescheduled it resumes here, the flag is already cleared,
-    // and the loop exits without blocking.
+    // The ISR may fire before this check and switch us away. The checked
+    // loop then exits on our later dispatch without sleeping again.
     __asm__ volatile("sti");
     // Re-fetch CLS on EVERY check, not just after the loop: the scheduler
     // pass this triggers switches us out, and since the fan-out we may be
@@ -1149,8 +1232,19 @@ void scheduler_trigger(core_local_storage_t *cls)
     // a core whose timer may be masked (tickless). The core that resumed us
     // cleared its own flag at scheduler_do entry, so the fresh read exits
     // immediately.
-    while (mp_waitingForScheduler[get_core_local_storage()->apic_id])
-        __asm__ volatile("hlt");
+    for (;;) {
+        // Keep the flag check and sti;hlt together under CLI. An IPI that
+        // arrives after the check stays pending until STI and wakes HLT;
+        // it cannot slip between the check and an unguarded halt.
+        __asm__ volatile("cli" ::: "memory");
+        if (!mp_waitingForScheduler[get_core_local_storage()->cpu]) {
+            __asm__ volatile("sti" ::: "memory");
+            break;
+        }
+        accounting_self_ipi_halt_begin();
+        __asm__ volatile("sti\n\thlt" ::: "memory");
+        accounting_self_ipi_halt_end();
+    }
     cls = get_core_local_storage();
 }
 
@@ -1196,7 +1290,7 @@ void scheduler_trigger(core_local_storage_t *cls)
 // never grew a frame. SIGKILL never reaches question 1 at all
 // (signal_pick_deliverable refuses to arm anything in front of it), so the
 // last resort cannot be postponed by a handler that never returns.
-static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
+static void scheduler_signal_visit(thread_t *thread, uint64_t cpu)
 {
 	task_t *task = (task_t *)thread->ownerTask;
 
@@ -1224,8 +1318,8 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 	signal_deliver_result_t dr = signal_deliver_to_regs(task, thread);
 	if (dr == SIGNAL_DELIVER_ARMED)
 	{
-		mp_isrSavedRIP[apic_id] = thread->regs.RIP;
-		mp_isrSavedRSP[apic_id] = thread->regs.RSP;
+		mp_isrSavedRIP[cpu] = thread->regs.RIP;
+		mp_isrSavedRSP[cpu] = thread->regs.RSP;
 		// RFLAGS TOO (Codex #29 rd11), and its absence made the previous
 		// round's fix a no-op on this path. Delivery clears DF in
 		// thread->regs.RFLAGS so a handler is not entered with the
@@ -1240,7 +1334,7 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 		// reload path and silently vanishes on the other one. RIP and RSP
 		// were mirrored because delivery obviously moved them; RFLAGS was
 		// missed because the change to it was subtle — one bit.
-		mp_isrSavedRFlags[apic_id] = thread->regs.RFLAGS;
+		mp_isrSavedRFlags[cpu] = thread->regs.RFLAGS;
 		return;
 	}
 
@@ -1275,7 +1369,7 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 
 	// Patch BOTH images of the frame. Idempotent on repeat passes.
 	thread->regs.RIP = TASK_EXIT_TRAMPOLINE_VIRT;
-	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
+	mp_isrSavedRIP[cpu] = TASK_EXIT_TRAMPOLINE_VIRT;
 
 	// Name the signal the ladder will name — same order as
 	// raise_terminating_signal_and_die, so the log and the exit code agree.
@@ -1294,15 +1388,15 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 void scheduler_run_new_thread()
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	uint64_t apic_id = cls->apic_id;
+	uint64_t cpu = cls->cpu;
 	thread_t* threadToStop=NULL;
     eThreadState threadToStopNewQueue=0;
 
-    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",cpu,mp_CoreHasRunScheduledThread[cpu]?"true":"false");
 
-    if (apic_id != 0 && !mp_CoreHasRunScheduledThread[apic_id])
+    if (cpu != 0 && !mp_CoreHasRunScheduledThread[cpu])
     {
-        printd(DEBUG_SCHEDULER,"*AP%u: No threads have been scheduled on this core yet, no thread to stop!\n",apic_id);
+        printd(DEBUG_SCHEDULER,"*AP%u: No threads have been scheduled on this core yet, no thread to stop!\n",cpu);
     }
 	else
 	{
@@ -1311,7 +1405,7 @@ void scheduler_run_new_thread()
 		task_t *taskToStop = (task_t*)threadToStop->ownerTask;
         printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
                taskToStop->taskID,
-               mp_isrSavedCS[apic_id], mp_isrSavedRIP[apic_id],
+               mp_isrSavedCS[cpu], mp_isrSavedRIP[cpu],
                threadToStop->exited,
                threadToStop->retVal);
 
@@ -1323,27 +1417,49 @@ void scheduler_run_new_thread()
 			//TODO: If this is the last thread for the task then do something with the task, INCLUDING resetting its GDT entry
 		}
         else if (sigset_has(threadToStop->signals.sigind, SIGSLEEP))
-			threadToStopNewQueue=THREAD_STATE_ISLEEP;
+		{
+			if (threadToStop->wakeOwed)
+			{
+				// A wake came while this thread was on its way here, between
+				// registering as a waiter and this requeue: it is paid now,
+				// instead of by the backstop (WAKE_OWED.md). Under the queue
+				// lock the wake took, so it came either before this check
+				// (owed) or after the park (a plain ISLEEP wake).
+				threadToStop->wakeOwed = false;
+				sigset_del(&threadToStop->signals.sigind, SIGSLEEP);
+				threadToStop->signals.sigdata[SIGSLEEP] = 0;
+				s_wake_counts.paid++;
+				threadToStopNewQueue=THREAD_STATE_RUNNABLE;
+			}
+			else
+				threadToStopNewQueue=THREAD_STATE_ISLEEP;
+		}
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
         scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
 	}
 	printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*Finding thread to run\n");
+    // Doorbell service point B: AFTER the outgoing thread was requeued. A
+    // sleeper that raised SIGSLEEP and was still on the CPU when its bell
+    // rang has just been moved to ISLEEP above; this pulls it straight back
+    // out in the same pass, which is what closes the park window rather
+    // than merely narrowing it (doorbell_park).
+    doorbell_service_locked();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	
     if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
-		debug_print_registers(apic_id, "continue2");
+		debug_print_registers(cpu, "continue2");
         // Continue path resumes from the isr arrays WITHOUT a reload, so the
         // signal visit must run here too (regs were just stored above, so
         // regs.CS is fresh for the ring-3 seatbelt — and a delivery's
         // RIP/RSP/RFLAGS redirect gets mirrored into the isr arrays, which
         // are what this path actually IRETs from; all three, see the mirror
         // invariant in scheduler_signal_visit).
-        scheduler_signal_visit(threadToStop, apic_id);
+        scheduler_signal_visit(threadToStop, cpu);
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -1360,7 +1476,7 @@ void scheduler_run_new_thread()
         scheduler_load_thread(cls, threadToRun);
         // The switch path: load just synced regs -> isr arrays, so the
         // redirect (if owed) patches both images consistently.
-        scheduler_signal_visit(threadToRun, apic_id);
+        scheduler_signal_visit(threadToRun, cpu);
 		task_t *pTask = (task_t*)threadToRun->ownerTask;
         // exename is a bare basename ("idle0", "idle1", ...) — no leading slash.
         if (strncmp(pTask->exename, "idle", 4) != 0)
@@ -1404,13 +1520,13 @@ void scheduler_run_new_thread()
 				taskToRun->taskID,
 				threadToRun->totalRunTicks);
 		}
-		mp_schedulerTaskSwitched[apic_id]=true;
+		mp_schedulerTaskSwitched[cpu]=true;
 		kTaskSwitchCount++;
-		mp_ForkReturn[apic_id] = false;
+		mp_ForkReturn[cpu] = false;
 		//TODO: Update the GDT to mark the task as not busy
         if (taskToRun->justForked)
         {
-            mp_ForkReturn[apic_id] = mp_isrSavedRSP[apic_id];
+            mp_ForkReturn[cpu] = mp_isrSavedRSP[cpu];
             taskToRun->justForked = 0;
         }
         //Update the core local storage task
@@ -1427,64 +1543,39 @@ void scheduler_run_new_thread()
 void scheduler_do() 
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	uint8_t apic_id = cls->apic_id;
-    mp_waitingForScheduler[apic_id] = false;
+	uint8_t cpu = cls->cpu;
+    mp_waitingForScheduler[cpu] = false;
 
-	// ── CPU-time accounting: the outgoing thread's slice ends HERE ──────────
-	// Charged at the switch boundary, not tick-sampled, so sub-tick slices
-	// are visible and nothing gets laundered into whoever the timer caught.
-	// Both rdtsc reads in every delta happen on THIS core (this function runs
-	// on the core being scheduled, even under tickless — the nudger only decides
-	// WHEN, the IPI makes each core run its own pass), so TSC desync between
-	// cores can never corrupt a delta. The ISR time between interrupt entry
-	// and this line rides on the outgoing thread — documented v1 honesty,
-	// fixable with entry stamps if it ever matters.
-	uint64_t acctPassStart = rdtsc();
-	if (cls->acctLastDispatchTSC != 0 &&
-	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
-	{
-		// Halted current = idle wearing a task's name; the span goes to
-		// this core's idle thread (smp.h acctCurrentHalted — the fix for
-		// top billing the compositor 95% of a core for sleeping).
-		thread_t *acctTarget = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
-		                           ? cls->acctIdleThread
-		                           : cls->currentThread;
-		acctTarget->runCycles += acctPassStart - cls->acctLastDispatchTSC;
-	}
-	if (cls->acctZeroTSC == 0)
-		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
-
-	// The BSP's pass also tends the cycles→µs exchange rate (x86_64.c has
-	// the doctrine: boot calibration is ±1% by construction; this converges
-	// it). BSP only — the recalibrator's TSC samples must all come from one
-	// core, and core 0 exists in every configuration.
-	if (apic_id == 0)
-		tsc_recalibrate();
+	// Close the outgoing thread using the CS captured by this scheduler
+	// interrupt, then name the next open span as scheduler work. Short device
+	// ISRs without their own stamps remain in the interrupted thread's class.
+	accounting_begin_scheduler(mp_isrSavedCS[cpu]);
+	uint64_t acctPassStart = cls->acctLastDispatchTSC;
 
     printd(DEBUG_SCHEDULER,"***** SCHEDULER *****\n");
-    printd(DEBUG_SCHEDULER,"scheduler: AP %u\n",apic_id);
+    printd(DEBUG_SCHEDULER,"scheduler: AP %u\n",cpu);
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksBefore = rdtsc();
 #endif
-	kDiagPassCount[apic_id]++;                          // TEMP DIAG
+	kDiagPassCount[cpu]++;                          // TEMP DIAG
 	// TEMP DIAG: name the interrupt that drove THIS pass, and this core's
 	// LVT timer state, from this core's own LAPIC (core-local, safe here).
-	kDiagLastVector[apic_id] = apic_in_service_vector();
-	kDiagLVT[apic_id] = read_apic_register(kMPApicBase + 0x320);
+	kDiagLastVector[cpu] = apic_in_service_vector();
+	kDiagLVT[cpu] = read_apic_register(kMPApicBase + 0x320);
 
 	// A timer-vector pass on a tickless AP is a lease expiry — the backstop
 	// preempting whoever ran past SCHED_BACKSTOP_MS without re-entering the
 	// scheduler. Counted for the test suite and for anyone diagnosing "who
 	// is interrupting my pinned core" (the answer is: its own lease).
-	if (kTicklessScheduler && apic_id != BOOTSTRAP_PROCESSOR_ID &&
-	    kDiagLastVector[apic_id] == IPI_TIMER_SCHEDULE_VECTOR)
-		kSchedBackstopFires[apic_id]++;
+	if (kTicklessScheduler && cpu != BSP_CPU &&
+	    kDiagLastVector[cpu] == IPI_TIMER_SCHEDULE_VECTOR)
+		kSchedBackstopFires[cpu]++;
 
 	// ── TEMP DIAG: the once-per-second report, BSP pass only ────────────
 	// ticks vs TSC-milliseconds answers "is the tick clock starving?";
 	// the rest answers "who is spending the time?". Values are deltas
 	// since the previous line except the max* fields, which reset here.
-	if (apic_id == 0)
+	if (cpu == BSP_CPU)
 	{
 		static uint64_t diagLastTick = 0, diagLastTSC = 0;
 		static uint64_t dNudgeU = 0, dNudgeP = 0, dTrig = 0, dIPI = 0, dBcast = 0, dTO = 0;
@@ -1497,32 +1588,32 @@ void scheduler_do()
                    "DIAG: ticks +%lu tsc +%lums | pass 0:%lu 1:%lu 2:%lu 3:%lu runq %lu | nudge u%lu p%lu trig %lu | ipi %lu icrmax %lu lockmax %lu | settle %lu to %lu (ap %lu) setmax %lu\n",
                    kTicksSinceStart - diagLastTick, tscMS,
                    kDiagPassCount[0] - dPass[0],
-                   (kMPCoreCount > 1) ? kDiagPassCount[kCPUInfo[1].apicID] - dPass[1] : 0,
-                   (kMPCoreCount > 2) ? kDiagPassCount[kCPUInfo[2].apicID] - dPass[2] : 0,
-                   (kMPCoreCount > 3) ? kDiagPassCount[kCPUInfo[3].apicID] - dPass[3] : 0,
+                   (kCPUCount > 1) ? kDiagPassCount[1] - dPass[1] : 0,
+                   (kCPUCount > 2) ? kDiagPassCount[2] - dPass[2] : 0,
+                   (kCPUCount > 3) ? kDiagPassCount[3] - dPass[3] : 0,
                    kDiagRunnableLen,
                    kDiagNudgeUnpinned - dNudgeU, kDiagNudgePinned - dNudgeP,
                    kDiagTriggerCalls - dTrig,
                    kDiagIPISends - dIPI, kDiagICRMaxSpins, kDiagLockMaxSpins,
                    kDiagSettleBroadcasts - dBcast, kDiagSettleTimeouts - dTO,
-                   kDiagSettleLastLateAPIC, kDiagSettleMaxSpins);
+                   kDiagSettleLastLateCPU, kDiagSettleMaxSpins);
             printd(DEBUG_DIAG,
                    "DIAG2: vec/lvt 0:0x%02x/0x%05x 1:0x%02x/0x%05x 2:0x%02x/0x%05x 3:0x%02x/0x%05x\n",
                    kDiagLastVector[0], kDiagLVT[0],
-                   (kMPCoreCount > 1) ? kDiagLastVector[kCPUInfo[1].apicID] : 0,
-                   (kMPCoreCount > 1) ? kDiagLVT[kCPUInfo[1].apicID] : 0,
-                   (kMPCoreCount > 2) ? kDiagLastVector[kCPUInfo[2].apicID] : 0,
-                   (kMPCoreCount > 2) ? kDiagLVT[kCPUInfo[2].apicID] : 0,
-                   (kMPCoreCount > 3) ? kDiagLastVector[kCPUInfo[3].apicID] : 0,
-                   (kMPCoreCount > 3) ? kDiagLVT[kCPUInfo[3].apicID] : 0);
+                   (kCPUCount > 1) ? kDiagLastVector[1] : 0,
+                   (kCPUCount > 1) ? kDiagLVT[1] : 0,
+                   (kCPUCount > 2) ? kDiagLastVector[2] : 0,
+                   (kCPUCount > 2) ? kDiagLVT[2] : 0,
+                   (kCPUCount > 3) ? kDiagLastVector[3] : 0,
+                   (kCPUCount > 3) ? kDiagLVT[3] : 0);
             diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart;
 			dNudgeU = kDiagNudgeUnpinned; dNudgeP = kDiagNudgePinned;
 			dTrig = kDiagTriggerCalls; dIPI = kDiagIPISends;
 			dBcast = kDiagSettleBroadcasts; dTO = kDiagSettleTimeouts;
 			dPass[0] = kDiagPassCount[0];
-			if (kMPCoreCount > 1) dPass[1] = kDiagPassCount[kCPUInfo[1].apicID];
-			if (kMPCoreCount > 2) dPass[2] = kDiagPassCount[kCPUInfo[2].apicID];
-			if (kMPCoreCount > 3) dPass[3] = kDiagPassCount[kCPUInfo[3].apicID];
+			if (kCPUCount > 1) dPass[1] = kDiagPassCount[1];
+			if (kCPUCount > 2) dPass[2] = kDiagPassCount[2];
+			if (kCPUCount > 3) dPass[3] = kDiagPassCount[3];
 			kDiagICRMaxSpins = 0; kDiagLockMaxSpins = 0; kDiagSettleMaxSpins = 0;
 		}
 	}
@@ -1539,16 +1630,20 @@ void scheduler_do()
 		if (lockSpins > kDiagLockMaxSpins)             // TEMP DIAG
 			kDiagLockMaxSpins = lockSpins;             // TEMP DIAG
 	}
+    // Doorbell service point A: a parked sleeper whose bell was rung is
+    // relinked here, BEFORE the peek, or the peek would find the idle thread
+    // already running and shortcut past it (doorbell.h, DOORBELL.md).
+    doorbell_service_locked();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {
 		printd(DEBUG_SCHEDULER, "Time to make the donuts. (switch threads)\n");
 		scheduler_run_new_thread();
-        printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s on core %u\n", ((task_t *)(cls->task))->path, cls->apic_id);
+        printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s on CPU %u\n", ((task_t *)(cls->task))->path, cls->cpu);
     }
     else
 	{
-		debug_print_registers(apic_id, "continue");
+		debug_print_registers(cpu, "continue");
 //        printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
@@ -1556,7 +1651,7 @@ void scheduler_do()
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksAfter = rdtsc();
 #endif
-    mp_CoreHasRunScheduledThread[apic_id] = true;
+    mp_CoreHasRunScheduledThread[cpu] = true;
 
 #if SCHEDULER_DEBUG == 1
     printd(DEBUG_SCHEDULER, "*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n", kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
@@ -1566,19 +1661,10 @@ void scheduler_do()
 #endif
     printd(DEBUG_SCHEDULER, "*********************\n");
 
-    // ── CPU-time accounting: the incoming thread's slice starts HERE ────────
-	// Covers both paths (switch and shortcut — a continued thread is still
-	// dispatched). Everything between acctPassStart and now was the
-	// scheduler's own time: it goes to this core's system bucket, which is
-	// what lets top show ghost-churn as "system: climbing" instead of
-	// laundering it into the innocent bystanders the timer interrupted.
-	uint64_t acctPassEnd = rdtsc();
-	cls->acctSchedCycles += acctPassEnd - acctPassStart;
-	cls->acctLastDispatchTSC = acctPassEnd;
-	// A dispatched thread is by definition not halted: every dispatch —
-	// switch or shortcut — drops the halted flag. The compositor re-raises
-	// it per nap; nobody else ever sets it.
-	cls->acctCurrentHalted = false;
+    // The pass owns this span even if a settle IPI interrupted it. Closing
+    // restamps for the incoming thread; the assembly return tail will close
+    // its own system time before an iretq to ring 3.
+	accounting_end_scheduler();
 
 	// ── The preemption lease (smp_core.c doctrine block) ────────────────────
 	// EVERY dispatch door funnels through this tail — switch, shortcut,
@@ -1593,7 +1679,7 @@ void scheduler_do()
 	// write (which is deliberately last), and a nested pass is barred by
 	// mp_inScheduler regardless.
 	if (kTicklessScheduler && kSchedBackstopEnabled &&
-	    apic_id != BOOTSTRAP_PROCESSOR_ID)
+	    cpu != BSP_CPU)
 	{
 		thread_t *dispatched = cls->currentThread;
 		if (dispatched != NULL && dispatched != NO_THREAD && !dispatched->idleThread)
@@ -1601,4 +1687,17 @@ void scheduler_do()
 		else
 			sched_backstop_disarm();
 	}
+}
+
+// The queue-lock idiom for callers outside this file that must hold the lock
+// in thread context (doorbell_park): lock with IF off, restore on unlock —
+// type 2 in the doctrine block at the top of this file.
+uint64_t scheduler_lock_queues(void)
+{
+	return scheduler_queues_lock();
+}
+
+void scheduler_unlock_queues(uint64_t flags)
+{
+	scheduler_queues_unlock(flags);
 }

@@ -1,0 +1,450 @@
+#ifndef PAGE_INTERNAL_H
+#define PAGE_INTERNAL_H
+
+#include "os64/mem.h"
+#include "os64/str.h"
+#include "page/page.h"
+
+#define P_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
+
+// Immutable strings live in page-owned arena blocks. Growable model vectors,
+// retained selection defaults and replaceable edits own separate allocations.
+// Submission scratch has its own arena so request construction does not
+// change the page or extend the lifetime of temporary entry-list bytes.
+typedef struct PBlock PBlock;
+
+typedef struct {
+    PBlock *blocks;
+    os64_page_state_t *budget;
+} PArena;
+
+void *p_arena_alloc(PArena *arena, size_t size);
+char *p_arena_copy(PArena *arena, const char *s, size_t n);
+void p_arena_free(PArena *arena);
+
+// Normalized defaults survive edits. Reset restores these without allocating.
+typedef struct {
+    const char *value;
+    size_t value_len;
+    bool checked;
+    uint8_t *selected;
+} PInitial;
+
+
+// Dirty control properties and getter caches belong to node identities.
+// An option carries its own selectedness record; reordering it does not
+// change which property was edited. Model pins retain snapshot tree bytes;
+// state publication retains replaceable value bytes until views are updated.
+typedef struct PNodeState PNodeState;
+typedef struct PAttrStage PAttrStage;
+struct PNodeState {
+    const os64_html_node_t *node;
+    char *text;
+    size_t text_len;
+    uint64_t text_version;
+    char *cache;
+    size_t cache_len;
+    uint64_t cache_version, cache_state_version;
+    char *retired_text, *retired_cache;
+    int8_t on, selected;
+    bool selection_set, text_user;
+    // A clean textarea clone can retain a current value unlike its children.
+    // Its cache holds the child-text baseline until a child mutation resets it.
+    bool text_clean;
+    bool on_dirty, on_attr, selected_dirty, selected_attr;
+    // An input's indeterminate flag (os64_page_node_set_indeterminate):
+    // no attribute stands for it, and a clone copies it.
+    bool indeterminate;
+    // A person's text the control's value could not hold: a number or a
+    // date the type's grammar refused, which left the value "". It is the
+    // field's, not the value's, so a clone does not copy it, and any value
+    // set by other than a person, a reset, or a change of the input's type
+    // clears it (badInput).
+    bool bad_input;
+    // The control's custom validity message (setCustomValidity), NULL being
+    // none: a reset keeps it, and a clone does not copy it, as HTML's
+    // cloning steps do not list it.
+    char *custom;
+    size_t custom_len;
+    // A text control's selection, in UTF-16 code units of its value: one a
+    // script or the host set (os64_page_node_set_selection), or the value's
+    // end where a changed value put it. `range_kept` says there is one;
+    // without it the selection is at 0, where every control's begins.
+    // `range_writes` counts the sets and the moves, so a set that wrote the
+    // numbers the record already held is still a set
+    // (os64_page_node_selection_writes).
+    uint32_t range_start, range_end;
+    uint8_t range_direction;
+    bool range_kept;
+    uint32_t range_writes;
+    // An owner-thread mutation plan borrows this link and clears it on
+    // publication or refusal; no property state is stored in the link.
+    PAttrStage *stage;
+    PNodeState *next;
+};
+
+struct os64_page_state {
+    os64_html_document_t *doc;
+    size_t max_bytes, bytes;
+    uint64_t version;
+    PNodeState **table;
+    size_t cap, count;
+    PNodeState *records;
+    os64_page_t *models;
+    bool private_owner;
+};
+
+// New records stay private until commit. A lookup indexes larger pending
+// batches; a replacement live table is reserved when those records need
+// more capacity. Abandoning either leaves live properties unchanged.
+typedef struct PValueStage PValueStage;
+typedef struct {
+    os64_page_state_t *state;
+    PValueStage *values;
+    PNodeState **table;
+    size_t cap, count;
+    PNodeState **pending;
+    size_t pending_cap;
+    PNodeState *records;
+} PReserve;
+
+void *p_state_alloc(os64_page_state_t *state, size_t size);
+void p_state_dealloc(os64_page_state_t *state, void *ptr);
+PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t *node);
+PNodeState *p_reserve_find(const PReserve *reserve, const os64_html_node_t *node);
+PNodeState *p_state_for_control(const os64_page_t *page, int32_t control);
+bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node);
+void p_reserve_commit(PReserve *reserve);
+void p_reserve_abort(PReserve *reserve);
+void p_state_publish(os64_page_state_t *state);
+void p_state_changed(os64_page_state_t *state);
+bool p_value_is_attribute(os64_page_element_t element, os64_page_input_t input);
+// Constraint validation's questions of the live state (state.c), asked by
+// submit.c's judge. The control's kind, as the value verbs accept it; its
+// radio group required with nothing ticked (HTML's Radio Button state), over
+// the tree the node is in, never for a radio with no name; its bad input; its
+// custom message, NULL for none.
+bool p_node_kind(os64_page_state_t *state, const os64_html_node_t *node, os64_page_element_t *element,
+                 os64_page_input_t *input);
+bool p_radio_group_missing(os64_page_state_t *state, const os64_html_node_t *node);
+bool p_node_bad_input(const os64_page_state_t *state, const os64_html_node_t *node);
+const char *p_node_custom(const os64_page_state_t *state, const os64_html_node_t *node, size_t *len);
+int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node,
+                          const char *utf8, size_t len, bool user);
+bool p_state_normalize(os64_page_t *page);
+int64_t p_state_choose(os64_page_t *page, int32_t control, int32_t option, bool on);
+void p_state_reset(os64_page_t *page, int32_t form);
+bool p_stale(const os64_page_t *page);
+
+// Node to index, and string to index. Open addressing over a power-of-two
+// table: the model is walked once and asked many times, and a face asks per
+// node while it draws.
+typedef struct {
+    const void **keys;
+    int32_t *vals;
+    size_t cap, count;
+} PPtrMap;
+
+// A name to the NODE it names, because that is what both users want: a
+// fragment wants somewhere to scroll to, and a `form=` wants an element to
+// ask whether it is a form.
+typedef struct {
+    const char **keys;
+    const void **vals;
+    size_t cap, count;
+} PStrMap;
+
+struct os64_page {
+    size_t references;
+    const os64_html_document_t *doc;
+    os64_page_options_t opt;
+    PArena arena;
+    bool incomplete, initial_ready, nodes_held;
+    uint64_t version;
+    os64_html_pin_t pin;
+    os64_page_state_t *state;
+    os64_page_t *state_next;
+
+    // Where the page came from, and what references resolve against. Two
+    // addresses, two jobs: the first decides a downgrade, the second
+    // decides an address, and `<base href>` moves only the second.
+    const char *document_url;
+    const char *base_url;
+    // Both are kept without a fragment, which no resolution reads. HTML's
+    // document base URL keeps one (os64_page_base_url_in): the document's
+    // own, or its base's, from the `#` on as written, NULL for none.
+    const char *document_fragment, *base_fragment;
+    // The tree p_base looks for a `<base href>` in: NULL for the
+    // document's own, else another document libhtml keeps beside it (one a
+    // script made: os64_page_base_url_in).
+    const os64_html_node_t *base_root;
+    os64_url_t document, base;
+    bool document_hierarchical, base_hierarchical;
+    char document_scheme[OS64_URL_SCHEME_MAX];
+
+    os64_page_link_t *links;
+    int32_t nlinks, linkcap;
+    os64_page_form_t *forms;
+    int32_t nforms, formcap;
+    os64_page_control_t *controls;
+    int32_t ncontrols, controlcap;
+    os64_page_image_t *images;
+    int32_t nimages, imagecap;
+    os64_page_background_t *backgrounds;
+    int32_t nbackgrounds, backgroundcap;
+    os64_page_sheet_t *sheets;
+    int32_t nsheets, sheetcap;
+
+    PInitial *initial;             // per control, captured after group normalization
+
+    PPtrMap link_map, form_map, control_map, image_map, background_map;
+    // A fragment matches an `id` FIRST and an old-style `<a name>` second,
+    // whatever tree order says, so the two cannot share one table.
+    PStrMap id_map, aname_map;
+    // A radio group is one name under one owner, and the members have to be
+    // findable from any one of them: to untick the rest, and to ask whether
+    // a required group has anything ticked at all. The chain is over every
+    // radio sharing a name; the owner is compared when it is walked.
+    PStrMap radio_map;
+    int32_t *radio_next;            // per control; -1 ends the chain
+    // ONE GROUP, LINKED: its first member (a control's own index when it is
+    // in no group) and the next member of the same name AND owner, -1 at the
+    // end. Built once, so a question about a whole group — validation's
+    // "is anything ticked?" — costs its size and not its size times itself.
+    int32_t *group_head;
+    int32_t *group_next;
+    // Per group head: the first member validation applies to, where the
+    // group is judged so that failures still come out in tree order; -1
+    // when every member is barred.
+    int32_t *group_judged_at;
+
+    // The first VALID declarative refresh in tree order. An invalid pragma
+    // sets nothing, which is what leaves a later one free to win.
+    os64_page_refresh_t refresh;
+    bool has_refresh;
+};
+
+// ── The arena and the vectors ───────────────────────────────────────────
+
+void *p_alloc(os64_page_t *page, size_t size);
+char *p_copy(os64_page_t *page, const char *s, size_t n);
+// Room for one more item in a heap vector, doubling. False on no memory,
+// which every caller turns into `incomplete` rather than into nothing.
+bool p_grow(void **items, int32_t *cap, int32_t count, size_t size);
+
+bool p_ptrmap_put(PPtrMap *map, const void *key, int32_t val);
+int32_t p_ptrmap_get(const PPtrMap *map, const void *key);
+void p_ptrmap_free(PPtrMap *map);
+// FIRST WINS: an id or an anchor name that repeats keeps the earliest, which
+// is what the standard's "the first such element" asks for.
+bool p_strmap_put(PStrMap *map, const char *key, const void *val);
+// The same, REPLACING what is there. For a chain whose head moves, where
+// "first wins" would pin the head to whatever went in first.
+bool p_strmap_set(PStrMap *map, const char *key, const void *val);
+const void *p_strmap_get(const PStrMap *map, const char *key);
+void p_strmap_free(PStrMap *map);
+
+// ── Reading the tree ────────────────────────────────────────────────────
+
+// An attribute's value, or NULL when the element does not carry it. The
+// empty string is a value: `formaction=""` is the page's own address.
+const char *p_attr(const os64_html_node_t *n, const char *name);
+bool p_has_attr(const os64_html_node_t *n, const char *name);
+bool p_is(const os64_html_node_t *n, os64_html_tag_t tag);
+// An HTML-namespace element of this tag anywhere up the tree, or NULL.
+const os64_html_node_t *p_ancestor(const os64_html_node_t *n, os64_html_tag_t tag);
+// A control's form owner, HTML's one rule (§ 4.10.17.3, core.c): with
+// `form=` and connected, the first element in its own tree with that id
+// when it is a form, else none; otherwise the parser's association, else
+// the nearest ancestor form. `document_ids` answers the document tree's
+// ids when the caller holds them (the model's id map); NULL walks.
+const os64_html_node_t *p_form_owner(const os64_html_node_t *n, const PStrMap *document_ids);
+// A subtree's text in tree order, into the page's arena. `collapse` applies the
+// standard's "strip and collapse ASCII whitespace", which is what an
+// option's text is defined in terms of — so a list written across several
+// lines of markup offers the same words a one-line one does. NULL on no
+// memory. `len` may be NULL.
+char *p_subtree_text(os64_page_t *page, const os64_html_node_t *n, bool collapse, size_t *len);
+// The same into any arena, for a reader that must not write to the page.
+char *p_subtree_text_into(PArena *arena, const os64_html_node_t *n, bool collapse, size_t *len);
+// Direct Text children supply a textarea's raw default value.
+char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len);
+// HTML non-negative integer prefix parsing, saturated on arithmetic overflow.
+bool p_nonnegative(const char *text, uint64_t *value);
+// Whether the select display size is one, using HTML integer parsing.
+bool p_select_one_line(const os64_page_control_t *control);
+// The text-like input types (core.c says why one list serves several rules).
+bool p_text_like_input(os64_page_input_t input);
+// The select's list of options in tree order, excluding the subtrees the
+// HTML list-of-options algorithm skips. NULL starts or ends the walk.
+const os64_html_node_t *p_option_next(const os64_html_node_t *select,
+                                      const os64_html_node_t *previous);
+bool p_option_disabled(const os64_html_node_t *select, const os64_html_node_t *option);
+// Make a control's `value`, `checked` and its options' `selected` agree with
+// shared node state, which owns the live control properties.
+void p_publish(os64_page_t *page, int32_t control);
+// ── A. The base and reference resolution ────────────────────────────────
+
+// Where the page came from, canonicalised. False on no memory.
+bool p_document_url(os64_page_t *page, const char *text);
+// What references resolve against: the first `base` with an `href`, else the
+// document's own address. False on no memory.
+bool p_base(os64_page_t *page);
+// Resolve one reference against the page's base, splitting off the `#name`
+// the address itself cannot carry. `ref` NULL means the page spelled none.
+void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out);
+// p_resolve for a picture's address, except that a `data:` reference past
+// OS64_URL_REF_MAX is taken whole instead of refused. A data: picture IS its
+// address, and a search page's inline thumbnails run past 8 KiB; it needs
+// no base and is read by no URL parser, so no buffer of that size is ever
+// asked to hold it. Links and forms keep the limit: the address of a page is
+// a different thing to hand on.
+void p_resolve_picture(os64_page_t *page, const char *ref, os64_page_ref_t *out);
+void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out);
+// Canonicalise an address that is already absolute: the scheme's default
+// port is never spelled, because a link nobody wrote must not appear.
+bool p_canonical(os64_page_t *page, const char *text, const char **out,
+                 os64_page_reason_t *refused);
+// The port `scheme` implies, or 0 when this library does not know one. The
+// only scheme policy in here; os64/url.h keeps grammar and declines policy.
+uint16_t p_default_port(const char *scheme);
+// Percent-decoding, in place over BYTES, so `%C3%A9` becomes the same UTF-8
+// the page was written in. Returns the new length.
+size_t p_percent_decode(char *s, size_t len);
+
+// ── K. The navigation a document declares ───────────────────────────────
+
+// The shared declarative refresh steps, over one `content` attribute: the
+// delay, and the
+// address if it named one. False means the page declared no refresh at all.
+// `url` points INTO `input` and is not NUL-terminated.
+bool p_refresh_content(const char *input, uint32_t *seconds, const char **url, size_t *url_len);
+// One `meta`, asked whether it declares a refresh, and recorded on the page
+// when it does. False leaves the page still looking.
+bool p_refresh_from(os64_page_t *page, const os64_html_node_t *n);
+
+// ── H. Value sanitization ───────────────────────────────────────────────
+
+// HTML numeric syntax is strict for values, prefix-parsed for attributes.
+bool p_number_parse(const char *text, bool strict, double *out);
+bool p_number_parse_clamped(const char *text, double *out);
+// Shortest decimal form of a finite binary64 value; out has at least 32 bytes.
+size_t p_number_spell(double value, char out[32]);
+long double p_number_mod(long double x, long double y);
+const char *p_range_value(PArena *arena, const os64_html_node_t *node,
+                          const char *raw, size_t *len);
+// HTML's "convert a string to a number" for the types min, max and step
+// apply to (number, range, the dates and times; value.c): false for any
+// other type, and for a string that does not convert — which is not the
+// same as no valid value: a number's or range's string is read by the
+// lenient floating-point rules ("10 " and "5px" convert), and a date or
+// time whose year is past 275760 does not, valid or not. A date
+// is milliseconds since 1970-01-01T00:00Z, a month months since January
+// 1970, a week the milliseconds of its Monday, a time milliseconds since
+// midnight, a local date and time milliseconds since the epoch as though
+// it were UTC.
+bool p_input_number(os64_page_input_t input, const char *s, double *out);
+// The type's default step, step scale factor and default step base.
+void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base);
+// What an input's min, max and step attributes say (HTML § 4.10.5.3.7-8),
+// read by p_input_number: the min and max that convert; a range's 0 and
+// 100 where it has none, and its max made its min when below it (`pinned`,
+// as Blink makes it); the step in the type's units, its default where the
+// attribute is no positive number, and `any` for step=any, which draws no
+// grid; the scale; and the step base: the min attribute's number, else
+// the value attribute's, else the type's default.
+typedef struct {
+    double min, max, step, base;
+    uint32_t scale;
+    bool has_min, has_max, pinned, any;
+} PLimits;
+void p_input_limits(const os64_html_node_t *n, os64_page_input_t input, PLimits *out);
+// HTML's "convert a number to a string" for the type (and, `as_date`, its
+// "convert a Date object to a string", which differs from it for a month
+// alone: a time value rather than a count of months), into `out`: false
+// for a number the type cannot spell, a date before year 1 or after 275760
+// (p_input_number's last; Blink's is 275760-09-13). A date, a local date and
+// time, a month and a week round to the nearest millisecond or month, and
+// a time takes the floor of its place in the day, as Blink does.
+bool p_input_spell(os64_page_input_t input, double number, bool as_date, char out[32]);
+// stepUp(count), or stepDown(-count) (HTML § 4.10.5.4) from `value` (0
+// when the value did not convert, `valid` false), in decimal over each
+// double's shortest spelling (range.c): the number to set, or false for
+// the steps that return. A value off the grid moves onto it, which is one
+// of the steps, as Blink and Gecko count it; the result is clamped onto
+// the grid within min and max; and a step that would move a value that
+// converted against the sign of `count` changes nothing (the spec's step
+// 10, read by the signed count as Blink and Gecko read it, where the spec
+// names the method, so stepDown(-1) moves up; and skipped for a value that
+// did not convert, as Blink does and WPT has it).
+bool p_step_by(double value, bool valid, const PLimits *limits, int64_t count, double *out);
+// Whether `value` is `base` plus a whole number of `step` times `scale`,
+// in decimal over each double's shortest spelling (range.c's arithmetic),
+// the scale multiplied there too; or, when `held` (a range's value, which
+// its sanitizer chose on the grid), is the double nearest such a grid
+// point, as the sanitizer holds the point it chooses: what stepMismatch
+// asks.
+bool p_step_aligned(double value, double base, double step, uint32_t scale, bool held);
+os64_page_input_t p_input_type(const os64_html_node_t *n);
+// Shared by initial values and edits; temporary storage belongs to arena.
+// raw_len is authoritative; raw also has a terminator at that offset.
+const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
+                            os64_page_element_t element, os64_page_input_t input,
+                            const char *raw, size_t raw_len, size_t *len);
+// The value the standard says this control holds, with the page's own bytes
+// sanitized for its type. Arena storage, or a tree pointer when nothing
+// needed changing.
+const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
+                         os64_page_element_t element, os64_page_input_t input, size_t *len);
+
+// ── C, D, I. The submitter, the entry list, validation ──────────────────
+
+// One name and value on their way to the wire. Both are UTF-8 here; family
+// E turns them into the form's selected encoding.
+typedef struct {
+    const char *name;
+    size_t name_len;
+    const char *value;
+    size_t value_len;
+    bool is_file;
+} PEntry;
+
+typedef struct {
+    PEntry *items;
+    int32_t count, cap;
+    PArena arena;                   // the normalised bytes, and nothing of the page's
+    // A `dir=auto` element's direction, by node, for this one list: every
+    // `dirname` control under one such element would otherwise scan its
+    // whole subtree again.
+    PPtrMap direction;
+} PEntries;
+
+// The control a submission submits FROM, or -1 for a form submitting
+// itself. `reason` says why when it answers false.
+bool p_submitter(const os64_page_t *page, int32_t form, os64_page_what_t what,
+                 int32_t *submitter, os64_page_reason_t *reason);
+// What the submitter overrules, folded onto the form's own answers.
+void p_effective(const os64_page_t *page, int32_t form, int32_t submitter,
+                 const os64_page_ref_t **action, os64_page_method_t *method,
+                 os64_page_enctype_t *enctype, bool *novalidate);
+// Constraint validation. False and `*control` names the first failure.
+bool p_validate(const os64_page_t *page, int32_t form, int32_t *control);
+bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
+                  os64_page_what_t what, PEntries *out);
+void p_entries_free(PEntries *entries);
+
+// ── E. The encoding ─────────────────────────────────────────────────────
+
+// The encoding the entry list goes out in: the first label in the form's
+// `accept-charset` libhtml supports, else the document's, else UTF-8 —
+// then the standard's output-encoding step, which turns UTF-16 into UTF-8.
+const char *p_encoding_for(const os64_page_t *page, int32_t form);
+// Serialise an entry list. `bytes` and `type` come back os64_malloc'd and
+// belong to the caller, which is the request — the GET path takes the
+// urlencoded bytes as a query and the POST path takes them as a body, so
+// there is one serialiser and not one per method.
+bool p_serialise(const PEntries *entries, os64_page_enctype_t enctype, const char *encoding,
+                 size_t max_body, char **bytes, size_t *len, char **type,
+                 os64_page_reason_t *refused);
+
+#endif // PAGE_INTERNAL_H

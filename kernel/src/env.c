@@ -84,9 +84,14 @@ bool env_set(envpage_t *env, const char *key, const char *val)
     size_t   key_len = strlen(key) + 1;    // include null terminator
     size_t   val_len = strlen(val) + 1;
 
-    // If the key already exists, compact it out so we can append the new pair.
+    // Find the old pair first, but do not disturb it until the replacement's
+    // final size is known to fit. A false return is a transaction failure:
+    // callers may report "ignored" or try to grow the block, and both rely on
+    // the environment still containing the value that was there on entry.
     char *ptr = env->data;
     char *end = env->data + env->data_end;
+    char *old_start = NULL;
+    char *old_end = NULL;
     while (ptr < end) {
         char *k = ptr;
         while (ptr < end && *ptr) ptr++;
@@ -95,25 +100,39 @@ bool env_set(envpage_t *env, const char *key, const char *val)
         ptr++;
 
         if (strcmp(k, key) == 0) {
-            // Shift everything after this val's '\0' back to where key started.
-            size_t tail = (size_t)(end - ptr);
-            memmove(k, ptr, tail);
-            env->data_end -= (uint32_t)(ptr - k);
-            env->count--;
-            end = env->data + env->data_end;
+            old_start = k;
+            old_end = ptr;
             break;
         }
     }
 
-    // Append new pair at the end.
-    if (env->data_end + key_len + val_len > cap)
+    size_t old_len = old_start ? (size_t)(old_end - old_start) : 0;
+    size_t new_len = key_len + val_len;
+    size_t retained = (size_t)env->data_end - old_len;
+    if (new_len > (size_t)cap - retained)
         return false;
+
+    // Preserve the established ordering rule: a replacement is compacted
+    // out and appended at the end, so every successful set has one write
+    // path. The preflight above makes these mutations non-failing.
+    if (old_start) {
+        size_t tail = (size_t)(end - old_end);
+        memmove(old_start, old_end, tail);
+        env->data_end -= (uint32_t)old_len;
+        env->count--;
+    }
 
     memcpy(env->data + env->data_end, key, key_len);
     env->data_end += (uint32_t)key_len;
     memcpy(env->data + env->data_end, val, val_len);
     env->data_end += (uint32_t)val_len;
     env->count++;
+
+    // A shorter replacement leaves part of the old live range beyond the
+    // new data_end. Keep the ABI's unused-tail-is-zero contract true rather
+    // than exposing fragments of the retired value through the task mapping.
+    if (old_len > new_len)
+        memset(env->data + env->data_end, 0, old_len - new_len);
     return true;
 }
 

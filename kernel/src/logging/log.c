@@ -109,10 +109,9 @@ void log_wallclock_now(void *out)
 	// timezone is a human's display preference. logd applies TZ for the FILE
 	// because it has an environment to read one from; serial has neither.
 }
-extern struct limine_smp_response *kLimineSMPInfo;
 // Ensures only one logd worker processes the buffers at a time
 _Atomic uint32_t kLogDWorkLock = 0;
-// Which core currently holds kLogDWorkLock (0xFFFFFFFF = nobody) — purely
+// Which CPU currently holds kLogDWorkLock (0xFFFFFFFF = nobody) — purely
 // forensic, for the no-progress panic in log_store_entry.
 volatile uint32_t kLogDDrainerCore = 0xFFFFFFFF;
 // The ring-3 log sink's heartbeat (see log.h). Claimed by the first
@@ -243,7 +242,7 @@ static bool log_awaiting_userland_sink(void)
 	// Hatch 2: the rings are filling. This one outranks the deadline, because
 	// a full ring is where entries actually die. Checked against the loudest
 	// core, not the average — one core at capacity loses just as much.
-	for (int c = 0; c < kMPCoreCount; c++)
+	for (uint32_t c = 0; c < kCPUCount; c++)
 	{
 		log_buffer_t *b = &core_log_buffers[c];
 		size_t used = (b->head >= b->tail)
@@ -262,11 +261,9 @@ static bool log_awaiting_userland_sink(void)
 
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-
 	if (!kLoggingInitialized)
 		return;
-	if (core >= MAX_CPUS) panic("Invalid core ID in log_store_entry: %u", core);
+	if (core >= kCPUCount) panic("log_store_entry: CPU %u has no log ring (%u CPUs on the roster)", core, kCPUCount);
 
 	log_buffer_t *buffer = &core_log_buffers[core];
 
@@ -279,10 +276,14 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
     entry->log_level = priority;
     entry->category = category;
     entry->continued = continued;
-	if (kSMPInitDone)
-		entry->threadID = cls->currentThread->threadID;
-	else
-		entry->threadID = 0;
+    // Early boot has no GS-based CLS. Read it only when SMP startup has
+    // installed the per-core state and a thread ID can be recorded.
+    entry->threadID = 0;
+    if (kSMPInitDone) {
+        core_local_storage_t *cls = get_core_local_storage();
+        if (cls->currentThread != NULL)
+            entry->threadID = cls->currentThread->threadID;
+    }
     snprintf(entry->message, MAX_LOG_MESSAGE_SIZE, "%s", message);
     entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
     buffer->head = (buffer->head + 1) % buffer->capacity;
@@ -303,7 +304,7 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
         // PURPOSE: it bypasses these queues, so it can't be drowned by the
         // flood it's reporting on.
         static volatile uint64_t forcedFlushCount = 0;
-        printf("LOGFULL: core %u queue full at tick %lu (occurrence #%lu)\n",
+        printf("LOGFULL: CPU %u queue full at tick %lu (occurrence #%lu)\n",
                core, kTicksSinceStart, __sync_add_and_fetch(&forcedFlushCount, 1));
 
         uint64_t idleSpins = 0;
@@ -420,9 +421,11 @@ static void log_drain_early_into_rings(void)
 	}
 }
 
+// One ring per CPU on the roster, and only those: a CPU a cap left parked
+// in the bootloader never runs kernel code, so it never logs. Anything that
+// ever starts a CPU later has to give it a ring before it can print.
 void logging_queueing_init() {
-    for (int i = 0; i <  (int)kLimineSMPInfo->cpu_count; i++) {
-        // Allocate memory for each core's log buffer
+    for (uint32_t i = 0; i < kCPUCount; i++) {
         core_log_buffers[i].entries = (log_entry_t *)kmalloc(LOG_BUFFER_SIZE); 
         core_log_buffers[i].capacity = LOG_BUFFER_SIZE / sizeof(log_entry_t);
         core_log_buffers[i].head = 0;  // Initialize head pointer
@@ -441,8 +444,8 @@ void logging_queueing_init() {
 	// so state it once, in the log, on DEBUG_BOOT (which survives even the
 	// Ctrl+~ suppression, precisely so a suppressed machine still explains
 	// itself).
-	printd(DEBUG_BOOT, "log: %d ring(s) x %d MB, %d ticks/sec\n",
-	       (int)kLimineSMPInfo->cpu_count, LOG_BUFFER_SIZE_MB, TICKS_PER_SECOND);
+	printd(DEBUG_BOOT, "log: %u ring(s) x %d MB, %d ticks/sec\n",
+	       kCPUCount, LOG_BUFFER_SIZE_MB, TICKS_PER_SECOND);
 }
 
 // Print one entry from a buffer and advance its tail.
@@ -514,7 +517,7 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
     // it must not be filterable by kDebugLevel. It is the counterpart of
     // "userland log sink went quiet" and the pair reads as one story.
     if (!kLogSinkClaimed && kLogSinkEverClaimed)
-        log_store_entry(get_core_local_storage()->apic_id, kTicksSinceStart, 0,
+        log_store_entry(get_core_local_storage()->cpu, kTicksSinceStart, 0,
                         OS64_LOGCAT_LOGGING, false,
                         "[logd] userland log sink re-attached — kernel off the wire again\n");
 
@@ -535,14 +538,14 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
     // entries are still there.
     if (__sync_lock_test_and_set(&kLogDWorkLock, 1))
         return 0;
-    kLogDDrainerCore = get_core_local_storage()->apic_id;
+    kLogDDrainerCore = get_core_local_storage()->cpu;
 
     uint32_t taken = 0;
     while (taken < max)
     {
         int best_core = -1;
         uint64_t best_tsc = UINT64_MAX;
-        for (int c = 0; c < kMPCoreCount; c++)
+        for (uint32_t c = 0; c < kCPUCount; c++)
         {
             log_buffer_t *buf = &core_log_buffers[c];
             if (!buf->entries || buf->head == buf->tail)
@@ -566,7 +569,9 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
 }
 
 bool logd_thread(bool daemon) {
-    thread_t *self = get_core_local_storage()->currentThread;
+    // Synchronous early-boot flushes have no GS-based CLS. Only the daemon
+    // needs its current thread to sleep between drain passes.
+    thread_t *self = daemon ? get_core_local_storage()->currentThread : NULL;
     bool nonDaemonRunSuccess = false;
     static uint32_t drain_pass = 0;
     static bool was_claimed = false;
@@ -644,7 +649,7 @@ bool logd_thread(bool daemon) {
         // Try-lock: if another CPU is already flushing, skip this wakeup
         if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
         {
-            kLogDDrainerCore = get_core_local_storage()->apic_id;
+            kLogDDrainerCore = cpu_self();
             if (kLoggingInitialized)
             {
                 // k-way merge: on each step pick the core whose oldest entry
@@ -659,7 +664,7 @@ bool logd_thread(bool daemon) {
                     int   best_core = -1;
                     uint64_t best_tsc  = UINT64_MAX;
 
-                    for (int c = 0; c < kMPCoreCount; c++)
+                    for (uint32_t c = 0; c < kCPUCount; c++)
                     {
                         log_buffer_t *buf = &core_log_buffers[c];
                         if (!buf->entries || buf->head == buf->tail)
@@ -682,30 +687,22 @@ bool logd_thread(bool daemon) {
             nonDaemonRunSuccess = processed_logs > 0;
             drain_pass++;
 
-            // Print queue depths directly to serial, so we can monitor buffer
-            // pressure without adding to the ring buffers themselves (which
-            // would skew the numbers). Quiet passes always print; while a
-            // backlog persists the heartbeat is rate-limited to every
-            // LOGD_STATS_EVERY-th pass so it can't flood the wire it reports
-            // on. Per-pass visibility cracked the 2026-07 slow-walk, and the
-            // 2026-07-11 eternal-drain bug was spotted precisely because this
-            // line STOPPED printing — keep it alive under all conditions. AP
-            // is the core the pass ran on — kworker drains from AP1 every 2s
-            // through this same code, so without it the stats can't tell the
-            // two drainers apart.
+            // Prepare queue-depth diagnostics without adding to the rings.
+            // The serial output call below is disabled; formatting still runs
+            // and must be safe before GS-based CLS is installed.
             if (!backlog || (drain_pass % LOGD_STATS_EVERY) == 0)
             {
                 char stats[128];
                 int pos = snprintf(stats, sizeof(stats),
                     "[logd] AP%u tick=%lu pass=%u drained=%d",
-                    get_core_local_storage()->apic_id, kTicksSinceStart, drain_pass, processed_logs);
-                for (int c = 0; c < kMPCoreCount && pos < (int)sizeof(stats) - 32; c++) {
+                    cpu_self(), kTicksSinceStart, drain_pass, processed_logs);
+                for (uint32_t c = 0; c < kCPUCount && pos < (int)sizeof(stats) - 32; c++) {
                     log_buffer_t *b = &core_log_buffers[c];
                     size_t used = (b->head >= b->tail)
                         ? b->head - b->tail
                         : b->capacity - b->tail + b->head;
                     pos += snprintf(stats + pos, sizeof(stats) - pos,
-                        " AP%d=%lu/%lu", c, (unsigned long)used, (unsigned long)b->capacity);
+                        " AP%u=%lu/%lu", c, (unsigned long)used, (unsigned long)b->capacity);
                 }
                 snprintf(stats + pos, sizeof(stats) - pos, "\n");
                 // This needs to be controlled by a config setting ... was useful when testing logd issues, isn't now
@@ -759,13 +756,13 @@ void logd_emergency_flush(void)
         // the price of completeness.
         kLogDWorkLock = 1;
     }
-    kLogDDrainerCore = get_core_local_storage()->apic_id;
+    kLogDDrainerCore = cpu_self();
 
     // Budget = every slot in every queue, so cores that are still alive and
     // producing can't hold us hostage: we flush the backlog that existed when
     // the panic hit (plus whatever slips in while we drain), then stop.
     uint64_t budget = 0;
-    for (int c = 0; c < kMPCoreCount; c++)
+    for (uint32_t c = 0; c < kCPUCount; c++)
         budget += core_log_buffers[c].capacity;
 
     while (budget--)
@@ -773,7 +770,7 @@ void logd_emergency_flush(void)
         // Same oldest-first k-way merge as logd_thread, unbounded by chunks.
         int best_core = -1;
         uint64_t best_tsc = UINT64_MAX;
-        for (int c = 0; c < kMPCoreCount; c++)
+        for (uint32_t c = 0; c < kCPUCount; c++)
         {
             log_buffer_t *buf = &core_log_buffers[c];
             if (!buf->entries || buf->head == buf->tail)

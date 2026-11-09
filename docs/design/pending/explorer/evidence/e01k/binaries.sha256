@@ -1,0 +1,4 @@
+54de7ade3e405605d6ab4378f22a811127b9e8fd5fd138fa5326c85920530922  kernel/bin/os64_kernel
+234fc37b6da4e33a62132ee0967d1fb4c99e0d64069248aac171c086b7601eba  userland/bin/tests/popuptest
+1486f189ea7ee8f3ac7a31172571bc3cc8e17dc45d86a8f3dc49645fe48a0ce9  userland/bin/libos64.so
+68c59f4541312cd3212941fd93549e552811e0cddb61cde0451db0b72bbbe996  userland/bin/libfreetype.so

@@ -1,0 +1,8 @@
+859 (0x0035) AP1: [user] workclose: workers=1 idle_ms=30 destroy_us=4474
+880 (0x0035) AP0: [user] workclose: workers=1 idle_ms=200 destroy_us=1222
+931 (0x0035) AP1: [user] workclose: workers=1 idle_ms=500 destroy_us=11042
+1012 (0x0035) AP1: [user] workclose: workers=1 idle_ms=800 destroy_us=10748
+1113 (0x0035) AP1: [user] workclose: workers=2 idle_ms=30 destroy_us=980069
+1213 (0x0035) AP1: [user] workclose: workers=2 idle_ms=200 destroy_us=803078
+1314 (0x0035) AP1: [user] workclose: workers=2 idle_ms=500 destroy_us=509302
+1415 (0x0035) AP3: [user] workclose: workers=2 idle_ms=800 destroy_us=206254

@@ -1,0 +1,9 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+   (none)
+
+== ADDED comment lines making a claim that goes stale first — what would make each false?
+   tools/fonts/unicode-17.0.0/UnicodeData.txt: 1D9FD;SIGNWRITING DYNAMIC EVERY OTHER TIME;So;0;L;;;;;N;;;;;
+
+Disposition: the one reported EVERY token is the pinned Unicode character name for U+1D9FD, not an authored code comment. No retired identifiers remain in prose. Raw terminal/build logs retain emitted whitespace through the evidence-local Git attribute.

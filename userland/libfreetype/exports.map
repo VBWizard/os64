@@ -1,0 +1,2 @@
+# Versioned font and geometry tables keep upstream types and symbols private.
+{ global: os64_freetype_backend_v1; os64_freetype_geometry_v1; local: *; };

@@ -57,7 +57,18 @@ char os64_proc_state_letter(os64_proc_state_t state)
     return state <= OS64_PROC_ZOMBIE ? letters[state] : '?';
 }
 
-static int read_task_status(uint64_t pid, os64_proc_info_t *info)
+static void finish_split(os64_proc_cpu_split_t *split, unsigned fields,
+                         uint64_t runtime)
+{
+    if (!split) return;
+    split->idle = (fields & 4u) != 0;
+    split->valid = (fields & 3u) == 3u &&
+        split->user_us <= runtime && split->idle_us <= runtime - split->user_us &&
+        split->system_us == runtime - split->user_us - split->idle_us;
+}
+
+static int read_task_status(uint64_t pid, os64_proc_info_t *info,
+                            os64_proc_cpu_split_t *split)
 {
     char path[PROC_PATH_MAX];
     char line[PROC_LINE_MAX];
@@ -68,6 +79,7 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
 
     info->pid = pid;
     int64_t result;
+    unsigned split_fields = 0;
     while ((result = os64_readline(h, line, sizeof(line))) == 1)
     {
         char *value = split_value(line);
@@ -82,8 +94,20 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
         else if (os64_streq(line, "foreground")) info->foreground = os64_streq(value, "yes");
         else if (os64_streq(line, "shell")) info->shell = os64_streq(value, "yes");
         else if (os64_streq(line, "threads")) info->threads = (uint32_t)os64_atou(value);
-        else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "cpu")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
+        else if (split && os64_streq(line, "user_us")) {
+            if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;
+            split_fields |= 1u;
+        }
+        else if (split && os64_streq(line, "system_us")) {
+            if (split_fields & 2u || !os64_parse_u64(value, &split->system_us)) split_fields |= 8u;
+            split_fields |= 2u;
+        }
+        else if (split && os64_streq(line, "idle_us")) {
+            if (split_fields & 4u || !os64_parse_u64(value, &split->idle_us)) split_fields |= 8u;
+            split_fields |= 4u;
+        }
         else if (os64_streq(line, "switches")) info->switches = os64_atou(value);
         else if (os64_streq(line, "faults"))
         {
@@ -95,6 +119,7 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
         }
     }
     os64_close(h);
+    if (!(split_fields & 8u)) finish_split(split, split_fields, info->runtime_us);
     return result < 0 ? -1 : 0;
 }
 
@@ -127,9 +152,9 @@ static uint64_t get_heap_value(uint64_t pid)
             break;
     }
 
-    // Close BEFORE returning: this runs once per task per refresh, and with
-    // TASK_MAX_HANDLES at 16 a leaked handle here starves top's entire scan
-    // (read_task_status's open fails → every row vanishes) within one screen.
+    // Close BEFORE returning: this runs once per task per refresh, so a
+    // leaked handle here fills the table within a few screens and starves
+    // top's entire scan (read_task_status's open fails → every row vanishes).
     os64_close(h);
 
     return mappedValue - virginValue;
@@ -137,8 +162,15 @@ static uint64_t get_heap_value(uint64_t pid)
 
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out)
 {
+    return os64_proc_read_split(pid, out, NULL);
+}
+
+int32_t os64_proc_read_split(uint64_t pid, os64_proc_info_t *out,
+                             os64_proc_cpu_split_t *split)
+{
     os64_memset(out, 0, sizeof(*out));
-    if (read_task_status(pid, out) < 0)
+    if (split) os64_memset(split, 0, sizeof(*split));
+    if (read_task_status(pid, out, split) < 0)
         return -1;
     read_command(pid, out);
     out->heap = get_heap_value(pid);
@@ -192,12 +224,14 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity)
     return (int32_t)count;
 }
 
-static int read_thread_status(const char *path, os64_thread_info_t *info)
+static int read_thread_status(const char *path, os64_thread_info_t *info,
+                              os64_proc_cpu_split_t *split)
 {
     char line[PROC_LINE_MAX];
     int32_t h = (int32_t)os64_open(path, NULL);
     if (h < 0) return -1;
     int64_t result;
+    unsigned split_fields = 0;
     while ((result = os64_readline(h, line, sizeof(line))) == 1)
     {
         char *value = split_value(line);
@@ -205,21 +239,42 @@ static int read_thread_status(const char *path, os64_thread_info_t *info)
         if (os64_streq(line, "thread")) info->tid = os64_atou(value);
         else if (os64_streq(line, "task")) info->pid = os64_atou(value);
         else if (os64_streq(line, "state")) info->state = parse_state(value);
-        else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "cpu")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
+        else if (split && os64_streq(line, "user_us")) {
+            if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;
+            split_fields |= 1u;
+        }
+        else if (split && os64_streq(line, "system_us")) {
+            if (split_fields & 2u || !os64_parse_u64(value, &split->system_us)) split_fields |= 8u;
+            split_fields |= 2u;
+        }
+        else if (split && os64_streq(line, "idle_us")) {
+            if (split_fields & 4u || !os64_parse_u64(value, &split->idle_us)) split_fields |= 8u;
+            split_fields |= 4u;
+        }
         else if (os64_streq(line, "affinity")) os64_strcopy(info->affinity, sizeof(info->affinity), value);
     }
     os64_close(h);
+    if (!(split_fields & 8u)) finish_split(split, split_fields, info->runtime_us);
     return result < 0 ? -1 : 0;
 }
 
 int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
                               os64_thread_info_t *out)
 {
+    return os64_proc_read_thread_split(pid, tid, out, NULL);
+}
+
+int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split)
+{
     char path[PROC_PATH_MAX];
     os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%lu/status", pid, tid);
     os64_memset(out, 0, sizeof(*out));
-    return read_thread_status(path, out);
+    if (split) os64_memset(split, 0, sizeof(*split));
+    return read_thread_status(path, out, split);
 }
 
 int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity)
@@ -236,7 +291,7 @@ int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity
         char path[PROC_PATH_MAX];
         os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%s/status", pid, entry.name);
         os64_memset(&out[count], 0, sizeof(out[count]));
-        if (read_thread_status(path, &out[count]) == 0) count++;
+        if (read_thread_status(path, &out[count], NULL) == 0) count++;
     }
     os64_close(directory);
     return (int32_t)count;
@@ -271,4 +326,59 @@ int32_t os64_tty_read(os64_tty_info_t *out)
     }
     os64_close(h);
     return result < 0 ? -1 : 0;
+}
+
+// The line discipline, read from the same file into its own outputs rather
+// than into os64_tty_info_t — that struct is ABI (procfs.h says why), and a
+// new fact about the terminal is a new call, not a new field.
+int32_t os64_tty_mode(bool *raw, uint64_t *holder)
+{
+    char line[PROC_LINE_MAX];
+    bool is_raw = false;
+    uint64_t who = 0;
+    // A report is parsed only if it carries BOTH lines with a value this
+    // library knows. The library is replaced under a running kernel (the
+    // kernel is the linker), so a kernel older than this call reports
+    // neither line — and that is "cannot be parsed", the -1 the contract
+    // promises, not a terminal in cooked mode.
+    bool seen_mode = false, seen_task = false, known_mode = false;
+
+    int32_t h = (int32_t)os64_open("/proc/self/tty", NULL);
+    if (h < 0)
+        return -1;
+    int64_t result;
+    while ((result = os64_readline(h, line, sizeof(line))) == 1)
+    {
+        char *value = split_value(line);
+        if (value == NULL)
+            continue;
+        if (os64_streq(line, "mode")) {
+            seen_mode = true;
+            is_raw = os64_streq(value, "raw");
+            known_mode = is_raw || os64_streq(value, "cooked");
+        }
+        else if (os64_streq(line, "raw_task")) { seen_task = true; who = os64_atou(value); }
+    }
+    os64_close(h);
+    if (result < 0 || !seen_mode || !seen_task || !known_mode)
+        return -1;
+    if (raw) *raw = is_raw;
+    if (holder) *holder = who;
+    return 0;
+}
+
+// The mode switch is the same file, written: one word, the ctl file's
+// grammar, through a handle this task opened itself (an inherited one is
+// refused — the kernel attributes the command to the writer). The kernel
+// also refuses a writer that is not the terminal's foreground, which is what
+// makes a refusal here mean "not your terminal to change".
+int32_t os64_tty_set_raw(bool raw)
+{
+    int32_t h = (int32_t)os64_open("/proc/self/tty", "w");
+    if (h < 0)
+        return -1;
+    const char *word = raw ? "raw\n" : "cooked\n";
+    int64_t n = os64_write(h, word, os64_strlen(word));
+    os64_close(h);
+    return n == (int64_t)os64_strlen(word) ? 0 : -1;
 }

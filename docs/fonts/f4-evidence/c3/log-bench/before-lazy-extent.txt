@@ -1,0 +1,2 @@
+8912542 bytes, 100000 lines: load 31.3 ms; extent under the builtin face 781.4 ms (960 px)
+adopting DejaVu Sans 16 1279.6 ms; extent under it 1273.5 ms (1012 px)

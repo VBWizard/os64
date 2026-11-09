@@ -1,0 +1,72 @@
+#ifndef YONDER_EVENTS_H
+#define YONDER_EVENTS_H
+#include <stdbool.h>
+#include <stdint.h>
+#include <os64/gui.h>
+
+/* P5 testing: Million Dollar Homepage's description popup waited for motion
+ * to stop. Hover edits can rebuild a large page, so input must yield to paint.
+ * Bound a turn's input work so rendering, page arrival and timers get a turn
+ * while the input queue is busy. Idle motion uses absolute positions; merge
+ * consecutive samples before dispatch, stopping at buttons/modifiers or a
+ * different event. Drags, clicks, keys and doorbells keep their order. */
+#define YONDER_EVENT_BATCH_MAX 32u
+
+typedef int64_t (*YonderEventPoll)(void *opaque, os64_gui_event_t *event);
+typedef struct {
+    unsigned consumed;
+    bool held, drained;
+    os64_gui_event_t pending;
+} YonderEventBatch;
+
+static inline bool yonder_event_batch_next(YonderEventBatch *batch,
+    os64_gui_event_t *event, YonderEventPoll poll, void *opaque)
+{
+    if (batch->consumed >= YONDER_EVENT_BATCH_MAX || batch->drained) return false;
+    if (batch->held) {
+        *event = batch->pending;
+        batch->held = false;
+    } else if (poll(opaque,event) != 1) {
+        batch->drained = true;
+        return false;
+    }
+    batch->consumed++;
+    if (event->type != OS64_GUI_EVENT_MOUSE_MOVE || event->mouse.buttons != 0) return true;
+    while (batch->consumed < YONDER_EVENT_BATCH_MAX) {
+        os64_gui_event_t next;
+        if (poll(opaque,&next) != 1) { batch->drained = true;break; }
+        if (next.type != OS64_GUI_EVENT_MOUSE_MOVE || next.mouse.buttons != 0 ||
+            next.mouse.modifiers != event->mouse.modifiers) {
+            batch->pending = next;
+            batch->held = true;
+            break;
+        }
+        *event = next;
+        batch->consumed++;
+    }
+    return true;
+}
+
+/* The batch read by a dispatcher (DROPDOWN.md § Step 1), whose poll takes
+ * a false answer for an EMPTY queue. Mostly the cap may end the reading
+ * early: the next turn reads on. But while the dispatcher QUARANTINES a
+ * destroyed window's handle (os64_ui_dispatcher_can_create false), it lifts
+ * the quarantine once every queue has answered empty, and a cap read as
+ * empty would lift it with events still queued, a stale one naming the dead
+ * handle among them. So during one, the cap starts a new batch instead,
+ * and an empty answer the batch had before cannot stand in for one now:
+ * the queue is asked again, because the destroy that began the quarantine
+ * may have queued an event (the owner's focus back) after the batch last
+ * found it empty. The quarantine is rare and must finish first, and the
+ * paint latency the cap is for is not owed by a turn that cannot make a
+ * window. */
+static inline bool yonder_event_batch_draining(YonderEventBatch *batch, os64_gui_event_t *event,
+                                               YonderEventPoll poll, void *opaque, bool quarantine)
+{
+    if (yonder_event_batch_next(batch, event, poll, opaque)) return true;
+    if (!quarantine) return false;
+    batch->consumed = 0;
+    batch->drained = false;
+    return yonder_event_batch_next(batch, event, poll, opaque);
+}
+#endif

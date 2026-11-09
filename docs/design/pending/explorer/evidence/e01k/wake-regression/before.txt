@@ -1,0 +1,2 @@
+popuptest: FAIL 56: os64_gui_event_wait_any(&ready)==1 && ready==b
+popuptest: 146 checks, 1 failures

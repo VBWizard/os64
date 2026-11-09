@@ -288,7 +288,25 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
 	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
+	else if (strcmp(mode, "x") == 0) fat_mode = FA_WRITE | FA_CREATE_NEW;
 	else
+		return -1;
+
+	// A READ-ONLY MOUNT REFUSES A MUTATING OPEN AT THE DOOR, the way
+	// ext2_open_rw does. FAT needs it more: an f_open carrying
+	// FA_CREATE_ALWAYS or FA_OPEN_APPEND WRITES — a directory entry, a
+	// truncated cluster chain — so the open is the mutation and there is no
+	// later dispatch site for a missing write verb to refuse at. Uncovered
+	// that is a ring-3 kernel panic rather than a leak: the metadata write
+	// lands on a partition the block tripwire knows is mounted read-only,
+	// and that tripwire panics by design.
+	//
+	// Written as an ALLOW-list of the two flags that only ever read or
+	// position, so any other flag — including one this driver does not use
+	// today — is refused by default rather than by having been remembered
+	// here. (FA_WRITE passes: "u" neither creates nor truncates, and the
+	// NULL write verb is what stops its writes.)
+	if (vfs_fs->read_only && (fat_mode & ~(BYTE)(FA_READ | FA_WRITE)) != 0)
 		return -1;
 
 	FIL* fat_file = kmalloc(sizeof(FIL));  // FIL object (FAT filesystem file handle)
@@ -322,6 +340,14 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 
     (*vfs_file)->handle = fat_file;
 	(*vfs_file)->f_path = (void*)path;
+	// FAT's file identity (vfs.h f_ident): the start cluster, which is where a
+	// FAT file's chain — and so the file itself — begins. Weaker than an inode
+	// in principle (FAT recycles cluster numbers freely, and an empty file has
+	// no cluster at all, reporting 0 = "cannot identify"), sound in practice
+	// for as long as this handle lives: FF_FS_LOCK refuses to unlink a file
+	// somebody has open, so the chain cannot be freed and the number cannot be
+	// handed to anything else.
+	(*vfs_file)->f_ident = (uint64_t)fat_file->obj.sclust;
 	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
 	(*vfs_file)->owner = vfs_fs;
 
@@ -360,9 +386,12 @@ static int fat_write(vfs_file_t* vfs_file, const void* buffer, size_t size) {
 static int fat_close(vfs_file_t* vfs_file) {
     FIL* fat_file = (FIL*)vfs_file->handle;
 
-	// Off the open-file registry FIRST — a concurrent vfs_sync_all must
-	// never find a file whose FIL is about to be freed.
-	vfs_openfile_unregister(vfs_file);
+	// MARKED, not unlinked. A concurrent vfs_sync_all must never find a file
+	// whose FIL is about to be freed — the mark is enough for that. Unlinking
+	// here was too much: f_close below is real disk I/O on this volume, and a
+	// file off the registry is a file unmount counts as gone, so it could free
+	// the filesystem mid-f_close (vfs.h, the `closing` contract).
+	vfs_openfile_mark_closing(vfs_file);
 
 	// FREE ON BOTH PATHS. This used to `return -1` before the two kfrees, so a
 	// failing close leaked the vfs_file_t AND the FIL — and nothing upstream
@@ -375,6 +404,9 @@ static int fat_close(vfs_file_t* vfs_file) {
 	// freeing is leaking forever. What the caller loses is the DATA, not the
 	// bookkeeping — and it is now told so, loudly (handle.c).
 	FRESULT fr = f_close(fat_file);
+	// Done with the volume — off the registry, so an unmount waiting on this
+	// file may proceed. Nothing below touches the filesystem.
+	vfs_openfile_unregister(vfs_file);
 	kfree(vfs_file); // Free the VFS file object
 	kfree(fat_file);
 	return (fr == FR_OK) ? 0 : -1;
@@ -488,9 +520,13 @@ static int fat_initialize(vfs_filesystem_t* vfs_fs) {
         return -1; // Failed to mount
     }
 
-    // Store the context in the VFS filesystem
+    // Store the context in the VFS filesystem. fs->fops is left ALONE: it is
+    // the per-mount COPY kRegisterFilesystem made, and this function used to
+    // overwrite it with &fat_fops — the GLOBAL table — which leaked the copy,
+    // made vfs_demote_mount_readonly strip the global (demoting every FAT
+    // mount at once), and handed unmount's teardown a kernel .data address to
+    // kfree (the allocator names its victim; it named this).
     vfs_fs->fs_specific = fat_fs;
-    vfs_fs->fops = &fat_fops;
     return 0; // Success
 }
 
@@ -676,8 +712,8 @@ static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
 
 // Rename a file — and the place where FAT's age shows.
 //
-// The seam (vfs.h fops->rename) promises ATOMIC REPLACE: the destination
-// name never fails to resolve, even for an instant. ext2 can honor that,
+// With flags zero, the seam preserves its original REPLACE behavior. ext2
+// can make that replacement atomic,
 // because one directory-block write swings a name onto a different inode.
 // FAT CANNOT, and this function is where we say so instead of pretending:
 //
@@ -692,14 +728,19 @@ static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
 // no concept of a file identity separate from its directory entry — that
 // idea IS the inode, and it is exactly what Ken Thompson's 1969 filesystem
 // had and MS-DOS's 1981 one did not. A DEBTS row carries it so the
-// difference stays visible, and root is ext2 precisely so the guarantee
-// that matters lives where it can actually be kept. The lifeboat is allowed
-// to be a lifeboat; it is not allowed to lie about its seaworthiness.
-static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t* vfs_fs)
+// difference stays visible. The opt-in policies do not pretend otherwise:
+// NOREPLACE leaves an existing destination alone, and REQUIRE_ATOMIC_REPLACE
+// refuses one because FAT cannot provide that guarantee. When the destination
+// is absent, FatFs's own f_rename still closes a race by refusing if another
+// caller creates it before the operation acquires the volume lock.
+static int fat_rename(const char* oldpath, const char* newpath,
+                      vfs_filesystem_t* vfs_fs, uint64_t flags)
 {
 	char lOld[512], lNew[512];
 
-	if (oldpath == NULL || newpath == NULL || vfs_fs == NULL)
+	if (oldpath == NULL || newpath == NULL || vfs_fs == NULL ||
+	    (flags & ~((uint64_t)OS64_RENAME_FLAG_MASK)) != 0 ||
+	    flags == OS64_RENAME_FLAG_MASK)
 		return -1;
 
 	strncpy(lOld, oldpath, sizeof(lOld) - 1);
@@ -717,6 +758,13 @@ static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t
 	FRESULT st = f_stat(lNew, &fi);
 	if (st == FR_OK)
 	{
+		if (flags & (OS64_RENAME_NOREPLACE |
+		             OS64_RENAME_REQUIRE_ATOMIC_REPLACE))
+		{
+			printd(DEBUG_VFS, "fat_rename: destination '%s' exists — requested safe policy refuses replacement\n",
+			       lNew);
+			return -1;
+		}
 		// Directories are never replaced — the seam's ruling, and here it is
 		// also self-preservation: f_unlink on a non-empty directory fails,
 		// and on an empty one it would silently remove a directory the
@@ -752,8 +800,31 @@ static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t
 	return 0;
 }
 
+// df's numbers. f_getfree WALKS THE FAT to count free clusters (FatFs keeps
+// no running total unless FSINFO is trusted), so this does real disk I/O —
+// kernel context, like every other FatFs call. Totals are clusters × cluster
+// size; the two reserved FAT entries are not clusters, hence n_fatent - 2.
+static int fat_space(vfs_filesystem_t *vfs_fs, uint64_t *total_bytes, uint64_t *free_bytes)
+{
+	char drive_label[8];
+	sprintf(drive_label, "%u:", vfs_fs->fatDiskNumber);
+
+	DWORD free_clusters = 0;
+	FATFS *ff = NULL;
+	if (f_getfree(drive_label, &free_clusters, &ff) != FR_OK || ff == NULL)
+		return -1;
+
+	uint64_t cluster_bytes = (uint64_t)ff->csize * FF_MAX_SS;   // fixed sector size build (FF_MIN_SS == FF_MAX_SS), so FATFS carries no ssize member
+	if (total_bytes)
+		*total_bytes = (uint64_t)(ff->n_fatent - 2) * cluster_bytes;
+	if (free_bytes)
+		*free_bytes = (uint64_t)free_clusters * cluster_bytes;
+	return 0;
+}
+
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
+	.space = fat_space,
     .open  = fat_open,
     .read  = fat_read,
 	.fgets = fat_gets,

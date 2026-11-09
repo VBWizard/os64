@@ -1,0 +1,8 @@
+caption: exit 0
+caption mutation iiii -> WWWW; one allocation denied: attempts=14, ink left denied=100 normal=52, differing pixels=876
+teardown=0
+
+parent: exit 0
+adoption=0 parent=(40,20,160,220) child=(6,6,188,29)
+expected child x=46 y=26 width=148 from committed parent + padding
+teardown=0

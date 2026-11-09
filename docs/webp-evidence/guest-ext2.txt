@@ -1,0 +1,2 @@
+PASS WebP lossy/lossless/alpha pixels, six callers, limits, truncation, animation refusal, sequence, mislabeled file and heap
+rc=0

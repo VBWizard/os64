@@ -1,0 +1,3 @@
+694 (0x0036) AP3: [user] desktop: startup decoration failed (-1); live frame retained
+704 (0x0036) AP3: wm: created window 1 'desktop' at (0,0) 1920x1080
+739 (0x0038) AP1: wm: created window 2 'Frame Studio' at (48,60) 1242x861

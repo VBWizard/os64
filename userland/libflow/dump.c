@@ -1,0 +1,891 @@
+// dump.c — what libflow makes of a page, as text, for the host harness and
+// for a probe in the guest: a change to the engine is a diff to a file.
+
+#include "internal.h"
+#include "os64/fmt.h"
+
+typedef struct {
+    char *out;
+    size_t cap, len;    // len counts everything, written or not
+    // The public tree's scroll containers' frames, by flow_box_t.scroller.
+    const flow_frame_t *const *scrollers;
+} Buf;
+
+static void put(Buf *b, const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (b->len + 1 < b->cap)
+            b->out[b->len] = s[i];
+        b->len++;
+    }
+}
+
+static void puts_(Buf *b, const char *s)
+{
+    put(b, s, os64_strlen(s));
+}
+
+static void putf(Buf *b, const char *fmt, ...) OS64_PRINTF(2, 3);
+static void putf(Buf *b, const char *fmt, ...)
+{
+    char tmp[128];
+    va_list ap;
+    va_start(ap, fmt);
+    int32_t n = os64_vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+    if (n > 0)
+        put(b, tmp, (size_t)n < sizeof(tmp) ? (size_t)n : sizeof(tmp) - 1);
+}
+
+// 26.6 as a decimal: whole pixels bare, a fraction to two places.
+static void unit(Buf *b, int32_t v)
+{
+    if (v < 0) {
+        puts_(b, "-");
+        v = -v;
+    }
+    int32_t whole = v / 64, frac = v % 64;
+    if (frac == 0) {
+        putf(b, "%d", (int)whole);
+        return;
+    }
+    int32_t hundredths = (frac * 100 + 32) / 64;
+    if (hundredths == 100) {
+        putf(b, "%d", (int)whole + 1);
+        return;
+    }
+    putf(b, "%d.%02d", (int)whole, (int)hundredths);
+}
+
+static void length(Buf *b, flow_length_t l)
+{
+    if (l.kind == FLOW_LENGTH_AUTO) {
+        puts_(b, "auto");
+    } else if (l.kind == FLOW_LENGTH_FIT_CONTENT) {
+        puts_(b, "fit-content");
+    } else if (l.kind == FLOW_LENGTH_CONTENT) {
+        puts_(b, "content");
+    } else {
+        unit(b, l.value);
+        if (l.kind == FLOW_LENGTH_PERCENT)
+            puts_(b, "%");
+        if (l.kind == FLOW_LENGTH_PERCENT && l.offset != 0) {
+            puts_(b, l.offset < 0 ? "-" : "+");
+            unit(b, l.offset < 0 ? -l.offset : l.offset);
+        }
+    }
+}
+
+// A grid track's sizing function at one end.
+static void breadth(Buf *b, flow_breadth_t v)
+{
+    switch (v.kind) {
+    case FLOW_TRACK_FIXED: length(b, v.len); break;
+    case FLOW_TRACK_FR: putf(b, "%d.%03dfr", v.fr / 1000, v.fr % 1000); break;
+    case FLOW_TRACK_AUTO: puts_(b, "auto"); break;
+    case FLOW_TRACK_MIN_CONTENT: puts_(b, "min-content"); break;
+    case FLOW_TRACK_MAX_CONTENT: puts_(b, "max-content"); break;
+    }
+}
+
+// A track list, comma-separated, a track as its two ends `min..max`
+// (`fit-content(len)` as that); the auto-repeat's tracks in brackets
+// after `fill` or `fit`.
+static void tracks(Buf *b, const char *name, const flow_tracks_t *t)
+{
+    if (t->n == 0)
+        return;
+    putf(b, " %s=", name);
+    for (int32_t i = 0; i < t->n; i++) {
+        if (i > 0)
+            puts_(b, ",");
+        if (t->repeat_n > 0 && i == t->repeat_at)
+            puts_(b, t->repeat_fit ? "fit[" : "fill[");
+        const flow_track_t *k = &t->tracks[i];
+        if (k->fit) {
+            puts_(b, "fit-content(");
+            breadth(b, k->max);
+            puts_(b, ")");
+        } else {
+            breadth(b, k->min);
+            puts_(b, "..");
+            breadth(b, k->max);
+        }
+        if (t->repeat_n > 0 && i == t->repeat_at + t->repeat_n - 1)
+            puts_(b, "]");
+    }
+}
+
+static void grid_line(Buf *b, flow_grid_line_t l)
+{
+    switch (l.kind) {
+    case FLOW_GRID_LINE_AUTO: puts_(b, "auto"); break;
+    case FLOW_GRID_LINE_NUMBER: putf(b, "%d", (int)l.n); break;
+    case FLOW_GRID_LINE_SPAN: putf(b, "span %d", (int)l.n); break;
+    case FLOW_GRID_LINE_NAME: putf(b, "%.*s", (int)l.name_len, l.name); break;
+    }
+}
+
+static bool length_eq(flow_length_t a, flow_length_t b)
+{
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
+}
+
+static bool is_zero(flow_length_t l)
+{
+    return (l.kind == FLOW_LENGTH_PX || l.kind == FLOW_LENGTH_PERCENT) && l.value == 0;
+}
+
+static void color(Buf *b, const flow_env_t *env, uint32_t rgb)
+{
+    if (rgb == env->ink)
+        puts_(b, "ink");
+    else if (rgb == env->link_ink)
+        puts_(b, "link");
+    else if (rgb == env->paper)
+        puts_(b, "paper");
+    else
+        putf(b, "#%06x", (unsigned)(rgb & 0xFFFFFF));
+    if (flow_alpha(rgb) != 255)
+        putf(b, "/%d", (int)flow_alpha(rgb));
+}
+
+static const char *const s_display[] = {
+    "inline", "block", "list-item", "inline-block", "table", "table-caption",
+    "table-row-group", "table-header-group", "table-footer-group", "table-row",
+    "table-cell", "table-column-group", "table-column", "flex", "inline-flex", "grid",
+    "inline-grid", "contents", "none",
+};
+static const char *const s_direction[] = {"row", "row-reverse", "column", "column-reverse"};
+static const char *const s_wrap[] = {"nowrap", "wrap", "wrap-reverse"};
+static const char *const s_place[] = {"normal", "auto", "stretch", "flex-start", "flex-end",
+                                      "center", "baseline", "start", "end", "self-start",
+                                      "self-end", "left", "right", "space-between",
+                                      "space-around", "space-evenly"};
+static const char *const s_generic[] = {"serif", "sans", "mono"};
+static const char *const s_border[] = {"none",   "hidden", "solid",  "inset", "outset",
+                                       "groove", "ridge",  "dotted", "dashed", "double"};
+static const char *const s_align[] = {"left", "right", "center", "justify", "html-left",
+                                      "html-right", "html-center", "html-justify"};
+static const char *const s_valign[] = {"baseline", "sub", "super", "top", "text-top",
+                                       "middle", "bottom", "html-middle"};
+static const char *const s_ws[] = {"normal", "pre", "nowrap", "pre-wrap", "pre-line"};
+static const char *const s_transform[] = {"none", "uppercase", "lowercase", "capitalize"};
+static const char *const s_list[] = {"disc", "circle", "square", "decimal", "lower-alpha",
+                                     "upper-alpha", "lower-roman", "upper-roman",
+                                     "disclosure-closed", "disclosure-open", "none"};
+static const char *const s_visibility[] = {"visible", "hidden", "collapse"};
+static const char *const s_float[] = {"none", "left", "right"};
+static const char *const s_clear[] = {"none", "left", "right", "both"};
+static const char *const s_position[] = {"static", "relative", "absolute", "fixed", "sticky"};
+
+// One name per value: an enum that grows without its table stops the build.
+_Static_assert(F_ARRAY(s_display) == FLOW_DISPLAY_NONE + 1, "s_display");
+_Static_assert(F_ARRAY(s_generic) == FLOW_GENERIC_MONO + 1, "s_generic");
+_Static_assert(F_ARRAY(s_border) == FLOW_BORDER_DOUBLE + 1, "s_border");
+_Static_assert(F_ARRAY(s_align) == FLOW_ALIGN_HTML_JUSTIFY + 1, "s_align");
+_Static_assert(F_ARRAY(s_valign) == FLOW_VALIGN_HTML_MIDDLE + 1, "s_valign");
+_Static_assert(F_ARRAY(s_ws) == FLOW_WS_PRE_LINE + 1, "s_ws");
+_Static_assert(F_ARRAY(s_transform) == FLOW_TRANSFORM_CAPITALIZE + 1, "s_transform");
+_Static_assert(F_ARRAY(s_list) == FLOW_LIST_NONE + 1, "s_list");
+_Static_assert(F_ARRAY(s_visibility) == FLOW_COLLAPSE + 1, "s_visibility");
+_Static_assert(F_ARRAY(s_float) == FLOW_FLOAT_RIGHT + 1, "s_float");
+_Static_assert(F_ARRAY(s_clear) == FLOW_CLEAR_BOTH + 1, "s_clear");
+_Static_assert(F_ARRAY(s_position) == FLOW_POSITION_STICKY + 1, "s_position");
+_Static_assert(F_ARRAY(s_direction) == FLOW_FLEX_COLUMN_REVERSE + 1, "s_direction");
+_Static_assert(F_ARRAY(s_wrap) == FLOW_FLEX_WRAP_REVERSE + 1, "s_wrap");
+_Static_assert(F_ARRAY(s_place) == FLOW_PLACE_SPACE_EVENLY + 1, "s_place");
+
+static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
+{
+    if (a->generic != b->generic || a->count != b->count)
+        return false;
+    for (uint32_t i = 0; i < a->count; i++)
+        if (a->names[i].len != b->names[i].len ||
+            os64_memcmp(a->names[i].name, b->names[i].name, a->names[i].len) != 0)
+            return false;
+    return true;
+}
+
+// One background layer; its gradient as its kind, its
+// geometry, then each stop as colour@position (a hint as @position alone).
+static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
+{
+    static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+    static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text"};
+    if (l->image != NULL) {
+        puts_(b, " bg-image=\"");
+        put(b, l->image, l->image_len);
+        putf(b, "\"@%d %s ", (int)l->sheet, kRepeat[l->repeat]);
+        length(b, l->position[0]);
+        puts_(b, "/");
+        length(b, l->position[1]);
+    }
+    if (l->fit != FLOW_FIT_LENGTHS) {
+        puts_(b, l->fit == FLOW_FIT_COVER ? " bg-size=cover" : " bg-size=contain");
+    } else if (l->size[0].kind != FLOW_LENGTH_AUTO || l->size[1].kind != FLOW_LENGTH_AUTO) {
+        puts_(b, " bg-size=");
+        length(b, l->size[0]);
+        puts_(b, "/");
+        length(b, l->size[1]);
+    }
+    if (l->origin != FLOW_EDGE_PADDING)
+        putf(b, " bg-origin=%s", kEdge[l->origin]);
+    if (l->clip != FLOW_EDGE_BORDER)
+        putf(b, " bg-clip=%s", kEdge[l->clip]);
+    const flow_gradient_t *g = l->gradient;
+    if (g == NULL)
+        return;
+    static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
+                                          "closest-corner", "size"};
+    putf(b, " gradient=%s%s:", g->repeating ? "repeating-" : "",
+         g->kind == FLOW_GRADIENT_LINEAR ? "linear" : "radial");
+    if (g->kind == FLOW_GRADIENT_LINEAR && (g->to_x != 0 || g->to_y != 0)) {
+        putf(b, "to %d %d", (int)g->to_x, (int)g->to_y);
+    } else if (g->kind == FLOW_GRADIENT_LINEAR) {
+        putf(b, "%d", (int)g->angle);
+    } else {
+        putf(b, "%s %s ", g->circle ? "circle" : "ellipse", kExtent[g->extent]);
+        if (g->extent == FLOW_EXTENT_SIZE) {
+            length(b, g->radii[0]);
+            puts_(b, "/");
+            length(b, g->radii[1]);
+            puts_(b, " ");
+        }
+        puts_(b, "at ");
+        length(b, g->centre[0]);
+        puts_(b, "/");
+        length(b, g->centre[1]);
+    }
+    for (int32_t i = 0; i < g->nstops; i++) {
+        puts_(b, i == 0 ? ":" : ",");
+        if (g->stops[i].current)
+            puts_(b, "currentColor");
+        else if (!g->stops[i].hint)
+            color(b, env, g->stops[i].colour);
+        puts_(b, "@");
+        length(b, g->stops[i].at);
+    }
+}
+
+static void four_lengths(Buf *b, const char *name, const flow_length_t v[4])
+{
+    putf(b, " %s=", name);
+    for (int i = 0; i < 4; i++) {
+        if (i > 0)
+            puts_(b, "/");
+        length(b, v[i]);
+    }
+}
+
+static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
+                    const FStyled *self, const flow_style_t *parent, int32_t depth)
+{
+    const flow_env_t *env = styles->env;
+    const flow_style_t *s = &self->style;
+    flow_style_t base;
+    // The comparison for inherited properties: the parent, or at the root
+    // the initial style a root inherits from.
+    if (parent == NULL) {
+        os64_memset(&base, 0, sizeof(base));
+        base.family = (flow_family_list_t){.generic = env->default_generic};
+        base.font_weight = 400;
+        base.font_size = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX;
+        base.color = env->ink;
+        parent = &base;
+    }
+
+    for (int32_t i = 0; i < depth; i++)
+        puts_(b, "  ");
+    const char *name = n->ns == OS64_HTML_NS_HTML && n->tag != OS64_HTML_TAG_UNKNOWN
+                           ? os64_html_tag_name(n->tag) : n->name;
+    puts_(b, name != NULL ? name : "?");
+    puts_(b, " ");
+    puts_(b, s_display[s->display]);
+    // An element that makes no box has nothing else worth reading.
+    if (s->display == FLOW_DISPLAY_NONE) {
+        puts_(b, "\n");
+        return;
+    }
+
+    if (!family_eq(&s->family, &parent->family)) {
+        puts_(b, " font=");
+        for (uint32_t i = 0; i < s->family.count; i++) {
+            puts_(b, "\"");
+            put(b, s->family.names[i].name, s->family.names[i].len);
+            puts_(b, "\",");
+        }
+        puts_(b, s_generic[s->family.generic]);
+    }
+    if (s->font_weight != parent->font_weight)
+        putf(b, " weight=%u", (unsigned)s->font_weight);
+    if (s->font_style != parent->font_style)
+        puts_(b, s->font_style == FLOW_FONT_ITALIC ? " italic" : " upright");
+    if (s->font_size != parent->font_size) {
+        puts_(b, " size=");
+        unit(b, s->font_size);
+    }
+    if (s->color != parent->color) {
+        puts_(b, " color=");
+        color(b, env, s->color);
+    }
+    if (s->fill != s->color) {
+        puts_(b, " fill=");
+        color(b, env, s->fill);
+    }
+    if (s->has_background) {
+        puts_(b, " bg=");
+        color(b, env, s->background);
+    }
+    // Each layer, the top first, a later one after its number: its
+    // picture with its repeat and position, its size and boxes when not
+    // the initial ones, and its gradient.
+    for (int32_t i = 0; i < flow_background_layers(s); i++) {
+        flow_layer_t l = flow_background_layer(s, i);
+        if (i > 0)
+            putf(b, " layer=%d", (int)i);
+        layer(b, env, &l);
+    }
+    bool margins = false, paddings = false, borders = false;
+    for (int i = 0; i < 4; i++) {
+        margins |= !is_zero(s->margin[i]);
+        paddings |= !is_zero(s->padding[i]);
+        borders |= s->border_style[i] != FLOW_BORDER_NONE;
+    }
+    if (margins)
+        four_lengths(b, "margin", s->margin);
+    if (paddings)
+        four_lengths(b, "padding", s->padding);
+    if (borders) {
+        puts_(b, " border=");
+        bool same = true;
+        for (int i = 1; i < 4; i++)
+            same &= s->border_width[i] == s->border_width[0] &&
+                    s->border_style[i] == s->border_style[0] &&
+                    s->border_color[i] == s->border_color[0];
+        for (int i = 0; i < (same ? 1 : 4); i++) {
+            if (i > 0)
+                puts_(b, "/");
+            unit(b, s->border_width[i]);
+            puts_(b, ":");
+            puts_(b, s_border[s->border_style[i]]);
+            puts_(b, ":");
+            color(b, env, s->border_color[i]);
+        }
+    }
+    flow_length_t automatic = {FLOW_LENGTH_AUTO, 0, 0};
+    if (!length_eq(s->width, automatic)) {
+        puts_(b, " width=");
+        length(b, s->width);
+    }
+    if (!length_eq(s->height, automatic)) {
+        puts_(b, " height=");
+        length(b, s->height);
+    }
+    static const char *const kLimits[4] = {" min-width=", " max-width=", " min-height=",
+                                           " max-height="};
+    const flow_length_t limits[4] = {s->min_width, s->max_width, s->min_height, s->max_height};
+    for (int i = 0; i < 4; i++)
+        if (!length_eq(limits[i], automatic)) {
+            puts_(b, kLimits[i]);
+            length(b, limits[i]);
+        }
+    if (s->box_sizing == FLOW_BORDER_BOX)
+        puts_(b, " border-box");
+    if (s->aspect_ratio > 0) {
+        // To three places: the ratio is a double, and a dump is text.
+        int64_t milli = (int64_t)(s->aspect_ratio * 1000 + 0.5);
+        putf(b, " aspect-ratio=%s%lld.%03lld", s->aspect_natural ? "auto/" : "",
+             (long long)(milli / 1000), (long long)(milli % 1000));
+    }
+    static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto"};
+    if (s->overflow_x != FLOW_OVERFLOW_VISIBLE || s->overflow_y != FLOW_OVERFLOW_VISIBLE)
+        putf(b, " overflow=%s/%s", kOverflow[s->overflow_x], kOverflow[s->overflow_y]);
+    if (s->text_align != parent->text_align)
+        putf(b, " align=%s", s_align[s->text_align]);
+    if (s->vertical_align != FLOW_VALIGN_BASELINE)
+        putf(b, " valign=%s", s_valign[s->vertical_align]);
+    if (s->white_space != parent->white_space)
+        putf(b, " ws=%s", s_ws[s->white_space]);
+    if (s->line_height.kind != parent->line_height.kind ||
+        s->line_height.value != parent->line_height.value) {
+        puts_(b, " line-height=");
+        if (s->line_height.kind == FLOW_LINE_NORMAL)
+            puts_(b, "normal");
+        else if (s->line_height.kind == FLOW_LINE_NUMBER)
+            putf(b, "%d.%03d", (int)(s->line_height.value / 1000), (int)(s->line_height.value % 1000));
+        else
+            unit(b, s->line_height.value);
+    }
+    if (!length_eq(s->text_indent, parent->text_indent)) {
+        puts_(b, " indent=");
+        length(b, s->text_indent);
+    }
+    if (s->text_transform != parent->text_transform)
+        putf(b, " transform=%s", s_transform[s->text_transform]);
+    static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word"};
+    static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere"};
+    if (s->word_break != parent->word_break)
+        putf(b, " word-break=%s", kWordBreak[s->word_break]);
+    if (s->overflow_wrap != parent->overflow_wrap)
+        putf(b, " overflow-wrap=%s", kOverflowWrap[s->overflow_wrap]);
+    if (s->letter_spacing != parent->letter_spacing) {
+        puts_(b, " letter-spacing=");
+        unit(b, s->letter_spacing);
+    }
+    if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
+        puts_(b, " underline");
+    if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)
+        puts_(b, " line-through");
+    if (s->visibility != parent->visibility)
+        putf(b, " visibility=%s", s_visibility[s->visibility]);
+    if (s->text_overflow == FLOW_TEXT_OVERFLOW_ELLIPSIS)
+        puts_(b, " text-overflow=ellipsis");
+    static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down"};
+    if (s->object_fit != FLOW_OBJECT_FILL)
+        putf(b, " object-fit=%s", kObjectFit[s->object_fit]);
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    if (!length_eq(s->object_position[0], half) || !length_eq(s->object_position[1], half)) {
+        puts_(b, " object-position=");
+        length(b, s->object_position[0]);
+        puts_(b, "/");
+        length(b, s->object_position[1]);
+    }
+    if (s->pixelated != parent->pixelated)
+        puts_(b, s->pixelated ? " pixelated" : " smooth");
+    if (s->list_style_type != parent->list_style_type)
+        putf(b, " list=%s", s_list[s->list_style_type]);
+    if (s->list_style_position != parent->list_style_position)
+        puts_(b, s->list_style_position == FLOW_LIST_INSIDE ? " list-inside" : " list-outside");
+    if (s->border_spacing[0] != parent->border_spacing[0] ||
+        s->border_spacing[1] != parent->border_spacing[1]) {
+        puts_(b, " spacing=");
+        unit(b, s->border_spacing[0]);
+        puts_(b, "/");
+        unit(b, s->border_spacing[1]);
+    }
+    if (s->border_collapse != parent->border_collapse)
+        puts_(b, s->border_collapse == FLOW_COLLAPSE_BORDERS ? " collapse" : " separate");
+    if (s->caption_side != parent->caption_side)
+        puts_(b, s->caption_side == FLOW_CAPTION_BOTTOM ? " caption-bottom" : " caption-top");
+    if (s->float_side != FLOW_FLOAT_NONE)
+        putf(b, " float=%s", s_float[s->float_side]);
+    if (s->clear != FLOW_CLEAR_NONE)
+        putf(b, " clear=%s", s_clear[s->clear]);
+    if (s->position != FLOW_POSITION_STATIC)
+        putf(b, " position=%s", s_position[s->position]);
+    bool insets = false;
+    for (int i = 0; i < 4; i++)
+        insets |= !length_eq(s->inset[i], automatic);
+    if (insets)
+        four_lengths(b, "inset", s->inset);
+    if (s->has_z_index)
+        putf(b, " z=%d", (int)s->z_index);
+    if (s->opacity != 1000)
+        putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
+    if (s->pointer_events_none != parent->pointer_events_none)
+        puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
+    if (s->outline_width > 0 && s->outline_style != FLOW_BORDER_NONE) {
+        puts_(b, " outline=");
+        unit(b, s->outline_width);
+        putf(b, ":%s:", s->outline_auto ? "auto" : s_border[s->outline_style]);
+        color(b, env, s->outline_color);
+        if (s->outline_offset != 0) {
+            puts_(b, " outline-offset=");
+            unit(b, s->outline_offset);
+        }
+    }
+    if (s->cursor != parent->cursor)
+        putf(b, " cursor=%s", f_cursor_words[s->cursor]);
+    static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all"};
+    if (s->user_select != FLOW_USER_SELECT_AUTO)
+        putf(b, " user-select=%s", kUserSelect[s->user_select]);
+    if (s->flex_direction != FLOW_FLEX_ROW)
+        putf(b, " flex-direction=%s", s_direction[s->flex_direction]);
+    if (s->flex_wrap != FLOW_FLEX_NOWRAP)
+        putf(b, " flex-wrap=%s", s_wrap[s->flex_wrap]);
+    if (s->justify_content != FLOW_PLACE_NORMAL)
+        putf(b, " justify-content=%s", s_place[s->justify_content]);
+    if (s->align_items != FLOW_PLACE_NORMAL)
+        putf(b, " align-items=%s", s_place[s->align_items]);
+    if (s->align_self != FLOW_PLACE_AUTO)
+        putf(b, " align-self=%s", s_place[s->align_self]);
+    if (s->align_content != FLOW_PLACE_NORMAL)
+        putf(b, " align-content=%s", s_place[s->align_content]);
+    if (s->flex_grow != 0 || s->flex_shrink != 1000 || s->flex_basis.kind != FLOW_LENGTH_AUTO) {
+        putf(b, " flex=%d.%03d/%d.%03d/", s->flex_grow / 1000, s->flex_grow % 1000,
+             s->flex_shrink / 1000, s->flex_shrink % 1000);
+        length(b, s->flex_basis);
+    }
+    if (s->order != 0)
+        putf(b, " order=%d", (int)s->order);
+    if (s->row_gap.kind != FLOW_LENGTH_AUTO || s->column_gap.kind != FLOW_LENGTH_AUTO) {
+        puts_(b, " gap=");
+        length(b, s->row_gap);
+        puts_(b, "/");
+        length(b, s->column_gap);
+    }
+    tracks(b, "grid-template-columns", &s->grid_template_columns);
+    tracks(b, "grid-template-rows", &s->grid_template_rows);
+    tracks(b, "grid-auto-columns", &s->grid_auto_columns);
+    tracks(b, "grid-auto-rows", &s->grid_auto_rows);
+    for (int32_t i = 0; i < s->ngrid_areas; i++) {
+        const flow_grid_area_t *a = &s->grid_areas[i];
+        putf(b, "%s%.*s:%d-%d/%d-%d", i == 0 ? " grid-areas=" : ",", (int)a->name_len, a->name,
+             (int)a->row0, (int)a->row1, (int)a->col0, (int)a->col1);
+    }
+    if (s->grid_auto_flow_column || s->grid_dense)
+        putf(b, " grid-auto-flow=%s%s", s->grid_auto_flow_column ? "column" : "row",
+             s->grid_dense ? " dense" : "");
+    const flow_grid_line_t *lines[4] = {&s->grid_row_start, &s->grid_column_start,
+                                        &s->grid_row_end, &s->grid_column_end};
+    for (int i = 0; i < 4; i++)
+        if (lines[i]->kind != FLOW_GRID_LINE_AUTO) {
+            // grid-area's order: the starts, then the ends.
+            puts_(b, " grid-area=");
+            for (int k = 0; k < 4; k++) {
+                if (k > 0)
+                    puts_(b, "/");
+                grid_line(b, *lines[k]);
+            }
+            break;
+        }
+    if (s->justify_items != FLOW_PLACE_NORMAL)
+        putf(b, " justify-items=%s", s_place[s->justify_items]);
+    if (s->justify_self != FLOW_PLACE_AUTO)
+        putf(b, " justify-self=%s", s_place[s->justify_self]);
+    if (s->specified_inline)
+        puts_(b, " specified-inline");
+    if (s->flow_root)
+        puts_(b, " flow-root");
+    if (self->holds_block)
+        puts_(b, " holds-block");
+    puts_(b, "\n");
+}
+
+int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
+{
+    Buf b = {out, cap, 0, NULL};
+    if (styles == NULL) {
+        if (cap > 0)
+            out[0] = '\0';
+        return 0;
+    }
+    const os64_html_document_t *doc = styles->doc;
+    const os64_html_node_t *top = doc->document;
+    const os64_html_node_t *cur = top != NULL ? os64_html_flat_first_child(doc, top) : doc->html;
+    int32_t depth = 0;
+    while (cur != NULL) {
+        const FStyled *self = cur->kind == OS64_HTML_ELEMENT ? f_style_of(styles, cur) : NULL;
+        const os64_html_node_t *down = NULL;
+        if (self != NULL) {
+            const FStyled *up = f_style_of(styles, f_flat_parent(doc, cur));
+            element(&b, styles, cur, self, up != NULL ? &up->style : NULL, depth);
+            if (self->style.display != FLOW_DISPLAY_NONE)
+                down = os64_html_flat_first_child(doc, cur);
+        }
+        if (down != NULL) {
+            cur = down;
+            depth++;
+            continue;
+        }
+        while (cur != NULL) {
+            if (top == NULL && cur == doc->html) {
+                cur = NULL;
+                break;
+            }
+            const os64_html_node_t *next = os64_html_flat_next_sibling(doc, cur);
+            if (next != NULL) {
+                cur = next;
+                break;
+            }
+            cur = f_flat_parent(doc, cur);
+            depth--;
+            if (cur == top)
+                cur = NULL;
+        }
+    }
+    if (cap > 0)
+        out[b.len < cap ? b.len : cap - 1] = '\0';
+    return (int64_t)b.len;
+}
+
+// ── The box tree ────────────────────────────────────────────────────────
+
+static void indent(Buf *b, int32_t depth)
+{
+    for (int32_t i = 0; i < depth; i++)
+        puts_(b, "  ");
+}
+
+static const char *node_name(const os64_html_node_t *n)
+{
+    if (n == NULL)
+        return "anon";
+    const char *name = n->ns == OS64_HTML_NS_HTML && n->tag != OS64_HTML_TAG_UNKNOWN
+                           ? os64_html_tag_name(n->tag) : n->name;
+    return name != NULL ? name : "?";
+}
+
+// Text as a quoted string, with the bytes that would break a line or a
+// quote escaped. UTF-8 passes through as itself.
+static void quoted(Buf *b, const char *s, uint32_t len)
+{
+    puts_(b, "\"");
+    for (uint32_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') {
+            char e[2] = {'\\', (char)c};
+            put(b, e, 2);
+        } else if (c == '\n') {
+            puts_(b, "\\n");
+        } else if (c == '\t') {
+            puts_(b, "\\t");
+        } else if (c < 0x20 || c == 0x7F) {
+            putf(b, "\\x%02x", c);
+        } else {
+            put(b, (const char *)&s[i], 1);
+        }
+    }
+    puts_(b, "\"");
+}
+
+static const char *const s_box[] = {
+    "block", "replaced", "table", "caption", "column-group", "column", "row-group", "row", "cell",
+};
+_Static_assert(F_ARRAY(s_box) == FB_CELL + 1, "s_box");
+
+static void box_lines(Buf *b, const FBox *box, int32_t depth);
+
+static void item_line(Buf *b, const FItem *it, int32_t depth)
+{
+    indent(b, depth);
+    switch (it->kind) {
+    case FI_TEXT:
+        puts_(b, "text ");
+        quoted(b, it->text, it->len);
+        if (it->offset != 0)
+            putf(b, " @%u", (unsigned)it->offset);
+        if (it->generated)
+            putf(b, " generated-by %s", node_name(it->node));
+        break;
+    case FI_OPEN:
+    case FI_CLOSE:
+        putf(b, "%s %s", it->kind == FI_OPEN ? "open" : "close", node_name(it->node));
+        if (it->kind == FI_OPEN && it->inl != NULL && it->inl->link >= 0)
+            putf(b, " link %d", (int)it->inl->link);
+        if (it->continuation)
+            puts_(b, it->kind == FI_OPEN ? " continued" : " split");
+        break;
+    case FI_ATOMIC:
+        putf(b, "atomic %s", node_name(it->node));
+        if (it->link >= 0)
+            putf(b, " link %d", (int)it->link);
+        if (it->control >= 0)
+            putf(b, " control %d", (int)it->control);
+        break;
+    case FI_BREAK:
+        puts_(b, it->node != NULL ? "br" : "newline");
+        break;
+    case FI_WBR:
+        puts_(b, "wbr");
+        break;
+    case FI_MARKER:
+        puts_(b, "marker ");
+        quoted(b, it->text, it->len);
+        break;
+    case FI_PLACEHOLDER:
+        putf(b, "placeholder %s", node_name(it->node));
+        break;
+    case FI_FLOAT:
+        putf(b, "float %s", node_name(it->node));
+        break;
+    }
+    puts_(b, "\n");
+    if (it->kind == FI_ATOMIC && it->content != NULL)
+        box_lines(b, it->content, depth + 1);
+}
+
+static void box_lines(Buf *b, const FBox *box, int32_t depth)
+{
+    indent(b, depth);
+    putf(b, "%s %s", s_box[box->kind], node_name(box->node));
+    if (box->marker != NULL) {
+        puts_(b, " marker ");
+        quoted(b, box->marker, box->marker_len);
+    }
+    if (box->link >= 0)
+        putf(b, " link %d", (int)box->link);
+    if (box->out_of_flow)
+        puts_(b, " out-of-flow");
+    else if (box->positioned)
+        puts_(b, " positioned");
+    if (box->floated != FLOW_FLOAT_NONE)
+        puts_(b, box->floated == FLOW_FLOAT_LEFT ? " float-left" : " float-right");
+    if (box->flex)
+        puts_(b, " flex");
+    if (box->grid)
+        puts_(b, " grid");
+    puts_(b, "\n");
+    for (const FItem *it = box->items; it != NULL; it = it->next)
+        item_line(b, it, depth + 1);
+    for (const FBox *c = box->first; c != NULL; c = c->next)
+        box_lines(b, c, depth + 1);
+}
+
+int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap)
+{
+    Buf b = {out, cap, 0, NULL};
+    if (boxes != NULL && boxes->root != NULL)
+        box_lines(&b, boxes->root, 0);
+    if (boxes != NULL && boxes->incomplete)
+        puts_(&b, "incomplete\n");
+    if (cap > 0)
+        out[b.len < cap ? b.len : cap - 1] = '\0';
+    return (int64_t)b.len;
+}
+
+// ── The laid-out tree ───────────────────────────────────────────────────
+//
+// Printed from the PUBLIC tree, so what the harness checks is what a face
+// reads: whole document pixels, already rounded once by flow.c.
+
+static void box_rect(Buf *b, os64_gui_rect_t r)
+{
+    putf(b, " %d %d %d %d", (int)r.x, (int)r.y, (int)r.w, (int)r.h);
+}
+
+// Where two rects meet: empty, at the first's corner, when they do not.
+static os64_gui_rect_t met(os64_gui_rect_t a, os64_gui_rect_t c)
+{
+    int64_t x0 = a.x > c.x ? a.x : c.x, y0 = a.y > c.y ? a.y : c.y;
+    int64_t x1 = (int64_t)a.x + a.w < (int64_t)c.x + c.w ? (int64_t)a.x + a.w : (int64_t)c.x + c.w;
+    int64_t y1 = (int64_t)a.y + a.h < (int64_t)c.y + c.h ? (int64_t)a.y + a.h : (int64_t)c.y + c.h;
+    if (x1 <= x0 || y1 <= y0)
+        return (os64_gui_rect_t){a.x, a.y, 0, 0};
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+}
+
+static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
+{
+    indent(b, depth);
+    switch (box->kind) {
+    case FLOW_BOX_LINE:
+        puts_(b, "line");
+        box_rect(b, box->rect);
+        putf(b, " base %d", (int)(box->baseline - box->rect.y));
+        break;
+    case FLOW_BOX_SPAN:
+        putf(b, "span %s", node_name(box->node));
+        box_rect(b, box->rect);
+        break;
+    case FLOW_BOX_TEXT:
+        puts_(b, "text ");
+        quoted(b, box->text, box->length);
+        box_rect(b, box->rect);
+        putf(b, " %s %d", s_generic[box->style->family.generic],
+             (int)((box->style->font_size + 32) / 64));
+        if (box->style->font_weight >= 600)
+            puts_(b, " bold");
+        if (box->style->font_style == FLOW_FONT_ITALIC)
+            puts_(b, " italic");
+        if (box->decoration & FLOW_DECORATION_UNDERLINE)
+            puts_(b, " underline");
+        if (box->decoration & FLOW_DECORATION_LINE_THROUGH)
+            puts_(b, " line-through");
+        break;
+    case FLOW_BOX_ATOMIC:
+        putf(b, "atomic %s", node_name(box->node));
+        box_rect(b, box->rect);
+        if (box->control >= 0)
+            putf(b, " control %d", (int)box->control);
+        break;
+    case FLOW_BOX_MARKER:
+        puts_(b, "marker ");
+        quoted(b, box->text, box->length);
+        box_rect(b, box->rect);
+        break;
+    default:
+        putf(b, "%s %s", s_box[box->kind], node_name(box->node));
+        box_rect(b, box->rect);
+        if (box->control >= 0)
+            putf(b, " control %d", (int)box->control);
+        break;
+    }
+    if (box->link >= 0)
+        putf(b, " link %d", (int)box->link);
+    if (box->unfinished)
+        puts_(b, " unfinished");
+    if (box->floated != FLOW_FLOAT_NONE)
+        puts_(b, box->floated == FLOW_FLOAT_LEFT ? " float-left" : " float-right");
+    if (box->clearance != 0)
+        putf(b, " clearance=%d", (int)box->clearance);
+    if (box->positioned)
+        puts_(b, " positioned");
+    else if (box->stacked)
+        puts_(b, " stacked");
+    if (box->fixed && (box->parent == NULL || !box->parent->fixed))
+        puts_(b, " fixed");
+    // A transformed box's own frame may sit inside its sticky one.
+    const flow_frame_t *own = box->frame != NULL && box->frame->box == box ? box->frame : NULL;
+    // A translation is its move; a box drawn through its matrix, the
+    // matrix's a b c d e f in thousandths, e and f of a pixel.
+    if (own != NULL && own->kind == F_FRAME_TRANSFORM) {
+        if (own->through) {
+            puts_(b, " through");
+            // Held to what a long long can say: scale(1e20) is finite.
+            for (int i = 0; i < 6; i++) {
+                double v = own->affine[i] * 1000;
+                v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
+                putf(b, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
+            }
+        } else {
+            putf(b, " transform %d %d", (int)own->by.x, (int)own->by.y);
+        }
+        if (own->upright)
+            puts_(b, " upright");
+        own = own->outer != NULL && own->outer->box == box ? own->outer : NULL;
+    }
+    if (own != NULL && own->kind == F_FRAME_STICKY)
+        putf(b, " sticky x %d..%d y %d..%d", (int)own->lo[0], (int)own->hi[0], (int)own->lo[1],
+             (int)own->hi[1]);
+    if (box->scroller >= 0 && b->scrollers != NULL) {
+        const flow_frame_t *f = b->scrollers[box->scroller];
+        putf(b, " scroller %d range %d %d", (int)box->scroller, (int)f->range.x, (int)f->range.y);
+        if (f->at.x != 0 || f->at.y != 0)
+            putf(b, " at %d %d", (int)f->at.x, (int)f->at.y);
+    }
+    if (box->unpainted)
+        puts_(b, " unpainted");
+    // What clips it with every scroll container unscrolled and every
+    // transform undone, as its rect is printed: its own clip, met with each
+    // scroll container's whose content it is in and each transform frame's,
+    // out to the first sticky frame, which would move it.
+    if (box->clipped) {
+        os64_gui_rect_t c = box->clip;
+        for (const flow_frame_t *f = box->frame; f != NULL && f->kind != F_FRAME_STICKY;
+             f = f->outer)
+            if (f->clips)
+                c = met(c, f->clip);
+        puts_(b, " clip");
+        box_rect(b, c);
+    }
+    puts_(b, "\n");
+    for (const flow_box_t *c = box->first; c != NULL; c = c->next)
+        tree_lines(b, c, depth + 1);
+}
+
+int64_t f_tree_dump(const flow_box_t *root, const flow_frame_t *const *scrollers, int32_t width,
+                    int32_t height, bool incomplete, char *out, size_t cap)
+{
+    Buf b = {out, cap, 0, scrollers};
+    if (root != NULL) {
+        putf(&b, "page %d %d\n", (int)width, (int)height);
+        tree_lines(&b, root, 0);
+    }
+    if (incomplete)
+        puts_(&b, "incomplete\n");
+    if (cap > 0)
+        out[b.len < cap ? b.len : cap - 1] = '\0';
+    return (int64_t)b.len;
+}

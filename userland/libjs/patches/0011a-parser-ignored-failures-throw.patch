@@ -1,0 +1,205 @@
+# Where the parser ignored an allocation's failure and went on, in three
+# functions: a child definition whose constant-pool add failed
+# (js_create_function asserted on its missing slot, ending the program); a
+# closure-variable add in resolve_scope_var (its -1 used as an index,
+# emitted as nothing, or taken by resolve_variables as the next position
+# and read at bc_buf[-1]); an `arguments` or function-name add there (its
+# -1 captured as a wild argument slot of an enclosing function, or, in the
+# function's own scope, looked up as a global: a wrong answer); and
+# get_lvalue reading a failed bytecode buffer as a bad assignment target
+# (a SyntaxError). Each now throws out of memory through the existing fail
+# path. resolve_labels' output buffer, the tokenizer lookahead, the
+# pseudo-variable adds and add_eval_variables are not covered (DEBTS.md).
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -26097,6 +26097,14 @@
+         depth = 3;
+         break;
+     default:
++        /* os64: get_prev_opcode answers OP_invalid once the bytecode
++           buffer has failed to grow, so the lvalue's opcode was never
++           written; upstream reported that out-of-memory as a SyntaxError
++           naming the script's assignment. */
++        if (dbuf_error(&fd->byte_code)) {
++            JS_ThrowOutOfMemory(s->ctx);
++            return -1;
++        }
+     invalid_lvalue:
+         if (tok == TOK_FOR) {
+             return js_parse_error(s, "invalid for in/of left hand-side");
+@@ -33034,6 +33042,13 @@
+ }
+ 
+ /* return the position of the next opcode or -1 if error */
++/* os64: get_closure_var fails only when add_closure_var cannot grow the
++   closure-variable array (out of memory, or too many closure variables),
++   and it has thrown when it does. Upstream used its -1 here as an index,
++   or emitted nothing (a later "stack underflow"); each call below now
++   returns -1, which resolve_variables takes to its fail path. So does a
++   failed add of an `arguments` or function-name binding (add_var has
++   thrown). */
+ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
+                              JSAtom var_name, int scope_level, int op,
+                              DynBuf *bc, uint8_t *bc_buf,
+@@ -33092,10 +33107,18 @@
+             s->has_arguments_binding) {
+             /* 'arguments' pseudo variable */
+             var_idx = add_arguments_var(ctx, s);
++            /* os64: the binding exists, so -1 is a failed add; upstream
++               went on to the enclosing scopes and the global */
++            if (var_idx < 0)
++                return -1;
+         }
+         if (var_idx < 0 && s->is_func_expr && var_name == s->func_name) {
+             /* add a new variable with the function name */
+             var_idx = add_func_var(ctx, s, var_name);
++            /* os64: the name exists, so -1 is a failed add; upstream
++               went on to the enclosing scopes and the global */
++            if (var_idx < 0)
++                return -1;
+         }
+     }
+     if (var_idx >= 0) {
+@@ -33243,11 +33266,12 @@
+             } else if (vd->var_name == JS_ATOM__with_ && !is_pseudo_var) {
+                 capture_var(fd, vd);
+                 idx = get_closure_var(ctx, s, fd, JS_CLOSURE_LOCAL, idx, vd->var_name, FALSE, FALSE, JS_VAR_NORMAL);
+-                if (idx >= 0) {
+-                    dbuf_putc(bc, OP_get_var_ref);
+-                    dbuf_put_u16(bc, idx);
+-                    var_object_test(ctx, s, var_name, op, bc, &label_done, 1);
+-                }
++                /* os64: upstream skipped the with-object test on failure */
++                if (idx < 0)
++                    return -1;
++                dbuf_putc(bc, OP_get_var_ref);
++                dbuf_put_u16(bc, idx);
++                var_object_test(ctx, s, var_name, op, bc, &label_done, 1);
+             }
+             idx = vd->scope_next;
+         }
+@@ -33267,11 +33291,19 @@
+         }
+         if (var_name == JS_ATOM_arguments && fd->has_arguments_binding) {
+             var_idx = add_arguments_var(ctx, fd);
++            /* os64: the binding exists, so -1 is a failed add; upstream
++               broke out with it and captured fd->args[-1 - offset] */
++            if (var_idx < 0)
++                return -1;
+             break;
+         }
+         if (fd->is_func_expr && fd->func_name == var_name) {
+             /* add a new variable with the function name */
+             var_idx = add_func_var(ctx, fd, var_name);
++            /* os64: the name exists, so -1 is a failed add; upstream
++               broke out with it and captured fd->args[-1 - offset] */
++            if (var_idx < 0)
++                return -1;
+             break;
+         }
+ 
+@@ -33282,6 +33314,9 @@
+             idx = get_closure_var(ctx, s, fd, JS_CLOSURE_LOCAL,
+                                   fd->var_object_idx, vd->var_name,
+                                   FALSE, FALSE, JS_VAR_NORMAL);
++            /* os64: upstream emitted index -1 on failure */
++            if (idx < 0)
++                return -1;
+             dbuf_putc(bc, OP_get_var_ref);
+             dbuf_put_u16(bc, idx);
+             var_object_test(ctx, s, var_name, op, bc, &label_done, 0);
+@@ -33294,6 +33329,9 @@
+             idx = get_closure_var(ctx, s, fd, JS_CLOSURE_LOCAL,
+                                   fd->arg_var_object_idx, vd->var_name,
+                                   FALSE, FALSE, JS_VAR_NORMAL);
++            /* os64: upstream emitted index -1 on failure */
++            if (idx < 0)
++                return -1;
+             dbuf_putc(bc, OP_get_var_ref);
+             dbuf_put_u16(bc, idx);
+             var_object_test(ctx, s, var_name, op, bc, &label_done, 0);
+@@ -33328,6 +33366,9 @@
+                 } else {
+                     idx = idx1;
+                 }
++                /* os64: upstream used index -1 on failure */
++                if (idx < 0)
++                    return -1;
+                 if (cv->closure_type == JS_CLOSURE_GLOBAL ||
+                     cv->closure_type == JS_CLOSURE_GLOBAL_DECL ||
+                     cv->closure_type == JS_CLOSURE_GLOBAL_REF)
+@@ -33347,6 +33388,9 @@
+                 } else {
+                     idx = idx1;
+                 }
++                /* os64: upstream emitted index -1 on failure */
++                if (idx < 0)
++                    return -1;
+                 dbuf_putc(bc, OP_get_var_ref);
+                 dbuf_put_u16(bc, idx);
+                 var_object_test(ctx, s, var_name, op, bc, &label_done, is_with);
+@@ -33367,6 +33411,9 @@
+         } else {
+             idx = idx1;
+         }
++        /* os64: upstream emitted index -1 on failure */
++        if (idx < 0)
++            return -1;
+     has_global_idx:
+         /* global variable access */
+         switch (op) {
+@@ -33418,6 +33465,10 @@
+                                   fd->vars[var_idx].is_lexical,
+                                   fd->vars[var_idx].var_kind);
+         }
++        /* os64: upstream emitted nothing on failure, leaving the value
++           off the stack ("stack underflow" when the function was made) */
++        if (idx < 0)
++            return -1;
+         if (idx >= 0) {
+         has_idx:
+             if ((op == OP_scope_put_var || op == OP_scope_make_ref) &&
+@@ -34392,6 +34443,12 @@
+             scope = get_u16(bc_buf + pos + 5);
+             pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
+                                          NULL, NULL, pos_next);
++            /* os64: -1 is a failed variable add; upstream took it
++               as the next position and read bc_buf[-1] as an opcode. The
++               fail path copies this instruction, atom and all, so the
++               atom is not freed here (the private-field call's shape). */
++            if (pos_next < 0)
++                goto fail;
+             JS_FreeAtom(ctx, var_name);
+             break;
+         case OP_scope_make_ref:
+@@ -34405,6 +34462,9 @@
+                 ls->ref_count--;  /* always remove label reference */
+                 pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
+                                              bc_buf, ls, pos_next);
++                /* os64: as above, -1 is a failed variable add */
++                if (pos_next < 0)
++                    goto fail;
+                 JS_FreeAtom(ctx, var_name);
+             }
+             break;
+@@ -36209,11 +36269,19 @@
+ 
+         fd1 = list_entry(el, JSFunctionDef, link);
+         cpool_idx = fd1->parent_cpool_idx;
++        /* os64: a child with no constant-pool slot is one whose
++           cpool_add ran out of memory; the parser ignored that failure
++           (a function definition, a class's default constructor and its
++           field initializer each add a slot without asking) and went on.
++           Upstream asserted here, which ended the program. */
++        if (cpool_idx < 0) {
++            JS_ThrowOutOfMemory(ctx);
++            goto fail;
++        }
+         func_obj = js_create_function(ctx, fd1);
+         if (JS_IsException(func_obj))
+             goto fail;
+         /* save it in the constant pool */
+-        assert(cpool_idx >= 0);
+         fd->cpool[cpool_idx] = func_obj;
+     }
+ 

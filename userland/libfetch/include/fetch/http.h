@@ -1,0 +1,370 @@
+#ifndef OS64GET_HTTP_H
+#define OS64GET_HTTP_H
+
+// http.h — enough of HTTP/1.1 (RFC 9112) to ask a stranger on port 80 for a
+// file and know whether what came back is one. libfetch's parser (LIBFETCH.md);
+// fetch.c is its one caller, and the host harness its other driver.
+//
+// WHAT AN ADDRESS IS LIVES IN libos64, NOT HERE. `os64_url_parse`
+// (os64/url.h) owns the scheme/host/port/path grammar, because gopher needs
+// every rule of it and a security-edged rule kept in two places drifts, and
+// `os64_url_absolute` (RFC 3986 §5.2 reference resolution) lives beside the
+// grammar because a redirect's Location and every href on a page are
+// written in it. What stays here is everything that is HTTP's alone: which
+// schemes are HTTP and what port each implies, the request line and the
+// Host header, the head, and the body's framing.
+//
+// WHY PARSING IS SEPARATE FROM THE SOCKET. Every function below that reads
+// takes its bytes from an `http_source_fn`, never from a handle. On os64 the
+// source supplies plain TCP or authenticated TLS bytes (transport.c); in
+// tools/test_http_host.sh it is a memory buffer handing out one byte at a
+// time, then two, then seventeen — because a stream parser's bugs live
+// exactly where a token straddles two reads, and a parser that can only be
+// driven by a real network is a parser nobody drives across those boundaries.
+//
+// DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
+// its own: content codings beyond gzip, transfer codings other than chunked,
+// authentication policy, cookie storage, IPv6 literals, and the keeping of
+// connections, which is fetch.c's and pool.c's (this file only reads what a
+// reply says about it: its version and its Connection line). What is missing is
+// REFUSED BY NAME rather than mis-read: a response this code cannot honestly
+// turn into bytes for a consumer must never become those bytes. gzip
+// decoding stays in fetch.c because http.c is the transport parser; libgzip
+// owns that format.
+//
+// WHAT A REDIRECT MEANS IS NOT HERE EITHER, and that split is on purpose:
+// the head says where the Location points, and fetch.c answers "and may I
+// go there", which depends on the machine — whether a proxy is configured,
+// how many hops have been spent, whether the answer points back at itself —
+// and on the caller, through its hop verdict.
+//
+// TLS belongs to the byte source. This parser receives HTTP plaintext on
+// both direct and proxied routes; routing and certificate verification do
+// not change HTTP framing.
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "os64/url.h"       // the common URL grammar, shared with gopher
+
+// Oversized optional fields with readable names are omitted whole, including
+// Set-Cookie: truncating one could change its meaning. Framing, coding and
+// Location fields must fit; dropping those could change the body's framing
+// or hide a conflicting redirect. See overlong_verdict for that distinction.
+// So a line holds the longest address with a field name in front of it.
+#define HTTP_LINE_MAX      (OS64_URL_REF_MAX + 64)
+// ...but the DROPPING is bounded, or a peer that talks forever and never
+// sends a newline is read forever. HTTP_HEAD_MAX is the whole head's budget
+// AND, spent down line by line, each line's — because a cap checked only
+// between lines is a cap the endless line never returns to be measured by.
+// HTTP_HEADERS_MAX bounds the other shape of the same attack: short lines,
+// endlessly many. Both refuse loudly.
+#define HTTP_HEAD_MAX      65536
+#define HTTP_HEADERS_MAX   128
+
+// Spelled as the library's, not merely equal to them: http_url_parse fills
+// an http_url_t by copying out of an os64_url_t, so a cap that drifted
+// SMALLER here would silently truncate an address the parser accepted.
+#define HTTP_HOST_MAX      OS64_URL_HOST_MAX
+#define HTTP_PATH_MAX      OS64_URL_PATH_MAX
+#define HTTP_SCHEME_MAX    OS64_URL_SCHEME_MAX
+#define HTTP_REASON_MAX    64
+#define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
+#define HTTP_TYPE_MAX      64     // a media type: "text/html", "image/svg+xml"
+#define HTTP_CHARSET_MAX   32     // its charset parameter: "utf-8", "windows-1252"
+
+// The longest request target: the absolute-form a proxy is sent, which is
+// the longer of the two forms (http_request).
+#define HTTP_TARGET_MAX    (HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + 16)
+
+// The longest address http_url_absolute can spell: a base's scheme and host,
+// with a whole Location header joined onto its path. Every buffer an
+// absolute-form address is written into is this size, so the ones that must
+// agree cannot drift apart.
+#define HTTP_URL_TEXT_MAX  (HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + HTTP_LINE_MAX + 16)
+
+// The read buffer. Big enough that a whole response head usually arrives in
+// one os64_read, and the leftover tail of that read is where the body starts
+// — which is why the stream, not the caller, owns it (see http_stream_read).
+#define HTTP_BUF_SIZE      8192
+
+// ── A URL, taken apart ──────────────────────────────────────────────────
+
+typedef struct {
+    char     scheme[HTTP_SCHEME_MAX];   // lowercased; filled whenever one was readable
+    char     host[HTTP_HOST_MAX];       // no port, no userinfo, no brackets
+    char     path[HTTP_PATH_MAX];       // always starts '/'; query kept, fragment dropped
+    uint16_t port;                      // the scheme's default (80/443) unless the URL said so
+} http_url_t;
+
+typedef enum {
+    HTTP_URL_OK = 0,
+    HTTP_URL_NOT_A_URL,   // no "scheme://" — this operand names a valet file
+    HTTP_URL_SCHEME,      // a URL, but neither http nor https
+    HTTP_URL_NO_HOST,
+    HTTP_URL_HOST_CHARS,  // userinfo, an IPv6 literal, or bytes a host cannot hold
+    HTTP_URL_PATH_CHARS,  // a space or a control byte: the request-splitting shape
+    HTTP_URL_PORT,
+    HTTP_URL_TOO_LONG
+} http_url_result_t;
+
+// Take `url` apart. HTTP_URL_NOT_A_URL is not a complaint: it is how the
+// caller learns the operand was a bare name meant for the valet, which is
+// why it is a result rather than an error.
+http_url_result_t http_url_parse(const char *url, http_url_t *out);
+
+// The refusal in words, one vocabulary for every caller (os64_dial_reason's
+// shape, and for its reason: a program should be able to print something a
+// person can act on without a debugger). HTTP_URL_SCHEME's sentence names no
+// scheme — the caller holds the parsed one and owes https:// a better
+// sentence than a generic refusal.
+const char *http_url_reason(http_url_result_t rc);
+
+// Build the request. HTTP/1.1, and the version is a promise about what the
+// reply may look like: a 1.1 client must read chunked framing, because a 1.1
+// server may answer any request with it (a 1.0 client is owed a length or a
+// close, which is what this asked for until http_body_read learned chunks).
+// It is also how the request asks to keep the connection: persistence is
+// HTTP/1.1's default (RFC 9112 § 9.3), so nothing is said for it unless the
+// caller asks for `Connection: keep-alive` (`keep_alive`, below: a browser
+// says it anyway), and `Connection: close` is never sent — a reply framed by
+// neither length nor chunks still ends at the server's close. Whether a
+// connection is kept after a reply is fetch.c's judgement, with every
+// clause of RFC 9112 § 9.3 (pool.h's connection_reusable). `Host:` because name-based
+// virtual hosting means a request without it reaches whatever the address
+// answers with by default — usually not the page asked for. Host is always
+// the first line after the request line.
+//
+// `absoluteForm` puts the WHOLE URL in the request line instead of the path,
+// which is what a proxy needs to know which origin the request is for (RFC
+// 7230 §5.3.2, and the CERN proxy's shape since 1994).
+//
+// The caller's headers ride in `extras`, every one optional (NULL = not
+// sent): `User-Agent` because a meaningful fraction of the web refuses a
+// request without one; `Accept` because content negotiation is how a server
+// chooses HTML over JSON; `extra_headers` as whole "Name: value\r\n" lines
+// for Referer, Range, Cookie — headers, not machinery. Every byte of all
+// header values is judged by the field-byte rule (`is_field_byte`: HTAB,
+// printable ASCII and obs-text), and a bad one refuses the request — a header a caller
+// composes from page content is a header an attacker composes, and a bare
+// LF in one is the request-splitting shape. Returns false if the request
+// will not fit or a header fails that rule; the caller cannot tell the two
+// apart and does not need to, since neither is the server's doing.
+typedef enum { HTTP_METHOD_GET = 0, HTTP_METHOD_POST } http_method_t;
+
+// The longest method a caller may name, with its NUL.
+#define HTTP_METHOD_NAME_MAX 64
+
+typedef struct {
+    const char *user_agent;
+    const char *accept;
+    const char *extra_headers;   // "Name: value\r\n" lines, already terminated
+    http_method_t method;       // zero-initialized options send GET
+    size_t body_len;            // POST: sent as Content-Length, including zero
+    const char *content_type;   // POST: optional, boundary preserved verbatim
+    // A method by name, any token, in place of `method` (which then stays
+    // GET, with no content_type): its body, when there is one, goes with a
+    // Content-Length, and so does an empty POST or PUT (Fetch § 4.6). GET
+    // and HEAD carry no body.
+    const char *method_name;
+    // A body is present even when body_len is zero (a page's empty string
+    // is a body; null is none): it goes with `Content-Length: 0`, whatever
+    // the method (GET and HEAD refuse one), so a server can tell an empty
+    // body from no body.
+    bool body_present;
+    // The representation headers a caller's page chose, as whole lines:
+    // Content-Type, Content-Encoding, Content-Language and Content-Location
+    // only, and only beside a method_name, whose redirects the caller
+    // rewrites itself.
+    const char *body_headers;
+    // Accept-Encoding: identity, for a request that asks for a byte Range
+    // of the representation (Fetch § 4.6: a coding would number other bytes).
+    bool identity;
+    // `Connection: keep-alive`, which a browser sends though HTTP/1.1 keeps
+    // the connection without it.
+    bool keep_alive;
+    // The order of the lines after Host, as field names separated by commas
+    // ("Connection, User-Agent, Accept"), matched without case: each named
+    // line goes where the list puts it, and the lines it does not name
+    // follow in this writer's own order — User-Agent, Accept,
+    // Accept-Encoding, Connection, Content-Length, Content-Type, then
+    // `body_headers` and `extra_headers` line by line as given. A name
+    // listed twice counts once, and Host, which is always first, is not
+    // moved by naming it. NULL: this writer's own order throughout.
+    const char *order;
+} http_request_extras_t;
+
+bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
+                  const http_request_extras_t *extras);
+
+// Framing, routing and body metadata belong to the renderer. extra_headers
+// cannot supply Host, Content-Length, Content-Type, Content-Encoding,
+// Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
+// Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
+// GET rejects body_len/body_present/content_type; POST permits an empty body. A
+// method_name that is not a token or is CONNECT (in any case: its reply
+// makes the connection a tunnel), a body with GET or HEAD, body_headers
+// without a method_name or naming anything else, and content_type beside a
+// method_name are refused, and so is an `order` that holds anything but field
+// names, commas and blanks.
+// The field-byte judgement on its own, so a caller can refuse a bad header
+// BEFORE dialling anybody about it. http_request applies it again.
+bool http_request_extras_ok(const http_request_extras_t *extras);
+
+// Write a parsed URL back out as text — the inverse of http_url_parse for
+// everything the parse kept, so a fragment and a redundant default port are
+// gone by construction.
+bool http_url_render(const http_url_t *url, char *out, size_t cap);
+
+// The same address in the library's spelling, for os64_url_absolute: a port
+// that is the scheme's default becomes 0 ("none spelled"), which is what
+// keeps a resolved `/login` from reading `https://host:443/login`.
+void http_url_to_os64(const http_url_t *url, os64_url_t *out);
+
+// ── A stream of bytes that arrives in whatever pieces it likes ──────────
+
+// Fill `buf` with up to `cap` bytes: > 0 got some, 0 the peer is done, < 0
+// the connection broke. os64_read's contract exactly, so the os64 source is
+// a two-line shim.
+typedef int64_t (*http_source_fn)(void *ctx, void *buf, size_t cap);
+
+typedef struct {
+    http_source_fn source;
+    void          *ctx;
+    uint8_t        buf[HTTP_BUF_SIZE];
+    size_t         have;      // bytes in buf
+    size_t         next;      // how many of them are spent
+    bool           ended;     // the source answered 0
+    bool           failed;    // the source answered < 0
+} http_stream_t;
+
+void http_stream_init(http_stream_t *s, http_source_fn source, void *ctx);
+
+// ── The answer ──────────────────────────────────────────────────────────
+
+typedef struct {
+    int32_t  status;                          // 200, 404, 301...
+    char     reason[HTTP_REASON_MAX];         // the server's own words
+    bool     hasLength;
+    uint64_t length;                          // valid only when hasLength
+    char     transferEncoding[HTTP_TOKEN_MAX];// "" = none said
+    char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity; caller also accepts gzip
+    // The media type and its charset parameter, for the consumer that has to
+    // decide what the bytes ARE (a page to parse, an image to decode) and how
+    // its text is encoded. Both lowercased; "" = not said.
+    // A Content-Type this cannot hold is dropped, not refused: nothing about
+    // the FRAMING depends on it, so the fetch stays honest without it.
+    char     contentType[HTTP_TYPE_MAX];
+    char     charset[HTTP_CHARSET_MAX];
+    bool     hasLocation;                     // a Location line was seen, even an empty one
+    char     location[HTTP_LINE_MAX];         // valid only when hasLocation; "" = it named nowhere
+    // What the reply says about its connection (RFC 9112 § 9.3): whether its
+    // status line said HTTP/1.1 (or a later 1.x), and whether a Connection
+    // line named `close` — or was too long to read, which is taken as one
+    // that did, since what it said cannot be known.
+    bool     http11;
+    bool     connectionClose;
+} http_response_t;
+
+typedef enum {
+    HTTP_HEAD_OK = 0,
+    HTTP_HEAD_SOURCE,     // the connection died before the head was whole
+    HTTP_HEAD_STATUS,     // the first line is not an HTTP status line
+    HTTP_HEAD_SYNTAX,     // a header line is not "Name: value"
+    HTTP_HEAD_TOO_MUCH,   // more head than this will read
+    HTTP_HEAD_CONFLICT,   // two different answers to one question
+    HTTP_HEAD_FRAMING,    // a header the fetch depends on was unreadable: framing, coding, or where a redirect points
+    HTTP_HEAD_SWITCHED    // 101: the bytes that follow are not HTTP any more
+} http_head_result_t;
+
+// Read the status line and every header, stopping on the blank line that
+// ends them. On return the stream is positioned at the first byte of the
+// body — including any body bytes that arrived in the same read as the head.
+http_head_result_t http_head_read(http_stream_t *s, http_response_t *out);
+#define HTTP_INTERIM_MAX 8
+// Read one head, including informational replies, to interleave upload and
+// response processing. The caller bounds the number of interim heads.
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out);
+
+// A complete, syntactically valid field, before header-specific framing
+// checks. Name and OWS-trimmed value are borrowed through this call only;
+// duplicate fields arrive separately, in wire order. Only final (>= 200)
+// response heads are offered, not interim heads or trailers. Oversized
+// optional fields are omitted whole — offered by name with a NULL value, so
+// an observer can tell absence from omission; framing/redirect fields fail
+// the head.
+// A later head failure does not undo callbacks already made.
+typedef void (*http_header_fn)(void *ctx, const char *name, size_t name_len,
+                               const char *value, size_t value_len);
+http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t *out,
+                                               http_header_fn on_header, void *ctx);
+
+// One-head form for upload/response interleaving, with the same observer rules.
+http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
+                                                   http_header_fn on_header, void *ctx);
+
+const char *http_head_reason(http_head_result_t rc);
+
+// Raw bytes after the head, in whatever quantity is to hand: > 0 got some, 0
+// the peer is done, < 0 the connection broke. Serves what the head-read
+// over-read first, so no byte of the body is ever lost to the header buffer —
+// a stream has no message boundaries, and this is where that fact is paid
+// for. The body reader below is built on it; a caller wanting the BODY rather
+// than the wire goes through that.
+int64_t http_stream_read(http_stream_t *s, void *out, size_t cap);
+
+// ── The body, with its framing taken off ────────────────────────────────
+//
+// HTTP has three ways of saying where a body ends, and a reply picks one:
+// a Content-Length (count the bytes), chunked transfer coding (the body
+// arrives as sized pieces and a zero-sized piece is the end — HTTP/1.1's
+// answer for a page whose length is not known when its head is sent), or
+// neither, in which case the close IS the end (HTTP/1.0's original framing,
+// RFC 1945 §7.2.2). The first two can tell a complete body from a cut one;
+// the third cannot, which is the whole reason the other two were invented.
+
+typedef enum {
+    HTTP_FRAMING_CLOSE = 0,
+    HTTP_FRAMING_LENGTH,
+    HTTP_FRAMING_CHUNKED
+} http_framing_t;
+
+typedef enum {
+    HTTP_BODY_OPEN = 0,   // still reading
+    HTTP_BODY_DONE,       // the framing was satisfied: every byte promised arrived
+    HTTP_BODY_CUT,        // the peer closed before it had
+    HTTP_BODY_BROKE,      // the connection failed
+    HTTP_BODY_SYNTAX,     // chunk framing that is not chunk framing
+    HTTP_BODY_TOO_MUCH    // a chunk-size line or trailer section beyond the caps
+} http_body_result_t;
+
+typedef struct {
+    http_stream_t     *s;
+    http_framing_t     framing;
+    http_body_result_t result;
+    uint64_t           delivered;   // body bytes handed to the caller so far
+    uint64_t           remaining;   // LENGTH: of the body; CHUNKED: of this chunk
+    uint8_t            state;       // CHUNKED's position (private to http.c)
+    size_t             trailerUsed; // CHUNKED: trailer bytes read, against HTTP_HEAD_MAX
+    size_t             trailers;    // CHUNKED: trailer lines read, against HTTP_HEADERS_MAX
+} http_body_t;
+
+// Decide the framing from the head and position the reader at the body.
+// Returns false when the reply names a transfer coding this code cannot undo
+// (anything but chunked or identity) — the caller refuses that by name, and
+// nothing is read. A Content-Length beside a transfer coding never reaches
+// here; http_head_read calls it a CONFLICT.
+bool http_body_open(http_body_t *b, http_stream_t *s, const http_response_t *reply);
+
+// Body bytes, framing removed: > 0 got some; 0 the body is over, and
+// `b->result` says whether it ended (DONE) or was merely stopped (CUT); < 0
+// it cannot go on, and `b->result` says why (BROKE, SYNTAX, TOO_MUCH). Never
+// hands back a byte of chunk framing, and never returns 0 for a chunked body
+// before its terminating chunk and trailer section have been read — so a
+// caller that sees 0 with DONE has a WHOLE file.
+int64_t http_body_read(http_body_t *b, void *out, size_t cap);
+
+const char *http_body_reason(http_body_result_t rc);
+
+#endif // OS64GET_HTTP_H

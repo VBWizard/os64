@@ -1,0 +1,4 @@
+debugfs 1.47.0 (5-Feb-2023)
+rm: File not found by ext2_lookup while trying to resolve filename
+debugfs 1.47.0 (5-Feb-2023)
+Allocated inode: 15

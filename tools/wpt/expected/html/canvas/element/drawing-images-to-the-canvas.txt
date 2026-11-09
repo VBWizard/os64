@@ -1,0 +1,22 @@
+# WPT's html/canvas/element/drawing-images-to-the-canvas in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/drawing-images-to-the-canvas --update
+# rewrites [passing].
+[required]
+2d.drawImage.canvas.html	Canvas test: 2d.drawImage.canvas
+2d.drawImage.self.1.html	Canvas test: 2d.drawImage.self.1
+2d.drawImage.self.2.html	Canvas test: 2d.drawImage.self.2
+[excluded]
+[passing]
+2d.drawImage.canvas.html	Canvas test: 2d.drawImage.canvas
+2d.drawImage.incomplete.emptysrc.html	Canvas test: 2d.drawImage.incomplete.emptysrc
+2d.drawImage.incomplete.immediate.html	Canvas test: 2d.drawImage.incomplete.immediate
+2d.drawImage.incomplete.nosrc.html	Canvas test: 2d.drawImage.incomplete.nosrc
+2d.drawImage.incomplete.reload.html	Canvas test: 2d.drawImage.incomplete.reload
+2d.drawImage.incomplete.removedsrc.html	Canvas test: 2d.drawImage.incomplete.removedsrc
+2d.drawImage.null.html	Canvas test: 2d.drawImage.null
+2d.drawImage.self.1.html	Canvas test: 2d.drawImage.self.1
+2d.drawImage.self.2.html	Canvas test: 2d.drawImage.self.2
+2d.drawImage.wrongtype.html	Incorrect image types in drawImage do not match any defined overloads, so WebIDL throws a TypeError
+2d.drawImage.wrongtype.paragraph.html	Incorrect image types in drawImage do not match any defined overloads, so WebIDL throws a TypeError
+2d.drawImage.zerocanvas.html	drawImage with zero-sized canvas as the source shoud throw exception

@@ -1,0 +1,310 @@
+{
+  "release": "1.6.0",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "cpu": "AMD Ryzen 9 3900X 12-Core Processor",
+  "fixture_encoder": "Pillow libwebp 1.3.2",
+  "sanitized": false,
+  "results": [
+    {
+      "fixture": "lossy-opaque.webp",
+      "sha256": "f869dc6308ab9a7ba49d61f4ffbeeaa4fa3d0e5f3d0868a9fbb1d31062b0a264",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 55280,
+        "output": 67108864,
+        "temporary_peak": 522641,
+        "total_peak": 67631505,
+        "allocations": 3,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 138.234,
+        "pixel_hash": "b61d9d1315c07711"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 55280,
+        "output": 67108864,
+        "temporary_peak": 522641,
+        "total_peak": 67631505,
+        "allocations": 3,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 184.346,
+        "pixel_hash": "b61d9d1315c07711"
+      }
+    },
+    {
+      "fixture": "lossless-gradient.webp",
+      "sha256": "eace67b979f57edce2b97911b82618dc294ff0a3036115aa6c747a5414b5a8d2",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 6224,
+        "output": 67108864,
+        "temporary_peak": 67462192,
+        "total_peak": 134571056,
+        "allocations": 36,
+        "alpha_paths": 0,
+        "transforms": 3,
+        "milliseconds": 96.487,
+        "pixel_hash": "7a910b617b670045"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 6224,
+        "output": 67108864,
+        "temporary_peak": 67462192,
+        "total_peak": 134571056,
+        "allocations": 36,
+        "alpha_paths": 0,
+        "transforms": 3,
+        "milliseconds": 187.651,
+        "pixel_hash": "7a910b617b670045"
+      }
+    },
+    {
+      "fixture": "lossless-palette.webp",
+      "sha256": "f17a36aaf230bc7b1aebce8d7f435ea887631689270f37cff0bd91cef4da4508",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 706,
+        "output": 67108864,
+        "temporary_peak": 8693072,
+        "total_peak": 75801936,
+        "allocations": 24,
+        "alpha_paths": 0,
+        "transforms": 8,
+        "milliseconds": 54.227,
+        "pixel_hash": "2f91480a44222325"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 706,
+        "output": 67108864,
+        "temporary_peak": 8693072,
+        "total_peak": 75801936,
+        "allocations": 24,
+        "alpha_paths": 0,
+        "transforms": 8,
+        "milliseconds": 43.819,
+        "pixel_hash": "2f91480a44222325"
+      }
+    },
+    {
+      "fixture": "lossy-alpha-binary.webp",
+      "sha256": "73679eceedb3669a8ee381dc1c87fd729154a9f4f3110df78e8889577c9bd3bb",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 56032,
+        "output": 67108864,
+        "temporary_peak": 36187457,
+        "total_peak": 103296321,
+        "allocations": 18,
+        "alpha_paths": 1,
+        "transforms": 8,
+        "milliseconds": 187.793,
+        "pixel_hash": "27fd4e3e61dfff6d"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 56032,
+        "output": 67108864,
+        "temporary_peak": 36187457,
+        "total_peak": 103296321,
+        "allocations": 18,
+        "alpha_paths": 1,
+        "transforms": 8,
+        "milliseconds": 210.844,
+        "pixel_hash": "27fd4e3e61dfff6d"
+      }
+    },
+    {
+      "fixture": "lossy-alpha-gradient.webp",
+      "sha256": "f64cc33da4836ea7ff04399a1c5adf6e248c7c57e686d446c115f5ac25133666",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 61358,
+        "output": 67108864,
+        "temporary_peak": 101477657,
+        "total_peak": 168586521,
+        "allocations": 13,
+        "alpha_paths": 2,
+        "transforms": 0,
+        "milliseconds": 210.346,
+        "pixel_hash": "ca2431dc08afabb2"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 61358,
+        "output": 67108864,
+        "temporary_peak": 101477657,
+        "total_peak": 168586521,
+        "allocations": 13,
+        "alpha_paths": 2,
+        "transforms": 0,
+        "milliseconds": 240.295,
+        "pixel_hash": "ca2431dc08afabb2"
+      }
+    },
+    {
+      "fixture": "lossless-noise.webp",
+      "sha256": "05957b0e0fcefe0efb765944d9c702ca8132018165d98c6302bc2da607a2949d",
+      "sse2": {
+        "width": 1024,
+        "height": 1024,
+        "input": 3145808,
+        "output": 4194304,
+        "temporary_peak": 4276848,
+        "total_peak": 8471152,
+        "allocations": 14,
+        "alpha_paths": 0,
+        "transforms": 4,
+        "milliseconds": 17.438,
+        "pixel_hash": "4bd5266a53ac4b94"
+      },
+      "scalar": {
+        "width": 1024,
+        "height": 1024,
+        "input": 3145808,
+        "output": 4194304,
+        "temporary_peak": 4276848,
+        "total_peak": 8471152,
+        "allocations": 14,
+        "alpha_paths": 0,
+        "transforms": 4,
+        "milliseconds": 18.454,
+        "pixel_hash": "4bd5266a53ac4b94"
+      }
+    },
+    {
+      "fixture": "lossless-noisy-stripes.webp",
+      "sha256": "093f648c63bb6cbb90b5ae8780a440cb0f504b460f768eff4c6173c9b15cb6cd",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 3154044,
+        "output": 67108864,
+        "temporary_peak": 67416816,
+        "total_peak": 134525680,
+        "allocations": 30,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 79.42,
+        "pixel_hash": "6855334b330c8dc5"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 3154044,
+        "output": 67108864,
+        "temporary_peak": 67416816,
+        "total_peak": 134525680,
+        "allocations": 30,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 112.024,
+        "pixel_hash": "6855334b330c8dc5"
+      }
+    },
+    {
+      "fixture": "lossy-wide.webp",
+      "sha256": "4eb58fdf18263a5a63ee7c44a81a4033d95c458950520220be0f46955f348627",
+      "sse2": {
+        "width": 16383,
+        "height": 16,
+        "input": 540,
+        "output": 1048512,
+        "temporary_peak": 2078608,
+        "total_peak": 3127120,
+        "allocations": 3,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 2.21,
+        "pixel_hash": "b9924952b415fb05"
+      },
+      "scalar": {
+        "width": 16383,
+        "height": 16,
+        "input": 540,
+        "output": 1048512,
+        "temporary_peak": 2078608,
+        "total_peak": 3127120,
+        "allocations": 3,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 2.713,
+        "pixel_hash": "b9924952b415fb05"
+      }
+    },
+    {
+      "fixture": "lossless-wide.webp",
+      "sha256": "aec1197480ca33bc18f7df7cce97354db08a394ffc0b9dd0687e73dac439c734",
+      "sse2": {
+        "width": 16384,
+        "height": 16,
+        "input": 54,
+        "output": 1048576,
+        "temporary_peak": 1258136,
+        "total_peak": 2306712,
+        "allocations": 13,
+        "alpha_paths": 0,
+        "transforms": 8,
+        "milliseconds": 1.28,
+        "pixel_hash": "2e1e2565a2fa2325"
+      },
+      "scalar": {
+        "width": 16384,
+        "height": 16,
+        "input": 54,
+        "output": 1048576,
+        "temporary_peak": 1258136,
+        "total_peak": 2306712,
+        "allocations": 13,
+        "alpha_paths": 0,
+        "transforms": 8,
+        "milliseconds": 1.226,
+        "pixel_hash": "2e1e2565a2fa2325"
+      }
+    },
+    {
+      "fixture": "lossy-alpha-raw.webp",
+      "sha256": "185d5c0f7d7231f2674dc5b1d889f3819b01229814cf9c8eb4cbc31b109390c0",
+      "sse2": {
+        "width": 4096,
+        "height": 4096,
+        "input": 16832524,
+        "output": 67108864,
+        "temporary_peak": 34077353,
+        "total_peak": 101186217,
+        "allocations": 5,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 172.772,
+        "pixel_hash": "d39b797758882251"
+      },
+      "scalar": {
+        "width": 4096,
+        "height": 4096,
+        "input": 16832524,
+        "output": 67108864,
+        "temporary_peak": 34077353,
+        "total_peak": 101186217,
+        "allocations": 5,
+        "alpha_paths": 0,
+        "transforms": 0,
+        "milliseconds": 218.24,
+        "pixel_hash": "d39b797758882251"
+      }
+    }
+  ]
+}

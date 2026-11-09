@@ -1,0 +1,718 @@
+#!/usr/bin/env python3
+r"""httptestd — a deterministic HTTP server for driving os64get's URL half.
+
+BROWSER.md's verification note calls for "a local python3 -m http.server
+behind the harness"; this is that, with the awkward cases added, because the
+answers worth testing are the ones a well-behaved library will not produce on
+request: a reply with no Content-Length, a connection cut mid-body, a 301,
+and content codings os64get must either decode or refuse without publishing.
+
+Every route's bytes are fixed by a seed, so the file the guest downloads can
+be compared against the file this server meant to send — host-side, byte for
+byte, after the guest has exited.
+
+    python3 httptestd.py [--port N] [--dump DIR]
+
+`--port` is spelled the way os64serve.py spells it, deliberately: these two
+sit in the same directory, get started the same way from the same prompt, and
+one of them taking `--port 6464` while the other took a bare number is the
+kind of difference you rediscover at 1am. A bare number still works.
+
+WHERE TO RUN IT DEPENDS ON WHICH MACHINE IS FETCHING, and this is the part
+that costs an afternoon if it is not said out loud:
+
+  - QEMU, from WSL2: run it here. The guest reaches the host's loopback at
+    10.0.2.2 through slirp, so `os64get http://10.0.2.2:8080/hello.txt` in
+    the guest finds a listener started from any WSL2 shell.
+  - THE P5, or anything else on the LAN: run it on the WINDOWS side, exactly
+    as os64serve.py's header explains for the same reason — WSL2 lives behind
+    a NAT of its own, so a listener started inside it is not reachable from
+    the room. Windows reads the file over \\wsl$ and serves it in place:
+
+        cd /mnt/c/temp
+        python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\httptestd.py'
+
+    Windows will prompt about the firewall the first time Python binds — say
+    yes, or the P5's connections are dropped before this program sees them.
+    `wsl -l` names the distro.
+
+Routes, and what each is FOR:
+
+    /               this text                              the map, served
+    /hello.txt      a small text file, Content-Length      the happy path
+    /big.bin        1 MiB, Content-Length                  the 64KB write loop
+    /slow.txt       Content-Length, dribbled out           the progress meter
+    /nolength.txt   HTTP/1.0, no length, close-delimited   RFC 1945 framing
+    /dir/           a page at a path ending in '/'         the index.html rule
+    /query?x=1&y=2  a page behind a query string           the query survives
+    /missing        404                                    a refusal
+    /redirect       301 -> /hello.txt                      the ordinary hop
+    /redirect/N     301 -> /redirect/N-1, then /hello.txt  a trail, and the hop cap
+    /redirect-page  302 -> hello.txt (page-relative)        RFC 3986 §5.2's merge
+    /set-cookie     two cookies on a 302 -> /needs-cookie
+    /needs-cookie   200 with session=donuts, 403 without
+    /referer        echoes the Referer field (or an empty line)
+    /downgrade      redirects to plain HTTP /referer
+    /post-form      HTML form for wend POST submission
+    /post-early     413 before reading the body (early upload response)
+    /post-continue  100 then read and echo the complete POST body
+    /post-pdf-form, /post-get-pdf-form, /post-down-form  wend review probes
+    /post-pdf       PDF media type, distinguishes POST from GET
+    /post-get-pdf   303 -> /post-pdf
+    /post-down     307 -> plain HTTP /post-pdf (loopback fixture only)
+    /post-echo      echoes method, content type, length and request body
+    /303-after-post POST -> GET redirect to /post-echo
+    /307-after-post POST replay redirect to /post-echo
+    /redirect-303   303 -> /hello.txt                      "GET this instead"
+    /redirect-307   307 -> /hello.txt                      the method-keeping pair
+    /redirect-308   308 -> /hello.txt                      ditto, permanent
+    /redirect-loop  302 -> itself                          a circle, named as one
+    /redirect-none  302 with no Location                   nowhere to go
+    /redirect-300   300 + Location                         a choice, not an order
+    /redirect-305   305 + Location                         "use my proxy": refused
+    /redirect-https 302 -> an https:// address              the honest TLS answer
+    /redirect-tricky 302 -> /hello.txt;reboot               a path, never a command
+    /redirect-relative 302 -> //example.com/elsewhere       scheme-relative, off-host
+    /redirect-broken 302 -> /bad path                       unusable, said so
+    /redirect-mail  302 -> mailto:...                       not a page at all
+    /chunked        200000 bytes chunked, ext + trailer    the framing comes off
+    /dots/..        a URL with no usable basename          DEST must still be honored
+    /chunked-cut    chunked, terminator never sent         truncation must not pass
+    /framing-spaced that framing, plus a blank before the colon
+    /coding-chain   Transfer-Encoding: gzip, chunked       a coding nothing decoded
+    /framing-hidden that framing, padded past a line cap    refused, not dropped
+    /gzipped        Content-Encoding: gzip                 decoded to HELLO
+    /gzip-close     gzip with no Content-Length            EOF finalizes it
+    /gzip-corrupt   gzip with a bad trailer CRC            kept only as .part
+    /gzip-trailing  valid gzip followed by junk            kept only as .part
+    /gzip-limit     1 MiB + 1 decoded zero byte            expansion refused
+    /gzip-chunked   gzip inside chunked framing            both envelopes come off
+    /gzip-twice     Content-Encoding: gzip, on two lines   encoded twice: refused by name
+    /gzip-cut       half a length-framed gzip, then close  a short body, not a bad one
+    /cut            half the promised body, then hangs up  a short body is a failure
+    /junk           not HTTP at all                        a bad header line
+    /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
+    /stall          half a head, then 45s of silence       the idle deadline
+    /stall-body     a whole head, half the body, silence   the window stays live (DOM_D4.md)
+    /sheet-wait.html a script below a slow style sheet      it waits for it (DOM_D7.md § D7d)
+    /slow-sheet.css that sheet, 1.5s late                   the sheet it waits for
+
+NOTE ON /redirect-https: it REDIRECTS to an https address, it does not fetch
+one. The first name for it was `/tohttps`, which read to Chris as "the server
+will make the TLS call for me and hand back the result" — a reasonable reading
+of a bad name, and a description of something else entirely (BROWSER.md
+sanctions a TLS-terminating proxy as the stopgap until os64 borrows a TLS).
+This route only produces the 302 that lets os64get prove it refuses an https
+target honestly instead of writing something wrong to disk.
+"""
+
+import random
+import socketserver
+import sys
+import time
+import zlib
+from urllib.parse import urlsplit
+
+USAGE = "python3 httptestd.py [--port N] [--dump DIR]"
+
+# How much request head a connection may send before it is refused — the
+# same three bounds tlsproxy.py keeps, for the same reason its Handler has a
+# timeout: the port is on the LAN.
+MAX_LINE = 65536
+MAX_HEAD = 262144
+MAX_HEAD_LINES = 200
+
+
+def visible(text):
+    """`text` with every byte a terminal would OBEY spelled as an escape —
+    C0 controls, DEL and the C1 range as `\\xHH`, backslash as `\\\\` — so a
+    request line off the LAN is logged as glyphs and cannot clear or rewrite
+    the operator's screen. tlsproxy.py keeps the same rule for the same
+    reason: both ports are open to the room. (Codex review round 5,
+    2026-09-03.)"""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif code < 0x20 or 0x7F <= code < 0xA0:
+            out.append(f"\\x{code:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+HELLO = b"hello from the host, over HTTP.\n"
+DIRPAGE = b"<html><body><h1>a directory</h1></body></html>\n"
+# A script below a style sheet that is slow to come must wait for it: the
+# box it measures is 300px wide only once the sheet has applied.
+SHEET_WAIT_PAGE = (b"<!doctype html><title>D7d sheet wait</title>"
+                   b"<link rel=stylesheet href=/slow-sheet.css>"
+                   b"<div id=box style='height:20px;background:#c7dff2'>the box</div>"
+                   b"<script>var w=document.getElementById('box').offsetWidth;</script>"
+                   b"<p id=out>Waiting for script</p><script>document.getElementById('out').textContent="
+                   b"(w===300?'PASS':'FAIL')+': the script below the sheet measured '+w;</script>\n")
+SLOW_SHEET = b"#box { width: 300px }\n"
+QUERYPAGE = b"the query survived the trip\n"
+NOLENGTH = b"no Content-Length here; the close is the length.\n" * 40
+SLOW = b"dribbled out, a piece at a time, so the meter has something to do.\n" * 700
+
+
+def big_bytes(size=1024 * 1024, seed=0x05064A17):
+    rng = random.Random(seed)
+    return bytes(rng.randrange(256) for _ in range(size))
+
+
+BIG = big_bytes()
+STALL_BODY = (b"<!doctype html><title>Stalled</title><h1>The first half</h1>\n"
+              + b"<p>This paragraph arrived before the server went quiet.</p>\n" * 400
+              + b"<h1 id=tail>The second half never comes</h1>\n")
+CHUNKED = BIG[:200000]
+INDEX = (__doc__.strip() + "\n").encode("utf-8")
+
+
+def chunked(body, sizes):
+    """`body` in chunked transfer coding, cut at `sizes` (cycled), with a
+    chunk extension on the first piece and one trailer field — the optional
+    parts of the grammar, so a client that only reads the mandatory ones is
+    found out here rather than by the first real server that uses them."""
+    out = b""
+    at = 0
+    i = 0
+    while at < len(body):
+        n = min(sizes[i % len(sizes)], len(body) - at)
+        size = f"{n:x}" + (";os64=first" if i == 0 else "")
+        out += size.encode() + b"\r\n" + body[at:at + n] + b"\r\n"
+        at += n
+        i += 1
+    return out + b"0\r\nX-Body-Bytes: %d\r\n\r\n" % len(body)
+
+
+def gzip_bytes(chunks):
+    """Build one RFC 1952 stream without retaining its uncompressed input."""
+    encoder = zlib.compressobj(level=9, wbits=16 + zlib.MAX_WBITS)
+    pieces = []
+    for chunk in chunks:
+        pieces.append(encoder.compress(chunk))
+    pieces.append(encoder.flush())
+    return b"".join(pieces)
+
+
+GZIP_HELLO = gzip_bytes([HELLO])
+GZIP_CORRUPT = bytearray(GZIP_HELLO)
+GZIP_CORRUPT[-8] ^= 0x80
+GZIP_CORRUPT = bytes(GZIP_CORRUPT)
+# The compressed stream is far below 1/100 of its decoded size, so os64get's
+# ratio rule reaches its 1 MiB floor. One byte more proves the exact boundary.
+GZIP_LIMIT = gzip_bytes([bytes(1024 * 1024), b"\0"])
+# Two Content-Encoding: gzip lines say `gzip, gzip` (RFC 7230 §3.2.2), and a
+# body that honours it is gzipped twice. One decoder pass leaves a gzip file
+# wearing the page's name; the client must refuse the list, not unwrap one.
+GZIP_TWICE = gzip_bytes([GZIP_HELLO])
+# gzip of the same 200000 bytes /chunked serves, for the chunked-and-gzip case.
+GZIP_CHUNKED = gzip_bytes([BIG[:200000]])
+
+
+def head(status, reason, headers, version="HTTP/1.1"):
+    text = f"{version} {status} {reason}\r\n"
+    for name, value in headers:
+        text += f"{name}: {value}\r\n"
+    return (text + "\r\n").encode("latin-1")
+
+
+class Handler(socketserver.StreamRequestHandler):
+    # A PER-CONNECTION READ TIMEOUT, and a bounded head drain, for the same
+    # reason tlsproxy.py has both: this binds every interface (the P5 case
+    # needs it to), so anything on the LAN can open a connection and then
+    # send nothing — or send short header lines forever. Either parks a
+    # worker thread and a file descriptor for good, and enough of them and
+    # the guest's fetches stop connecting. socketserver applies `timeout` to
+    # the socket in setup(). (Codex review round 4, 2026-09-03.)
+    timeout = 30
+
+    # A fetch-and-close client gets a fetch-and-close server: every reply
+    # ends by hanging up, whatever else frames it — os64get asks for the
+    # close and does not speak keep-alive.
+    def handle(self):
+        try:
+            request = self.read_head()
+        except OSError as error:
+            # A timeout or a reset while the request was still arriving;
+            # nothing to answer and nobody waiting to read one.
+            print(f"  !! request head never finished: {error}", flush=True)
+            return
+        if request is None:
+            return
+
+        parts = request.split()
+        method = parts[0] if parts else ""
+        lengths = self.headers.get("content-length", [])
+        if (len(lengths) > 1 or "transfer-encoding" in self.headers or
+                (lengths and (len(lengths[0]) > 20 or not lengths[0].isascii() or not lengths[0].isdecimal()))):
+            self.send(head(400, "Bad Request", [("Content-Length", 0)]))
+            return
+        path = parts[1] if len(parts) >= 2 else "/"
+        parsed = urlsplit(path)
+        route, query = parsed.path, parsed.query
+        if route == "/post-early":
+            print(f"  EARLY {visible(request)}", flush=True)
+            self.send(head(413, "Content Too Large", [("Content-Length", 9)]) + b"too large")
+            # Keep the response readable while the client abandons its upload.
+            time.sleep(1)
+            return
+        if route == "/post-continue":
+            self.send(head(100, "Continue", []))
+        length = int(lengths[0]) if lengths else 0
+        if length > 1024 * 1024:
+            self.send(head(413, "Content Too Large", [("Content-Length", 0)]))
+            return
+        try:
+            body = self.rfile.read(length)
+        except OSError:
+            return
+        if len(body) != length:
+            return
+        content_type = self.headers.get("content-type", [""])[0]
+        if method == "POST":
+            print(f"  POST bytes={len(body)} crc32={zlib.crc32(body):08x} "
+                  f"type={visible(content_type)}", flush=True)
+
+        print(f"  {visible(request)}", flush=True)
+
+        if route == "/":
+            # The map, served by the territory: this module's own docstring,
+            # so the page a client reads and the source a person reads are one
+            # text and cannot disagree about what a route is for.
+            self.send(head(200, "OK", [("Content-Type", "text/plain; charset=utf-8"),
+                                       ("Content-Length", len(INDEX))]) + INDEX)
+        elif route == "/set-cookie":
+            self.send(head(302, "Found", [("Set-Cookie", "session=donuts; Path=/; HttpOnly"),
+                                         ("Set-Cookie", "taste=chocolate; Path=/"),
+                                         ("Location", "/needs-cookie"), ("Content-Length", 0)]))
+        elif route == "/needs-cookie":
+            tokens = [token.strip() for line in self.headers.get("cookie", []) for token in line.split(";")]
+            allowed = "session=donuts" in tokens
+            result = b"cookie accepted\n" if allowed else b"cookie missing\n"
+            print(f"  cookie accepted={allowed}", flush=True)
+            self.send(head(200 if allowed else 403, "OK" if allowed else "Forbidden",
+                           [("Content-Type", "text/plain"), ("Content-Length", len(result))]) + result)
+        elif route == "/referer":
+            result = (self.headers.get("referer", [""])[0] + "\n").encode("latin-1")
+            self.send(head(200, "OK", [("Content-Type", "text/plain"), ("Content-Length", len(result))]) + result)
+        elif route == "/downgrade":
+            # Host came from the client: validate before reflecting into a
+            # Location field. Only the local fixture authority is needed.
+            host = self.headers.get("host", [""])[0]
+            if not host or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in host):
+                self.send(head(400, "Bad Request", [("Content-Length", 0)]))
+                return
+            self.send(head(302, "Found", [("Location", f"http://{host}/referer"), ("Content-Length", 0)]))
+        elif route in ("/post-pdf-form", "/post-get-pdf-form", "/post-down-form"):
+            action = route.removesuffix("-form")
+            result = (f'<html><body><form method="post" action="{action}">'
+                      '<input type="hidden" name="secret" value="donuts">'
+                      '<input type="submit" value="Submit"></form></body></html>').encode()
+            self.send(head(200, "OK", [("Content-Type", "text/html"), ("Content-Length", len(result))]) + result)
+        elif route == "/post-pdf":
+            result = method.encode()
+            self.send(head(200, "OK", [("Content-Type", "application/pdf"), ("Content-Length", len(result))]) + result)
+        elif route == "/post-get-pdf":
+            self.send(head(303, "See Other", [("Location", "/post-pdf"), ("Content-Length", 0)]))
+        elif route == "/post-down":
+            # Only redirect to the QEMU loopback fixture, never reflected input.
+            target = f"http://10.0.2.2:{self.server.server_address[1]}/post-pdf"
+            self.send(head(307, "Redirect", [("Location", target), ("Content-Length", 0)]))
+        elif route == "/post-form":
+            body = (b'<html><title>POST probe</title><body><form method="post" action="/post-echo">'
+                    b'<input type="hidden" name="snack" value="chocolate donuts">'
+                    b'<button type="submit" name="send" value="yes">Send the donuts</button>'
+                    b'</form></body></html>')
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                      ("Content-Length", len(body))]) + body)
+        elif route in ("/post-echo", "/post-continue"):
+            result = (f"method={method}\ncontent-type={content_type}\nbytes={len(body)}\n".encode("latin-1")
+                      + body)
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                      ("Content-Length", len(result))]) + result)
+        elif route in ("/303-after-post", "/307-after-post"):
+            code = int(route[1:4])
+            self.send(head(code, "Redirect", [("Location", "/post-echo"), ("Content-Length", 0)]))
+        elif route == "/hello.txt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Length", len(HELLO))]) + HELLO)
+        elif route == "/big.bin":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Length", len(BIG))]) + BIG)
+        elif route == "/slow.txt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Length", len(SLOW))]))
+            for start in range(0, len(SLOW), 1400):
+                self.send(SLOW[start:start + 1400])
+                time.sleep(0.05)
+        elif route == "/nolength.txt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain")],
+                           version="HTTP/1.0") + NOLENGTH)
+        elif route == "/dir/":
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                       ("Content-Length", len(DIRPAGE))]) + DIRPAGE)
+        elif route == "/query":
+            body = QUERYPAGE + query.encode("latin-1") + b"\n"
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Length", len(body))]) + body)
+        elif route == "/redirect":
+            self.send(head(301, "Moved Permanently",
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route.startswith("/redirect/"):
+            # A TRAIL OF N HOPS, so the same server can prove both halves of
+            # the rule: a chain shorter than the cap arrives, and one longer
+            # than it stops with the address it stopped at. The body is a
+            # courtesy page a browser would show and a fetcher must discard —
+            # sent with a length so a client that reads it instead of the
+            # real file is caught by the size, not by luck.
+            rest = route[len("/redirect/"):]
+            left = int(rest) if rest.isdigit() else 0
+            where = f"/redirect/{left - 1}" if left > 1 else "/hello.txt"
+            page = b"<html><body>this way</body></html>\n"
+            self.send(head(301, "Moved Permanently",
+                           [("Location", where), ("Content-Type", "text/html"),
+                            ("Content-Length", len(page))]) + page)
+        elif route == "/redirect-page":
+            # RELATIVE TO THE PAGE, the form RFC 3986 §5.2.3's merge exists
+            # for: `hello.txt` is not an address until it is joined to the
+            # directory of the page that said it.
+            self.send(head(302, "Found",
+                           [("Location", "hello.txt"), ("Content-Length", 0)]))
+        elif route in ("/redirect-303", "/redirect-307", "/redirect-308"):
+            code = int(route[-3:])
+            reason = {303: "See Other", 307: "Temporary Redirect",
+                      308: "Permanent Redirect"}[code]
+            self.send(head(code, reason,
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-loop":
+            # Pointing at itself. The hop cap would eventually stop this, five
+            # requests later and in words about counting; a client that
+            # notices should say what actually happened.
+            self.send(head(302, "Found",
+                           [("Location", "/redirect-loop"), ("Content-Length", 0)]))
+        elif route == "/redirect-none":
+            self.send(head(302, "Found", [("Content-Length", 0)]))
+        elif route == "/redirect-300":
+            # A LIST TO CHOOSE FROM. Its Location is the server's preference,
+            # not an instruction, and a fetcher choosing on somebody's behalf
+            # is guessing.
+            self.send(head(300, "Multiple Choices",
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-305":
+            # "Route your traffic through this machine" — from a stranger.
+            # Every browser dropped 305 for that reason; os64get must not
+            # obey it either.
+            self.send(head(305, "Use Proxy",
+                           [("Location", "http://10.0.2.2:9/"), ("Content-Length", 0)]))
+        elif route == "/redirect-dots":
+            # An absolute Location with dot segments. §5.2.2 squashes them in
+            # every branch; sent raw, `/dir/../hello.txt` asks this server
+            # what `..` means, and this server (like many) says 404.
+            self.send(head(302, "Found",
+                           [("Location", f"http://10.0.2.2:{self.server.server_address[1]}/dir/../hello.txt"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-dead":
+            # A hop to a port nothing listens on: a road that does not
+            # arrive, which is exit 15 — not 3, which names the address that
+            # was TYPED as unreachable.
+            self.send(head(302, "Found",
+                           [("Location", "http://10.0.2.2:1/nothing"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-two":
+            # Two different Locations: a redirect with no destination.
+            self.send(head(302, "Found",
+                           [("Location", "/hello.txt"), ("Location", "/missing"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-mail":
+            self.send(head(302, "Found",
+                           [("Location", "mailto:someone@example.com"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-https":
+            self.send(head(302, "Found",
+                           [("Location", "https://example.com/"), ("Content-Length", 0)]))
+        elif route == "/redirect-relative":
+            # Scheme-relative: a different host, the scheme inherited. It is
+            # resolved BEFORE it is judged, or nothing is being judged — and
+            # following it leaves this server for a real one, which is the
+            # point: only the guest's own dial says whether that host answers.
+            self.send(head(302, "Found",
+                           [("Location", "//example.com/elsewhere"), ("Content-Length", 0)]))
+        elif route == "/redirect-broken":
+            # Root-relative and malformed: resolved, it is a URL os64get
+            # refuses, and it must say so rather than dial something it made
+            # up out of the readable part.
+            self.send(head(302, "Found",
+                           [("Location", "/bad path"), ("Content-Length", 0)]))
+        elif route == "/redirect-tricky":
+            # A Location that is a legal path AND a husk command separator.
+            # It is FOLLOWED, as a path, and this server has nothing there —
+            # so the fetch ends in an honest 404 rather than in `reboot`. Any
+            # message that offers an address as a command to type must quote
+            # it. (Codex review round 5, PR #52.)
+            self.send(head(302, "Found",
+                           [("Location", "/hello.txt;reboot"), ("Content-Length", 0)]))
+        elif route == "/framing-hidden":
+            # A framing header PADDED past a client's line limit. RFC 7230 lets
+            # any amount of optional whitespace follow the colon, so a server
+            # picks how long its own headers are — and a client that drops long
+            # lines to be tolerant will miss this one and publish raw chunk
+            # framing as the file. os64get must refuse it. (Codex P1, PR #52.)
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Transfer-Encoding", " " * 3000 + "chunked")]))
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+        elif route == "/dots/..":
+            # A URL whose last path segment is unusable as a file name. With
+            # a DEST naming a file, the fetch must still work — the basename
+            # is only wanted when nothing else says where the bytes go.
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Length", len(HELLO))]) + HELLO)
+        elif route == "/chunked-cut":
+            # A chunked body that never sends its terminating chunk, then
+            # hangs up. Through a proxy that strips the framing and states no
+            # length, this arrives downstream as a clean EOF and publishes as
+            # a COMPLETE file — truncation wearing success. (Codex round 2.)
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(b"10000\r\n" + BIG[:65536] + b"\r\n")
+        elif route == "/framing-spaced":
+            # The framing header padded past a client's line cap AND carrying
+            # the blank before the colon that the SHORT form is already
+            # refused for. Both shapes must earn the same answer, or a server
+            # picks which parser it faces by padding a line. Written as raw
+            # bytes because head() cannot spell a malformed name.
+            # (Codex round 3.)
+            self.send(b"HTTP/1.1 200 OK\r\n"
+                      b"Content-Type: text/plain\r\n"
+                      b"Transfer-Encoding :" + b" " * 3000 + b"chunked\r\n"
+                      b"\r\n")
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+        elif route == "/coding-chain":
+            # A legal transfer-coding CHAIN. http.client de-chunks only when
+            # the header is exactly "chunked", so this arrives still coded and
+            # still framed — and a proxy that drops the header on sight would
+            # hand the raw framing on as a file.
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Transfer-Encoding", "gzip, chunked")]))
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+        elif route == "/chunked":
+            # The grammar's whole vocabulary in one reply: sizes from one
+            # byte to past the client's read buffer, an extension, a trailer.
+            # The body is BIG's first 200000 bytes, so `--dump` has the file
+            # to compare against.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(chunked(CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
+        elif route == "/gzipped":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_HELLO))]) + GZIP_HELLO)
+        elif route == "/gzip-close":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip")],
+                           version="HTTP/1.0") + GZIP_HELLO)
+        elif route == "/gzip-corrupt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CORRUPT))]) + GZIP_CORRUPT)
+        elif route == "/gzip-trailing":
+            body = GZIP_HELLO + b"not another gzip member"
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(body))]) + body)
+        elif route == "/gzip-limit":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_LIMIT))]) + GZIP_LIMIT)
+        elif route == "/gzip-chunked":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(chunked(GZIP_CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
+        elif route == "/gzip-twice":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_TWICE))]) + GZIP_TWICE)
+        elif route == "/gzip-cut":
+            # A length that promises the whole stream, half of it, then the
+            # close: the framing's verdict (cut) must win over the decoder's
+            # (it never saw a trailer), and the client must not wait forever
+            # for bytes the peer has hung up on.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CHUNKED))])
+                      + GZIP_CHUNKED[:len(GZIP_CHUNKED) // 2])
+        elif route == "/cut":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Length", 100000)]))
+            self.send(BIG[:40000])
+        elif route == "/reason-latin1":
+            # A reason phrase in Latin-1 (obs-text, legal), which os64get
+            # prints. Every byte a program prints must be a glyph the console
+            # can draw; this route is how that is checked from ring 3.
+            self.send(head(404, "Nicht gefunden - déjà vu üñå", [("Content-Length", 0)]))
+        elif route == "/junk":
+            self.send(b"220 this is not an HTTP server\r\n\r\nwhatever\n")
+        elif route == "/stall":
+            # Half a head, then silence for longer than os64get's idle
+            # deadline. The fetch must FAIL on its own, saying the server
+            # went silent, not sit until someone presses Ctrl+C.
+            self.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n")
+            time.sleep(45)
+        elif route == "/sheet-wait.html":
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                       ("Content-Length", len(SHEET_WAIT_PAGE))]) + SHEET_WAIT_PAGE)
+        elif route == "/slow-sheet.css":
+            time.sleep(1.5)
+            self.send(head(200, "OK", [("Content-Type", "text/css"),
+                                       ("Content-Length", len(SLOW_SHEET))]) + SLOW_SHEET)
+        elif route == "/stall-body":
+            # A whole head and half of a declared HTML body, then silence
+            # for longer than the idle deadline. yonder parses on its
+            # window's thread as the body arrives (DOM_D4.md), so this is
+            # the body that proves the window stays live while a page is
+            # stuck mid-way: it must scroll and paint the page it was on,
+            # Stop must end the load at once, and left alone the deadline
+            # must end it with the page as far as it came and the sentence
+            # saying the server went silent.
+            half = STALL_BODY[:len(STALL_BODY) // 2]
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                       ("Content-Length", len(STALL_BODY))]) + half)
+            time.sleep(45)
+        else:
+            body = f"no such thing here: {route}\n".encode("latin-1")
+            self.send(head(404, "Not Found", [("Content-Type", "text/plain"),
+                                              ("Content-Length", len(body))]) + body)
+
+    def read_head(self):
+        """The request line, with the headers after it drained and bounded.
+        Returns None when the head is more than this server will read; a
+        client that keeps sending short header lines forever is as good at
+        parking a worker as one that sends nothing at all."""
+        request = self.rfile.readline(MAX_LINE).decode("latin-1", "replace").strip()
+        self.headers = {}
+        used = 0
+        lines = 0
+        while True:
+            line = self.rfile.readline(MAX_LINE)
+            if line in (b"\r\n", b"\n", b""):
+                return request
+            name, colon, value = line.decode("latin-1").partition(":")
+            if not colon:
+                return None
+            self.headers.setdefault(name.lower(), []).append(value.strip())
+            used += len(line)
+            lines += 1
+            if used > MAX_HEAD or lines > MAX_HEAD_LINES:
+                print("  !! more request head than this server will read", flush=True)
+                self.send(head(431, "Request Header Fields Too Large",
+                               [("Content-Length", 0)]))
+                return None
+
+    def send(self, data):
+        try:
+            self.wfile.write(data)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    # Don't wait for handler threads at shutdown. They are daemons and die
+    # with the process; without this, Ctrl-C during a deliberately slow route
+    # waits for that route to finish dribbling.
+    block_on_close = False
+
+# CTRL-C ALREADY WORKS HERE, and it is worth saying why, because the valet
+# beside this needed a deliberate fix for the same thing. WinSock's blocking
+# accept() does not return for a console signal, so a raw accept loop on
+# Windows only notices Ctrl-C when the next client arrives — read by everyone
+# as "does not stop". socketserver.serve_forever() does not block in accept:
+# it waits in a selector with a poll interval and comes back every half
+# second whether or not anyone knocked, which is when Python gets to raise
+# the KeyboardInterrupt. Same cure, already built in.
+
+def dump_bodies(where):
+    """Write the deterministic bodies where a host-side comparison can find
+    them: the point of a fixed seed is that the file the guest downloaded can
+    be diffed against the one this meant to serve."""
+    import pathlib
+    out = pathlib.Path(where)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, body in (("hello.txt", HELLO), ("big.bin", BIG), ("slow.txt", SLOW),
+                       ("nolength.txt", NOLENGTH), ("index.html", DIRPAGE),
+                       ("chunked", CHUNKED)):
+        (out / name).write_bytes(body)
+    print(f"bodies written to {out}")
+
+
+def bad(message):
+    print(f"httptestd: {message}", file=sys.stderr)
+    print(f"usage: {USAGE}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_port(text):
+    # An EMPTY argument is the one worth naming, because it is what a shell
+    # hands you when a variable expands to nothing — and cmd.exe does that
+    # without a murmur. `int('')` answers with a traceback, which tells the
+    # reader about Python instead of about their command line.
+    if text == "":
+        bad("--port was given nothing (an empty argument — a variable that expanded to nothing?)")
+    try:
+        port = int(text)
+    except ValueError:
+        bad(f"'{text}' is not a port number")
+    if not 1 <= port <= 65535:
+        bad(f"port {port} is not in 1..65535")
+    return port
+
+
+def main():
+    port = 8080
+    where = None
+
+    args = sys.argv[1:]
+    while args:
+        token = args.pop(0)
+        if token in ("-h", "--help"):
+            print(__doc__)
+            return
+        elif token == "--port":
+            if not args:
+                bad("--port needs a number after it")
+            port = parse_port(args.pop(0))
+        elif token == "--dump":
+            if not args:
+                bad("--dump needs a directory after it")
+            where = args.pop(0)
+        elif token.startswith("-"):
+            bad(f"unknown option {token}")
+        else:
+            # A bare number still means the port, because that is how this
+            # started and a harness script may still spell it that way.
+            port = parse_port(token)
+
+    if where is not None:
+        dump_bodies(where)
+        return
+
+    print(f"httptestd serving on 0.0.0.0:{port} — every interface, so a machine "
+          f"across the room can reach it.", flush=True)
+    print("Ctrl-C to stop.", flush=True)
+    try:
+        with Server(("0.0.0.0", port), Handler) as server:
+            server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nhttptestd: stopped.")
+    except OSError as error:
+        bad(f"cannot listen on port {port}: {error}")
+
+
+if __name__ == "__main__":
+    main()

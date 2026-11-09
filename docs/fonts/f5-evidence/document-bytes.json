@@ -1,0 +1,10 @@
+{
+  "original": {
+    "utf8": "F5 live document: café, naïve, résumé.\nA wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — \nLast line.\n",
+    "sha256": "91415627757c56a49693af749e924882fade25d782a46e36da73caa0d553f516"
+  },
+  "saved": {
+    "utf8": "F5 live document: café, naïve, résumé.UNSAVED font switch proof\n\nA wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — A wider line with editable words and symbols: α β → € — \nLast line.\n",
+    "sha256": "026a170c2c7c7c80c3199755f71500e111ca9c2e029915cc97dcf2d885a01e91"
+  }
+}

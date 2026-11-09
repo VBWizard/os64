@@ -1,0 +1,1091 @@
+# WPT's user-timing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh user-timing --update
+# rewrites [passing].
+[required]
+# Slice 1a: mark, measure, the entries and their lists, clearMarks and
+# clearMeasures, detail, the errors, and measures against the navigation
+# timing milestones. Each fails with the switch off.
+clearMarks.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. Entry "1" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "". There should be 2 entries.
+clearMarks.html	First loop: checking entries after removing "1". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. Entry "abc" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "1". There should be 1 entries.
+clearMarks.html	First loop: checking entries after removing "abc". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "abc". There should be 0 entries.
+clearMarks.html	First loop: marks that we cleared for "" should not exist anymore.
+clearMarks.html	First loop: marks that we cleared for "1" should not exist anymore.
+clearMarks.html	First loop: marks that we cleared for "abc" should not exist anymore.
+clearMarks.html	No marks should exist after we clear all.
+clearMarks.html	No marks should exist when we clear all.
+clearMarks.html	Nothing should happen if we clear a non-exist mark.
+clearMarks.html	Second loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. Entry "1" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. Entry "1" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". There should be 4 entries.
+clearMarks.html	Second loop: checking entries after removing "1". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "1". There should be 2 entries.
+clearMarks.html	Second loop: checking entries after removing "abc". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "abc". There should be 0 entries.
+clearMarks.html	Second loop: marks that we cleared for "" should not exist anymore.
+clearMarks.html	Second loop: marks that we cleared for "1" should not exist anymore.
+clearMarks.html	Second loop: marks that we cleared for "abc" should not exist anymore.
+clearMeasures.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. Entry "2" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "". There should be 2 entries.
+clearMeasures.html	First loop: checking entries after removing "2". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "2". There should be 1 entries.
+clearMeasures.html	First loop: checking entries after removing "aaa". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "aaa". There should be 0 entries.
+clearMeasures.html	First loop: measure "" should not exist anymore after we cleared it.
+clearMeasures.html	First loop: measure "2" should not exist anymore after we cleared it.
+clearMeasures.html	First loop: measure "aaa" should not exist anymore after we cleared it.
+clearMeasures.html	No measures should exist after we clear all (after first loop).
+clearMeasures.html	No measures should exist when we clear all (after second loop).
+clearMeasures.html	Nothing should happen if we clear a non-exist measure
+clearMeasures.html	Second loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. Entry "2" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. Entry "2" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". There should be 4 entries.
+clearMeasures.html	Second loop: checking entries after removing "2". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". There should be 2 entries.
+clearMeasures.html	Second loop: checking entries after removing "aaa". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "aaa". There should be 0 entries.
+clearMeasures.html	Second loop: measure "" should not exist anymore after we cleared it.
+clearMeasures.html	Second loop: measure "2" should not exist anymore after we cleared it.
+clearMeasures.html	Second loop: measure "aaa" should not exist anymore after we cleared it.
+clear_all_marks.any.html	Clearing all marks remove all of them.
+clear_all_measures.any.html	Clearing all marks remove all of them.
+clear_non_existent_mark.any.html	Clearing a non-existent mark doesn't affect existing marks
+clear_non_existent_measure.any.html	Clearing a non-existent measure doesn't affect existing measures
+clear_one_mark.any.html	Clearing an existent mark doesn't affect other existing marks
+clear_one_measure.any.html	Clearing an existent measure doesn't affect other existing measures
+entry_type.any.html	Validate the user timing entry type PerformanceMark
+entry_type.any.html	Validate the user timing entry type PerformanceMeasure
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domComplete
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domContentLoadedEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domContentLoadedEventStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domInteractive
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domLoading
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domainLookupEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domainLookupStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute fetchStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute loadEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute loadEventStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute navigationStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute redirectEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute redirectStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute requestStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute responseEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute responseStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute secureConnectionStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute unloadEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute unloadEventStart
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string)'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {detail})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {startTime, detail})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {startTime})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {})'.
+mark-entry-constructor.any.html	Using new PerformanceMark() shouldn't add the entry to performance timeline.
+mark-errors.any.html	[new PerformanceMark]: Infinity should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: NaN should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: Negative startTime in mark-options should be rejected
+mark-errors.any.html	[new PerformanceMark]: Number should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: String should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: Infinity should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: NaN should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: Negative startTime in mark-options should be rejected
+mark-errors.any.html	[performance.mark]: Number should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: String should be rejected as the mark-options.
+mark-measure-feature-detection.html	Test PerformanceMark existence and feature detection
+mark-measure-feature-detection.html	Test PerformanceMeasure existence and feature detection
+mark-measure-return-objects.any.html	L3: performance.mark(name) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.mark(name, param) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name, param1) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name, param1, param2) should return an entry.
+mark.any.html	Entry 0 duration == 0
+mark.any.html	Entry 0 has the proper entryType
+mark.any.html	Entry 0 has the proper name
+mark.any.html	Entry 0 is properly created
+mark.any.html	Entry 0 startTime is approximately correct (up to 20ms difference allowed)
+mark.any.html	Entry 1 duration == 0
+mark.any.html	Entry 1 has the proper entryType
+mark.any.html	Entry 1 has the proper name
+mark.any.html	Entry 1 is properly created
+mark.any.html	Entry 1 startTime is approximately correct (up to 20ms difference allowed)
+mark.any.html	The mark returned by getEntries()[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntries()[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	The mark returned by getEntriesByName("mark", "mark")[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntriesByName("mark", "mark")[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	The mark returned by getEntriesByType("mark")[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntriesByType("mark")[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	getEntries()[0] returns an object containing a "mark" mark
+mark.any.html	getEntries()[1] returns an object containing a "mark" mark
+mark.any.html	getEntriesByName("mark", "mark")[0] returns an object containing a "mark" mark
+mark.any.html	getEntriesByName("mark", "mark")[1] returns an object containing a "mark" mark
+mark.any.html	getEntriesByType("mark")[0] returns an object containing a "mark" mark
+mark.any.html	getEntriesByType("mark")[1] returns an object containing a "mark" mark
+mark.html	Checking all doubly marked entries.Entries in entrylist should be in order.
+mark.html	Checking all doubly marked entries.Entry_list 0. Entry "" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 0. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 0. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 0. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 1. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 1. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 1. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 2. Entry "abc" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 2. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 2. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 2. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 3. Entry "" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 3. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 3. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 3. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 4. Entry "1" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 4. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 4. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 4. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 5. Entry "abc" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 5. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 5. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 5. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.There should be 6 entries.
+mark.html	Checking all entries.Entries in entrylist should be in order.
+mark.html	Checking all entries.Entry_list 0. Entry "" should be one that we have set.
+mark.html	Checking all entries.Entry_list 0. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 0. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 0. startTime should greater than 0.
+mark.html	Checking all entries.Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Checking all entries.Entry_list 1. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 1. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 1. startTime should greater than 0.
+mark.html	Checking all entries.Entry_list 2. Entry "abc" should be one that we have set.
+mark.html	Checking all entries.Entry_list 2. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 2. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 2. startTime should greater than 0.
+mark.html	Checking all entries.There should be 3 entries.
+mark.html	First loop: checking entry of name "".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	First loop: checking entry of name "".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "".There should be 1 entries.
+mark.html	First loop: checking entry of name "1".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	First loop: checking entry of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "1".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "1".There should be 1 entries.
+mark.html	First loop: checking entry of name "abc".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "abc".There should be 1 entries.
+mark.html	Second loop step 0: checking entries of name "".Entries in entrylist should be in order.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. Entry "" should be one that we have set.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 0: checking entries of name "".There should be 2 entries.
+mark.html	Second loop step 1: checking entries of name "1".Entries in entrylist should be in order.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 1: checking entries of name "1".There should be 2 entries.
+mark.html	Second loop step 2: checking entries of name "abc".Entries in entrylist should be in order.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. Entry "abc" should be one that we have set.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 2: checking entries of name "abc".There should be 2 entries.
+mark.html	Second loop step 3: checking entries of name "".Entries in entrylist should be in order.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. Entry "" should be one that we have set.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 3: checking entries of name "".There should be 2 entries.
+mark.html	Second loop step 4: checking entries of name "1".Entries in entrylist should be in order.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 4: checking entries of name "1".There should be 2 entries.
+mark.html	Second loop step 5: checking entries of name "abc".Entries in entrylist should be in order.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. Entry "abc" should be one that we have set.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 5: checking entries of name "abc".There should be 2 entries.
+mark.html	There should be 0 marks
+measure-l3.any.html	When start and end mark are both given, the start time and end time of the measure entry should be the marks' time, repectively
+measure-l3.any.html	When the end mark is given and the start is unprovided, the end time of the measure entry should be the end mark's time, the start time should be 0.
+measure-l3.any.html	When the start mark is given and the end is unprovided, the start time of the measure entry should be the start mark's time, the end should be now.
+measure-with-dict.any.html	measure should throw a TypeError when passed an invalid argument combination
+measure_exception.html	Invocation of performance.measure("Exception8", {"detail": "non-empty"}) should throw TypeError Exception.
+measure_exception.html	Invocation of performance.measure("Exception9", {"start": 1, "duration": 2, "end": 3}) should throw TypeError Exception.
+measure_exception.html	Invocation of performance.measure() should throw TypeError Exception.
+measure_navigation_timing.html	window.performance is defined
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].name == "measure_mark_start_nav_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].name == "measure_nav_start_mark_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].name == "measure_nav_start_nav_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].name == "measure_nav_start_no_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].startTime is correct
+measure_syntax_err.any.html	Create a mark "existing_mark"
+measures.html	Checking all doubly measured entries.Entries in entrylist should be in order.
+measures.html	Checking all doubly measured entries.Entry_list 0. Entry "" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 0. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 0. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 0. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 1. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 1. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 1. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 2. Entry "" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 2. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 2. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 2. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 3. Entry "aaa" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 3. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 3. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 3. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 4. Entry "2" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 4. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 4. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 4. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 5. Entry "2" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 5. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 5. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 5. startTime should be a number.
+measures.html	Checking all doubly measured entries.There should be 6 entries.
+measures.html	Checking all entries.Entries in entrylist should be in order.
+measures.html	Checking all entries.Entry_list 0. Entry "" should be one that we have set.
+measures.html	Checking all entries.Entry_list 0. duration should be a number.
+measures.html	Checking all entries.Entry_list 0. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 0. startTime should be a number.
+measures.html	Checking all entries.Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Checking all entries.Entry_list 1. duration should be a number.
+measures.html	Checking all entries.Entry_list 1. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 1. startTime should be a number.
+measures.html	Checking all entries.Entry_list 2. Entry "2" should be one that we have set.
+measures.html	Checking all entries.Entry_list 2. duration should be a number.
+measures.html	Checking all entries.Entry_list 2. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 2. startTime should be a number.
+measures.html	Checking all entries.There should be 3 entries.
+measures.html	First loop: checking entry of name "".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	First loop: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "".There should be 1 entries.
+measures.html	First loop: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	First loop: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "2".There should be 1 entries.
+measures.html	First loop: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "aaa".There should be 1 entries.
+measures.html	Second loop step 0: checking entry of name "".Entries in entrylist should be in order.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. Entry "" should be one that we have set.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. duration should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 0: checking entry of name "".There should be 2 entries.
+measures.html	Second loop step 1: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. duration should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".There should be 2 entries.
+measures.html	Second loop step 2: checking entry of name "".Entries in entrylist should be in order.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. Entry "" should be one that we have set.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. duration should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 2: checking entry of name "".There should be 2 entries.
+measures.html	Second loop step 3: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. duration should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".There should be 2 entries.
+measures.html	Second loop step 4: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. Entry "2" should be one that we have set.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. duration should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 4: checking entry of name "2".There should be 2 entries.
+measures.html	Second loop step 5: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. Entry "2" should be one that we have set.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. duration should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 5: checking entry of name "2".There should be 2 entries.
+measures.html	There should be 0 entries returned.
+structured-serialize-detail.any.html	The detail object is cloned when passed to mark API.
+structured-serialize-detail.any.html	The detail property in the mark constructor should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the mark method should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the measure method should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the measure method should be the same reference.
+structured-serialize-detail.any.html	When accessing detail from a mark entry and the detail is not provided, just return a null value.
+structured-serialize-detail.any.html	When accessing detail from a measure entry and the detail is not provided, just return a null value.
+user-timing-tojson.html	Test toJSON() in PerformanceMark
+user-timing-tojson.html	Test toJSON() in PerformanceMeasure
+user_timing_exists.any.html	self.performance.clearMarks is defined.
+user_timing_exists.any.html	self.performance.clearMeasures is defined.
+user_timing_exists.any.html	self.performance.mark is defined.
+user_timing_exists.any.html	self.performance.measure is defined.
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Partial interface Performance: member names are unique
+idlharness.any.html	Partial interface Performance: original interface defined
+idlharness.any.html	Performance interface: calling clearMarks(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling clearMeasures(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling mark(DOMString, optional PerformanceMarkOptions) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: performance must inherit property "clearMarks(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "clearMeasures(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "mark(DOMString, optional PerformanceMarkOptions)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString)" with the proper type
+idlharness.any.html	PerformanceMark interface object length
+idlharness.any.html	PerformanceMark interface object name
+idlharness.any.html	PerformanceMark interface: existence and properties of interface object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMark interface: mark must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMark must be primary interface of mark
+idlharness.any.html	PerformanceMeasure interface object length
+idlharness.any.html	PerformanceMeasure interface object name
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMeasure interface: measure must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMeasure must be primary interface of measure
+idlharness.any.html	Stringification of mark
+idlharness.any.html	Stringification of measure
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
+# Slice E (GITHUB_WALLS.md): the pages that observe marks and measures with a
+# PerformanceObserver. Each fails with the switch off.
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous measures
+case-sensitivity.any.html	getEntriesByType values are case sensitive
+mark-l3.any.html	mark entries' detail and startTime are customizable.
+measure-with-dict.any.html	measure entries' detail and start/end are customizable
+supported-usertiming-types.any.html	'mark' entries should be observable.
+supported-usertiming-types.any.html	'measure' entries should be observable.
+supported-usertiming-types.any.html	supportedEntryTypes contains 'mark' and 'measure'.
+[excluded]
+[passing]
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous marks
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous measures
+case-sensitivity.any.html	getEntriesByType values are case sensitive
+clearMarks.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. Entry "1" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "". Entry_list 0. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "". Entry_list 1. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "". There should be 2 entries.
+clearMarks.html	First loop: checking entries after removing "1". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. Entry "abc" should be one that we have set.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. duration of mark should be 0.
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. entryType should be "mark".
+clearMarks.html	First loop: checking entries after removing "1". Entry_list 0. startTime should greater than 0.
+clearMarks.html	First loop: checking entries after removing "1". There should be 1 entries.
+clearMarks.html	First loop: checking entries after removing "abc". Entries in entrylist should be in order.
+clearMarks.html	First loop: checking entries after removing "abc". There should be 0 entries.
+clearMarks.html	First loop: marks that we cleared for "" should not exist anymore.
+clearMarks.html	First loop: marks that we cleared for "1" should not exist anymore.
+clearMarks.html	First loop: marks that we cleared for "abc" should not exist anymore.
+clearMarks.html	No marks should exist after we clear all.
+clearMarks.html	No marks should exist when we clear all.
+clearMarks.html	Nothing should happen if we clear a non-exist mark.
+clearMarks.html	Second loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. Entry "1" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 0. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 1. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. Entry "1" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 2. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "". Entry_list 3. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "". There should be 4 entries.
+clearMarks.html	Second loop: checking entries after removing "1". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 0. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. Entry "abc" should be one that we have set.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. duration of mark should be 0.
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. entryType should be "mark".
+clearMarks.html	Second loop: checking entries after removing "1". Entry_list 1. startTime should greater than 0.
+clearMarks.html	Second loop: checking entries after removing "1". There should be 2 entries.
+clearMarks.html	Second loop: checking entries after removing "abc". Entries in entrylist should be in order.
+clearMarks.html	Second loop: checking entries after removing "abc". There should be 0 entries.
+clearMarks.html	Second loop: marks that we cleared for "" should not exist anymore.
+clearMarks.html	Second loop: marks that we cleared for "1" should not exist anymore.
+clearMarks.html	Second loop: marks that we cleared for "abc" should not exist anymore.
+clearMeasures.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 0. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. Entry "2" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "". Entry_list 1. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "". There should be 2 entries.
+clearMeasures.html	First loop: checking entries after removing "2". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. duration should be a number.
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. entryType should be "measure".
+clearMeasures.html	First loop: checking entries after removing "2". Entry_list 0. startTime should be a number.
+clearMeasures.html	First loop: checking entries after removing "2". There should be 1 entries.
+clearMeasures.html	First loop: checking entries after removing "aaa". Entries in entrylist should be in order.
+clearMeasures.html	First loop: checking entries after removing "aaa". There should be 0 entries.
+clearMeasures.html	First loop: measure "" should not exist anymore after we cleared it.
+clearMeasures.html	First loop: measure "2" should not exist anymore after we cleared it.
+clearMeasures.html	First loop: measure "aaa" should not exist anymore after we cleared it.
+clearMeasures.html	No measures should exist after we clear all (after first loop).
+clearMeasures.html	No measures should exist when we clear all (after second loop).
+clearMeasures.html	Nothing should happen if we clear a non-exist measure
+clearMeasures.html	Second loop: checking entries after removing "". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 0. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 1. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. Entry "2" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 2. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. Entry "2" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "". Entry_list 3. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "". There should be 4 entries.
+clearMeasures.html	Second loop: checking entries after removing "2". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 0. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. Entry "aaa" should be one that we have set.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. duration should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. entryType should be "measure".
+clearMeasures.html	Second loop: checking entries after removing "2". Entry_list 1. startTime should be a number.
+clearMeasures.html	Second loop: checking entries after removing "2". There should be 2 entries.
+clearMeasures.html	Second loop: checking entries after removing "aaa". Entries in entrylist should be in order.
+clearMeasures.html	Second loop: checking entries after removing "aaa". There should be 0 entries.
+clearMeasures.html	Second loop: measure "" should not exist anymore after we cleared it.
+clearMeasures.html	Second loop: measure "2" should not exist anymore after we cleared it.
+clearMeasures.html	Second loop: measure "aaa" should not exist anymore after we cleared it.
+clear_all_marks.any.html	Clearing all marks remove all of them.
+clear_all_measures.any.html	Clearing all marks remove all of them.
+clear_non_existent_mark.any.html	Clearing a non-existent mark doesn't affect existing marks
+clear_non_existent_measure.any.html	Clearing a non-existent measure doesn't affect existing measures
+clear_one_mark.any.html	Clearing an existent mark doesn't affect other existing marks
+clear_one_measure.any.html	Clearing an existent measure doesn't affect other existing measures
+entry_type.any.html	Validate the user timing entry type PerformanceMark
+entry_type.any.html	Validate the user timing entry type PerformanceMeasure
+idlharness.any.html	Partial interface Performance: member names are unique
+idlharness.any.html	Partial interface Performance: original interface defined
+idlharness.any.html	Performance interface: calling clearMarks(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling clearMeasures(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling mark(DOMString, optional PerformanceMarkOptions) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: performance must inherit property "clearMarks(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "clearMeasures(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "mark(DOMString, optional PerformanceMarkOptions)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString)" with the proper type
+idlharness.any.html	PerformanceMark interface object length
+idlharness.any.html	PerformanceMark interface object name
+idlharness.any.html	PerformanceMark interface: existence and properties of interface object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMark interface: mark must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMark must be primary interface of mark
+idlharness.any.html	PerformanceMeasure interface object length
+idlharness.any.html	PerformanceMeasure interface object name
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMeasure interface: measure must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMeasure must be primary interface of measure
+idlharness.any.html	Stringification of mark
+idlharness.any.html	Stringification of measure
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domComplete
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domContentLoadedEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domContentLoadedEventStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domInteractive
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domLoading
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domainLookupEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domainLookupStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute fetchStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute loadEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute loadEventStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute navigationStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute redirectEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute redirectStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute requestStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute responseEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute responseStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute secureConnectionStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute unloadEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute unloadEventStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domComplete
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domContentLoadedEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domContentLoadedEventStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domInteractive
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domLoading
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domainLookupEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domainLookupStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute fetchStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute loadEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute loadEventStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute navigationStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute redirectEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute redirectStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute requestStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute responseEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute responseStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute secureConnectionStart
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute unloadEventEnd
+invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute unloadEventStart
+invoke_without_parameter.html	window.performance.mark() throws a TypeError exception when invoke without a parameter.
+invoke_without_parameter.html	window.performance.measure() throws a TypeError exception when invoke without a parameter.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string)'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {detail})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {startTime, detail})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {startTime})'.
+mark-entry-constructor.any.html	Mark entry can be created by 'new PerformanceMark(string, {})'.
+mark-entry-constructor.any.html	Using new PerformanceMark() shouldn't add the entry to performance timeline.
+mark-errors.any.html	[new PerformanceMark]: Infinity should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: NaN should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: Negative startTime in mark-options should be rejected
+mark-errors.any.html	[new PerformanceMark]: Number should be rejected as the mark-options.
+mark-errors.any.html	[new PerformanceMark]: String should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: Infinity should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: NaN should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: Negative startTime in mark-options should be rejected
+mark-errors.any.html	[performance.mark]: Number should be rejected as the mark-options.
+mark-errors.any.html	[performance.mark]: String should be rejected as the mark-options.
+mark-l3.any.html	mark entries' detail and startTime are customizable.
+mark-measure-feature-detection.html	Test PerformanceMark existence and feature detection
+mark-measure-feature-detection.html	Test PerformanceMeasure existence and feature detection
+mark-measure-return-objects.any.html	L3: performance.mark(name) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.mark(name, param) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name, param1) should return an entry.
+mark-measure-return-objects.any.html	L3: performance.measure(name, param1, param2) should return an entry.
+mark.any.html	Entry 0 duration == 0
+mark.any.html	Entry 0 has the proper entryType
+mark.any.html	Entry 0 has the proper name
+mark.any.html	Entry 0 is properly created
+mark.any.html	Entry 0 startTime is approximately correct (up to 20ms difference allowed)
+mark.any.html	Entry 1 duration == 0
+mark.any.html	Entry 1 has the proper entryType
+mark.any.html	Entry 1 has the proper name
+mark.any.html	Entry 1 is properly created
+mark.any.html	Entry 1 startTime is approximately correct (up to 20ms difference allowed)
+mark.any.html	The mark returned by getEntries()[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntries()[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	The mark returned by getEntriesByName("mark", "mark")[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntriesByName("mark", "mark")[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	The mark returned by getEntriesByType("mark")[0] matches the mark returned by getEntriesByName("mark")[0]
+mark.any.html	The mark returned by getEntriesByType("mark")[1] matches the mark returned by getEntriesByName("mark")[1]
+mark.any.html	getEntries()[0] returns an object containing a "mark" mark
+mark.any.html	getEntries()[1] returns an object containing a "mark" mark
+mark.any.html	getEntriesByName("mark", "mark")[0] returns an object containing a "mark" mark
+mark.any.html	getEntriesByName("mark", "mark")[1] returns an object containing a "mark" mark
+mark.any.html	getEntriesByType("mark")[0] returns an object containing a "mark" mark
+mark.any.html	getEntriesByType("mark")[1] returns an object containing a "mark" mark
+mark.html	Checking all doubly marked entries.Entries in entrylist should be in order.
+mark.html	Checking all doubly marked entries.Entry_list 0. Entry "" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 0. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 0. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 0. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 1. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 1. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 1. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 2. Entry "abc" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 2. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 2. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 2. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 3. Entry "" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 3. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 3. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 3. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 4. Entry "1" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 4. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 4. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 4. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.Entry_list 5. Entry "abc" should be one that we have set.
+mark.html	Checking all doubly marked entries.Entry_list 5. duration of mark should be 0.
+mark.html	Checking all doubly marked entries.Entry_list 5. entryType should be "mark".
+mark.html	Checking all doubly marked entries.Entry_list 5. startTime should greater than 0.
+mark.html	Checking all doubly marked entries.There should be 6 entries.
+mark.html	Checking all entries.Entries in entrylist should be in order.
+mark.html	Checking all entries.Entry_list 0. Entry "" should be one that we have set.
+mark.html	Checking all entries.Entry_list 0. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 0. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 0. startTime should greater than 0.
+mark.html	Checking all entries.Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Checking all entries.Entry_list 1. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 1. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 1. startTime should greater than 0.
+mark.html	Checking all entries.Entry_list 2. Entry "abc" should be one that we have set.
+mark.html	Checking all entries.Entry_list 2. duration of mark should be 0.
+mark.html	Checking all entries.Entry_list 2. entryType should be "mark".
+mark.html	Checking all entries.Entry_list 2. startTime should greater than 0.
+mark.html	Checking all entries.There should be 3 entries.
+mark.html	First loop: checking entry of name "".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	First loop: checking entry of name "".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "".There should be 1 entries.
+mark.html	First loop: checking entry of name "1".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	First loop: checking entry of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "1".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "1".There should be 1 entries.
+mark.html	First loop: checking entry of name "abc".Entries in entrylist should be in order.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	First loop: checking entry of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	First loop: checking entry of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	First loop: checking entry of name "abc".There should be 1 entries.
+mark.html	Second loop step 0: checking entries of name "".Entries in entrylist should be in order.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 0: checking entries of name "".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. Entry "" should be one that we have set.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 0: checking entries of name "".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 0: checking entries of name "".There should be 2 entries.
+mark.html	Second loop step 1: checking entries of name "1".Entries in entrylist should be in order.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 1: checking entries of name "1".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 1: checking entries of name "1".There should be 2 entries.
+mark.html	Second loop step 2: checking entries of name "abc".Entries in entrylist should be in order.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. Entry "abc" should be one that we have set.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 2: checking entries of name "abc".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 2: checking entries of name "abc".There should be 2 entries.
+mark.html	Second loop step 3: checking entries of name "".Entries in entrylist should be in order.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. Entry "" should be one that we have set.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 3: checking entries of name "".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. Entry "" should be one that we have set.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 3: checking entries of name "".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 3: checking entries of name "".There should be 2 entries.
+mark.html	Second loop step 4: checking entries of name "1".Entries in entrylist should be in order.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. Entry "1" should be one that we have set.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. Entry "1" should be one that we have set.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 4: checking entries of name "1".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 4: checking entries of name "1".There should be 2 entries.
+mark.html	Second loop step 5: checking entries of name "abc".Entries in entrylist should be in order.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. Entry "abc" should be one that we have set.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. duration of mark should be 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. entryType should be "mark".
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 0. startTime should greater than 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. Entry "abc" should be one that we have set.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. duration of mark should be 0.
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. entryType should be "mark".
+mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. startTime should greater than 0.
+mark.html	Second loop step 5: checking entries of name "abc".There should be 2 entries.
+mark.html	There should be 0 marks
+mark_exceptions.html	window.performance.mark("connectEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("connectStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domComplete") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domContentLoadedEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domContentLoadedEventStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domInteractive") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domLoading") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domainLookupEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domainLookupStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("fetchStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("loadEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("loadEventStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("navigationStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("redirectEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("redirectStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("requestStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("responseEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("responseStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("secureConnectionStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("unloadEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("unloadEventStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark() throws a TypeError exception.
+measure-exceptions.html	Passing 'domComplete' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domContentLoadedEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domContentLoadedEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domInteractive' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'loadEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'loadEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'redirectEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'redirectStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'secureConnectionStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'unloadEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'unloadEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 51.15 as a mark to measure API should cause error.
+measure-exceptions.html	Passing DoesNotExist as a mark to measure API should cause error.
+measure-l3.any.html	When start and end mark are both given, the start time and end time of the measure entry should be the marks' time, repectively
+measure-l3.any.html	When the end mark is given and the start is unprovided, the end time of the measure entry should be the end mark's time, the start time should be 0.
+measure-l3.any.html	When the start mark is given and the end is unprovided, the start time of the measure entry should be the start mark's time, the end should be now.
+measure-with-dict.any.html	measure entries' detail and start/end are customizable
+measure-with-dict.any.html	measure should throw a TypeError when passed an invalid argument combination
+measure_exception.html	Invocation of performance.measure("Exception1", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception2", "NonExistMark1", "navigationStart") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception3", "navigationStart", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception4", "NonExistMark1", "ExistMark") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception5", "ExistMark", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception6", "NonExistMark1", "NonExistMark2") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception7", "redirectStart") should throw INVALID_ACCESS_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception8", {"detail": "non-empty"}) should throw TypeError Exception.
+measure_exception.html	Invocation of performance.measure("Exception9", {"start": 1, "duration": 2, "end": 3}) should throw TypeError Exception.
+measure_exception.html	Invocation of performance.measure() should throw TypeError Exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd", "responseEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "navigationStart", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_navigation_timing.html	window.performance is defined
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].name == "measure_mark_start_nav_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].name == "measure_nav_start_mark_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_mark_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].duration is approximately correct (up to 20ms difference allowed)
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].name == "measure_nav_start_nav_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_nav_end")[0].startTime is correct
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].entryType == "measure"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].name == "measure_nav_start_no_end"
+measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].startTime is correct
+measure_syntax_err.any.html	Create a mark "existing_mark"
+measure_syntax_err.any.html	self.performance.measure("measure", "existing_mark", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark", "existing_mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measures.html	Checking all doubly measured entries.Entries in entrylist should be in order.
+measures.html	Checking all doubly measured entries.Entry_list 0. Entry "" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 0. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 0. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 0. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 1. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 1. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 1. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 2. Entry "" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 2. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 2. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 2. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 3. Entry "aaa" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 3. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 3. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 3. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 4. Entry "2" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 4. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 4. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 4. startTime should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 5. Entry "2" should be one that we have set.
+measures.html	Checking all doubly measured entries.Entry_list 5. duration should be a number.
+measures.html	Checking all doubly measured entries.Entry_list 5. entryType should be "measure".
+measures.html	Checking all doubly measured entries.Entry_list 5. startTime should be a number.
+measures.html	Checking all doubly measured entries.There should be 6 entries.
+measures.html	Checking all entries.Entries in entrylist should be in order.
+measures.html	Checking all entries.Entry_list 0. Entry "" should be one that we have set.
+measures.html	Checking all entries.Entry_list 0. duration should be a number.
+measures.html	Checking all entries.Entry_list 0. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 0. startTime should be a number.
+measures.html	Checking all entries.Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Checking all entries.Entry_list 1. duration should be a number.
+measures.html	Checking all entries.Entry_list 1. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 1. startTime should be a number.
+measures.html	Checking all entries.Entry_list 2. Entry "2" should be one that we have set.
+measures.html	Checking all entries.Entry_list 2. duration should be a number.
+measures.html	Checking all entries.Entry_list 2. entryType should be "measure".
+measures.html	Checking all entries.Entry_list 2. startTime should be a number.
+measures.html	Checking all entries.There should be 3 entries.
+measures.html	First loop: checking entry of name "".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	First loop: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "".There should be 1 entries.
+measures.html	First loop: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	First loop: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "2".There should be 1 entries.
+measures.html	First loop: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	First loop: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	First loop: checking entry of name "aaa".There should be 1 entries.
+measures.html	Second loop step 0: checking entry of name "".Entries in entrylist should be in order.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 0: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. Entry "" should be one that we have set.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. duration should be a number.
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 0: checking entry of name "".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 0: checking entry of name "".There should be 2 entries.
+measures.html	Second loop step 1: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. duration should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 1: checking entry of name "aaa".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 1: checking entry of name "aaa".There should be 2 entries.
+measures.html	Second loop step 2: checking entry of name "".Entries in entrylist should be in order.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. Entry "" should be one that we have set.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. duration should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 2: checking entry of name "".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. Entry "" should be one that we have set.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. duration should be a number.
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 2: checking entry of name "".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 2: checking entry of name "".There should be 2 entries.
+measures.html	Second loop step 3: checking entry of name "aaa".Entries in entrylist should be in order.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. duration should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. Entry "aaa" should be one that we have set.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. duration should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 3: checking entry of name "aaa".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 3: checking entry of name "aaa".There should be 2 entries.
+measures.html	Second loop step 4: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. Entry "2" should be one that we have set.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. duration should be a number.
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 4: checking entry of name "2".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 4: checking entry of name "2".There should be 2 entries.
+measures.html	Second loop step 5: checking entry of name "2".Entries in entrylist should be in order.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. Entry "2" should be one that we have set.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. duration should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. entryType should be "measure".
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 0. startTime should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. Entry "2" should be one that we have set.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. duration should be a number.
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. entryType should be "measure".
+measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. startTime should be a number.
+measures.html	Second loop step 5: checking entry of name "2".There should be 2 entries.
+measures.html	There should be 0 entries returned.
+structured-serialize-detail.any.html	Mark: Throw an exception when the detail property cannot be structured-serialized.
+structured-serialize-detail.any.html	Measure: Throw an exception when the detail property cannot be structured-serialized.
+structured-serialize-detail.any.html	The detail object is cloned when passed to mark API.
+structured-serialize-detail.any.html	The detail property in the mark constructor should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the mark method should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the measure method should be structured-clone.
+structured-serialize-detail.any.html	The detail property in the measure method should be the same reference.
+structured-serialize-detail.any.html	When accessing detail from a mark entry and the detail is not provided, just return a null value.
+structured-serialize-detail.any.html	When accessing detail from a measure entry and the detail is not provided, just return a null value.
+supported-usertiming-types.any.html	'mark' entries should be observable.
+supported-usertiming-types.any.html	'measure' entries should be observable.
+supported-usertiming-types.any.html	supportedEntryTypes contains 'mark' and 'measure'.
+user-timing-tojson.html	Test toJSON() in PerformanceMark
+user-timing-tojson.html	Test toJSON() in PerformanceMeasure
+user_timing_exists.any.html	self.performance.clearMarks is defined.
+user_timing_exists.any.html	self.performance.clearMeasures is defined.
+user_timing_exists.any.html	self.performance.mark is defined.
+user_timing_exists.any.html	self.performance.measure is defined.

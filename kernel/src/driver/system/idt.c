@@ -5,6 +5,7 @@ extern void vector123();
 extern void vector130();
 extern void vector131();   // IPI_WATCHPOINT_SYNC_VECTOR — watchpoint.c's per-core sync
 extern void vector132();   // IPI_FREEZE_VECTOR — stop every other core before a fatal report
+extern void vector133();   // IPI_SPEC_CTRL_VECTOR — write this thread's speculation controls
 extern void vector124();
 extern void vector125();
 extern void vector138();
@@ -18,6 +19,7 @@ extern void handler_irq0_asm();
 extern void handler_irq1_asm();
 extern void handler_irq12_asm();
 extern void handler_e1000_intx_asm();
+extern void handler_r8125_msi_asm();
 // The unified exception path (2026-08-11): one prologue for all 32 vectors
 // (exception_entry.S), one reporter (exception_report.c). The table holds the
 // 32 stub addresses so the wiring below is a loop, not thirty-two lines each
@@ -157,12 +159,14 @@ void initialize_idt() {
     set_idt_entry(0x41, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 via IOAPIC
     set_idt_entry(0x4C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 via IOAPIC
     set_idt_entry(0x45, (uint64_t)&handler_e1000_intx_asm, 0x28, 0x8E); // e1000 INTx via IOAPIC (≥0x40, same TPR bar)
+    set_idt_entry(0x46, (uint64_t)&handler_r8125_msi_asm, 0x28, 0x8E);  // RTL8125 MSI (same class as its neighbour)
 
 	// SET MP handlers
 	set_idt_entry(IPI_INVALIDATE_TLB_VECTOR, (uint64_t)&vector123, 0x28, 0x8E);		// Invalidate TLB IPI
 	set_idt_entry(IPI_ACCT_SETTLE_VECTOR, (uint64_t)&vector130, 0x28, 0x8E);		// CPU-time settle-on-read IPI
 	set_idt_entry(IPI_WATCHPOINT_SYNC_VECTOR, (uint64_t)&vector131, 0x28, 0x8E);	// Debug-register sync IPI
 	set_idt_entry(IPI_FREEZE_VECTOR, (uint64_t)&vector132, 0x28, 0x8E);		// Freeze-the-machine IPI
+	set_idt_entry(IPI_SPEC_CTRL_VECTOR, (uint64_t)&vector133, 0x28, 0x8E);		// Speculation-policy IPI
 	set_idt_entry(IPI_DISABLE_SCHEDULING_VECTOR, (uint64_t)&vector124, 0x28, 0x8E);		// AP Disable IPI
 	set_idt_entry(IPI_ENABLE_SCHEDULING_VECTOR, (uint64_t)&vector125, 0x28, 0x8E);		// AP Enable IPI
 	set_idt_entry(IPI_TIMER_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// AP Scheduler (timer ISR)

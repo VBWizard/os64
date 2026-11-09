@@ -1,0 +1,62 @@
+#!/bin/bash
+# vmget — copy a file out of the guest onto the host, exactly.
+#
+#   tools/vmget <guest-path> <host-path> [port]
+#   tools/vmget /home/out.txt /tmp/out.txt
+#   tools/vmget --root /bin/cat /tmp/cat          (a file from / instead)
+#
+# WHY: reading a program's output off a screenshot is guesswork, and for
+# anything binary it is impossible. Both filesystems are ext2 inside disk
+# images, so the HOST can read them with debugfs while the VM runs. Have the
+# guest redirect into /home (`myprog > /home/out.txt`), run `sync`, then
+# fetch the file and compare bytes with cmp.
+#
+# /home is where your test output goes. --root is for reading a file the
+# image already shipped (an input you copied, a binary you compared against);
+# it is the filesystem make rebuilds, so nothing you write there survives.
+set -u
+
+ROOTFS=0
+if [ "${1:-}" = "--root" ]; then
+    ROOTFS=1
+    shift
+fi
+SRC=${1:-}
+DST=${2:-}
+PORT=${3:-55556}
+if [ -z "$SRC" ] || [ -z "$DST" ]; then
+    echo "usage: vmget [--root] <guest-path> <host-path> [port]" >&2
+    exit 2
+fi
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+DIR=/tmp/os64-vm-$PORT
+if [ ! -d "$DIR" ]; then
+    echo "vmget: no VM images at $DIR — run tools/vmboot first" >&2
+    exit 2
+fi
+
+# The offsets come from the makefile, so they follow it if the layout moves.
+if [ "$ROOTFS" = 1 ]; then
+    IMG=$DIR/os64.img
+    mb=$(grep -m1 '^DISK_SIZE_MB ?=' "$ROOT/GNUmakefile" | tr -dc '0-9')
+    OFFSET=$(( (2048 + ${mb:-64} * 2048) * 512 ))
+    path=$SRC
+else
+    IMG=$DIR/os64_data.img
+    OFFSET=$(grep -m1 '^DISK_OFFSET ?=' "$ROOT/GNUmakefile" | tr -dc '0-9')
+    OFFSET=${OFFSET:-1048576}
+    # /home IS the root of that filesystem: /home/out.txt is /out.txt in it.
+    path=${SRC#/home}
+fi
+case "$path" in /*) ;; *) path="/$path" ;; esac
+
+rm -f "$DST"
+out=$(debugfs -R "dump $path $DST" "$IMG?offset=$OFFSET" 2>&1)
+if [ ! -s "$DST" ] && [ ! -f "$DST" ]; then
+    echo "vmget: could not read $SRC" >&2
+    echo "$out" | grep -v "^debugfs" >&2
+    echo "vmget: did the guest write it, and did you run 'sync' in the guest?" >&2
+    exit 1
+fi
+echo "vmget: $SRC -> $DST ($(stat -c %s "$DST") bytes)"

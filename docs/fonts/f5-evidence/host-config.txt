@@ -1,0 +1,3 @@
+Preparation allocation-denial cases: 1141
+font_config: 1407755 checks, 0 failures; no live allocations
+Artifacts: /tmp/quinn-f5-config-final

@@ -1,0 +1,15 @@
+[user] F3 grid 100x35 cell 14x29
+[user] F3 child startup 100x35
+[user] F3 child SIGWINCH 200x69
+[user] F3 PASS: font adoption committed and invalidated old snapshot
+[user] F3 grid 200x69 cell 7x15
+[user] F3 child SIGWINCH 82x31
+[user] F3 PASS: font adoption committed and invalidated old snapshot
+[user] F3 grid 82x31 cell 17x33
+[user] F3 PASS: real PTY refusal preserved font/grid/selection
+[user] F3 PASS: proportional terminal rejected
+[user] F3 child SIGWINCH 175x64
+[user] F3 PASS: font adoption committed and invalidated old snapshot
+[user] F3 grid 175x64 cell 8x16
+[user] F3 child input usable, exiting
+[user] F3 PASS: fixture finished

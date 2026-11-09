@@ -1,0 +1,38 @@
+From 675a94f5d0e6a255d0255bd794b2d89f01b3f62f Mon Sep 17 00:00:00 2001
+From: Werner Lemberg <wl@gnu.org>
+Date: Thu, 2 Apr 2026 07:56:04 +0200
+Subject: [PATCH] [autofit] Prevent signed integer overflow.
+
+Reported as
+
+  https://issues.oss-fuzz.com/issues/496105489
+
+* src/autofit/aflatin.c
+  (af_glyph_hints_apply_vertical_separation_adjustments): Use `ADD_LONG` and
+  `SUB_LONG`.
+---
+ src/autofit/aflatin.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/autofit/aflatin.c b/src/autofit/aflatin.c
+index 73addf28e..cf3f657d7 100644
+--- a/src/autofit/aflatin.c
++++ b/src/autofit/aflatin.c
+@@ -3739,7 +3739,7 @@
+ 
+         pos = ADD_LONG( high_min_y, adjustment_amount );
+         if ( adjust_below_top && is_top_tilde )
+-          pos += high_height;
++          pos = ADD_LONG( pos, high_height );
+ 
+         if ( pos % 64 == 0 && tilde_height < 3 * 64 )
+         {
+@@ -3892,7 +3892,7 @@
+ 
+         pos = SUB_LONG( low_max_y, adjustment_amount );
+         if ( adjust_above_bottom && is_bottom_tilde )
+-          pos -= low_height;
++          pos = SUB_LONG( pos, low_height );
+ 
+         if ( pos % 64 == 0 && tilde_height < 3 * 64 )
+         {

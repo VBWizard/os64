@@ -75,7 +75,7 @@
 // INTx-plus-IOAPIC-routing versus polling, and polling wins for v1: it keeps
 // the slice about the seam instead of about interrupt plumbing, and it is
 // the pattern this kernel has already proven twice (xhci_poll, then
-// virtio_net_poll). Interrupts get built for hardware that rewards them —
+// virtio-net's drain). Interrupts get built for hardware that rewards them —
 // the RTL8125 on the P5, or an e1000e — where real MSI-X vectors and a
 // bottom half buy microsecond round trips. All interrupt sources are
 // explicitly MASKED at init below, so a shared INTx line can never scream
@@ -96,13 +96,15 @@
 #include "CONFIG.h"
 #include "driver/system/pci.h"
 #include "driver/system/apic.h"  // ioapic_route_gsi / ioapic_mask_gsi — the INTx door
-#include "smp.h"                 // kCPUInfo — the BSP's APIC ID targets the doorbell
+#include "smp_core.h"            // BSP_CPU — the doorbell rings on the BSP
+#include "random.h"              // the interrupt's moment feeds the entropy pool
 #include "driver/net/net_device.h"
 #include "driver/net/e1000.h"
+#include "knet.h"                 // kNetDoorbell — the ISR rings it
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
-extern uint8_t kPCIDeviceCount, kPCIFunctionCount;
+extern uint16_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 
@@ -254,12 +256,21 @@ typedef struct
 } __attribute__((packed)) e1000_tx_desc_t;
 
 // Ring sizes. RDLEN/TDLEN must be a multiple of 128 bytes, and a descriptor
-// is 16 bytes, so the count must be a multiple of 8. Thirty-two of each is
-// 512 bytes per ring and 64KB of frame buffers per direction — generous for
-// an OS whose entire network load is a test suite and a ping, and trivially
-// growable the day a workload says so.
-#define E1000_RX_DESCS  32
-#define E1000_TX_DESCS  32
+// is 16 bytes, so the count must be a multiple of 8. The RX ring has to hold
+// everything a peer can send between two drains. With the INTx doorbell
+// (DOORBELL.md) the drain is on arrival and the ring is a burst buffer;
+// without it — NETPOLL — the drain is once per tick, and a scaled TCP
+// window (tcp.h, 1MB) is up to ~700 full frames per tick, more than any
+// ring here holds, so under that regime the ring, not the window, is the
+// ceiling and the excess is dropped and recovered as loss. 128 slots (256KB
+// of buffers) is a tick's worth at the old 64KB window with headroom for a
+// second connection or a burst of ARP and ping. TX has 63 usable slots,
+// ~92KB of MSS-sized segments — less than a scaling peer's window, so a
+// bulk output pass stops at the first refusal and the ack clock resumes it.
+// A refused frame remains TCP's loss recovery responsibility; queue depth
+// does not guarantee submission.
+#define E1000_RX_DESCS  128
+#define E1000_TX_DESCS  64
 #define E1000_BUF_SIZE  2048   // must match RCTL_BSIZE_2048 above
 
 // Same fence discipline as virtio_net.c: x86 is TSO, so coherent DMA sees
@@ -305,14 +316,13 @@ typedef struct
 
 static e1000_t s_e1000;
 
-// The doorbell's two public flags, read by processSignals (signals.c):
-// UsesIntx false = the probe never confirmed a wire, poll unconditionally
-// (yesterday's behavior, never a dead NIC); true = drain only when RxWork
-// says the ISR heard something. RxWork is set in interrupt context and
-// consumed (cleared-then-drained, in that order, so a doorbell during the
-// drain schedules the next pass instead of being lost) in processSignals.
+// The wire's state: false = the probe never confirmed a GSI and the tick's
+// ring of knet's bell is what drains this card (yesterday's cadence, never
+// a dead NIC); true = the ISR rings that bell itself on every arrival, so
+// the drain runs on the ISR's say-so. The flag that used to gate the drain
+// (kE1000RxWork) became the doorbell — same clear-before-drain discipline,
+// now inside knet (DOORBELL.md).
 volatile bool kE1000UsesIntx = false;
-volatile bool kE1000RxWork = false;
 
 // Set (once) when the ISR unilaterally abandons INTx — a shared line gone
 // hostile at runtime. processSignals announces it so the fallback is never
@@ -332,6 +342,9 @@ volatile bool kE1000IntxDivorced = false;
 static volatile int16_t  sProbeGsi = -1;        // candidate under probe, else -1
 static volatile uint32_t sProbeStrangerBase = 0;
 static volatile bool     sProbeStormed = false;
+// The settle window, in PAUSE iterations (see the probe loop for why the
+// number is what it is and what twenty million of them cost under TCG).
+#define E1000_PROBE_SETTLE_SPINS 200000u
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 // volatile at the single choke point so no call site can forget it. The
@@ -520,21 +533,39 @@ static int32_t e1000_transmit(net_device_t* dev, const void* frame, uint16_t len
 
 static net_operations_t s_e1000_ops = {
 	.transmit = e1000_transmit,
+	.drain    = e1000_drain,
 };
 
-// ── Poll (processSignals, the xhci_poll/virtio_net_poll precedent) ──────────
-void e1000_poll(void)
+// ── Drain (the seam's verb; knet calls it, DOORBELL.md) ─────────────────────
+// Returns whether anything moved — a completion reclaimed or a frame
+// delivered — so the drainer knows to come around again.
+bool e1000_drain(struct net_device* dev)
 {
+	(void)dev;   // one e1000 per machine; the seam's handle and s_e1000 are the same card
 	e1000_t* e = &s_e1000;
 	if (!e->up)
-		return;
+		return false;
 
 	// Cheap reentry guard: if another core is mid-drain, skip. Nothing is
-	// lost — the descriptors keep their DD bits and the next pass collects
+	// lost — the descriptors keep their DD bits and the next drain collects
 	// them.
 	static volatile uint32_t busy = 0;
 	if (__sync_lock_test_and_set(&busy, 1))
-		return;
+		return false;
+	bool moved = false;
+
+	// Overruns in POLLED mode (no INTx adopted, divorced after a storm, or
+	// NETPOLL): the card latches RXO in ICR whether or not anyone is
+	// listening, and with no handler reading ICR the drain is the only place
+	// the bit is ever seen. Reading clears it, which is why this is gated on
+	// the handler being absent — with INTx live the handler owns ICR and a
+	// second reader would swallow causes it was about to act on.
+	if (!kE1000UsesIntx)
+	{
+		uint32_t icr = e1000_read32(e, E1000_ICR);
+		if (icr & E1000_INT_RXO)
+			e->netdev.rx_overruns++;
+	}
 
 	// TX reclaim: every descriptor the hardware finished returns to the
 	// pool. Status is cleared as we go so a stale DD from three trips around
@@ -544,6 +575,7 @@ void e1000_poll(void)
 	{
 		e->tx[e->tx_clean].status = 0;
 		e->tx_clean = (uint16_t)((e->tx_clean + 1) % E1000_TX_DESCS);
+		moved = true;
 	}
 	spinlock_release_irqrestore(&e->lock, irqflags);
 
@@ -606,11 +638,13 @@ void e1000_poll(void)
 
 		spinlock_release_irqrestore(&e->lock, irqflags);
 
+		moved = true;   // a descriptor came back, delivered or counted
 		if (flen)
 			net_device_rx(&e->netdev, staged, flen);
 	}
 
 	__sync_lock_release(&busy);
+	return moved;
 }
 
 // ── Ring construction ───────────────────────────────────────────────────────
@@ -743,6 +777,9 @@ static bool e1000_setup_tx(e1000_t* e)
 // which callers render as nothing at all.
 static void e1000_read_link_mode(e1000_t* e, uint32_t status)
 {
+	// The seam's verbatim link word (net_device.h): STATUS, whatever it says.
+	snprintf(e->netdev.link_raw, sizeof(e->netdev.link_raw), "0x%08x", status);
+
 	if (!(status & STATUS_LU))
 	{
 		e->netdev.link_mbps  = 0;
@@ -987,12 +1024,18 @@ void e1000_isr(void)
 			e1000_write32(e, E1000_IMC, 0xFFFFFFFF);
 			kE1000UsesIntx = false;
 			kE1000IntxDivorced = true;
-			kE1000RxWork = true;   // hand the baton back to the poll cleanly
+			doorbell_ring(&kNetDoorbell);   // hand the baton back to the drainer cleanly
 		}
 		return;
 	}
 
 	e->intx_fires++;
+	// RXO is the card saying its receive ring ran out and frames were
+	// dropped: the seam's rx_overruns (net_device.h). With INTx live this
+	// read of ICR is the only one, so the bit is counted here; in polled
+	// mode e1000_drain reads ICR instead and counts it there.
+	if (icr & E1000_INT_RXO)
+		e->netdev.rx_overruns++;
 	if (icr & E1000_INT_LSC)
 	{
 		// Cable event: re-read reality rather than inferring it. One MMIO
@@ -1008,10 +1051,13 @@ void e1000_isr(void)
 		e1000_read_link_mode(e, st);
 	}
 
-	// Any confirmed cause raises the flag — RXT0 obviously, RXO because the
-	// drain is exactly what relieves an overrun, LSC harmlessly (one spare
-	// drain per cable event). processSignals consumes it.
-	kE1000RxWork = true;
+	// Any confirmed cause rings knet's bell — RXT0 obviously, RXO because
+	// the drain is exactly what relieves an overrun, LSC harmlessly (one
+	// spare drain per cable event). The ring is the whole top half: one
+	// store and a self-IPI, no lock, microseconds (doorbell.h). The
+	// arrival's moment goes to the entropy pool first, same rules.
+	random_add_timing(RANDOM_SOURCE_NIC);
+	doorbell_ring(&kNetDoorbell);
 }
 
 // Adopt the wire. Called from kernel_init AFTER the platform switches to
@@ -1096,7 +1142,6 @@ void e1000_enable_intx(void)
 	if (e->pci->interrupt_line > 2 && e->pci->interrupt_line < 16)
 		candidates[candidateCount++] = e->pci->interrupt_line;
 
-	uint8_t bspApicId = kCPUInfo[0].apicID;
 	bool confirmed = false;
 
 	for (uint8_t c = 0; c < candidateCount && !confirmed; c++)
@@ -1133,7 +1178,7 @@ void e1000_enable_intx(void)
 		// on a healthy boot is the price, and it is worth it.
 		printf("e1000: probing GSI %u for the INTx wire...\n", gsi);
 
-		if (!ioapic_route_gsi(gsi, 0x45, bspApicId, true /*level*/, true /*active low*/))
+		if (!ioapic_route_gsi(gsi, 0x45, BSP_CPU, true /*level*/, true /*active low*/))
 			return;   // no IOAPIC at all — polled it is
 
 		// Clean slate, then ring the test bell: unmask ONLY the link-status
@@ -1151,10 +1196,20 @@ void e1000_enable_intx(void)
 		// old wait(2) here rode kTicksSinceStart — but a storming candidate
 		// starves IRQ0 (vector 0x45 outranks 0x20), the tick clock freezes,
 		// and wait() never returns: the whole boot hangs inside the probe.
-		// A pure iteration bound cannot be starved, only slowed — tens of
-		// milliseconds at worst, on any clock, under any storm.
+		// A pure iteration bound cannot be starved, only slowed.
+		//
+		// HOW SLOW "SLOWED" CAN BE (2026-09-05): under TCG a PAUSE is a
+		// trip through QEMU's main loop, microseconds each, and the bound
+		// used to be twenty million of them — forty seconds per silent
+		// candidate on an eight-vCPU WSL2 box, four silent candidates in
+		// front of the e1000's GSI 20, and a harness that looked wedged at
+		// "probing GSI 18" for as long as anyone waited. QEMU's own
+		// interrupt trace showed the BSP here, ticking away, with vector
+		// 0x45 never once delivered. The wire answers in microseconds when
+		// it answers at all; this many iterations is still milliseconds on
+		// bare metal and seconds under TCG, both generous.
 		for (volatile uint32_t spin = 0;
-		     spin < 20000000u && e->intx_fires == before && !sProbeStormed;
+		     spin < E1000_PROBE_SETTLE_SPINS && e->intx_fires == before && !sProbeStormed;
 		     spin++)
 			__asm__ volatile("pause");
 		sProbeGsi = -1;

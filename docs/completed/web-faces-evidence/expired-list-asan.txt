@@ -1,0 +1,63 @@
+=================================================================
+==86235==ERROR: AddressSanitizer: heap-use-after-free on address 0x504000000670 at pc 0x62b933e16628 bp 0x7ffcb0220400 sp 0x7ffcb02203f0
+READ of size 8 at 0x504000000670 thread T0
+    #0 0x62b933e16627 in main tools/test_font_family_host.c:171
+    #1 0x71acbcc2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #2 0x71acbcc2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #3 0x62b933e16c94 in _start (/tmp/web-faces-family-slices/test_family+0x29c94) (BuildId: 6bc9d89af86d8a31f29fc3782db5a488b2f41ed2)
+
+0x504000000670 is located 32 bytes inside of 48-byte region [0x504000000650,0x504000000680)
+freed by thread T0 here:
+    #0 0x71acbd8fc4d8 in free ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:52
+    #1 0x62b933e1c8e0 in os64_font_family_open userland/libos64/font_family.c:153
+    #2 0x62b933e16fa8 in open_key tools/test_font_family_host.c:59
+    #3 0x62b933e153b2 in main tools/test_font_family_host.c:170
+    #4 0x71acbcc2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #5 0x71acbcc2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #6 0x62b933e16c94 in _start (/tmp/web-faces-family-slices/test_family+0x29c94) (BuildId: 6bc9d89af86d8a31f29fc3782db5a488b2f41ed2)
+
+previously allocated by thread T0 here:
+    #0 0x71acbd8fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x62b933e16d92 in allocate tools/test_font_family_host.c:14
+    #2 0x62b933e22d35 in allocate_raw userland/libos64/text_cache.c:13
+    #3 0x62b933e248d1 in text_alloc userland/libos64/text_cache.c:42
+    #4 0x62b933e1d07d in os64_font_family_open userland/libos64/font_family.c:185
+    #5 0x62b933e16fa8 in open_key tools/test_font_family_host.c:59
+    #6 0x62b933e1535b in main tools/test_font_family_host.c:168
+    #7 0x71acbcc2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #8 0x71acbcc2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #9 0x62b933e16c94 in _start (/tmp/web-faces-family-slices/test_family+0x29c94) (BuildId: 6bc9d89af86d8a31f29fc3782db5a488b2f41ed2)
+
+SUMMARY: AddressSanitizer: heap-use-after-free tools/test_font_family_host.c:171 in main
+Shadow bytes around the buggy address:
+  0x504000000380: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd fd fa
+  0x504000000400: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd fd fa
+  0x504000000480: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd fd fa
+  0x504000000500: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd fd fa
+  0x504000000580: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd fd fa
+=>0x504000000600: fa fa 00 00 00 00 01 fa fa fa fd fd fd fd[fd]fd
+  0x504000000680: fa fa 00 00 00 00 00 00 fa fa fa fa fa fa fa fa
+  0x504000000700: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x504000000780: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x504000000800: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x504000000880: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==86235==ABORTING

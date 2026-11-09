@@ -1,9 +1,18 @@
 # userland/GNUmakefile — builds the whole os64 userland: the launch stub,
-# libos64, and every app under apps/. One makefile above them all (per the
-# roadmap — build scale is a non-issue on the dev machines).
+# libos64, every app under apps/, and every fixture under tests/. One makefile
+# above them all (per the roadmap — build scale is a non-issue on the dev
+# machines).
 #
-# Output: each app links to userland/bin/<app> as a dynamically-linked ring-3
-# ELF (launch + the app, against /lib/libos64.so), ready for the disk image.
+# Output: each program links to userland/bin/<app> or userland/bin/tests/<name>
+# as a dynamically-linked ring-3 ELF (launch + the program, against
+# /lib/libos64.so), ready for the disk image's /bin and /tests.
+
+# Parallel when this is the top-level make (`make -C userland`); under the
+# root build it inherits the root's jobserver instead — a -j of its own
+# would drop that jobserver and run a full count beside the root's jobs.
+ifeq ($(MAKELEVEL),0)
+MAKEFLAGS += -j$(shell nproc)
+endif
 
 # THE CROSS TOOLCHAIN, AND THE TWO-FACED `?=` (fixed 2026-08-22).
 #
@@ -36,7 +45,21 @@
 # breaks the root build instead: under -rR the origin is `undefined`.)
 ifeq ($(filter-out default undefined,$(origin CC)),)
 CC := x86_64-elf-gcc
+# ccache in front of the cross compiler WHEN THE MACHINE HAS ONE, and nothing
+# otherwise: a convenience of the dev box, never a requirement of the build.
+# quickjs.c is one pinned upstream translation unit that takes 30-40 s at
+# -O2 and never changes, so every clean build recompiled it for the same
+# bytes. ccache hashes the preprocessed source, the flags and the compiler
+# itself, and hands back the stored object on a match — byte for byte what
+# the compiler would emit, so a build with it and one without must not
+# differ; if two machines ever do, this line is the first question. Only
+# the `-c` compiles go through it; links are $(LD)'s. An explicit CC from
+# the command line or the environment is left alone, as above.
+ifneq ($(shell command -v ccache 2>/dev/null),)
+CC := ccache $(CC)
 endif
+endif
+$(info userland: CC is '$(CC)')
 ifeq ($(filter-out default undefined,$(origin LD)),)
 LD := x86_64-elf-ld
 endif
@@ -61,11 +84,23 @@ WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 # after the kernel's identical lesson was already written down. The .d files
 # land next to the .o's; the -include below pulls them in. In CFLAGS because
 # CFLAGS is what the compile rules actually pass.
+# -fstack-clash-protection: a frame larger than a page is lowered one page at
+# a time, each page touched as it goes, so RSP can never step over the
+# unmapped guard below a thread's stack — an overflow faults IN the guard,
+# which the kernel names "Stack overflow" on the glass. Without it a frame
+# allocated in one `sub rsp` lands wherever the arithmetic puts it: yonder's
+# 16KB frame against the 16KB guard (2026-10-30) happened to land inside it,
+# and a 100KB frame would not. Costs one store per page of a large frame,
+# nothing for the rest.
+# The probe loop is inline (GCC 14), so the freestanding build needs nothing
+# from a runtime. Fixture: /tests/stackprobe.
 CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
-           -fno-stack-protector -fcf-protection=none \
+           -fno-stack-protector -fcf-protection=none -fstack-clash-protection \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
-           -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include
+           -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
+           -I$(CURDIR)/libdraw2d/include -I$(CURDIR)/libcanvas/include -I$(CURDIR)/libsvg/include -I$(CURDIR)/libxml/include -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libflow/include -I$(CURDIR)/libway/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libwebp/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include \
+           -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/include -I$(CURDIR)/libdom/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -84,6 +119,12 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
 # nchain word, and an app's own .dynsym is sized exactly the same way. The
 # host toolchain this tree actually builds with defaults to gnu-only hashing,
 # so this is load-bearing, not belt-and-braces.
+# -rpath-link names the BUILD-TIME directory where ld can verify transitive
+# shared dependencies. An app that needs libpng needs libgzip transitively;
+# without this hint ld warns that libgzip cannot be found and then treats
+# libpng's inflate calls as unresolved. This does not
+# write an RPATH into the ELF — os64's runtime loader follows DT_NEEDED names
+# in /lib, independent of the host build tree.
 # -z separate-code: keep CODE in a segment of its own, exactly as the library
 # link does. app.ld's ALIGNs are necessary but not sufficient — ld will happily
 # merge the read-only zone (dynamic tables, .rodata) into the executable one
@@ -92,12 +133,22 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
 # quietly undoing the NX arc. It became necessary the moment .plt got its own
 # section (which the debugger needs); before that ld happened to split them.
 # "Happened to" is not a guarantee, hence the flag.
-LDFLAGS ?= -nostdlib --no-as-needed --hash-style=sysv -T $(CURDIR)/link/app.ld -z max-page-size=0x1000 -z noexecstack -z separate-code
+LDFLAGS ?= -nostdlib --no-as-needed --hash-style=sysv -rpath-link $(BIN) -T $(CURDIR)/link/app.ld -z max-page-size=0x1000 -z noexecstack -z separate-code
 
 BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
+# The flags stamps (written below the -O2 list): every object depends on the
+# stamp of its family, so it rebuilds when its flags change, not only when its
+# source does.
+PIC_FLAGS_STAMP    := $(OBJ)/flags/pic
+STATIC_FLAGS_STAMP := $(OBJ)/flags/static
+# The fixtures land in their own output directory because they land in their
+# own directory ON THE IMAGE (/tests, not /bin). Keeping the two apart here is
+# what lets the image rules route them without a hand-maintained list of which
+# names are tests — the SOURCE tree is the answer, and it cannot drift.
+TESTBIN := $(BIN)/tests
 
-# ── THE LIBRARY AND THE STUB (split 2026-08-22, when libos64 became a .so) ──
+# ── SHARED LIBRARIES AND THE STUB ──────────────────────────────────────────
 #
 # Until today every one of these objects was linked into every single app:
 # 64 private copies of the same ~81KB of library code, on disk and again in
@@ -112,23 +163,65 @@ OBJ     := $(CURDIR)/obj
 LAUNCH_SRCS := start/launch.S
 LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 
-# The library's own sources. thread_trampoline.S moved here out of launch.S
+# libos64's own sources. thread_trampoline.S moved here out of launch.S
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/image.c libos64/menu.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/monitor.c libos64/monitor_io.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/work.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_window.c libos64/window_placement.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_settings.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_data.c libos64/ui_dataview.c libos64/directory.c libos64/browser.c libos64/ui_browser.c libos64/ui_file_dialog.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_menu.c libos64/ui_menu_widget.c libos64/ui_dropdown.c libos64/ui_dispatcher.c libos64/ui_icon.c libos64/ui_icon_button.c libos64/ui_toolbar.c libos64/ui_action.c libos64/ui_status.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/mouse_settings.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/launch.c libos64/thread_trampoline.S \
+    libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c libos64/font_provider.c libos64/font_family.c libos64/font_adopt.c libos64/font_config.c libos64/font_discovery.c libos64/font_install.c libos64/font_psf2.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
 LIBOS64_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBOS64_SRCS))
+LIBOS64_OBJS += $(OBJ)/pic/shared/decoration.c.o $(OBJ)/pic/shared/damage.c.o
+
+$(OBJ)/pic/shared/%.c.o: ../shared/%.c $(PIC_FLAGS_STAMP)
+	@mkdir -p $(@D)
+	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
+
 LIBOS64_SO   := $(BIN)/libos64.so
 
-# The library is position-independent; the apps are not. That asymmetry is the
+# libgzip is a separate shared module: the raw DEFLATE engine and the gzip
+# and zlib containers round it serve HTTP content decoding, PNG's image data
+# and WOFF's tables without becoming part of libos64's foundational C
+# surface. Its framing reuses libos64's established CRC32, heap, and memory
+# primitives, so the object records a real DT_NEEDED on libos64.so instead of
+# carrying private copies of them.
+LIBGZIP_SRCS := libgzip/inflate.c libgzip/deflate.c libgzip/gzip.c libgzip/zlib.c
+LIBGZIP_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGZIP_SRCS))
+LIBGZIP_SO   := $(BIN)/libgzip.so
+
+# libpng owns PNG chunks, filters and color conversion. It uses libgzip's
+# zlib door and libos64's heap/CRC primitives, but neither of
+# those lower libraries knows an image format exists. That direction keeps a
+# decoder out of every program's foundational runtime.
+LIBPNG_SRCS := libpng/png.c libpng/encode.c
+LIBPNG_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPNG_SRCS))
+LIBPNG_SO   := $(BIN)/libpng.so
+
+# libfetch is the fetch machinery every program that downloads shares
+# (LIBFETCH.md): the HTTP parser, the plain-or-TLS transport, the redirect
+# and proxy rules, the connections kept between fetches, gzip undone
+# downstream of the framing. It records real DT_NEEDED edges on libtls,
+# libgzip and libos64; none of those knows a URL exists.
+LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c \
+                 libfetch/pool.c
+LIBFETCH_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFETCH_SRCS))
+LIBFETCH_SO   := $(BIN)/libfetch.so
+
+# Shared-library code is position-independent; the apps are not. That is the
 # whole design (see kernel/include/shared_object.h): apps keep their fixed
 # per-app link bases — which is what lets a host debugger tell two running
-# programs apart — while the LIBRARY, being PIC, can be placed anywhere and is
-# therefore free to live outside the crowded low 2GB entirely.
+# programs apart — while a PIC library can live outside the crowded low 2GB.
 LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
+# The shared libraries build -O2: yonder paints every pixel through
+# libos64's draw, text and font code, and the libraries derived from these
+# flags (libgzip, libpng, libfetch, libimage) sit on its path too. The
+# other libraries already ask for -O2 in their own makefiles.
+LIBOS64_CFLAGS += -O2
+LIBGZIP_CFLAGS := $(LIBOS64_CFLAGS)
+LIBPNG_CFLAGS  := $(LIBOS64_CFLAGS)
+LIBFETCH_CFLAGS := $(LIBOS64_CFLAGS)
 
 # --hash-style=sysv: the kernel derives the dynamic symbol COUNT from
 #   DT_HASH's nchain word (there is no DT_SYMTABSZ in ELF), so a GNU-only
@@ -147,20 +240,32 @@ LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
 # -z separate-code: keep CODE in a segment of its own. Without it ld happily
 # merges the read-only zone (symbol tables, relocations, .rodata) into the
 # executable one and hands back a single R+E LOAD — which, since os64 derives
-# page protections straight from segment flags, would make every constant in
-# the library executable and undo the NX arc for the one object every program
-# maps. lib.ld's ALIGNs are necessary but NOT sufficient; the flag is what
-# makes ld honour them as segment boundaries.
-LIBOS64_LDFLAGS := -shared -soname libos64.so --hash-style=sysv -Bsymbolic-functions \
-                   -z max-page-size=0x1000 -z noexecstack -z separate-code \
-                   -T $(CURDIR)/link/lib.ld
+# page protections straight from segment flags, would make the library's
+# constants executable. lib.ld's ALIGNs are necessary but NOT sufficient; the
+# flag is what makes ld honour them as segment boundaries.
+SHARED_LIB_LDFLAGS := -shared --hash-style=sysv -Bsymbolic-functions \
+                      -z max-page-size=0x1000 -z noexecstack -z separate-code \
+                      -T $(CURDIR)/link/lib.ld
+LIBOS64_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libos64.so
+LIBGZIP_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libgzip.so
+LIBPNG_LDFLAGS  := $(SHARED_LIB_LDFLAGS) -soname libpng.so
+LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 
 # Each library's PRELINKED base, from the same assigner that places the apps
 # (--libs switches it to the shared-library window). Libraries are placed at
 # BUILD time, not by the kernel's bump allocator, so the address is a stable
 # function of the library's name — which is what lets the GDB map below name
 # it and `step` into a library call actually step in. See link/lib.ld.
-LIBOS64_BASE   := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so | cut -d= -f2)
+# Library bases must be assigned as one population: calculating each name in
+# isolation would miss a hash collision and prelink two objects into the same
+# slot. app_bases.py sorts before probing, so adding a library gives the build
+# one deterministic map independent of link order.
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libwebp.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so libdom.so libxml.so libsvg.so libdraw2d.so libcanvas.so)
+LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
+LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
+LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
+LIBPNG_BASE    := $(patsubst libpng.so=%,%,$(filter libpng.so=%,$(LIB_BASE_PAIRS)))
+LIBFETCH_BASE  := $(patsubst libfetch.so=%,%,$(filter libfetch.so=%,$(LIB_BASE_PAIRS)))
 
 # more and less are two policies over one file-pager engine.  Keeping that
 # engine outside either app directory prevents the first useful slices from
@@ -176,12 +281,97 @@ HEX_BUFFER_APPS := hexedit
 HEX_BUFFER_SRC  := common/hex_buffer.c
 HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 
+# tar's header codec is pure byte work. The app uses it to handle archives;
+# tartest uses the same object to construct malformed inputs at the format
+# boundary instead of carrying a private almost-tar encoder in the fixture.
+TAR_FORMAT_PROGRAMS := tartest
+TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
+
+# The telnet protocol engine (RFC 854 + RFC 1143) is bytes in, bytes out and
+# host-tested at every chunk size. The telnet CLIENT and telnetd both drive
+# it — the client role and the server role are one file, so the negotiation
+# has one implementation to be right. telnetd links the object the client
+# app already builds.
+TELNET_ENGINE_PROGRAMS := telnetd
+TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
+
+# These programs consume the standalone gzip module. Keep the dependency
+# selective: linking libgzip into every app would turn an optional format
+# engine into part of the foundational runtime by accident. (os64get is not
+# here: it names libfetch, which carries its own edges on libgzip and libtls;
+# yonder is, for the zlib door it calls itself, unwrapping a WOFF font.)
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder
+
+# Programs that download: they name libfetch and get its whole closure.
+LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest yonder
+# What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
+# `wend` declares the edge before it CALLS anything through it, which is
+# deliberate: the library is otherwise on the image with nothing loading it,
+# and a prelink slot that collides or a `.so` that will not resolve is worth
+# finding on the boot that ships the library rather than on the one that
+# starts using it. The calls arrive with the renderer's lift.
+LIBPAGE_PROGRAMS := wend pagetest flowdump yonder
+# Where a page is laid out: the layout library's probe, and the browser.
+LIBFLOW_PROGRAMS := flowdump yonder
+# A browsing session (libway): the browsers.
+LIBWAY_PROGRAMS := wend yonder
+# The page's garb (libgarb): its probe, and whoever parses a page's sheets
+# and cascades them for libflow.
+LIBGARB_PROGRAMS := garbdump flowdump yonder
+# libtls's own probes, and yonder, which calls the entropy door
+# (os64_tls_entropy) itself for crypto.getRandomValues.
+LIBTLS_PROGRAMS := tlslibtest tlstransportprobe yonder
+
+# Programs whose main thread asks for a 4 MiB stack, not the 1 MiB every
+# thread gets (SCRIPT_STACK.md): `-z stack-size` writes it in PT_GNU_STACK,
+# and the kernel reads it there. yonder, whose script engine and layout
+# share its window thread; and stacktest, which proves the kernel's half.
+BIG_STACK_PROGRAMS := yonder stacktest
+BIG_STACK_LDFLAGS := -z stack-size=4194304
+
+# pngtest directly checks the codec; gview and desktop use libimage.
+# libpng carries its own DT_NEEDED edge on
+# libgzip, so consumers name the codec they asked for rather than its engine.
+LIBPNG_PROGRAMS := pngtest
+
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
 # once PER .c FILE, so without sort a two-file app appears twice in APPS
 # and its link rule gets eval'd twice.
 APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
+
+# And every tests/<name>/ directory is a FIXTURE named <name>, built exactly
+# like an app and installed to /tests instead of /bin.
+#
+# The split is curatorial, not technical: /bin is the programs and tools a
+# person runs, /tests is the proof harness — the badge-code fixtures testrun
+# spawns, and the acceptance probes you drive by hand when a feature is on
+# trial. Two directories also make a NAME COLLISION IMPOSSIBLE TO MISS, which
+# is why the split was worth doing on its own: `hog` existed twice, once here
+# and once under kernel/test/elf, both aimed at /bin/hog, and the image kept
+# the one this tree built. So test_backstop_preemption — whose entire premise
+# is "a thread that never enters the kernel" — was spawning the measuring
+# instrument, which calls os64_ticks() as it spins.
+TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/*/*.c)))))
+
+# AND THE TRIPWIRE, because this slice exists to replace vigilance with a
+# mechanism. Every per-program make variable below (APP_OBJS_<name>,
+# APP_BASE_<name>, the base stamp) is keyed on the NAME alone, so one name in
+# both trees would have the second eval quietly overwrite the first and build
+# one of them from the other's sources. The two directories cannot collide on
+# the IMAGE any more; this is what stops them colliding in the BUILD.
+APP_TEST_NAME_CLASH := $(filter $(APPS),$(TESTS))
+ifneq ($(APP_TEST_NAME_CLASH),)
+$(error name used by both an app and a fixture: $(APP_TEST_NAME_CLASH) — \
+        apps/ and tests/ share one link-base pool and one set of make \
+        variables, so a name must belong to exactly one of them)
+endif
+
+# `[` is the traditional second name for test, not a second program. Keep one
+# linked image and copy it under the punctuation name so both entry points have
+# identical expression semantics and fixes cannot drift between twins.
+APP_ALIASES := [
 
 # EVERY APP LINKS AT ITS OWN BASE ADDRESS.
 #
@@ -195,7 +385,14 @@ APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
 # not a hand-maintained table), so an app's address is stable across rebuilds and
 # adding a new app doesn't shove the others around — and "drop a directory and it
 # builds" still holds. See that file for the full rationale and the window map.
-APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS))
+# FIXTURES DRAW FROM THE SAME POOL AS APPS, and must: a fixture is an ordinary
+# non-PIE ET_EXEC, so two programs sharing a base is the same debugger ambiguity
+# whichever directory they came from — and testrun runs a fixture right next to
+# the app it is testing. Because app_bases.py keys on the NAME and sorts before
+# probing, feeding it both lists yields exactly the map it produced when they
+# were one list: moving a program between apps/ and tests/ does not move it in
+# memory.
+APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS) jsembedtest)
 # The slot size comes from the same script that assigns the bases, and is
 # handed to ld so app.ld can ASSERT the app actually fits in its slot. One
 # definition of the number; see app.ld's slot-check comment.
@@ -203,8 +400,36 @@ APP_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --slot-size)
 $(foreach p,$(APP_BASE_PAIRS),\
   $(eval APP_BASE_$(word 1,$(subst =, ,$(p))) := $(word 2,$(subst =, ,$(p)))))
 
+.DEFAULT_GOAL := all
+include libtls/foundation.mk
+include libtls/shared.mk
+include libjpeg/shared.mk
+include libwebp/shared.mk
+include libfreetype/shared.mk
+include libmath/shared.mk
+include libimage/shared.mk
+include libxml/library.mk
+include libdraw2d/library.mk
+include libcanvas/library.mk
+include libsvg/library.mk
+include libhtml/library.mk
+include libpage/library.mk
+include libgarb/library.mk
+include libflow/library.mk
+include libway/library.mk
+include libjs/shared.mk
+include libdom/library.mk
+include apps/js/runner.mk
+
+# Source membership and the population used for prelink placement live here.
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBSVG_SO) $(LIBDRAW2D_SO) $(LIBCANVAS_SO): GNUmakefile
+
 .PHONY: all
-all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
+all: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+     $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
+
+$(BIN)/[: $(BIN)/test
+	cp $< $@
 
 # The shared library itself. ET_DYN, PRELINKED: app_bases.py --libs picks its
 # slot in the kernel's prelink region (the first 4GB of the shared window)
@@ -213,27 +438,63 @@ all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 # one — the bump allocator in shared_object.c serves only images that arrive
 # WITHOUT a base. (This comment said the opposite until 2026-08-23, in the
 # same commit that made it false.)
-# --defsym BEFORE -T (which lives in LIBOS64_LDFLAGS): ld reads options left
-# to right and lib.ld's DEFINED(LIB_BASE) test can only see symbols defined by
-# the time the script is read. The same trap app.ld's comment memorializes.
-$(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
+# Both --defsym values precede -T (which lives in LIBOS64_LDFLAGS): ld reads
+# options left to right, and lib.ld must see the assigned base and the slot
+# bound before it evaluates either one. LIB_SLOT_SIZE comes from the assigner
+# that spaces the bases, so its ASSERT checks against the build's actual map.
+# The injected text backend lives in a leaf library. Keep its production
+# dependency explicit so ordinary consumers share the same dependency closure.
+$(LIBOS64_SO): $(LIBOS64_OBJS) $(LIBFREETYPE_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
 	@mkdir -p "$(BIN)"
-	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) $(LIBOS64_LDFLAGS) -o $@ $(LIBOS64_OBJS)
+	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBOS64_LDFLAGS) \
+	      -o $@ $(LIBOS64_OBJS) --no-as-needed $(LIBFREETYPE_SO)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
 
-# Per-app link rule, generated per app: the app name appears in BOTH the
-# directory and the filename, and a make pattern prerequisite allows only one
-# `%` stem — so a single `$(BIN)/%: $(OBJ)/apps/%/%.c.o` rule can't express it.
-# eval writes an explicit rule for each app instead (also the natural place to
-# add per-app extras later).
+# --no-as-needed makes the dependency an explicit property of libgzip.so.
+# The kernel recursively loads DT_NEEDED objects and resolves this library's
+# libos64 references within that dependency closure.
+$(LIBGZIP_SO): $(LIBGZIP_OBJS) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+	@mkdir -p "$(BIN)"
+	$(LD) --defsym LIB_BASE=$(LIBGZIP_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBGZIP_LDFLAGS) --no-as-needed \
+	      -o $@ $(LIBGZIP_OBJS) $(LIBOS64_SO)
+	@printf '  %-10s prelinked at %s\n' "libgzip.so" "$(LIBGZIP_BASE)"
+
+# libpng calls both dependencies directly: libgzip for raw inflate and
+# libos64 for allocation and PNG chunk CRCs. --no-as-needed records both edges
+# even if a future optimizer changes which calls remain visible to the linker.
+$(LIBPNG_SO): $(LIBPNG_OBJS) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+	@mkdir -p "$(BIN)"
+	$(LD) --defsym LIB_BASE=$(LIBPNG_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBPNG_LDFLAGS) --no-as-needed \
+	      -o $@ $(LIBPNG_OBJS) $(LIBGZIP_SO) $(LIBOS64_SO)
+	@printf '  %-10s prelinked at %s\n' "libpng.so" "$(LIBPNG_BASE)"
+
+# libfetch calls all three directly: libtls for the encrypted transport,
+# libgzip for content coding, libos64 for everything else. --no-as-needed
+# records every edge even if a future optimizer hides a call from the linker.
+$(LIBFETCH_SO): $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+	@mkdir -p "$(BIN)"
+	$(LD) --defsym LIB_BASE=$(LIBFETCH_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBFETCH_LDFLAGS) --no-as-needed \
+	      -o $@ $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO)
+	@printf '  %-10s prelinked at %s\n' "libfetch.so" "$(LIBFETCH_BASE)"
+
+# The link rule, generated once per program — apps and fixtures alike: the
+# name appears in BOTH the directory and the filename, and a make pattern
+# prerequisite allows only one `%` stem, so a single
+# `$(BIN)/%: $(OBJ)/apps/%/%.c.o` rule can't express it. eval writes an
+# explicit rule for each instead (also the natural place to add per-app
+# extras later).
 # NOTE the argument order: --defsym MUST come BEFORE -T (which lives in LDFLAGS).
 # ld processes options left to right, and the script's DEFINED(APP_BASE) test can
 # only see symbols defined by the time the script is read — a --defsym placed
 # after -T is silently ignored and every app quietly links at the 0x400000
 # fallback again (which builds, runs, and fails only in the debugger — the worst
 # kind of bug). Verified: defsym-after-T -> 0x400000, defsym-before-T -> 0xe400000.
-# MULTI-FILE APPS (since top, 2026-07-27): EVERY .c in apps/<name>/ compiles
-# and links into <name> — before this, the rule named exactly <name>.c.o, so
+# MULTI-FILE APPS (since top, 2026-07-27): EVERY .c in the program's directory
+# compiles and links into it — before this, the rule named exactly <name>.c.o, so
 # a second source file wasn't "compiled but not linked", it was never even
 # compiled ("undefined reference to `topMain'" was the symptom). The wildcard
 # expands at eval time, so dropping another .c into the folder is picked up
@@ -249,43 +510,101 @@ $(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
 # the required filename changes, its new stamp is created, and only that app
 # relinks with the new --defsym. Old stamps are harmless historical crumbs and
 # disappear with `make clean` alongside the rest of OBJ.
+#
+# THE THREE ARGUMENTS are (name, source directory, output directory) — a
+# fixture builds by exactly the same recipe as an app and differs only in
+# where it comes from and where it goes, so it gets the same rule rather than
+# a parallel copy that could drift.
 define APP_RULE
-APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
+APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
-                       $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ))
-APP_BASE_STAMP_$(1) := $(OBJ)/apps/$(1)/.base-$(APP_BASE_$(1))
+                       $(if $(filter $(1),webpbench),$(OBJ)/webp-bench-sse2/decoder.o) \
+                       $(if $(filter $(1),webpbenchscalar),$(OBJ)/webp-bench-scalar/decoder.o) \
+                       $(if $(filter $(1),fonttest),$(OBJ)/freetype/libfreetype/port/runtime.c.o $(OBJ)/freetype/libfreetype/port/nonlocal.S.o) \
+                       $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
+                       $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
+                       $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
+                       $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
+                       $(if $(filter $(1),sshtest),$(addprefix $(OBJ)/apps/sshd/,ssh_codec.c.o ssh_keys.c.o ssh_transport.c.o ssh_connection.c.o)) \
+                       $(if $(filter $(1),scribefonttest),$(addprefix $(OBJ)/apps/scribe/,scribe.c.o scribe_buf.c.o)) \
+                       $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
+                       $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
+                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) \
+                       $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
+                       $(if $(filter $(1),domtest yonder),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
+                       $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \
+                       $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
+                       $(if $(filter $(1),$(LIBGARB_PROGRAMS)),$(LIBGARB_SO)) \
+                       $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
+                       $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder scribe scribefonttest grootmenu actiongallery roam),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
+                       $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
+                       $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),js),$(LIBJS_SO)) \
+                       $(if $(filter $(1),mathtest yonder),$(LIBMATH_SO)) \
+                       $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
+                       $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
+                       $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
+                       $(if $(filter $(1),$(LIBTLS_PROGRAMS)),$(LIBTLS_SO)) \
+                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest),$(BEARSSL_ARCHIVE))
+APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
 	@touch "$$@"
-$(BIN)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
-	@mkdir -p "$(BIN)"
-	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO)
+$(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
+	@mkdir -p "$(3)"
+	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) $(if $(filter $(1),$(BIG_STACK_PROGRAMS)),$(BIG_STACK_LDFLAGS)) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
-$(foreach app,$(APPS),$(eval $(call APP_RULE,$(app))))
+$(foreach app,$(APPS),$(eval $(call APP_RULE,$(app),apps,$(BIN))))
+$(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 
-# The GDB symbol map: one add-symbol-file per app, at its own base. Sourced by
-# ./.gdbinit, so EVERY app's symbols are loaded before anything runs — symbolic
-# breakpoints (`hbreak upper.c:47`) resolve immediately instead of going pending,
-# and they resolve UNAMBIGUOUSLY because no two apps share an address anymore.
-$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(LIBOS64_SO)
+# The GDB symbol map: one add-symbol-file per program, at its own base. Sourced
+# by ./.gdbinit, so EVERY program's symbols are loaded before anything runs —
+# symbolic breakpoints (`hbreak upper.c:47`) resolve immediately instead of going
+# pending, and they resolve UNAMBIGUOUSLY because no two share an address.
+# FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
+# afterthought: a fixture is the program you are most likely to be single-
+# stepping, because it is what you reach for when something is already broken.
+$(BIN)/app_bases.gdb: $(LIBDRAW2D_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBXML_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBJS_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
-	@printf '# Every app at its own base, so GDB can hold all their symbols at once.\n' >> $@
+	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
 	@$(foreach app,$(APPS),\
 	   printf 'add-symbol-file %s/%s %s\n' "$(BIN)" "$(app)" "$(APP_BASE_$(app))" >> $@;)
+	@printf '\n# The /tests fixtures, from the same base pool.\n' >> $@
+	@$(foreach t,$(TESTS),\
+	   printf 'add-symbol-file %s/%s %s\n' "$(TESTBIN)" "$(t)" "$(APP_BASE_$(t))" >> $@;)
 	@printf '\n' >> $@
-	@printf '# THE SHARED LIBRARY (2026-08-22). Without this line GDB has no line\n' >> $@
-	@printf '# info anywhere in libos64, so `step` at a library call silently behaves\n' >> $@
-	@printf '# like `next` — it cannot step into code it has no symbols for. This is\n' >> $@
-	@printf '# also why the library is PRELINKED at a build-time address (link/lib.ld):\n' >> $@
+	@printf '# THE SHARED LIBRARIES. Without these lines GDB has no line info in\n' >> $@
+	@printf '# shared-library code, so `step` at a library call silently behaves like\n' >> $@
+	@printf '# `next` — it cannot step into code it has no symbols for. This is also\n' >> $@
+	@printf '# why each library is PRELINKED at a build-time address (link/lib.ld):\n' >> $@
 	@printf '# when the kernel chose the address by load order, the build had nothing\n' >> $@
 	@printf '# truthful to write here.\n' >> $@
-	@printf '# The address is .text, which is what add-symbol-file wants — NOT the\n' >> $@
-	@printf '# image base, since lib.ld puts the read-only zone first.\n' >> $@
-	@printf 'add-symbol-file %s 0x%s\n' "$(LIBOS64_SO)" \
-	   "$$(x86_64-elf-readelf -SW $(LIBOS64_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
-	@printf '# (symbols for %s + libos64.so)\n' "$(APPS)" >> $@
+	@printf '# Their section addresses are already absolute in each prelinked ELF, so\n' >> $@
+	@printf '# bare add-symbol-file reads the truth without duplicating it by regex.\n' >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBOS64_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBGZIP_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBPNG_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBWEBP_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBFREETYPE_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBMATH_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBJS_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBXML_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBDRAW2D_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBCANVAS_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBPAGE_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBFLOW_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBWAY_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBGARB_SO)" >> $@
+	@printf '# (symbols for %s + every shared library above)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
 # compile regenerates its .d with the current include list, so it cannot drift.
@@ -293,8 +612,8 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(LIBOS64_SO)
 # per-app form covered only <name>.c.d, which would have left topMain.c.o
 # stale against topMain.h edits — the EXACT bug class this makefile's -MMD
 # comment block memorializes, sneaking back through a side door.
-HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) \
-               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c)) \
+HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) $(LIBGZIP_OBJS:.o=.d) $(LIBPNG_OBJS:.o=.d) $(LIBFETCH_OBJS:.o=.d) \
+               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c tests/*/*.c)) \
                $(PAGER_OBJ:.o=.d) $(HEX_BUFFER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
 
@@ -304,11 +623,19 @@ HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) \
 # does not decide that — the stems differ in length, and the more specific
 # prefix wins — but keeping them adjacent and commented means nobody has to
 # re-derive it.
-$(OBJ)/pic/%.c.o: %.c
+$(OBJ)/pic/libgzip/%.c.o: libgzip/%.c $(PIC_FLAGS_STAMP)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LIBGZIP_CFLAGS) -c $< -o $@
+
+$(OBJ)/pic/libpng/%.c.o: libpng/%.c $(PIC_FLAGS_STAMP)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LIBPNG_CFLAGS) -c $< -o $@
+
+$(OBJ)/pic/%.c.o: %.c $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
-$(OBJ)/pic/%.S.o: %.S
+$(OBJ)/pic/%.S.o: %.S $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
@@ -318,17 +645,50 @@ $(OBJ)/pic/%.S.o: %.S
 # here compile at -O2 (a pattern-specific variable, so nothing else
 # changes). Add one only when it has been MEASURED; a demo that feels
 # slow is usually doing more math, not less optimizing.
-OPTIMIZED_APPS := fpu_demo
-$(foreach a,$(OPTIMIZED_APPS),$(eval $(OBJ)/apps/$(a)/%.c.o: CFLAGS += -O2))
+# The source directory is DERIVED rather than spelled, because a name here is
+# a pattern prefix: `$(OBJ)/apps/<name>/%.c.o` matches nothing at all once that
+# program lives under tests/, and a pattern-specific variable that matches
+# nothing is silent — the -O2 would simply stop applying with no diagnostic.
+# fpu_demo made exactly that move on the day /tests was created.
+OPTIMIZED_APPS   := fpu_demo vncd yonder coreprobe
+OPTIMIZED_CFLAGS := -O2
+$(foreach a,$(OPTIMIZED_APPS),\
+  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += $(OPTIMIZED_CFLAGS)))
 
-$(OBJ)/%.c.o: %.c
+# SSH uses private BearSSL primitives without widening libtls.so ABI.
+SSH_CFLAGS := -O2 -I$(CURDIR)/libtls/port/include
+$(OBJ)/apps/sshd/%.c.o: CFLAGS += $(SSH_CFLAGS)
+$(OBJ)/tests/sshtest/%.c.o: CFLAGS += $(SSH_CFLAGS)
+
+# AN OBJECT REBUILDS WHEN ITS FLAGS CHANGE. Make compares dates, and nothing
+# dates a flag: before these stamps, an edit to the flags relinked the old
+# objects, and a library or an app put on -O2 went on running its -O0 code
+# under the new name. Each stamp holds a family's flags and is rewritten as
+# this file is read, only when they differ, so its date moves exactly when
+# they do. The PIC family's are the flags the obj/pic rules compile with;
+# the static family's are CFLAGS and every pattern-specific addition to it.
+# So an addition is a variable, and its variable is in the static stamp: one
+# spelled inline, or left out of the stamp, relinks stale objects the day it
+# changes.
+flags_same = $(if $(subst x$(1),,x$(2))$(subst x$(2),,x$(1)),,same)
+define flags_stamp
+$(if $(call flags_same,$(strip $(2)),$(strip $(file <$(1)))),,$(file >$(1),$(strip $(2))))
+endef
+$(shell mkdir -p $(OBJ)/flags)
+$(eval $(call flags_stamp,$(PIC_FLAGS_STAMP),$(LIBOS64_CFLAGS) | $(LIBGZIP_CFLAGS) | $(LIBPNG_CFLAGS) | $(LIBFETCH_CFLAGS)))
+$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS)))
+
+$(OBJ)/%.c.o: %.c $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJ)/%.S.o: %.S
+$(OBJ)/%.S.o: %.S $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:
 	rm -rf $(OBJ) $(BIN)
+
+-include $(OBJ)/pic/shared/decoration.c.d
+-include $(OBJ)/pic/shared/damage.c.d

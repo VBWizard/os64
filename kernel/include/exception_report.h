@@ -78,6 +78,11 @@ const char *exception_vector_name(uint64_t vector);
 // `dying` has the usual meaning: wire-only, touch no log queue.
 void exception_report_registers(const exception_context_t *ctx, bool dying);
 
+// Mute (or restore) the glass for lines the reporter emits while the caller
+// holds exception_wire_lock — a ring-3 death shows one headline on screen and
+// sends the rest to the wire and the log.
+void exception_glass_mute(bool mute);
+
 // The context the shared prologue registered for THIS core, or NULL when the
 // running exception arrived through the old (EXCOLD) stubs — which is exactly
 // the question the shared demand pager asks to decide which reporter owns a

@@ -1,0 +1,47 @@
+{
+  "encoder": "Pillow libwebp 1.3.2",
+  "fixtures": [
+    {
+      "name": "lossy_512",
+      "size": 512,
+      "input_bytes": 2222,
+      "input_sha256": "8426104b26a6c6d092b5fef2de68dd1a6b83a73bb4255655fd9459ad5d711a48",
+      "pixel_crc32": "0ba6c4d3"
+    },
+    {
+      "name": "lossless_512",
+      "size": 512,
+      "input_bytes": 180,
+      "input_sha256": "557d9bf4c085bf49cdf05d17f17383079e01aab7ad691dc48ac461075f07da5f",
+      "pixel_crc32": "4c7da02a"
+    },
+    {
+      "name": "alpha_512",
+      "size": 512,
+      "input_bytes": 2388,
+      "input_sha256": "e2b27c555365f6edc34bf89bf2c8bb690c2ecc880df86236be6eec78302539cf",
+      "pixel_crc32": "73f780f5"
+    },
+    {
+      "name": "lossy_4096",
+      "size": 4096,
+      "input_bytes": 55280,
+      "input_sha256": "f869dc6308ab9a7ba49d61f4ffbeeaa4fa3d0e5f3d0868a9fbb1d31062b0a264",
+      "pixel_crc32": "eb639d27"
+    },
+    {
+      "name": "lossless_4096",
+      "size": 4096,
+      "input_bytes": 6224,
+      "input_sha256": "eace67b979f57edce2b97911b82618dc294ff0a3036115aa6c747a5414b5a8d2",
+      "pixel_crc32": "dc164346"
+    },
+    {
+      "name": "alpha_4096",
+      "size": 4096,
+      "input_bytes": 61358,
+      "input_sha256": "f64cc33da4836ea7ff04399a1c5adf6e248c7c57e686d446c115f5ac25133666",
+      "pixel_crc32": "4d072be9"
+    }
+  ]
+}

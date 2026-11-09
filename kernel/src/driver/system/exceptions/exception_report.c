@@ -69,9 +69,16 @@ static volatile uint32_t kWireDepth = 0;
 
 static uint32_t wire_self(void)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-	// 0xFE: the pre-CLS early-boot pseudo-identity. One core, no contention.
-	return (cls != NULL) ? (uint32_t)cls->apic_id : 0xFEu;
+	// An identity, not an index: the APIC ID is unique even for a CPU that
+	// faults before its CLS exists, or that the roster never numbered. The
+	// LAPIC is mapped by then; before init_SMP maps it only the BSP runs.
+	return read_apic_id().id;
+}
+
+static uint32_t exception_core_index(void)
+{
+	uint32_t cpu = cpu_self();
+	return cpu < MAX_CPUS ? cpu : 0;
 }
 
 void exception_wire_lock(void)
@@ -393,6 +400,16 @@ static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 // whole answer: CR2 says which address died, the registers say which pointer
 // carried it there. Exported (not folded into exception_report) because the
 // ring-3 segfault report needs exactly this block under its own headline.
+// The glass switch, for a caller that reports standalone under the wire lock:
+// the ring-3 kill paths print their one headline and then mute the glass for
+// the register block (simple_exceptions.c FAULT_PRINT says why). Only ever
+// toggled by the narrator holding exception_wire_lock, which is what makes
+// one static flag correct across cores.
+void exception_glass_mute(bool mute)
+{
+	kExcEmitToGlass = !mute;
+}
+
 void exception_report_registers(const exception_context_t *ctx, bool dying)
 {
 	// Reentrant, so this costs nothing under exception_report's own lock and
@@ -417,10 +434,9 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 	// with the frame. GS earns its line because get_core_local_storage() IS
 	// `mov rax, [gs:0]` — a wrong GS makes every cls-> read return garbage,
 	// which is the shape of a corruption family this OS spent weeks on. And
-	// because os64 uses SWAPGS NOWHERE, the base has ONE correct answer at all
-	// times, ring 0 and ring 3 alike: inside kCoreLocalStorage. So it is not
-	// merely printed, it is CHECKED — if this line says WRONG, stop reading
-	// the rest of the report and believe this line first.
+	// after CLS initialization the base should be inside kCoreLocalStorage
+	// in ring 0 and ring 3 alike. During CPU bring-up, zero is expected until
+	// that CPU installs its GS base.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -428,7 +444,8 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		EXC_EMIT(dying, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		         gs_base,
-		         sane ? "in kCoreLocalStorage — ok"
+		         (!kSMPInitDone && gs_base == 0) ? "not initialized (early boot)"
+		              : sane ? "in kCoreLocalStorage — ok"
 		              : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
 	exception_wire_unlock();
@@ -436,7 +453,7 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 
 void exception_report(const exception_context_t *ctx, const char *why)
 {
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = try_get_core_local_storage();
 	uint64_t cr0, cr2, cr3, cr4;
 	char bits[96];
 
@@ -462,8 +479,7 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	// `dying` false, EXC_EMIT's printd copy carries the report into the log
 	// file when logd holds the sink. Read under the wire lock; per-core, so
 	// a concurrent fatal report on another core is unaffected.
-	uint32_t excCore = (cls != NULL && cls->apic_id < MAX_CPUS)
-	                       ? (uint32_t)cls->apic_id : 0;
+	uint32_t excCore = exception_core_index();
 	const bool resuming = kExcResumingCore[excCore];
 	const bool dying = !resuming;
 	kExcEmitToGlass = !resuming;
@@ -484,8 +500,10 @@ void exception_report(const exception_context_t *ctx, const char *why)
 		         exception_vector_name(ctx->vector));
 	}
 
-	EXC_EMIT(dying, ">>> AP %lu (Thread 0x%08x)  vector %lu  error 0x%lx <<<\n",
-	         cls ? cls->apic_id : 0, cls ? cls->threadID : 0,
+	// Both numbers: the CPU number is the log's, the APIC ID is what a
+	// person debugging the hardware will be holding.
+	EXC_EMIT(dying, ">>> AP %u (APIC %u) (Thread 0x%08x)  vector %lu  error 0x%lx <<<\n",
+	         cpu_self(), read_apic_id().id, cls ? cls->threadID : 0,
 	         ctx->vector, ctx->error_code);
 
 	// The #PF error code decoded, in the SAME words the ring-3 segfault report
@@ -604,17 +622,14 @@ static exception_context_t *kCurrentCtx[MAX_CPUS];
 
 exception_context_t *exception_current_context(void)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-	if (cls == NULL || cls->apic_id >= MAX_CPUS) {
-		return NULL;
-	}
-	return kCurrentCtx[cls->apic_id];
+	// Use the same CPU identity before and after GS setup. An AP without
+	// CLS must retain its own capture instead of borrowing the BSP's slot.
+	return kCurrentCtx[exception_core_index()];
 }
 
 void exception_dispatch(exception_context_t *ctx)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-	uint32_t core = (cls != NULL && cls->apic_id < MAX_CPUS) ? (uint32_t)cls->apic_id : 0;
+	uint32_t core = exception_core_index();
 
 	// Save-and-restore rather than set-and-clear, because exceptions NEST: a
 	// #PF taken inside the pager re-enters here with its own context, and a

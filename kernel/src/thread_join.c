@@ -61,7 +61,9 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// part is why this feature needed no address-space work — whoever wrote
 	// task_alloc_guarded_stack solved the multi-thread case years before
 	// there were multiple threads.
-	thread_t* t = createThread(task, false);
+	// A spawned thread gets the default stack; only a program's main thread
+	// takes the size it declares (SCRIPT_STACK.md § 8).
+	thread_t* t = createThread(task, false, 0);
 	if (t == NULL)
 	{
 		kfree(j);
@@ -79,7 +81,7 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// AFFINITY, and the trap in it: "run anywhere" is THREAD_NO_AFFINITY,
 	// which is 0xFFFFFFFFFFFFFFFF — NOT zero. createThread doesn't set the
 	// field and kmalloc zeroes every allocation, so a thread born here
-	// arrives claiming mp_apic == 0, and 0 is a perfectly valid APIC id:
+	// arrives claiming pinnedCPU == 0, and 0 is a perfectly valid CPU number:
 	// the BSP. Every thread a program created would then be PINNED to core
 	// 0 and they would timeshare one core while seven sat idle — the
 	// scheduler faithfully doing what it was told. (Found within an hour of
@@ -89,7 +91,7 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// Inherit the creating task's main thread rather than hardcoding the
 	// sentinel: if that thread is pinned somewhere on purpose, its threads
 	// belong there too, and for every ordinary program it means "anywhere".
-	t->mp_apic = task->threads->mp_apic;
+	t->pinnedCPU = task->threads->pinnedCPU;
 
 	// Write the return address into the new thread's user stack. The stack
 	// lives at a task-local lower-half VA that the kernel's own page tables
@@ -97,13 +99,14 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// TASK's tables, then write through the HHDM alias (valid while
 	// allocated). See CLAUDE.md § Writing to Task Memory.
 	//
-	// t->regs.RSP is a USER-SUPPLIED stack pointer (the `thread` syscall's
-	// arg), so it is resolved through paging_resolve_user_writable, not a
-	// bare walk (2026-08-24): a plain walk accepted ANY present page, so a
-	// stack pointer forged at the kernel's upper-half or a read-only shared
-	// page would have had the kernel write `exit_stub` there — the same
-	// ring-3 -> ring-0 write Codex found in signal delivery, wearing thread
-	// creation's clothes. The guard demands lower-half + USER + WRITABLE.
+	// t->regs.RSP is createThread's: the top of the user stack the kernel
+	// just allocated for this thread (the `thread` syscall's arg becomes RDI
+	// and is never dereferenced). It is still resolved through
+	// paging_resolve_user_writable rather than a bare walk, as a guard: a
+	// plain walk accepts ANY present page, and the kernel writing `exit_stub`
+	// through a pointer that ever came to name the kernel's half or a
+	// read-only shared page would be the ring-3 -> ring-0 write Codex found
+	// in signal delivery. The guard demands lower-half + USER + WRITABLE.
 	uintptr_t phys_rsp = paging_resolve_user_writable((pt_entry_t*)task->pml4v, t->regs.RSP);
 	if (phys_rsp == 0)
 	{
@@ -213,8 +216,16 @@ void thread_join_close(thread_join_t* j)
 {
 	printd(DEBUG_THREAD, "thread_join_close: handle for thread 0x%08lx released (%s)\n",
 	       j->threadID, j->exited ? "already exited" : "still running — detached");
-	j->waiter = NULL;
+	// The waiter slot is NOT cleared here (it was, until the pin): a reader
+	// parked in thread_join_read may still be inside this object on its own
+	// reference, and it voids its own registration at the top of its loop.
+	// Clearing it from a sibling's close would only lose that reader's wake.
 	thread_join_unref(j);
+}
+
+void thread_join_ref(thread_join_t* j)
+{
+	__sync_fetch_and_add(&j->refcount, 1);
 }
 
 void thread_join_wake_if_ready(void)

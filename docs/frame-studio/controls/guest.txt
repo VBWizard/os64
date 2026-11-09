@@ -1,0 +1,38 @@
+decorationtest: PASS font=24px screen=1920x1080 generation=4 frame=502x277 content=500x240
+decorationtest: state frame=160,164 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=0 layout=1
+decorationtest: close request 1 window=0 (kept open)
+decorationtest: state frame=160,164 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=1
+decorationtest: state frame=160,164 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=2
+decorationtest: state frame=160,164 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=2
+decorationtest: replaced window during input test
+decorationtest: state frame=160,180 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=2
+decorationtest: state frame=0,0 1920x1080 content=1918x1043 flags=264
+decorationtest: client edges down=0 up=0 close=1 layout=3
+decorationtest: state frame=160,180 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=3
+decorationtest: state frame=160,180 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=1 layout=3
+decorationtest: state frame=160,180 502x277 content=500x240 flags=260
+decorationtest: client edges down=0 up=0 close=1 layout=5
+decorationtest: close request 2 window=0 (kept open)
+decorationtest: close request 3 window=0 (kept open)
+decorationtest: state frame=160,180 502x277 content=500x240 flags=260
+decorationtest: client edges down=0 up=0 close=3 layout=5
+decorationtest: close request 4 window=0 (kept open)
+decorationtest: state frame=160,180 502x277 content=500x240 flags=260
+decorationtest: client edges down=0 up=0 close=4 layout=5
+decorationtest: state frame=160,180 502x277 content=500x240 flags=260
+decorationtest: client edges down=0 up=0 close=4 layout=5
+decorationtest: content minimum fixed at current size
+decorationtest: state frame=496,0 1920x1080 content=1918x1043 flags=260
+decorationtest: client edges down=0 up=0 close=4 layout=5
+decorationtest: content minimum released
+decorationtest: state frame=496,0 1920x1080 content=1918x1043 flags=260
+decorationtest: client edges down=0 up=0 close=4 layout=5
+decorationtest: state frame=496,0 1920x1080 content=1918x1043 flags=260
+decorationtest: client edges down=0 up=0 close=4 layout=1

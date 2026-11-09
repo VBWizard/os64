@@ -1,0 +1,2 @@
+test_menu_apps_host: 1546 checks, 0 failures
+Artifacts: /tmp/e1c-scribe-host

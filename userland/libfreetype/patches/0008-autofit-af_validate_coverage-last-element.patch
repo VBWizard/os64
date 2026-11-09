@@ -1,0 +1,26 @@
+From f9010851e4c8f5589955e70c32c5a8d9508c39e9 Mon Sep 17 00:00:00 2001
+From: Werner Lemberg <wl@gnu.org>
+Date: Fri, 29 May 2026 06:43:37 +0200
+Subject: [PATCH] * src/autofit/afgsub.c (af_validate_coverage): Check last
+ element.
+
+Fixes issue #1439.
+---
+ src/autofit/afgsub.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/autofit/afgsub.c b/src/autofit/afgsub.c
+index af7b0f679..efcba18ae 100644
+--- a/src/autofit/afgsub.c
++++ b/src/autofit/afgsub.c
+@@ -81,6 +81,10 @@
+         if ( startGlyphID > endGlyphID )
+           return FALSE;
+ 
++        /* If `endGlyphID` is 0xFFFF it must be the last element. */
++        if ( endGlyphID == 0xFFFF && p < limit )
++          return FALSE;
++
+         count += endGlyphID - startGlyphID + 1;
+ 
+         /* We don't validate coverage indices. */

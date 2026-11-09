@@ -1,0 +1,15 @@
+{
+  "reviewed_base": "e0800cb8",
+  "branch": "codex/explorer-e01a",
+  "review_pr": "https://github.com/VBWizard/os64/pull/254",
+  "sha256": {
+    "tools/test_ui_action_host.c": "617c9d3d50fb74c4b526a04bb037f855ffe83d05620560a123b8f38853e4e6fd",
+    "userland/libos64/ui_action.c": "cdd98d9bc5924b16844727997dcc0cfb1dd9afb8c7ea07e3c93fdfdb6a806d9d",
+    "userland/libos64/ui_status.c": "c8bc0ceef7587cc3bd31a02b883f30e7a211e327f6ade70597908f83406b97ed",
+    "userland/libos64/include/os64/ui_action.h": "64314e5287a6bd1d2f3546b8cd7edd6513de227f4748e0c345d8e8619840cd38",
+    "userland/libos64/include/os64/ui_status.h": "44c7ce77133110e484e575ed485e264cb25cdcf4fbb7501e8d1c74761ea6a096",
+    "userland/bin/libos64.so": "3277d5061e4e9428b5e01467723d69f3cc4cbff6a3cd5706125aeb23dbc53d3f",
+    "userland/bin/actiongallery": "47dcdc538abbb2b362e06d9037246036694eaffe6bc7ca94e98f34e1a429ab8f",
+    "userland/bin/tests/fontsettingstest": "409380917cdb3a9aa0e5a86ab4200380bf025434964e930bac1b777fe4939fb4"
+  }
+}

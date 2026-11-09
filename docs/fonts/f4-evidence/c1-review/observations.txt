@@ -1,0 +1,22 @@
+Captured against implementation d11608b / report tip 5a33242.
+OS64_FONT_OK is 0.
+
+measure:
+planner measurement allocation denied; adoption=0 staged_width=32 actual_width=96
+
+register:
+registration allocation denied; adoption=0 planner_calls=0 (expected refusal or registered planner)
+
+clip:
+primary row=[20,30), painted y=[16,31], pixels outside row=24
+
+paint:
+installed face width=96; paint allocation denied, rendered pen=32
+
+cross (additional context-policy probe; not a separate finding):
+foreign-context bind=0 widths=32 (expected same face)
+
+release:
+AddressSanitizer: heap-use-after-free in binding_free, ui_font.c:88.
+Allocator owner freed by os64_ui_font_release, ui_font.c:541.
+Full trace: release-asan.txt.

@@ -2,30 +2,8 @@
 
 #define DEFAULT_HEAD_LINES 20
 #define HEAD_BUF_SIZE 32768
-#define HEAD_MAX_FILES 512
 
 static char buf[HEAD_BUF_SIZE];
-
-static bool parse_line_count(const char *value, uint64_t *lineCount)
-{
-    if (value == NULL || *value == '\0')
-        return false;
-
-    uint64_t result = 0;
-    for (const char *p = value; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (result > (UINT64_MAX - digit) / 10)
-            return false;
-        result = result * 10 + digit;
-    }
-
-    *lineCount = result;
-    return true;
-}
 
 static int write_all(int32_t handle, const char *data, size_t length)
 {
@@ -82,7 +60,12 @@ int main(int argc, char **argv)
 {
     uint64_t lineCount = DEFAULT_HEAD_LINES;
     const char *lineCountValue = NULL;
-    const char *files[HEAD_MAX_FILES] = {0};
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
+    if (files == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "head: out of memory\n");
+        return 2;
+    }
     int32_t returnCode = 0;
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
@@ -95,17 +78,25 @@ int main(int argc, char **argv)
     args.details = "With no FILE, or when FILE is -, read standard input. Multiple inputs are labeled.";
 
     int32_t parsed = os64_args_parse(&args, "head [-n NUM] [FILE ...]",
-                                     files, HEAD_MAX_FILES);
+                                     files, OS64_SPAWN_MAX_ARGS);
     if (parsed == OS64_ARG_HELP)
-        os64_exit(0);
+    {
+        os64_free(files);
+        return 0;
+    }
     if (parsed < 0)
-        os64_exit(2);
+    {
+        os64_free(files);
+        return 2;
+    }
 
-    if (lineCountValue != NULL && !parse_line_count(lineCountValue, &lineCount))
+    if (lineCountValue != NULL &&
+        !os64_parse_u64(lineCountValue, &lineCount))
     {
         os64_hprintf(OS64_STDERR, "head: invalid line count: %s\n",
                      lineCountValue);
-        os64_exit(2);
+        os64_free(files);
+        return 2;
     }
 
     int32_t inputCount = parsed == 0 ? 1 : parsed;
@@ -158,5 +149,6 @@ int main(int argc, char **argv)
             os64_close(fileHandle);
     }
 
-    os64_exit(returnCode);
+    os64_free(files);
+    return returnCode;
 }

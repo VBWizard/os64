@@ -1,0 +1,150 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Percentage heights</title>
+<style>
+html{height:100%}
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.track{height:6px;width:300px;background:#ddd;margin:1em 0}
+.fill{height:100%;width:0;background:#0969da;animation:fill 3s linear infinite}
+@keyframes fill{to{width:100%}}
+.eq{display:flex;align-items:flex-end;gap:4px;height:32px;margin:1em 0}
+.eq span{display:block;width:8px;height:100%;background:#1a7f37;transform-origin:bottom;animation:bar 1s ease-in-out infinite alternate}
+.eq span:nth-child(2){animation-delay:-.3s}
+.eq span:nth-child(3){animation-delay:-.6s}
+.eq span:nth-child(4){animation-delay:-.9s}
+@keyframes bar{from{transform:scaleY(.2)}to{transform:scaleY(1)}}
+.case{margin:1.2em 0}
+.case p{margin:.3em 0}
+.stage{display:flex;gap:16px;align-items:flex-start}
+.cb{background:#ddd}
+.mid{background:#bbb}
+.t{background:#0969da}
+.ghost{width:40px;border:2px dashed #c00;box-sizing:border-box;margin-top:0}
+.got{font-weight:bold}
+.got.ok{color:#1a7f37}
+.got.bad{color:#c00}
+</style>
+</head><body>
+<h1>Percentage heights</h1>
+<p>CSS 2.1 &sect; 10.5: a percentage height is of the containing block's
+height when that height does not wait on the content (a length, a
+percentage that itself resolved, an absolute box's, and the window's above
+the root), and is <code>auto</code> when it does. Another browser shows
+every check PASS, and so should yonder.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+
+<h2>Look</h2>
+<p>A progress bar whose fill is <code>height: 100%</code> of a 6-pixel
+track, its width animated: a blue bar fills the grey track again and
+again.</p>
+<div class="track"><div class="fill"></div></div>
+<p>An equalizer: bars <code>height: 100%</code> of a 32-pixel row that
+aligns them to its foot, each scaled by keyframes: four green bars rise
+and fall.</p>
+<div class="eq"><span></span><span></span><span></span><span></span></div>
+
+<h2>Measured</h2>
+<p>Each case is a light grey containing block holding a blue box whose
+height is a percentage. Beside it, a dashed red outline is the height the
+blue box should have; the two tops line up, so a blue box that matches its
+outline is right. Under each caption, the height the script measured: green
+when it is the expected one, red when it is not.</p>
+<div id="probe">
+  <div class="case">
+    <p>1. A fill of a 6px track, <code>height: 100%</code>: <b>6px</b>. <span class="got" id="g-fill"></span></p>
+    <div class="stage">
+      <div class="cb" style="height:6px;width:100px"><div id="m-fill" class="t" style="height:100%;width:50%"></div></div>
+      <div class="ghost" style="height:6px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>2. A bar of a 32px row that aligns its items to its foot, <code>height: 100%</code>: <b>32px</b>. <span class="got" id="g-bar"></span></p>
+    <div class="stage">
+      <div class="cb" style="display:flex;align-items:flex-end;height:32px;width:100px"><div id="m-bar" class="t" style="width:20px;height:100%"></div></div>
+      <div class="ghost" style="height:32px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>3. The same row, <code>height: 50%</code>: <b>16px</b>, sitting at the row's foot. <span class="got" id="g-half"></span></p>
+    <div class="stage">
+      <div class="cb" style="display:flex;align-items:flex-end;height:32px;width:100px"><div id="m-half" class="t" style="width:20px;height:50%"></div></div>
+      <div class="ghost" style="height:16px;margin-top:16px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>4. <code>height: 50%</code> of a box that is itself <code>height: 50%</code> of 200px: <b>50px</b>. <span class="got" id="g-chain"></span></p>
+    <div class="stage">
+      <div class="cb" style="display:flex;align-items:flex-start;height:200px;width:100px"><div class="mid" style="height:50%;width:60px"><div id="m-chain" class="t" style="height:50%;width:30px"></div></div></div>
+      <div class="ghost" style="height:50px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>5. An empty box, <code>min-height: 50%</code> of 200px: <b>100px</b>. <span class="got" id="g-min"></span></p>
+    <div class="stage">
+      <div class="cb" style="display:flex;align-items:flex-start;height:200px;width:100px"><div id="m-min" class="t" style="min-height:50%;width:40px"></div></div>
+      <div class="ghost" style="height:100px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>6. A 150px box, <code>max-height: 25%</code> of 200px: cut to <b>50px</b>. <span class="got" id="g-max"></span></p>
+    <div class="stage">
+      <div class="cb" style="display:flex;align-items:flex-start;height:200px;width:100px"><div id="m-max" class="t" style="height:150px;max-height:25%;width:40px"></div></div>
+      <div class="ghost" style="height:50px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>7. A border box, <code>height: 100%</code> of 100px with its padding and border inside: <b>100px</b>. <span class="got" id="g-border"></span></p>
+    <div class="stage">
+      <div class="cb" style="height:100px;width:100px"><div id="m-border" class="t" style="box-sizing:border-box;height:100%;padding:10px;border:4px solid #024;width:60px"></div></div>
+      <div class="ghost" style="height:100px"></div>
+    </div>
+  </div>
+  <div class="case">
+    <p>8. An empty box, <code>height: 100%</code> of a block its content sizes: that is <code>auto</code>, so <b>0px</b>,
+    and nothing blue shows; the grey block round it is as tall as its padding alone. <span class="got" id="g-auto"></span></p>
+    <div class="stage">
+      <div class="cb" style="width:100px;padding:6px 0"><div id="m-auto" class="t" style="height:100%;width:40px"></div></div>
+      <div class="ghost" style="height:0"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const H = id => document.getElementById(id).getBoundingClientRect().height;
+function near(a, b) { return Math.abs(a - b) <= 1; }
+
+function shown(id, want) {
+  const got = H('m-' + id), span = document.getElementById('g-' + id);
+  span.textContent = 'Measured: ' + Math.round(got * 10) / 10 + 'px';
+  span.className = 'got ' + (near(got, want) ? 'ok' : 'bad');
+  return got;
+}
+
+const root = document.documentElement.getBoundingClientRect().height;
+record(near(root, innerHeight), 'the root\'s height: 100% is the window\'s height',
+  'root ' + root + ', window ' + innerHeight);
+record(near(shown('fill', 6), 6), 'a fill\'s height: 100% of a 6px track is 6px', 'got ' + H('m-fill'));
+const bar = shown('bar', 32), half = shown('half', 16);
+record(near(bar, 32) && near(half, 16),
+  'bars of a 32px flex-end row: 100% is 32px, 50% is 16px',
+  'got ' + bar + ' and ' + half);
+record(near(shown('chain', 50), 50), '50% of 50% of 200px is 50px', 'got ' + H('m-chain'));
+record(near(shown('min', 100), 100), 'an empty box\'s min-height: 50% of 200px holds it at 100px',
+  'got ' + H('m-min'));
+record(near(shown('max', 50), 50), 'max-height: 25% of 200px cuts a 150px box to 50px', 'got ' + H('m-max'));
+record(near(shown('border', 100), 100), 'a border box\'s height: 100% of 100px is 100px, its frame within',
+  'got ' + H('m-border'));
+record(near(shown('auto', 0), 0), 'height: 100% of a parent its content sizes is auto: an empty box is 0',
+  'got ' + H('m-auto'));
+
+document.getElementById('summary').textContent = passed + ' passed, ' + failed + ' failed';
+document.getElementById('checks').textContent = lines.join('\n');
+</script>
+</body></html>

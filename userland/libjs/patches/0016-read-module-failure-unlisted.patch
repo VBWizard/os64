@@ -1,0 +1,37 @@
+# A module read from bytecode that fails part way (an allocation refused,
+# under a runtime's memory limit) must leave nothing behind. Upstream's
+# failure path drops one of the module's two references, so the half-read
+# module stayed on the context's list under its name — a later import
+# would find it — and the GC, walking it at teardown, followed entry counts
+# whose arrays were never allocated. The read now unlists and frees it, and
+# zeroes any count with no array first.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -39330,7 +39330,27 @@
+     return obj;
+  fail:
+     if (m) {
++        /* os64: a module is born holding two references, the context's
++           list's and the value read, so dropping one left a half-read
++           module listed under its name, found by the next import of it
++           and walked by the GC. A count is read before its array is
++           allocated, and an entry is filled in place, so a count with no
++           array is zeroed for the free to walk (a zeroed entry frees as
++           nothing). The list's reference goes as js_free_modules drops
++           it. */
++        if (!m->req_module_entries)
++            m->req_module_entries_count = 0;
++        if (!m->export_entries)
++            m->export_entries_count = 0;
++        if (!m->star_export_entries)
++            m->star_export_entries_count = 0;
++        if (!m->import_entries)
++            m->import_entries_count = 0;
++        list_del(&m->link);
++        m->link.prev = NULL;
++        m->link.next = NULL;
+         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_MODULE, m));
++        JS_FreeValue(ctx, obj);
+     }
+     return JS_EXCEPTION;
+ }

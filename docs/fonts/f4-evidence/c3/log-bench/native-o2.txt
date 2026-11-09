@@ -1,0 +1,4 @@
+8912542 bytes, 100000 lines: reading them 30.9 ms
+Open, builtin face: 26.0 ms
+change to DejaVu Sans 16 with it open: 2.1 ms (adopted)
+Open under DejaVu Sans 16: 30.9 ms

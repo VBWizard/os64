@@ -1,0 +1,8 @@
+<!doctype html>
+<title>The runner's own: a pass and a failure</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+test(function() { assert_equals(1 + 1, 2); }, "a test that passes");
+test(function() { assert_equals(1 + 1, 3, "arithmetic"); }, "a test that fails");
+</script>

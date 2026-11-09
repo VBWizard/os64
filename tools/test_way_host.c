@@ -1,0 +1,673 @@
+// test_way_host.c — libway's pure half on the host: real pages through
+// libhtml and libpage, then through the judgements, the refresh rules, the
+// history and the typed address, asserting each DECISION and each sentence
+// exactly as a face would show it (docs/completed/06-navigator.md's evidence).
+// The I/O half, way_load, needs a network; the guest walk proves it.
+
+// POSIX, for the cache's files (test_way_cache.inc).
+#define _DEFAULT_SOURCE
+
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "html/html.h"
+#include "way/way.h"
+#include "page/page.h"
+
+// The console goes nowhere; a file the cache opened (test_way_cache.inc)
+// is written.
+
+// The jar's lock yields under contention; one thread never contends.
+void os64_yield(void)
+{
+}
+
+// ── Allocation, and failing it on purpose ───────────────────────────────
+
+static size_t allocations, fail_at, live;
+
+// libhtml ends the program when a pinned document is freed. A harness that
+// reached this has found that, so it fails.
+void os64_exit(int32_t code)
+{
+    (void)code;
+    exit(3);
+}
+void *os64_malloc(size_t size)
+{
+    allocations++;
+    if (fail_at != 0 && allocations >= fail_at)
+        return NULL;
+    void *at = malloc(size != 0 ? size : 1);
+    if (at != NULL)
+        live++;
+    return at;
+}
+
+void *os64_calloc(size_t count, size_t size)
+{
+    void *at = os64_malloc(count * size);
+    if (at != NULL)
+        memset(at, 0, count * size);
+    return at;
+}
+
+void *os64_realloc(void *ptr, size_t size)
+{
+    allocations++;
+    if (fail_at != 0 && allocations >= fail_at)
+        return NULL;
+    void *at = realloc(ptr, size != 0 ? size : 1);
+    if (at != NULL && ptr == NULL)
+        live++;
+    return at;
+}
+
+void os64_free(void *ptr)
+{
+    if (ptr != NULL)
+        live--;
+    free(ptr);
+}
+
+static int checks, failures;
+
+static void expect(const char *name, bool ok, const char *detail)
+{
+    checks++;
+    if (!ok) {
+        failures++;
+        fprintf(stderr, "FAIL %s%s%s\n", name, detail != NULL ? ": " : "",
+                detail != NULL ? detail : "");
+    }
+}
+
+static void expect_said(const char *name, const way_session_t *s, const char *want)
+{
+    expect(name, strcmp(s->status, want) == 0, s->status);
+}
+
+// ── A face that answers from a script ───────────────────────────────────
+
+static struct {
+    bool answer;
+    int asked;
+    char question[WAY_SENTENCE_MAX];
+    bool security;
+    const char *refused;
+} s_face;
+
+static bool face_confirm(void *ctx, const char *question, bool security, const char *refused)
+{
+    (void)ctx;
+    s_face.asked++;
+    snprintf(s_face.question, sizeof(s_face.question), "%s", question);
+    s_face.security = security;
+    s_face.refused = refused;
+    return s_face.answer;
+}
+
+static way_session_t session(void)
+{
+    way_session_t s;
+    memset(&s, 0, sizeof(s));
+    s.name = "wend";
+    s.delayed_hint = " - press g to go";
+    s.face.confirm = face_confirm;
+    return s;
+}
+
+// ── Pages ───────────────────────────────────────────────────────────────
+
+// A crumb a face describes whole: its document, and a state the session
+// takes (NULL for none).
+static way_crumb_t crumb_of(const char *url, uint64_t document, const char *state)
+{
+    way_crumb_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.url, sizeof(c.url), "%s", url);
+    c.document = document;
+    if (state != NULL) {
+        c.state = os64_malloc(strlen(state) + 1);
+        if (c.state == NULL)
+            abort();
+        strcpy(c.state, state);
+    }
+    return c;
+}
+
+static way_page_t page_of(const char *html, const char *url)
+{
+    way_page_t p;
+    memset(&p, 0, sizeof(p));
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    os64_html_parser_t *parser = os64_html_parser_new(&opt);
+    if (parser == NULL)
+        return p;
+    os64_html_parser_feed(parser, html, strlen(html));
+    p.doc = os64_html_parser_finish(parser);
+    if (p.doc != NULL)
+        p.model = os64_page_build(p.doc, url, NULL, NULL);
+    snprintf(p.url, sizeof(p.url), "%s", url);
+    return p;
+}
+
+// Activates link `i` (or control `i` pressed) and returns the verdict.
+static os64_page_verdict_t activate(const way_page_t *p, os64_page_activation_t how, int32_t i,
+                                    os64_page_request_t *request)
+{
+    os64_page_what_t what = {how, i, 0, 0};
+    return os64_page_activate(p->model, what, request);
+}
+
+// ── The judgements ──────────────────────────────────────────────────────
+
+static void judge_case(const char *name, const char *html, const char *url,
+                       os64_page_activation_t how, way_ask_t ask, way_judgement_kind_t kind,
+                       const char *said, const char *question)
+{
+    way_session_t s = session();
+    way_page_t p = page_of(html, url);
+    os64_page_request_t request;
+    os64_page_verdict_t v = activate(&p, how, 0, &request);
+    expect(name, v == OS64_PAGE_NAVIGATE, "the page did not ask to navigate");
+    if (v == OS64_PAGE_NAVIGATE) {
+        way_judgement_t j = way_judge(&s, &request, ask);
+        expect(name, j.kind == kind, NULL);
+        if (said != NULL)
+            expect_said(name, &s, said);
+        if (question != NULL)
+            expect(name, strcmp(j.question, question) == 0, j.question);
+    }
+    os64_page_request_free(&request);
+    way_page_clear(&p);
+}
+
+static void judgements(void)
+{
+    judge_case("judge: an http link is fetched", "<a href=/next>n</a>", "http://h/p",
+               OS64_PAGE_ACTIVATE_LINK, WAY_ASK_NEVER, WAY_FETCH, "", NULL);
+    judge_case("judge: gopher is handed to the gopher client",
+               "<a href=gopher://g.org/1/x>g</a>", "http://h/p", OS64_PAGE_ACTIVATE_LINK,
+               WAY_ASK_NEVER, WAY_REFUSE,
+               " that is gopherspace - read it with:  gopher 'gopher://g.org/1/x'", NULL);
+    judge_case("judge: a gopher address holding a quote is not offered as a command",
+               "<a href=\"gopher://g.org/1/it's\">g</a>", "http://h/p", OS64_PAGE_ACTIVATE_LINK,
+               WAY_ASK_NEVER, WAY_REFUSE,
+               " that is gopherspace - and its address holds a quote, so open it in gopher by"
+               " hand", NULL);
+    judge_case("judge: a scheme this browser does not fetch is named",
+               "<a href=mailto:a@b.c>m</a>", "http://h/p", OS64_PAGE_ACTIVATE_LINK,
+               WAY_ASK_NEVER, WAY_REFUSE, " that is a mailto: address, which wend does not fetch",
+               NULL);
+    judge_case("judge: a POST form is sent (packet 05)",
+               "<form method=post action=/p><input type=submit></form>", "http://h/p",
+               OS64_PAGE_ACTIVATE_CONTROL, WAY_ASK_SEND, WAY_FETCH, "", NULL);
+    judge_case("judge: a POST leaving https for http asks first",
+               "<form method=post action=http://e.org/p><input type=submit></form>",
+               "https://h/p", OS64_PAGE_ACTIVATE_CONTROL, WAY_ASK_SEND, WAY_QUESTION, "",
+               " e.org would get this unencrypted - send it?");
+    judge_case("judge: a form leaving https for http asks first",
+               "<form action=http://e.org/s><input type=submit></form>", "https://h/p",
+               OS64_PAGE_ACTIVATE_CONTROL, WAY_ASK_SEND, WAY_QUESTION, "",
+               " e.org would get this unencrypted - send it?");
+    judge_case("judge: a link leaving https for http does not ask",
+               "<a href=http://e.org/>e</a>", "https://h/p", OS64_PAGE_ACTIVATE_LINK,
+               WAY_ASK_NEVER, WAY_FETCH, "", NULL);
+
+    // The question put through the face: its words, its security flag and
+    // the sentence for a no; the answer decides.
+    way_page_t p = page_of("<form action=http://e.org/s><input type=submit></form>",
+                           "https://h/p");
+    os64_page_request_t request;
+    activate(&p, OS64_PAGE_ACTIVATE_CONTROL, 0, &request);
+    way_session_t s = session();
+    memset(&s_face, 0, sizeof(s_face));
+    s_face.answer = true;
+    bool yes = way_may_go(&s, &request, WAY_ASK_SEND);
+    expect("may go: yes goes", yes && s_face.asked == 1 && s_face.security &&
+                                   strcmp(s_face.refused, " not sent") == 0, NULL);
+    s_face.answer = false;
+    expect("may go: no stays", !way_may_go(&s, &request, WAY_ASK_SEND), NULL);
+    s_face.asked = 0;
+    expect("may go: a link is not asked",
+           way_may_go(&s, &request, WAY_ASK_NEVER) && s_face.asked == 0, NULL);
+    os64_page_request_free(&request);
+    way_page_clear(&p);
+}
+
+// ── The refresh rules ───────────────────────────────────────────────────
+
+static void refresh_case(const char *name, const char *meta, const char *url, int32_t chain_before,
+                         way_refresh_t want, const char *said, const char *goes_to)
+{
+    char html[512];
+    snprintf(html, sizeof(html), "<meta http-equiv=refresh content=\"%s\"><p id=here>x", meta);
+    way_session_t s = session();
+    way_page_t p = page_of(html, url);
+    int32_t chain = chain_before;
+    os64_page_request_t request;
+    way_refresh_t got = way_refresh_step(&s, &p, &chain, &request);
+    expect(name, got == want, NULL);
+    if (said != NULL)
+        expect_said(name, &s, said);
+    if (goes_to != NULL)
+        expect(name, request.url != NULL && strcmp(request.url, goes_to) == 0, request.url);
+    if (want == WAY_REFRESH_JUMP)
+        expect(name, request.anchor != NULL && request.anchor->kind == OS64_HTML_ELEMENT, NULL);
+    os64_page_request_free(&request);
+    // Judged once per loaded page, however it was answered.
+    got = way_refresh_step(&s, &p, &chain, &request);
+    expect(name, got == WAY_REFRESH_NONE, "a second look acted again");
+    os64_page_request_free(&request);
+    way_page_clear(&p);
+}
+
+static void refreshes(void)
+{
+    refresh_case("refresh: an immediate one goes", "0; url=/next", "http://h/p", 0,
+                 WAY_REFRESH_GO, "", "http://h/next");
+    refresh_case("refresh: a delayed one is offered, not followed", "30; url=/next",
+                 "http://h/p", 0, WAY_REFRESH_NONE,
+                 " this page asks to send you to http://h/next in 30 seconds - press g to go",
+                 NULL);
+    refresh_case("refresh: a delayed reload of itself is said", "10", "http://h/p", 0,
+                 WAY_REFRESH_NONE, " this page asks to reload itself every 10 seconds", NULL);
+    refresh_case("refresh: an immediate reload of itself is refused", "0", "http://h/p", 0,
+                 WAY_REFRESH_NONE,
+                 " this page asks to reload itself immediately, which wend does not do", NULL);
+    refresh_case("refresh: the sixth hop of a chain is refused", "0; url=/next", "http://h/p",
+                 WAY_REFRESH_MAX, WAY_REFRESH_NONE,
+                 " this page is the end of a chain of redirects too long to follow", NULL);
+    refresh_case("refresh: the fifth hop still goes", "0; url=/next", "http://h/p",
+                 WAY_REFRESH_MAX - 1, WAY_REFRESH_GO, "", "http://h/next");
+    refresh_case("refresh: a fragment of this page is a move", "0; url=#here", "http://h/p", 0,
+                 WAY_REFRESH_JUMP, "", NULL);
+
+    way_page_t p = page_of("<meta http-equiv=refresh content=\"30; url=/later\">", "http://h/p");
+    const char *later = way_delayed_refresh(&p);
+    expect("delayed: the address offered", later != NULL && strcmp(later, "http://h/later") == 0,
+           later);
+    way_page_clear(&p);
+    p = page_of("<meta http-equiv=refresh content=\"0; url=/now\">", "http://h/p");
+    expect("delayed: an immediate one is not offered", way_delayed_refresh(&p) == NULL, NULL);
+    way_page_clear(&p);
+    p = page_of("<p>plain", "http://h/p");
+    expect("delayed: a plain page offers nothing", way_delayed_refresh(&p) == NULL, NULL);
+    way_page_clear(&p);
+}
+
+// ── The history ─────────────────────────────────────────────────────────
+
+static void history(void)
+{
+    way_session_t s = session();
+    way_crumb_t crumb;
+    expect("history: Back with nowhere to go says so",
+           !way_last(&s, &crumb) && strcmp(s.status, " this is where you came in") == 0,
+           s.status);
+    for (int i = 0; i <= WAY_HISTORY_MAX; i++) {
+        char url[32];
+        snprintf(url, sizeof(url), "http://h/%d", i);
+        way_position_t where;
+        memset(&where, 0, sizeof(where));
+        where.bytes[0] = (uint8_t)i;
+        where.bytes[WAY_POSITION_MAX - 1] = 0xA5;
+        way_remember(&s, url, &where);
+    }
+    expect("history: the sixty-fifth crumb drops the first",
+           s.depth == WAY_HISTORY_MAX && strcmp(s.history[0].url, "http://h/1") == 0, NULL);
+    expect("history: the last crumb, and its position untouched",
+           way_last(&s, &crumb) && strcmp(crumb.url, "http://h/64") == 0 &&
+               crumb.position.bytes[0] == 64 && crumb.position.bytes[WAY_POSITION_MAX - 1] == 0xA5,
+           NULL);
+    expect("history: looking does not spend", s.depth == WAY_HISTORY_MAX, NULL);
+    way_forget_last(&s);
+    expect("history: forgetting spends one",
+           s.depth == WAY_HISTORY_MAX - 1 && way_last(&s, &crumb) &&
+               strcmp(crumb.url, "http://h/63") == 0, NULL);
+}
+
+// Back and Forward: the page Back leaves is where Forward goes, Forward's
+// arrival puts the page it left back on the history, and following
+// anything new empties what was ahead.
+static void forward(void)
+{
+    way_session_t s = session();
+    way_position_t at;
+    memset(&at, 0, sizeof(at));
+    way_crumb_t crumb;
+    expect("forward: nowhere to go at first",
+           !way_next(&s, &crumb) && strcmp(s.status, " there is nowhere forward to go") == 0,
+           s.status);
+    way_remember(&s, "http://h/a", &at);    // a -> b
+    way_remember(&s, "http://h/b", &at);    // b -> c
+    at.bytes[0] = 7;
+    way_went_back(&s, "http://h/c", &at);   // back from c to b
+    expect("forward: Back leaves the page ahead",
+           s.depth == 1 && way_next(&s, &crumb) && strcmp(crumb.url, "http://h/c") == 0 &&
+               crumb.position.bytes[0] == 7, NULL);
+    way_went_back(&s, "http://h/b", &at);   // back from b to a
+    expect("forward: two back, two ahead, newest last",
+           s.depth == 0 && s.ahead == 2 && way_next(&s, &crumb) &&
+               strcmp(crumb.url, "http://h/b") == 0, NULL);
+    way_went_forward(&s, "http://h/a", &at);  // forward from a to b
+    expect("forward: Forward puts the page left back on the history",
+           s.depth == 1 && strcmp(s.history[0].url, "http://h/a") == 0 && s.ahead == 1 &&
+               way_next(&s, &crumb) && strcmp(crumb.url, "http://h/c") == 0, NULL);
+    way_remember(&s, "http://h/b", &at);      // b -> somewhere new
+    expect("forward: a new way empties what was ahead", s.ahead == 0 && s.depth == 2, NULL);
+
+    // The delayed refresh's sentence carries the face's own offer.
+    way_page_t p = page_of("<meta http-equiv=refresh content=\"5; url=/x\">", "http://h/p");
+    s.delayed_hint = NULL;
+    int32_t chain = 0;
+    os64_page_request_t request;
+    way_refresh_step(&s, &p, &chain, &request);
+    expect_said("refresh: a face with nothing to offer offers nothing", &s,
+                " this page asks to send you to http://h/x in 5 seconds");
+    way_page_clear(&p);
+
+    way_leg_t leg = way_leg(&s);
+    expect("leg: the session's identity and face, an empty sentence",
+           leg.session == &s && leg.face.confirm == face_confirm && leg.status[0] == '\0', NULL);
+}
+
+// Entries a face describes whole (HTML § Session history): each crumb's
+// document and state ride with it between the lists, the session owns a
+// state while the crumb is in it, and every way a crumb leaves the session
+// either hands its state over or frees it (`live` is the proof).
+static void entries(void)
+{
+    way_session_t s = session();
+    way_crumb_t crumb, arrived;
+    size_t before = live;
+    way_crumb_t left = crumb_of("http://h/a", 7, "{\"n\":1}");
+    way_remember_entry(&s, &left);
+    expect("entries: remembering takes the state", left.state == NULL && s.depth == 1 &&
+           s.history[0].document == 7 && strcmp(s.history[0].state, "{\"n\":1}") == 0, NULL);
+    left = crumb_of("http://h/a#two", 7, "2");
+    left.entry = 41;
+    way_remember_entry(&s, &left);
+    expect("entries: Back's crumb is copied out with its state borrowed",
+           way_last(&s, &crumb) && crumb.document == 7 && crumb.state == s.history[1].state &&
+               crumb.entry == 41 && s.depth == 2, NULL);
+    left = crumb_of("http://h/a#three", 7, NULL);
+    left.entry = 42;
+    way_went_back_entry(&s, &left, &arrived);
+    expect("entries: Back hands the crumb's state to the face and keeps the left one for Forward",
+           s.depth == 1 && s.ahead == 1 && strcmp(arrived.state, "2") == 0 &&
+               strcmp(arrived.url, "http://h/a#two") == 0 && s.forward[0].state == NULL &&
+               s.forward[0].document == 7 && strcmp(s.forward[0].url, "http://h/a#three") == 0, NULL);
+    expect("entries: an entry keeps its name wherever it moves", arrived.entry == 41 && s.forward[0].entry == 42,
+           NULL);
+    {
+        way_session_t f = session();
+        way_crumb_t a = crumb_of("http://h/x", 1, "{}"), b = crumb_of("http://h/y", 1, "1");
+        way_forward_entry(&f, &a);
+        way_forward_entry(&f, &b);
+        way_forget_ahead(&f);
+        expect("entries: forgetting what is ahead empties Forward and frees the states", f.ahead == 0 && f.depth == 0,
+               NULL);
+        way_history_clear(&f);
+    }
+    left = arrived;                         // the state goes back in with the entry it came with
+    way_went_forward_entry(&s, &left, &arrived);
+    expect("entries: Forward is the mirror, the state taken back in",
+           left.state == NULL && s.depth == 2 && s.ahead == 0 && arrived.state == NULL &&
+               strcmp(s.history[1].state, "2") == 0 && strcmp(arrived.url, "http://h/a#three") == 0,
+           NULL);
+    way_went_back_entry(&s, &arrived, &crumb);
+    os64_free(crumb.state);
+    left = crumb_of("http://h/b", 9, "ahead");
+    way_went_forward_entry(&s, &left, &arrived);    // nothing ahead now but a#three
+    os64_free(arrived.state);
+    left = crumb_of("http://h/c", 9, "{}");
+    way_remember_entry(&s, &left);
+    expect("entries: a new way frees the states that were ahead", s.ahead == 0, NULL);
+    way_went_back_entry(&s, &left, &arrived);
+    expect("entries: an entry whose state was taken goes ahead with none",
+           s.ahead == 1 && s.forward[0].state == NULL && strcmp(s.forward[0].url, "http://h/c") == 0,
+           NULL);
+    os64_free(arrived.state);
+    // Back with nowhere to go hands back a zeroed crumb and still keeps the
+    // page left for Forward, as way_went_back always has.
+    while (s.depth > 0) {
+        way_crumb_t here = crumb_of("http://h/x", 1, "x");
+        way_went_back_entry(&s, &here, &arrived);
+        os64_free(arrived.state);
+    }
+    way_crumb_t here = crumb_of("http://h/y", 1, "y");
+    way_went_back_entry(&s, &here, &arrived);
+    expect("entries: Back past the first crumb answers a zeroed crumb",
+           arrived.url[0] == '\0' && arrived.state == NULL && arrived.document == 0, NULL);
+    for (int i = 0; i <= WAY_HISTORY_MAX + 2; i++) {
+        way_crumb_t c = crumb_of("http://h/many", (uint64_t)i, "kept");
+        way_remember_entry(&s, &c);
+    }
+    expect("entries: the oldest crumb dropped past the cap takes its state with it",
+           s.depth == WAY_HISTORY_MAX && s.history[0].document == 3 && s.ahead == 0, NULL);
+    left = crumb_of("http://h/far", 4, "far");
+    way_forward_entry(&s, &left);
+    left = crumb_of("http://h/near", 4, "near");
+    way_forward_entry(&s, &left);
+    expect("entries: an entry put ahead takes its state, nearest last",
+           left.state == NULL && way_next(&s, &crumb) && strcmp(crumb.url, "http://h/near") == 0 &&
+               strcmp(crumb.state, "near") == 0 && s.ahead == 2, NULL);
+    way_history_clear(&s);
+    expect("entries: clearing frees every state and empties both lists",
+           s.depth == 0 && s.ahead == 0 && live == before, NULL);
+    // A plain face's calls free a state they move out of the session.
+    left = crumb_of("http://h/p", 2, "p");
+    way_remember_entry(&s, &left);
+    way_went_back(&s, "http://h/q", &(way_position_t){{0}});
+    way_went_forward(&s, "http://h/p", &(way_position_t){{0}});
+    way_forget_last(&s);
+    way_history_clear(&s);
+    expect("entries: way_went_back, way_went_forward and way_forget_last free what they spend",
+           live == before, NULL);
+}
+
+// ── Typed addresses and details ─────────────────────────────────────────
+
+static void typed(void)
+{
+    char out[64];
+    expect("typed: a bare host means http",
+           way_typed_address("example.com", out, sizeof(out)) &&
+               strcmp(out, "http://example.com") == 0, out);
+    expect("typed: a scheme is kept",
+           way_typed_address("https://a.b/c", out, sizeof(out)) && strcmp(out, "https://a.b/c") == 0,
+           out);
+    expect("typed: a :// after the first slash is not a scheme",
+           way_typed_address("a.b/x://y", out, sizeof(out)) && strcmp(out, "http://a.b/x://y") == 0,
+           out);
+    // 18 bytes hold "http://" and ten more, with the terminator.
+    char tiny[18];
+    expect("typed: one byte too long is refused, not trimmed",
+           !way_typed_address("a.bc/defghi", tiny, sizeof(tiny)), NULL);
+    expect("typed: one that just fits is taken",
+           way_typed_address("a.bc/defgh", tiny, sizeof(tiny)) &&
+               strcmp(tiny, "http://a.bc/defgh") == 0, tiny);
+
+    way_page_t p = page_of("<details id=a></details><details id=b></details>", "http://h/p");
+    const os64_html_node_t *a = p.doc->body->first_child, *b = a->next;
+    bool ok = way_details_flip(&p, a) && way_details_flip(&p, b) && p.nflipped == 2 &&
+              way_details_flip(&p, a) && p.nflipped == 1 && p.flipped[0] == b;
+    expect("details: a flip flips back", ok, NULL);
+    size_t count=p.doc->node_count;
+    expect("details: flipped identity survives model replacement",
+           os64_html_remove(p.doc,(os64_html_node_t *)b)==OS64_HTML_OK, NULL);
+    os64_page_t *fresh=os64_page_rebuild(p.model);
+    expect("details: new model builds after removal",fresh!=NULL,NULL);
+    os64_page_free(p.model);p.model=fresh;
+    expect("details: flip hold retains detached node",p.doc->node_count==count,NULL);
+    expect("details: flipping back releases detached identity",
+           way_details_flip(&p,b),NULL);
+    os64_page_free(p.model);p.model=NULL;
+    expect("details: released identity reclaimed after snapshots",p.doc->node_count==count-1,NULL);
+    way_page_clear(&p);
+}
+
+// ── Out of memory at every allocation ───────────────────────────────────
+
+// Everything above that allocates, as one walk: build, judge a form, a
+// refresh step, the details flips. At each failure the answer may be a
+// refusal; it may never be a crash or a leak.
+static void walk(void)
+{
+    way_session_t s = session();
+    way_page_t p = page_of("<meta http-equiv=refresh content=\"0; url=/next\">"
+                           "<form action=http://e.org/s><input name=q value=x><input type=submit>"
+                           "</form><details></details><details></details>",
+                           "https://h/p");
+    if (p.model != NULL) {
+        os64_page_request_t request;
+        if (activate(&p, OS64_PAGE_ACTIVATE_CONTROL, 1, &request) == OS64_PAGE_NAVIGATE)
+            (void)way_judge(&s, &request, WAY_ASK_SEND);
+        os64_page_request_free(&request);
+        int32_t chain = 0;
+        (void)way_refresh_step(&s, &p, &chain, &request);
+        os64_page_request_free(&request);
+        const os64_html_node_t *d = p.doc->body->last_child;
+        (void)way_details_flip(&p, d);
+        (void)way_details_flip(&p, d->prev);
+    }
+    way_page_clear(&p);
+}
+
+static void sweep(void)
+{
+    size_t base = live;
+    allocations = 0;
+    walk();
+    size_t count = allocations;
+    for (size_t at = 1; at <= count; at++) {
+        allocations = 0;
+        fail_at = at;
+        walk();
+        fail_at = 0;
+        if (live != base) {
+            char detail[64];
+            snprintf(detail, sizeof(detail), "at allocation %zu", at);
+            expect("sweep: nothing leaked", false, detail);
+            return;
+        }
+    }
+    printf("libway sweep: each of %zu allocations failed in turn, nothing leaked\n", count);
+}
+
+// ── The standing line, and a text body's encoding ───────────────────────
+//
+// way_note and way_text_utf8 are the two judgements way_load used to make
+// inline that yonder's window now makes on its own (DOM_D4.md), so each
+// sentence and each rule is held here, where no network is needed.
+
+static way_head_t head_of(int32_t status, const char *reason, const char *type,
+                          const char *charset, const char *url, bool posted)
+{
+    way_head_t h;
+    memset(&h, 0, sizeof(h));
+    h.status = status;
+    snprintf(h.reason, sizeof(h.reason), "%s", reason);
+    snprintf(h.content_type, sizeof(h.content_type), "%s", type);
+    snprintf(h.charset, sizeof(h.charset), "%s", charset);
+    snprintf(h.url, sizeof(h.url), "%s", url);
+    h.posted = posted;
+    h.body = WAY_BODY_TEXT;
+    return h;
+}
+
+static void note_is(const char *name, const way_page_t *p, const char *want)
+{
+    expect(name, strcmp(p->note, want) == 0, p->note);
+}
+
+static void notes(void)
+{
+    way_page_t p;
+    memset(&p, 0, sizeof(p));
+    way_head_t h = head_of(200, "OK", "text/html", "", "http://h/final", false);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    note_is("note: a whole page is its status and reason", &p, "200 OK");
+    expect("note: the address is the head's, after redirects", strcmp(p.url, "http://h/final") == 0 &&
+           !p.posted, p.url);
+
+    h = head_of(404, "", "text/html", "", "http://h/", true);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    note_is("note: no reason, no space", &p, "404");
+    expect("note: posted follows the head", p.posted, NULL);
+
+    h = head_of(200, "OK", "text/html", "", "http://h/", false);
+    way_note(&p, &h, true, OS64_FETCH_OK, NULL);
+    note_is("note: our memory", &p,
+            "200 OK - this machine ran out of memory partway, so the page stops where it does");
+
+    way_note(&p, &h, false, OS64_FETCH_CUT, "the server hung up early");
+    note_is("note: the wire's sentence", &p, "200 OK - the server hung up early");
+    way_note(&p, &h, false, OS64_FETCH_CUT, NULL);
+    note_is("note: the wire's failure when nobody wrote a sentence", &p,
+            "200 OK - the fetch did not finish");
+
+    // A parser that refused: a real refusal, from a byte cap the page passes.
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    opt.max_bytes = 16;
+    os64_html_parser_t *parser = os64_html_parser_new(&opt);
+    if (parser != NULL) {
+        const char *html = "<p>this page is longer than sixteen bytes</p>";
+        os64_html_parser_feed(parser, html, strlen(html));
+        p.doc = os64_html_parser_finish(parser);
+    }
+    expect("note: the fixture's parse refused", p.doc != NULL && p.doc->refusal != 0, NULL);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    expect("note: the parser's sentence names the refusal",
+           strncmp(p.note, "200 OK - the page is bigger than this browser will parse (", 58) == 0,
+           p.note);
+    way_note(&p, &h, true, OS64_FETCH_SILENT, "the server went silent");
+    expect("note: every trouble, in order",
+           strncmp(p.note, "200 OK - this machine ran out of memory partway, so the page stops where"
+                           " it does - the server went silent - the page is bigger", 120) == 0,
+           p.note);
+    way_page_clear(&p);
+
+    h = head_of(200, "OK", "text/plain", "UNICODE-1-1-UTF-8", "http://h/", false);
+    expect("text: a UTF-8 label in any spelling", way_text_utf8(&h, "abc", 3), NULL);
+    h = head_of(200, "OK", "text/plain", "iso-8859-1", "http://h/", false);
+    expect("text: another label wins over a byte order mark", !way_text_utf8(&h, "\xEF\xBB\xBFx", 4),
+           NULL);
+    h = head_of(200, "OK", "application/ld+json", "", "http://h/", false);
+    expect("text: JSON is UTF-8 by its own rule", way_text_utf8(&h, "{}", 2), NULL);
+    h = head_of(200, "OK", "text/plain", "", "http://h/", false);
+    expect("text: a byte order mark says so itself", way_text_utf8(&h, "\xEF\xBB\xBFx", 4), NULL);
+    expect("text: no label, no mark: windows-1252", !way_text_utf8(&h, "plain", 5), NULL);
+    expect("text: two bytes are not a mark", !way_text_utf8(&h, "\xEF\xBB", 2), NULL);
+    expect("text: an empty body", !way_text_utf8(&h, NULL, 0), NULL);
+}
+
+#include "test_way_jar.inc"
+#include "internal.h"
+#include "test_way_cache.inc"
+
+int main(void)
+{
+    jar_cases();
+    cache_cases();
+    judgements();
+    refreshes();
+    history();
+    forward();
+    entries();
+    typed();
+    notes();
+    sweep();
+    expect("nothing leaked", live == 0, NULL);
+    printf("libway: %d checks, %d failed\n", checks, failures);
+    return failures != 0 ? 1 : 0;
+}

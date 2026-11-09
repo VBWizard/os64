@@ -1,0 +1,145 @@
+{
+  "stable_samples": 1141,
+  "torn_samples_skipped": 58,
+  "peak_live": 244402320,
+  "peak_mapped": 247033856,
+  "final_live": 7486912,
+  "final_mapped": 10014720,
+  "exit_us": 242933359,
+  "bursts": [
+    {
+      "start_us": 17204964,
+      "peak_live": 177784080,
+      "drained_us": 23658073,
+      "idle_live": 7777184
+    },
+    {
+      "start_us": 33608269,
+      "peak_live": 244394160,
+      "drained_us": 38866356,
+      "idle_live": 7777872
+    },
+    {
+      "start_us": 50827408,
+      "peak_live": 244394992,
+      "drained_us": 56505869,
+      "idle_live": 7778704
+    },
+    {
+      "start_us": 68055984,
+      "peak_live": 244395808,
+      "drained_us": 74316957,
+      "idle_live": 7779584
+    },
+    {
+      "start_us": 85662978,
+      "peak_live": 177676640,
+      "drained_us": 92107925,
+      "idle_live": 7780624
+    },
+    {
+      "start_us": 101853691,
+      "peak_live": 244397952,
+      "drained_us": 108127124,
+      "idle_live": 7781664
+    },
+    {
+      "start_us": 118858024,
+      "peak_live": 244398752,
+      "drained_us": 124720913,
+      "idle_live": 7782464
+    },
+    {
+      "start_us": 136034232,
+      "peak_live": 244399472,
+      "drained_us": 142344000,
+      "idle_live": 7783184
+    },
+    {
+      "start_us": 153255070,
+      "peak_live": 244401552,
+      "drained_us": 159104954,
+      "idle_live": 7785264
+    },
+    {
+      "start_us": 171033873,
+      "peak_live": 177522160,
+      "drained_us": 177329170,
+      "idle_live": 7786048
+    },
+    {
+      "start_us": 187651351,
+      "peak_live": 244402320,
+      "drained_us": 193939102,
+      "idle_live": 7786096
+    },
+    {
+      "start_us": 204869681,
+      "peak_live": 244402320,
+      "drained_us": 211764339,
+      "idle_live": 7786032
+    }
+  ],
+  "navigation": [
+    {
+      "address": "http://fixture.test:8093/load-00.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-01.html",
+      "shown": 2,
+      "coming": 4
+    },
+    {
+      "address": "http://fixture.test:8093/load-02.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-03.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-04.html",
+      "shown": 0,
+      "coming": 6
+    },
+    {
+      "address": "http://fixture.test:8093/load-05.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-06.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-07.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-08.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-09.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-10.html",
+      "shown": 1,
+      "coming": 5
+    },
+    {
+      "address": "http://fixture.test:8093/load-11.html",
+      "shown": 1,
+      "coming": 5
+    }
+  ]
+}

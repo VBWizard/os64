@@ -1,0 +1,189 @@
+// doorbell.c — the wake-from-interrupt primitive. doorbell.h is the contract,
+// DOORBELL.md the argument; what is here is the mechanism and nothing else.
+
+#include "doorbell.h"
+#include "scheduler.h"
+#include "smp_core.h"     // send_ipi, IPI_MANUAL_SCHEDULE_VECTOR, BSP_CPU
+#include "signals.h"      // SIGSLEEP, the backstop nap
+#include "kernel.h"       // kTicksSinceStart
+#include "panic.h"
+#include "x86_64.h"       // rdtsc — the edge stamp (knet's wake latency)
+// kSMPInitDone comes from smp_core.h above
+
+static doorbell_t* s_bells[DOORBELL_MAX];
+static volatile uint32_t s_bell_count;
+
+void doorbell_register(doorbell_t* db, thread_t* thread, const char* name)
+{
+	db->thread = thread;
+	db->edge   = 0;
+	db->rings  = 0;
+	db->wakes  = 0;
+	db->rung_runnable = 0;
+	db->name   = name;
+
+	// Find a free slot, then publish the pointer LAST so a service pass on
+	// another core sees either nothing or a whole bell.
+	for (uint32_t i = 0; i < DOORBELL_MAX; i++)
+	{
+		if (s_bells[i] != NULL)
+			continue;
+		s_bells[i] = db;
+		__sync_synchronize();
+		if (i >= s_bell_count)
+			s_bell_count = i + 1;
+		return;
+	}
+	panic("doorbell_register: no slot for '%s' — DOORBELL_MAX is %u\n", name, DOORBELL_MAX);
+}
+
+void doorbell_unregister(doorbell_t* db)
+{
+	for (uint32_t i = 0; i < DOORBELL_MAX; i++)
+		if (s_bells[i] == db)
+			s_bells[i] = NULL;
+	__sync_synchronize();
+	db->thread = NULL;
+}
+
+// The leading edge is stamped so the sleeper can measure how long a ring
+// waited for it (/sys/net/knet's wake latency). Only the edge: later rings
+// into an already-rung bell are answered by the same wake, and the wait that
+// matters is the oldest one's. Bit and stamp go up in ONE compare-and-swap
+// (doorbell.h): two ringers racing on the edge each build their own word and
+// exactly one CAS lands, so the sleeper can never read one ringer's stamp
+// under another's bit, and a ringer that lost the race retries, finds the
+// bit up, and publishes nothing — never a bare bit over a stamp the sleeper
+// has already consumed. The core is in the stamp because per-core TSCs are
+// not one clock (SCHEDULER.md: under QEMU/WSL2 they are desynchronized
+// enough to make a cross-core difference meaningless), so the sleeper
+// measures only stamps its own core made — a ring from another core is
+// counted but not timed.
+bool doorbell_raise(doorbell_t* db)
+{
+	for (;;)
+	{
+		uint64_t old = db->edge;
+		if (doorbell_edge_rung(old))
+			return false;
+		uint64_t fresh = doorbell_edge_make(rdtsc(), get_core_local_storage()->cpu);
+		if (__sync_bool_compare_and_swap(&db->edge, old, fresh))
+			return true;
+		// Lost the race to another ringer or to the sleeper's take: re-read
+		// and decide again on what is there now.
+	}
+}
+
+uint64_t doorbell_take(doorbell_t* db)
+{
+	return __sync_fetch_and_and(&db->edge, ~DOORBELL_EDGE_RUNG);
+}
+
+void doorbell_ring(doorbell_t* db)
+{
+	doorbell_raise(db);
+	db->rings++;
+	__sync_synchronize();
+
+	thread_t* t = db->thread;
+	if (t == NULL || !kSMPInitDone)
+		return;   // nobody is parked on it yet, or the BSP's tick is the only pass there is
+
+	// Provoke a pass on the thread's home core. An unpinned thread lives
+	// wherever the scheduler last put it; the BSP's pass is the one every
+	// unpinned wake already rides, so ring there. send_ipi declines to send
+	// a scheduling IPI at a core already in its pass, which is right: that
+	// pass answers the bell itself if it has not passed the service point,
+	// and the tick answers it within 10ms if it has (DOORBELL.md).
+	uint32_t target = (t->pinnedCPU == THREAD_NO_AFFINITY)
+	                  ? BSP_CPU : (uint32_t)t->pinnedCPU;
+	send_ipi(target, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+}
+
+void doorbell_ring_in_pass(doorbell_t* db)
+{
+	doorbell_raise(db);
+	db->rings++;
+}
+
+bool doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
+{
+	thread_t* self = get_core_local_storage()->currentThread;
+
+	// The check and the decision to sleep are one act under the queue lock
+	// with interrupts off. A ring that lands before the check is seen here
+	// and the park returns. A ring that lands after it finds this thread
+	// still RUNNING, so the service point before the pick cannot relink it;
+	// the pass this park provokes then moves the thread to ISLEEP and the
+	// service point AFTER that requeue relinks it in the same pass. That
+	// second service point is what makes this window closed rather than
+	// merely small (scheduler_run_new_thread).
+	uint64_t flags = scheduler_lock_queues();
+	if (doorbell_rung(db))
+	{
+		scheduler_unlock_queues(flags);
+		return false;
+	}
+	self->signals.sigdata[SIGSLEEP] = kTicksSinceStart + backstop_ticks;
+	sigset_add(&self->signals.sigind, SIGSLEEP);
+	scheduler_unlock_queues(flags);
+
+	// The same door signal_raise(SIGSLEEP) walks through: a pass that finds
+	// SIGSLEEP pending on the outgoing thread parks it in ISLEEP.
+	scheduler_trigger(NULL);
+	return true;
+}
+
+void doorbell_service_locked(void)
+{
+	uint32_t n = s_bell_count;
+	for (uint32_t i = 0; i < n; i++)
+	{
+		doorbell_t* db = s_bells[i];
+		if (db == NULL || !doorbell_rung(db))
+			continue;
+		thread_t* t = db->thread;
+		if (t == NULL)
+			continue;
+		if (t->threadState == THREAD_STATE_RUNNABLE)
+		{
+			// Awake but off the CPU: the ring landed while it ran, and the
+			// pass answering the ring has just requeued it (or it was
+			// already waiting its turn). It sees the bit at the top of its
+			// loop, and it competes on AGING for its next turn — NOT the
+			// boost. The boost is one pick for a sleeper; handing it to a
+			// preempted drainer at every pass turns it into a priority
+			// under a NIC that rings once per frame, and the drainer then
+			// owns its core until the ring empties — which, with the reader
+			// starved beside it, is when the window closes (DOORBELL.md:
+			// a sustained flood must not starve the BSP; the P5 measured
+			// the other rule at 180 Mbit/s against 300). Counted, because
+			// this count is how that was seen.
+			db->rung_runnable++;
+			continue;
+		}
+		if (t->threadState != THREAD_STATE_ISLEEP)
+			continue;   // RUNNING, here before its requeue or on another core: it will see the bit at the top of its loop
+		// The bit stays SET — the sleeper clears it, so a ring that lands
+		// between this relink and the sleeper's loop top is not lost.
+		db->wakes++;
+		t->expedite = true;
+		scheduler_wake_isleep_thread_locked(t);
+	}
+}
+
+uint32_t doorbell_count(void)
+{
+	return s_bell_count;
+}
+
+doorbell_t* doorbell_at(uint32_t index)
+{
+	return index < DOORBELL_MAX ? s_bells[index] : NULL;
+}
+
+// The fixture's bell (doorbell.h). Defined here rather than in the test file
+// so processSignals' ring site links whether or not the test suite is in the
+// build.
+doorbell_t    kDoorbellTestBell;
+volatile bool kDoorbellTestArm;

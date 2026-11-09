@@ -1,0 +1,4 @@
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:427 [gallery font visibility] consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e01a/tools/test_ui_action_host.c:427 [gallery font visibility] consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK
+action/status: 420 checks, 2 failures
+Artifacts: /tmp/e01a-r2-before

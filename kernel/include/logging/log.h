@@ -29,9 +29,8 @@
 // loops straight back (no sleep) while a backlog remains, so throughput is
 // unchanged.
 #define LOGD_DRAIN_CHUNK 64
-// While a backlog persists, print the [logd] stats heartbeat at most once
-// per this many passes (quiet passes always print) — the heartbeat must
-// survive sustained load without becoming its own flood.
+// Format queue-depth diagnostics every this many passes while a backlog
+// persists, or on a quiet pass. Serial output is disabled in logd_thread().
 #define LOGD_STATS_EVERY 64
 // How long a producer waits on a full ring before concluding that nothing is
 // draining it and taking the oldest entry's slot (log_store_entry). The old

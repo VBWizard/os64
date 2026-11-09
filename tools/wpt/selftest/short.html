@@ -1,0 +1,11 @@
+<!doctype html>
+<title>The runner's own: the ordinary budget</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// As long.html, without the long timeout: the runner gives up first.
+setup({explicit_timeout: true});
+async_test(function(t) {
+  t.step_timeout(t.step_func_done(), 70000);
+}, "never reported: the ordinary budget ends first");
+</script>

@@ -1,0 +1,2232 @@
+{
+  "browser": {
+    "browser": "Chromium",
+    "version": "140.0.7339.16",
+    "playwright": "1.55.0",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "viewport": [
+      128,
+      128
+    ],
+    "deviceScaleFactor": 1,
+    "locale": "en-US",
+    "timezone": "UTC",
+    "colorScheme": "light",
+    "fonts": "recorded per capture; fixtures contain no text"
+  },
+  "native": {
+    "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "flags": [
+      "-O2",
+      "-g",
+      "-std=c11",
+      "-fcf-protection=none",
+      "-fno-builtin",
+      "-fno-tree-loop-distribute-patterns",
+      "-fno-fast-math",
+      "-ffp-contract=off",
+      "-fexcess-precision=standard",
+      "-mno-avx",
+      "-mno-fma",
+      "-fsanitize=address,undefined",
+      "-fno-sanitize-recover=all",
+      "-fno-omit-frame-pointer",
+      "-Wall",
+      "-Wextra",
+      "-Werror"
+    ],
+    "binary_sha256": "0439cd8fbd8e7d7b32b69e752c85eb25133c1aebe0ec97f41284cbaf38281909",
+    "inputs": {
+      "abi/include/os64/ansi.h": "c9202b2b7a0e930e65a7c4b2d74e07e9ab48c0f804694b7aa57763beafdf2b65",
+      "abi/include/os64/appearance.h": "3c7ff8f72ee55668b2fee8dec93c10ef327f87e2830536eb014d048cd71d7927",
+      "abi/include/os64/charset.h": "d655aaf75bf4a4c6070e707e044da3f8b240efe3106c12363b560e9e4178551a",
+      "abi/include/os64/damage.h": "65084f6b3083551de35e02a4703414726d4e561d7bfd90d0a3d45d6e7a9b898d",
+      "abi/include/os64/decoration.h": "c74dcf501d78801f81281e1c8654e14a876d9ca004de1dc3d8528cfd374913ee",
+      "abi/include/os64/dirent.h": "71bd7518b45ba9f370e974b15f370f96e49b8dbe0c34d4d6fcf25e7e4c6395e7",
+      "abi/include/os64/env.h": "a45c4e686e9775cf5f0959a37ed2b0cca609f5d39c14c6c481cfe2541c9bb8e9",
+      "abi/include/os64/file.h": "e9637f3c5efe23316f57838737a22f03804acba12426f46758fff69bab935dab",
+      "abi/include/os64/glass.h": "50372be5698f420b56a0a2f1498793ad419daf484918b771382b48c8f68a0140",
+      "abi/include/os64/gui.h": "1b25688e17b3bce414b09bc80e9161695d5bbf34a56ec6754447c91c58426591",
+      "abi/include/os64/heap.h": "d96a0b656b645492a0d5e50e99e9d00de4d914f44adf0cf31e0369ccb95b3fb2",
+      "abi/include/os64/klog.h": "aee32e17da4db9137d1e5ca7e145f5f5eb69faafa179092c3207c54c7db5610a",
+      "abi/include/os64/klog_format.h": "f03f8e8cf0718402e40e2b5c010f281547a4f92f9fd124a8838014f249d91c2b",
+      "abi/include/os64/memory.h": "2d3a0a9cbd936d85801c4a36b56fdbdc03964a734cc490dc4ea92821d17b3503",
+      "abi/include/os64/mount.h": "572813a11fdd1f8bca30158caf163aa905bc54be7f70a9657fa165c8f248d4f6",
+      "abi/include/os64/mouse.h": "a005eef2838cd62bcfe3dd802ec913a74ab631807603476e4a3b8458ed8f488a",
+      "abi/include/os64/net.h": "3b1043a9ca875ef774c5918b22b9f0d5942b769aa86478db86fdb1bccd344233",
+      "abi/include/os64/pty.h": "639fe80688981905b5b37d0febe4ad65a0addc8e2d8bb85b2d27449fe05bac90",
+      "abi/include/os64/rect.h": "380a721b7553cb50ea3cd948a6d247523f7a4729c16b26ef2855b792a4c18768",
+      "abi/include/os64/signal.h": "80d7701de94af81b499641f776f9424f1e0339adab907c8b9cdb61016ae40c92",
+      "abi/include/os64/syscall.h": "cc016f1ce70d7d6cc6a041e910ba11cb9b3c9e208b0bad4bf773af8f3c7a590e",
+      "abi/include/os64/syscall_numbers.h": "929ebe0cde26e0ce3a9bd98febd50bb8c6881088976e74454e03e8abbf52f038",
+      "abi/include/os64/text_profile.h": "29d11ec605bdc8b8dbbd03f4f171dbcc8d2754b7e54b81d6e1414f237be86aa5",
+      "abi/include/os64/text_w1_data.h": "4d41b68e5e01093f16c8aad3de9451f143cf5f905cf788c412262af5fefbaed5",
+      "abi/include/os64/ticks.h": "40e8ecc6d4506af4faac881513352e7c7826e89940202c4c40c7d978ab3a7833",
+      "abi/include/os64/time.h": "37cc96fc0dd33b7b132612c66a09e76155bfe7fc5f7e46de4bab930c7d903efe",
+      "abi/include/os64/utf8_scalar.h": "e7ede1b49dc2895351bf1d3e8306ebe97bfda8bb6b30bbb7759d404114a980d3",
+      "tools/decoration_legacy.h": "7f866ff1175a0fd60310afe73d1f9c7ff5a0fb57fc6de58963c4ba9f58098518",
+      "tools/fonts/fake_backend.h": "6ca8be662e8486af864424db113c3901c1676ee752a2cc2112ab8c32072c0d31",
+      "tools/gif_sequence_host_support.h": "1701d0a6878c913dc92dc39adf1a6431dcbf918ddd023db0205cbc2eca521856",
+      "tools/hid_keyboard_fixtures.h": "0fda27e58781fd3dbebed8eddb08b77b9fc02513d639b6a8e53d0c8d52fc8933",
+      "tools/hid_mouse_fixtures.h": "dccb9f1aa642bbbe3af52e74da27b9216c2e8001c24bf4c7b89e1ededf45c621",
+      "tools/test_directory_host_support.h": "8beef16c8e22c964ce70e02656d87cddda125422d57d73bfaae0931e16537164",
+      "tools/test_file_dialog_syscalls.h": "9936372715ad7fbcbaf313a520c83d3533efb4c7b3544eeae585770182d66f4c",
+      "tools/test_js_cli_fake.h": "8e4a4e1fdee06d4b2dfdb30127dd274414bc9ff4427ab8f23f648fde54a98f0b",
+      "tools/test_libflow_fonts.c": "51f90ede6e8331b2e76768572565d0c547d0c1dc78965d6f70eeff747b14f432",
+      "tools/test_libflow_fonts.h": "342ef9d07b0beb74db9c17433022535b1bac0b117d059a1311216c0391288e2a",
+      "tools/test_svg_core.py": "b4cc0bd9bfcc77584093a72da15f928f7e18f36f6885311044dfd820bf27752a",
+      "tools/test_yonder_host.c": "f5d6ab2fa807c67a9050187f26e08e3c2292a11a70c33688b8b0c22a282f5bb9",
+      "tools/test_yonder_host.sh": "f2f33c582ae4546c30d924f40df2ed9a46a001e5bd811151b9fd98bdf2696c74",
+      "tools/test_yonder_replay_fs.h": "a4bbff32ca3d6e7ae83958b473523b64bfb1b1d021658dd31f3d3ddb7e6670a9",
+      "tools/test_yonder_svg.c": "47082c523c06c27fdb0134ad3e05ea5754b2ac3356fb158822947af54d5e31a7",
+      "tools/test_yonder_svg_bounds.inc": "25105cd34a29684d8068f4e0352a2a797129e7cab2dfc3cb665315761f354757",
+      "tools/test_yonder_svg_clips.inc": "d783f1e25aa316f6fc1b5634fb59c57175aecaa4bd359031cdef65b5754c7418",
+      "tools/test_yonder_svg_document.inc": "ae07a5b2693ea5128b26e16c5696e1ae647fe6e701fafac0fbdfbd5826226865",
+      "tools/test_yonder_svg_use.inc": "d25e15abf3817cf96a1d596c796cc145885de9a45c22b1dd6df6764e764149ce",
+      "tools/test_yonder_svg_viewports.inc": "e920423d7c115824de4f20016928b75d0e7b5b9e19805eae73057a0d6cc6ee6a",
+      "tools/tls_engine_fixture.h": "6f760e666c51221c70188543ee5ebbbad004da71f6dca5a8ed843a75226e57cb",
+      "tools/yonder_host_menus.h": "4953aa50e04bbba861ede1d2ad1de270978662e6d2e40d96518b843f285c2c87",
+      "userland/apps/yonder/agent.c": "b9a2160d0d6906da91536c3bbb423f8fcef2b400167ca961111e5db0a3aa247d",
+      "userland/apps/yonder/agent.h": "1fc2092cd2bed42dbebe9bc04ece6e09a0c023bf35aa42e07b75ab3d121144cb",
+      "userland/apps/yonder/bar.c": "3651fbe4a7170483691cab4f4967d14eef64f14302993eec12ee26c1fb181de4",
+      "userland/apps/yonder/bar.h": "7753e1c9207847aea84c45d9c599bba655d324191b2e6316c0c662d61ccc5832",
+      "userland/apps/yonder/cookies.h": "b0d8362206b6844b81c8aa348132a8c5236319cdd6b59dc83c30262175dfe3ae",
+      "userland/apps/yonder/diag.h": "5d597cfcb0bf9c805db3cc6ded7a656f5739c9d10b89020cb2231662d159903e",
+      "userland/apps/yonder/events.h": "c0d575f43b6ee327095414231c2dad69bbe6fcffb91d35b752b0f2957e506ab0",
+      "userland/apps/yonder/fetch_job.h": "173821c9a5cb2c115763bbf472f4af618caadf5cfee655c14e9b190ae12f8280",
+      "userland/apps/yonder/font_unwrap.h": "405bbeca7d4c4980b9dcef190f2347250aff047504e775fe9592b03c3a5eeb34",
+      "userland/apps/yonder/geometry.h": "6df53b24b9a73b261170be386636d2d68262e2ff33b13dfb1d4814a5e8978d80",
+      "userland/apps/yonder/importmap.h": "8f339842ae7acc302b21a7b1e6a4e151e82b84949c7ca56e572ae2b21b43639b",
+      "userland/apps/yonder/jobs.h": "5fccc8981cb62c679a55a77a81dd4cdce384536d1aa70073457e17a9e90025eb",
+      "userland/apps/yonder/mail.c": "360eddb54c0bc40d4fc957754dbd4cc29bc7df9ec033fcfe977ab9a0f69c996c",
+      "userland/apps/yonder/mail.h": "45de85f44a00c5f879c950c688b42756c99372949dde62219006ba62f6a52a8f",
+      "userland/apps/yonder/modules.h": "ae579308a19c881d7063d6560664f739d3d28f4eb123efd52efd6f222e00ef8a",
+      "userland/apps/yonder/paint.c": "50b6cf0abbece40b576b6ffba172c1ab339234273626aaa35d533abea4c10b48",
+      "userland/apps/yonder/paint.h": "da75b5f14ade0e3897d8d38994bcfcf9bff205a4660b1121938e40c9def093b9",
+      "userland/apps/yonder/paint_cache.c": "3cc929dc6380f7ca37cba74a7bd56de2ce41ab32ed3ba4ad40abf25f13603032",
+      "userland/apps/yonder/paint_cache.h": "358972c2cbc5e22a607e50264c3ac59775fdfa6603b33e1ad575e07ceb8aa551",
+      "userland/apps/yonder/picture.h": "73d2cda4f238402149192e544df39c0b8f78f6d118d8ef2f92884661bbea9dd8",
+      "userland/apps/yonder/scale.c": "409ead158a4eed938dd148bb135c512d8ee28ce9555fba44870dd309391abcd3",
+      "userland/apps/yonder/scale.h": "b70be0302e518d316abd3206d63b767d4b16be101e634cf1b2f67aeddfc42797",
+      "userland/apps/yonder/scratch.c": "980416820ad18d2486b3eb017f56ac1097c1eb6896b88af777f356714c07470f",
+      "userland/apps/yonder/scratch.h": "74baf61dd21bf27047718cbc1a969111538d1fa2d05acdc55375a8bdc1aeaac9",
+      "userland/apps/yonder/script_job.h": "025fbd074bcc3489bf80aabecc6fc2ec2ecf1c71421357034d30254ac5d786d5",
+      "userland/apps/yonder/scripts.h": "8c466371a43cf8ce7e91fbe3aecfa003d3afbbda79921ade9cc61119f57a5e18",
+      "userland/apps/yonder/settings.h": "f1b5f8878229b83dd60bea01bd3ddb9b15b80de42d28fafdddc95c1a1ed8a019",
+      "userland/apps/yonder/sheet.h": "8210252131d97aaa5185759535f5b89838ba805bd6e4366ad02490e31ad648e8",
+      "userland/apps/yonder/storage.h": "745ef1e693a9dbf474ad89506f64c480380bcbbe2e5c1dd5cdc0ac0fa56e3011",
+      "userland/apps/yonder/svg.c": "37cc9784142262447cd410294eed65e3c7b040c99c66bc65fcea023340ea6aee",
+      "userland/apps/yonder/svg.h": "ab5acc49b8f81e0a1c030e688e63f437dd995a594489d21a55b7d0fe7e8335e3",
+      "userland/apps/yonder/svg_document.c": "a7d757057956bb63b39be2b379eaf3bad4f21d0a5b154dea060990a522c781d3",
+      "userland/apps/yonder/svg_document.h": "ecad1eb83172479123b9d8851cb467cfaf7fb2e0f99e1df1c3a67f7c2a4136bb",
+      "userland/apps/yonder/ticker.h": "b77007838486b293f2b55551403d1dbbed879d71cd44b908a2e955bf092cd780",
+      "userland/apps/yonder/trip.h": "2b80dd8b74c46777847983b544ccdb0c7e0dcb092361e320cc38436c379d8e39",
+      "userland/apps/yonder/warp.h": "385977cadf3cd69d6a0514982a82a938891d313538a09bf9ba89722edb30fbf0",
+      "userland/apps/yonder/webfont.h": "639587fc275fae42b996dd6a58518138d41c338fd74c6c38b8930780efadbdca",
+      "userland/libfetch/http.c": "1b625fba38b7b42f807488cffe9455d916194e135ab75a931d22d99551892df0",
+      "userland/libfetch/include/fetch/fetch.h": "fa338e8ceca98de6e969c90ff189abd8b199b990c8127c536d46ade52d2c6916",
+      "userland/libfetch/include/fetch/http.h": "5a507f627f58282a3d82907682acf1c234de73998f114adcaa6f26e3a45584e3",
+      "userland/libfetch/include/fetch/transport.h": "c2974d1b7f428d0843c608ca603808fae35b97b7c785f0de397c837afddf0506",
+      "userland/libflow/attrs.c": "b91b432105713adecd8826d6fea7a490d669df1bc3895f5c55dddca0487163a1",
+      "userland/libflow/boxes.c": "4ef28132ecabb83d56235a2f0ee1b5307defca62830e1faa0684963186911e68",
+      "userland/libflow/dump.c": "f7c481e00c29181b356ab8f79767a101d0a59fee091b13ea975b541aa291c38c",
+      "userland/libflow/flow.c": "acb41f5a447a47f03aa3276424dc846706132923575734b6db032721cb907859",
+      "userland/libflow/include/flow/flow.h": "33ab69e669c7c45ec42a3005c0afc551b2f99879043025a285ae3ac4740ca2a3",
+      "userland/libflow/internal.h": "528c636952deabf48e3a5c48fea32c04a0dec26ff2014044079de7ba920f68dd",
+      "userland/libflow/layout.c": "d7df7163e5b23982444054397dd08ef31694d8419f06a681f925e23f3b06bdb4",
+      "userland/libflow/motion.c": "b4e897902f9b7a116ae9e8017d75b23fcfc7f979db65fe09f814daf53a375716",
+      "userland/libflow/store.c": "6d52b6b75fabf5d824fe47bb62ae72b8c2ea9da6f6077fd6f7877e8eee8ed2fd",
+      "userland/libflow/style.c": "ca72863ac1348a2aad585469d20f9c892fb64ae8b9c234556c5d00e490b8989d",
+      "userland/libfreetype/port/backend.c": "052848da71c29474131e7a9cd94801f382c07a673417f68e9dca35e42ad9e40f",
+      "userland/libfreetype/port/ft2build.h": "262d8890fe0833c686da00b831d8ff73d4f1aaf9929fc183453adc8cb2096d55",
+      "userland/libfreetype/port/ftsystem.c": "369b0a4bed429e62260d6c8fe01ec0425c678f207a40582d8b855ecc4bafb570",
+      "userland/libfreetype/port/geometry.c": "8c6409b49218dfcdb389a13c4de04b3bf58472fe588f3989c3b5c925ec011095",
+      "userland/libfreetype/port/nonlocal.S": "f4b2b72fc53664cbd56a4ad8f02dbc52f20eec9550a8503e5ceeb61038076221",
+      "userland/libfreetype/port/os64_ftmodule.h": "44f7d40fa500a6c352cb8c09ec1c955c76124e53144f25577e99522c48cf84e1",
+      "userland/libfreetype/port/os64_ftoption.h": "b3b22924139063d0b3da750a2921cef3754a9135dfa4129d89b92e90386de9e6",
+      "userland/libfreetype/port/os64_ftstdlib.h": "7fda8b647b5490317e0accf755a8bc4ac66ddf98e7b4941e60e186b267b87304",
+      "userland/libfreetype/port/runtime.c": "c987364b6225258d329f9bc67d366ce42961b2dc5af68c3d579a728ce06c7bf1",
+      "userland/libfreetype/port/runtime.h": "6fa07bab56eb4513736ed7bb8a2a15b1d12aa6d0d3d4ecd83e769a531ff82cdb",
+      "userland/libfreetype/sources.mk": "bb72865fdaa0ff4c0af8ddbd18d1bfefe78875d8c744b247068e42ec9c30a2f3",
+      "userland/libfreetype/upstream/include/freetype/config/ftconfig.h": "9731d71090d0181237b27f9b2db8fb96c904aa07da35aad51baad6ad2d8115ea",
+      "userland/libfreetype/upstream/include/freetype/config/ftheader.h": "0b099b85a787ef6a20774dad096bb74e6cbb89e244f198baad8b135709123d0b",
+      "userland/libfreetype/upstream/include/freetype/config/ftmodule.h": "61c76e01106e7b7c80f39f8d6fd479b5323b54d757c9a2cb66d07064ef616649",
+      "userland/libfreetype/upstream/include/freetype/config/ftoption.h": "9014bc786e9c20ef03bb12cf9e4d6f273f0da24af5b9291a88eda976325ef457",
+      "userland/libfreetype/upstream/include/freetype/config/ftstdlib.h": "de81744697b6f9f7fe3a49ca320f2a7ea8f2ae905bb96ff161b5b2d1eed25fe2",
+      "userland/libfreetype/upstream/include/freetype/config/integer-types.h": "0aeaf74f638d1584ccae37f580076a7ac24ef89049749839c3c90dcdda148d5b",
+      "userland/libfreetype/upstream/include/freetype/config/mac-support.h": "be37d3886a1a1ab1bcf894259d6a50d90b5fc71e3284b12e818c57710a9c945d",
+      "userland/libfreetype/upstream/include/freetype/config/public-macros.h": "7557630cb407f98fbc003300c507ae444b0f7449cab99d80c13f5c343710d06e",
+      "userland/libfreetype/upstream/include/freetype/freetype.h": "fd45e7ee01c8f0f2419186d3fc9dd58e25cd866ef0c49f0b347c2d141665a364",
+      "userland/libfreetype/upstream/include/freetype/ftadvanc.h": "6f0c22af9c16eb0459736db8c60e27269db6b774addd196a845e417c851d3813",
+      "userland/libfreetype/upstream/include/freetype/ftbbox.h": "4389ec87328ba568415fe4919b9399ff38fa766956b0940e494fbccd1427a6da",
+      "userland/libfreetype/upstream/include/freetype/ftbdf.h": "d394c0d427d75efbb04ee06d55e2793bfab969d6ca94dba9f743707b109adbcd",
+      "userland/libfreetype/upstream/include/freetype/ftbitmap.h": "92b63e93b151d96fd985cfaba4ec60e47204bbc922f3bee82412ae2fc426fb03",
+      "userland/libfreetype/upstream/include/freetype/ftbzip2.h": "be324bc70ad4b355d7a2ae78a540019db17146a140cdcc59676079afc174ca38",
+      "userland/libfreetype/upstream/include/freetype/ftcache.h": "ba20c0391cc39373474ce3d57adb65559e3954d413d98c2100d77d40bf82bf07",
+      "userland/libfreetype/upstream/include/freetype/ftchapters.h": "c7d1c2ca13903fb6d0b3b37850344d805280856fb87c7597087ce2352573f752",
+      "userland/libfreetype/upstream/include/freetype/ftcid.h": "e71180811abd5f87bb9c5eb058904b32c037ed29f8666e8a9b3561936b5b6ecc",
+      "userland/libfreetype/upstream/include/freetype/ftcolor.h": "217af290dc25ceba7b77ed62bf7710e17d6396d6a20438072ab3a0685f4b2137",
+      "userland/libfreetype/upstream/include/freetype/ftdriver.h": "459e4688340c8fc66545768e360b7fa126a4939c8de33d729181ca23572cf695",
+      "userland/libfreetype/upstream/include/freetype/fterrdef.h": "376e05cbda2fe270031ef19722c6f9d76b9c4c444ff9e0e9c97cf9e3a016111f",
+      "userland/libfreetype/upstream/include/freetype/fterrors.h": "a7547172143ce6309f89492b47ab0e6e69c7fb7f7caa8c81635811fd42673050",
+      "userland/libfreetype/upstream/include/freetype/ftfntfmt.h": "54f23d9c103f0c485e837ea1a9db5f0736372b7d781d1adafb8cff6aa950d4d1",
+      "userland/libfreetype/upstream/include/freetype/ftgasp.h": "a1453a8faeba8845c7b35bcdbbfc43afcc51bfaea89470f813e344a5c9fb06af",
+      "userland/libfreetype/upstream/include/freetype/ftglyph.h": "79a94788388fee750f7cb1deac0c2dfe23d6a6232f29eb9bc056ca4d5a74f137",
+      "userland/libfreetype/upstream/include/freetype/ftgxval.h": "06bb3bd9450ac2534f738849df72de6e618313a61d4b4866bc0bdf44ecefdbcf",
+      "userland/libfreetype/upstream/include/freetype/ftgzip.h": "75f54dfef82233d9a9a1f9d4b4560a258b052784aff9859137cc232f468805df",
+      "userland/libfreetype/upstream/include/freetype/ftimage.h": "30fb302298e418986d12107f856aca8f6e290cf88fe51b6186171ca21a65d824",
+      "userland/libfreetype/upstream/include/freetype/ftincrem.h": "073a9dd3b7585989ee68540b3688a1e11bbd3498dd8210809b0869529861df05",
+      "userland/libfreetype/upstream/include/freetype/ftlcdfil.h": "462073b97096be0c7e485d802fee6e6046f1aa36050c14f7771c31b99bab30fa",
+      "userland/libfreetype/upstream/include/freetype/ftlist.h": "fea6f521193148308630725ae5de0ec736c135910704239967c541c8ab3e0cd1",
+      "userland/libfreetype/upstream/include/freetype/ftlogging.h": "3c353c71c09de36f847cdc209f6e7d92dd92304b1d11c1d8d7300d439a24ef88",
+      "userland/libfreetype/upstream/include/freetype/ftlzw.h": "fd8b72704427c0d8d4c6f2efdd30fdbfc55a7d1246a3c627dcb82661b324aae3",
+      "userland/libfreetype/upstream/include/freetype/ftmac.h": "4203c770c57d3f09ea16e1dd6535da3a1bda62673cb9bedaacab90ac4b736bad",
+      "userland/libfreetype/upstream/include/freetype/ftmm.h": "5d134d486b89d9a3dbaa54e581168be3868d04951c1ec3260542d852a14dddb1",
+      "userland/libfreetype/upstream/include/freetype/ftmodapi.h": "1e526ff1f741cce96bf8d5e935bd9f1ba8db4afdd5c76f387ac54964b25d3fde",
+      "userland/libfreetype/upstream/include/freetype/ftmoderr.h": "b9f667a0487217b12de1390cbf08622aae39966d1ef7c0578cfdd44d7328ddb9",
+      "userland/libfreetype/upstream/include/freetype/ftotval.h": "da5bfb9e509556bfc16ce899a161ea26555cc3ff019cdcc67e6b3af3723f6361",
+      "userland/libfreetype/upstream/include/freetype/ftoutln.h": "db0585ea338debdb9b721adc5f6d138ec7f88df30ff44cf6fb3cac79a70982f8",
+      "userland/libfreetype/upstream/include/freetype/ftparams.h": "4db8f53c9b62aa5adfd2f89877a96c522198e9a780402be7aafba9fdace5f485",
+      "userland/libfreetype/upstream/include/freetype/ftpfr.h": "dd40f7a041f345c8ae12664f52d2def53ec5dd2a49e65aba2b95bdef5b63a1d0",
+      "userland/libfreetype/upstream/include/freetype/ftrender.h": "9579d3d9ff09e98ee09a49c8588d97a910c8fe698fe465a3f33965921fea77ec",
+      "userland/libfreetype/upstream/include/freetype/ftsizes.h": "2afecd7a4dabbf89e9f76d373829b4e8e70a5c593ecccb7646e190c47a2b398e",
+      "userland/libfreetype/upstream/include/freetype/ftsnames.h": "621faad855dfd4cc5e9a90b5a4554b706767653c5c2d41acd1b03d2e118b52dd",
+      "userland/libfreetype/upstream/include/freetype/ftstroke.h": "ba4ed8f81ac66e9e6a2cdf772b69da02a0085fc5576cd233e4da661c6fb1967c",
+      "userland/libfreetype/upstream/include/freetype/ftsynth.h": "f75aa75f8cb754c37db6ac16e1c9648997e06d280d8b28490d502838e6c649ca",
+      "userland/libfreetype/upstream/include/freetype/ftsystem.h": "9a41ef1877a9f5f7e5debbf0d701bd393e53e2ae36fb6c34faebf26b8cbc43f2",
+      "userland/libfreetype/upstream/include/freetype/fttrigon.h": "924526c9b662973f64eb5b4f5034ae897684cb08b9cca7262aba097e49471ade",
+      "userland/libfreetype/upstream/include/freetype/fttypes.h": "27663e885fdb62982c221cbe1dba3e2f0d2730f5aa54aec333613bc60e05d1fe",
+      "userland/libfreetype/upstream/include/freetype/ftwinfnt.h": "a2d77ef372f2c874d61179687b71a2d034e1d51430266c46ec0854593d02b779",
+      "userland/libfreetype/upstream/include/freetype/internal/autohint.h": "c7cbbc5a3ef63736dd7b8a297bc95067fe978a10bb969a984a8692f805bbc783",
+      "userland/libfreetype/upstream/include/freetype/internal/cffotypes.h": "f5ef8ae6a20dbf92f84e28201e038054f353513ab23c6092d2901378615d8cb8",
+      "userland/libfreetype/upstream/include/freetype/internal/cfftypes.h": "c563db1545cf8c323b5e414a606c727f7c8d040c168d24abaacdcf05dd2ac0c4",
+      "userland/libfreetype/upstream/include/freetype/internal/compiler-macros.h": "7f34bf9a86ee998fe285edfcf8e509070b10cec0ca1b08e53f4e01811ba63cef",
+      "userland/libfreetype/upstream/include/freetype/internal/ftcalc.h": "496ec9f724ca74a604c5363bd3f133a51d1b47053fbf5a710a018d6a1928e173",
+      "userland/libfreetype/upstream/include/freetype/internal/ftdebug.h": "b7d2d9f85ebf5a97c453ea6fa4dcf4325b9d3d6a3274d7ae62ede99eb207005f",
+      "userland/libfreetype/upstream/include/freetype/internal/ftdrv.h": "39efd6b6062cbde9c6d5e149e113de54eaacc84ddfe72d41b609d1aa1da3d4ab",
+      "userland/libfreetype/upstream/include/freetype/internal/ftgloadr.h": "326623def7d16cd7886459edc1843934cd134783df43741805d39448b8d37b20",
+      "userland/libfreetype/upstream/include/freetype/internal/fthash.h": "023d88d49d29ecf3833db7717a3f7ae223c17ec2012bdb5bf33bb67abaf616c4",
+      "userland/libfreetype/upstream/include/freetype/internal/ftmemory.h": "90ba879c7384948c4323767d368b5660be4c33104a7699e7c1ce0e983ec5b7ac",
+      "userland/libfreetype/upstream/include/freetype/internal/ftmmtypes.h": "b131a8d4c3bed0438bbb47a5dab5020e43a152157de667552e751f4e98a35754",
+      "userland/libfreetype/upstream/include/freetype/internal/ftobjs.h": "236d0e8a235ef1958917a7350f14320380a4b95aaf8d1299928419aaff15a74c",
+      "userland/libfreetype/upstream/include/freetype/internal/ftpsprop.h": "1213d6141efeaa743e1c566634cd6788f4c12cb48164fd089fb793e721c41a71",
+      "userland/libfreetype/upstream/include/freetype/internal/ftrfork.h": "fc6edbdfeb71bcfcfea4e5bde0bdd3014fa56a4db8b01c1f178d931810ace640",
+      "userland/libfreetype/upstream/include/freetype/internal/ftserv.h": "0d53a4e5a4df8bb3b70578f8792b75850880af5a4a39351ffa93e3f0b8cf0d5a",
+      "userland/libfreetype/upstream/include/freetype/internal/ftstream.h": "5e35712114b18e457c3b71852c1224b2356da5a28adb0cb29a9f8a34e60a7d3c",
+      "userland/libfreetype/upstream/include/freetype/internal/fttrace.h": "22cab82cf50eefa8f3d083e91932b2674109a32104775a42d278172a634d0008",
+      "userland/libfreetype/upstream/include/freetype/internal/ftvalid.h": "69705440b3c104ea033de8e1fda0226ec523f09f4962561cfdc180605f6324f1",
+      "userland/libfreetype/upstream/include/freetype/internal/psaux.h": "5396fe79bd2c279afcdd594d3fff88ea5962bb6779109539529a305d17dc0d3c",
+      "userland/libfreetype/upstream/include/freetype/internal/pshints.h": "a1edc1691574dcd73c7ecbbe4f40b62fc2e1f94ee57df02a1396aac8bb51a5f5",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svbdf.h": "528d9a5af7583623303c01323fe50657d62ee972f46b938e76794abe4488c6f6",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svcfftl.h": "3aecb7a51cec4a84d3f0c29dd70f563cb476e5e0e1e232f074e42f9a3f341bb8",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svcid.h": "03874b78ef7b68eed4cdcb82998e0bb132d37a3e814850ab0db14932a8fef375",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svfntfmt.h": "73ee1f29f28443ea4ab462cd1b49766c465e1ea3068b6f6cc043f48a8d87cdcf",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svgldict.h": "2677a537aa796ba2ec1b527ae961a13aba894317e7e326f5e574c529d5ebd9ac",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svgxval.h": "b5218e794653fdc866f22e1c2e6995ef471d544d72079ece353bfac3eb16a39a",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svkern.h": "2aabbe2772f776141e9438bb02937ffc9752fac52061d00a4cadbee65741d589",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svmetric.h": "5acdbc81e44aa670bffdc6b9dd68549ffe1db1bba819d249a2c2c23650a9ab56",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svmm.h": "277b2fa598f61b5b28b419fdd6b178c38b1ac853aff75f6ca7b448964beaaf15",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svotval.h": "408d183d96cc62a9c166a7f392b3bb102d818fb82680c5498330bcd69fd46312",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svpfr.h": "7fe80b52bfc3e537ea0b1bc4e5e8c508608026fea02f8e0ca082965320f0cb9c",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svpostnm.h": "ae626264be5339bdb7a56bba21ec8b9ef5954c6d77f47e4deda472ba30479908",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svprop.h": "62d5a32b261d8e1c2fc72328a0b13fa642f5db824b9398d54c0f7f61897ceffc",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svpscmap.h": "a151bf86f9c1348cf5727b7fe4ca86287cd354753edc236e5a99b118d511d14f",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svpsinfo.h": "4f66de51efed7884e7f911f485e601cc370c7c9c2d7503a59511862ccc118b7d",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svsfnt.h": "19c44d5979d323009b496bfe5acc59210b4c985e0dc73d1239bda1b2284f7794",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svttcmap.h": "03f84fd4b573f6bb8399e669f1fa019271cd8362494709ca01d90464eb0dc859",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svtteng.h": "760880d0ec32640bdce34fbd4dae0096a240bf61a04027f53a992cc24fa10cd5",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svttglyf.h": "4e984a4c0f82e071205e7d8463f9edfac1a90c26081a2884aa6721c1155d0615",
+      "userland/libfreetype/upstream/include/freetype/internal/services/svwinfnt.h": "d48058b0fe7eebe2b63050a040016077665d8b7ffe2a61a783b1806b366b0549",
+      "userland/libfreetype/upstream/include/freetype/internal/sfnt.h": "df4a2d4943af91457c66ffbd9f4f13a8e0e2adb4c5d98980b24a604d50312fc8",
+      "userland/libfreetype/upstream/include/freetype/internal/svginterface.h": "23c235b3912995227a2c30e2903489aaf84c7ec337a9781244f31b90952eb4db",
+      "userland/libfreetype/upstream/include/freetype/internal/t1types.h": "15c1a26b6538acc65fa7214d2514e827454c439851d802c277d40eabbbe9bd91",
+      "userland/libfreetype/upstream/include/freetype/internal/tttypes.h": "d6e41389fbfd3981570b60ea1f0f5bffa25874d94d9f2753529ee9931df893e3",
+      "userland/libfreetype/upstream/include/freetype/internal/wofftypes.h": "eb43a2ad0a51d36f9f894bc7079d5a816ca0ac13eacaa7dccf620599db6e56ac",
+      "userland/libfreetype/upstream/include/freetype/otsvg.h": "3f7b2484cf4980c5dfb568e8f57b687d3add3b7cc499054f46164ca6d2690e53",
+      "userland/libfreetype/upstream/include/freetype/t1tables.h": "3bf63affe3fd88daa017ee7fcd894e37e961be9abdcd168b39a328ad3e6db3ba",
+      "userland/libfreetype/upstream/include/freetype/ttnameid.h": "c7f9f5b9d7f90bb77f0b5e5fb643039f47ded753130b9c4521d6070fe7dcd7ce",
+      "userland/libfreetype/upstream/include/freetype/tttables.h": "7fd1ce25de661e802dbff67ad5e9927bcdef1730527a5d453120586f13698280",
+      "userland/libfreetype/upstream/include/freetype/tttags.h": "7ded67566c32f76903938b53dc849c97cc1c2f25abe14357f7258928df4c3f1f",
+      "userland/libfreetype/upstream/include/ft2build.h": "1e8028d455a85db4dd19b2019a721d56409f802c2223e78ab5199c22f8b33397",
+      "userland/libfreetype/upstream/src/autofit/afadjust.c": "44e9fbb2d6dd2f05bb7742dfcdd236d0a5617ed98ef362ebf2cb12ca6d1b7028",
+      "userland/libfreetype/upstream/src/autofit/afadjust.h": "1bb4ecb0bf2a21c3b043902f95f1532804cad0ec3cad12dbed1dc5dfc27823a0",
+      "userland/libfreetype/upstream/src/autofit/afblue.c": "16ed687694c4c31a29a3fe8e2732e210774b200cc633be8cf9cb70b50c109f80",
+      "userland/libfreetype/upstream/src/autofit/afblue.h": "fb5cd1dda3def04abc79671b6425939f0b4297e63aaf521bc842d61eecbe70c7",
+      "userland/libfreetype/upstream/src/autofit/afcjk.c": "5f25e4c8381f75eba0bc77e659cf62c8835b43c83cdc5e12ec9587d3fabff51f",
+      "userland/libfreetype/upstream/src/autofit/afcjk.h": "af5d118aa7637c865f6f823d2b8c9763fed9fbc947d16f055725aa8720b6ee09",
+      "userland/libfreetype/upstream/src/autofit/afcover.h": "bbdafe724fec3477bfb3f7f008fb531f10802227dfb65ae3d5c0b401a6ccd8a9",
+      "userland/libfreetype/upstream/src/autofit/afdummy.c": "19471e7015b5a30a251996fc2fdae006930cb1bc3df2e005f048a0a52911591c",
+      "userland/libfreetype/upstream/src/autofit/afdummy.h": "3fdca1894152210a9e268186033ff2b59bc1727baf512a889bf53cb32940eca5",
+      "userland/libfreetype/upstream/src/autofit/aferrors.h": "54be3c1462f9a1636a11e2bef204eaa522c000015f96fc28be550a470bdb864a",
+      "userland/libfreetype/upstream/src/autofit/afglobal.c": "3fe113873f7c73fb28ce91cac05fde304bb730e7529c0f07e9ffb8cbaf9ad187",
+      "userland/libfreetype/upstream/src/autofit/afglobal.h": "a6aedac1187d3d38a57858d7d8270f70758190b818d5b87e78405df55ac53bbe",
+      "userland/libfreetype/upstream/src/autofit/afgsub.c": "194a97ea4bd1b6d0c82b818527cf2b6e9c6dde858dae2ee1f51592190e7f7729",
+      "userland/libfreetype/upstream/src/autofit/afgsub.h": "bf852daeefb3b8f686b786c716562622a7d5377ad81f5cd0c7a3793e9e7da155",
+      "userland/libfreetype/upstream/src/autofit/afhints.c": "f5e40683ebc49661679a254f64066a6e34f2a165d9cd9e18a87226846f045196",
+      "userland/libfreetype/upstream/src/autofit/afhints.h": "1efd0ff9c7b110097598510834ccc6a721ed9bfcb434b0c2f42f932e25eb1e28",
+      "userland/libfreetype/upstream/src/autofit/afindic.c": "554e25a2a329bed7e5570b63357f43ec74e38b3bd455cba5c5eea5e17517de24",
+      "userland/libfreetype/upstream/src/autofit/afindic.h": "653db1a786ec97c7437fee306ed6f5cf69de9beae04f2f442920744600b648ec",
+      "userland/libfreetype/upstream/src/autofit/aflatin.c": "2a9ef79d5c4a936505e0fd6417ae115e43463d7002ad07eb2fe31ceb7675c519",
+      "userland/libfreetype/upstream/src/autofit/aflatin.h": "02f973545981ff89066a8a5a382c0588eff0b54f7648e95999d4b8c17bfe930c",
+      "userland/libfreetype/upstream/src/autofit/afloader.c": "ba8bbf5ae52538474336cd000fadfdaab1ae5ae22c5ea3ccef199a7a9be574f6",
+      "userland/libfreetype/upstream/src/autofit/afloader.h": "8a93cd0c31fd5ece8d3b6ebe24e10a857a426ead708f921eb6669720c1850723",
+      "userland/libfreetype/upstream/src/autofit/afmodule.c": "db16e28f1c56213fe41e79ef0fa4d42ea59611b4dc8e0b8384260483d4d850b3",
+      "userland/libfreetype/upstream/src/autofit/afmodule.h": "5dc89036dcdcece016b168cc745636109042c11132adbc8d5c80155f9b24eb3c",
+      "userland/libfreetype/upstream/src/autofit/afranges.c": "f2acb2b19bb5960a484b455459a76b469c997734b94e5260e7bd19fd5214f0c5",
+      "userland/libfreetype/upstream/src/autofit/afranges.h": "8d4cb4f9837430487a434d8c39af6155ce11152bfe6f1cbd75d9816db16a0262",
+      "userland/libfreetype/upstream/src/autofit/afscript.h": "c623bcd6176627184808fe171e7d3d515a0e3335be594823c6720fd0714be5b9",
+      "userland/libfreetype/upstream/src/autofit/afshaper.c": "8736862aa348a2c71f53e4f72d623fe48e7ff0d2ce930a7fa928d37dffe3e86a",
+      "userland/libfreetype/upstream/src/autofit/afshaper.h": "488f041a008b44a1b7e0ce481af06703d2b7c1e1fd746a2b0f4d9c1fee0c2ce8",
+      "userland/libfreetype/upstream/src/autofit/afstyles.h": "d409ff2483e005f8d8d42e1bc5713711b26bf598c3e5d65de75912649c1fdc22",
+      "userland/libfreetype/upstream/src/autofit/aftypes.h": "eb0c1a7303f69f1dc6910a4238a1c47e41dac14c65b5f2c72b380cca4dfe76c9",
+      "userland/libfreetype/upstream/src/autofit/afws-decl.h": "7d2550bca7d020cb9d3d88a374ad24d958cff8006f9f9cfb66dd8a1b35b3024e",
+      "userland/libfreetype/upstream/src/autofit/afws-iter.h": "adbbacecbdb3e3534218d39b596c7bcadc89cd1169b7f2a572c0d40ba752e8f4",
+      "userland/libfreetype/upstream/src/autofit/autofit.c": "d637d65131f6295238c55112c3bb05ba3bdcab456a8974c4b70eb91ed26b8385",
+      "userland/libfreetype/upstream/src/autofit/ft-hb-decls.h": "ed05eec3b5657f98a0c106fa4aa2e5a4bc7f0864e5d34bd5989eee6d8b718bcf",
+      "userland/libfreetype/upstream/src/autofit/ft-hb-ft.c": "84dd5ddff1cec222e1755b4962faf45836238dfa3a46854dabd969eb4e50f8be",
+      "userland/libfreetype/upstream/src/autofit/ft-hb-ft.h": "0bf308d2062053e31aa6f9b350a37e2dac8adef0b1a82f549d73af8bc2026695",
+      "userland/libfreetype/upstream/src/autofit/ft-hb-types.h": "f106bf7cc41f52cd70907266a74a293c57bc5f71285b01c36bf198ad8b1c6234",
+      "userland/libfreetype/upstream/src/autofit/ft-hb.c": "b6fbcc6a2a7b6c291326b24de313ad21edf2c7bbfd82e6844f0c90b20802040a",
+      "userland/libfreetype/upstream/src/autofit/ft-hb.h": "e1ca76cbe0df2850f38b974dbff58f0322d19bafecc4125f52077f0c82411534",
+      "userland/libfreetype/upstream/src/autofit/hb-script-list.h": "0627d9f6a59a8b09e562e8aeaf414300899308725350beeb50b62b8657399576",
+      "userland/libfreetype/upstream/src/base/ftadvanc.c": "bd1a022d326f821c6f2fda53c62ef7935ef607842433bb57a6848d6a73387fb3",
+      "userland/libfreetype/upstream/src/base/ftbase.c": "dc3d0ab282abd22ea0600d7bc5691fa72e4b242985efde21d455dc6168b63c42",
+      "userland/libfreetype/upstream/src/base/ftbase.h": "dc052ddd0b7e5bf6160ca7bcfe21da0df97c5af3b2b36f2ef49357da928b0b05",
+      "userland/libfreetype/upstream/src/base/ftbbox.c": "f61b4b28e8d6c2735d34dda1fd16537c7097ccf6541f22dcd4ae3f6e690f4fef",
+      "userland/libfreetype/upstream/src/base/ftbdf.c": "ee5532a0930883ea09f6058d7dd563db11de24667792532275367f589ea55d17",
+      "userland/libfreetype/upstream/src/base/ftbitmap.c": "6fde2b9026696e791182aff7fc8d1a3ae139c13081352e5054867ea998d2cf58",
+      "userland/libfreetype/upstream/src/base/ftcalc.c": "f44804bf7c62ac2027b6562cd3724eee5e08224fb5066266e3bde839fed136ff",
+      "userland/libfreetype/upstream/src/base/ftcid.c": "696e5b954bafec33f0ee17771aef4bb9211ab147d1617c38759a93c47ddc96f5",
+      "userland/libfreetype/upstream/src/base/ftcolor.c": "23d9b09c41996f3a1f57015e7cd1794a4855879f8c18023ae5351c92126a62cc",
+      "userland/libfreetype/upstream/src/base/ftdbgmem.c": "4f8985c711c20e3827fd71de09d4f2cfd6dd6691ae898a52856a074c6d32f312",
+      "userland/libfreetype/upstream/src/base/ftdebug.c": "459e81f660dc67dc5c5eac04c9b4f3159f02702bc84289966a8b9430c1cd394c",
+      "userland/libfreetype/upstream/src/base/fterrors.c": "f44b2bc19fa134f3c5cade023cbe226c1027c5963f2852d8d083a83376162142",
+      "userland/libfreetype/upstream/src/base/ftfntfmt.c": "d0610262adf35366720ad113f3df6f370b9a09784b90456e0769a40b61fad92d",
+      "userland/libfreetype/upstream/src/base/ftfstype.c": "4c3d51a47ac665a23196995b8dec32f7fa1527c571ff09c7efa6b8597b7ff143",
+      "userland/libfreetype/upstream/src/base/ftgasp.c": "be881bc11e269902aa76d3453168f3ed6257e26fdf2273c2427b0e03b2caf1bd",
+      "userland/libfreetype/upstream/src/base/ftgloadr.c": "66265634a5fd49d05c53f22c535f6cd8d774028ee6693babb20dde35bfcf75d4",
+      "userland/libfreetype/upstream/src/base/ftglyph.c": "0420bd19c41022b017e232ecf5aca3b5907642bc214d57b49da3604ee8afd34e",
+      "userland/libfreetype/upstream/src/base/ftgxval.c": "ccc12a9c0b928dcf1465c07f331b6754602b0059c31e0c1236634489b6c18153",
+      "userland/libfreetype/upstream/src/base/fthash.c": "693e5a54b3ce30140975a94a3369dbe706eb1f280c69e80da426d39cc45b94ef",
+      "userland/libfreetype/upstream/src/base/ftinit.c": "a612a0b7a3c769bc7ac48b2c959b3ecd3c76d42f355c4c611455b56d473ea237",
+      "userland/libfreetype/upstream/src/base/ftlcdfil.c": "df5c9f2d63b207da730c3de39da2ee181ed5754523b3dc4ac55be57b3505d9a5",
+      "userland/libfreetype/upstream/src/base/ftmac.c": "3cd4271a5a2f0b237721f9ad760de9a27ce9afaf6b1e034fac1831d665ea06b2",
+      "userland/libfreetype/upstream/src/base/ftmm.c": "e60bbe070f49e2cc0cf5dd46c3c4e2d4572e88621403d47bc9320b0a89e7798b",
+      "userland/libfreetype/upstream/src/base/ftobjs.c": "e5558a906bfef754843740c55a1110759f23c737303d092ba6fefdce2ba4bb9f",
+      "userland/libfreetype/upstream/src/base/ftotval.c": "b93118b7242e7ba42dd103becb064815ddbf21d62055b37f9565a133499ef688",
+      "userland/libfreetype/upstream/src/base/ftoutln.c": "e9a31e1a88398615df585a009632c5eebbc456da0e09b6f6ad6ac2965c1bc3b3",
+      "userland/libfreetype/upstream/src/base/ftpatent.c": "e6740b91751c39d81ecb7a93e0ede78ed28588254734d4bac8badb0e807435fc",
+      "userland/libfreetype/upstream/src/base/ftpfr.c": "287f384221e83d162ab1de86d2470c8d853c42dad2e00850fab5201c6dce50b7",
+      "userland/libfreetype/upstream/src/base/ftpsprop.c": "6101a71be5e7f3f71d39c6aee5cf165ca05d5fe02270e6ac6b635a6977d95b53",
+      "userland/libfreetype/upstream/src/base/ftrfork.c": "7f35f81d18d6ddabbb850685e4c1524e91e0dd9b5bb9e76dd68120e75269b6b0",
+      "userland/libfreetype/upstream/src/base/ftsnames.c": "3ffaeb114165248cdbe25af92bee4926beb59c563941c50d4bafc7a291cc6d1c",
+      "userland/libfreetype/upstream/src/base/ftstream.c": "438f1170e70f39cbe051d21726b6e25fd02a2ea286e72dbbaf2bf0e10e10584b",
+      "userland/libfreetype/upstream/src/base/ftstroke.c": "b5f82138906d4b26c91b0c3631141c5cc9bc3ccced36ee5d98409c260ebbc478",
+      "userland/libfreetype/upstream/src/base/ftsynth.c": "a9e72d6ce793c46624ac932405d60dda3ea10acc67a78a1b95de962e6a123a01",
+      "userland/libfreetype/upstream/src/base/ftsystem.c": "b545e79c8a7ceaeeeebe76dbeaffe8c9c890dab6c0db1d09d4f10febe33cf10a",
+      "userland/libfreetype/upstream/src/base/fttrigon.c": "68b511c61c8370c430a1fcbf3c531e107493db33b7eb86c671d9e5b43e32dcf7",
+      "userland/libfreetype/upstream/src/base/fttype1.c": "efc840f6803e3ae71c1e1677ad562c1122d7568965a507a6dd50e7cb03cddb94",
+      "userland/libfreetype/upstream/src/base/ftutil.c": "e9a4474671af787582c3ce4a33bda435ea4b76a94eb55df4a65346e90490d35e",
+      "userland/libfreetype/upstream/src/base/ftwinfnt.c": "4e57ed4fa0fd455cf58b160852dc01f297ba8c282631655d0a894ccd9adb1e73",
+      "userland/libfreetype/upstream/src/base/md5.c": "0eb851f59869e6e4e23ccbaff30ba1874c1a0e5a00d3cfef7529561dfcee2550",
+      "userland/libfreetype/upstream/src/base/md5.h": "2f7fd79f1a8ec20e8f7febccbc445eddc25a654f4d6503f289561178e5aea781",
+      "userland/libfreetype/upstream/src/cff/cff.c": "12c1e444baa1f557432c7e39366d0788ee1da60df64fe6b8ab4a37534a7329e8",
+      "userland/libfreetype/upstream/src/cff/cffcmap.c": "280c87f7ff79685b9f55dc9437487fb92c9b0c769ea56164aa28878b666e5e0b",
+      "userland/libfreetype/upstream/src/cff/cffcmap.h": "e763ddee97bce64359cc2c5d0fdb28286976e9b359b57b4b141d60de112acb57",
+      "userland/libfreetype/upstream/src/cff/cffdrivr.c": "72d7477de6f9bbd3f6646f29c0968e230b8d727b0fc96ddea52f9bb4163a3ac8",
+      "userland/libfreetype/upstream/src/cff/cffdrivr.h": "2e4547fb49edba5cd285d76c1d900e2420466c5eb1f204fa0a4c1e2fbbf20876",
+      "userland/libfreetype/upstream/src/cff/cfferrs.h": "8b55cf506fce1ea8789fc7218b1b69024cd86882c61f8ecaf9f69321784da050",
+      "userland/libfreetype/upstream/src/cff/cffgload.c": "a96b677f84f527a7943a17021f8748b27746ef046b51258daff259b29c61b929",
+      "userland/libfreetype/upstream/src/cff/cffgload.h": "0c89e174696ddd0c47d520c75ffd466a60a137f3630cee5ebbc4fe22d8118033",
+      "userland/libfreetype/upstream/src/cff/cffload.c": "40a2a68659e28a552cb5646874916633d73114940b8aefcd0cbe34af8e685460",
+      "userland/libfreetype/upstream/src/cff/cffload.h": "af86afa039cdd5dae80d6b5d73787b374c752323c37bbc8df1bedaafa7397555",
+      "userland/libfreetype/upstream/src/cff/cffobjs.c": "14762bf3254f5b0381f23070ef433580f36528800d1749f1c4899978d3cd80ff",
+      "userland/libfreetype/upstream/src/cff/cffobjs.h": "90c873ca3ebcdbccadb75cb9cc825bf45ec0a9038eb117a3e5d9b14e009050b3",
+      "userland/libfreetype/upstream/src/cff/cffparse.c": "01a7d04e499e9cf6e0b0c41431362fb20cfd0915f058dd626e7217f3be737d06",
+      "userland/libfreetype/upstream/src/cff/cffparse.h": "341f4720618ac34c4a8e5958f92af00a839d48acf8c753925657e7e2fff1c0b8",
+      "userland/libfreetype/upstream/src/cff/cfftoken.h": "79ebc3105c9fa0320725436c8d6502c28e3b52828a66d327c2ee4e605d7feee4",
+      "userland/libfreetype/upstream/src/psaux/afmparse.c": "5b700d42b7251a0e0f6151b3cff8831185c9b61d5c05673c4400e0f26948d09a",
+      "userland/libfreetype/upstream/src/psaux/afmparse.h": "f1ada57619fb851a2a6234ca8b66bb016743180bbcbe3e355622558160bcaa3c",
+      "userland/libfreetype/upstream/src/psaux/cffdecode.c": "6a643f5468b13213f4a4d4061f99915e75abfe593884343c22e68ec4bf8ca0cb",
+      "userland/libfreetype/upstream/src/psaux/cffdecode.h": "f71a5e4b719c5abb1aecc12ebb0d26d1e4939e8cf12f696f28f87cc879ad8cd2",
+      "userland/libfreetype/upstream/src/psaux/psarrst.c": "8f06555b38b42e966b8c87b0e539121819b11940930ccb5e97e8cc8feb6cbab2",
+      "userland/libfreetype/upstream/src/psaux/psarrst.h": "4c15987656b0ccca4cd0982d56ca71d69809ebf8242b37425ae1a0e13c8f2440",
+      "userland/libfreetype/upstream/src/psaux/psaux.c": "bb5e4062df615b8ec1e302a89aa9e55405e8c4468a9543cb633659c329be578b",
+      "userland/libfreetype/upstream/src/psaux/psauxerr.h": "9df6e7a22fc05448889e0399651a76e9a0f1e18c3b24f8ae695c959811f81ddb",
+      "userland/libfreetype/upstream/src/psaux/psauxmod.c": "28041fb1696eb679f62efaae4fd9b68ff3e36b69c2f81074b76eec357fdad807",
+      "userland/libfreetype/upstream/src/psaux/psauxmod.h": "c8a85cd33168a16b6f788586c9ae46d2049d227e9f75a630607f17aa5b254813",
+      "userland/libfreetype/upstream/src/psaux/psblues.c": "1b63ad1b4c72686b28045e7437d9053158de9b2f4f2e77c310e8607d42d35c6d",
+      "userland/libfreetype/upstream/src/psaux/psblues.h": "1718a1ab8f6be015741bc7b1c7d3d57e9dbd619d00a6529dc55dc4ff68b8b83d",
+      "userland/libfreetype/upstream/src/psaux/psconv.c": "699c2ab8bb094ba4fb407b9b33d61c6df9fca710b2dc80f68cbe689e79e62fa7",
+      "userland/libfreetype/upstream/src/psaux/psconv.h": "7543c2a9f5df4b24dbfa7255a883ddda7c9d5ac02d39a131f3ce6e84fb154e71",
+      "userland/libfreetype/upstream/src/psaux/pserror.c": "41d5ba2da3ec46c816064e1f14257076458eb93679501fb21806d579fb675595",
+      "userland/libfreetype/upstream/src/psaux/pserror.h": "662dfec3c17eca34affffe8f220bf60afc60112a04e5157a3c2efbd0edcb6f42",
+      "userland/libfreetype/upstream/src/psaux/psfixed.h": "af4656b05c539aa3a0fe569c8a22b26ef0437b1f32f75a13157bce5ce17057e9",
+      "userland/libfreetype/upstream/src/psaux/psfont.c": "8b266d1268845f9ad01a4f5bb29d5e2c37ab4794282c8102241153cc38a1efdf",
+      "userland/libfreetype/upstream/src/psaux/psfont.h": "b34af623c4ad5055b4539c9e5ac95924d3800451579716feebd5d467ba2c3322",
+      "userland/libfreetype/upstream/src/psaux/psft.c": "eac2afd167a8b027254ec1cefba82581b5767851162b87b3e924687d87996f8a",
+      "userland/libfreetype/upstream/src/psaux/psft.h": "25bbe8ba4f8157641619540785d86d50d1c327d17825e12221585225574c50bc",
+      "userland/libfreetype/upstream/src/psaux/psglue.h": "bb3ffac93b19a70f3d61381ec1866fa06427255d00dd13097673cf554c339e53",
+      "userland/libfreetype/upstream/src/psaux/pshints.c": "cf3991a805a41aed108196528d57caed575ca39a6324817d5cab48c63ce9c9bd",
+      "userland/libfreetype/upstream/src/psaux/pshints.h": "63c7b6744d098c2c6f6604790ab0203752b10750d5c2505339408d917122b108",
+      "userland/libfreetype/upstream/src/psaux/psintrp.c": "d95ffba6bedbdb530a7ea1e951cc1c0b6933b1f29835beef3656e129dc74e2db",
+      "userland/libfreetype/upstream/src/psaux/psintrp.h": "0b32ec2bdbd1a97bfaa446a6687f4e36a31a6e7d9b4a3062db0ffe72f26d355f",
+      "userland/libfreetype/upstream/src/psaux/psobjs.c": "9d8e3f205d6279f1fb400a313c84a4ef2c0f524a51e013fbc10459d232c1c3d9",
+      "userland/libfreetype/upstream/src/psaux/psobjs.h": "70efc6ece5692a5fa57ce70be0458924bd73424e12bdf76b251e27e5f6eb2978",
+      "userland/libfreetype/upstream/src/psaux/psread.c": "782174f869f52a18d5841d78acbe659519eb768e2965ae059aebe87fb8889882",
+      "userland/libfreetype/upstream/src/psaux/psread.h": "e21f0c22a78a4f9abb3d80b656711656910fda66085e6a06e6b763273884b149",
+      "userland/libfreetype/upstream/src/psaux/psstack.c": "109ab5b098122891fc135f81b8c5e0bbba37523b4089a085cd9d397b8f4b0228",
+      "userland/libfreetype/upstream/src/psaux/psstack.h": "49cb6d98d82faac84669a5b6394247044b4d597cddb90c96ea093184e7d44f22",
+      "userland/libfreetype/upstream/src/psaux/pstypes.h": "910ee2ede0c0c149d798bf9dc608e1d3e013e675bdaaa6358ed2371eb600357f",
+      "userland/libfreetype/upstream/src/psaux/t1cmap.c": "4e474bc78fe0c95cf58a3f61533917f69035dcb0a35380fbbaf90287657a0bf4",
+      "userland/libfreetype/upstream/src/psaux/t1cmap.h": "49b79cc8b20f60e799acb49d3171d8766fb198a6ff6aee41dc0eab6447a513cc",
+      "userland/libfreetype/upstream/src/psaux/t1decode.c": "06a1c5a92d3181bfe6afc909818e2495e6f5c9cd9d876b819d04648c1b5f168b",
+      "userland/libfreetype/upstream/src/psaux/t1decode.h": "495fea1fc192ac5cf677c610c0c61dbe78c6368b45a3fa6b1f2d6524947e5936",
+      "userland/libfreetype/upstream/src/pshinter/pshalgo.c": "82cc56dc73b763257d5a7151f2b18d3e7d4c2de56e66fab4317e238c5a3c64a3",
+      "userland/libfreetype/upstream/src/pshinter/pshalgo.h": "6dda6f401d05d5b8db1222d6b449838095aa2c99a664d03a83e1ea3a9e5cac6e",
+      "userland/libfreetype/upstream/src/pshinter/pshglob.c": "a5041bafa5ace7d3fa9cf8f91ab8183c902aebdefffebfc080c059935377b1cf",
+      "userland/libfreetype/upstream/src/pshinter/pshglob.h": "4b7a775c1e246e58cf4a5cb6551477b8b74c51fca991455eacc753cb2b7eb9d5",
+      "userland/libfreetype/upstream/src/pshinter/pshinter.c": "638203d74ba1ef837074049e61a722321eb092d91bf90f0180b7cc5f3ee82278",
+      "userland/libfreetype/upstream/src/pshinter/pshmod.c": "534ded2b44b8fba080cbdc1207bd39cbd82d77398e44361efd9afa968936f47e",
+      "userland/libfreetype/upstream/src/pshinter/pshmod.h": "b495161424eee0c2d2576684b85ccd7d546b17f534bc44d26f9bf50355879dbe",
+      "userland/libfreetype/upstream/src/pshinter/pshnterr.h": "a2bf6745c5dd974cee27f4b642386fe812af4217f1c93e3f4e1d08bbd735365f",
+      "userland/libfreetype/upstream/src/pshinter/pshrec.c": "d6081fbb1f2324fffbed405ac31f321e9e4f0dae02dfb1a509303615d2b3834a",
+      "userland/libfreetype/upstream/src/pshinter/pshrec.h": "c7fc29e242b7af3cb1569dc22eebb756093983bbc0de906c7d44df4c6996462a",
+      "userland/libfreetype/upstream/src/psnames/psmodule.c": "fd5bfa6821ee266f403cdef31af7a13e76059a71d9f48e5c45d4442426ee8881",
+      "userland/libfreetype/upstream/src/psnames/psmodule.h": "20ba4abfe9c60392fbc4bc19f7f31d2bc8a78dcbba0efda45ff53f037dc31efd",
+      "userland/libfreetype/upstream/src/psnames/psnamerr.h": "46cca41a97c13f47e79e258f30bbe277a6f5412eabc6113b88949266dba666c3",
+      "userland/libfreetype/upstream/src/psnames/psnames.c": "eb541c8027a6862bdd271d550cae886716c6a7e0ae484d7ac070cbae869254fe",
+      "userland/libfreetype/upstream/src/psnames/pstables.h": "1095bb32a4346a0961baa081a9d275c48feb8a8b9c94ac534d2047d504aa9abf",
+      "userland/libfreetype/upstream/src/sfnt/pngshim.c": "c6eab902d978bee5907911dae15783a3600ed61f777160e227af062840e65fe5",
+      "userland/libfreetype/upstream/src/sfnt/pngshim.h": "bf73a0af6a793ba9503861c32907cec7f98e19fc16779a3237b4509f0dfbd187",
+      "userland/libfreetype/upstream/src/sfnt/sfdriver.c": "3e9539a19862ffd28b04f9f2a134987bc8d03ec556af10ed89f238380e63d1f1",
+      "userland/libfreetype/upstream/src/sfnt/sfdriver.h": "46eee079a34200896605144c2894bc5151548905c17d91f63e148bae01e68d7c",
+      "userland/libfreetype/upstream/src/sfnt/sferrors.h": "453e1b8a43ec939ace3c2c3048e0676cb807311e71c0d65248b9da75163e7806",
+      "userland/libfreetype/upstream/src/sfnt/sfnt.c": "412b93ea8bad243ac4491612872c6aafbb92bbef19263d38f0e48a93f94fcbaa",
+      "userland/libfreetype/upstream/src/sfnt/sfobjs.c": "056d76df3c5b2cd45f761ce7f4c81d773f5b960c570af4ac6d3ce78b22212de6",
+      "userland/libfreetype/upstream/src/sfnt/sfobjs.h": "c7e0618c98517a2f1b3ee2977e55b0259fbf6cc3428b809315a96a0e285c28b5",
+      "userland/libfreetype/upstream/src/sfnt/sfwoff.c": "ee0309112a0e061f2ec60d2d52976c76a881165f36ea1cbc0ed8e1faa8281717",
+      "userland/libfreetype/upstream/src/sfnt/sfwoff.h": "72cefae962d22b84c06d3a3e4a52c1fbd5fed00484c72b12e730fa431c47fdd8",
+      "userland/libfreetype/upstream/src/sfnt/sfwoff2.c": "9c67d2b0e2d0a88520bbfe132827252d0f7bd731bb735fba7a36575222d7cc72",
+      "userland/libfreetype/upstream/src/sfnt/sfwoff2.h": "c2d7b11d8e9807c03437a6caf435c5bb4c92e7d7e5a2ecf02a6d42945655b4ef",
+      "userland/libfreetype/upstream/src/sfnt/ttbdf.c": "2bc05bcbb0805b586c96aa3ec4eb0efbbf9106dcac61e8d3d72552a1ed5d1659",
+      "userland/libfreetype/upstream/src/sfnt/ttbdf.h": "b46ba30c5321778e1b27e00aac77e6473a967132b4608befbcaaac32479c60d4",
+      "userland/libfreetype/upstream/src/sfnt/ttcmap.c": "f7288c09bf7b64381ebc794df9236d99f2d378043d89ab477b6e5be697f8a00a",
+      "userland/libfreetype/upstream/src/sfnt/ttcmap.h": "c27fb995d45fd6c890ae52b8f2ee0d44339f1c784ba0357f64ba4f0d7bfdaeea",
+      "userland/libfreetype/upstream/src/sfnt/ttcmapc.h": "39d6b8842a667f35de96457b01b47492b441453d55f061635852398e6bee1b8e",
+      "userland/libfreetype/upstream/src/sfnt/ttcolr.c": "2bfa9d364ec1a58eb07f8df6a6c75e99ec69bb06c61e24e52661d108d2c4d2c1",
+      "userland/libfreetype/upstream/src/sfnt/ttcolr.h": "514e26de5f3838e3b7a3fa6cc9a141d8fb7b7fc00f880dd706cb687139a91a05",
+      "userland/libfreetype/upstream/src/sfnt/ttcpal.c": "3167aadf88466838fd870e2c26f409c10eb55231a5124d864bb77f4ca899327c",
+      "userland/libfreetype/upstream/src/sfnt/ttcpal.h": "0a610edec84bb838be4ebcd4214491d9201e225fc4bdc97b0b43bd30ec3350d0",
+      "userland/libfreetype/upstream/src/sfnt/ttgpos.c": "48f0eb6f7e82bcbc5a6028f8deb137c26688b78260ce9404e2fb8ae004ef8009",
+      "userland/libfreetype/upstream/src/sfnt/ttgpos.h": "de19cb05f6c0d06df61e9fc815a44e679b98fc91bb73a748daf2f287f32d061d",
+      "userland/libfreetype/upstream/src/sfnt/ttkern.c": "d0466ae739af657e3073d28b9e0a43e896644598c29be3cfb83e8144d9b5b9b5",
+      "userland/libfreetype/upstream/src/sfnt/ttkern.h": "2a5c5417c053b12e8ce9b5b32e58449b34c5b8260e4182f0cb63ee8e6529069f",
+      "userland/libfreetype/upstream/src/sfnt/ttload.c": "7336ee8e93002611016976208dc92b55da6eb16cc03b08be8a678e3252394eb7",
+      "userland/libfreetype/upstream/src/sfnt/ttload.h": "9fd2d4dee6dbf4c80e2830c41cf0f485982691406568bd9f08c841fa8830537f",
+      "userland/libfreetype/upstream/src/sfnt/ttmtx.c": "65c7522ff2188b4a8c665beebdb6e6ccde8496f6ab480bc1af740aaecd981e2f",
+      "userland/libfreetype/upstream/src/sfnt/ttmtx.h": "a7c4d3dc26984cf67546715c8fe51d5501799a2f0fd78ab192ac229ad1ee01d8",
+      "userland/libfreetype/upstream/src/sfnt/ttpost.c": "9d8b3d635e819e2278d0cab60641b95f6795e0b19877e42b3eb130c8f706180c",
+      "userland/libfreetype/upstream/src/sfnt/ttpost.h": "74ed451e01c3d22fa86bd21c220e207fad07f400c9844f3068d2e0fa4fc8636a",
+      "userland/libfreetype/upstream/src/sfnt/ttsbit.c": "da9f35e5a0a813b2de10f2c21ab30fff6995550f9d9480f3e3468e8440506645",
+      "userland/libfreetype/upstream/src/sfnt/ttsbit.h": "15349b38b018ae5d786483eb0eca13364ac1a98dd56cc20bc930beb0db7cd7c3",
+      "userland/libfreetype/upstream/src/sfnt/ttsvg.c": "f58bf8a4a1604de5308d7e069422995284569ab3f7edae4334d3fa2a4e83c396",
+      "userland/libfreetype/upstream/src/sfnt/ttsvg.h": "19cdeb40ffd9c398d12c1bc910a4e66f0f739b4f79e5c727d63c5ab6929fe2b2",
+      "userland/libfreetype/upstream/src/sfnt/woff2tags.c": "02c3c39d125d366d4b73e270154c5d6be4165146a9e3201b43a3892aadbb8d4e",
+      "userland/libfreetype/upstream/src/sfnt/woff2tags.h": "24bf63442a6ced7d379f5a43457e73acd14452fea737dc8a747103f85a7dd0a6",
+      "userland/libfreetype/upstream/src/smooth/ftgrays.c": "232214dee3690bffe6eeb514f16b7f9a7ad5f9747a7a0213fdd752ed25e17649",
+      "userland/libfreetype/upstream/src/smooth/ftgrays.h": "f33954dc06f13a9582c4867db24cdcc5f2842b6628ed2ffe4e0a87f716c0c5d0",
+      "userland/libfreetype/upstream/src/smooth/ftsmerrs.h": "80b146b8653a9ca6986e3a6fc65ddadb8397956ad048bb8593d8e419bddde28b",
+      "userland/libfreetype/upstream/src/smooth/ftsmooth.c": "5ca3619bdd112ba9e58bace1c68a6315e4bf4eda99be63e4ad2bdb4b1adbf4a4",
+      "userland/libfreetype/upstream/src/smooth/ftsmooth.h": "e770884ca1f5e248ec6a90613db8508d8959b03ca6bd1f678d73c4a4b9f8e783",
+      "userland/libfreetype/upstream/src/smooth/smooth.c": "37c9b7a09fe76c9b51159a98c9ff665860c2d25eea38816195c793fc8b2a6596",
+      "userland/libfreetype/upstream/src/truetype/truetype.c": "b99552a6f23dc7e6eb776e4ac17faaf778617981b486046bd121495330f1192e",
+      "userland/libfreetype/upstream/src/truetype/ttdriver.c": "fa6d085ad483e9358646cfd05394a0a0be6fa43b82c35915b4917abcd667e009",
+      "userland/libfreetype/upstream/src/truetype/ttdriver.h": "ea74c300c0d3520c14e79065c68be2155e3a26cabe7ce85e3a80ec59f9660437",
+      "userland/libfreetype/upstream/src/truetype/tterrors.h": "6bda477a55a95d767c2f9873c044b8b31465523e9c4b890333206d312c146fae",
+      "userland/libfreetype/upstream/src/truetype/ttgload.c": "0c0d584e998a4c8a5d1c8f898e18d59bdd63e64eef10e199d66a2bb049914cf2",
+      "userland/libfreetype/upstream/src/truetype/ttgload.h": "41a553dc85431295de605e67785ba9b11ffdc67cbeceade458332985027b9652",
+      "userland/libfreetype/upstream/src/truetype/ttgxvar.c": "b5ca576f480437e59f84a31ba2b569c7aadd31871f608034f6ea576340b88e10",
+      "userland/libfreetype/upstream/src/truetype/ttgxvar.h": "23b382b73de0dd46e278c4c6dfbbed6692d250d50d3f1f152f9b8d45e34b60eb",
+      "userland/libfreetype/upstream/src/truetype/ttinterp.c": "13374528272f5ff53f543950bfdf0aa5cc8a10eb19d2755fa770ec9e061ddb02",
+      "userland/libfreetype/upstream/src/truetype/ttinterp.h": "210e2af9d4daa7275befba59a7c2611613796dd8aa3a30a888901631ad14e532",
+      "userland/libfreetype/upstream/src/truetype/ttobjs.c": "c381554e81a00f9d5c430e7c51e1d6c289958867426b021a6165eb12b451922d",
+      "userland/libfreetype/upstream/src/truetype/ttobjs.h": "b7a1be06a29341d7c525fbeb663d09fc4a265dfb155323b80bb88ad8b19b70ae",
+      "userland/libfreetype/upstream/src/truetype/ttpload.c": "668c9627c4634bbb11a6a4f0b616be19826c7ee22af545c45cf5a8dbb90514d7",
+      "userland/libfreetype/upstream/src/truetype/ttpload.h": "75a23ba770d230c894ecea0c2eabe2dac892b151d0ee1560c5fe75227f02667c",
+      "userland/libgarb/cascade.c": "8bf819e82d2dcac81b7876979ee3012a330b008855870314c19a4af674db635a",
+      "userland/libgarb/decode.c": "fef7544050d7917cc6fd576bc1ff421ea0c1ee25f9277c2fe526eb6f1f634f24",
+      "userland/libgarb/dump.c": "419396f55845271833a1ca4bdf9475d7a3ce92cd5742981e3cf61c5864823f3e",
+      "userland/libgarb/include/garb/cascade.h": "c8eddeacb23daace8ecebcb6b41e283e9855c3e0698d411c3a69741e92687f48",
+      "userland/libgarb/include/garb/garb.h": "631ea34fc33711261ba63ad247b27620c30d0cdae1fbb508c316031dfa8e9556",
+      "userland/libgarb/include/garb/select.h": "3e8bf8ffadc1c723bea1619d232d8a1e7a02a62c26aecd026756ff3668ce0bcf",
+      "userland/libgarb/include/garb/values.h": "7c2529a0867c51b4066934b9559a2505dc4316ac91abb5389363dd467a671707",
+      "userland/libgarb/internal.h": "2ccc4b05a5a7ac04eff1468a0166f164d02d51d9a905c1dd532f863ec1f6fe01",
+      "userland/libgarb/media.c": "cfd33e3868d12b3e5ffb0f1656d1ecb441d9df3f9ba6532d340e382e06686f4e",
+      "userland/libgarb/parse.c": "6d0bd4e14a44f1e587e190025199e7503f076dcbf179c829a8d4193e58719d98",
+      "userland/libgarb/props.c": "404b2c4e9d3cc1e03e013798af388b53a920ad4af8726848c50cf69fb8b74f8e",
+      "userland/libgarb/select.c": "ccde2cf54c4985d13eb01492fcf13a0fa58b94902ad6d8b8aabe3f3afcf1ec50",
+      "userland/libgarb/tokenize.c": "3a99044874b1308ab6c1f9907c74523986d681cff8bb9fee6920c595d0e664c4",
+      "userland/libgarb/values.c": "03b6429959b5461989bf01d68b94b4cf9794270a233d71b2c5cb33e0dded2d68",
+      "userland/libgarb/values_internal.h": "80250b6e85326232b18c3ad1be7892798a3942b8e4e086881592708c04f1b824",
+      "userland/libgzip/include/gzip/deflate.h": "2cf3d89954f366dd7abd08f515ae5704df74e5d99487a782b89345374aaf6f96",
+      "userland/libgzip/include/gzip/gzip.h": "4b61f771ccba939cca4ad4d6325dfac1f2dafbfd700e4bdcad75e959b5bd8a81",
+      "userland/libgzip/include/gzip/inflate.h": "279e9435a4b7d360c975726b4b3cc162a47fdebc78b57975c55a0ce1553ac84e",
+      "userland/libgzip/include/gzip/zlib.h": "0b64605e5074fc545f1b1dab9b0101358b9744759f06bfde87aaf5ea67fa96f1",
+      "userland/libhtml/core.c": "21dd209605922bd15af55e761b7e2f0d6937c50ef608c73ad2efb92d7e4519b4",
+      "userland/libhtml/dom.c": "514c470d791f4dea518c5d5710d7f82c020121dc1e3af621bf0bac1dfda4bef4",
+      "userland/libhtml/encoding.c": "54d86d737a5346216e4e4f3e93e36b83d97efc6c5cebd1841663bdba9802268d",
+      "userland/libhtml/fragment.c": "c67ada3d134ca10eebe7a546d0a2d4b9bee8cf2310c414083ff8292bbe2f3b6d",
+      "userland/libhtml/include/html/html.h": "0f504c56469823136b2fb14af2bba87759bbb216088c262b49263cc61ed658ba",
+      "userland/libhtml/include/html/tags.h": "f14e646d8674d47c6865d95a8495b0b199f7729f3c4cd6510093d6d4f821a9d4",
+      "userland/libhtml/include/html/xml.h": "98d32eb22e5ab53ce2e748cd696664a98e9ff2ca43b59d5ad5565b54aa3185af",
+      "userland/libhtml/internal.h": "0cd3ee982077581cfe7665c65eb16550341512f6fc220ac9023a88f5a9df8af8",
+      "userland/libhtml/serialize.c": "17efb634cbcefd791b7469c6e45684f056962c3efe3149b7cd37e27deba7f2ae",
+      "userland/libhtml/tokenizer.c": "0001129e6a5d0a6f92ce2767b4d375c99863220ff62fa57d377f9fd980ad9725",
+      "userland/libhtml/tree.c": "91661a62fc73ea9da711f7c5fbae3798d1f6547be134a241cfe676e7e54167ac",
+      "userland/libhtml/xml.c": "9039810faeacf9f6558c09df940a899d389cb60e3e31147f81729dad8bff023e",
+      "userland/libmath/include/math.h": "8d6062df26ec288091fe21f4a05c1af1af0f02d92cb4bbc34eba87c90feb9bee",
+      "userland/libmath/port/sqrt.c": "06d859e91256509e5df011206f2021f36de4db76f6bdd6541ad8a835cbb94084",
+      "userland/libmath/sources.mk": "fcd0b97414d3fc50d2d95d909593e054e357f78bd7c0f8fab3b7dfa1717536d2",
+      "userland/libmath/upstream/arch/generic/fp_arch.h": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "userland/libmath/upstream/arch/x86_64/bits/fenv.h": "406af96f4d9e50a1191873aa00f3d4c4918065cc791492fad93bdc45640dde79",
+      "userland/libmath/upstream/arch/x86_64/bits/float.h": "de4738aaf93195145476108f536039c28dc572aa34ccf3ce099142266f9007df",
+      "userland/libmath/upstream/arch/x86_64/bits/limits.h": "1cf68647701c5ccf850d6f092f1dbd1460c2b25931699b423cd3b6a98081885f",
+      "userland/libmath/upstream/arch/x86_64/bits/stdint.h": "a901e488e09ba0e5d796d2db619ef834e120e6e3c38de8fb8e763eb148780728",
+      "userland/libmath/upstream/include/endian.h": "4414084736937798abcc075d1f8053e116d873c81dda0908013bfca3331771b9",
+      "userland/libmath/upstream/include/features.h": "6d228e77b88b69f70f9157548b6ec673ffc6b998ce6035fbbee0caddb8442903",
+      "userland/libmath/upstream/include/fenv.h": "9b6d535409cac95bb00e3305f7724af42b7003909a833b7622d6d18d7e650e2c",
+      "userland/libmath/upstream/include/float.h": "d513aa2c48b2d60672ab10dbab0ab80347db9f1b353db4ea3fae2018907964c1",
+      "userland/libmath/upstream/include/limits.h": "d6fb743478f7a8dd27f057db844a806165709641b0d0e78fbf0cabf5c88f1e12",
+      "userland/libmath/upstream/include/math.h": "5559892c51d9625616fde0c4d25609f1e68e0aa3aee090d1842c6f894e63352a",
+      "userland/libmath/upstream/include/stdint.h": "b6e77f1611e56cf499233172cab8bc09c0f7d937f3daa5ad552e1712fc6663e5",
+      "userland/libmath/upstream/src/include/features.h": "9b199f92f5949f23a224995e0e1578b2f1be0e95879fbc1c4abfa2784658490c",
+      "userland/libmath/upstream/src/internal/libm.h": "d5a11757541471030d8f4bf7a39a29de35732ecbb291b2f45bf03296be4f25a2",
+      "userland/libmath/upstream/src/math/__cos.c": "3f0f774aab60a18d7ef935ffdf121bcda17cbadabff14096c614da22e31a42c1",
+      "userland/libmath/upstream/src/math/__expo2.c": "29cc9dd6d656cd0fbf921a8a1aeee81b430558d880194832a8d44d82c8d37d94",
+      "userland/libmath/upstream/src/math/__math_divzero.c": "84aa910bdc5e7ccfed42098c37c44e278aa942d46e5a51d5ee8273336c79e719",
+      "userland/libmath/upstream/src/math/__math_invalid.c": "b56440ed59fa1e1aaaf6bf8b672c8bb71eaf844457906f7773da1d67d7ef013b",
+      "userland/libmath/upstream/src/math/__math_oflow.c": "74669de53bc4b250183cfa262a8a03ee8106f33a83e3aca6b217bafc7363b83c",
+      "userland/libmath/upstream/src/math/__math_uflow.c": "9a841197bbe9ade9bbd684f8bc65424a97c481d37dabb9fa1790bafe7959034a",
+      "userland/libmath/upstream/src/math/__math_xflow.c": "5feafe10347636884a071a5096f912d5ca4a0939844804ca09b88241405648ad",
+      "userland/libmath/upstream/src/math/__rem_pio2.c": "938329e0939cd83ee2185a52154b41242f618d4a6df1b08395f344da33d4f1e6",
+      "userland/libmath/upstream/src/math/__rem_pio2_large.c": "b97f19fb5951c83a0c10506fab35646caefde13bd03100ad2af55ef00af0b9fb",
+      "userland/libmath/upstream/src/math/__sin.c": "f3a37ef9bcfb8a2f9c809d8c7f1aa2c17c8c3319ad7fb2fe7c0a6284ea8859d2",
+      "userland/libmath/upstream/src/math/__tan.c": "e18b65b69fced8dbb2d3ed1a3dc6daea0e9f857f2762f274380bd89a6f89d2c4",
+      "userland/libmath/upstream/src/math/acos.c": "cc6f9017e7e2e0ef01516fa12c68aa63865e6415c90dc039dfce9abffae09a4c",
+      "userland/libmath/upstream/src/math/acosh.c": "ceca7bf870102e649afbdf1d78d710a4b1db6014a77394d9a12a0c4746788715",
+      "userland/libmath/upstream/src/math/asin.c": "9302dd0b2f302f7b7decce82e737ed250bae1bcc65c19eaf3d7ec19010892e63",
+      "userland/libmath/upstream/src/math/asinh.c": "a0a31b87d1f7b11c43500602fc537097c7f59a483c27a82513944df0b1d6c4f3",
+      "userland/libmath/upstream/src/math/atan.c": "1cffb67a65456ae0bc5f07a94df04a4f18ebc1ac0bffe3219250c4e0555ee01d",
+      "userland/libmath/upstream/src/math/atan2.c": "a5f94b09b10b4e72bb15d94ae403c9dfd27d7ad881ecd729000004429acfca63",
+      "userland/libmath/upstream/src/math/atanh.c": "1bfda6f427e5cb7e350cfc2ab08e022968f5d13e9728d35cbe7d601e9977d44f",
+      "userland/libmath/upstream/src/math/cbrt.c": "af442893d4048c0eb485b93b5628792fb796d45ffc0f88c682041366c7da611d",
+      "userland/libmath/upstream/src/math/ceil.c": "f616b50efc61eb35f946308b222f5f83ca707b4efaf7ea175969a5b62d2d6637",
+      "userland/libmath/upstream/src/math/cos.c": "3a74e054057d636fa494bdd76a53a40db5cee618264f6ab31cb0538ba63c6bda",
+      "userland/libmath/upstream/src/math/cosh.c": "5e5ed87e1a80e68734f4c87a4907a55f50a54df58261698aa94d5cb3276a3d43",
+      "userland/libmath/upstream/src/math/exp.c": "7db56f21ca9b8915d36dd5099b707aafeb6a736eae798e19b76b074764e75f34",
+      "userland/libmath/upstream/src/math/exp_data.c": "c55dff64e369fe816cd8ce367064989bb119f85783599680d1a329031c660689",
+      "userland/libmath/upstream/src/math/exp_data.h": "df77fca837edd02b260dd09a2914202775909ae67a059218ae38cfab104e6d16",
+      "userland/libmath/upstream/src/math/expm1.c": "c4764166cea03420f2dfc1840a6a7615934192d851b96d5d2dcc321cc1e39460",
+      "userland/libmath/upstream/src/math/fabs.c": "99880a7802d67077fa54a2bbb5d3388cf42b00c96d3e2b1c16d63f2918157754",
+      "userland/libmath/upstream/src/math/floor.c": "b9ccb9363719a84be218d60c56717f4fb0234e170c305e36ce21c30e1f42f8e1",
+      "userland/libmath/upstream/src/math/fmax.c": "70d8ee2a5c78bf10a45a5e39ab346a9527867cfc16246d162e07c39d29e77c1f",
+      "userland/libmath/upstream/src/math/fmin.c": "8f174565b041802c3ee1b141caf2c7240b4ed5f45e920caec11c1585682199a4",
+      "userland/libmath/upstream/src/math/fmod.c": "33fb61093e04783081b9e8f8a8a303456b2f919c215cd0c378c1ed0acf41934c",
+      "userland/libmath/upstream/src/math/hypot.c": "a5532b3328310bb3ac9f7cd9074fd26c5fe7288c719c907c5c03a615442f9e7e",
+      "userland/libmath/upstream/src/math/log.c": "a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc",
+      "userland/libmath/upstream/src/math/log10.c": "ef9b4b1f0918cf1fcb797f9fa4d4ffe177bfa27f668d74a41d613bfbcd83850a",
+      "userland/libmath/upstream/src/math/log1p.c": "c76bbf714cd456a9f0de6e2c94853c27e7865581a2edfdef6d1f861739bbcb46",
+      "userland/libmath/upstream/src/math/log2.c": "281e4fc0f737419e245019d8bc8a8ca53032c2d88c31d08561e9e59dcb4b4640",
+      "userland/libmath/upstream/src/math/log2_data.c": "5a62bb213f19dc1364cddb612e3d13831e382f5ae6f7fafd7064362f53478dfb",
+      "userland/libmath/upstream/src/math/log2_data.h": "b56e1a56f73a8700caa9787cd399fecf7f96038af56c2a590aeb6f0f8662ea8e",
+      "userland/libmath/upstream/src/math/log_data.c": "e96bcd99d88fc57e0f3686299014f4b949a6212603ce237f39e16cedc155617a",
+      "userland/libmath/upstream/src/math/log_data.h": "a8dced6f0821f30cad040ba326b03e419fbe0a750ed8f3b0d7145992bee4bccc",
+      "userland/libmath/upstream/src/math/lrint.c": "ef099c61a442a79c5e7afc11ddc6915e31022a1b8c1c44d74dd03184f068d02b",
+      "userland/libmath/upstream/src/math/pow.c": "b06f0a08d74fcff8cced7afa2c0e47e301e3e8a19c0de5becdec28cd7b014027",
+      "userland/libmath/upstream/src/math/pow_data.c": "2052ec913f9b4a2170a98a6fcbcd7694f5dec220036b00c36106a2b4b65a4c55",
+      "userland/libmath/upstream/src/math/pow_data.h": "5014345a7958adcf6ff835b5e96afa99dd5a98c40dfe968442288e002b8e01a3",
+      "userland/libmath/upstream/src/math/rint.c": "6f393f377e693f6887c0f6495eba476abc45d2f4127fc93366fc02f1f49e2fef",
+      "userland/libmath/upstream/src/math/round.c": "2349e599e99052603794087193725d28180b5d3466d43d6e6e1b254627bf37ae",
+      "userland/libmath/upstream/src/math/scalbn.c": "a2e766283ed30c2b30c71e01dbdabef58faf92cc9aa84a01c1ce1069b6625696",
+      "userland/libmath/upstream/src/math/sin.c": "24e53a9d85f196f66919cc19247be5480bb607ef38844b1a24bc47c4fe4974ef",
+      "userland/libmath/upstream/src/math/sinh.c": "ab082814c4b1bbad8ea7dcfde1e36167cd72be5ef0e8b3ef3def0e052dd74261",
+      "userland/libmath/upstream/src/math/tan.c": "422d411bac962a1077ae394d14e54313012a6faa3476c20b2a66d3fb3f7a923f",
+      "userland/libmath/upstream/src/math/tanh.c": "7e290e86729cba6ccc8eb1f7db2452736daf1a2a8ce01b210db5787fee5cb762",
+      "userland/libmath/upstream/src/math/trunc.c": "2f2941542db65a5c3a8a6fa952b978a5ff757f8b14ffdaef8ad28e0cafead644",
+      "userland/libos64/arena.c": "3e6cd92a8193ed5cf1be6cb764600472e4d50950a94cbd8ea4d7a19b9aabcd3a",
+      "userland/libos64/bidi.c": "72086277d1ba015badbf4f59e55f9bc446c03224cec57ae9cfd67caa32443f9d",
+      "userland/libos64/fmt.c": "0c13909325eb99ee2300ab0c9686fd3e55a50ea2e2c53852a64d57da06b02065",
+      "userland/libos64/include/os64/arena.h": "ab4fcca946b1156c8f460da9f277b2db9ef36ca0fa54bd9eab68b0f113e2ef32",
+      "userland/libos64/include/os64/args.h": "bbf731e3752ad071935cb455d825fbc365a6c93076011ab053acb6e0c5dff6ef",
+      "userland/libos64/include/os64/browser.h": "c5a06daf292cdd2d802151f956a89910bdc6804e9e532cbc896308909558cabd",
+      "userland/libos64/include/os64/clip.h": "f417f4b54b81485258f4b85da15004a0105fd91538da77edde5961824e0507b6",
+      "userland/libos64/include/os64/conf.h": "45d4b9cae0f196b169cdc972e91523276c15d38dd612aad8f131560ba6aa45b6",
+      "userland/libos64/include/os64/crc32.h": "37d6629bb72e36409731b250a01c4ed3a523cacf9836e17c31ef9ee11663eff7",
+      "userland/libos64/include/os64/date.h": "d06f31bfa63f729c3fce2456d3b13b776eb134137bbe3ddd4629508ddcc2e1ea",
+      "userland/libos64/include/os64/decoration_prepare.h": "0490fce0de6e3eaf4d23a4e6bbcf4b45bc71be6207febccef40007dce27e0172",
+      "userland/libos64/include/os64/decoration_startup.h": "3b573040350c61f1e157da3107481618fe62b03319c335cd9b42fa8cc8ca10fa",
+      "userland/libos64/include/os64/dial.h": "84989d3558d5eff4a387582332a1a80bf62a82fb81a40f614427d8e54662abcd",
+      "userland/libos64/include/os64/directory.h": "f8747fec7470d2912235d645e9a9c343d8ec7a536bf0e6cd4962da88d25c068f",
+      "userland/libos64/include/os64/draw.h": "0904c029d55d3acaed140cb205b8d3cacf6f0b749bd50d78603bc226d5c95f5e",
+      "userland/libos64/include/os64/fmt.h": "b4b8810d70b141d795863198998c9c750d1df385273d55285885c5fde31fea12",
+      "userland/libos64/include/os64/font_adopt.h": "6fc28b87904d0e08c0af3deff97e75ff9026cfe6adcd8885ac4c5878f6f6f7c8",
+      "userland/libos64/include/os64/font_backend.h": "162f40ceca018627fa63dc1344e90ce5378e63c468bb618bb72d06ef9cc6e0ac",
+      "userland/libos64/include/os64/font_config.h": "0728d09471c62b6288a98181dc7a49305ae4b9a0fc33932c7388fef24a59fc0e",
+      "userland/libos64/include/os64/font_provider.h": "8c794e3ac6bd2da2546e5c9520e2306329256d517758791a36df12a1b0059f73",
+      "userland/libos64/include/os64/font_psf1.h": "9143f73f22f98a3190e8310b4cc042b877514c6ef0d4caec8f93b1f1ac9e518f",
+      "userland/libos64/include/os64/font_psf2.h": "b1fb14ab146c60de325bb312a1314555fe74a7e548b294d60657f117322cb085",
+      "userland/libos64/include/os64/font_settings.h": "3bc0701bc063a35a4b9cace1adde5e352df916591986edbe856d575f88d36486",
+      "userland/libos64/include/os64/geometry_backend.h": "57aa7ed5b2c8d7ccb6159d0f501d97dd1fb3c72b7accfe3a5884ab693ae301e4",
+      "userland/libos64/include/os64/io.h": "e5240b209c9959230617189e7884562598957d58fefb9d01e2c64692ea496dd9",
+      "userland/libos64/include/os64/klog_read.h": "e171493028458104854d8b1692de15a57f75f6bb247db3302be5af238f049a89",
+      "userland/libos64/include/os64/launch.h": "2638f6a7926a67a4617a1ec1012cc75ab14b793f120bc7a103838d604365b2c3",
+      "userland/libos64/include/os64/lock.h": "1c0a3d128ba5c1b701c185e3f1723293f3a5d318b006f09b25d61532511d4745",
+      "userland/libos64/include/os64/mem.h": "61e73204edd1b38ce56087b644295f2a22779263f47d260f2c8f6a67811415f4",
+      "userland/libos64/include/os64/menu.h": "b6846f2fde1342d77d0e70dc58755a0ce0686d5a93ab19d719680efa53c0a12f",
+      "userland/libos64/include/os64/monitor.h": "bfb082eda79c3e4a6c5b309d1e6faef94b6c1493561a81c1a588b802914ef5b3",
+      "userland/libos64/include/os64/monitor_io.h": "3b3ea5038e546d1553578922b02758a43fcbe8f988a0fc65fe9c52b1f12c3c30",
+      "userland/libos64/include/os64/mouse_settings.h": "86c13e3f7deba0aab0aab670530f52cf9ea48a7dfe3acc841353ffdfb24ff2de",
+      "userland/libos64/include/os64/os64.h": "8831d652900bb0580fe3a12ecebc07873c01586e392aea06fd76a590cf11dbf4",
+      "userland/libos64/include/os64/proc.h": "012df92b7526948a581f5247572b151aa59ef96e675ce4cc72b877c37e67fa41",
+      "userland/libos64/include/os64/procfs.h": "c58868fb8fe474e561e683d7c2d11f0597032b8e20690e9b8fc5354183dca581",
+      "userland/libos64/include/os64/resolve.h": "db05020d495347c4d28a24c41668da152db05c801f3db8f599194f7207c3f751",
+      "userland/libos64/include/os64/runtime.h": "3994d8850cd6500d8f249396cee8ad39418bfe6bad5999e871860779d6d4d733",
+      "userland/libos64/include/os64/slurp.h": "33b3ec6f695eb71bfc56d28e893f9140bfab95e282835c05a63ae153d54a3883",
+      "userland/libos64/include/os64/str.h": "2fe1bd6cc256aa8f7e8dfbbe0d8a3feba53638283f374fd06e8a99f2d8b8e543",
+      "userland/libos64/include/os64/text.h": "c59200b08fa60c4e6fc0b27bafd04e2edd9350514a6e9e5fed04683df6700279",
+      "userland/libos64/include/os64/text_draw.h": "48b6a905dce2bbbebc3bc1fd6ae55df8cc06b49d1791fa9192df6321c1fe8918",
+      "userland/libos64/include/os64/thread.h": "1fbf6a62e2fbe8f537f99c957c315464f021dd0f460183043646c0c0eb476ea5",
+      "userland/libos64/include/os64/ui.h": "b8add72219051bedc0c7781fb3878604b4055efb8ab11e1eb68661004a765afe",
+      "userland/libos64/include/os64/ui_action.h": "f66c13d2041421b85d033062af0d03bb4f017050e65b1d31e9fa3b2b6aee6666",
+      "userland/libos64/include/os64/ui_browser.h": "0e1b5ebb32ef507e98d4fbf0a740d1c84d64c52815ad53576ecad5e7b069b341",
+      "userland/libos64/include/os64/ui_data.h": "6059f38c1354c05936d2cf6021deaf915254367264aee0fd491e4ec28994bc9c",
+      "userland/libos64/include/os64/ui_dataview.h": "0bbb09234ff6828a800b6f24542d50f66cb6ec1e7d030ee5dea6a8366024d9e1",
+      "userland/libos64/include/os64/ui_dispatcher.h": "c05651c28527c36726dcb45ad586ed84a997f375b7d43b43c6ef35caee18e7c9",
+      "userland/libos64/include/os64/ui_file_dialog.h": "33296d0005ec7db32e15e8d975a042742199c282ad5ccbc0de8908571641e145",
+      "userland/libos64/include/os64/ui_icon.h": "aadb714f05ccc75f6b4e736ab61f78e9e96e3b8957e1f0bfed9570b32c67facb",
+      "userland/libos64/include/os64/ui_menu.h": "3a49651f25f67bc5b6157da2ede6fe36ab9a32c1a8046b9bb58d0ea5c2020917",
+      "userland/libos64/include/os64/ui_result.h": "87f9a45a1694397b9e59ae159437e60e01dc95d986aff215102f2aa0f4024c57",
+      "userland/libos64/include/os64/ui_settings.h": "13920deea8e9a375509c1960ab7586f454be5777919c6b24e41e4754ecb32986",
+      "userland/libos64/include/os64/ui_status.h": "44c7ce77133110e484e575ed485e264cb25cdcf4fbb7501e8d1c74761ea6a096",
+      "userland/libos64/include/os64/ui_toolbar.h": "d160acacda2dade14033d46145ace20035f006717117bac18d3b60fa643358ef",
+      "userland/libos64/include/os64/ui_window.h": "c50891fcbc94c2e00e9814f1c818a6e929e6ac9880d89b78f5e747df987d161e",
+      "userland/libos64/include/os64/url.h": "8fc29945a0efa1068cecceb9ff9b048c852b394f3d1045d33991ad3955179a15",
+      "userland/libos64/include/os64/walk.h": "60dc4a7570ee8a7ad3283bc49e9d546a427b6a8765fc26a32c424f7fe8e922fc",
+      "userland/libos64/include/os64/window_placement.h": "bce7c2b63bac174f0b5b756fb7ea48c87430112e5499743cb0d42d7e8e2d24b9",
+      "userland/libos64/include/os64/work.h": "4c67b2e8f08a6007408aca7c7cf04b95509aade8e84ee93c1cf03c80fbb55702",
+      "userland/libos64/str.c": "62e6a7c6ad63ed4a5cf6e3bae4721f9d27b40a688539fe5f6366c6d4cf35702c",
+      "userland/libos64/text.c": "7e6cbaca45efae05d2810075cdae30b4fbdad93abb9ab6bb01a2cc2ce1739568",
+      "userland/libos64/text_bitmap.c": "95211dd0ce4538e00ebee9da85501d6f1a811f267210d150cb1e2992a38532fc",
+      "userland/libos64/text_cache.c": "eb9fb59743183788b6b800af906e11dac13cfc904187f0cd41d76e32610ed00a",
+      "userland/libos64/text_decode.c": "01cdbd2d7c1b33fe8d20a00442d40745722535202adf1ab3c1bbeabb0f02bcc6",
+      "userland/libos64/url.c": "65342cc9a617ebe21bd1be6de25c26b0776389bbed6ca55d272b02f5ab3be8fe",
+      "userland/libpage/activate.c": "582241ce8e80181e290603f778aac545df5cb38995ecb9b4dbf49d1899c87680",
+      "userland/libpage/core.c": "92dacdbb155644e6606a2a6ba1c8f99c58dedbc06666d976423ca255b86b1410",
+      "userland/libpage/encode.c": "3c76ded7616a0dd9b85c4c40bafa6c4226c321c36aecbfdc86d0800c7a007344",
+      "userland/libpage/include/page/page.h": "efa81755a3014250a601ffd55315ee1b481f4c949858046c243264b3e968d10e",
+      "userland/libpage/internal.h": "9fb22a52da2da6a3ffc0d9ca69f2596bec9529003c16c412f0cca054c055427b",
+      "userland/libpage/number.c": "c7a6af3631abcef279e7f6f36d3d5d12758e80c8733d1209b6a7b4109c7e89eb",
+      "userland/libpage/range.c": "7971f427d8dee65e171e1488c4f858800c3f3bae40d527e1b12eab5e73fc2cba",
+      "userland/libpage/refresh.c": "2ae3fc6ab696617085e0e47df824992a5df4b0994719631bd3f7dc34a793247f",
+      "userland/libpage/resolve.c": "555a906142d0cd85b70e645a69116b06f0e33be1fc10e207136afd5be6383ac5",
+      "userland/libpage/state.c": "fd4014c76832df78e85df6f961382b1eff8b6507b26be1161adac0beea663cbd",
+      "userland/libpage/submit.c": "9ab2fbfa07ba6d89046a2c50fdd455584f6ad708caa8f17306d8caae7cd64649",
+      "userland/libpage/upstream/ryu/compat/assert.h": "64e9a464159a5aeadd9ffe58b3787da004a17edde736073ce267dd9d53125f38",
+      "userland/libpage/upstream/ryu/compat/inttypes.h": "dd1e65241020275e480c9f023566ad3d27cad42dfac5d4d1b9c176732d1eede5",
+      "userland/libpage/upstream/ryu/compat/stdlib.h": "6e8003b84f2448642d2e6f3fdd08a650ad9b7a94008c561684c6d79c2f13dd1a",
+      "userland/libpage/upstream/ryu/compat/string.h": "31c5620d4bb39e4e90e5d324a6845ba93cd07253b305de94570aac599b807a3b",
+      "userland/libpage/upstream/ryu/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+      "userland/libpage/upstream/ryu/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+      "userland/libpage/upstream/ryu/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+      "userland/libpage/upstream/ryu/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+      "userland/libpage/upstream/ryu/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+      "userland/libpage/upstream/ryu/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+      "userland/libpage/upstream/ryu/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16",
+      "userland/libpage/value.c": "9f8aec2a2e610456745a5c40f29674a22e6f33e03e1b4263bcdc4ab75df55f5c",
+      "userland/libsvg/bounds.c": "32e5b1d8827b3f1fe35e621806919d8f7e8f55462d644c4b6946152dd5e39f3a",
+      "userland/libsvg/core.c": "25fa06819e7ae710708d973124e318f66495fb36fcc0e730913a82c61ee1145b",
+      "userland/libsvg/geometry.c": "65aa60b844874c8ce46b4e880ee413766234419e6c0eeba33e68b53d78f4a039",
+      "userland/libsvg/include/svg/svg.h": "6c61b844872120bb3f4a579648a96732aa2b69762144db1659dd4e31e2400d35",
+      "userland/libsvg/internal.h": "1c0c6eabcaa27803002e89db70e23f8e04e560faebc792a30c1d3a2a6a0a2b41",
+      "userland/libsvg/library.mk": "f39fc7276f89b89f40ac1ad114db071ad715fc0ee1b3e2c71da22f8d4eee2ea6",
+      "userland/libsvg/paint.c": "a3f51024ac9b2fa4db770b45904155b63c37d838db9e18b17071793a8d9d6e2c",
+      "userland/libsvg/path.c": "78ad6a3c53936b793f9008de069663a3f84980a148c58a725c606dac3a2b18b6",
+      "userland/libsvg/scene.c": "d7caaf8dd63880cc25850a2a02901e5467ee963c8d209d6b31c0ff5f88730b59",
+      "userland/libsvg/stroke.c": "60e693bb95a26511323686091acf4024143a41e81b2f0f82bb823c0a6534f3a3",
+      "userland/libtls/include/tls/tls.h": "f72a2d77f09a0030121e585d6b77a8e43819bfbe68f7cecefe8d497123659084",
+      "userland/libtls/include/tls/transport.h": "eb8c3f2c1c387825f118d90be1eca3fdd930748ec32e2c2b2c2716a4b0196142",
+      "userland/libway/include/way/cache.h": "da687c2715855ba58c55661aa597b0172e29b22341c6e1928ac88aa0933af088",
+      "userland/libway/include/way/jar.h": "115fa2832cfc2fcd1162584b0e07ae3878f3f77c7df8a0bccc7e7b8a73aab975",
+      "userland/libway/include/way/origin.h": "17ffaccfdda0f29a817099df77c6178384cf23790e03b23df5ff5e156974effd",
+      "userland/libway/include/way/way.h": "4674c4a32109e4f6fcaf3af5d6a02ed17b9312fb2fc90a312727f04bf55cc7e8",
+      "userland/libway/origin.c": "1058e353e7c6e977507529afa8fd3fcc1ea43f7b9529c8b24f42ed17dda317f3",
+      "userland/libxml/include/xml/xml.h": "01f5974f5f6014d3f4a13a0672053aef4266a6b06db518b1ad183af7d8a1bd5d",
+      "userland/libxml/internal.h": "eb4e2f45ded150e6ee2680a2eae81e81d6146ec510aef5769cdb18c7af2ea060",
+      "userland/libxml/xml.c": "4adaaf065d7d67cf951567391168035861c699a9931468683c51574a9c5ad2ab"
+    }
+  },
+  "results": [
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 0,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "3c285ccdc59c98455fc9ad809fd7ffe42cee715895dc1e6e16d94d89c16623c0",
+      "svg_sha256": "64743d3e69ba68b0e76c7607aa0bbc5140d1c158bb609e47163c59c452cb839d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 0,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "64743d3e69ba68b0e76c7607aa0bbc5140d1c158bb609e47163c59c452cb839d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 0,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "8fa74444f5de39e80eb9e209af825795938d804b91260294e9c496457bb1eb0d",
+      "svg_sha256": "64743d3e69ba68b0e76c7607aa0bbc5140d1c158bb609e47163c59c452cb839d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 1,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "11d17032dca9cbdbc176fd27edd10759dee530c9f4ca9cbd9054c702f391c397",
+      "svg_sha256": "7cbffc10b08aaafa9483df3784bcc324c3db5f586453e11a647249b5c5b2a772",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 1,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "7cbffc10b08aaafa9483df3784bcc324c3db5f586453e11a647249b5c5b2a772",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 1,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "59080a19912286a878b4402661b5be323a45689dc261e1b55254746176476317",
+      "svg_sha256": "7cbffc10b08aaafa9483df3784bcc324c3db5f586453e11a647249b5c5b2a772",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 2,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "70181e2932dd9cde456a5bb5a83181e2ed0c73cae53997513bc550c742bec4c8",
+      "svg_sha256": "49cac25de1c8a5fe9bad6f9628d0e7cde38c355e4a89b51947332464f3f1f19e",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 2,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "49cac25de1c8a5fe9bad6f9628d0e7cde38c355e4a89b51947332464f3f1f19e",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 2,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "8dc2cdb0bd02b9801808b53f7d4f4da5768edc85a52a944706af3c49d440d56d",
+      "svg_sha256": "49cac25de1c8a5fe9bad6f9628d0e7cde38c355e4a89b51947332464f3f1f19e",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 3,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "2499b74b244a6ef93db6b6fd386274f0ae30e808e18d6b5979a9e98fab656b24",
+      "svg_sha256": "409c671881976672916c745a641101b76142d76077512f97b22a9c42cebd2ade",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 3,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "409c671881976672916c745a641101b76142d76077512f97b22a9c42cebd2ade",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 3,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "c1517d3b0d39d96aad6b913476ba288784472550bd6fd2ae8cad3bcaa6dcd40e",
+      "svg_sha256": "409c671881976672916c745a641101b76142d76077512f97b22a9c42cebd2ade",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 1,
+      "totalPixels": 4096,
+      "sumMaxChannelDifference": 4096,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          1
+        ],
+        "pixels": [
+          0,
+          4096
+        ]
+      },
+      "case": 4,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 17,
+      "source_sha256": "614bdebed376c79792e1caf8c3742b47eaa75869818d997e2184abe7d05e38bb",
+      "svg_sha256": "d27e8193a76dd1e1f4e93557e9871c8b1ecb1394ebe84a5963d38dd515b38ec5",
+      "native_sha256": "1de0f4567ad894889054811336fdc015af8541e40e89181b16bfdfb2e51005f2",
+      "browser_sha256": "f98460cdf598fcede0fbe85cea5144a6024f2557a047c85a43a76110c289597a",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 4,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "81647f439e825a28c635b3479c35c5ec3db65ecbb67c87f144b417a434956561",
+      "svg_sha256": "d27e8193a76dd1e1f4e93557e9871c8b1ecb1394ebe84a5963d38dd515b38ec5",
+      "native_sha256": "1de0f4567ad894889054811336fdc015af8541e40e89181b16bfdfb2e51005f2",
+      "browser_sha256": "18fe3ad02d17d042172ca04b80d9708b11cc336e431cea0ca20cbb526fbe261c",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 129,
+      "totalPixels": 4288,
+      "sumMaxChannelDifference": 53248,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          1
+        ],
+        "pixels": [
+          0,
+          4096
+        ]
+      },
+      "case": 4,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 17,
+      "source_sha256": "94312d20c23772af2315161073d94d5bff385413d9536604324071ccf8107e48",
+      "svg_sha256": "d27e8193a76dd1e1f4e93557e9871c8b1ecb1394ebe84a5963d38dd515b38ec5",
+      "native_sha256": "1de0f4567ad894889054811336fdc015af8541e40e89181b16bfdfb2e51005f2",
+      "browser_sha256": "6ded2c65eca73954a0896033c74118b3404f28774789df2342c0b1d67e4c9223",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 5,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "1ae0c5cac0921af805f352c6d36e0563d06e514a83213d29921c2637cfda3d6f",
+      "svg_sha256": "257dcd05a1652225567535b69daab7aef00d5cb2bf515a5647b5896846a04d01",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "736743558609804454735bf1175546a97bcb5aa238bc9b6fbcb9b30331f3e9c7",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 5,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "113f5b5d4de98bcff4d5132b4f1e762e5065e01672b304f8325b318b0041eb23",
+      "svg_sha256": "257dcd05a1652225567535b69daab7aef00d5cb2bf515a5647b5896846a04d01",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "736743558609804454735bf1175546a97bcb5aa238bc9b6fbcb9b30331f3e9c7",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 384,
+      "sumMaxChannelDifference": 97920,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 5,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "1e774d7a784a107e4dba68fe4ae05487d4aca0d5b9467ab60d30fcd54d12c929",
+      "svg_sha256": "257dcd05a1652225567535b69daab7aef00d5cb2bf515a5647b5896846a04d01",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "b8bddeff49cb85f556a164212f340a8fe2f82947ccf1912135e2f09fc86fcf70",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 6,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "b18f875d1ba1ad499d61c7176fa2738f201d9ed050ecd86b8860d0ec64e6e2f7",
+      "svg_sha256": "d3a6557b3a7f8a7732c5880f5acd34a71fd78b069489932ec30e3e35f91451e3",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "736743558609804454735bf1175546a97bcb5aa238bc9b6fbcb9b30331f3e9c7",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 6,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "113f5b5d4de98bcff4d5132b4f1e762e5065e01672b304f8325b318b0041eb23",
+      "svg_sha256": "d3a6557b3a7f8a7732c5880f5acd34a71fd78b069489932ec30e3e35f91451e3",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "736743558609804454735bf1175546a97bcb5aa238bc9b6fbcb9b30331f3e9c7",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 384,
+      "sumMaxChannelDifference": 97920,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 6,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "ca0cb6687cb42c7008657cfffecb89cd28e6fbcf3295482ab0bd09a469973851",
+      "svg_sha256": "d3a6557b3a7f8a7732c5880f5acd34a71fd78b069489932ec30e3e35f91451e3",
+      "native_sha256": "f86796cba640698d08a3e57a245917605f3e2a227742d98c17e06dca670236fc",
+      "browser_sha256": "b8bddeff49cb85f556a164212f340a8fe2f82947ccf1912135e2f09fc86fcf70",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 7,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "328ff923994eb46c7d6a4726bf881e31177ae342cbc47ad985b61adfc4624c8a",
+      "svg_sha256": "02b4ba57f374ce4797b386d55b33a45d4f4205334d1d3d96a5b76f5789578fb2",
+      "native_sha256": "ecffe2caef4c17dc33efce621abe27b825dc6512551559a4f9e12a11b7b0e98d",
+      "browser_sha256": "048ef8dc0db0c64835a471a634ca5e411122a1b894cc3dcfd08fbcc583d2eb39",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 7,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "58438b4e5c0dfbdb3f3203d43d2de10173a03a92619dc701b6a66583e8c5b7a0",
+      "svg_sha256": "02b4ba57f374ce4797b386d55b33a45d4f4205334d1d3d96a5b76f5789578fb2",
+      "native_sha256": "ecffe2caef4c17dc33efce621abe27b825dc6512551559a4f9e12a11b7b0e98d",
+      "browser_sha256": "048ef8dc0db0c64835a471a634ca5e411122a1b894cc3dcfd08fbcc583d2eb39",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 384,
+      "sumMaxChannelDifference": 97920,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 7,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "5a8fe4c44e8bb0f3862c0c86f563907f24a479aa1a1d26d2cd8bfe6cd6f7a1f0",
+      "svg_sha256": "02b4ba57f374ce4797b386d55b33a45d4f4205334d1d3d96a5b76f5789578fb2",
+      "native_sha256": "ecffe2caef4c17dc33efce621abe27b825dc6512551559a4f9e12a11b7b0e98d",
+      "browser_sha256": "d3b88744b12e0c579935403ab0a4447d863f9d718af51e7252b0d323a1f41ac5",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 8,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "91dc03cba38f4efef68addf3e4f1120d2ee5b4245a094624294429cc1b7c5c61",
+      "svg_sha256": "8fc8db9800096b83894861e4a9fdbbf9c6c550a3b3c2a856f8111a626b2e4564",
+      "native_sha256": "644891eb43e6bed6847dece0cb631d6a58a53ca59babae768a2d9f32763ba9cd",
+      "browser_sha256": "89243484a04ce01afb8e987e498a38bc5f8d55a192eb28dacdb4d5dfe774bc8e",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 8,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "71c552395fb3fed4f4f64599ed9db90878664798b1ab830f485b3de3b8588862",
+      "svg_sha256": "8fc8db9800096b83894861e4a9fdbbf9c6c550a3b3c2a856f8111a626b2e4564",
+      "native_sha256": "644891eb43e6bed6847dece0cb631d6a58a53ca59babae768a2d9f32763ba9cd",
+      "browser_sha256": "89243484a04ce01afb8e987e498a38bc5f8d55a192eb28dacdb4d5dfe774bc8e",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 8,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "363b23ef86a70e4258c37d5b75d93fa5b4833b027fbcf58385339e5a44c4ea97",
+      "svg_sha256": "8fc8db9800096b83894861e4a9fdbbf9c6c550a3b3c2a856f8111a626b2e4564",
+      "native_sha256": "644891eb43e6bed6847dece0cb631d6a58a53ca59babae768a2d9f32763ba9cd",
+      "browser_sha256": "5ea70aaafeacf0844e48e3ef20d1c690ae80888c3267a15005c32118b93a62c5",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 3072,
+      "sumMaxChannelDifference": 783360,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 9,
+      "kind": "actual",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "905dd240451189d3cba78916dcc508530bf0e4c7da7e01753a47c410d411228f",
+      "svg_sha256": "b0e79ac4f71c33a8826334931a4f4c5d63d1a325aa4c9662f7ede8f93e022c58",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4d9287ff7617b0e39f4413986cd7f8aa259f4ad31de3553e1eeae76b73cfc1f3",
+      "as_expected": true,
+      "known_difference": "secure-static native profile ignores SMIL set at 0s; Chromium image mode animates"
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 9,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "b0e79ac4f71c33a8826334931a4f4c5d63d1a325aa4c9662f7ede8f93e022c58",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 3216,
+      "sumMaxChannelDifference": 820080,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 9,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "1d9ed3383acf2a99554d6ad3534516e3ce22de90e622004be4d566bf8dbab9d6",
+      "svg_sha256": "b0e79ac4f71c33a8826334931a4f4c5d63d1a325aa4c9662f7ede8f93e022c58",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "8f0c42641fd0a238ed2cec9adbf9d4901eda90c33becbf57a4faea523145838f",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 10,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "a910a34999b1d4dc4836fd3e267c39b5528ff1411e30e4b30edeb87b756634f3",
+      "svg_sha256": "ab7182d343d044c1d0846395d0784e0338a80ac4b81c09351a8f0af82b9b9b4f",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 10,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "ab7182d343d044c1d0846395d0784e0338a80ac4b81c09351a8f0af82b9b9b4f",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 10,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "8b0fda96fc98abb0796de34c1f14f7f22e86a3bd8b4048e58212b3a2912a7da7",
+      "svg_sha256": "ab7182d343d044c1d0846395d0784e0338a80ac4b81c09351a8f0af82b9b9b4f",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 11,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "fb8681a62e3e8842ed9e0ada6870c68027c8f51ba48b7fa700299c8fe6bf4858",
+      "svg_sha256": "5ddceaabaaef711b1630820ef528bf91c8b89d3364a9b72c417b8ff455b1ea74",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 11,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "5ddceaabaaef711b1630820ef528bf91c8b89d3364a9b72c417b8ff455b1ea74",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 11,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "ab03743b57c51477c5734a85125fae900aee7567b9f50cb049cbedb74897855d",
+      "svg_sha256": "5ddceaabaaef711b1630820ef528bf91c8b89d3364a9b72c417b8ff455b1ea74",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 12,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "42d2b029c27763da29cd1440ae7ae1c769a1550afe71e4fdf709af540ea4e2e1",
+      "svg_sha256": "2b56777931ba3cfb948b17e30e06174675199ceeb1ee11f95800211a970717bc",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 12,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "2b56777931ba3cfb948b17e30e06174675199ceeb1ee11f95800211a970717bc",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 12,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "b9cc5eae77551995b2a2b1c1d2f32bea7afa52db9b894a41c9a33f6e6f3cf374",
+      "svg_sha256": "2b56777931ba3cfb948b17e30e06174675199ceeb1ee11f95800211a970717bc",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 13,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "fb666185c566f90cf6060fee3a93908dedaad13bbe74b66537ca396df6ee79f9",
+      "svg_sha256": "1979c6039b3065a66a6f5d95d203f3382d278e09ee57e9ce2ed1d182e41397da",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 13,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "1979c6039b3065a66a6f5d95d203f3382d278e09ee57e9ce2ed1d182e41397da",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 13,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "c1a96869752682cc19dc50eac7fac70d98adff025a9406343703f14266aa8937",
+      "svg_sha256": "1979c6039b3065a66a6f5d95d203f3382d278e09ee57e9ce2ed1d182e41397da",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 14,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "f01bd13a6dd95a185f2117d40fd71c2f69e086b4d52ca9d1ca1ed54319e7d528",
+      "svg_sha256": "7524f97acc27780a0e3dd8c426f6a4f03f4b16e78e35726f4e7779b290c7594d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 14,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "7524f97acc27780a0e3dd8c426f6a4f03f4b16e78e35726f4e7779b290c7594d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 14,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "74a182dce5d75337254f892c4ce25d8fe3b631c7175f0123b6dbf386aa35ff31",
+      "svg_sha256": "7524f97acc27780a0e3dd8c426f6a4f03f4b16e78e35726f4e7779b290c7594d",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 15,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "5ad4c44a97c78d3e9cdda912c7786707b92d334bbb658f5c762448d12f885a93",
+      "svg_sha256": "99ae1bf50d5397c13047a8dfcd1b40c5d92ec15f96fab3bb704882dec483f0b3",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 15,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "0a5c1417b6ca1c7355a38fd9cb4530d1859353fc683cfe218abe02a9ca52ce66",
+      "svg_sha256": "99ae1bf50d5397c13047a8dfcd1b40c5d92ec15f96fab3bb704882dec483f0b3",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "4f0a0b31ba9b662b4f9e3e37340196fdfe1b4041ebe321709082894041ae669d",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 15,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "504ad22b29b8b4fce9bd2b34ed46c23351e9545eab3edd5d3bda1cc02a306884",
+      "svg_sha256": "99ae1bf50d5397c13047a8dfcd1b40c5d92ec15f96fab3bb704882dec483f0b3",
+      "native_sha256": "d644b5948d000ae1003f593a27e096c9c3af6dc27fa58c46cab7de3a83b22930",
+      "browser_sha256": "9ef6915c6382a5f30113fc04c9422ce2da999f8a3d728575283a0ac4ecb57a29",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 16,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "520357ce70ce1ce034b1fc689226668234117d248cba19e3af2bc06185c8ba65",
+      "svg_sha256": "ac20566d8878d8ddc9d911ac7492876e788cb3a33346339571c102d73540444c",
+      "native_sha256": "88d8422ff1b383373bf4e629f5b98251f61ef2b7fb9a15c5e7c438bf65baed13",
+      "browser_sha256": "8fc35aea06c75be9ecfcf0f217a5870d7cc1252bf1d0037fe4b3e56f35cecf62",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 16,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "cfb81c9428906b1c72294e62b79ae0df277de4f06cd55edc3a7252e3febba73b",
+      "svg_sha256": "ac20566d8878d8ddc9d911ac7492876e788cb3a33346339571c102d73540444c",
+      "native_sha256": "88d8422ff1b383373bf4e629f5b98251f61ef2b7fb9a15c5e7c438bf65baed13",
+      "browser_sha256": "8fc35aea06c75be9ecfcf0f217a5870d7cc1252bf1d0037fe4b3e56f35cecf62",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 16,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "dc9eb5294b2ed7c3995dcdf9a3102c596a00ff9b8e62c45455075c07f8f2a8d4",
+      "svg_sha256": "ac20566d8878d8ddc9d911ac7492876e788cb3a33346339571c102d73540444c",
+      "native_sha256": "88d8422ff1b383373bf4e629f5b98251f61ef2b7fb9a15c5e7c438bf65baed13",
+      "browser_sha256": "00270f33122450fb154668f921647f311fa9e4c0c31c0b8cf62fee3a1c7e26a7",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 17,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "a8d0dacc0931204648c7febd868f11fa46c19f0350cfc5d4803325f809f3103e",
+      "svg_sha256": "b09c28fb1c4d7af51859759bc8d7f48b397ff33a61dd0f8612129b0800a8f764",
+      "native_sha256": "f3cf584c2f9bab7d706a5f0303863471f3f6c0af75bc19b10068fbfee83daf66",
+      "browser_sha256": "566f66d6cab8e8df57c1b9a03cfa5d41899ca52f5ad4ea427ae867e827585a64",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 17,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "71c6642ba94390ece0817bd313e378209da9e32c9fd7afa5565ac91947d12a9e",
+      "svg_sha256": "b09c28fb1c4d7af51859759bc8d7f48b397ff33a61dd0f8612129b0800a8f764",
+      "native_sha256": "f3cf584c2f9bab7d706a5f0303863471f3f6c0af75bc19b10068fbfee83daf66",
+      "browser_sha256": "566f66d6cab8e8df57c1b9a03cfa5d41899ca52f5ad4ea427ae867e827585a64",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 192,
+      "sumMaxChannelDifference": 48960,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 17,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "74cbb1ef3717db410c06c957ea2a1e6721ffc9f2996497c47fc5c41932d2a9fb",
+      "svg_sha256": "b09c28fb1c4d7af51859759bc8d7f48b397ff33a61dd0f8612129b0800a8f764",
+      "native_sha256": "f3cf584c2f9bab7d706a5f0303863471f3f6c0af75bc19b10068fbfee83daf66",
+      "browser_sha256": "540f28964a7b60b408e435d291e0ed3d0809a575d44c27ad47ed5edc5f7abcbc",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 18,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "82097fe3273d4bf9f0112d0704c324576007e21e72b3402557677f10c5aa7eb0",
+      "svg_sha256": "c2056a01d436a62a393fb7e2e2b727fe3d11056234ee9c0571321ab982ae4208",
+      "native_sha256": "572779518387019755685496e33014e9590f962e532167879987f95cb2a3f02d",
+      "browser_sha256": "5960fec1305666e0c96ab99999aa5e27e8c5d1fc5ee810dc80dcb37d45e434f8",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 18,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "c189c7301522ab2936eb0624243b716a3f9e83ce16928db5d773b0fe2fe80e3b",
+      "svg_sha256": "c2056a01d436a62a393fb7e2e2b727fe3d11056234ee9c0571321ab982ae4208",
+      "native_sha256": "572779518387019755685496e33014e9590f962e532167879987f95cb2a3f02d",
+      "browser_sha256": "5960fec1305666e0c96ab99999aa5e27e8c5d1fc5ee810dc80dcb37d45e434f8",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 384,
+      "sumMaxChannelDifference": 97920,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 18,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "bffdfa2b34eb7ff4bc44cdcd056783736b3804b95786c242ce6bd78602dc2fd6",
+      "svg_sha256": "c2056a01d436a62a393fb7e2e2b727fe3d11056234ee9c0571321ab982ae4208",
+      "native_sha256": "572779518387019755685496e33014e9590f962e532167879987f95cb2a3f02d",
+      "browser_sha256": "13a74f2c3a60b14b73a1af52a510c4ade81e5255915bd3a0031fdc04dea99ac5",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 19,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "041ebcff12e49b5bcd2a5210072fc80c9bb0119d74f7052b6da692f0b17074d7",
+      "svg_sha256": "78012a9324ec3490cd68d797a894663ee33c93b8d6b7003db91968f7ac51b17c",
+      "native_sha256": "04a2d4f241badd07616317dc28ddc914ecc8f26e6aef3eeab659e9bcf4f3a109",
+      "browser_sha256": "832e5409555a978abff0e46ad7d439cade07fe23466626ba09d559859f983179",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 19,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "f180a0c2ebedc105933e79188387d869748a5b8c64e37a45d50ddd8719c5d13d",
+      "svg_sha256": "78012a9324ec3490cd68d797a894663ee33c93b8d6b7003db91968f7ac51b17c",
+      "native_sha256": "04a2d4f241badd07616317dc28ddc914ecc8f26e6aef3eeab659e9bcf4f3a109",
+      "browser_sha256": "832e5409555a978abff0e46ad7d439cade07fe23466626ba09d559859f983179",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 288,
+      "sumMaxChannelDifference": 73440,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 19,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "39120f9c4d0093f4eab7cbfc35d5227bc360a3b321696016813648c35b965fd5",
+      "svg_sha256": "78012a9324ec3490cd68d797a894663ee33c93b8d6b7003db91968f7ac51b17c",
+      "native_sha256": "04a2d4f241badd07616317dc28ddc914ecc8f26e6aef3eeab659e9bcf4f3a109",
+      "browser_sha256": "f464d62e4d0b8b82f3a5d4dcbd706b6e29f323ecbe43d3287287ee8b1507dc86",
+      "as_expected": true
+    }
+  ]
+}

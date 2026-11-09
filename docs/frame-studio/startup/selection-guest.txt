@@ -1,0 +1,4 @@
+framestudio: ready content=1240x840 title=24 buttons=4 generation=0
+framestudio: Load OK name=Blue grain bytes=208424 generation=0
+framestudio: startup decoration result=0 generation=0
+framestudio: Apply OK generation=1 font=30 buttons=4 finish=2

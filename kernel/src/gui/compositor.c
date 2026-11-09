@@ -1,14 +1,16 @@
 // compositor.c — the GUI compositor daemon and subsystem entry point.
 //
 // The pipeline (per frame): drain input → route events → recomposite damaged
-// screen regions into the RAM backbuffer (scene layers bottom-up, cursor
-// last) → flush only the damaged rects to the uncached hardware framebuffer.
-// The backbuffer is the canonical screen image; the framebuffer only ever
-// receives finished pixels, which is why nothing can flicker.
+// screen regions into the RAM backbuffer (the scene, cursor last) → flush
+// only the damaged rects to the write-combining framebuffer. The backbuffer
+// is the canonical screen image; the framebuffer only ever receives finished
+// pixels, which is why nothing can flicker.
 //
-// Scene layers: the desktop surface (bottom), the windows in z-order, then
-// the mouse cursor. The cursor needs no save-under trickery — recompositing
-// the damaged region rebuilds whatever it covered.
+// The scene is the windows in z-order over the desktop surface, and each
+// damaged pixel is written by the one of them that can be seen there
+// (OCCLUSION.md); the band, the switcher and the mouse cursor go over it.
+// The cursor needs no save-under trickery — recompositing the damaged
+// region rebuilds whatever it covered.
 
 #include "gui/compositor.h"
 #include "gui/surface.h"
@@ -16,6 +18,9 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
+#include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
+#include "os64/damage.h"       // the damage list's rule, shared with libos64
+#include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -47,10 +52,75 @@ task_t *kGuiCompTask = NULL;
 // ---------------------------------------------------------------------------
 // Shared GUI state. Everything guarded by kGuiLock is touched by client
 // threads (gui_window_* calls) and the compositor. Compositing into the RAM
-// backbuffer happens UNDER the lock (sub-ms; keeps window lifetimes safe);
-// only the flush to the slow uncached framebuffer runs after release.
+// backbuffer happens UNDER the lock (keeps window lifetimes safe; /sys/gui's
+// composite line says how long it holds it);
+// only the flush to the slower write-combining framebuffer runs after release.
 // ---------------------------------------------------------------------------
 spinlock_t kGuiLock = 0;   // shared with window.c / gui_client.c via gui_internal.h
+
+// gui_lock's counts (gui_internal.h): one row a site, and who holds the lock
+// now and since when, so gui_unlock charges the hold to the site that took it.
+static gui_lock_count_t s_lock_counts[GUI_LOCK_SITES];
+static gui_composite_count_t s_composite_counts;
+static gui_lock_site_t s_lock_holder;
+static uint64_t s_lock_since;
+
+static const char *const kLockSiteNames[GUI_LOCK_SITES] = {
+	"publish", "composite", "damage", "ring", "wait", "poll", "window", "glass", "other",
+};
+
+const char *gui_lock_site_name(gui_lock_site_t site)
+{
+	return site < GUI_LOCK_SITES ? kLockSiteNames[site] : "?";
+}
+
+uint64_t gui_lock(gui_lock_site_t site)
+{
+	uint64_t waited;
+	uint64_t flags = spinlock_acquire_irqsave_measured(&kGuiLock, rdtsc, &waited);
+	gui_lock_count_t *c = &s_lock_counts[site < GUI_LOCK_SITES ? site : GUI_LOCK_OTHER];
+	c->acquires++;
+	if (waited != 0) {
+		c->contended++;
+		c->wait_cycles += waited;
+		if (waited > c->max_wait_cycles)
+			c->max_wait_cycles = waited;
+	}
+	s_lock_holder = site < GUI_LOCK_SITES ? site : GUI_LOCK_OTHER;
+	s_lock_since = rdtsc();
+	return flags;
+}
+
+void gui_unlock(uint64_t irqflags)
+{
+	uint64_t now = rdtsc();
+	uint64_t hold = now > s_lock_since ? now - s_lock_since : 0;
+	gui_lock_count_t *c = &s_lock_counts[s_lock_holder];
+	c->hold_cycles += hold;
+	if (hold > c->max_hold_cycles)
+		c->max_hold_cycles = hold;
+	if (s_lock_holder == GUI_LOCK_COMPOSITE) {
+		uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+		uint64_t us = per_us != 0 ? hold / per_us : 0;
+		int k = 0;
+		while (k < GUI_COMPOSITE_HOLD_BUCKETS - 1 && us >= (250ull << k))
+			k++;
+		s_composite_counts.holds[k]++;
+	}
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
+}
+
+void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart)
+{
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	*comp = s_composite_counts;
+	for (int s = 0; s < GUI_LOCK_SITES; s++) {
+		out[s] = s_lock_counts[s];
+		if (restart)
+			s_lock_counts[s].max_wait_cycles = s_lock_counts[s].max_hold_cycles = 0;
+	}
+	gui_unlock(flags);
+}
 
 // ── VT8 glass ownership (Phase B, 2026-08-19 — GRAPHICS.md's VT8 chapter) ───
 // The GUI is VT8's seated shell, not the framebuffer's owner-by-force. One
@@ -82,38 +152,14 @@ bool gui_owns_glass(void)
 //
 // v1 kept ONE union rect, and the P5 shakedown priced that choice: a bouncing
 // ball in one corner unioned with a cursor in the other produced a near-
-// fullscreen rectangle, recomposited and pushed through the uncached
+// fullscreen rectangle, recomposited and pushed through the write-combining
 // framebuffer ~100 times a second. The screen was mostly unchanged; we paid
 // retail for it anyway. Two small rects should cost two small rects.
 //
-// The design is deliberately the cheap one — a fixed array plus a merge
-// heuristic, NOT region algebra. Regions (X11's, Cairo's) split rectangles on
-// overlap to keep an exact non-overlapping cover, and they are the right
-// answer when you have thousands; here the whole population is "one ball, one
-// cursor, one console line, sometimes a dragged window", and an exact cover
-// would cost more to maintain than the overdraw it saves.
-//
-// Two rules keep it honest:
-//   1. MERGE WHEN MERGING IS CHEAP. Union two entries only if the union wastes
-//      no more than DAMAGE_MERGE_SLACK pixels beyond their own areas — so
-//      touching/overlapping rects collapse (and overlapping ones MUST, or the
-//      overlap composites twice) while distant ones stay apart. Without this,
-//      a list degenerates into a list of near-duplicates.
-//   2. OVERFLOW FALLS BACK TO v1. When the list is full and nothing merges
-//      cheaply, collapse everything into one union rect. Worst case is exactly
-//      today's behavior — never a wrong screen, only a slower one.
-//
-// Entries may still overlap (rule 1 tolerates SLACK, and merging is
-// pairwise-greedy with NO re-merge pass: a rect that bridges into entry i can
-// grow it until it swallows entry j whole, and nothing goes back to notice).
-// So the overlap is not strictly slack-bounded — the swallowed-entry case
-// composites and UC-flushes a duplicate of j's whole area. It is WASTE, never
-// wrongness: both passes composite identical bytes in identical z-order, so
-// the glass cannot disagree with itself. The geometry that triggers it (a
-// late rect bridging two established ones) is rare at this population size;
-// if it ever shows in the flush counter, the fix is a containment sweep after
-// a merge grows an entry, not a redesign. (Honesty upgrade from review,
-// 2026-08-19 — the first version of this comment claimed the slack bound.)
+// The list's rule (merge when merging is cheap, collapse to one union when
+// full, and why entries may still overlap) is shared with libos64's window
+// painting: shared/damage.c, os64/damage.h. What is the compositor's own is
+// the list itself and its two numbers, below.
 // ---------------------------------------------------------------------------
 // Sixteen since the rubber band (2026-08-19). An interactive resize adds the
 // four edges of the OLD outline and the four of the NEW one every time the
@@ -133,22 +179,17 @@ bool gui_owns_glass(void)
 static rect_t   kPendingDamage[DAMAGE_MAX_RECTS];
 static uint32_t kPendingDamageCount;   // 0 means "no damage"
 
-static inline int64_t rect_area(rect_t r)
-{
-	return rect_is_empty(r) ? 0 : (int64_t)r.w * (int64_t)r.h;
-}
-
-// Would unioning these two waste little enough to be worth one composite?
-// Overlapping rects always qualify: their union is never bigger than the sum
-// of their areas, so the test below passes by construction — which is what
-// guarantees the list never composites the same pixel twice for free.
-static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
-{
-	return rect_area(rect_union(a, b)) <= rect_area(a) + rect_area(b) + DAMAGE_MERGE_SLACK;
-}
-
-// The canonical screen image (scene + cursor). Compositor-thread-only.
+// The canonical screen image (scene + cursor). Written by the compositor
+// thread only; /dev/glass readers on other threads copy its pixels, which is
+// why it is published through s_backbuffer_ready rather than by its pointer
+// (surface_init stores the pointer before the size a reader needs with it).
 static surface_t kBackbuffer;
+static bool s_backbuffer_ready;
+
+const surface_t *gui_backbuffer(void)
+{
+	return __atomic_load_n(&s_backbuffer_ready, __ATOMIC_ACQUIRE) ? &kBackbuffer : NULL;
+}
 
 // tty_focus calls this instead of a grid repaint when focus lands on the
 // seated VT8. It runs in the SWITCHER's context — usually the keyboard IRQ —
@@ -239,39 +280,31 @@ static inline rect_t cursor_rect(void)
 
 void gui_damage_add_locked(rect_t screen_rect)
 {
-	if (rect_is_empty(screen_rect))
-		return;
+	// The rule is shared/damage.c's. A full list that nothing merges into
+	// falls back to v1, one union rect for the whole frame, and is counted,
+	// because a union across the screen makes the next pass long, and a long
+	// pass lets the list fill again (GUI_LOCK.md).
+	if (os64_damage_add(kPendingDamage, &kPendingDamageCount, DAMAGE_MAX_RECTS, DAMAGE_MERGE_SLACK,
+	                    screen_rect))
+		s_composite_counts.collapses++;
+}
 
-	// Merge into the first entry where merging is cheap. First-fit, not
-	// best-fit: the list is at most DAMAGE_MAX_RECTS long and the common case
-	// is one or two entries, so hunting for the optimal partner would cost
-	// more than the overdraw it saves.
-	for (uint32_t i = 0; i < kPendingDamageCount; i++) {
-		if (damage_merge_is_cheap(kPendingDamage[i], screen_rect)) {
-			kPendingDamage[i] = rect_union(kPendingDamage[i], screen_rect);
-			return;
-		}
-	}
-
-	if (kPendingDamageCount < DAMAGE_MAX_RECTS) {
-		kPendingDamage[kPendingDamageCount++] = screen_rect;
-		return;
-	}
-
-	// Full, and nothing merged cheaply — fall back to v1: one union rect for
-	// the whole frame. Over-redraws, never under-redraws.
-	rect_t all = screen_rect;
-	for (uint32_t i = 0; i < kPendingDamageCount; i++)
-		all = rect_union(all, kPendingDamage[i]);
-	kPendingDamage[0] = all;
-	kPendingDamageCount = 1;
+uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
+{
+	uint32_t n = kPendingDamageCount < cap ? kPendingDamageCount : cap;
+	for (uint32_t i = 0; i < n; i++)
+		out[i] = kPendingDamage[i];
+	for (uint32_t i = n; i < kPendingDamageCount; i++)
+		kPendingDamage[i - n] = kPendingDamage[i];
+	kPendingDamageCount -= n;
+	return n;
 }
 
 void gui_damage_add(rect_t screen_rect)
 {
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_DAMAGE);
 	gui_damage_add_locked(screen_rect);
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 }
 
 void gui_census(uint32_t *windows, uint64_t *surface_bytes)
@@ -281,9 +314,9 @@ void gui_census(uint32_t *windows, uint64_t *surface_bytes)
 	if (!kEnableGUI)
 		return;   // no compositor, no z-list, nothing to lock
 
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
 	wm_census_locked(windows, surface_bytes);
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 }
 
 void gui_emergency_disable(void)
@@ -325,10 +358,10 @@ static void paint_desktop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Recomposite `damage` (screen coords) into the backbuffer: scene layers
-// bottom-up (desktop, windows), cursor last. Caller holds kGuiLock; the
-// caller flushes AFTER releasing it. This is the only writer of the
-// backbuffer.
+// Recomposite `damage` (screen coords) into the backbuffer: the scene (each
+// pixel by the window or desktop visible there), then the band, the
+// switcher and the cursor over it. Caller holds kGuiLock; the caller
+// flushes AFTER releasing it. This is the only writer of the backbuffer.
 // ---------------------------------------------------------------------------
 // The rubber band lives with the gesture state that drives it (below), but it
 // is a SCENE LAYER and has to be drawn from here — hence the one forward
@@ -346,23 +379,18 @@ static rect_t composite_locked(rect_t damage)
 	if (!rect_intersect(damage, screen, &damage))
 		return (rect_t){0, 0, 0, 0};
 
-	// Layer 0: desktop (same coordinates both sides — straight copy), UNLESS
-	// a window already covers this rect completely, in which case these
-	// pixels are about to be painted over and nobody can see them. Since the
-	// desktop shell is a fullscreen window, that is the common case now, and
-	// skipping it is what keeps a drag from costing two screenful blits per
-	// damage rect (wm_rect_is_covered carries the measurement).
-	if (!wm_rect_is_covered(damage))
-		surface_blit(&kBackbuffer, damage.x, damage.y, &kDesktop, damage);
+	// The scene: each pixel by the one window that can be seen there, or by
+	// the desktop surface where no window is.
+	wm_composite_result_t scene = wm_composite(&kBackbuffer, &kDesktop, damage);
+	s_composite_counts.painted += scene.painted;
+	s_composite_counts.stops += scene.stopped;
+	s_composite_counts.faults += scene.fault;
 
-	// Layer 1: windows, bottom-up by z-order.
-	wm_composite(&kBackbuffer, damage);
-
-	// Layer 2: the interactive-resize outline, when one is up. No-op
+	// Over the scene, the interactive-resize outline, when one is up. No-op
 	// otherwise, and the check is one pointer compare per damage rect.
 	band_composite(&kBackbuffer, damage);
 
-	// Layer 3: the Alt+Tab strip. Above the band because it is the more modal
+	// Then the Alt+Tab strip. Above the band because it is the more modal
 	// of the two — though in practice they cannot coexist, one needing a
 	// Ctrl+Alt mouse drag and the other Alt held on the keyboard.
 	switcher_composite(&kBackbuffer, damage);
@@ -388,8 +416,48 @@ static rect_t composite_locked(rect_t damage)
 // click-to-focus/raise and titlebar dragging, and translate whatever belongs
 // to a window into content-local coordinates on its queue.
 // ---------------------------------------------------------------------------
+static uint8_t s_drag_buttons;
 static window_t *s_drag_window = NULL;
 static int32_t s_drag_dx, s_drag_dy;   // grab offset: cursor minus frame origin
+
+// The start snapshot makes an unchanged gesture decidable; grab offsets do
+// not record the original frame or content size. kGuiLock owns gesture state.
+static struct {
+	int32_t x, y;
+	uint32_t width, height;
+	bool maximized;
+} s_placement_start;
+
+static void placement_begin_locked(const window_t *w)
+{
+	s_placement_start.x = w->frame.x;
+	s_placement_start.y = w->frame.y;
+	s_placement_start.width = w->content.width;
+	s_placement_start.height = w->content.height;
+	s_placement_start.maximized = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
+}
+
+// Automatic geometry changes do not reach this helper: its callers complete
+// user gestures, before any cancellation-triggered automatic adjustment.
+// Moving an already fitted window reports positions, preserving preferred size.
+static void placement_complete_locked(window_t *w, bool resized)
+{
+	if ((w->flags & GUI_WINDOW_DESKTOP) || w->popup_owner_id) return;
+	uint32_t changed = 0;
+	if (w->frame.x != s_placement_start.x) changed |= OS64_GUI_PLACEMENT_X;
+	if (w->frame.y != s_placement_start.y) changed |= OS64_GUI_PLACEMENT_Y;
+	if (resized && w->content.width != s_placement_start.width)
+		changed |= OS64_GUI_PLACEMENT_WIDTH;
+	if (resized && w->content.height != s_placement_start.height)
+		changed |= OS64_GUI_PLACEMENT_HEIGHT;
+	if (!changed) return;
+	if (s_placement_start.maximized) changed = OS64_GUI_PLACEMENT_ALL;
+	input_event_t ev = { .type = INPUT_EVENT_WINDOW_PLACEMENT,
+		.placement = { .x = w->frame.x, .y = w->frame.y,
+			.width = w->content.width, .height = w->content.height,
+			.changed = changed }, .tick = kTicksSinceStart };
+	wm_deliver_event(w, &ev);
+}
 
 // An Alt+F4 escalation decided by the router (under kGuiLock) and carried
 // out by the frame loop after the lock drops. The owner's task id, 0 = none.
@@ -457,9 +525,11 @@ static uint64_t s_titlebar_click_tick = 0;
 // Copying the TITLES too, rather than reading them back through the window
 // on every repaint, is the same argument one level up: the draw path then
 // dereferences nothing at all, and the picture the user is choosing from
-// cannot reflow under their hand halfway through a walk. Nothing in the
-// scene is allowed to change during a hold anyway, so a live re-read could
-// only ever differ from the snapshot by being wrong.
+// cannot reflow under their hand halfway through a walk. The switcher moves
+// no window during a hold, but a client can still rename one
+// (gui_window_set_title — a browser does it unprompted as pages load): its
+// row keeps the name it had when the hold began, and the new one shows from
+// the next hold on.
 static bool     s_alttab_active = false;
 static uint32_t s_alttab_ring[ALTTAB_RING_MAX];
 static char     s_alttab_titles[ALTTAB_RING_MAX][GUI_WINDOW_TITLE_MAX];
@@ -580,9 +650,9 @@ static void switcher_composite(surface_t *backbuffer, rect_t damage)
 	// border colour outlining it — the same two greys the chrome uses to say
 	// "this one is live", one level up from a window.
 	surface_fill_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
-	                  WINDOW_BORDER_UNFOCUSED);
+	                  wm_border_color(false));
 	surface_draw_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
-	                  WINDOW_BORDER_FOCUSED);
+	                  wm_border_color(true));
 
 	// NO SEPARATOR LINES. Each row is a tile laid on the dark slab and one
 	// pixel shorter than its pitch, so the frame itself shows through between
@@ -594,8 +664,8 @@ static void switcher_composite(surface_t *backbuffer, rect_t damage)
 		rect_t row = {sx + SWITCHER_BORDER,
 		              sy + SWITCHER_BORDER + (int32_t)i * SWITCHER_ROW_H,
 		              s_alttab_row_w, SWITCHER_ROW_H - SWITCHER_ROW_GAP};
-		uint32_t bg = (i == s_alttab_step) ? WINDOW_TITLEBAR_FOCUSED
-		                                   : WINDOW_TITLEBAR_UNFOCUSED;
+		uint32_t bg = (i == s_alttab_step) ? wm_titlebar_color(true)
+		                                   : wm_titlebar_color(false);
 		surface_fill_rect(&view, row, bg);
 
 		// A MINIMIZED WINDOW IS IN THE RING AND DRAWN DIM. That is the whole
@@ -665,7 +735,7 @@ static void alttab_step_locked(bool backwards)
 	// and offered the second one. When the focus is not in the ring, the
 	// first step stays on 0.
 	if (first) {
-		window_t *focus = wm_focused();
+		window_t *focus = wm_focus_root(wm_focused());
 		if (focus == NULL || s_alttab_ring[0] != focus->id)
 			goto chosen;
 	}
@@ -749,6 +819,9 @@ static void alttab_end_locked(bool commit)
 // The readout reports CONTENT size, not frame size: the client area is what
 // an app actually gets, and for a terminal it is the number that matters.
 static window_t *s_band_window = NULL;   // the window being rubber-banded
+// Buttons owned by a resize or cancelled WM move. Ownership outlives the
+// outline/target; draining releases needs no live window pointer.
+static uint8_t s_wm_buttons;
 static rect_t    s_band_rect;            // the outline, screen coords, as drawn
 static rect_t    s_band_origin;          // its frame when the gesture began
 static int32_t   s_band_anchor_x, s_band_anchor_y;   // where the press landed
@@ -889,21 +962,132 @@ static void band_track_locked(int32_t x, int32_t y)
 // the pointer for the client until the last button comes up. Every window
 // system since has one, because every window system without one grew this
 // same bug.
+static os64_decor_capture_t s_control_capture;
+static uint32_t s_control_hover;
+
+void gui_cancel_decoration(const struct window *w)
+{
+	if (!w || s_control_capture.window==w->id) {
+		window_t *pressed=wm_window_by_id(s_control_capture.window);
+		if (pressed) wm_decoration_state(pressed,0,0);
+		os64_decor_capture_cancel(&s_control_capture);
+	}
+	if (!w || s_control_hover==w->id) {
+		window_t *hover=wm_window_by_id(s_control_hover);
+		if (hover) wm_decoration_state(hover,0,0);
+		s_control_hover=0;
+	}
+}
+
 static window_t *s_pointer_window = NULL;
+static window_t *s_hover_window = NULL;
+static int32_t s_hover_x, s_hover_y;
+static int32_t s_hover_w, s_hover_h;
+
+static void control_state_locked(void)
+{
+	if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+	window_t *under=NULL;
+	uint32_t hit=0;
+	if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_pointer_window) {
+		under=wm_topmost_at(s_cursor_x,s_cursor_y);
+		if (under) hit=wm_decoration_hit(under,s_cursor_x,s_cursor_y);
+		if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+	}
+	if (s_control_capture.buttons) {
+		(void)os64_decor_capture_step(&s_control_capture,OS64_DECOR_POINTER_MOVE,0,
+			under?under->id:0,hit);
+		if (!s_control_capture.armed) hit=0;
+	}
+	uint32_t id=hit && under?under->id:0;
+	if (s_control_hover && s_control_hover!=id) {
+		window_t *old=wm_window_by_id(s_control_hover);
+		if (old) wm_decoration_state(old,0,0);
+	}
+	if (id) wm_decoration_state(under,hit,s_control_capture.armed?hit:0);
+	s_control_hover=id;
+}
+
+// Reconcile against the final scene each frame, including geometry changes
+// with no mouse motion. Grabs suppress hover in other windows; WM gestures
+// and text VTs have no client hover target. kGuiLock protects this and teardown.
+static void pointer_state_locked(void)
+{
+	window_t *under = NULL;
+	int32_t x = 0, y = 0;
+	int32_t width = 0, height = 0;
+	if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_control_capture.buttons) {
+		under = wm_topmost_at(s_cursor_x, s_cursor_y);
+		if (under && s_pointer_window && under != s_pointer_window) under = NULL;
+		if (under) {
+			rect_t content = wm_content_rect_on_screen(under);
+			if (!rect_contains_point(content, s_cursor_x, s_cursor_y)) under = NULL;
+			else {
+				x = s_cursor_x - content.x; y = s_cursor_y - content.y;
+				width = content.w; height = content.h;
+			}
+		}
+	}
+	if (under != s_hover_window && s_hover_window) {
+		input_event_t leave = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .inside = 0 }, .tick = kTicksSinceStart };
+		wm_deliver_event(s_hover_window, &leave);
+	}
+	if (under && (under != s_hover_window || x != s_hover_x || y != s_hover_y ||
+	              width != s_hover_w || height != s_hover_h)) {
+		input_event_t enter = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .x = x, .y = y, .inside = 1 }, .tick = kTicksSinceStart };
+		wm_deliver_event(under, &enter);
+	}
+	s_hover_window = under;
+	s_hover_x = x;
+	s_hover_y = y;
+	s_hover_w = width;
+	s_hover_h = height;
+}
 
 void gui_grab_release(const struct window *w)
 {
-	// Called from wm_destroy under kGuiLock — the one moment a dying window
-	// can un-name itself before its memory goes back. Compare only; never
-	// dereference (the caller is mid-teardown).
-	if (s_drag_window == (const window_t *)w)
+	gui_cancel_decoration(w);
+	// Called from wm_destroy under kGuiLock while the window is still linked
+	// and alive. Clear its control state before releasing pointer references.
+	if (s_drag_window == (const window_t *)w) {
+		s_wm_buttons |= s_drag_buttons;
 		s_drag_window = NULL;
+	}
 	if (s_pointer_window == (const window_t *)w)
 		s_pointer_window = NULL;   // a window that dies mid-drag lets go
+	if (s_hover_window == (const window_t *)w)
+		s_hover_window = NULL;
+	gui_cancel_resize(w);
+}
+
+void gui_cancel_resize(const struct window *w)
+{
 	if (s_band_window == (const window_t *)w) {
-		band_damage_locked(s_band_rect);   // erase the orphaned outline
+		band_damage_locked(s_band_rect);
 		s_band_window = NULL;
+		// Keep s_wm_buttons: its matching releases still belong to us.
 	}
+}
+
+// Install a new frame geometry without retaining a gesture's old offsets.
+// Client grabs remain paired; WM-owned edges drain after cancellation.
+void gui_decoration_changed(void)
+{
+	gui_cancel_decoration(NULL);
+	if (s_drag_window) {
+		placement_complete_locked(s_drag_window, false);
+		s_wm_buttons |= s_drag_buttons;
+		s_drag_window = NULL;
+	}
+	if (s_band_window) gui_cancel_resize(s_band_window);
+	s_titlebar_click_window=0;
+}
+
+void gui_geometry_changing(const struct window *w)
+{
+	if (s_drag_window == w || s_band_window == w) gui_decoration_changed();
 }
 
 // Deliver a mouse event to a window, in ITS coordinates. `require_inside`
@@ -927,8 +1111,8 @@ static bool deliver_mouse_to_window(window_t *w, input_event_t ev,
 
 // Is the window-management chord held? BOTH modifiers, so a plain Ctrl-click
 // or Alt-click still reaches the app underneath — the chord has to be
-// deliberate, because it overrides whatever the window itself wanted the
-// click to mean.
+// deliberate. Decoration buttons are handled before this chord; elsewhere
+// it overrides the client's interpretation of the click.
 static inline bool wm_chord_held(const input_event_t *ev)
 {
 	const uint8_t both = KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT;
@@ -949,6 +1133,58 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 
 static void route_event_locked(const input_event_t *ev)
 {
+	// Finalize a live move before a text-VT event can consume its release.
+	if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
+	if (s_drag_window) {
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN) s_drag_buttons |= (uint8_t)(1u << ev->mouse.button);
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP) s_drag_buttons &= (uint8_t)~(1u << ev->mouse.button);
+	}
+	// Track the physical pointer on text VTs too, so returning to the GUI
+	// can reconcile hover without waiting for another movement.
+	if (ev->type == INPUT_EVENT_MOUSE_MOVE) {
+		rect_t moved = cursor_rect();
+		s_cursor_x = ev->mouse.x;
+		s_cursor_y = ev->mouse.y;
+		gui_damage_add_locked(rect_union(moved, cursor_rect()));
+	}
+	if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+	if (s_control_capture.buttons && (ev->type==INPUT_EVENT_MOUSE_MOVE ||
+		ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN || ev->type==INPUT_EVENT_MOUSE_BUTTON_UP)) {
+		uint32_t owner=s_control_capture.window;
+		window_t *under=wm_topmost_at(ev->mouse.x,ev->mouse.y);
+		uint32_t hit=under?wm_decoration_hit(under,ev->mouse.x,ev->mouse.y):0;
+		if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+		uint32_t kind=ev->type==INPUT_EVENT_MOUSE_MOVE?OS64_DECOR_POINTER_MOVE:
+			ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN?OS64_DECOR_POINTER_DOWN:OS64_DECOR_POINTER_UP;
+		uint32_t action=os64_decor_capture_step(&s_control_capture,kind,ev->mouse.button,
+			under?under->id:0,hit);
+		window_t *w=wm_window_by_id(owner);
+		if (w) wm_decoration_state(w,0,0);
+		if (action && w) wm_decoration_action(w,action,ev->tick);
+		control_state_locked();
+		return;
+	}
+	if (s_wm_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)) {
+		// Drain individual edges, not mouse.buttons: one physical report can
+		// enqueue several releases with the same final (empty) button mask.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN)
+			s_wm_buttons |= (uint8_t)(1u << ev->mouse.button);
+		else if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)
+			s_wm_buttons &= (uint8_t)~(1u << ev->mouse.button);
+		// Cancellation removes the outline, not ownership of its press. Do
+		// this before the VT fork so a release on a text VT is consumed too.
+		if (!s_band_window || !gui_owns_glass()) {
+			if (s_band_window) gui_cancel_resize(s_band_window);
+			return;
+		}
+		// Additional button presses were consumed during this resize; their
+		// releases must not fall through to a client while the band is live.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP &&
+		    ev->mouse.button != INPUT_MOUSE_BUTTON_RIGHT)
+			return;
+	}
 	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
 	// glass: the window system when VT8 is up, the focused TEXT TERMINAL
 	// otherwise — where they become gpm's old gesture, select-to-copy and
@@ -957,6 +1193,8 @@ static void route_event_locked(const input_event_t *ev)
 	// did. Only the pointer had nowhere to go.
 	if (!gui_owns_glass()) {
 		switch (ev->type) {
+		case INPUT_EVENT_MOUSE_WHEEL:
+			return;   // GUI wheel queued before a VT switch; text routes at arrival
 		case INPUT_EVENT_MOUSE_MOVE:
 		case INPUT_EVENT_MOUSE_BUTTON_DOWN:
 		case INPUT_EVENT_MOUSE_BUTTON_UP:
@@ -968,15 +1206,19 @@ static void route_event_locked(const input_event_t *ev)
 	}
 
 	switch (ev->type) {
+	case INPUT_EVENT_MOUSE_WHEEL: {
+		// Window-management gestures own the pointer but do not scroll.
+		if (s_band_window || s_drag_window || s_wm_buttons || s_control_capture.buttons)
+			break;
+		if (s_pointer_window)
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+		else {
+			window_t *under = wm_topmost_at(ev->mouse.x, ev->mouse.y);
+			if (under) deliver_mouse_to_window(under, *ev, true);
+		}
+		break;
+	}
 	case INPUT_EVENT_MOUSE_MOVE: {
-		// Damage where the cursor WAS and where it lands; the recomposite
-		// repaints the scene under the old position.
-		rect_t moved = cursor_rect();
-		s_cursor_x = ev->mouse.x;
-		s_cursor_y = ev->mouse.y;
-		moved = rect_union(moved, cursor_rect());
-		gui_damage_add_locked(moved);
-
 		// A gesture in progress OWNS the pointer: no hit-testing, no delivery
 		// to whatever the cursor happens to sweep across. Losing this is how
 		// a drag ends up half-delivered to three different windows.
@@ -997,6 +1239,11 @@ static void route_event_locked(const input_event_t *ev)
 	case INPUT_EVENT_MOUSE_BUTTON_DOWN: {
 		if (s_band_window || s_drag_window)
 			break;   // a second button during a gesture is not a new gesture
+		if (s_pointer_window) {
+			// Additional buttons belong to the existing client gesture.
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+			break;
+		}
 
 		window_t *w = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (!w)
@@ -1010,6 +1257,18 @@ static void route_event_locked(const input_event_t *ev)
 		printd(DEBUG_GUI, "guicomp: button %u down on window %u at (%d,%d), mods 0x%02x\n",
 			ev->mouse.button, w->id, ev->mouse.x, ev->mouse.y, ev->mouse.modifiers);
 		wm_raise(w);
+
+		uint32_t action=wm_decoration_hit(w,ev->mouse.x,ev->mouse.y);
+		if (action) {
+			s_titlebar_click_window=0;
+			uint32_t accepted=ev->mouse.button==INPUT_MOUSE_BUTTON_LEFT &&
+				!(wm_decoration_disabled(w) & (1u<<action))?action:0;
+			os64_decor_capture_begin(&s_control_capture,w->id,accepted,
+				ev->mouse.buttons | (1u<<ev->mouse.button));
+			if (!accepted) os64_decor_capture_cancel(&s_control_capture);
+			control_state_locked();
+			break;
+		}
 
 		// The chord's two verbs (see the gesture comment above the band
 		// state): left moves, right resizes, anywhere in the window.
@@ -1027,10 +1286,14 @@ static void route_event_locked(const input_event_t *ev)
 		} else if (wm_chord_held(ev)) {
 			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 				s_drag_window = w;
+				placement_begin_locked(w);
+				s_drag_buttons = ev->mouse.buttons;
 				s_drag_dx = ev->mouse.x - w->frame.x;
 				s_drag_dy = ev->mouse.y - w->frame.y;
 			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
 				s_band_window = w;
+				placement_begin_locked(w);
+				s_wm_buttons = ev->mouse.buttons;
 				s_band_origin = w->frame;
 				s_band_rect   = w->frame;
 				s_band_anchor_x = ev->mouse.x;
@@ -1057,8 +1320,9 @@ static void route_event_locked(const input_event_t *ev)
 			if (w->id == s_titlebar_click_window &&
 			    ev->tick - s_titlebar_click_tick <= DOUBLE_CLICK_TICKS) {
 				s_titlebar_click_window = 0;   // a third click starts over
+				s_wm_buttons=ev->mouse.buttons | (1u<<ev->mouse.button);
 				bool was = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
-				wm_set_maximized(w, !was);
+				wm_decoration_action(w,OS64_DECOR_MAXIMIZE,ev->tick);
 				if (((w->flags & GUI_WINDOW_MAXIMIZED) != 0) != was)
 					printd(DEBUG_GUI, "guicomp: titlebar double-click: window %u %s\n",
 						w->id, was ? "restored" : "maximized");
@@ -1069,6 +1333,8 @@ static void route_event_locked(const input_event_t *ev)
 			// Grab for dragging; remember where in the frame we grabbed so
 			// the window doesn't jump under the cursor.
 			s_drag_window = w;
+			placement_begin_locked(w);
+			s_drag_buttons = ev->mouse.buttons;
 			s_drag_dx = ev->mouse.x - w->frame.x;
 			s_drag_dy = ev->mouse.y - w->frame.y;
 		} else if (deliver_mouse_to_window(w, *ev, true)) {
@@ -1094,11 +1360,14 @@ static void route_event_locked(const input_event_t *ev)
 			rect_t final = s_band_rect;
 			band_damage_locked(s_band_rect);   // erase the outline
 			s_band_window = NULL;
-			w->flags &= ~GUI_WINDOW_MAXIMIZED;   // a hand-sized window is not "the maximized one"
-			wm_resize(w, final);
+			uint32_t maximized = w->flags & GUI_WINDOW_MAXIMIZED;
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;
+			if (wm_resize(w, final)) placement_complete_locked(w, true);
+			else w->flags |= maximized;
 			break;
 		}
 		if (s_drag_window && ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
+			placement_complete_locked(s_drag_window, false);
 			s_drag_window = NULL;
 			break;
 		}
@@ -1201,10 +1470,12 @@ static void route_event_locked(const input_event_t *ev)
 		// Ctrl under the GUI). The first press is a REQUEST to the owner —
 		// INPUT_EVENT_WINDOW_CLOSE on its queue, because the window is the
 		// app's and an editor with unsaved work gets to answer. The second
-		// press within GUI_CLOSE_ESCALATE_TICKS, on a window that is still
-		// here, is "I mean it": SIGTERM to the owning task, carried out by
+		// press within GUI_CLOSE_ESCALATE_TICKS, on a window without a popup
+		// owner, is "I mean it": SIGTERM to its task, carried out by
 		// the frame loop after the lock drops. Explicit rather than timed —
 		// a stuck program is killed by the user's hand, never by a clock.
+		// Owned popups repeat the close request instead: killing their task
+		// would also kill the document whose menu is being dismissed.
 		// F-keys have no ASCII, so this is the one chord that reads the
 		// scancode — through keyboard_fkey_number, which knows both
 		// dialects. Both edges swallowed.
@@ -1212,9 +1483,8 @@ static void route_event_locked(const input_event_t *ev)
 		    keyboard_fkey_number(ev->key.scancode, ev->key.modifiers) == 4) {
 			window_t *focus = wm_focused();
 			// The desktop is exempt — and this one is guarded HERE rather
-			// than at a wm_ setter because there is no setter to guard: a
-			// close is a REQUEST delivered to the owner, so the only place
-			// to decline it is where it is composed. Alt+F4 with nothing
+			// than relying on the action helper: escalation bypasses the normal
+			// close request, so its guard must cover both paths here. Alt+F4 with nothing
 			// but your desktop showing is a gesture nobody means, and its
 			// second press would SIGTERM the shell.
 			if (focus && (focus->flags & GUI_WINDOW_DESKTOP)) {
@@ -1223,7 +1493,7 @@ static void route_event_locked(const input_event_t *ev)
 				break;
 			}
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
-				if (focus->closeAskedTick != 0 &&
+				if (!focus->popup_owner_id && focus->closeAskedTick != 0 &&
 				    ev->tick - focus->closeAskedTick <= GUI_CLOSE_ESCALATE_TICKS) {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close twice — terminating owner %lu\n",
 						focus->id, focus->owner);
@@ -1231,12 +1501,8 @@ static void route_event_locked(const input_event_t *ev)
 					s_terminate_owner = focus->owner;
 				} else {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close\n", focus->id);
-					focus->closeAskedTick = ev->tick;
-					input_event_t close = {
-						.type = INPUT_EVENT_WINDOW_CLOSE,
-						.tick = ev->tick,
-					};
-					wm_deliver_event(focus, &close);
+					focus->closeAskedTick = focus->popup_owner_id ? 0 : ev->tick;
+					wm_decoration_action(focus,OS64_DECOR_CLOSE,ev->tick);
 				}
 			}
 			break;
@@ -1254,15 +1520,18 @@ static void route_event_locked(const input_event_t *ev)
 			window_t *focus = wm_focused();
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
 				switch (ev->key.ascii) {
+				case 0x13: // Ctrl+Alt+S: settings, including when chrome is hidden
+					wm_decoration_action(focus,OS64_DECOR_SETTINGS,ev->tick);
+					break;
 				case 0x10: {   // Ctrl+Alt+P: pin on top (toggle)
 					bool was = (focus->flags & GUI_WINDOW_PINNED) != 0;
-					wm_set_pinned(focus, !was);
+					wm_decoration_action(focus,OS64_DECOR_PIN,ev->tick);
 					chord_report(focus, GUI_WINDOW_PINNED, was, "pinned", "unpinned");
 					break;
 				}
 				case 0x0D: {   // Ctrl+Alt+M: maximize (toggle) — 0x0D is Ctrl+M, a CR by 1963's table
 					bool was = (focus->flags & GUI_WINDOW_MAXIMIZED) != 0;
-					wm_set_maximized(focus, !was);
+					wm_decoration_action(focus,OS64_DECOR_MAXIMIZE,ev->tick);
 					chord_report(focus, GUI_WINDOW_MAXIMIZED, was, "maximized", "restored");
 					break;
 				}
@@ -1271,7 +1540,7 @@ static void route_event_locked(const input_event_t *ev)
 				// hold ENDS on it (walking past leaves it hidden).
 				case 0x0E: {
 					bool was = wm_is_hidden(focus);
-					wm_set_minimized(focus, true);
+					wm_decoration_action(focus,OS64_DECOR_MINIMIZE,ev->tick);
 					chord_report(focus, GUI_WINDOW_MINIMIZED, was, "minimized", "restored");
 					break;
 				}
@@ -1302,14 +1571,15 @@ bool guicomp_thread(bool daemon)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
-	printd(DEBUG_GUI, "guicomp: compositor starting on APIC %u (thread=0x%08x, daemon=%u)\n",
-		cls->apic_id, self->threadID, daemon);
+	printd(DEBUG_GUI, "guicomp: compositor starting on CPU %u (thread=0x%08x, daemon=%u)\n",
+		cls->cpu, self->threadID, daemon);
 
 	if (surface_init(&kBackbuffer, kFrameBuffer.width, kFrameBuffer.height) != 0 ||
 	    surface_init(&kDesktop, kFrameBuffer.width, kFrameBuffer.height) != 0) {
 		printd(DEBUG_GUI, "guicomp: FATAL: surface allocation failed, compositor exiting\n");
 		return false;
 	}
+	__atomic_store_n(&s_backbuffer_ready, true, __ATOMIC_RELEASE);
 	printd(DEBUG_GUI, "guicomp: backbuffer %ux%u ready (%lu KB x2)\n",
 		kBackbuffer.width, kBackbuffer.height,
 		(uint64_t)kBackbuffer.width * kBackbuffer.height * 4 / 1024);
@@ -1354,7 +1624,9 @@ bool guicomp_thread(bool daemon)
 		frames++;
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
-		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
+		// A VT transition can occur without another pointer event.
+		if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
 
 		input_event_t ev;
 		while (input_pop(&ev))
@@ -1365,6 +1637,7 @@ bool guicomp_thread(bool daemon)
 		// iron — see the seated-predicate comment). Convert the ISR's one-
 		// store flag into ordinary damage here, under our own lock.
 		if (s_glass_regained) {
+			gui_cancel_decoration(NULL);
 			s_glass_regained = false;
 			// Whatever the console overlay had painted is gone with the VT
 			// switch's repaint; it must not try to restore cells that now
@@ -1397,17 +1670,39 @@ bool guicomp_thread(bool daemon)
 		// own create or destroy arrives as damage anyway, and the walk costs
 		// less than one damage rect's composite.
 		wm_cover_sweep_locked();
+		control_state_locked();
+		pointer_state_locked();
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
 		// frame instead of racing the one being drawn.
 		rect_t damage[DAMAGE_MAX_RECTS];
 		uint32_t damage_count = kPendingDamageCount;
-		for (uint32_t i = 0; i < damage_count; i++)
+		bool drew = false;
+		for (uint32_t i = 0; i < damage_count; i++) {
 			damage[i] = composite_locked(kPendingDamage[i]);
+			if (!rect_is_empty(damage[i])) {
+				drew = true;
+				s_composite_counts.rects++;
+				s_composite_counts.pixels += (uint64_t)damage[i].w * (uint64_t)damage[i].h;
+			}
+		}
+		// Drawn means something survived the clip to the screen: damage from
+		// a window moved wholly off it composites nothing.
+		s_composite_counts.passes++;
+		s_composite_counts.drawn += drew;
 		kPendingDamageCount = 0;
+		// Every /dev/glass viewer learns what this frame changed. Here,
+		// after the pixels are down and before the lock goes, is what makes
+		// a viewer's copy eventually exact (gui/glass.h): any composite that
+		// overlaps a copy records its damage after the copy's take.
+		glass_damage_locked(damage, damage_count);
 
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
+
+		// A /dev/glass keyboard's held key repeats here, outside kGuiLock as
+		// delivery must be (gui/glass.h, INPUT and glass_input_tick).
+		glass_input_tick();
 
 		// A close escalation decided under the lock is carried out here,
 		// outside it: signalling a task takes scheduler locks, and kGuiLock
@@ -1418,7 +1713,7 @@ bool guicomp_thread(bool daemon)
 			gui_window_terminate_owner(owner);
 		}
 
-		// -------- Flush to the (slow, uncached) framebuffer, lock-free -----
+		// -------- Flush to the (write-combining) framebuffer, lock-free ----
 		// One flush per surviving rect. composite_locked clipped each to the
 		// screen and may have emptied it entirely; those are skipped here
 		// rather than filtered above, so the indices keep matching.
@@ -1478,8 +1773,9 @@ bool guicomp_thread(bool daemon)
 		// them, hlt time bills as run time — this thread is the one idler
 		// the scheduler cannot see, and top spent a day showing it at 95%
 		// of a core while the flush counter sat frozen. Begin settles the
-		// frame's real work onto us and routes the nap to the idle thread;
-		// End settles the nap and takes the meter back.
+		// frame's real work onto us and routes the nap to the idle thread.
+		// IRQ entry closes the nap before billing its handler; End settles
+		// our post-wake tail.
 		__asm__ volatile("cli" ::: "memory");
 		if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
 			mpAcctHaltBegin();
@@ -1490,7 +1786,7 @@ bool guicomp_thread(bool daemon)
 	}
 }
 
-// Pin the compositor to core 1 when we have one (kworker precedent): keeps
+// Pin the compositor to CPU 1 when we have one (kworker precedent): keeps
 // steady frame work off the BSP, which handles IRQ0/signals. EXCEPT in
 // tickless mode (the default): there the AP scheduler timers stay masked
 // (smp_core.c enableAPScheduling_ISR) — a thread pinned to an AP runs
@@ -1500,8 +1796,8 @@ bool guicomp_thread(bool daemon)
 // (SCHEDULER.md) lets a pinned compositor and parked cores coexist.
 uint64_t gui_compositor_affinity(void)
 {
-	return (kMPCoreCount > 1 && !kTicklessScheduler)
-	           ? (uint64_t)kCPUInfo[1].apicID
+	return (kCPUCount > 1 && !kTicklessScheduler)
+	           ? (uint64_t)1
 	           : THREAD_NO_AFFINITY;
 }
 

@@ -1,0 +1,7 @@
+shot r2-ps2-hidden-mnemonic
+shot r2-ps2-overflow-hover
+shot r2-ps2-left-actions
+shot r2-ps2-wheel-no-selection
+shot r2-ps2-enter-no-invocation
+shot r2-ps2-visible-selection
+shot r2-ps2-visible-invocation

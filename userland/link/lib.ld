@@ -109,4 +109,13 @@ SECTIONS
     .got.plt  : { *(.got.plt) *(.igot.plt) }
     .data     : { *(.data*) }
     .bss      : { *(.bss*) *(COMMON) }
+
+    /* app_bases.py separates prelinked libraries by LIB_SLOT_SIZE. The build
+     * supplies that same value here, so an image that grows into its neighbour
+     * is rejected at link time instead of relying on the runtime overlap
+     * tripwire. The fallback is for a hand-run ld invocation. */
+    ASSERT(. - (DEFINED(LIB_BASE) ? LIB_BASE : 0x00007F0000000000)
+             <= (DEFINED(LIB_SLOT_SIZE) ? LIB_SLOT_SIZE : 0x04000000)
+                - CONSTANT(MAXPAGESIZE),
+           "shared library image is larger than its app_bases.py slot — it would overlap the next library's address range (see userland/tools/app_bases.py)")
 }

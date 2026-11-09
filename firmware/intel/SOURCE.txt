@@ -1,0 +1,9 @@
+Intel AX210 Bluetooth firmware, unchanged upstream binaries.
+Source: https://gitlab.com/kernel-firmware/linux-firmware/-/tree/20240115
+License: LICENCE.ibt_firmware (included verbatim).
+The kernel embeds these files and the license for kernel-only P5 updates.
+
+SHA-256:
+b3b5d5e48ca08187ce5d3553fb6daadb4c5f3e24972b5813fe91b60dbc888038  ibt-0041-0041.sfi
+fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077  ibt-0041-0041.ddc
+5181b0b51efc79d5acb2c9bb92042878fdbad97a92114d4ab5e32e2b5b52fce4  LICENCE.ibt_firmware

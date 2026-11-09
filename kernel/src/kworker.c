@@ -11,7 +11,9 @@
 #include "task.h"
 #include "thread.h"
 #include "tty.h"     // the midwife half of the job: shells for knocked terminals
+#include "console_font.h"   // and a third trade: hanging a new face on the glass
 #include "logging/log.h"
+#include "driver/system/usb/xhci.h"
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
 #define KWORKER_REAP_BATCH_SIZE 8
@@ -24,6 +26,8 @@
 static bool kworker_run_maintenance(void)
 {
 	bool did_work = false;
+	// Periodic policy and disk work must not keep the worker from sleeping.
+	xhci_bluetooth_maintain();
 	int reaped = task_reap_eligible_zombies(KWORKER_REAP_BATCH_SIZE);
 
 	paging_sentinel_check("kworker: after zombie reap");
@@ -41,6 +45,14 @@ static bool kworker_run_maintenance(void)
 	// task context, never an IRQ. The undertaker and the midwife turn out to
 	// be the same worker, which any small town could have told us.
 	if (tty_summon_sweep()) {
+		did_work = true;
+	}
+
+	// A console face somebody wrote to /sys/console/font, validated at the
+	// door and waiting for a context that may do the rest: re-shaping the
+	// terminals' grids allocates, and the door runs with interrupts off or
+	// inside a burial (console_font.h).
+	if (console_font_sweep()) {
 		did_work = true;
 	}
 
@@ -82,8 +94,8 @@ bool kworker_thread(bool daemon)
 	thread_t *self = cls->currentThread;
 
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-		"kworker_thread: starting on APIC %u (thread=0x%08x, daemon=%u)\n",
-		cls->apic_id,
+		"kworker_thread: starting on CPU %u (thread=0x%08x, daemon=%u)\n",
+		cls->cpu,
 		self->threadID,
 		daemon);
 
@@ -92,21 +104,21 @@ bool kworker_thread(bool daemon)
 
 		if (!daemon) {
 			printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-				"kworker_thread: single-pass exit on APIC %u, did_work=%u\n",
-				cls->apic_id,
+				"kworker_thread: single-pass exit on CPU %u, did_work=%u\n",
+				cls->cpu,
 				did_work);
 			return did_work;
 		}
 
 		if (!did_work) {
 			printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-				"kworker_thread: APIC %u sleeping until tick %u\n",
-				cls->apic_id,
+				"kworker_thread: CPU %u sleeping until tick %u\n",
+				cls->cpu,
 				kTicksSinceStart + KWORKER_SLEEP_TICKS);
 			signal_raise(SIGSLEEP, kTicksSinceStart + KWORKER_SLEEP_TICKS, self);
 			printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-				"kworker_thread: APIC %u woke at tick %u\n",
-				cls->apic_id,
+				"kworker_thread: CPU %u woke at tick %u\n",
+				cls->cpu,
 				kTicksSinceStart);
 		}
 	}

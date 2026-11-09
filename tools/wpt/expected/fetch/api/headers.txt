@@ -1,0 +1,443 @@
+# WPT's fetch/api/headers in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh fetch/api/headers --update
+# rewrites [passing].
+[required]
+header-setcookie.any.html	Adding Set-Cookie headers normalizes their value
+header-setcookie.any.html	Adding invalid Set-Cookie headers throws
+header-setcookie.any.html	Headers iterator does not combine set-cookie & set-cookie2 headers
+header-setcookie.any.html	Headers iterator does not combine set-cookie headers
+header-setcookie.any.html	Headers iterator does not special case set-cookie2 headers
+header-setcookie.any.html	Headers iterator is correctly updated with set-cookie changes
+header-setcookie.any.html	Headers iterator is correctly updated with set-cookie changes #2
+header-setcookie.any.html	Headers iterator preserves per header ordering, but sorts keys alphabetically
+header-setcookie.any.html	Headers iterator preserves per header ordering, but sorts keys alphabetically (and ignores value ordering)
+header-setcookie.any.html	Headers iterator preserves set-cookie ordering
+header-setcookie.any.html	Headers.prototype.append works for set-cookie
+header-setcookie.any.html	Headers.prototype.delete works for set-cookie
+header-setcookie.any.html	Headers.prototype.get combines set-cookie headers in order
+header-setcookie.any.html	Headers.prototype.getSetCookie ignores set-cookie2 headers
+header-setcookie.any.html	Headers.prototype.getSetCookie preserves header ordering
+header-setcookie.any.html	Headers.prototype.getSetCookie with an empty header
+header-setcookie.any.html	Headers.prototype.getSetCookie with multiple headers
+header-setcookie.any.html	Headers.prototype.getSetCookie with no headers present
+header-setcookie.any.html	Headers.prototype.getSetCookie with one header
+header-setcookie.any.html	Headers.prototype.getSetCookie with one header created from an object
+header-setcookie.any.html	Headers.prototype.getSetCookie with two equal headers
+header-setcookie.any.html	Headers.prototype.has works for set-cookie
+header-setcookie.any.html	Headers.prototype.set works for set-cookie
+header-setcookie.any.html	Set-Cookie is a forbidden response header
+headers-basic.any.html	Appending a value pair during iteration causes it to be reached during iteration
+headers-basic.any.html	Check Symbol.iterator method
+headers-basic.any.html	Check append method
+headers-basic.any.html	Check delete method
+headers-basic.any.html	Check entries method
+headers-basic.any.html	Check forEach method
+headers-basic.any.html	Check get method
+headers-basic.any.html	Check has method
+headers-basic.any.html	Check keys method
+headers-basic.any.html	Check set method
+headers-basic.any.html	Check values method
+headers-basic.any.html	Create headers from empty object
+headers-basic.any.html	Create headers from no parameter
+headers-basic.any.html	Create headers from undefined parameter
+headers-basic.any.html	Create headers with 1 should throw
+headers-basic.any.html	Create headers with existing headers
+headers-basic.any.html	Create headers with existing headers with custom iterator
+headers-basic.any.html	Create headers with null should throw
+headers-basic.any.html	Create headers with record
+headers-basic.any.html	Create headers with sequence
+headers-basic.any.html	Iteration skips elements removed while iterating
+headers-basic.any.html	Prepending a value pair before the current element position causes it to be skipped during iteration and adds the current element a second time
+headers-basic.any.html	Removing elements already iterated over causes an element to be skipped during iteration
+headers-casing.any.html	Check append method, names use characters with different case
+headers-casing.any.html	Check delete method, names use characters with different case
+headers-casing.any.html	Check set method, names use characters with different case
+headers-casing.any.html	Create headers, names use characters with different case
+headers-combine.any.html	Check append methods when called with already used name
+headers-combine.any.html	Check delete and has methods when using same name for different values
+headers-combine.any.html	Check set methods when called with already used name
+headers-combine.any.html	Create headers using same name for different values
+headers-combine.any.html	Iterate combined values
+headers-combine.any.html	Iterate combined values in sorted order
+headers-errors.any.html	Check headers append with an invalid name [object Object]
+headers-errors.any.html	Check headers append with an invalid name invalidĀ
+headers-errors.any.html	Check headers append with an invalid value invalidĀ
+headers-errors.any.html	Check headers delete with an invalid name [object Object]
+headers-errors.any.html	Check headers delete with an invalid name invalidĀ
+headers-errors.any.html	Check headers get with an invalid name [object Object]
+headers-errors.any.html	Check headers get with an invalid name invalidĀ
+headers-errors.any.html	Check headers has with an invalid name [object Object]
+headers-errors.any.html	Check headers has with an invalid name invalidĀ
+headers-errors.any.html	Check headers set with an invalid name [object Object]
+headers-errors.any.html	Check headers set with an invalid name invalidĀ
+headers-errors.any.html	Check headers set with an invalid value invalidĀ
+headers-errors.any.html	Create headers giving an array having one string as init argument
+headers-errors.any.html	Create headers giving an array having three strings as init argument
+headers-errors.any.html	Create headers giving bad header name as init argument
+headers-errors.any.html	Create headers giving bad header value as init argument
+headers-errors.any.html	Headers forEach loop should stop if callback is throwing exception
+headers-errors.any.html	Headers forEach throws if argument is not callable
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value GET
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value trace
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value track
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value GET
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value trace
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value track
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value GET
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value connect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value trace
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value track
+headers-forbidden-override.any.html	header x-http-method is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-http-method is allowed to use value GET
+headers-forbidden-override.any.html	header x-http-method is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value connect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value trace
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value track
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value GET
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value connect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value trace
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value track
+headers-forbidden-override.any.html	header x-method-override is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-method-override is allowed to use value GET
+headers-forbidden-override.any.html	header x-method-override is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value connect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value trace
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value track
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language/ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language/@ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept/" as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept/012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have authorization/basics as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language/ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language/@ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type set to text/plain;ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, text/plain
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type/text/html as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type/text/plain; long=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have downlink/-1.0 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have dpr/2 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have ect/6g as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have range/bytes 0- as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have rtt/1.0 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have save-data/on as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have test/hi as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have unknown/doesitmatter as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have viewport-width/100 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have width/100 as header
+headers-no-cors.any.html	Loading data…
+headers-normalize.any.html	Check append method with not normalized values
+headers-normalize.any.html	Check set method with not normalized values
+headers-normalize.any.html	Create headers with not normalized values
+headers-record.any.html	Basic operation with one property
+headers-record.any.html	Basic operation with one property and a proto
+headers-record.any.html	Correct operation ordering with non-enumerable properties
+headers-record.any.html	Correct operation ordering with repeated keys
+headers-record.any.html	Correct operation ordering with two properties
+headers-record.any.html	Correct operation ordering with two properties one of which has an invalid name
+headers-record.any.html	Correct operation ordering with two properties one of which has an invalid value
+headers-record.any.html	Correct operation ordering with undefined descriptors
+headers-record.any.html	Passing nothing to Headers constructor
+headers-record.any.html	Passing null to Headers constructor
+headers-record.any.html	Passing undefined to Headers constructor
+headers-structure.any.html	Headers has append method
+headers-structure.any.html	Headers has delete method
+headers-structure.any.html	Headers has entries method
+headers-structure.any.html	Headers has get method
+headers-structure.any.html	Headers has has method
+headers-structure.any.html	Headers has keys method
+headers-structure.any.html	Headers has set method
+headers-structure.any.html	Headers has values method
+[excluded]
+[passing]
+header-setcookie.any.html	Adding Set-Cookie headers normalizes their value
+header-setcookie.any.html	Adding invalid Set-Cookie headers throws
+header-setcookie.any.html	Headers iterator does not combine set-cookie & set-cookie2 headers
+header-setcookie.any.html	Headers iterator does not combine set-cookie headers
+header-setcookie.any.html	Headers iterator does not special case set-cookie2 headers
+header-setcookie.any.html	Headers iterator is correctly updated with set-cookie changes
+header-setcookie.any.html	Headers iterator is correctly updated with set-cookie changes #2
+header-setcookie.any.html	Headers iterator preserves per header ordering, but sorts keys alphabetically
+header-setcookie.any.html	Headers iterator preserves per header ordering, but sorts keys alphabetically (and ignores value ordering)
+header-setcookie.any.html	Headers iterator preserves set-cookie ordering
+header-setcookie.any.html	Headers.prototype.append works for set-cookie
+header-setcookie.any.html	Headers.prototype.delete works for set-cookie
+header-setcookie.any.html	Headers.prototype.get combines set-cookie headers in order
+header-setcookie.any.html	Headers.prototype.getSetCookie ignores set-cookie2 headers
+header-setcookie.any.html	Headers.prototype.getSetCookie preserves header ordering
+header-setcookie.any.html	Headers.prototype.getSetCookie with an empty header
+header-setcookie.any.html	Headers.prototype.getSetCookie with multiple headers
+header-setcookie.any.html	Headers.prototype.getSetCookie with no headers present
+header-setcookie.any.html	Headers.prototype.getSetCookie with one header
+header-setcookie.any.html	Headers.prototype.getSetCookie with one header created from an object
+header-setcookie.any.html	Headers.prototype.getSetCookie with two equal headers
+header-setcookie.any.html	Headers.prototype.has works for set-cookie
+header-setcookie.any.html	Headers.prototype.set works for set-cookie
+header-setcookie.any.html	Set-Cookie is a forbidden response header
+header-values-normalize.any.html	XMLHttpRequest with value %00
+header-values-normalize.any.html	fetch() with value %00
+header-values.any.html	XMLHttpRequest with value x%00x needs to throw
+header-values.any.html	XMLHttpRequest with value x%0Ax needs to throw
+header-values.any.html	XMLHttpRequest with value x%0Dx needs to throw
+header-values.any.html	fetch() with value x%00x needs to throw
+header-values.any.html	fetch() with value x%0Ax needs to throw
+header-values.any.html	fetch() with value x%0Dx needs to throw
+headers-basic.any.html	Appending a value pair during iteration causes it to be reached during iteration
+headers-basic.any.html	Check Symbol.iterator method
+headers-basic.any.html	Check append method
+headers-basic.any.html	Check delete method
+headers-basic.any.html	Check entries method
+headers-basic.any.html	Check forEach method
+headers-basic.any.html	Check get method
+headers-basic.any.html	Check has method
+headers-basic.any.html	Check keys method
+headers-basic.any.html	Check set method
+headers-basic.any.html	Check values method
+headers-basic.any.html	Create headers from empty object
+headers-basic.any.html	Create headers from no parameter
+headers-basic.any.html	Create headers from undefined parameter
+headers-basic.any.html	Create headers with 1 should throw
+headers-basic.any.html	Create headers with existing headers
+headers-basic.any.html	Create headers with existing headers with custom iterator
+headers-basic.any.html	Create headers with null should throw
+headers-basic.any.html	Create headers with record
+headers-basic.any.html	Create headers with sequence
+headers-basic.any.html	Iteration skips elements removed while iterating
+headers-basic.any.html	Prepending a value pair before the current element position causes it to be skipped during iteration and adds the current element a second time
+headers-basic.any.html	Removing elements already iterated over causes an element to be skipped during iteration
+headers-casing.any.html	Check append method, names use characters with different case
+headers-casing.any.html	Check delete method, names use characters with different case
+headers-casing.any.html	Check set method, names use characters with different case
+headers-casing.any.html	Create headers, names use characters with different case
+headers-combine.any.html	Check append methods when called with already used name
+headers-combine.any.html	Check delete and has methods when using same name for different values
+headers-combine.any.html	Check set methods when called with already used name
+headers-combine.any.html	Create headers using same name for different values
+headers-combine.any.html	Iterate combined values
+headers-combine.any.html	Iterate combined values in sorted order
+headers-errors.any.html	Check headers append with an invalid name [object Object]
+headers-errors.any.html	Check headers append with an invalid name invalidĀ
+headers-errors.any.html	Check headers append with an invalid value invalidĀ
+headers-errors.any.html	Check headers delete with an invalid name [object Object]
+headers-errors.any.html	Check headers delete with an invalid name invalidĀ
+headers-errors.any.html	Check headers get with an invalid name [object Object]
+headers-errors.any.html	Check headers get with an invalid name invalidĀ
+headers-errors.any.html	Check headers has with an invalid name [object Object]
+headers-errors.any.html	Check headers has with an invalid name invalidĀ
+headers-errors.any.html	Check headers set with an invalid name [object Object]
+headers-errors.any.html	Check headers set with an invalid name invalidĀ
+headers-errors.any.html	Check headers set with an invalid value invalidĀ
+headers-errors.any.html	Create headers giving an array having one string as init argument
+headers-errors.any.html	Create headers giving an array having three strings as init argument
+headers-errors.any.html	Create headers giving bad header name as init argument
+headers-errors.any.html	Create headers giving bad header value as init argument
+headers-errors.any.html	Headers forEach loop should stop if callback is throwing exception
+headers-errors.any.html	Headers forEach throws if argument is not callable
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value GET
+headers-forbidden-override.any.html	header X-HTTP-METHOD is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value trace
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-HTTP-METHOD is forbidden to use value track
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value GET
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value connect
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value trace
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-HTTP-METHOD-OVERRIDE is forbidden to use value track
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value GET
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value  connect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value TRACE
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value TRACK
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value connect
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value trace
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value trace,
+headers-forbidden-override.any.html	header X-METHOD-OVERRIDE is forbidden to use value track
+headers-forbidden-override.any.html	header x-http-method is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-http-method is allowed to use value GET
+headers-forbidden-override.any.html	header x-http-method is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value connect
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value trace
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-http-method is forbidden to use value track
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value GET
+headers-forbidden-override.any.html	header x-http-method-override is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value connect
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value trace
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-http-method-override is forbidden to use value track
+headers-forbidden-override.any.html	header x-method-override is allowed to use value ",TRACE",
+headers-forbidden-override.any.html	header x-method-override is allowed to use value GET
+headers-forbidden-override.any.html	header x-method-override is allowed to use value GETTRACE
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value  connect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value CONNECT
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value GET,track 
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value TRACE
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value TRACK
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \nconnect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \rtrace
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value \ttrack
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value connect
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value trace
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value trace,
+headers-forbidden-override.any.html	header x-method-override is forbidden to use value track
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language/ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept-language/@ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept/" as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have accept/012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have authorization/basics as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language set to , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language set to sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, , sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language/ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-language/@ as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type set to text/plain;ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss, text/plain
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type/text/html as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have content-type/text/plain; long=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have downlink/-1.0 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have dpr/2 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have ect/6g as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have range/bytes 0- as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have rtt/1.0 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have save-data/on as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have test/hi as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have unknown/doesitmatter as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have viewport-width/100 as header
+headers-no-cors.any.html	"no-cors" Headers object cannot have width/100 as header
+headers-no-cors.any.html	Loading data…
+headers-normalize.any.html	Check append method with not normalized values
+headers-normalize.any.html	Check set method with not normalized values
+headers-normalize.any.html	Create headers with not normalized values
+headers-record.any.html	Basic operation with one property
+headers-record.any.html	Basic operation with one property and a proto
+headers-record.any.html	Correct operation ordering with non-enumerable properties
+headers-record.any.html	Correct operation ordering with repeated keys
+headers-record.any.html	Correct operation ordering with two properties
+headers-record.any.html	Correct operation ordering with two properties one of which has an invalid name
+headers-record.any.html	Correct operation ordering with two properties one of which has an invalid value
+headers-record.any.html	Correct operation ordering with undefined descriptors
+headers-record.any.html	Passing nothing to Headers constructor
+headers-record.any.html	Passing null to Headers constructor
+headers-record.any.html	Passing undefined to Headers constructor
+headers-structure.any.html	Headers has append method
+headers-structure.any.html	Headers has delete method
+headers-structure.any.html	Headers has entries method
+headers-structure.any.html	Headers has get method
+headers-structure.any.html	Headers has has method
+headers-structure.any.html	Headers has keys method
+headers-structure.any.html	Headers has set method
+headers-structure.any.html	Headers has values method

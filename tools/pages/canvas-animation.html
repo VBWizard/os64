@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — In Motion</title>
+<style>
+body{margin:0;background:#e7efe9;color:#243e3e;font:18px sans-serif}
+main{max-width:960px;margin:30px auto;padding:0 24px}h1{font-size:44px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#48786b;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;background:#fffdf3;border:1px solid #adc7ba;border-radius:12px}
+canvas{width:100%;height:170px;display:block;background:#183b42;border:1px solid #608b86}
+button{padding:10px 16px;background:#326e65;color:white;border:0;border-radius:6px;font-size:16px;margin:8px 10px 16px 0}
+.caption{font-size:15px;min-height:65px}.track{position:relative;height:170px;background:#d6e7dc;overflow:hidden;border:1px solid #608b86}
+#runner{position:absolute;left:0;top:60px;width:48px;height:48px;background:#dd9166;border-radius:8px}
+.small{font-size:14px;color:#48786b}
+</style>
+<main><p class="eyebrow">YONDER / CANVAS / THE FRAME CLOCK</p><h1>In Motion</h1>
+<p>No rapid clicking required. Four drawings, sharing the browser's frame clock.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<button id="pause">Pause motion</button><button id="direction">Reverse direction</button>
+<div class="cards">
+<section class="card"><h2>1. The evening tide</h2><canvas id="tide" width="400" height="170"></canvas>
+<p class="caption">Three waves travel together. Their movement follows elapsed time, so a slower frame takes a bigger step.</p></section>
+<section class="card"><h2>2. A little orbit</h2><canvas id="orbit" width="400" height="170"></canvas>
+<p class="caption">A golden satellite circles a mint planet. Gradients and transformed paths redraw with each frame.</p></section>
+<section class="card"><h2>3. Words on the move</h2><canvas id="words" width="400" height="170"></canvas>
+<p class="caption">HELLO CANVAS sways and turns. The same text renderer that drew the still gallery now draws its next frame.</p></section>
+<section class="card"><h2>4. A travelling companion</h2><div class="track"><div id="runner"></div></div>
+<p class="caption">This one is an HTML element. Its motion uses the same timestamp as the canvas drawings above.</p></section>
+</div><p class="small">Try pause/resume, reverse, and 25%–400% zoom. Cover the window and uncover it: motion resumes without replaying missed frames.</p></main>
+<script>
+(function(){
+ var tide=document.getElementById('tide').getContext('2d'),orbit=document.getElementById('orbit').getContext('2d'),words=document.getElementById('words').getContext('2d');
+ var runner=document.getElementById('runner'),pause=document.getElementById('pause');
+ var handle=0,running=true,last=null,phase=0,direction=1;
+ function draw(t){
+  tide.clearRect(0,0,400,170);
+  var colors=['#375f71','#4d958e','#9fd4b0'];
+  for(var j=0;j<3;j++){
+   tide.beginPath();tide.moveTo(0,170);
+   for(var x=0;x<=400;x+=8)tide.lineTo(x,70+j*24+Math.sin(x/55+t*(j*.18+1)+j)*18);
+   tide.lineTo(400,170);tide.closePath();tide.fillStyle=colors[j];tide.fill();
+  }
+  orbit.clearRect(0,0,400,170);orbit.strokeStyle='#6a9692';orbit.lineWidth=2;
+  orbit.beginPath();orbit.ellipse(200,85,132,55,0,0,Math.PI*2);orbit.stroke();
+  var glow=orbit.createRadialGradient(190,72,3,200,85,39);glow.addColorStop(0,'#d4f0bc');glow.addColorStop(1,'#5caa91');
+  orbit.fillStyle=glow;orbit.beginPath();orbit.arc(200,85,39,0,Math.PI*2);orbit.fill();
+  orbit.save();orbit.translate(200+Math.cos(t)*132,85+Math.sin(t)*55);orbit.rotate(t);
+  orbit.fillStyle='#f5c56d';orbit.fillRect(-10,-10,20,20);orbit.restore();
+  words.clearRect(0,0,400,170);words.save();words.translate(200,85+Math.sin(t)*20);words.rotate(Math.sin(t*.7)*.12);
+  words.fillStyle='#f5c56d';words.font='bold 32px sans-serif';words.textAlign='center';words.textBaseline='middle';words.fillText('HELLO CANVAS',0,0);words.restore();
+  runner.style.transform='translateX('+(176+Math.sin(t)*166)+'px) rotate('+(Math.sin(t)*20)+'deg)';
+ }
+ function frame(now){
+  handle=0;if(!running)return;
+  if(last!==null)phase+=(now-last)*.001*direction;
+  last=now;draw(phase);handle=requestAnimationFrame(frame);
+ }
+ pause.onclick=function(){running=!running;if(!running){cancelAnimationFrame(handle);handle=0;pause.textContent='Resume motion';}else{last=null;handle=requestAnimationFrame(frame);pause.textContent='Pause motion';}};
+ document.getElementById('direction').onclick=function(){direction=-direction;};
+ draw(0);document.getElementById('status').textContent='Live animation. Your clicking finger may rest.';handle=requestAnimationFrame(frame);
+})();
+</script>

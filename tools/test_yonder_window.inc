@@ -1,0 +1,369 @@
+/* P1-W END TO END (MODERN_WEB.md § P1-W, as built): crypto through
+ * yonder's entropy (scripts.c's hook over libtls's door, faked by this
+ * host as fake_entropy_*), and a queueMicrotask callback that throws,
+ * reported on the page's record while the page carries on. And P2a's
+ * (§ P2a, as built): rejections nothing handled on the record, and the
+ * window's error and rejection events. */
+
+static const char *window_record_text(void) {
+    static char text[16384];
+    text[0]='\0';
+    if(g.page.diag!=NULL) yonder_diag_render(g.page.diag,text,sizeof(text));
+    return text;
+}
+
+/* Whether the page's record holds `line`; the record is shown when not. */
+static bool window_record_has_quietly(const char *line) {
+    return strstr(window_record_text(),line)!=NULL;
+}
+
+static bool window_record_has(const char *line) {
+    const char *text=window_record_text();
+    if(strstr(text,line)!=NULL) return true;
+    fprintf(stderr,"window: the record has no \"%s\":\n%s\n",line,text);
+    return false;
+}
+
+static void window_crypto_case(void) {
+    fake_entropy_fail=false;
+    loop_page("<p id=out>x</p><script>var a=crypto.getRandomValues(new Uint8Array(8));"
+        "document.getElementById('out').textContent=[a.length,a.some(x=>x!==0),isSecureContext,"
+        "'randomUUID' in crypto,origin].join(':');</script>");
+    check(loop_settle() && script_rebuild() && probe_text_is("out","8:true:false:false:http://fixture.test"),
+        "window: crypto fills from yonder's entropy; an http page is no secure context");
+    loop_drop();
+    fake_entropy_fail=true;
+    loop_page("<p id=out>x</p><script>try{crypto.getRandomValues(new Uint8Array(4))}"
+        "catch(e){document.getElementById('out').textContent=e.name}</script>"
+        "<script>crypto.getRandomValues(new Uint8Array(1))</script>");
+    check(loop_settle() && script_rebuild() && probe_text_is("out","OperationError"),
+        "window: entropy yonder cannot read is an OperationError the page can catch");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-2: OperationError"),
+        "window: and one it does not catch is its script's FAILED line");
+    fake_entropy_fail=false;
+    loop_drop();
+}
+
+static void window_microtask_case(void) {
+    loop_page("<p id=out>x</p><script>queueMicrotask(()=>{throw new Error('in a microtask')});"
+        "queueMicrotask(()=>{document.getElementById('out').textContent='after'});</script>"
+        "<script>document.getElementById('out').title='next script'</script>");
+    check(loop_settle() && script_rebuild() && probe_text_is("out","after"),
+        "window: the microtask after one that threw still runs");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: Error: in a microtask"),
+        "window: a microtask's throw is reported on the page's record, against the script that queued it");
+    check(strstr(window_record_text(),"FAILED script http://fixture.test/final#inline-2")==NULL &&
+          strstr(window_record_text(),"verdict: 1 FAILED\n")!=NULL,
+        "window: and the next script runs clean");
+    loop_drop();
+}
+
+/* P2a END TO END (MODERN_WEB.md § P2a, as built): the page's record says a
+ * rejection nothing handled, by the script, event or timer whose task left
+ * it, and the window's events reach the page's handlers. */
+static void window_rejection_case(void) {
+    loop_page("<p id=b>button</p><p id=log>-</p><script>var log=[];"
+        "function note(s){log.push(s);document.getElementById('log').textContent=log.join('|')}"
+        "onunhandledrejection=function(e){note('unhandled '+e.reason.message)};"
+        "onrejectionhandled=function(e){note('handled '+e.reason.message)};"
+        "var kept=Promise.reject(new Error('from the script'));Promise.reject(new Error('and another'));"
+        "Promise.reject(new Error('caught')).catch(function(){});"
+        "document.getElementById('b').addEventListener('click',async function(){throw new TypeError('in a click')});"
+        "async function later(){await new Promise(function(r){setTimeout(r,10)});throw new Error('after a timer')}"
+        "later();setTimeout(function(){kept.catch(function(){})},50);</script>");
+    check(loop_settle() && script_rebuild(),"window: a page that leaves rejections unhandled arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
+                            "Error: from the script, at inline:1:267 (1)"),
+        "window: a script's unhandled rejection is its FAILED line, said as one, with where it was made");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
+                            "Error: and another, at inline:1:312 (1)"),
+        "window: and each rejection it left is a line of its own");
+    check(strstr(window_record_text(),"caught")==NULL,"window: a caught rejection is no failure");
+    input_click_at("b");
+    check(window_record_has("FAILED script pointer input: unhandled rejection: TypeError: in a click, "
+                            "at inline:1:475 (1)"),
+        "window: an async click handler that throws is the click's FAILED line, at its handler");
+    check(status_says("unhandled rejection: TypeError: in a click"),
+        "window: and the status line says it, as it says a script's error");
+    now_ms+=100;
+    for(int i=0;i<4;i++) script_turn();
+    check(window_record_has("FAILED script http://fixture.test/final#timer-1: unhandled rejection: "
+                            "Error: after a timer, at later inline:1:579 (1)"),
+        "window: one a timer's task left is the timer's, in the function that threw");
+    check(script_rebuild() && probe_text_is("log","unhandled from the script|unhandled and another|"
+                                                 "unhandled in a click|unhandled after a timer|handled from the script"),
+        "window: each was the page's unhandledrejection, and the late handler its rejectionhandled");
+    loop_drop();
+    loop_page("<p id=log>-</p><script>onunhandledrejection=function(e){e.preventDefault()};"
+        "onerror=function(m,f,l,c){document.getElementById('log').textContent=[m,f,l,c].join(' ')};"
+        "Promise.reject(new Error('handled by the page'))</script><script>missing()</script>");
+    check(loop_settle() && script_rebuild() && strstr(window_record_text(),"handled by the page")==NULL,
+        "window: a rejection the page's listener cancelled is no failure");
+    check(probe_text_is("log","Uncaught ReferenceError: 'missing' is not defined http://fixture.test/final 1 1") &&
+          window_record_has("FAILED script http://fixture.test/final#inline-2: ReferenceError: 'missing' is not "
+                            "defined, at inline:1:1 (1)"),
+        "window: window.onerror hears a script's error, which is its FAILED line as before");
+    loop_drop();
+}
+
+/* A flood of rejections in one task costs the record seventeen lines past
+ * the task's first failure, the last counting the rest, and the record's
+ * lookups stay a few probes a line (diag.c's index). */
+static void window_rejection_flood_case(void) {
+    loop_page("<script>for(var i=0;i<1000;i++)Promise.reject(i)</script>");
+    uint64_t before=yonder_diag_steps();
+    check(loop_settle(),"window: a page that leaves a thousand rejections arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: 0 (1)") &&
+          window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: 16 (1)") &&
+          strstr(window_record_text(),"unhandled rejection: 17 (1)")==NULL &&
+          window_record_has("FAILED script http://fixture.test/final#inline-1: and 983 more unhandled "
+                            "rejections (1)"),
+        "window: the first, sixteen more, and one line counting the rest");
+    check(yonder_diag_steps()-before<2000,"window: and the record found its lines in a few probes each");
+    loop_drop();
+}
+
+/* A script is muted, and named, by where it came from: a same-origin
+ * address that redirects to another site is that site's script; one that
+ * redirects within the site is the page's, told whole. */
+static void window_redirect_case(const char *final, bool muted) {
+    loop_page("<p id=log>-</p><script>var log=[];"
+        "onerror=function(m,f){log.push(m+' '+f);document.getElementById('log').textContent=log.join('|')};"
+        "onunhandledrejection=function(e){log.push('unhandled '+e.reason.message);"
+        "document.getElementById('log').textContent=log.join('|')}</script>"
+        "<script src=/lib.js></script>");
+    char record[160], told[200];
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for the script's fetch");
+    check(script_land_from("/lib.js","Promise.reject(new Error('rejected'));throw new Error('thrown')",final),
+        "window: the redirected script's fetch comes back");
+    check(loop_settle() && script_rebuild(),"window: the page with a redirected script settles");
+    snprintf(record,sizeof(record),"FAILED script %s: Error: thrown, at 1:54 (1)",final);
+    snprintf(told,sizeof(told),"Uncaught Error: thrown %s|unhandled rejected",final);
+    check(window_record_has(record),"window: the record names the script by the address it came from");
+    check(probe_text_is("log",muted ? "Script error. " : told),
+        muted ? "window: a same-origin address redirected to another site is muted"
+              : "window: one redirected within the site is told whole, by where it came from");
+    loop_drop();
+}
+
+/* Where a script failed, on its FAILED line (scripts.c's
+ * yonder_scripts_failure): in a function of another script, that script's
+ * address, the function's name and the line; in its own, the line alone. */
+static void window_frame_case(void) {
+    loop_page("<script src=/lib.js></script><script>\n\nboom()</script>");
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for the library's fetch");
+    check(script_land("/lib.js","function boom(){\n  null.x}\nfunction ok(){}\nnull.y"),
+        "window: the library's fetch comes back");
+    check(loop_settle(),"window: the page whose library and inline script both fail settles");
+    check(window_record_has("FAILED script http://fixture.test/lib.js: TypeError: cannot read property 'y' "
+                            "of null, at 4:5 (1)"),
+        "window: a src script's own failure is at its line and column");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: TypeError: cannot read property "
+                            "'x' of null, at boom http://fixture.test/lib.js:2:7 (1)"),
+        "window: an inline script's failure in the library's function names the function and the library");
+    check(!status_says(", at "),"window: the status line says the message alone");
+    loop_drop();
+    loop_page("<p id=c onclick=\"null.z\">c</p><script>function j(){JSON.parse('<html>')}j()</script>"
+        "<script>Promise.reject(new Error('same'));\nPromise.reject(new Error('same'))</script>");
+    check(loop_settle(),"window: a page that parses HTML as JSON and fails one way twice arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: SyntaxError: unexpected token: "
+                            "'<', at j inline:1:24 (1)"),
+        "window: JSON that does not parse is placed in the script that parsed it, not in the JSON");
+    check(window_record_has("unhandled rejection: Error: same, at inline:1:25 (1)") &&
+          window_record_has("unhandled rejection: Error: same, at inline:2:25 (1)"),
+        "window: the same failure at two places is two lines");
+    input_click_at("c");
+    check(window_record_has("FAILED script pointer input: TypeError: cannot read property 'z' of null, "
+                            "at onclick onclick attribute:2:5 (1)"),
+        "window: a place in no script the binding named is the engine's own name for it");
+    loop_drop();
+    /* A throw inside the Streams standard's own script is marked as the
+     * browser's place, whoever is at fault (STREAMS.md § 4, rule 4). */
+    loop_page("<script>ReadableStream.prototype.getReader.call({})</script>");
+    check(loop_settle(),"window: a page that calls a stream's method on another object arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: (in os64-streams) TypeError: "
+                            "Illegal invocation, at getReader os64-streams:"),
+        "window: a throw inside streams.js is marked as inside it");
+    loop_drop();
+}
+
+/* The text of the element with `id`, or "(none)", for a case to say. */
+static const char *window_text(const char *id) {
+    os64_html_node_t *n=probe_id(id);
+    return n && n->first_child && n->first_child->kind==OS64_HTML_TEXT ? n->first_child->text : "(none)";
+}
+
+/* P2b END TO END (MODERN_WEB.md § P2b, as built): the setImmediate trick
+ * through yonder's loop, each message a task of its own, a due timer not
+ * starved by them; and an idle callback run by the shown page's turn only
+ * when nothing else is, one that asks for itself again once a period, not
+ * once a turn. */
+static void window_message_case(void) {
+    loop_page("<p id=out>-</p><script>var log=[];function say(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('message',function(e){if(e.source!==window||e.data!=='tick')return;"
+        "log.push('m'+log.length);if(log.length<5)postMessage('tick','*');say()});"
+        "setTimeout(function(){log.push('t');say()},0);postMessage('tick','*');log.push('s');say()</script>");
+    check(loop_settle(),"window: a page that posts itself messages arrives");
+    for(int i=0;i<10 && script_turn();i++) {}
+    if(!probe_text_is("out","s,t,m2,m3,m4")) fprintf(stderr,"window: the page says %s\n",window_text("out"));
+    check(script_rebuild() && probe_text_is("out","s,t,m2,m3,m4"),
+        "window: its script, then the due timer (queued no later), then each message a task of its own");
+    check(!scripts_owed(g.page.scripts) && strstr(window_record_text(),"FAILED")==NULL,
+        "window: and nothing more is owed");
+    loop_drop();
+}
+
+/* A page whose every message posts another still has its view's events:
+ * once a rendering opportunity they run first in the turn. */
+static void window_message_view_case(void) {
+    loop_page("<p id=out>-</p><script>var n=0;onmessage=function(){n++;postMessage(0,'*')};postMessage(0,'*');"
+        "addEventListener('resize',function(){document.getElementById('out').textContent='resized '+innerWidth})"
+        "</script>");
+    check(loop_settle(),"window: a page that posts itself messages for ever arrives");
+    check(script_turn(),"window: a turn that asks the view (nothing owed) and runs a message");
+    g.view.bounds.w=600;
+    for(int i=0;i<5;i++) check(script_turn(),"window: each turn runs a task");
+    check(probe_text_is("out","-"),"window: inside a rendering opportunity the messages run");
+    now_ms+=YONDER_SCRIPTS_VIEW_CADENCE_MS;
+    check(script_turn() && script_rebuild() && probe_text_is("out","resized 600"),
+        "window: past one, the resize runs first in the turn, the messages notwithstanding");
+    check(script_turn() && scripts_owed(g.page.scripts),"window: and the messages go on");
+    loop_drop();
+}
+
+static void window_idle_case(void) {
+    loop_page("<p id=out>-</p><script>var log=[];function say(){document.getElementById('out').textContent=log.join(',')}"
+        "requestIdleCallback(function(d){log.push('idle:'+d.didTimeout);say()});"
+        "setTimeout(function(){log.push('timer');say()},0);log.push('script');say()</script>");
+    check(loop_settle() && script_rebuild() && probe_text_is("out","script,timer"),
+        "window: the timer due as the parse ended runs as the page arrives, and the idle callback waits");
+    check(script_turn() && script_rebuild() && probe_text_is("out","script,timer,idle:false"),
+        "window: the shown page's turn runs it when it has nothing else");
+    check(!script_turn(),"window: and then nothing");
+    loop_drop();
+    loop_page("<p id=out>-</p><script>var n=0;function again(){n++;document.getElementById('out').textContent=n;"
+        "if(n<5)requestIdleCallback(again)}requestIdleCallback(again)</script>");
+    check(loop_settle() && script_turn() && script_rebuild() && probe_text_is("out","1"),
+        "window: one that asks for itself again runs once");
+    check(!script_turn() && !script_turn(),"window: and not again in the same period: the loop does not spin");
+    check(yonder_scripts_idle_next(g.page.scripts)==now_ms+50,"window: the ticker is told when the next period may start");
+    now_ms+=50;
+    check(script_turn() && script_rebuild() && probe_text_is("out","2"),"window: the next period runs it again");
+    loop_drop();
+}
+
+/* A stack overflow says where it recursed: its place, and the callers that
+ * show the cycle (scripts.c's yonder_scripts_failure). Every new failure is
+ * said on the console too, once, prefixed "yonder:" (diag.c). */
+static void window_overflow_case(void) {
+    yonder_host_console_clear();
+    loop_page("<script>function deep(n){return deep(n+1)+1}\ndeep(0)</script>");
+    check(loop_settle(),"window: a page whose script recurses without end settles");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: InternalError: stack overflow, "
+                            "at deep inline:1:") &&
+          window_record_has(", called from deep 1:29, deep 1:29, deep 1:29 (1)"),
+        "window: a stack overflow names its place and the callers that recurse");
+    check(strstr(yonder_host_console,"yonder: FAILED script http://fixture.test/final#inline-1: InternalError: "
+                                     "stack overflow, at deep inline:1:")!=NULL &&
+          strstr(yonder_host_console,", called from deep 1:29, deep 1:29, deep 1:29\n")!=NULL,
+        "window: and says it on the console, prefixed yonder:");
+    loop_drop();
+    loop_page("<script>null.a</script>");
+    check(loop_settle() && window_record_has("FAILED script http://fixture.test/final#inline-1: TypeError: "
+                                             "cannot read property 'a' of null, at inline:1:5 (1)"),
+        "window: another failure's place is its first frame alone");
+    loop_drop();
+
+    // Once a page: the same failure twice is one console line.
+    yonder_diag_t *d=yonder_diag_new("https://fixture.test/twice",1,0);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script x","TypeError: t, at 1:2");
+    yonder_diag_failed(d,"script x","TypeError: t, at 1:2");
+    yonder_diag_failed_seen(d,"script x","TypeError: t, at 1:2");
+    check(yonder_host_console_lines==1 &&
+          strcmp(yonder_host_console,"yonder: FAILED script x: TypeError: t, at 1:2\n")==0,
+        "window: the console hears a failure once a page");
+    // A long address is cut on the console, its place kept.
+    char what[400], message[400];
+    char long_path[260];
+    memset(long_path,'p',sizeof(long_path)-1); long_path[sizeof(long_path)-1]='\0';
+    snprintf(what,sizeof(what),"script https://cdn.test/%s/bundle.js",long_path);
+    snprintf(message,sizeof(message),"TypeError: t, at https://cdn.test/%s/bundle.js?v=1:777:731",long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,what,message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script https://cdn.test/.../bundle.js: TypeError: t, at "
+                                     "https://cdn.test/.../bundle.js:777:731\n")==0,
+        "window: a long address is cut on the console to its host and last part, its place kept");
+    // A comma after the address (a stack overflow's callers) is not the
+    // address's: the first frame's place survives the cut (Codex #437 rd1).
+    snprintf(message,sizeof(message),"InternalError: stack overflow, at https://cdn.test/%s/bundle.js?v=1:777:731, "
+             "called from deep 1:29",long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script z",message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script z: InternalError: stack overflow, at "
+                                     "https://cdn.test/.../bundle.js:777:731, called from deep 1:29\n")==0,
+        "window: a place before a stack overflow's callers survives the cut");
+    // A control byte or one past ASCII in a page's error text is escaped
+    // on the console: it cannot end, bend or clear the line.
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script c","Error: a\nb\rc\x0c\xe2\x80\x9cq\\");
+    check(strcmp(yonder_host_console,"yonder: FAILED script c: Error: a\\x0ab\\x0dc\\x0c\\xe2\\x80\\x9cq\\x5c\n")==0,
+        "window: control bytes, bytes past ASCII and a backslash are escaped on the console");
+    // A query's slash is no part of the path: the file is the path's last
+    // part (Codex #437 rd2).
+    snprintf(message,sizeof(message),"TypeError: t, at https://cdn.test/%s/bundle.js?redirect=https://o.test/wrong.js:777:731",
+             long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script q",message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script q: TypeError: t, at https://cdn.test/.../bundle.js:777:731\n")==0,
+        "window: a slash in an address's query does not name its file");
+    // Long both ways, the line still fits os64_complain's buffer and ends.
+    char big_what[700], big_message[1500];
+    memset(big_what,'w',sizeof(big_what)-1); big_what[sizeof(big_what)-1]='\0';
+    memset(big_message,'m',sizeof(big_message)-1); big_message[sizeof(big_message)-1]='\0';
+    yonder_host_console_clear();
+    yonder_diag_failed(d,big_what,big_message);
+    size_t said=strlen(yonder_host_console);
+    check(said<1024 && said>900 && yonder_host_console[said-1]=='\n',
+        "window: a failure long in both parts is cut to fit the console's line, its end kept");
+    yonder_diag_free(d);
+
+    // A recursion across two scripts names the other script's address, not
+    // the engine's private name for it (Codex #437 rd1).
+    loop_page("<script src=/a.js></script><script>\nfunction b(n){return a(n+1)+1}\na(0)</script>");
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for a.js");
+    check(script_land("/a.js","function a(n){return b(n)+1}"),"window: a.js comes back");
+    check(loop_settle(),"window: the page whose scripts recurse into each other settles");
+    check(window_record_has("http://fixture.test/a.js:1:") && !window_record_has_quietly("os64-script"),
+        "window: a caller in another script is named by its address");
+    loop_drop();
+}
+
+/* The engine's stack out of the window thread's (scripts.c's
+ * yonder_script_stack_limit, SCRIPT_STACK.md § 5): the declared 4 MiB gives
+ * 2 MiB; the default 1 MiB, or a size that could not be read, gives
+ * DOM_D10.md's 128 KiB; a huge one stops at the most. */
+static void window_stack_case(void) {
+    check(yonder_script_stack_limit((size_t)4<<20)==((size_t)2<<20),"window: a 4 MiB stack gives the engine 2 MiB");
+    check(yonder_script_stack_limit((size_t)1<<20)==(size_t)128*1024,"window: the default 1 MiB gives it 128 KiB, as before");
+    check(yonder_script_stack_limit(0)==(size_t)128*1024,"window: a stack whose size could not be read gives 128 KiB");
+    check(yonder_script_stack_limit(((size_t)2<<20)+(size_t)128*1024)==(size_t)128*1024 &&
+          yonder_script_stack_limit(((size_t)2<<20)+(size_t)256*1024)==(size_t)256*1024,
+        "window: what is left above the headroom, never less than 128 KiB");
+    check(yonder_script_stack_limit((size_t)16<<20)==((size_t)8<<20),"window: a 16 MiB stack stops the engine at 8 MiB");
+}
+
+static void window_cases(void) {
+    window_stack_case();
+    window_overflow_case();
+    window_message_case();
+    window_message_view_case();
+    window_idle_case();
+    window_redirect_case("http://other.test/lib.js",true);
+    window_redirect_case("http://fixture.test/moved/lib.js",false);
+    window_frame_case();
+    window_rejection_case();
+    window_rejection_flood_case();
+    window_crypto_case();
+    window_microtask_case();
+}

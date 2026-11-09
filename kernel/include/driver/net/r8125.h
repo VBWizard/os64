@@ -33,12 +33,14 @@
 // ── REGISTER PROVENANCE, stated once ───────────────────────────────────
 //
 // Offsets marked [8169-family] are shared across the whole RealTek
-// descriptor-ring lineage and are the ones this author knows cold.
-// Offsets marked [8125-SPECIFIC] MOVED in this generation and are the
-// dangerous ones — they are written from knowledge of Linux's r8169.c
-// (RTL8125 = RTL_GIGA_MAC_VER_60 and up) and MUST be confirmed against the
-// vendor's GPL r8125 driver or that file before first light on the P5.
-// Any offset this driver has not yet confirmed says so at its definition.
+// descriptor-ring lineage. Offsets marked [8125-SPECIFIC] MOVED in this
+// generation. The driver was first written from knowledge of Linux's
+// r8169.c (RTL8125 = RTL_GIGA_MAC_VER_60 and up) with the moved ones
+// tagged UNCONFIRMED; on 2026-09-05 every offset and bit was checked
+// against Realtek's own GPL r8125 driver (r8125.h / r8125_n.c, the
+// awesometic/realtek-r8125-dkms mirror) and the tags came off, each
+// definition naming the vendor's spelling. The PHY register map arrived
+// the same day, already checked (r8125_phy.h).
 //
 // The doc's tripwire put it best: trust the shape, verify the numbers.
 
@@ -63,36 +65,39 @@
 // The register file comfortably fits one page; map a page and be done.
 #define R8125_REG_WINDOW 0x1000
 
-// Ring sizes. These used to both be 64, with a comment reasoning that "bigger
-// rings would buy nothing measurable today" because TCP's window and the
-// scheduler pass set the ceiling first. That reasoning was about THROUGHPUT,
-// and it was right about throughput — but it missed what a small ring costs
-// when it RUNS OUT, which is not slowness. It is RDU: RX-descriptors-exhausted,
-// a bit this family LATCHES, and which halted reception outright until
-// 2026-08-22 taught the driver to acknowledge it (r8125_ack_status).
+// Ring sizes. A ring is the time the card can wait for the drainer: when
+// the receive ring RUNS OUT the card raises RDU (descriptors exhausted) and
+// drops every frame until the drain refills it, and each such moment is a
+// hole in a TCP stream that the sender fills only after its retransmit
+// timer fires. Slowness is the symptom, but the cause is a ring too shallow
+// for the gap between two drains.
 //
-// THE RECEIVE RING IS 256 SINCE 2026-08-22, and the evidence is specific. The
-// P5 logged `ISR=0x00000011` — ROK | RDU — during an `os64get -a` pulling 83
-// files back to back: frames arrived faster than one scheduler pass could
-// drain 64 descriptors, the card had nowhere to put the next one, and every
-// such moment is DROPPED FRAMES and a TCP retransmit. Acknowledging made that
-// survivable; it did not make it free. A ring four times deeper absorbs a
-// burst that a single pass then drains, which is exactly the shape of this
-// traffic — bursty file transfer, not steady line-rate.
+// THE RECEIVE RING IS THE VENDOR'S DEFAULT, 1024 — the hardware's maximum
+// (MAX_NUM_RX_DESC in Realtek's r8125 driver; 256 is its MINIMUM). The gap
+// it has to cover is knet's scheduling latency: knet is one thread pinned to
+// the BSP (DOORBELL.md) and a ring that lands while it is runnable but off
+// the CPU waits behind whatever the BSP is running, up to a scheduler
+// quantum or more. The P5 showed the shape on 2026-10-18 — 57 overruns in
+// three seconds under a 22,000-frame/s page load with yonder, vncd and sshd
+// busy beside knet, and a 256-ring at that rate was 12 ms of slack, one
+// quantum. 1024 is ~46 ms at the same rate, and the whole ring is still one
+// drain call (r8125_drain's bound is the ring).
 //
-// The cost is 256 * R8125_BUF_SIZE = 512KB of receive buffer plus 4KB of
-// descriptors, and it is charged once at bring-up on a machine with at least
-// 8GB (Chris, deciding this: "We're *not* trying to write the world's smallest
-// OS"). 0.006% of the smallest supported machine, against a bug that ended
-// every large transfer.
+// Cost: 1024 * R8125_BUF_SIZE = 2MB of receive buffer plus 16KB of
+// descriptors, once at bring-up, on a machine with at least 8GB (Chris, when
+// the ring first grew: "We're *not* trying to write the world's smallest
+// OS").
 //
-// TRANSMIT STAYS AT 64, deliberately, because the evidence never accused it:
-// no TDU, and the ring-full path has not fired once since the acknowledge
-// landed. Growing it too would be changing an untested variable in the same
-// breath as a tested one — and transmit here is mostly bare ACKs, which the
-// device drains as fast as we can post them.
-#define R8125_RX_DESCS 256
-#define R8125_TX_DESCS 64
+// TRANSMIT IS 256, the vendor's minimum. The P5 streams a VNC session out
+// through its ssh tunnel at hundreds of Mbit/s with a scaled window, and a
+// 64-slot ring filled twice under that stream: not a device that stopped
+// completing, a producer that outran the wire for a moment, and the frame
+// at the full ring was dropped for TCP to resend. Four times the room: at a
+// gigabit the device empties 256 full frames in about three milliseconds,
+// which is how long a burst from a scaled window can now run ahead of the
+// wire before a frame is dropped.
+#define R8125_RX_DESCS 1024
+#define R8125_TX_DESCS 256
 
 // One RX buffer per descriptor. 2KB covers a standard 1500-byte MTU with
 // room to spare; jumbo frames are a non-goal (RTL8125.md).
@@ -103,10 +108,39 @@
 // which satisfies it several times over.
 #define R8125_RING_ALIGN 256
 
+// WHAT THE PHY ADVERTISES, above the 10/100/1000 it always offers
+// (r8125_phy_plan_advertisement owns the rest of the policy).
+//
+// 2.5GBASE-T is ON — which is to say the driver leaves the PHY's own
+// default alone. The first draft of this slice turned it off on the
+// theory that the P5's gigabit switch mishandled the 802.3bz next pages
+// and fell back to 100M; the P5's "as found" dump refuted that the same
+// day (2026-09-05: 2.5G advertised, partner offering 10/100/1000, link
+// 1000/full, before the driver had touched anything). With it ON, a boot
+// whose firmware left the PHY at its default advertises exactly what we
+// would write, so nothing is written and the link is never dropped at
+// init. With it OFF every such boot renegotiated for no gain.
+//
+// The receive path could not drain a real 2.5G link (the ring already
+// overruns on gigabit bursts — R8125_RX_DESCS), so the day a 2.5G switch
+// arrives, that row is the next problem. A good problem to have.
+#define R8125_ADVERTISE_2500 1
+
 void init_r8125(void);
-// The processSignals rider, beside virtio_net_poll and e1000_poll. Cheap
+// The seam's drain verb, called by knet whenever its doorbell rings
+// (DOORBELL.md): by this driver's interrupt handler on arrival once MSI is
+// wired, and by the tick every pass until then. Cheap
 // when the hardware is absent (one pointer test) and cheap when it is idle
-// (one descriptor-status read per ring).
-void r8125_poll(void);
+// (one descriptor-status read per ring); returns whether anything moved.
+bool r8125_drain(struct net_device* dev);
+
+// Adopt MSI (DOORBELL.md): called from kernel_init at the platform moment the
+// e1000 adopts its INTx wire — after the LAPIC is the interrupt controller —
+// never from init_r8125, which runs long before that. Programs the PCI MSI
+// capability at the BSP and vector 0x46; a chip without the capability, or a
+// NETPOLL boot, stays tick-driven and says so. The handler, r8125_isr, is
+// called only from handler_r8125_msi_asm.
+void r8125_enable_msi(void);
+void r8125_isr(void);
 
 #endif // R8125_H

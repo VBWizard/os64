@@ -1,0 +1,27 @@
+delete: exit 0
+textview Backspace after e-acute: bytes=636166c3 cursor=4; expected bytes=636166 cursor=3
+textview Delete before e-acute: bytes=636166a9 cursor=3; expected bytes=636166 cursor=3
+
+field-oom: exit 0
+textfield Backspace after refused layout: bytes=636166c3 cursor=4; expected intact input or whole-cluster deletion
+teardown=0
+
+view-oom: exit 0
+textview Right before e-acute after refused layout: cursor=4; legal neighboring offsets=3,5
+
+field-adopt: exit 0
+textfield adoption=0 caret before=64 left before=0; caret after=192 left after=0 inner width=92; visible=0
+teardown=0
+
+commit: exit 0
+real Scribe planner: adoption=0 commit allocation attempts=5; extent before=1024 after=1536 expected=1536 hscroll.total=1536
+teardown=0
+
+commit-oom: exit 0
+real Scribe planner: adoption=0 commit allocation attempts=1; extent before=1024 after=0 expected=1536 hscroll.total=0
+teardown=0
+
+save: exit 0
+unchanged save input=616263 output=6162630a status=0 byte-identical=0
+unchanged save input= output=0a status=0 byte-identical=0
+unchanged save input=6162630a output=6162630a status=0 byte-identical=1

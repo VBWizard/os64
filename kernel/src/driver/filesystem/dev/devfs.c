@@ -21,6 +21,8 @@
 #include "strings/strings.h"
 #include "serial_logging.h"
 #include "CONFIG.h"
+#include "random.h"            // /dev/random: the entropy pool's door
+#include "gui/glass.h"         // /dev/glass: a viewer of the screen
 
 // ── The node vocabulary ─────────────────────────────────────────────────────
 
@@ -31,7 +33,9 @@ typedef enum
 	DEV_NODE_NULL,       // "/null"
 	DEV_NODE_ZERO,       // "/zero"
 	DEV_NODE_FULL,       // "/full"
-	DEV_NODE_TTY         // "/tty" — never opened as a file (see devfs.h)
+	DEV_NODE_RANDOM,     // "/random" — the entropy pool's door (random.h)
+	DEV_NODE_TTY,        // "/tty" — never opened as a file (see devfs.h)
+	DEV_NODE_GLASS       // "/glass" — the screen; never opened as a file either
 } dev_node_t;
 
 // ONE table, walked by every path lookup and by readdir alike. Counted, never
@@ -48,7 +52,9 @@ static const dev_entry_t kDevNodes[] = {
 	{ "null", DEV_NODE_NULL },
 	{ "zero", DEV_NODE_ZERO },
 	{ "full", DEV_NODE_FULL },
+	{ "random", DEV_NODE_RANDOM },
 	{ "tty",  DEV_NODE_TTY  },
+	{ "glass", DEV_NODE_GLASS },
 };
 static const int kDevNodeCount = (int)(sizeof(kDevNodes) / sizeof(kDevNodes[0]));
 
@@ -125,12 +131,13 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	     mode[0] != 'c' && mode[0] != 'u'))
 		return -1;
 
-	// ROOT is a directory (dops), NONE does not exist, and TTY never gets
-	// here at all — syscall_open answers it as a handle alias before the
-	// filesystem is ever asked to open anything (devfs.h, THE ALIAS). If it
-	// somehow arrives, refusing is the honest answer: this layer cannot
-	// produce a terminal.
-	if (node != DEV_NODE_NULL && node != DEV_NODE_ZERO && node != DEV_NODE_FULL)
+	// ROOT is a directory (dops), NONE does not exist, and TTY and GLASS
+	// never get here at all — syscall_open answers them as handle aliases
+	// before the filesystem is ever asked to open anything (devfs.h, THE
+	// ALIAS). If one somehow arrives, refusing is the honest answer: this
+	// layer cannot produce a terminal or a screen.
+	if (node != DEV_NODE_NULL && node != DEV_NODE_ZERO && node != DEV_NODE_FULL &&
+	    node != DEV_NODE_RANDOM)
 		return -1;
 
 	dev_file_handle_t *h = kmalloc(sizeof(dev_file_handle_t));
@@ -166,6 +173,12 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 // /dev/zero` is meant to run until you stop it, exactly as it has since
 // System V. /dev/full reads as zeros for the same reason Linux's does: its
 // divergence is on the WRITE side, and a reader should not have to care.
+
+// The most /dev/random takes or gives in one call: a page — 64 ChaCha
+// blocks out, 64 BLAKE2s blocks in. The reason is written at the read
+// case; the write case cites it.
+#define DEV_RANDOM_IO_MAX 4096
+
 static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 {
 	dev_file_handle_t *h = (dev_file_handle_t *)vfs_file->handle;
@@ -183,6 +196,39 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			if (size == 0)
 				return 0;
 			memset(buffer, 0, size);
+			return (int)size;
+
+		case DEV_NODE_RANDOM:
+			// Exactly the bytes asked for up to a PAGE, never short below
+			// it; a larger request is served a page and the rest on the
+			// next read — the short read every file read handles anyway.
+			// The cap is the reason zero has none: this read runs through
+			// call_in_kernel_context, which keeps this core's interrupts
+			// OFF for the whole operation, and generating is CPU work
+			// that scales with the request (a megabyte is seventeen
+			// thousand ChaCha blocks at -O0) where zero's is a memset.
+			// A page is 64 blocks: microseconds, under any tick.
+			// Before the pool is seeded the read is REFUSED and counted
+			// (random.h reads_refused) rather than parked: the same
+			// borrowed context may not sleep (syscall.c, THE HANDLE
+			// ALIAS). Boot itself outlasts seeding on every machine this
+			// house owns, so the refusal is a tripwire for a source that
+			// failed, not a state a program meets. Before refusing, fold
+			// what the interrupts have left in the fast pools: a machine
+			// with no NIC has no knet to do it, and the tick alone seeds
+			// the pool if something folds it (random.h).
+			if (!random_seeded())
+				random_fold_fast_pools();
+			if (!random_seeded())
+			{
+				kRandomStats.reads_refused++;
+				return -1;
+			}
+			if (size == 0)
+				return 0;
+			if (size > DEV_RANDOM_IO_MAX)
+				size = DEV_RANDOM_IO_MAX;
+			random_bytes(buffer, size);
 			return (int)size;
 
 		default:
@@ -212,6 +258,20 @@ static int dev_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 		case DEV_NODE_FULL:
 			return -1;          // no space, on purpose, every time
+
+		case DEV_NODE_RANDOM:
+			// A contribution: folded into the pool with no credit, since
+			// the kernel cannot know what the bytes are worth. Taken a
+			// PAGE at a time, a short write above it, for the read case's
+			// reason: the fold hashes under the pool's lock inside the
+			// borrowed context, and a megabyte is sixteen thousand BLAKE2s
+			// blocks at -O0 with this core's interrupts off. Null and
+			// zero swallow whole because swallowing costs nothing.
+			if (size > DEV_RANDOM_IO_MAX)
+				size = DEV_RANDOM_IO_MAX;
+			if (size)
+				random_mix(buffer, size);
+			return (int)size;
 
 		default:
 			return -1;
@@ -353,12 +413,27 @@ static vfs_filesystem_t *kDevFilesystem = NULL;   // set at mount; the identity
                                                   // check the alias hook needs
 
 bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
-                        const char *mode, handle_type_t *type)
+                        const char *mode, handle_type_t *type, void **object)
 {
-	if (fs == NULL || fs != kDevFilesystem || type == NULL)
+	if (fs == NULL || fs != kDevFilesystem || type == NULL || object == NULL)
 		return false;
 
-	if (dev_parse_path(path) != DEV_NODE_TTY)
+	*object = NULL;
+	dev_node_t node = dev_parse_path(path);
+	if (node == DEV_NODE_GLASS)
+	{
+		// One viewer per open: "r" watches, "u" watches and types
+		// (os64/glass.h, THE HANDS). A boot with no desktop has no screen:
+		// the name is still an alias, and HANDLE_NONE is its refusal. Any
+		// other mode falls through to the ordinary open, which refuses it
+		// as a file.
+		if (mode == NULL || (mode[0] != 'r' && mode[0] != 'u') || mode[1] != '\0')
+			return false;
+		*object = glass_view_open(mode[0] == 'u');
+		*type = *object != NULL ? HANDLE_GLASS : HANDLE_NONE;
+		return true;
+	}
+	if (node != DEV_NODE_TTY)
 		return false;
 
 	// "d" is the directory mode, and a terminal is not a directory. Refusing
@@ -378,6 +453,12 @@ bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
 		*type = HANDLE_CONSOLE_OUT;
 
 	return true;
+}
+
+void devfs_handle_alias_abandon(handle_type_t type, void *object)
+{
+	if (type == HANDLE_GLASS && object != NULL)
+		glass_view_close((glass_view_t *)object);
 }
 
 // ── Mounting ────────────────────────────────────────────────────────────────

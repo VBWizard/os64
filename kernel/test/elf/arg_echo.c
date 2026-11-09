@@ -1,8 +1,11 @@
 // arg_echo.c — task startup-state test fixture (arguments, environment, and
 // segment initialization).
 //
-// The kernel launches this as /bin/arg_echo with argc=3 and
-//   argv = { "/bin/arg_echo", "hello", "world" }
+// The kernel launches this as /tests/arg_echo with argc=3 and
+//   argv = { "/tests/arg_echo", "hello", "world" }
+// and argv[0] is CHECKED BY CONTENT below, so the path is part of the
+// contract: move the fixture and both spawners (test_task_args and testrun's
+// table) must move with it, or the fixture reports FAIL_ARGV0 and says so.
 // and (always, since env_inherit never returns NULL) an inherited environment.
 //
 // os64's task ABI hands the entry point argc/argv/env in RDI/RSI/RDX. Because
@@ -29,7 +32,7 @@
 
 // Must match kernel/include/task.h. TASK_ENV_VIRT moved 0x6f006000 ->
 // 0x6f100000 on 2026-08-13 when the fixed-VA block was re-laid to give argv a
-// 1MB window (shell globbing raised the argument ceiling to 512). ARGV did NOT
+// 1MB window for spawned arguments. ARGV did NOT
 // move — it is the address a program can actually observe, so its neighbours
 // were the ones that gave ground. This fixture is precisely what catches a
 // mismatch between these two files, which is why it now runs on every boot
@@ -86,7 +89,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
 
     // --- string contents survived the copy and the TASK-space pointers are
     //     dereferenceable inside our own address space ---
-    if (!streq(argv[0], "/bin/arg_echo"))
+    if (!streq(argv[0], "/tests/arg_echo"))
         return FAIL_ARGV0;
     if (!streq(argv[1], "hello"))
         return FAIL_ARGV1;

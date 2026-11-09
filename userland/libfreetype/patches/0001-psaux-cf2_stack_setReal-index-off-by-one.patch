@@ -1,0 +1,24 @@
+From 1f705ffb716c7a35efe13d3b58f62ef7c4c6415d Mon Sep 17 00:00:00 2001
+From: Mateusz Jurczyk <mjurczyk@google.com>
+Date: Thu, 7 May 2026 12:29:45 +0000
+Subject: [PATCH] * src/psaux/psstack.c (cf2_stack_setReal): Fix off-by-one in
+ index check.
+
+Fixes #1428.
+---
+ src/psaux/psstack.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/psaux/psstack.c b/src/psaux/psstack.c
+index 797486588..f8d1e8d44 100644
+--- a/src/psaux/psstack.c
++++ b/src/psaux/psstack.c
+@@ -211,7 +211,7 @@
+                      CF2_UInt   idx,
+                      CF2_Fixed  val )
+   {
+-    if ( idx > cf2_stack_count( stack ) )
++    if ( idx >= cf2_stack_count( stack ) )
+     {
+       CF2_SET_ERROR( stack->error, Stack_Overflow );
+       return;

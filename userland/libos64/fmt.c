@@ -274,6 +274,35 @@ int32_t os64_snprintf(char *buf, size_t size, const char *fmt, ...)
 	return n;
 }
 
+int32_t os64_format_binary_size(uint64_t bytes, char *buf, size_t size)
+{
+	if (bytes < 1024)
+		return os64_snprintf(buf, size, "%luB", bytes);
+
+	static const char *units[] = {"K", "M", "G", "T", "P", "E"};
+	uint64_t divisor = 1024;
+	int32_t unit = 0;
+	while (unit < 5 && bytes >= divisor * 1024)
+	{
+		divisor *= 1024;
+		unit++;
+	}
+
+	uint64_t whole = bytes / divisor;
+	uint64_t remainder = bytes % divisor;
+	uint64_t tenth = 0;
+	while (tenth < 9)
+	{
+		uint64_t candidate = tenth + 1;
+		uint64_t threshold = (divisor / 10) * candidate +
+			((divisor % 10) * candidate + 9) / 10;
+		if (remainder < threshold)
+			break;
+		tenth = candidate;
+	}
+	return os64_snprintf(buf, size, "%lu.%lu%s", whole, tenth, units[unit]);
+}
+
 // The printf-to-a-handle worker. 1024 bytes of stack scratch per call: big
 // enough for any sane line, small enough for the 16KB user stacks, and on
 // the STACK so concurrent tasks (or threads, someday) never share a buffer —

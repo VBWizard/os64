@@ -1,0 +1,46 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- E01B_HANDOFF
+   docs/design/pending/explorer/DECISIONS.md:233: | O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2
+   docs/design/pending/explorer/E01K_HANDOFF.md:130: on the merged API. [E1B](E01B_HANDOFF.md) consumes the final wrappers.
+   docs/design/pending/explorer/E01_MENUS.md:13: - **Implementation:** [E1B handoff](E01B_HANDOFF.md), with
+   docs/design/pending/explorer/HANDOFF.md:17: from current `origin/userland` at that merge. The [concrete E1B handoff](E01B_HANDOFF.md)
+   docs/design/pending/explorer/HANDOFF.md:27: | [E1B menus](E01B_HANDOFF.md) | Implemented; invariant audit, re-review pending; earlier P5 passed | Review shared transitions and evidence
+   docs/design/pending/explorer/README.md:33: - Current work: Quinn's [E1B toolkit](E01B_HANDOFF.md), on
+   docs/design/pending/explorer/README.md:51: [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
+   docs/design/pending/explorer/README.md:63: | E1 | Actions, menus and status | E1A/E1K complete; E1B invariant audit, re-review pending; earlier P5 passed | Quinn (E1B), Sol (E1A) | [E
+   docs/design/pending/explorer/evidence/e01b/README.md:4: `b36e9ddc` (PR #257). [Concrete handoff](../../E01B_HANDOFF.md).
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:4: -- E01B_HANDOFF
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:6: docs/design/pending/explorer/E01K_HANDOFF.md:130: on the merged API. [E1B](E01B_HANDOFF.md) consumes the final wrappers.
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:7: docs/design/pending/explorer/E01_MENUS.md:13: - **Implementation:** [E1B handoff](E01B_HANDOFF.md), with
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:8: docs/design/pending/explorer/HANDOFF.md:17: from current `origin/userland` at that merge. The [concrete E1B handoff](E01B_HANDOFF.md)
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:9: docs/design/pending/explorer/HANDOFF.md:27: | [E1B menus](E01B_HANDOFF.md) | Implemented; review fixes, P5 report passed | Review the toolki
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:10: docs/design/pending/explorer/README.md:33: - Current work: Quinn's [E1B toolkit](E01B_HANDOFF.md), on
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:11: docs/design/pending/explorer/README.md:51: [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), or [E2](E02_ICONS.md). New slices 
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:13: docs/design/pending/explorer/evidence/e01b/README.md:4: `b36e9ddc` (PR #257). [Concrete handoff](../../E01B_HANDOFF.md).
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:15: docs/design/pending/explorer/E01B_HANDOFF.md:15: [evidence/e01b](evidence/e01b/README.md). Chris reports the P5 walkthrough passed;
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:24: Reviewed hits: E01B_HANDOFF.md and evidence/e01b/README.md both still exist; these are live documentation links, not retired interfaces. No 
+-- evidence/e01b/README.md
+   docs/design/pending/explorer/E01B_HANDOFF.md:15: [evidence/e01b](evidence/e01b/README.md). Chris reports the P5 walkthrough passed;
+   docs/design/pending/explorer/E01_MENUS.md:14: [host/guest evidence and P5 walkthrough](evidence/e01b/README.md).
+   docs/design/pending/explorer/HANDOFF.md:19: font and context hooks. [Evidence and P5 walkthrough](evidence/e01b/README.md)
+   docs/design/pending/explorer/README.md:35: [Evidence and P5 walkthrough](evidence/e01b/README.md) accompany ordinary
+   docs/design/pending/explorer/README.md:63: | E1 | Actions, menus and status | E1A/E1K complete; E1B invariant audit, re-review pending; earlier P5 passed | Quinn (E1B), Sol (E1A) | [E
+   docs/design/pending/explorer/SESSION_LOG.md:433: [Evidence and the P5 walkthrough](evidence/e01b/README.md) retain reports,
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:13: docs/design/pending/explorer/evidence/e01b/README.md:4: `b36e9ddc` (PR #257). [Concrete handoff](../../E01B_HANDOFF.md).
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:14: -- evidence/e01b/README.md
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:15: docs/design/pending/explorer/E01B_HANDOFF.md:15: [evidence/e01b](evidence/e01b/README.md). Chris reports the P5 walkthrough passed;
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:16: docs/design/pending/explorer/E01_MENUS.md:14: [host/guest evidence and P5 walkthrough](evidence/e01b/README.md).
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:17: docs/design/pending/explorer/HANDOFF.md:19: font and context hooks. [Evidence and P5 walkthrough](evidence/e01b/README.md)
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:18: docs/design/pending/explorer/README.md:35: [Evidence and P5 walkthrough](evidence/e01b/README.md) accompany ordinary
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:20: docs/design/pending/explorer/SESSION_LOG.md:433: [Evidence and the P5 walkthrough](evidence/e01b/README.md) retain reports,
+   docs/design/pending/explorer/evidence/e01b/review-r1/stale-refs.txt:24: Reviewed hits: E01B_HANDOFF.md and evidence/e01b/README.md both still exist; these are live documentation links, not retired interfaces. No 
+
+== No new superlative claims.
+
+Reviewed each hit: E01B_HANDOFF.md and evidence/e01b/README.md are existing
+files with live documentation links; review-r1/stale-refs.txt records their
+previous false-positive listing. Neither name is retired. No new superlative
+comments were reported. No code identifiers were retired by the private
+session-layout move.

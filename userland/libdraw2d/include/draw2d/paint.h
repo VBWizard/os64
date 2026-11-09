@@ -1,0 +1,138 @@
+#ifndef OS64_DRAW2D_PAINT_H
+#define OS64_DRAW2D_PAINT_H
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <os64/geometry_backend.h>
+
+/* Numeric sRGB paint, independent of markup, paths and fonts. Channels in
+ * this intermediate are premultiplied; RGB must not exceed alpha. */
+typedef struct { uint16_t a, r, g, b; } draw2d_pixel_t;
+static inline uint16_t draw2d_multiply(uint16_t a, uint16_t b)
+{
+    return (uint16_t)(((uint32_t)a * b + 32767) / 65535);
+}
+static inline draw2d_pixel_t draw2d_scale(draw2d_pixel_t p, uint16_t a)
+{
+    return (draw2d_pixel_t){draw2d_multiply(p.a, a), draw2d_multiply(p.r, a),
+                            draw2d_multiply(p.g, a), draw2d_multiply(p.b, a)};
+}
+static inline draw2d_pixel_t draw2d_over(draw2d_pixel_t s, draw2d_pixel_t d)
+{
+    uint16_t inverse = 65535 - s.a;
+    return (draw2d_pixel_t){s.a + draw2d_multiply(d.a, inverse),
+                            s.r + draw2d_multiply(d.r, inverse),
+                            s.g + draw2d_multiply(d.g, inverse),
+                            s.b + draw2d_multiply(d.b, inverse)};
+}
+/* Preserve SVG's rounding order: straight color alpha, opacity, coverage,
+ * then premultiplication. Coverage is independent of paint opacity. */
+static inline draw2d_pixel_t draw2d_color(uint32_t argb, uint16_t opacity, uint16_t coverage)
+{
+    uint16_t a = draw2d_multiply((uint16_t)((argb >> 24) * 257), opacity);
+    a = draw2d_multiply(a, coverage);
+    return (draw2d_pixel_t){a, draw2d_multiply((uint16_t)(((argb >> 16) & 255) * 257), a),
+                            draw2d_multiply((uint16_t)(((argb >> 8) & 255) * 257), a),
+                            draw2d_multiply((uint16_t)((argb & 255) * 257), a)};
+}
+static inline draw2d_pixel_t draw2d_unpack(uint32_t premultiplied)
+{
+    return (draw2d_pixel_t){(uint16_t)((premultiplied >> 24) * 257),
+                            (uint16_t)(((premultiplied >> 16) & 255) * 257),
+                            (uint16_t)(((premultiplied >> 8) & 255) * 257),
+                            (uint16_t)((premultiplied & 255) * 257)};
+}
+static inline uint32_t draw2d_pack(draw2d_pixel_t p)
+{
+    return ((uint32_t)((p.a + 128u) / 257) << 24) |
+           ((uint32_t)((p.r + 128u) / 257) << 16) |
+           ((uint32_t)((p.g + 128u) / 257) << 8) | ((p.b + 128u) / 257);
+}
+typedef enum { DRAW2D_OK, DRAW2D_BAD_ARGUMENT, DRAW2D_LIMIT, DRAW2D_UNSUPPORTED } draw2d_status_t;
+typedef enum {
+    DRAW2D_ARGB8_PREMULTIPLIED, DRAW2D_ARGB16_PREMULTIPLIED, DRAW2D_ARGB8_STRAIGHT
+} draw2d_format_t;
+typedef struct {
+    void *pixels;
+    uint32_t width, height;
+    size_t stride, capacity; /* Bytes; capacity need not include final-row padding. */
+    draw2d_format_t format;
+} draw2d_surface_t;
+typedef struct { uint32_t x0, y0, x1, y1; } draw2d_damage_t;
+typedef struct { uint32_t argb; } draw2d_solid_t; /* Straight-alpha sRGB source. */
+typedef enum {
+    DRAW2D_SOURCE_OVER, DRAW2D_CLEAR, DRAW2D_DESTINATION_OUT,
+    DRAW2D_SOURCE_IN, DRAW2D_SOURCE_OUT, DRAW2D_SOURCE_ATOP,
+    DRAW2D_DESTINATION_OVER, DRAW2D_DESTINATION_IN, DRAW2D_DESTINATION_ATOP,
+    DRAW2D_COPY, DRAW2D_XOR, DRAW2D_LIGHTER
+} draw2d_operator_t;
+/* Whether zero shape coverage leaves destination pixels unchanged. CLEAR
+ * uses coverage directly; the others in this set composite transparent source. */
+static inline bool draw2d_zero_coverage_preserves_destination(draw2d_operator_t op)
+{
+    return op == DRAW2D_SOURCE_OVER || op == DRAW2D_CLEAR || op == DRAW2D_DESTINATION_OUT ||
+        op == DRAW2D_SOURCE_ATOP || op == DRAW2D_DESTINATION_OVER || op == DRAW2D_XOR || op == DRAW2D_LIGHTER;
+}
+typedef struct {
+    draw2d_operator_t operation;
+    uint16_t opacity;
+} draw2d_composite_t;
+
+/* A read-only sRGB image view. The caller holds storage stable and keeps it
+ * disjoint from the destination for the complete paint. Map transforms device
+ * pixel centers into source pixel coordinates; filtering clamps to image edges. */
+typedef struct {
+    draw2d_surface_t surface;
+    os64_geometry_map_t device_to_source;
+    bool smoothing;
+} draw2d_image_t;
+/* A validated, infallible straight-sRGB source. sample must not allocate,
+ * reenter painting, mutate storage, or execute script. */
+typedef struct { void *context; uint32_t (*sample)(void *,double,double); } draw2d_shader_t;
+#pragma GCC visibility push(default)
+/* Premultiplied pixel composition followed by clip interpolation. Source
+ * already includes coverage and global alpha. CLEAR is a separate coverage
+ * operation; callers pass SOURCE_OVER through LIGHTER, excluding CLEAR. */
+draw2d_pixel_t draw2d_blend_pixel(draw2d_pixel_t source, draw2d_pixel_t destination,
+                                  draw2d_operator_t, uint16_t clip);
+/* Empty surfaces may have NULL storage. Nonempty surfaces require aligned
+ * storage/stride, nonoverflowing row bounds and sufficient capacity. */
+draw2d_status_t draw2d_surface_validate(const draw2d_surface_t *);
+/* Axis-aligned device-space rectangle with analytic pixel-area coverage.
+ * Negative extents normalize; nonfinite inputs and zero extents draw nothing.
+ * Paint targets are premultiplied (straight surfaces can only be validated).
+ * CLEAR ignores source and opacity. Admission validates the whole operation
+ * and pixel work cap before writing. No allocations/callbacks or partial
+ * failure; padding is untouched. damage is optional, empty on no-op/failure.
+ * Surface descriptor and damage output must not alias writable pixel storage
+ * or each other. Input pixel channels must obey premultiplication. */
+draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
+                                 double width, double height, draw2d_solid_t,
+                                 draw2d_composite_t, uint64_t max_pixels,
+                                 draw2d_damage_t *damage);
+/* Full-bitmap byte coverage and optional clip coverage, tightly packed.
+ * Length must cover width*height. Both buffers are borrowed, must not alias
+ * writable destination storage, and remain immutable. A transparent source
+ * still participates in operators such as COPY and DESTINATION_IN.
+ * Clip coverage interpolates the completed composite with the old pixel.
+ * CLEAR ignores source/opacity and removes shape coverage inside the clip.
+ * Zero coverage is skipped when the operator preserves the destination for
+ * transparent source. Damage encloses processed pixels inside the clip;
+ * clearing operators may damage pixels outside the shape. Validates the
+ * full bitmap work cap before any write; output damage is conservative. */
+draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
+draw2d_status_t draw2d_paint_image(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, const draw2d_image_t *, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
+/* Paint a destination sub-surface whose top-left is (origin_x, origin_y)
+ * in the image map's device space. Coverage and returned damage stay local
+ * to the sub-surface. Sampling keeps the original map and evaluation order. */
+draw2d_status_t draw2d_paint_image_at(const draw2d_surface_t *,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,const draw2d_image_t *,uint32_t origin_x,uint32_t origin_y,
+    draw2d_composite_t,uint64_t max_pixels,draw2d_damage_t *);
+draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *,const uint8_t *,const uint8_t *,size_t,
+    const draw2d_shader_t *,draw2d_composite_t,uint64_t,draw2d_damage_t *);
+#pragma GCC visibility pop
+#endif

@@ -1,0 +1,10 @@
+840 (0x0033) AP1: wm: created window 1 'desktop' at (0,0) 1024x768
+845 (0x0035) AP2: wm: created window 2 'scribe' at (140,90) 640x440
+3874 (0x0035) AP1: wm: created window 3 'Scribe - Open' at (142,47) 882x721
+12706 (0x0032) AP3: guicomp: band resize on window 3 from 882x721 (SE corner)
+12777 (0x0032) AP3: wm: window 3 resized to 680x500 content at (142,47)
+15144 (0x0035) AP1: wm: created window 4 'Scribe - Save As' at (172,130) 682x521
+19378 (0x0040) AP2: wm: created window 5 'Open' at (100,80) 682x521
+22790 (0x0032) AP3: guicomp: band resize on window 5 from 682x521 (SE corner)
+22861 (0x0032) AP3: wm: window 5 resized to 480x440 content at (100,80)
+26061 (0x0035) AP2: wm: created window 6 'Scribe - Open' at (172,130) 482x461

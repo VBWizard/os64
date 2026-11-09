@@ -1,0 +1,1 @@
+close probe: owned=1 full=0 signal=0 closes=2 losses=0; 8 checks, 0 failures

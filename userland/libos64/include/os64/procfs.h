@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #define OS64_PROC_NAME_MAX 64
+// Bounded display summary in the existing process-record ABI.
 #define OS64_PROC_COMMAND_MAX 256
 
 typedef enum {
@@ -30,7 +31,7 @@ typedef struct {
     uint64_t major_faults;
     uint64_t switches;
     uint32_t tty;
-    uint32_t core;
+    uint32_t core;            // the CPU number it last ran on (/proc's "cpu" line)
     uint32_t threads;
     os64_proc_state_t state;
     uint64_t heap;
@@ -45,10 +46,17 @@ typedef struct {
     uint64_t tid;
     uint64_t pid;
     uint64_t runtime_us;
-    uint32_t core;
+    uint32_t core;            // the CPU number it last ran on (/proc's "cpu" line)
     os64_proc_state_t state;
     char affinity[24];
 } os64_thread_info_t;
+
+// Optional CPU fields from the same status read as the corresponding record.
+// Existing record layouts are ABI and cannot grow when libos64 is replaced.
+typedef struct {
+    uint64_t user_us, system_us, idle_us;
+    bool valid, idle;
+} os64_proc_cpu_split_t;
 
 // The controlling terminal, via /proc/self/tty — os64's TIOCGWINSZ, shaped
 // as a file. rows/cols are what a full-screen program lays itself out in;
@@ -61,6 +69,25 @@ typedef struct {
     bool     focused;     // the glass is showing this terminal right now
     bool     live;        // a shell is seated here (false = dormant)
 } os64_tty_info_t;
+// THIS STRUCT IS ABI: os64_tty_read fills it through a pointer, and a binary
+// built against an older shape keeps running against a newer libos64.so
+// (the kernel is the linker; the library is replaced under live programs).
+// A field added here overruns every such caller's object. New facts about
+// the terminal get a new call — os64_tty_mode is the first — not a new field.
+
+// The terminal's line discipline (SIGINT.md § Raw mode): raw means Ctrl+C
+// and Ctrl+D arrive as the bytes 0x03 / 0x04. The mode is the FOREGROUND
+// task's wish, so holder names that task when raw and is 0 when cooked.
+// Either output may be NULL. Reads /proc/self/tty. Returns 0, or -1 if the
+// file cannot be opened or parsed.
+int32_t os64_tty_mode(bool *raw, uint64_t *holder);
+
+// Switch the calling process's terminal between cooked (Ctrl+C is SIGINT,
+// Ctrl+D is end-of-input) and raw (both are bytes). A write of `raw` or
+// `cooked` to /proc/self/tty — through a handle THIS task opened; only the
+// terminal's foreground task may ask, and the kernel restores cooked when
+// that task exits, so no program ever has to. Returns 0, or -1 when refused.
+int32_t os64_tty_set_raw(bool raw);
 
 // Snapshot up to capacity live tasks, sorted by the /proc directory's PID
 // order. A task disappearing between readdir and open is an ordinary race and
@@ -71,8 +98,18 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity);
 // which already own an identity-keyed cache and should not allocate a second
 // whole-system snapshot merely to share the parser.
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out);
+int32_t os64_proc_read_split(uint64_t pid, os64_proc_info_t *out,
+                             os64_proc_cpu_split_t *split);
+// Read the complete command, joining cmdline's argument lines with spaces.
+// Returns 0 and allocated NUL-terminated text (release with os64_free), or -1
+// and *out == NULL on read/allocation/size failure. Empty reports yield "".
+// The 1 MiB read ceiling covers the child's argv window; no prefix is returned.
+int32_t os64_proc_command(uint64_t pid, char **out);
 int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
                               os64_thread_info_t *out);
+int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split);
 
 // Read the calling process's controlling terminal (via /proc/self/tty).
 // Returns 0 on success, -1 if the file cannot be opened or parsed.

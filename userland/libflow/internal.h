@@ -1,0 +1,1257 @@
+#ifndef FLOW_INTERNAL_H
+#define FLOW_INTERNAL_H
+
+#include "flow/flow.h"
+#include "garb/select.h"
+#include "garb/values.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+
+#define F_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
+
+// `n` CSS pixels in the tree's 26.6 units, which are device pixels'
+// (flow_env_t.zoom), rounded to the nearest unit.
+static inline int64_t f_css_units(const flow_env_t *env, int64_t n)
+{
+    uint32_t z = env->zoom != 0 ? env->zoom : 1000;
+    int64_t u = n * 64 * (int64_t)z;
+    return u >= 0 ? (u + 500) / 1000 : -((-u + 500) / 1000);
+}
+
+// White-space's two questions (CSS Text 3 § 3), answered in one place so
+// the box builder and layout agree: does a run of spaces collapse, and
+// may a line wrap?
+static inline bool f_ws_collapses(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP || ws == FLOW_WS_PRE_LINE;
+}
+
+static inline bool f_ws_wraps(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP || ws == FLOW_WS_PRE_LINE;
+}
+
+// Positioning's two questions (POSITION.md), answered in one place so the
+// three passes agree. Out of flow: no formatting context holds the box,
+// and it is laid out against its containing block once that is finished —
+// an absolute box, and a fixed one, whose containing block is always the
+// viewport.
+static inline bool f_out_of_flow(const flow_style_t *s)
+{
+    return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
+}
+
+// Leaves the flow: out of flow, or floated (FLOATS.md). Neither splits an
+// inline element round it nor makes its container hold a block. A float is
+// still laid out in its formatting context, where it was written, so
+// f_out_of_flow keeps its own meaning: no formatting context holds the box.
+static inline bool f_leaves_flow(const flow_style_t *s)
+{
+    return f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE;
+}
+
+// Display's questions, answered in one place for every pass: is the
+// element an atom on its line — laid out as a block of its own inside the
+// line — and does it lay its children out as flex items (FLEX.md) or grid
+// items (GRID.md)?
+static inline bool f_display_atomic(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_INLINE_BLOCK || d == FLOW_DISPLAY_INLINE_FLEX ||
+           d == FLOW_DISPLAY_INLINE_GRID;
+}
+
+static inline bool f_display_flex(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_FLEX || d == FLOW_DISPLAY_INLINE_FLEX;
+}
+
+static inline bool f_display_grid(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_GRID || d == FLOW_DISPLAY_INLINE_GRID;
+}
+
+// A grid's bound on either axis (GRID.md, decision 4), and on the cells of
+// one grid-template-areas (libgarb's own bound on them).
+#define F_GRID_MAX 1000
+#define F_GRID_AREA_CELLS 1024
+
+// Whether a style asks for a transform (PILE3.md § Transforms): any of
+// the four properties is not `none` — or `will-change` names one, or an
+// animation of one is current or in effect, which act as if it were
+// (PILE3.md § Animations): a frame, its matrix the identity at a value of
+// `none`, a stacking context and a containing block, all the same.
+static inline bool f_transforms(const flow_style_t *s)
+{
+    return s->transform != NULL || s->translate != NULL || s->rotate != NULL ||
+           s->scale != NULL || ((s->will_change | s->animating) & FLOW_WILL_TRANSFORM);
+}
+
+// Whether its opacity makes a box a stacking context: it is below full
+// opacity, or `will-change` names opacity, or an animation of it is
+// current or in effect (PILE3.md § Animations).
+static inline bool f_opacity_context(const flow_style_t *s)
+{
+    return s->opacity < 1000 || ((s->will_change | s->animating) & FLOW_WILL_OPACITY);
+}
+
+// Whether it is granted: a plain inline's box cannot be transformed
+// (Transforms 1 § 2), so its transform does nothing at all.
+static inline bool f_transformed(const flow_style_t *s)
+{
+    return f_transforms(s) && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether a `filter` or a `backdrop-filter` other than none is granted
+// (FILTER.md § 2): a plain inline's is not drawn and makes nothing, as its
+// opacity is painted opaque (flow_style_t.filter).
+static inline bool f_filtered(const flow_style_t *s)
+{
+    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether its `filter` makes a box a group (flow_visit_groups): granted,
+// and not only a `backdrop-filter`, which is drawn without one.
+static inline bool f_group_filter(const flow_style_t *s)
+{
+    return s->nfilter > 0 && f_filtered(s);
+}
+
+// Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
+// a stacking context and a group laid by its mode; a plain inline's does
+// nothing, and an inline-block's is not drawn (it is no stacked box), as
+// their opacity is painted opaque.
+static inline bool f_blended(const flow_style_t *s)
+{
+    return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether `isolation: isolate` is granted: a stacking context, no group.
+static inline bool f_isolated(const flow_style_t *s)
+{
+    return s->isolate && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// A containing block for the absolute boxes inside it: an element whose
+// position is not static, or that is transformed (f_transformed) or
+// filtered (f_filtered), and that makes a box of its own. A table's rows,
+// row groups and columns are not (`position: relative`, a transform and a
+// filter on them are booked), and neither is anything `display: contents`
+// or `none` makes no box for.
+static inline bool f_contains_absolute(const flow_style_t *s)
+{
+    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s))
+        return false;
+    switch (s->display) {
+    case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
+    case FLOW_DISPLAY_TABLE_ROW_GROUP: case FLOW_DISPLAY_TABLE_HEADER_GROUP:
+    case FLOW_DISPLAY_TABLE_FOOTER_GROUP: case FLOW_DISPLAY_TABLE_ROW:
+    case FLOW_DISPLAY_TABLE_COLUMN_GROUP: case FLOW_DISPLAY_TABLE_COLUMN:
+        return false;
+    default:
+        return true;
+    }
+}
+
+// A containing block for the fixed boxes inside it too, in place of the
+// viewport (Transforms 1 § 3, Filter Effects 1 § 2): one that is
+// transformed or filtered.
+static inline bool f_contains_fixed(const flow_style_t *s)
+{
+    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s));
+}
+
+// The same two answers for an element, `root` the document's root: the
+// root's filter makes it neither containing block (Filter Effects 1 § 5,
+// 2 § 3: "unless the element it applies to is document root element"),
+// though its position or transform still does. So `html { filter:
+// grayscale(1) }` leaves a fixed header fixed to the viewport.
+static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
+{
+    if (root && f_filtered(s)) {
+        flow_style_t plain = *s;
+        plain.nfilter = plain.nbackdrop_filter = 0;
+        return fixed ? f_contains_fixed(&plain) : f_contains_absolute(&plain);
+    }
+    return fixed ? f_contains_fixed(s) : f_contains_absolute(s);
+}
+
+// ── Storage ─────────────────────────────────────────────────────────────
+//
+// Everything a layout builds lives until the layout is freed and is never
+// freed piecemeal, so it comes from blocks that are freed together. A
+// pointer handed out stays valid: blocks never move.
+typedef struct FBlock FBlock;
+typedef struct {
+    FBlock *blocks;
+    // Bytes the blocks hold, and the most they may: flow_env_t's
+    // max_arena_bytes for the arenas a page can multiply (boxes, lines). A
+    // block past it is refused like one malloc cannot supply, so such a page
+    // stops as `incomplete`.
+    size_t reserved, cap;
+} FArena;
+
+// The byte budget a multiplied arena takes from the environment.
+static inline size_t f_arena_budget(const flow_env_t *env)
+{
+    return env != NULL && env->max_arena_bytes != 0 ? env->max_arena_bytes : FLOW_ARENA_DEFAULT;
+}
+
+void *f_arena_alloc(FArena *arena, size_t size);    // zeroed; NULL on no memory or budget
+void f_arena_free(FArena *arena);
+
+// A node to the record built for it. Open addressing over a power-of-two
+// table, because layout asks "what is this node's style?" once per node
+// and the face asks "which box is this node?" once per click.
+typedef struct {
+    const void **keys;
+    void **vals;
+    size_t cap, count;
+} FMap;
+
+bool f_map_put(FMap *map, const void *key, void *val);  // false on no memory
+void *f_map_get(const FMap *map, const void *key);      // NULL when absent
+void f_map_free(FMap *map);
+
+// ── The page's attribute grammars (attrs.c) ─────────────────────────────
+//
+// HTML's microsyntaxes, each the standard's algorithm by name, so a value a
+// page wrote means here what it means in every browser.
+
+typedef enum { F_DIM_NONE = 0, F_DIM_PX, F_DIM_PERCENT } f_dim_kind_t;
+
+// "Rules for parsing dimension values": digits, an optional fraction, and a
+// `%` that makes it a percentage; anything after that is ignored. The value
+// is in 1/64ths — of a pixel or of a percent. `nonzero` is the "(ignoring
+// zero)" form: a zero is no value at all.
+f_dim_kind_t f_parse_dimension(const char *s, bool nonzero, int32_t *out);
+// "Rules for parsing integers" and "…non-negative integers". A value too
+// large to mean anything on a page is clamped to F_INT_MAX, which no
+// geometry reaches, rather than overflowing into a different number.
+#define F_INT_MAX 1000000
+bool f_parse_integer(const char *s, int32_t *out);
+bool f_parse_nonnegative(const char *s, int32_t *out);
+// Whether `n`, styled `s`, is laid out as a replaced element (boxes.c): a
+// canvas only where `env` says scripting is on, and a button only when it
+// is the face's own button (f_button_faced).
+bool f_replaced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
+// Whether `<button>` `n`, styled `s`, is the face's own button, a widget
+// that draws its own caption: its content is text alone, not all white
+// space, it hosts no shadow tree, `env`'s cascade gives it no ::before or
+// ::after that draws, and the page drew nothing of its box
+// (flow_style_t.author_box). Any other button is laid out as any element
+// is (STYLED_BUTTONS.md § 2).
+bool f_button_faced(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
+// Elements that make no box in this browser, nor anything inside them
+// (boxes.c): `embed`, `audio`, `source`, `track`, `keygen`.
+bool f_boxless(const os64_html_node_t *n);
+// Whether pass 2 draws anything inside element `n`, styled `s`: nothing
+// inside a boxless element, nor inside a replaced one unless it is laid
+// out through `display: contents` (a button's, whose content then flows
+// where it is). Pass 1's tree-order state follows it (GENERATED_CONTENT.md
+// § 8.2).
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, const flow_style_t *s);
+// "Rules for parsing a legacy colour value", `chucknorris` and all: a
+// page's colour attribute means the colour every browser draws.
+bool f_parse_legacy_color(const char *s, uint32_t *out);
+
+// ASCII case-insensitive, which is what `[attr=value i]` means.
+bool f_eq_nocase(const char *a, const char *b);
+
+// ── Pass 1: the computed styles (style.c) ───────────────────────────────
+
+// The colour each decoration is drawn in: the colour of the innermost
+// element that asked for it, so `<u><font color=red><s>` underlines in the
+// u's colour and strikes through in red. A kind not drawn has no colour
+// worth reading.
+typedef struct {
+    uint32_t underline, line_through;
+} FDecorationColors;
+
+// An element's decorations and colours taking on the ones propagated to it:
+// the kinds it already draws keep its own colour.
+static inline void f_decoration_inherit(uint8_t *bits, FDecorationColors *colors,
+                                        uint8_t up_bits, FDecorationColors up)
+{
+    if (!(*bits & FLOW_DECORATION_UNDERLINE) && (up_bits & FLOW_DECORATION_UNDERLINE))
+        colors->underline = up.underline;
+    if (!(*bits & FLOW_DECORATION_LINE_THROUGH) && (up_bits & FLOW_DECORATION_LINE_THROUGH))
+        colors->line_through = up.line_through;
+    *bits |= up_bits;
+}
+
+// ── Animations (motion.c; PILE3.md § Animations) ────────────────────────
+
+// A set of libgarb's longhands.
+#define F_PROP_WORDS ((GARB_NPROPS + 63) / 64)
+typedef struct {
+    uint64_t w[F_PROP_WORDS];
+} FProps;
+
+static inline bool f_props_has(const FProps *p, garb_prop_t prop)
+{
+    return (p->w[prop / 64] >> (prop % 64)) & 1u;
+}
+
+static inline void f_props_add(FProps *p, garb_prop_t prop)
+{
+    p->w[prop / 64] |= (uint64_t)1 << (prop % 64);
+}
+
+static inline void f_props_remove(FProps *p, garb_prop_t prop)
+{
+    p->w[prop / 64] &= ~((uint64_t)1 << (prop % 64));
+}
+
+// The timeline's record of one running animation: when it started, and
+// while it is paused, the time it holds (motion.c).
+typedef struct FRecord FRecord;
+
+// One keyframe: its offset; its own easing, or none and the animation's;
+// its declarations as written (in the cascade, or the styles' arena where
+// keyframes at one offset were joined), and the sheet they were written in,
+// which a url() is read against; and the longhands it sets, every one but
+// those an `!important` winner holds. Its style is resolved where it is
+// mixed, against the values the animations make (FResolve).
+typedef struct {
+    double offset;
+    bool has_easing;
+    garb_easing_t easing;
+    const garb_set_t *decls;
+    int32_t ndecls;
+    int32_t sheet;
+    FProps sets;
+} FKeyframe;
+
+// One animation: a CSS one whose @keyframes exist, with its record on the
+// timeline, or a script's effect (`script`, garb_effect_t), whose
+// clock is its own and which has no record; its timing (a script's: its
+// duration, delay and iteration count, and the linear easing a keyframe
+// without its own takes), its keyframes in their used order, and every
+// longhand any of them sets.
+// `dropped`: those whose lists found no room in this layout's style
+// (f_motion_style), each left as it was — the base's, or an earlier
+// animation's, which the tree shows — so nothing is due for this one's
+// motion of them (f_motion_next) until a later layout finds room.
+// `holds`: those whose interval at this layout's time has two ends of one
+// value, an implicit end the value underneath, both resolved as they are
+// mixed (f_motion_style) — what moves them, a font size, a colour, a
+// parent, a value underneath, is an animation of its own, due for itself.
+typedef struct {
+    flow_animation_t timing;
+    FRecord *record;
+    const garb_effect_t *script;
+    FKeyframe *frames;
+    int32_t nframes;
+    FProps props;
+    FProps dropped;
+    FProps holds;
+} FAnimation;
+
+// A keyframe resolved (FResolve): its style, and the longhands whose lists
+// found no room in the lists' budget, which its mix leaves as they were.
+typedef struct {
+    flow_style_t style;
+    FProps refused;
+} FResolved;
+
+// An element's animations: its style with none of them (each property's
+// underlying value, the implicit keyframes'), and those that run, in
+// composite order — its CSS animations in `animation-name` order, the
+// first `ncss`, then its script effects in the order they were made — a
+// later one's value replacing an earlier's.
+// `in_place` when every property they set only repaints where the element
+// already draws (f_motion_in_place) — the view's question, not `ticks`.
+// `ticks` when the element's values move between layouts (PILE3.md §
+// Animations in place; f_motion_ticks and the style pass's conditions):
+// then `resolved` holds every keyframe resolved, two to a keyframe as the
+// style pass keeps them (`first` each animation's first) and living as
+// long as the styles, `mixed` what the lists of the layout's mix of its
+// values spent of the lists' budget (not its keyframes', which it keeps),
+// `edge` when its next phase edge shows (f_motion_next_of,
+// F_NEXT_EDGES, from the layout's time) and `at` the time its style is the
+// element's at — the layout's, or the last tick's that moved it.
+// `text_reach`, for an element whose animations repaint in place and set
+// `text-shadow`: the farthest any frame's text shadow is offset, in px,
+// the easings' overshoot included — how far past the ink the layout gave
+// it a frame may draw, which is what the view's question asks
+// (flow_motion_due). 0 for any other: one that is not in place is due
+// wherever its element is, and asks the view nothing.
+typedef struct {
+    flow_style_t base;
+    FAnimation *anims;
+    int32_t nanims, ncss;
+    int32_t text_reach;
+    bool in_place;
+    bool ticks;
+    const FResolved **resolved;
+    const int32_t *first;
+    size_t mixed;
+    double edge, at;
+} FMotion;
+
+// What the lists an animated value makes come from — a transform's, the
+// shadows', a background's positions: NULL when none is left.
+typedef void *(*FAlloc)(void *ctx, size_t bytes);
+// Animation `a`'s keyframe `frame` resolved: its declarations laid over
+// the element's own, against the parent when `over` is NULL — for the
+// font size and the colour, which are worked out first — and otherwise
+// against `over`'s font size and colour, which every animation has made by
+// then. It lasts as long as the look it is asked for; NULL on no memory.
+typedef const FResolved *(*FResolve)(void *ctx, int32_t a, int32_t frame, const flow_style_t *over);
+
+// The `i`th animation `s` names, its lists coordinated (flow_animation_t).
+int32_t f_animations(const flow_style_t *s);
+flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
+// Easing 1 § 2's output for the input `x`, the before flag `before`.
+double garb_ease(const garb_easing_t *e, double x, bool before);
+// The element's style at time `now` (ms): `out`, which holds the base,
+// with each animated property's value — and, when `record`, which of its
+// intervals hold one value (FAnimation.holds) — its keyframes resolved by
+// `resolve` — false when a list found no room, a keyframe's or the mix's,
+// and that property is left as it was, named in `failed` when it is given
+// and, when `record`, in its animation's `dropped`; false too when a
+// keyframe found no memory to be resolved, which is the caller's to know. What an animation dropped is
+// left as it was at every time asked, as the layout that dropped it left
+// it.
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, FResolve resolve,
+                    void *ctx, FProps *failed, bool record);
+// Of FLOW_WILL_*, what an animation that is current or in effect at `now`
+// animates (Web Animations 1 § 5.6).
+uint8_t f_motion_effects(const FMotion *m, double now);
+// Whether every property `m`'s animations set only repaints where the
+// element, and what it holds, already draw — colours, opacity,
+// visibility, a background's position, the corners' curves — or around
+// its text by no more than FMotion.text_reach (a text shadow). Such an
+// animation can wait while its element is out of view; any other (a
+// transform, a size, a position, a box shadow's offset) may carry what it
+// draws into view from anywhere (flow_motion_due).
+bool f_motion_in_place(const FMotion *m);
+// How far past [0, 1] an easing's output may go at most, either side: the
+// control points' reach for a Bézier, whose curve lies inside their hull —
+// at least the overshoot, which is all a bound needs — and 0 for the
+// others.
+double f_easing_overshoot(const garb_easing_t *e);
+// Whether every property `m`'s animations set is of the TICK SET, which
+// nothing but painting reads and nothing inherits: the transform's four
+// properties and its origin, opacity, the background's colour and
+// position, the border colours, `box-shadow` (PILE3.md § Animations in
+// place).
+bool f_motion_ticks(const FMotion *m);
+// Whether any property `m`'s animations set has another value in `a` than
+// in `b`: a blend in a transform is the same only as itself, so two worked
+// apart differ.
+bool f_motion_changed(const FMotion *m, const flow_style_t *a, const flow_style_t *b);
+// Each property `m`'s animations set that has another value in `a` than
+// in `b`, added to `out`; whether any was.
+bool f_motion_changed_props(const FMotion *m, const flow_style_t *a, const flow_style_t *b, FProps *out);
+// Whether every longhand has one value in `a` and in `b`, as the motion
+// compares them (f_motion_changed).
+bool f_styles_same(const flow_style_t *a, const flow_style_t *b);
+// The first property in `props` that is not drawn where its element already
+// draws — that is, neither in the in-place class (f_motion_in_place) nor in
+// the tick set (f_motion_ticks), whose frames a tick marks without a
+// layout — as a garb_prop_t; -1 when every one is.
+int32_t f_props_placed(const FProps *props);
+// Every property `m`'s animations set taken from `worked` into `live`,
+// each as a keyframe's discrete value is taken (its fields, and the
+// currentColor it holds).
+void f_motion_take(const FMotion *m, flow_style_t *live, const flow_style_t *worked);
+// When an animated value is next due after `now`, of the properties `only`
+// names (NULL for all): `now` itself while an animation that can show is
+// in its active phase and what it shows moves, a step or a discrete flip
+// among them; the far end of an interval whose two ends hold one value; a
+// phase's edge; INFINITY for none. Early is allowed, late never. Which
+// intervals hold is what the layout at `now` found (FAnimation.holds): at
+// another time, none does, and that is early.
+double f_motion_next(const FMotion *m, double now, const FProps *only);
+// f_motion_next in halves: F_NEXT_EDGES, the starts and ends of active
+// phases, where what an animation does to the page's structure may change
+// (f_motion_effects) — a layout's to show for an element that ticks; and
+// F_NEXT_VALUES, everything else — the ticks'. The earlier of the two is
+// f_motion_next.
+typedef enum { F_NEXT_ALL, F_NEXT_EDGES, F_NEXT_VALUES } FNext;
+double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext half);
+// A layout's dealings with the timeline: it begins a timeline of its own
+// beside the one the page shows (`from`, read and never changed; NULL on
+// no memory), each animated element's CSS animations (its first `ncss`;
+// a script's effects keep their own clocks) are matched to its records
+// there (Animations 1 § 2) and given records of the new one's — false on no
+// memory — and it ends: a complete layout keeps only what it matched, an
+// incomplete one carries every record it did not match on as it was. The
+// new timeline is the tree's (FStyles.timeline) until the face shows the
+// tree (flow_timeline_commit), and `from` must live until it ends.
+flow_timeline_t *f_timeline_begin(const flow_timeline_t *from);
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
+bool f_timeline_end(flow_timeline_t *t, bool complete);
+// How many records the timeline keeps, each holding its element; and how
+// many elements its map names.
+int32_t f_timeline_records(const flow_timeline_t *t);
+int32_t f_timeline_elements(const flow_timeline_t *t);
+// A transform function's matrix, made from its primitive and arguments
+// (flow_transform_t): not for FLOW_FN_BLEND, which waits for the box.
+void f_transform_fn_matrix(flow_transform_t *f);
+// The unit two angles held together are worked in: theirs, or degrees
+// when they differ, as Chrome works every angle; an angle held to the
+// domain (values.h) is finite in any unit. And angle `v` in unit `from`
+// moved into unit `to`.
+flow_angle_unit_t f_angle_common(flow_angle_unit_t a, flow_angle_unit_t b);
+double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to);
+// Two matrices interpolated as Transforms 1 § 11 (both 2D) or 2 § 13
+// (else) say: false when either cannot be decomposed — singular, holding
+// an entry past a double, or its arithmetic or the composed answer past a
+// double's range — and the pair is discrete.
+bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16]);
+// A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
+// function T(x, y) · its matrix, the translations' percentages of the box
+// `w` by `h`: in doubles, the arithmetic of the mix it goes into.
+void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, double out[16]);
+// A FLOW_FN_BLEND's matrix in a box `w` by `h`: its two tails multiplied
+// out and mixed (f_matrix_mix), or, where they cannot be, the first below
+// a fraction of one half and the second from there (Transforms 1 § 11) —
+// the one way a mix of tails is drawn, and so the way it is compared.
+void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[16]);
+
+typedef struct {
+    flow_style_t style;
+    // Style equality does not imply unchanged text or child order.
+    bool steady, subtree_steady, reuse_safe;
+    size_t list_cost;
+    // The element's animations, or NULL for none (motion.c).
+    FMotion *motion;
+    // Pass 2's question, answered bottom-up here: does this element make,
+    // somewhere inside its inline formatting, an in-flow block-level box?
+    // True for an inline with a block child (or an inline child that holds
+    // one), which is what makes its container MIX and the inline SPLIT
+    // (LAYOUT.md § Pass 2). Not a style property: no cascade writes it.
+    bool holds_block;
+    // What walking up from this element would say, answered here once,
+    // parent before child, so a later pass asks in constant time and the
+    // layout stays linear in the page (LAYOUT.md § Bounds). The link this
+    // element is or sits in, or -1. The decorations drawn across its
+    // content: its own and every ancestor's up to an atomic inline or (full
+    // quirks, the Quirks standard's 3.11) a table, which keep their own and
+    // stop the rest — each kind in its own colour (FDecorationColors).
+    int32_t link;
+    uint8_t decoration;
+    FDecorationColors decoration_colors;
+    // How many of this element and its ancestors in the document's own tree
+    // (a selector's, not the flat tree's) are lists (`ul ol menu dir`),
+    // lists or `dl`s, and `li`s: the chapter's descendant selectors for its
+    // children, by the same bargain. And whether one of them is a `nobr`,
+    // which is what `nobr wbr` asks.
+    int32_t lists, lists_or_dls, items;
+    bool in_nobr;
+    // Its `quotes` (inherited): the winner's value, its marks' pairs, or
+    // NULL for auto (GENERATED_CONTENT.md § 8).
+    const garb_val_t *quotes;
+    // An `rp` among this element's children: whether an `rt` in it gets
+    // the parentheses a browser that lays out no ruby adds. Set by the
+    // child, and read by pass 2 once every child has been styled.
+    bool has_rp;
+    // The element whose box is the containing block of an absolute box
+    // inside this one: this element when it can be one
+    // (f_contains_absolute), else its parent's answer; NULL for the initial
+    // containing block. An absolute element's own containing block is its
+    // PARENT's anchor. `fixed_anchor` is the same for a FIXED box: the
+    // nearest transformed or filtered one (f_contains_fixed), whose box is
+    // its containing block in place of the viewport.
+    const os64_html_node_t *anchor, *fixed_anchor;
+    // `opacity: 0` on this element or an ancestor whose opacity is not
+    // animated: nothing of it is painted (flow_box_t.unpainted).
+    bool transparent;
+    // Its in-flow children are flex or grid items: it is a flex or grid
+    // container, or it makes no box (`display: contents`) inside one. Pass
+    // 1 blockifies them (Flexbox 1 § 4, Grid 2 § 6).
+    bool lays_out_items;
+    // What the author took from the parent by keyword — `inherit`, or
+    // `unset` on an inherited property — whatever the property is, in a
+    // declaration or any keyframe of its animations: a value an ancestor
+    // hands down to a box it does not hold (flow_motion_due).
+    FProps taken;
+    // Its ::before and ::after (GENERATED_CONTENT.md § 4): each a synthetic
+    // element node of pass 1's arena, its parent this element and its one
+    // child the content's text, styled in the map as any element is; NULL
+    // when the pseudo-element does not exist. `pseudo_declared` says, per
+    // pseudo-element (bit 0 ::before, bit 1 ::after), whether the author
+    // declared its content at all, `none` included: what takes the place of
+    // the parentheses an `rt` draws of its own. A `q`'s marks are its
+    // pseudo-elements, from the chapter's sheet (style_pseudo).
+    const os64_html_node_t *pseudo[2];
+    uint8_t pseudo_declared;
+} FStyled;
+
+// `value` spelled in counter style `type`, its symbols without a suffix
+// (CSS Counter Styles 3), into `out`: what a list's marker and `counter()`
+// share. Returns the length; `none` spells nothing.
+#define F_COUNTER_SPELL_MAX 24
+uint32_t f_counter_spell(flow_list_style_type_t type, int32_t value, char out[F_COUNTER_SPELL_MAX]);
+
+// The pseudo-element a node of libflow's own is, or belongs to (its text),
+// GARB_PSEUDO_NONE for any node of a document; and the element it is made
+// for. A synthetic node never leaves libflow (GENERATED_CONTENT.md § 4).
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n);
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n);
+
+// THE FLAT TREE (SHADOW_DOM.md § 5) is what renders: a host's children are
+// its shadow root's, a slot's are its assigned nodes or else its own, and a
+// host's child no slot takes, or a slot's own while nodes are assigned to
+// it, is in it nowhere. With no shadow trees it is the document's own
+// tree. libhtml answers for a document's nodes; a synthetic node is in no
+// child list, so it, and its text, climb by their own parent.
+static inline const os64_html_node_t *f_flat_parent(const os64_html_document_t *doc,
+                                                    const os64_html_node_t *n)
+{
+    return f_pseudo_of(n) != GARB_PSEUDO_NONE ? n->parent : os64_html_flat_parent(doc, n);
+}
+
+// What is left of the budget for the lists a declaration hands each element
+// it reaches (style.c, list_alloc): the one part of styling a page can
+// multiply.
+#define F_STYLE_LISTS_BUDGET ((size_t)32 << 20)
+// How deeply an animation's mix of transforms may nest blends
+// (flow_transform_blend_t.depth): each nested one is worked out within the
+// one around it as it is drawn, so a nest a page could stack thousands of
+// animations deep would be a stack as deep. A mix past it finds no room.
+#define F_BLEND_DEPTH_MAX 32
+
+typedef struct {
+    const os64_html_document_t *doc;
+    const flow_env_t *env;
+    flow_env_t inputs;
+    uint64_t cascade_generation, cascade_updates, reused;
+    bool lists_refused;
+    FArena arena;
+    FMap map;               // element node -> FStyled
+    size_t lists_left;      // of F_STYLE_LISTS_BUDGET
+    // The elements an animation runs on, in document order (FStyled.motion).
+    const os64_html_node_t **animated;
+    int32_t nanimated, cap_animated;
+    // The timeline this layout builds when the environment hands it one
+    // (f_timeline_begin), which its FMotions point into; freed with the
+    // styles unless the face takes it (flow_timeline_commit).
+    flow_timeline_t *timeline;
+    // The pass met tree-order state, a counter or a quote mark
+    // (GENERATED_CONTENT.md § 8.4): an element's generated content then
+    // depends on every element before it, so the pass is restyled whole.
+    bool ordered;
+} FStyles;
+
+// ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few
+// hundred bytes per element, so a page that cannot have its styles cannot
+// have its boxes either; and a partial table would let pass 2 decide a
+// container's shape from half its children, which a whole build decides
+// differently (LAYOUT.md § Proof, the prefix rule).
+FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
+                       const flow_env_t *env);
+FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
+                              const flow_env_t *env, const FStyles *previous);
+// NULL for a node with no style: not an element, or inside a
+// `display: none` subtree, which pass 1 does not descend into.
+const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
+// An element's style when pass 1 did not reach it, for getComputedStyle
+// (flow_computed_new): it and the elements between it and the nearest
+// ancestor pass 1 styled are styled into `extra` — empty, with `styles`'
+// document, an environment whose cascade is `styles`' and no timeline, so
+// no animation runs — from a copy of that ancestor's record; that and the
+// root element's font size (`rem`) are all of `styles` it reads, and it
+// writes nothing there. `styles`' own record when it has one; NULL for
+// a node that is no element, one whose ancestors reach no styled element
+// (detached, or in a template's contents), and on no memory.
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element);
+// CSSOM's SVG values use the same unit and calculation rules as layout.
+// font/root_font are zoomed 26.6 sizes; the result uses CSS pixels and
+// percentages, or a dimensionless number in px when number is true.
+typedef struct { double px, pct; bool number; } FNumeric;
+bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
+                     const garb_val_t *value, FNumeric *out);
+uint32_t f_style_colour(garb_color_t color);
+// Compare scalar and pointed-to style values, independent of their arenas.
+bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
+void f_style_free(FStyles *styles);
+// The styles pass 1 made for a tree, which live as long as it does.
+const FStyles *f_tree_styles(const flow_tree_t *tree);
+// The style of an ANONYMOUS box: its parent's inherited properties and the
+// initial value of every other (CSS 2.1 §9.2.1.1) — never a copy of the
+// parent's struct, which would give an anonymous block its parent's margins
+// and borders a second time.
+void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
+                       flow_display_t display, flow_style_t *out);
+
+// One line per styled element, indented by depth: the element, its display,
+// then what it CHANGED — an inherited property where it differs from the
+// parent's, any other where it differs from its initial value — so a line
+// reads as the rules that fired. Like snprintf, it answers the length the
+// whole dump needs and writes what fits.
+int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
+// `cursor`'s keywords in flow_cursor_t's order (CSS UI 4 § 5.1.1): what
+// pass 1 reads a keyword as, and what a dump writes back.
+extern const char *const f_cursor_words[FLOW_CURSOR_ZOOM_OUT + 1];
+
+// ── Pass 2: the box tree (boxes.c) ──────────────────────────────────────
+//
+// Block-level boxes form the tree. A block container whose content is
+// inline holds, instead of children, its INLINE FORMATTING CONTEXT as one
+// flat sequence of items — text pieces, the opening and closing edges of
+// inline boxes, atomic inlines, breaks — because a line is broken across
+// that sequence and not per node: `foo<b>bar</b>` is one word in two nodes
+// (LAYOUT.md § Pass 3).
+
+// How deep the box build descends — element levels, the parts of a table,
+// and an inline-block's content twice — before it stops and reports the
+// page incomplete. Every pass after it recurses along the boxes, so this is
+// what bounds the stack a layout needs, whatever nesting the parser was
+// told to allow; it is sized to leave a thread's stack room to spare
+// (LAYOUT.md § Bounds).
+#define F_DEPTH_MAX 512
+
+typedef enum {
+    FB_BLOCK = 0,       // a block container; node NULL for an anonymous one
+    FB_REPLACED,        // a block-level replaced box: a frame, or a picture made a block
+    FB_TABLE,
+    FB_CAPTION,         // a block container
+    FB_COLUMN_GROUP,
+    FB_COLUMN,
+    FB_ROW_GROUP,
+    FB_ROW,
+    FB_CELL,            // a block container
+} f_box_kind_t;
+
+typedef enum {
+    FI_TEXT = 0,
+    FI_OPEN,            // an inline box begins (or, after a split, continues)
+    FI_CLOSE,           // it ends (or is interrupted by a block)
+    FI_ATOMIC,          // a replaced inline, or an inline-block with content
+    FI_BREAK,           // `br`, or a preserved newline
+    FI_WBR,             // a break opportunity and nothing else
+    FI_MARKER,          // a list marker drawn inside
+    // Where an out-of-flow box was written among inline content: nothing on
+    // the line — no width, no height, no break opportunity — but the point
+    // its static position is read from once the line is placed.
+    FI_PLACEHOLDER,
+    // Where a float was written among inline content: no width and no
+    // break opportunity of its own, but the point lines() meets it, and
+    // places it, in order (FLOATS.md).
+    FI_FLOAT,
+} f_item_kind_t;
+
+// What an overflow value does, asked in one place (CSS Overflow 3 § 3):
+// every value but `visible` cuts what overflows. Every one but `visible`
+// and `clip` makes a SCROLL CONTAINER, which is what starts a formatting
+// context, gives an inline-block its bottom edge for a baseline, and has a
+// scroll position its content is drawn moved by (PILE3.md § Scrolling
+// boxes) — `hidden` too, which a person cannot scroll and a script and a
+// fragment link can; `clip` does none of it — that is what it is for.
+static inline bool f_overflow_clips(flow_overflow_t o)
+{
+    return o != FLOW_OVERFLOW_VISIBLE;
+}
+
+static inline bool f_overflow_scrolls(flow_overflow_t o)
+{
+    return o != FLOW_OVERFLOW_VISIBLE && o != FLOW_OVERFLOW_CLIP;
+}
+
+typedef struct FBox FBox;
+typedef struct FReuseCall FReuseCall;
+typedef struct FLine FLine;
+typedef struct FFrag FFrag;
+typedef struct FSpan FSpan;
+typedef struct FPos FPos;
+
+// One record per inline element, shared by every piece a block splits it
+// into, so a face paints a split `<a>` as one link.
+typedef struct {
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    int32_t link;                   // libpage's index, or -1
+    int32_t pieces;                 // how many OPENs have been emitted
+    FBox *open_in;                  // the context its current piece is open in
+    // A positioned inline's entry (pass 2); and in pass 3 its first and last
+    // pieces, whose padding boxes bound it as a containing block (CSS 2.1 §
+    // 10.1), and the relative offset its pieces and content move by.
+    FPos *pos;
+    FSpan *first_span, *last_span;
+    int64_t rel_x, rel_y;
+} FInline;
+
+typedef struct FItem FItem;
+struct FItem {
+    FItem *next;
+    f_item_kind_t kind;
+    // TEXT: the text node, or for generated text the element that
+    // generated it. OPEN/CLOSE/ATOMIC/BREAK/WBR: the element (NULL for a
+    // preserved newline). MARKER: the list item.
+    const os64_html_node_t *node;
+    const flow_style_t *style;      // what the item is drawn in
+    // TEXT, MARKER: the bytes to lay out. For page text, a slice of the
+    // node's processed copy starting `offset` bytes in — the range a
+    // selection maps back through — or, under text-transform, a copy of
+    // that slice with its case changed and its length kept.
+    const char *text;
+    uint32_t len, offset;
+    // TEXT from a node: the node's source byte the slice's processing
+    // began at, and whether white space was collapsing there (the space
+    // state f_collapse_white started in), so a source byte's processed
+    // offset can be replayed (flow_text_processed).
+    uint32_t source;
+    bool source_space;
+    bool generated;                 // TEXT the sheet made: a quote mark, a ruby parenthesis
+    bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
+    FInline *inl;                   // OPEN, CLOSE
+    FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
+    bool replaced;                  // ATOMIC: a replaced element's (flow_box_t.replaced)
+    FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
+    FBox *floated;                  // FLOAT: the float written here
+    int32_t link, control;          // ATOMIC: libpage's indexes, or -1
+};
+
+struct FBox {
+    f_box_kind_t kind;
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    FBox *parent, *first, *last, *next;
+    // A block container either has in-flow block children or is an inline
+    // formatting context with items — never both. Out-of-flow children may
+    // hang under either kind.
+    bool ifc;
+    // An inline formatting context's ellipsis (flow_box_t.ellipsis), made
+    // once, the first time its lines are laid out; NULL for none.
+    os64_text_run_t *ellipsis;
+    // POSITION.md. `positioned`: a block-level box whose position is not
+    // static — but a table's row, group or column, laid out static (booked)
+    // — whose public box is stacked (flow_box_t.stacked): reached from the
+    // layers and skipped by every walk of its tree ancestors. `out_of_flow`: an absolute or fixed one, which no
+    // formatting context holds — laid out once its containing block is
+    // finished.
+    // `pos`: its entry, which every box that is a containing block has
+    // (f_contains_absolute): the positioned, transformed and filtered ones,
+    // and such an inline-block's content or root, which are not
+    // `positioned`.
+    bool positioned, out_of_flow;
+    FPos *pos;
+    // Its element is transformed and the box can be (PILE3.md §
+    // Transforms): drawn moved, with everything in it, by a frame of its own
+    // — an inline-block's content by its atom's — and the containing block
+    // of the out-of-flow boxes inside it, fixed ones included.
+    bool transformed;
+    // A float (FLOATS.md): the side, NONE for every other box. It is a
+    // block child of the container it was written in, or among inline
+    // content a child of the inline formatting context with a FLOAT item
+    // where it stood; either way it is laid out in its formatting context
+    // where the flow meets it, and takes no room in the flow.
+    flow_float_t floated;
+    // A float's margin box's height, as laid out (float_lay): from its top
+    // margin to its bottom one, a table's captions included, which its box
+    // leaves out.
+    int64_t float_h;
+    // § 9.5.2: how far a block in the flow that clears floats was moved
+    // below where it would have stood, 0 when it was not.
+    int64_t clearance;
+    // It lays its children out as flex items (FLEX.md), or as grid items
+    // (GRID.md): a block container whose element is such a container, or
+    // an inline one's atom content.
+    bool flex, grid;
+    // The positioned inlines whose pieces are all laid out inside this box,
+    // which is finished only once all of them are (FPos.home).
+    FPos *homed;
+    FItem *items, *last_item;
+    int32_t nitems;
+    bool collapse_space;            // build time: the last text ended in a collapsible space
+    // A list item's marker when it is drawn OUTSIDE; an inside marker is
+    // an item. NULL when the item has none.
+    const char *marker;
+    uint32_t marker_len;
+    // The link this box IS (a frame) or sits inside, however deep, or -1:
+    // every box carries its own, an anonymous one its parent's. And the
+    // control it is — a form control made block-level, by `display: block`
+    // or by positioning — or -1.
+    int32_t link, control;
+
+    // ── Pass 3's geometry, in 26.6 document coordinates (x from the page's
+    // left edge, y from its top). 64-bit, because a long page is taller
+    // than 26.6 can count in 32 bits.
+    bool placed;                    // false: layout stopped before this box
+    // Layout stopped INSIDE this box: its rectangle holds what was laid
+    // out before it did (LAYOUT.md § Proof, the allocation sweep).
+    bool unfinished;
+    int64_t x, y, w, h;             // the border box
+    // A table row: the baseline its layout gave it (the one its baseline
+    // cells share, else its first cell's, else its bottom), absolute, once
+    // it is laid out.
+    bool has_baseline;
+    int64_t baseline;
+    // An inline-block's content: the content width its line gave it (§
+    // 10.3.9), which block() takes as given rather than filling — so its
+    // percentages still resolve against the line, as they were measured.
+    bool atom_sized;
+    int64_t atom_w;
+    int64_t border[4], padding[4];  // used widths, top right bottom left
+    FLine *lines, *last_line;       // an inline formatting context's lines
+    FFrag *marker_frag;             // an outside marker, placed
+    // The box's min-content and max-content border-box widths, found once
+    // per layout and kept: a nested table asks for its cells' widths on
+    // every level above it, and without the memo that is exponential.
+    bool intrinsic_known;
+    int64_t intrinsic_min, intrinsic_max;
+    // The def_h they were measured against (-2 before it was found): an
+    // inline picture's percentage height is of it, so a layout reusing an
+    // earlier one's widths must have measured with the same.
+    int64_t intrinsic_def;
+    // The same two from its content alone, before a width or limit the page
+    // gave overrides them (a picture's, its own width: replaced_own),
+    // border box: what a row flex item's automatic minimum and content
+    // basis — `content`, or `auto` with no width — read (Flexbox 1 § 4.5,
+    // § 9.2).
+    int64_t content_min, content_max;
+    // The height its content took when it was laid out, border box, before
+    // a height or a limit the page gave: a flex container's, the height its
+    // items ask; a table's, its rows'. What a flex item's natural height,
+    // and a column item's automatic minimum and `flex-basis: content`, read.
+    int64_t content_h;
+    uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
+    // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
+    // blocks, `static_known` says x and y hold it until the box is laid
+    // out; among inline content it is the placeholder `place` on a line.
+    // Either moves with whatever moves what holds it. Then the width and
+    // left margin its equations gave it, and the content height when they
+    // gave one, which block() takes as given.
+    bool static_known;
+    FFrag *place;
+    bool abs_sized, abs_h_set;
+    int64_t abs_w, abs_ml, abs_h;
+    // Its heights where they do not wait on its content (CSS 2.1 § 10.5),
+    // as seed_heights found them — block_at on its way in, a flex container
+    // for its items before it measures them — each -1 where there is none:
+    // `cb_h`, the containing block's content height its own percentage
+    // heights resolve against (an absolute box's, absolute() sets from the
+    // block it is placed in); `def_h`, its own content height — a length,
+    // a percentage of `cb_h`, or its absolute equations' — which its
+    // children's resolve against. Neither holds until `def_known`.
+    bool def_known;
+    int64_t cb_h, def_h;
+    // A flex item's width and left margin, as its container decided them
+    // before laying it out (FLEX.md), which block() takes as given; its
+    // line, counted from the first — a row's placing it again reads that,
+    // and the container's baseline reads either's; and how many times the
+    // box was laid out, which the fuzz holds to once.
+    bool flex_sized;
+    int64_t flex_w, flex_ml;
+    int32_t flex_line;
+    // A grid item's area's first row and column, which the grid's baseline
+    // reads; and its x from the area's left edge as it was laid out, which
+    // placing a table item again keeps (a table places itself).
+    int32_t grid_row, grid_col;
+    int64_t area_dx;
+    uint32_t laid;
+    // The post-clearance call origin moves with translate(). The optional
+    // signature is owned by this tree's bounded snapshot metadata.
+    int64_t origin_x, origin_y;
+    FReuseCall *reuse_call;
+};
+
+// One element that is a containing block (f_contains_absolute; POSITION.md):
+// a box, or an inline element whose pieces are spread over lines.
+// The root's overflow, or the body's when the root's is visible, is the
+// viewport's (CSS Overflow 3 § 3.3): the box itself neither clips nor
+// scrolls, and the face scrolls the page.
+static inline bool f_viewport_overflow(const FBox *b)
+{
+    if (b->parent == NULL)
+        return true;
+    const flow_style_t *root = b->parent->style;
+    return b->parent->parent == NULL && b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+           b->node->tag == OS64_HTML_TAG_BODY && root->overflow_x == FLOW_OVERFLOW_VISIBLE &&
+           root->overflow_y == FLOW_OVERFLOW_VISIBLE;
+}
+
+// Whether a box cuts its own content on the x axis (or else the y): an
+// element whose overflow is not the viewport's. An anonymous box carries
+// its parent's style and clips nothing of its own.
+static inline bool f_box_clips(const FBox *b, bool x_axis)
+{
+    return b->node != NULL && !f_viewport_overflow(b) &&
+           f_overflow_clips(x_axis ? b->style->overflow_x : b->style->overflow_y);
+}
+
+// Whether a box is a scroll container: one that clips, on either axis, by
+// a value that scrolls.
+static inline bool f_box_scrolls(const FBox *b)
+{
+    return b->node != NULL && !f_viewport_overflow(b) &&
+           (f_overflow_scrolls(b->style->overflow_x) || f_overflow_scrolls(b->style->overflow_y));
+}
+
+typedef enum { FP_BOX = 0, FP_INLINE } f_pos_kind_t;
+
+struct FPos {
+    FPos *next;                     // every entry, in tree order
+    f_pos_kind_t kind;
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    FBox *box;                      // BOX
+    FInline *inl;                   // INLINE
+    // INLINE: the block container its pieces are all laid out in, finished
+    // only once all of them are; and the next inline entry homed there.
+    FBox *home;
+    FPos *home_next;
+    // An out-of-flow box's containing block, NULL for the initial one.
+    FPos *cb;
+    // The out-of-flow boxes this entry is the containing block of, in tree
+    // order; and the next in its containing block's.
+    FPos *abs_first, *abs_last, *abs_next;
+};
+
+typedef struct {
+    FArena arena;
+    const FStyles *styles;          // what the boxes' styles came from
+    FBox *root;
+    uint64_t count;              // boxes allocated, including anonymous boxes
+    // Every containing block's entry, in tree order; and the out-of-flow
+    // boxes of the initial containing block.
+    FPos *positioned, *last_positioned;
+    FPos *icb_first, *icb_last;
+    // Memory or the arena's budget ran out partway, or the page nests past
+    // F_DEPTH_MAX: every box and item present is real, and the build
+    // stopped at the first thing it could not make.
+    bool incomplete;
+} FBoxes;
+
+// Relative call results remain valid when a parent translates a subtree.
+struct FReuseCall {
+    FBox *box;
+    int64_t cbw, cbh, forced_w, pm_pos, pm_neg;
+    int64_t delta_y, out_pos, out_neg, first_delta, float_min;
+    flow_text_align_t parent_align;
+    bool first_set, result_first_set, bfc, valid, float_free, has_queries;
+};
+typedef struct {
+    FBox *box;
+    const FBox *old;
+    size_t parent, subtree_count;
+    bool equal, ordinary;
+    flow_reuse_reason_t reason;
+} FReusePair;
+typedef struct { const void *from; void *to; } FReusePointer;
+typedef struct {
+    FReusePair *pairs;
+    uint32_t *slots;
+    FReusePointer *pointers;
+    size_t count, capacity, nslots, pointer_slots, bytes, staging_left;
+    flow_tree_t *tree;
+    const flow_tree_t *previous;
+} FReuseMatch;
+FReusePair *f_reuse_pair(const FReuseMatch *match, const FBox *box);
+void *f_reuse_pointer(const FReuseMatch *match, const void *old);
+
+// ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
+
+typedef enum { FF_TEXT = 0, FF_ATOMIC, FF_MARKER, FF_PLACEHOLDER } f_frag_kind_t;
+
+// What one line holds: a text fragment is one run of the text engine; an
+// atomic fragment is a replaced box or an inline-block; a marker fragment
+// is a list marker's text.
+struct FFrag {
+    FFrag *next;
+    f_frag_kind_t kind;
+    const FItem *item;              // TEXT, ATOMIC; a MARKER drawn inside
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    os64_text_run_t *run;           // TEXT, MARKER: owned, released with the tree
+    const char *text;               // TEXT, MARKER: the bytes the run was laid out from
+    uint32_t begin, end;            // TEXT: the byte range in the item's text
+    int64_t x, y, w, h;             // TEXT, MARKER: the content area; ATOMIC: the border box
+    int64_t hang;                   // TEXT: the width at its end of pre-wrap spaces that hang
+    int64_t baseline;               // absolute
+    uint8_t decoration;             // FLOW_DECORATION_* drawn across it
+    FDecorationColors decoration_colors;
+    int32_t link;                   // the link it sits in, or -1
+    // The relative offset it moves by once its line is placed: a relative
+    // atom's own, and every relative inline's open round it.
+    int64_t rel_x, rel_y;
+};
+
+// One inline box's piece on one line: what a link's underline or a
+// background is drawn behind.
+struct FSpan {
+    FSpan *next;
+    FInline *inl;
+    int64_t x0, x1, top, bottom;
+    int64_t rel_x, rel_y;           // as a fragment's
+};
+
+struct FLine {
+    FLine *next;
+    int64_t x, y, w, h, baseline;   // w: the content width it was broken to
+    // Pass 2 stopped inside this line's context, so the line was broken
+    // without the items that would have followed: it is kept, empty, where
+    // it began. (A line pass 3 could not finish never joins its context.)
+    bool unfinished;
+    FFrag *frags, *last_frag;
+    FSpan *spans, *last_span;
+};
+
+// NULL only when there is not memory for the tree itself.
+FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
+                      const FStyles *styles, const flow_env_t *env);
+void f_boxes_free(FBoxes *boxes);
+// CSS white space processing (CSS 2.1 §16.6.1), for every text the page
+// is laid out as — a text node's, and a missing picture's alt — where
+// f_ws_collapses says spaces collapse: `n` bytes of `in` into `out` (room
+// for `n`), each run of spaces, tabs and line breaks one space, and none
+// at the start when `*space` says the text before ended in one. It leaves
+// `*space` saying whether this one does, and returns the length. A caller
+// that keeps line breaks (pre-line) collapses the text between them.
+uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space);
+// One line per box and per item, indented by depth; the same contract as
+// f_style_dump.
+int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap);
+
+typedef struct {
+    const flow_env_t *env;
+    os64_html_quirks_t quirks;
+    const os64_page_t *model;
+    FBoxes *boxes;
+    FArena arena;                   // lines, fragments, spans
+    // Every run a fragment holds, so freeing the tree releases each once.
+    os64_text_run_t **runs;
+    size_t nruns, cap_runs;
+    int64_t width, height;          // the page's, 26.6
+    // How many times an inline formatting context was measured: the cost
+    // the harness holds to a linear bound (LAYOUT.md § Bounds).
+    uint64_t measures, reused;
+    // How many steps the exclusion spaces walked, read and moved (FLOATS.md
+    // § Bounds): what the harness holds linear in the floats and lines.
+    uint64_t float_walk;
+    // How many carets word_pieces stepped through cutting words at their
+    // characters: what the harness holds linear in the text.
+    uint64_t piece_carets;
+    // The most table working memory held at once, which shares the arena's
+    // budget: what the harness holds to it.
+    size_t scratch_peak;
+    // The text engine, the allocator or the budget refused partway: what is
+    // placed is real, and nothing after the refusal is.
+    bool incomplete;
+} FLayout;
+
+// A length in 26.6 against a base in 26.6, as layout resolves one: a
+// percentage of the base, and `auto` read as 0 — the caller that cares
+// asks first.
+int64_t f_len(flow_length_t l, int64_t base);
+
+// Whether a box is a block formatting context's root (layout.c, where the
+// list is): what holds its floats, and what the fuzz asks to find each
+// float's context.
+bool f_bfc_root(const FBox *b);
+
+// Lays the box tree out at `width` CSS pixels. NULL only when there is not
+// memory for the layout record.
+FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                  const flow_env_t *env, int32_t width);
+FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                          const flow_env_t *env, int32_t width, FReuseMatch *match,
+                          flow_reuse_stats_t *stats);
+void f_layout_free(FLayout *layout);
+
+// The most frames one sticky box's push may be worked from, itself, the
+// ones outside it and their scrollports' included. A sticky box past it is
+// laid out and drawn where the flow put it: the work of a lookup stays
+// bounded however a page nests them.
+#define F_FRAME_DEPS 32
+
+typedef enum { F_FRAME_STICKY = 0, F_FRAME_SCROLL, F_FRAME_TRANSFORM } f_frame_kind_t;
+
+// A FRAME, as the door built it: what moves a box and everything inside it
+// away from where the flow put them. A STICKY box (CSS Position 3 § 3.4)
+// moves itself by its push at the page's scroll, worked from everything
+// below. A SCROLL CONTAINER moves its CONTENT, not itself, back by its own
+// scroll position `at` (CSS Overflow 3 § 2.2): the container is in the
+// frame outside, its content in this one, and its padding box clips that
+// content from outside. A TRANSFORMED box (PILE3.md § Transforms) moves
+// itself and its content through its matrix; a box both sticky and
+// transformed has its transform frame inside its sticky one.
+struct flow_frame {
+    f_frame_kind_t kind;
+    const flow_box_t *box;
+    // Moved at all: false for a sticky box past F_FRAME_DEPS, and then it is
+    // where the frame it is in puts it; a scroll container's always moves.
+    // `mover`: this one when it moves, else the nearest outside it that
+    // does, or NULL — whose frame is this one's.
+    bool moves;
+    const flow_frame_t *mover;
+    // The next frame out along its containing blocks, which moves it and
+    // everything it is worked against; NULL for none.
+    const flow_frame_t *outer;
+    // SCROLL: where its content is scrolled to, which the face sets
+    // (flow_scroll_set), from 0 to `range` on each axis — the most its
+    // scrollable overflow reaches past its padding box `pad` — and its
+    // place in the tree's list of them.
+    flow_point_t at, range;
+    os64_gui_rect_t pad;
+    int32_t index;
+    // STICKY: its SCROLLPORT, the nearest ancestor that is a scroll
+    // container, or NULL for the viewport — the padding box `port_rect`, in
+    // the coordinates of the frame `port` itself is in; the viewport's is
+    // `view_w` by `view_h` at the page's scroll.
+    const flow_box_t *port;
+    os64_gui_rect_t port_rect;
+    int32_t view_w, view_h;
+    // The insets that are not `auto`, in pixels, in CSS's side order.
+    bool has[4];
+    int32_t inset[4];
+    // How far it may move on each axis, x then y, and stay inside its
+    // containing block, margins and all: lo <= 0 <= hi.
+    int32_t lo[2], hi[2];
+    // TRANSFORM: its matrix, column-major, in 26.6 document coordinates as
+    // the box was laid out (f_transform_matrix), and what it is drawn as
+    // (PILE3.md § Transforms, the painter). A translation is an OFFSET,
+    // `by` pixels. A FLAT matrix that does more is drawn THROUGH: what is
+    // inside is painted in the frame's own coordinates and laid onto the
+    // frame outside's through `affine` — x' = a x + c y + e, y' = b x + d y
+    // + f, {a, b, c, d, e, f}, in pixels — so `by` moves nothing. A matrix
+    // that is not flat is drawn UPRIGHT, moved by `by`: how far it moves
+    // the transform-origin.
+    double matrix[16];
+    double affine[6];
+    bool through, upright;
+    flow_point_t by;
+    // And the border box, in 26.6 as it was laid out, that the matrix is
+    // worked against, so a tick works its new one against the same
+    // (flow_motion_tick).
+    int64_t box_x, box_y, box_w, box_h;
+    // When its containing block is a scroll container (`outer`'s box), the
+    // block's content reaches as far down as the container scrolls, so
+    // `hi[1]` is `room_down` — the room to the padding box's foot, which
+    // may be negative — plus that range, once the range is known
+    // (sticky_reach_scrolled).
+    bool cb_scrolls;
+    int32_t room_down;
+    // What clips everything in the frame from outside, which stays where it
+    // is while the frame moves, in the coordinates of the frame outside, as
+    // wide as a rectangle can say on an axis nothing clips, when `clips`: a
+    // sticky box's, the clip its parent hands its content; a scroll
+    // container's, the clip it hands its own. The boxes inside keep in
+    // their own `clip` only what clips inside the frame, and
+    // flow_box_doc_clip meets the two. `clipped`: it or one outside it clips.
+    os64_gui_rect_t clip;
+    bool clips, clipped;
+};
+
+// A transformed box's matrix (flow_frame_t.matrix) from its style and its
+// border box at (x, y), `w` by `h`, all in 26.6: T(origin) · translate ·
+// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6), up
+// to a positive power of two: one whose entries a double cannot hold comes
+// back divided down, which every reader allows — the matrix is
+// homogeneous, and each divides by its w — though an entry too small
+// beside the rest is lost to 0 (the numeric contract, PILE3.md §
+// Transforms, the painter, Booked). Made in one place from those alone, so
+// a box's matrix can be made again without laying it out again.
+void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
+                        double m[16]);
+
+// The public tree (flow.c) as text, one line per box (dump.c); `scrollers`
+// are its scroll containers' frames, by flow_box_t.scroller.
+int64_t f_tree_dump(const flow_box_t *root, const flow_frame_t *const *scrollers, int32_t width,
+                    int32_t height, bool incomplete, char *out, size_t cap);
+
+#endif

@@ -1,0 +1,56 @@
+fonttest: backend revision 1, table 104 bytes
+fonttest: private target runtime PASS
+fonttest: DejaVuSans.ttf                   757076 bytes
+fonttest: DejaVuSansMono.ttf               340712 bytes
+fonttest: SourceSans3-Regular.otf          334924 bytes
+fonttest: SourceCodePro-Regular.otf        131128 bytes
+fonttest: faces --------------------------------------------
+  DejaVu Sans (TrueType)           16px  DejaVu Sans/Book  6253 glyphs  ascent 960 descent 256 line 1216
+  DejaVu Sans (TrueType)           24px  DejaVu Sans/Book  6253 glyphs  ascent 1472 descent 384 line 1856
+  DejaVu Sans (TrueType)           32px  DejaVu Sans/Book  6253 glyphs  ascent 1920 descent 512 line 2432
+  DejaVu Sans Mono (TrueType)      16px  DejaVu Sans Mono/Book  3377 glyphs  ascent 960 descent 256 line 1216  fixed
+  DejaVu Sans Mono (TrueType)      24px  DejaVu Sans Mono/Book  3377 glyphs  ascent 1472 descent 384 line 1856  fixed
+  DejaVu Sans Mono (TrueType)      32px  DejaVu Sans Mono/Book  3377 glyphs  ascent 1920 descent 512 line 2432  fixed
+  Source Sans 3 (OpenType/CFF)     16px  Source Sans 3/Regular  2478 glyphs  ascent 1024 descent 384 line 1408
+  Source Sans 3 (OpenType/CFF)     24px  Source Sans 3/Regular  2478 glyphs  ascent 1536 descent 512 line 2048
+  Source Sans 3 (OpenType/CFF)     32px  Source Sans 3/Regular  2478 glyphs  ascent 2048 descent 704 line 2752
+  Source Code Pro (OpenType/CFF)   16px  Source Code Pro/Regular  1568 glyphs  ascent 1024 descent 320 line 1344  fixed
+  Source Code Pro (OpenType/CFF)   24px  Source Code Pro/Regular  1568 glyphs  ascent 1536 descent 448 line 1984  fixed
+  Source Code Pro (OpenType/CFF)   32px  Source Code Pro/Regular  1568 glyphs  ascent 2048 descent 576 line 2624  fixed
+fonttest: kerning ------------------------------------------
+  DejaVuSans.ttf               'AV' @32px  -131/64 px
+  DejaVuSans.ttf               'To' @32px  -348/64 px
+  SourceSans3-Regular.otf      'AV' @32px  -29/64 px
+  SourceSans3-Regular.otf      'LT' @32px  -246/64 px
+fonttest: specimen -----------------------------------------
+  DejaVu Sans 'R' at 20px  13x15 mask, left 1, top -15, advance 896/64 px
+    | ####***.    |
+    | ########:   |
+    | #*    :##   |
+    | #*     *#.  |
+    | #*     *#.  |
+    | #*    :#*   |
+    | #######*.   |
+    | ######*.    |
+    | #*   .**.   |
+    | #*    .#*   |
+    | #*     *#.  |
+    | #*     .#*  |
+    | #*      *#  |
+    | #*      .#: |
+    | #*       ** |
+  DejaVu Sans 'e' at 20px  11x11 mask, left 1, top -11, advance 768/64 px
+    |   :***:   |
+    | .*#####*  |
+    | **.   :#* |
+    |:#      :# |
+    |*#*****### |
+    |*######### |
+    |*#         |
+    |:#:        |
+    | **:    .: |
+    | .*######* |
+    |   :****:  |
+fonttest: engine live 1504 bytes, peak 105936, 2146 allocations
+fonttest: specimen window open for 20 seconds
+fonttest: PASS (peak 109772 bytes, 6446 allocations)

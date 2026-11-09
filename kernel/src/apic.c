@@ -66,11 +66,6 @@ uint8_t acpiGetAPICVersion()
     return apicReadRegister(APIC_REGISTER_VERSION);
 }
 
-uint8_t apciGetAPICID()
-{
-    return apicReadRegister(APIC_REGISTER_APIC_ID_OFFSET);
-}
-
 uint64_t apicGetAPICBase(void)
 {
    uint64_t rax = rdmsr64(IA32_APIC_BASE_MSR);
@@ -78,27 +73,13 @@ uint64_t apicGetAPICBase(void)
    return (rax & 0xfffffffffffff000);
 }
 
-uint32_t apicReadRegister(uint32_t reg) 
+uint32_t apicReadRegister(uint32_t reg)
 {
-    return *((volatile uint32_t *) (kCPUInfo[0].registerBase + reg));
+    return *((volatile uint32_t *) (kMPApicBase + reg));
 }
 
 void apicWriteRegister(uint64_t reg, uint32_t value) {
-    *((volatile uint32_t *) (kCPUInfo[0].registerBase + reg)) = value;
-}
-
-/* Set the physical address for local APIC registers */
-void apicSetAPICBase(uintptr_t apic) {
-    uint64_t msr_value;
-
-    // Combine the base address with the enable flag
-    msr_value = (apic & 0xFFFFFFFFFFFFF100) | IA32_APIC_BASE_MSR_ENABLE;
-
-    // Write the value to the IA32_APIC_BASE MSR
-    wrmsr64(IA32_APIC_BASE_MSR, msr_value);
-
-    // Update the CPU's APIC base register tracking
-    kCPUInfo[0].registerBase = apic;
+    *((volatile uint32_t *) (kMPApicBase + reg)) = value;
 }
 
 /**
@@ -173,9 +154,9 @@ void ioapic_write(uint32_t reg, uint32_t value) {
 }
 
 // Program the IOAPIC redirection entry that firmware says this ISA IRQ is
-// wired to (MADT override first, MP tables second), targeting the given
-// LAPIC. Returns false when there is no IOAPIC to program.
-static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id) {
+// wired to (MADT override first, MP tables second), targeting CPU dest_cpu.
+// Returns false when there is no IOAPIC to program.
+static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint32_t dest_cpu) {
     if (!kIOAPICAddress) {
         return false;
     }
@@ -185,7 +166,7 @@ static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_
     uint32_t high_reg = low_reg + 1;
 
     uint32_t entry_low = vector; // delivery mode fixed; edge/high unless the override says otherwise
-    uint32_t entry_high = ((uint32_t)dest_apic_id) << 24; // physical destination
+    uint32_t entry_high = kCPUs[dest_cpu].apic.id << 24; // physical destination
 
     // Honor the override's MPS INTI flags: polarity (bits 0-1, 11 = active
     // low -> redirection bit 13) and trigger mode (bits 2-3, 11 = level ->
@@ -202,8 +183,8 @@ static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_
     ioapic_write(high_reg, entry_high);
     ioapic_write(low_reg, entry_low);
 
-    printd(DEBUG_SMP, "IOAPIC: IRQ%u mapped to redirection %u, vector 0x%02x, dest APIC %u\n",
-           isa_irq, redirection_index, vector, dest_apic_id);
+    printd(DEBUG_SMP, "IOAPIC: IRQ%u mapped to redirection %u, vector 0x%02x, dest CPU %u (APIC %u)\n",
+           isa_irq, redirection_index, vector, dest_cpu, kCPUs[dest_cpu].apic.id);
 
     return true;
 }
@@ -219,7 +200,7 @@ static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_
 // candidate, PROBE it — e1000's ICS register can fire a test interrupt on
 // command — and mask it again via ioapic_mask_gsi if the doorbell stays
 // silent.
-bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
+bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint32_t dest_cpu,
                       bool level_triggered, bool active_low)
 {
     if (!kIOAPICAddress)
@@ -229,7 +210,7 @@ bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
     uint32_t high_reg = low_reg + 1;
 
     uint32_t entry_low  = vector;                        // delivery mode fixed
-    uint32_t entry_high = ((uint32_t)dest_apic_id) << 24; // physical destination
+    uint32_t entry_high = kCPUs[dest_cpu].apic.id << 24; // physical destination
     if (active_low)
         entry_low |= (1u << 13);
     if (level_triggered)
@@ -238,8 +219,8 @@ bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
     ioapic_write(high_reg, entry_high);
     ioapic_write(low_reg, entry_low);
 
-    printd(DEBUG_SMP, "IOAPIC: GSI %u routed to vector 0x%02x, dest APIC %u (%s, active %s)\n",
-           gsi, vector, dest_apic_id,
+    printd(DEBUG_SMP, "IOAPIC: GSI %u routed to vector 0x%02x, dest CPU %u (APIC %u) (%s, active %s)\n",
+           gsi, vector, dest_cpu, kCPUs[dest_cpu].apic.id,
            level_triggered ? "level" : "edge", active_low ? "low" : "high");
     return true;
 }
@@ -258,7 +239,7 @@ void ioapic_mask_gsi(uint8_t gsi)
 }
 
 // Move an ISA IRQ from the legacy PIC to the IOAPIC: program the redirection
-// entry (targeting dest_apic_id), mask the line on the PIC so it can't
+// entry (targeting CPU dest_cpu), mask the line on the PIC so it can't
 // double-deliver, and flip the handler's EOI-path flag (each IRQ's asm
 // handler tests its own k*UsesLapic to choose LAPIC vs PIC EOI).
 //
@@ -271,8 +252,8 @@ void ioapic_mask_gsi(uint8_t gsi)
 // The destination matters more than it looks: the GUI routes the input IRQs
 // (1 and 12) at the COMPOSITOR's core, so a keyboard/mouse interrupt ends
 // the compositor's hlt-wait directly — input latency without busy-waiting.
-void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id, volatile bool *uses_lapic_flag) {
-    if (!ioapic_route_irq(isa_irq, vector, dest_apic_id)) {
+void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint32_t dest_cpu, volatile bool *uses_lapic_flag) {
+    if (!ioapic_route_irq(isa_irq, vector, dest_cpu)) {
         return;
     }
 
@@ -290,11 +271,11 @@ void remap_irq0_to_apic(uint32_t vector) {
         return;
     }
 
-    // Route PIT IRQ0 through the IOAPIC (to the BSP — it owns timekeeping),
+    // Route PIT IRQ0 through the IOAPIC (to the BSP, CPU 0 — it owns timekeeping),
     // then switch the platform to APIC mode. The IMCR write is deliberately
     // NOT in ioapic_adopt_isa_irq — it is a one-time platform-wide switch,
     // not a per-IRQ action.
-    ioapic_adopt_isa_irq(0, (uint8_t)(vector & 0xFF), kCPUInfo[0].apicID, &kIRQ0UsesLapic);
+    ioapic_adopt_isa_irq(0, (uint8_t)(vector & 0xFF), 0, &kIRQ0UsesLapic);
 
     set_imcr_to_apic();
 }

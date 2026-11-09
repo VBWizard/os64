@@ -1,0 +1,1 @@
+{ global: os64_jpeg_decode; os64_jpeg_free; os64_jpeg_status_name; os64_jpeg_license; local: *; };

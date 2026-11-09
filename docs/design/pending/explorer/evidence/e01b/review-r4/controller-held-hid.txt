@@ -1,0 +1,5 @@
+shot r4-hid-f10-held
+shot r4-hid-outside
+shot r4-hid-f10-recovered
+shot r4-hid-shortcut-closed
+shot r4-hid-shortcut-recovered

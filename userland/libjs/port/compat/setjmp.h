@@ -1,0 +1,1 @@
+/* The retained QuickJS profile uses no declarations from setjmp.h. */

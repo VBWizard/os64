@@ -1,0 +1,4 @@
+adoption=0, first actual button paint allocations=0, denied paint allocation attempts=0
+ink left normal=52 denied=52, differing pixels=0, retained run=1
+teardown=0
+live allocator blocks=0

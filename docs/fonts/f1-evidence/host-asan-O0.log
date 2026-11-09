@@ -1,0 +1,19 @@
+
+cost: face @ size                     px peak bytes allocations     held
+DejaVu Sans (TTF)                     16      51260        465    49307
+DejaVu Sans (TTF)                     24      51260        465    49343
+DejaVu Sans (TTF)                     32      51260        465    49410
+DejaVu Sans Mono (TTF)                16      45704        457    44504
+DejaVu Sans Mono (TTF)                24      45704        457    44525
+DejaVu Sans Mono (TTF)                32      45704        457    44571
+Source Sans 3 (CFF)                   16     109772        968   106060
+Source Sans 3 (CFF)                   24     109772        968   106096
+Source Sans 3 (CFF)                   32     109772        968   106106
+Source Code Pro (CFF)                 16      75082        910    71378
+Source Code Pro (CFF)                 24      75082        910    71406
+Source Code Pro (CFF)                 32      75082        910    71421
+
+943 checks, 0 failures
+host cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+flags  : -O0 -g -std=c11 -fcf-protection=none -fno-builtin -fno-tree-loop-distribute-patterns -DOS64_FREETYPE_HOSTED -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libfreetype/port -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libfreetype/upstream/include -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libos64/include -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+sources: 11 upstream + 4 port + harness

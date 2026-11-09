@@ -1,0 +1,68 @@
+=================================================================
+==41==ERROR: AddressSanitizer: heap-use-after-free on address 0x519000000478 at pc 0x64417c523925 bp 0x7ffd2c5add60 sp 0x7ffd2c5add50
+READ of size 8 at 0x519000000478 thread T0
+    #0 0x64417c523924 in binding_free /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/ui_font.c:88
+    #1 0x64417c52ed1e in text_free /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/text_cache.c:23
+    #2 0x64417c52ed87 in backend_free /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/text_cache.c:28
+    #3 0x64417c52f033 in remove_image /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/text_cache.c:172
+    #4 0x64417c531916 in text_drop_font_cache /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/text_cache.c:191
+    #5 0x64417c5319de in os64_text_font_release /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/text_cache.c:143
+    #6 0x64417c526ab3 in os64_font_set_release /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/font_provider.c:148
+    #7 0x64417c522e23 in main /tmp/quinn-f4-c1-review/repro.c:57
+    #8 0x7be9f6a2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #9 0x7be9f6a2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #10 0x64417c521b44 in _start (/tmp/quinn-f4-c1-review/repro+0x1b6b44) (BuildId: 856cf103f417323a4313c2827cded1295817d7ba)
+
+0x519000000478 is located 1016 bytes inside of 1072-byte region [0x519000000080,0x5190000004b0)
+freed by thread T0 here:
+    #0 0x7be9f76fc4d8 in free ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:52
+    #1 0x64417c5228d5 in os64_free /tmp/quinn-f4-c1-review/repro.c:17
+    #2 0x64417c5264b7 in os64_ui_font_release /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/ui_font.c:541
+    #3 0x64417c522e0f in main /tmp/quinn-f4-c1-review/repro.c:55
+    #4 0x7be9f6a2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #5 0x7be9f6a2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #6 0x64417c521b44 in _start (/tmp/quinn-f4-c1-review/repro+0x1b6b44) (BuildId: 856cf103f417323a4313c2827cded1295817d7ba)
+
+previously allocated by thread T0 here:
+    #0 0x7be9f76fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x64417c5228a0 in os64_malloc /tmp/quinn-f4-c1-review/repro.c:15
+    #2 0x64417c523693 in binding_ensure /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/ui_font.c:108
+    #3 0x64417c5259a2 in os64_ui_font_context /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/ui_font.c:351
+    #4 0x64417c522af6 in main /tmp/quinn-f4-c1-review/repro.c:50
+    #5 0x7be9f6a2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #6 0x7be9f6a2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #7 0x64417c521b44 in _start (/tmp/quinn-f4-c1-review/repro+0x1b6b44) (BuildId: 856cf103f417323a4313c2827cded1295817d7ba)
+
+SUMMARY: AddressSanitizer: heap-use-after-free /home/yogi/src/os64/.worktrees/font-widgets/userland/libos64/ui_font.c:88 in binding_free
+Shadow bytes around the buggy address:
+  0x519000000180: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  0x519000000200: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  0x519000000280: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  0x519000000300: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  0x519000000380: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+=>0x519000000400: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd[fd]
+  0x519000000480: fd fd fd fd fd fd fa fa fa fa fa fa fa fa fa fa
+  0x519000000500: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x519000000580: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x519000000600: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x519000000680: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==41==ABORTING

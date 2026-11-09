@@ -1,0 +1,270 @@
+# WPT's html/webappapis/structured-clone in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/webappapis/structured-clone --update
+# rewrites [passing].
+[required]
+# P2b: structuredClone, the binding's structured serialize and deserialize.
+# Each fails with the switch off. What still fails: what this browser does
+# not have to clone (FileList, ImageData, ImageBitmap, MessagePort,
+# OffscreenCanvas, a transferable ReadableStream, WebAssembly's growable
+# SharedArrayBuffer), and a transferred length-tracking view, whose copy
+# tracks no length (the engine does not say which views track; DEBTS.md).
+structured-clone.any.html	A detached ArrayBuffer cannot be transferred
+structured-clone.any.html	A subclass instance will deserialize as its closest serializable superclass
+structured-clone.any.html	An object whose interface is deleted from the global must still deserialize
+structured-clone.any.html	Array Blob object, Blob NUL
+structured-clone.any.html	Array Blob object, Blob basic
+structured-clone.any.html	Array Blob object, Blob empty
+structured-clone.any.html	Array Blob object, Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Array Blob object, Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Array Blob object, Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Array Blob object, two Blobs
+structured-clone.any.html	Array Boolean objects
+structured-clone.any.html	Array Date objects
+structured-clone.any.html	Array Number objects
+structured-clone.any.html	Array RegExp object, RegExp empty
+structured-clone.any.html	Array RegExp object, RegExp flags and lastIndex
+structured-clone.any.html	Array RegExp object, RegExp new line
+structured-clone.any.html	Array RegExp object, RegExp slash
+structured-clone.any.html	Array RegExp object, RegExp sticky flag
+structured-clone.any.html	Array RegExp object, RegExp unicode flag
+structured-clone.any.html	Array String objects
+structured-clone.any.html	Array primitives
+structured-clone.any.html	Array sparse
+structured-clone.any.html	Array with circular reference
+structured-clone.any.html	Array with identical property values
+structured-clone.any.html	Array with non-index property
+structured-clone.any.html	ArrayBuffer
+structured-clone.any.html	BigInt -9007199254740994n
+structured-clone.any.html	Blob NUL
+structured-clone.any.html	Blob basic
+structured-clone.any.html	Blob empty
+structured-clone.any.html	Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Boolean false
+structured-clone.any.html	Boolean true
+structured-clone.any.html	Date -0
+structured-clone.any.html	Date -8.64e15
+structured-clone.any.html	Date 0
+structured-clone.any.html	Date 8.64e15
+structured-clone.any.html	Empty Error object
+structured-clone.any.html	Error object
+structured-clone.any.html	EvalError object
+structured-clone.any.html	File basic
+structured-clone.any.html	Length-tracking DataView
+structured-clone.any.html	Length-tracking TypedArray
+structured-clone.any.html	Number -0
+structured-clone.any.html	Number -9007199254740992
+structured-clone.any.html	Number -9007199254740994
+structured-clone.any.html	Number -Infinity
+structured-clone.any.html	Number 0
+structured-clone.any.html	Number 0.2
+structured-clone.any.html	Number 9007199254740992
+structured-clone.any.html	Number 9007199254740994
+structured-clone.any.html	Number Infinity
+structured-clone.any.html	Number NaN
+structured-clone.any.html	Object Blob object, Blob NUL
+structured-clone.any.html	Object Blob object, Blob basic
+structured-clone.any.html	Object Blob object, Blob empty
+structured-clone.any.html	Object Blob object, Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Object Blob object, Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Object Blob object, Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Object Boolean objects
+structured-clone.any.html	Object Date objects
+structured-clone.any.html	Object Number objects
+structured-clone.any.html	Object RegExp object, RegExp empty
+structured-clone.any.html	Object RegExp object, RegExp flags and lastIndex
+structured-clone.any.html	Object RegExp object, RegExp new line
+structured-clone.any.html	Object RegExp object, RegExp slash
+structured-clone.any.html	Object RegExp object, RegExp sticky flag
+structured-clone.any.html	Object RegExp object, RegExp unicode flag
+structured-clone.any.html	Object String objects
+structured-clone.any.html	Object primitives
+structured-clone.any.html	Object with a getter that throws
+structured-clone.any.html	Object with circular reference
+structured-clone.any.html	Object with identical property values
+structured-clone.any.html	Object with index property and length
+structured-clone.any.html	Object with non-configurable property
+structured-clone.any.html	Object with non-enumerable property
+structured-clone.any.html	Object with non-writable property
+structured-clone.any.html	Object with property on prototype
+structured-clone.any.html	ObjectPrototype must lose its exotic-ness when cloned
+structured-clone.any.html	RangeError object
+structured-clone.any.html	ReferenceError object
+structured-clone.any.html	RegExp empty
+structured-clone.any.html	RegExp flags and lastIndex
+structured-clone.any.html	RegExp new line
+structured-clone.any.html	RegExp slash
+structured-clone.any.html	RegExp sticky flag
+structured-clone.any.html	RegExp unicode flag
+structured-clone.any.html	Resizable ArrayBuffer
+structured-clone.any.html	Resizable ArrayBuffer is transferable
+structured-clone.any.html	Serializing OOB DataView throws
+structured-clone.any.html	Serializing OOB TypedArray throws
+structured-clone.any.html	Serializing a non-serializable platform object fails
+structured-clone.any.html	String NUL
+structured-clone.any.html	String astral character
+structured-clone.any.html	String empty string
+structured-clone.any.html	String lone high surrogate
+structured-clone.any.html	String lone low surrogate
+structured-clone.any.html	SyntaxError object
+structured-clone.any.html	Transferring OOB DataView throws
+structured-clone.any.html	Transferring OOB TypedArray throws
+structured-clone.any.html	Transferring a non-transferable platform object fails
+structured-clone.any.html	TypeError object
+structured-clone.any.html	URIError object
+structured-clone.any.html	primitive BigInt, -0n
+structured-clone.any.html	primitive BigInt, -9007199254740994000900719925474099400090071992547409940009007199254740994000n
+structured-clone.any.html	primitive BigInt, -9007199254740994000n
+structured-clone.any.html	primitive BigInt, 0n
+structured-clone.any.html	primitive false
+structured-clone.any.html	primitive null
+structured-clone.any.html	primitive number, -0
+structured-clone.any.html	primitive number, -9007199254740992
+structured-clone.any.html	primitive number, -9007199254740994
+structured-clone.any.html	primitive number, -Infinity
+structured-clone.any.html	primitive number, 0
+structured-clone.any.html	primitive number, 0.2
+structured-clone.any.html	primitive number, 9007199254740992
+structured-clone.any.html	primitive number, 9007199254740994
+structured-clone.any.html	primitive number, Infinity
+structured-clone.any.html	primitive number, NaN
+structured-clone.any.html	primitive string, NUL
+structured-clone.any.html	primitive string, astral character
+structured-clone.any.html	primitive string, empty string
+structured-clone.any.html	primitive string, lone high surrogate
+structured-clone.any.html	primitive string, lone low surrogate
+structured-clone.any.html	primitive true
+structured-clone.any.html	primitive undefined
+[excluded]
+structured-clone-cross-realm-method.html	needs a frame (IFRAME.md, Tier 1)
+[passing]
+structured-clone.any.html	A detached ArrayBuffer cannot be transferred
+structured-clone.any.html	A subclass instance will deserialize as its closest serializable superclass
+structured-clone.any.html	An object whose interface is deleted from the global must still deserialize
+structured-clone.any.html	Array Blob object, Blob NUL
+structured-clone.any.html	Array Blob object, Blob basic
+structured-clone.any.html	Array Blob object, Blob empty
+structured-clone.any.html	Array Blob object, Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Array Blob object, Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Array Blob object, Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Array Blob object, two Blobs
+structured-clone.any.html	Array Boolean objects
+structured-clone.any.html	Array Date objects
+structured-clone.any.html	Array Number objects
+structured-clone.any.html	Array RegExp object, RegExp empty
+structured-clone.any.html	Array RegExp object, RegExp flags and lastIndex
+structured-clone.any.html	Array RegExp object, RegExp new line
+structured-clone.any.html	Array RegExp object, RegExp slash
+structured-clone.any.html	Array RegExp object, RegExp sticky flag
+structured-clone.any.html	Array RegExp object, RegExp unicode flag
+structured-clone.any.html	Array String objects
+structured-clone.any.html	Array primitives
+structured-clone.any.html	Array sparse
+structured-clone.any.html	Array with circular reference
+structured-clone.any.html	Array with identical property values
+structured-clone.any.html	Array with non-index property
+structured-clone.any.html	ArrayBuffer
+structured-clone.any.html	BigInt -9007199254740994n
+structured-clone.any.html	Blob NUL
+structured-clone.any.html	Blob basic
+structured-clone.any.html	Blob empty
+structured-clone.any.html	Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Boolean false
+structured-clone.any.html	Boolean true
+structured-clone.any.html	Date -0
+structured-clone.any.html	Date -8.64e15
+structured-clone.any.html	Date 0
+structured-clone.any.html	Date 8.64e15
+structured-clone.any.html	Empty Error object
+structured-clone.any.html	Error object
+structured-clone.any.html	EvalError object
+structured-clone.any.html	File basic
+structured-clone.any.html	Length-tracking DataView
+structured-clone.any.html	Length-tracking TypedArray
+structured-clone.any.html	Number -0
+structured-clone.any.html	Number -9007199254740992
+structured-clone.any.html	Number -9007199254740994
+structured-clone.any.html	Number -Infinity
+structured-clone.any.html	Number 0
+structured-clone.any.html	Number 0.2
+structured-clone.any.html	Number 9007199254740992
+structured-clone.any.html	Number 9007199254740994
+structured-clone.any.html	Number Infinity
+structured-clone.any.html	Number NaN
+structured-clone.any.html	Object Blob object, Blob NUL
+structured-clone.any.html	Object Blob object, Blob basic
+structured-clone.any.html	Object Blob object, Blob empty
+structured-clone.any.html	Object Blob object, Blob paired surrogates (invalid utf-8)
+structured-clone.any.html	Object Blob object, Blob unpaired high surrogate (invalid utf-8)
+structured-clone.any.html	Object Blob object, Blob unpaired low surrogate (invalid utf-8)
+structured-clone.any.html	Object Boolean objects
+structured-clone.any.html	Object Date objects
+structured-clone.any.html	Object Number objects
+structured-clone.any.html	Object RegExp object, RegExp empty
+structured-clone.any.html	Object RegExp object, RegExp flags and lastIndex
+structured-clone.any.html	Object RegExp object, RegExp new line
+structured-clone.any.html	Object RegExp object, RegExp slash
+structured-clone.any.html	Object RegExp object, RegExp sticky flag
+structured-clone.any.html	Object RegExp object, RegExp unicode flag
+structured-clone.any.html	Object String objects
+structured-clone.any.html	Object primitives
+structured-clone.any.html	Object with a getter that throws
+structured-clone.any.html	Object with circular reference
+structured-clone.any.html	Object with identical property values
+structured-clone.any.html	Object with index property and length
+structured-clone.any.html	Object with non-configurable property
+structured-clone.any.html	Object with non-enumerable property
+structured-clone.any.html	Object with non-writable property
+structured-clone.any.html	Object with property on prototype
+structured-clone.any.html	ObjectPrototype must lose its exotic-ness when cloned
+structured-clone.any.html	RangeError object
+structured-clone.any.html	ReferenceError object
+structured-clone.any.html	RegExp empty
+structured-clone.any.html	RegExp flags and lastIndex
+structured-clone.any.html	RegExp new line
+structured-clone.any.html	RegExp slash
+structured-clone.any.html	RegExp sticky flag
+structured-clone.any.html	RegExp unicode flag
+structured-clone.any.html	Resizable ArrayBuffer
+structured-clone.any.html	Resizable ArrayBuffer is transferable
+structured-clone.any.html	Serializing OOB DataView throws
+structured-clone.any.html	Serializing OOB TypedArray throws
+structured-clone.any.html	Serializing a non-serializable platform object fails
+structured-clone.any.html	String NUL
+structured-clone.any.html	String astral character
+structured-clone.any.html	String empty string
+structured-clone.any.html	String lone high surrogate
+structured-clone.any.html	String lone low surrogate
+structured-clone.any.html	SyntaxError object
+structured-clone.any.html	Transferring OOB DataView throws
+structured-clone.any.html	Transferring OOB TypedArray throws
+structured-clone.any.html	Transferring a non-transferable platform object fails
+structured-clone.any.html	TypeError object
+structured-clone.any.html	URIError object
+structured-clone.any.html	primitive BigInt, -0n
+structured-clone.any.html	primitive BigInt, -9007199254740994000900719925474099400090071992547409940009007199254740994000n
+structured-clone.any.html	primitive BigInt, -9007199254740994000n
+structured-clone.any.html	primitive BigInt, 0n
+structured-clone.any.html	primitive false
+structured-clone.any.html	primitive null
+structured-clone.any.html	primitive number, -0
+structured-clone.any.html	primitive number, -9007199254740992
+structured-clone.any.html	primitive number, -9007199254740994
+structured-clone.any.html	primitive number, -Infinity
+structured-clone.any.html	primitive number, 0
+structured-clone.any.html	primitive number, 0.2
+structured-clone.any.html	primitive number, 9007199254740992
+structured-clone.any.html	primitive number, 9007199254740994
+structured-clone.any.html	primitive number, Infinity
+structured-clone.any.html	primitive number, NaN
+structured-clone.any.html	primitive string, NUL
+structured-clone.any.html	primitive string, astral character
+structured-clone.any.html	primitive string, empty string
+structured-clone.any.html	primitive string, lone high surrogate
+structured-clone.any.html	primitive string, lone low surrogate
+structured-clone.any.html	primitive true
+structured-clone.any.html	primitive undefined

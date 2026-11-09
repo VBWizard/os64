@@ -46,9 +46,24 @@ size_t os64_strcopy(char *dst, size_t cap, const char *src);
 // Compare two NUL-terminated strings for exact equality. A bool, not a
 // three-way int: every caller in this tree so far (husk's str_eq, echo's
 // str_is) wanted "are these the same word", and `strcmp(a,b) == 0` reading as
-// "equal" has confused people for fifty years. Ordering comparison arrives if
-// something ever needs to SORT — consumer-driven, like everything else here.
+// "equal" has confused people for fifty years. Use os64_strcmp when a
+// three-way ordering comparison is required.
 bool os64_streq(const char *a, const char *b);
+
+// Compare NUL-terminated strings as unsigned bytes. The sign of the result
+// gives their lexical ordering; zero means equal. Both strings must be valid.
+int os64_strcmp(const char *a, const char *b);
+
+// Find the first/last byte matching (unsigned char)c in a valid NUL-terminated
+// string. The terminating NUL participates in the search. NULL if absent;
+// the returned pointer borrows the input storage and does not grant write access.
+char *os64_strchr(const char *s, int c);
+char *os64_strrchr(const char *s, int c);
+
+// Find the first byte matching (unsigned char)c in the first n bytes. The
+// block need not be a string; n == 0 permits a NULL block. NULL if absent.
+// The returned pointer borrows the block and does not grant write access.
+void *os64_memchr(const void *block, int c, size_t n);
 
 // The same, ignoring ASCII letter case. `os64_streq_nocase` and not the
 // traditional `strieq`/`strcasecmp` spelling: the `i` infix is fifty-year-old
@@ -66,15 +81,23 @@ bool os64_streq(const char *a, const char *b);
 // (Found 2026-08-23, before a "just lowercase the keys" change shipped.)
 bool os64_streq_nocase(const char *a, const char *b);
 
+// Match one complete string against a shell-style pattern: '*' any run,
+// '?' one byte, and bracket expressions with members, ranges and a leading
+// !/^ negation — V7's glob grammar, the one husk's globbing speaks, so
+// `find -name` and the shell agree on what `*.[ch]` means. A `[` with no
+// closing `]` is an ordinary character, so `/bin/[` can be named (the
+// shell's rule, and one matcher means one rule). Recursive on '*', depth
+// bounded by the number of '*' in the pattern, not by the text's length.
+// husk's glob expansion and find's -name both run through this call.
+bool os64_glob_match(const char *pattern, const char *text);
+
 // Parse a decimal integer from the front of `s`: optional +/- sign, then
 // digits, stopping at the first non-digit (the classic contract). Returns 0
 // for no-digits — indistinguishable from a real zero, which is atoi's
-// fifty-year-old wart; when a caller needs to tell them apart, a
-// full-diagnosis parser can join it (consumer-driven, as ever). The name
-// survives on merit: `atoi` is one of the handful of Unix names (fork, exec)
-// that earned its keep — every C programmer alive reads it instantly.
-// (Graduated from top's `temporaryAtoi` — "the library guy" was off playing
-// with the network, per the heckling in topmain.c, and has now returned.)
+// fifty-year-old wart; use os64_parse_u64 below when a whole unsigned field
+// must be validated. The name survives on merit: `atoi` is one of the handful
+// of Unix names (fork, exec) that earned its keep — every C programmer alive
+// reads it instantly.
 int64_t os64_atoi(const char *s);
 
 // The unsigned sibling: digits only, no sign, same stop-at-first-non-digit
@@ -83,17 +106,22 @@ int64_t os64_atoi(const char *s);
 // negate a tick count.
 uint64_t os64_atou(const char *s);
 
+// Parse one complete unsigned decimal field. Unlike os64_atou, this refuses
+// an empty string, signs, trailing characters, and values beyond UINT64_MAX.
+// On failure *out is untouched, so a rejected field cannot half-update its
+// caller's state. Returns false for NULL inputs as well.
+bool os64_parse_u64(const char *s, uint64_t *out);
+
 // The HEX sibling, and the one /proc's ADDRESSES want: every %p the kernel
 // prints is zero-padded hex with no 0x prefix (sprintf.c), so os64_atou would
 // read "0000000070000000" as seventy million decimal and be quietly, ruinously
 // wrong — it does not fail, it succeeds at another number. Accepts an optional
 // 0x/0X, consumes [0-9a-fA-F], stops at the first character that is not one.
 //
-// It takes the ENDPTR that os64_atoi's comment above promised to a future
-// caller ("a full-diagnosis parser can join it, consumer-driven"): if `end` is
-// non-NULL it is set to where parsing stopped. That is strtol's one genuinely
-// good idea, and it is what makes TWO numbers in one string a non-problem —
-// you never split, you parse in place and step over the delimiter:
+// It takes an ENDPTR rather than os64_parse_u64's whole-field contract: if
+// `end` is non-NULL it is set to where parsing stopped. That is strtol's one
+// genuinely good idea, and it is what makes TWO numbers in one string a
+// non-problem — you never split, you parse in place and step over the delimiter:
 //
 //     const char *p;
 //     uint64_t lo = os64_xtou(text, &p);      // p lands on the '-'
@@ -116,6 +144,21 @@ uint64_t os64_xtou(const char *s, const char **end);
 // is hi - lo — the first number is the low end, in both files.
 bool os64_parse_range(const char *s, uint64_t *lo, uint64_t *hi);
 
+// Reverse the kernel's field escaping, IN PLACE — the reader's half of the
+// contract the emitter states in full at synth_text_escape (kernel synthfs.h).
+// A row of whitespace-separated columns can only be split if no column holds
+// whitespace, and columns that are DATA cannot promise that: a GPT partition
+// name is arbitrary bytes off somebody's disk ("Basic data partition" is what
+// Windows writes), and a mount prefix is a path. Those columns arrive with
+// backslash written `\\` and any byte at or below 0x20 or equal to 0x7F
+// written `\xHH`; split the row FIRST, then unescape each field you keep.
+//
+// The result is never longer than the input, so it decodes over itself. A
+// malformed escape is left exactly as it reads — a lone trailing backslash,
+// or `\x` without two hex digits, is a corrupt report rather than a value,
+// and inventing a byte for it would hide that.
+void os64_unescape_field(char *s);
+
 // Copy `n` bytes. No overlap handling (that is memmove's job, below).
 void *os64_memcpy(void *dst, const void *src, size_t n);
 
@@ -128,5 +171,75 @@ void *os64_memmove(void *dst, const void *src, size_t n);
 
 // Fill `n` bytes with `c`.
 void *os64_memset(void *dst, int c, size_t n);
+
+// Compare `n` bytes: negative, zero or positive, memcmp's own contract. For
+// bytes and not strings — the streq family is what a NUL-terminated
+// comparison wants, and reaching for this one on a string reads the byte
+// after the NUL.
+int os64_memcmp(const void *a, const void *b, size_t n);
+
+// ── UTF-8 ───────────────────────────────────────────────────────────────
+//
+// libhtml's tree is UTF-8 and the glass is Latin-1 (or CP437), so every
+// consumer of a page folds code points on their way to a cell. The DECODE
+// is the same for all of them and lives here; the FOLD (what a curly quote
+// becomes) is each face's own table. First consumer: the line-mode browser
+// (BROWSER.md § The face).
+
+// The replacement character, what a decode answers for bytes that are not
+// UTF-8. Never silently dropped: a page with a broken byte shows a mark
+// where it was, not nothing.
+#define OS64_UTF8_REPLACEMENT 0xFFFDu
+
+// Decode ONE code point from `s` (at most `n` bytes). Writes it to `*cp`
+// and returns how many bytes it took, always at least 1 when `n` is not 0
+// — an invalid lead byte, a truncated sequence, an overlong form, a
+// surrogate or a value past U+10FFFF answers OS64_UTF8_REPLACEMENT and
+// consumes ONE byte, so a walk over a corrupt string still ends and still
+// shows every bad byte as one mark. The valid ranges are the Unicode
+// standard's (Table 3-7), the same ones libhtml's decoder honours, so a
+// string that came out of the tree decodes byte for byte as it went in.
+// Returns 0 only for `n == 0`.
+size_t os64_utf8_decode(const char *s, size_t n, uint32_t *cp);
+
+// Encode ONE code point into `out` (at least 4 bytes) and return how many
+// bytes it wrote: 1..4. A surrogate or a value past U+10FFFF is encoded as
+// OS64_UTF8_REPLACEMENT (3 bytes), never as an invalid sequence.
+size_t os64_utf8_encode(uint32_t cp, char *out);
+
+// ── Which way text runs ─────────────────────────────────────────────────
+//
+// A RUN OF TEXT IS POINTED THE WAY ITS FIRST STRONG CHARACTER POINTS, and
+// only three of Unicode's bidirectional classes are strong: L, R and AL
+// (UAX #9 P2 and P3). Everything else — digits, spaces, punctuation, the
+// marks — takes its direction from what surrounds it and decides nothing,
+// which is why "Hello" followed by Hebrew reads left to right and the same
+// Hebrew after a comma does not.
+//
+// HTML is written in these terms twice over: `dir=auto` means "read the
+// text and see", and a form's `dirname` entry sends the answer to the
+// server. A layout engine that ever draws Hebrew or Arabic needs the same
+// table, which is why it is here and not in the library that submits forms.
+//
+// The table is GENERATED from a pinned Unicode DerivedBidiClass.txt by
+// tools/gen_bidi_table.py — the classes move between Unicode versions, and
+// a hand-written copy would be a snapshot nobody could check.
+typedef enum {
+    OS64_BIDI_L = 0,       // Left_To_Right: Latin, Greek, most of the world
+    OS64_BIDI_R,           // Right_To_Left: Hebrew, Thaana, N'Ko
+    OS64_BIDI_AL,          // Arabic_Letter: right to left, and its own shaping
+    OS64_BIDI_NOT_STRONG   // decides nothing by itself
+} os64_bidi_strong_t;
+
+// One code point's strong class.
+os64_bidi_strong_t os64_bidi_strong(uint32_t cp);
+
+// The first strong class in `len` bytes of UTF-8, or OS64_BIDI_NOT_STRONG
+// when nothing in the text is strong — which is a different answer from
+// "left to right", and the caller's own rule decides what to do with it
+// (HTML's `dir=auto` reads both as left to right; a layout engine may not).
+// Bytes that are not UTF-8 decode to the replacement character, whose class
+// is not strong, so a corrupt string never decides a direction.
+os64_bidi_strong_t os64_bidi_first_strong(const char *utf8, size_t len);
 
 #endif // OS64_STR_H

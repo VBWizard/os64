@@ -93,6 +93,19 @@ static bool elf_validate_ehdr(const Elf64_Ehdr *ehdr)
         return false;
     }
 
+    // The entry point becomes the first thread's RIP, and IRETQ checks a new
+    // RIP before it leaves ring 0: a non-canonical one is the KERNEL's #GP, a
+    // panic, on the program's first dispatch. An e_entry at or above
+    // USER_CANONICAL_MAX names no user address in any image type (a
+    // load_bias only adds to it), so the header is refused here — which is
+    // what lets elf_can_load turn such a program away before task_create
+    // builds anything. A dynamic image's entry is load_bias + e_entry, and
+    // that sum needs its own bound where it is formed
+    // (elf_resolve_dynamic_dependencies).
+    if (ehdr->e_entry >= USER_CANONICAL_MAX) {
+        return false;
+    }
+
     return true;
 }
 
@@ -133,7 +146,14 @@ static int elf_map_segment(task_t *task, vfs_file_t *file, const Elf64_Phdr *phd
         return -1;
     }
 
-    if (seg_end >= kHHDMOffset) {
+    // A segment lies wholly below USER_CANONICAL_MAX or not at all. Above it
+    // nothing can ever fault the pages in (a non-canonical access is a #GP,
+    // never a #PF), and a page-table walk ignores bits 48-63, so such an
+    // address aliases another slot — for the gap just above the ceiling, the
+    // kernel half's, which every task shares. A VMA there is a promise no
+    // mapping could keep without writing into tables that are not this
+    // task's.
+    if (seg_end > USER_CANONICAL_MAX) {
         return -1;
     }
 
@@ -679,8 +699,11 @@ int elf_load_from_path(task_t *task, const char *path)
 // died on a path that exists but isn't a program (try /partition_info, a text
 // file). Neither is a kernel error. Both are just "no", and "no" is an answer a
 // shell is perfectly capable of printing.
-bool elf_can_load(const char *path)
+bool elf_can_load(const char *path, uint64_t *declared_stack)
 {
+    if (declared_stack != NULL) {
+        *declared_stack = 0;
+    }
     if (path == NULL) {
         return false;
     }
@@ -702,6 +725,23 @@ bool elf_can_load(const char *path)
     bool loadable = elf_read_at(file, 0, &ehdr, sizeof(ehdr)) && elf_validate_ehdr(&ehdr);
     if (!loadable) {
         printd(DEBUG_TASK, "elf_can_load: not a loadable ELF64: %s\n", path);
+    }
+
+    // The main thread's stack the program asks for (SCRIPT_STACK.md § 4):
+    // PT_GNU_STACK's p_memsz, which `ld -z stack-size` writes. Read here
+    // because every program passes here before its task is built, dynamic
+    // or not; createThread judges the number. A header that does not read
+    // asks for nothing.
+    if (loadable && declared_stack != NULL && ehdr.e_phentsize >= sizeof(Elf64_Phdr)) {
+        for (uint16_t i = 0; i < ehdr.e_phnum && i < ELF_STACK_PHDRS_MAX; i++) {
+            Elf64_Phdr ph;
+            if (!elf_read_at(file, ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize, &ph, sizeof(ph)))
+                break;
+            if (ph.p_type == PT_GNU_STACK) {
+                *declared_stack = ph.p_memsz;
+                break;
+            }
+        }
     }
 
     if (fs->fops->close != NULL) {

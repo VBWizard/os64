@@ -32,7 +32,8 @@ here, because your scratchpad dies with your session.*
 
 | Command | What it does |
 |---|---|
-| `make` | Build kernel + 64MB disk image + ISO (ISO also lands at /mnt/c/temp for VBox) |
+| `make` | Build kernel + userland + disk images + ISO. Everything that boots on this machine is ready after this |
+| `make copy` | Hand the ISO to VirtualBox: copy it to /mnt/c/temp, where the VM boots it from. NOT part of `make` since 2026-08-28 — it was the slowest step of every build and the only thing needing it is a VM that is rarely opened now the P5 boots os64 itself. Fails loudly if /mnt/c/temp isn't there |
 | `make run` | QEMU BIOS boot, **windowed** — the human's mode |
 | `make run-uefi` | Same, OVMF/UEFI |
 | `make debug` | QEMU + GDB server :1234, waits (`-S -s`); `gdb kernel/bin/os64_kernel` → `target remote :1234`. QEMU's gdbstub breakpoints are linear-address based — no int3 patching, higher-half addresses work directly |
@@ -50,7 +51,7 @@ exactly the 4 objects that include it rebuild; touch `CONFIG.h` and 66 do.
 
 The same rot was downstream: the `disk` target was `.PHONY`, so every `make
 run` nuked and reformatted the 64MB image and forced `xorriso` to repack the
-77MB ISO — nothing below a phony prerequisite can ever be up to date. The disk
+whole ISO — nothing below a phony prerequisite can ever be up to date. The disk
 image is a real file target now, so an unchanged tree rebuilds nothing (~0.1s)
 and `make run` just launches QEMU.
 
@@ -132,13 +133,1073 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
   bracket trick breaks the self-match: `pkill -f 'qemu-system-x86_6[4]'`.
   (A compound command that dies with exit 144 mid-chain: that was this.)
   Background tasks reporting exit 144 after your own pkill are expected.
-- **Waiting on boot progress:** don't chain sleeps; run a background
-  watcher: `until grep -qi "All VFS tests passed" "$LOG"; do sleep 3;
-  done`. Under WSL2 the serial drain can crawl (unsolved QEMU/WSL2
-  artifact) — a quiet log is not a dead kernel; give markers tens of
-  seconds before declaring a hang.
+- **Waiting on boot progress: the marker is `"boot complete"`, and on the
+  default entry it is the ONLY one you may wait on.** Don't chain sleeps:
+  `until grep -q "boot complete" "$LOG"; do sleep 1; done`. `[pool] boot
+  complete: N/M paging pages used` comes out of `kernel_park` through
+  `serial_print_string` — the direct polled write, the same door panic uses —
+  so it is ungated by debug level and survives a logd claim on the port by
+  construction, which is why it was written that way. It prints when the kernel
+  task parks *because userland is running*. ~32s on the default entry.
+
+  Every other milestone in this file's next section is a `printd`, and with
+  `LOGD=` on the cmdline (the default entry has it) those go to logd's FILE and
+  NEVER reach the wire — waiting on `All VFS tests passed` or `BUILT-IN TESTS`
+  there is waiting for something that will not come. Chris's ruling, 2026-08-28,
+  after watching two models burn 90- and 200-second timeouts on exactly that.
+  Read the file host-side after the guest exits (`debugfs -R "cat /os64.log"
+  "disk/os64_data.img?offset=1048576"`), or boot an entry with no `LOGD=`.
+
+  Under WSL2 the serial drain can crawl (unsolved QEMU/WSL2 artifact) — a quiet
+  log is not a dead kernel; give markers tens of seconds before declaring a
+  hang.
+- **The NOCACHE leg: boot it once per slice that touches a driver, the
+  loader, or anything that opens a file from a task's context.** The block
+  cache serves directory and inode blocks from kernel memory that every
+  address space can see, so with it on, a disk path that only works under
+  the kernel's own page tables passes every boot — until a cache miss lands
+  under some task's CR3 and the machine dies in the NVMe driver. `NOCACHE`
+  on the cmdline turns every read into a miss, so the dependence shows on
+  the FIRST spawn instead of the first unlucky one (the P5, 2026-09-06: two
+  NOCACHE boots died five seconds after the prompt; with the cache on the
+  same bug needed a 176MB write during the late tests to evict the root's
+  inode lines). Test-rig the entry the way the deterministic-selection
+  bullet says — the token never ships, and it does not travel to the P5.
+  The test-suite verdicts read the same as on a cached boot, except the
+  block-cache test's coherence half, which skips itself when nothing is
+  cached.
+
+### The helper scripts (`tools/vm*`)
+
+The invocation above, and the keystroke ballet that drives it, are wrapped
+so nobody rebuilds them from memory:
+
+| Script | What it does |
+|---|---|
+| `tools/vmboot [port]` | copies the images to `/tmp/os64-vm-<port>`, boots the default (text) entry headless, waits for `boot complete` |
+| `tools/vmtype <port> <text>` | types a line into the guest and presses Enter |
+| `tools/vmcmd <port> <monitor command>` | one monitor command, reply printed |
+| `tools/vmshot <file.png> [port]` | screendump, converted from PPM |
+| `tools/vmget [--root] <guest> <host> [port]` | reads a file out of the guest with `debugfs`: `/home` by default, the system filesystem with `--root`. Offsets are read from the makefile |
+| `tools/vmls [port]` | lists the guest's `/home` |
+| `tools/vmstop [port]` | kills only the VM on that port |
+| `tools/vmtest [options] '<cmd>' ...` | **all of the above in one foreground command**: boot, type, screenshot, fetch, compare, stop, with the evidence printed to stdout |
+
+`vmtest` exists for a caller that cannot keep a VM alive between commands —
+a sandbox with no background processes, or a scripted acceptance run that
+wants one command and one verdict. Its `--get` prints a fetched file's size,
+checksum and first bytes; `--cmp <guest>=<original>` compares a file the
+guest wrote against one the image shipped and prints IDENTICAL or DIFFERENT.
+
+**`docs/agent_qemu_testing.md` deliberately documents only the step-by-step
+scripts, not `vmtest`.** That document is what an agent under evaluation is
+given, and driving the loop itself — boot, type, wait, look, fetch, stop —
+is part of what is being evaluated. Point a colleague at `vmtest` when the
+goal is the answer rather than the exercise.
+
+## The chaos rig (weather in the wire)
+
+slirp is a perfect network: nothing is ever lost, reordered, duplicated or
+late, so `/sys/net/tcp`'s retransmit and out-of-order counters read zero on
+this harness forever, and the TCP debts they exist to adjudicate (a send
+window — and reassembly and the measured RTO, until each was paid) cannot be
+measured here. `tools/cable.py` puts
+a cable with weather in it between the guest's NIC and slirp, using QEMU's
+`filter-redirector` (the COLO building block): every frame goes out to the
+cable over a loopback socket and the survivors come back in. No tap, no
+netem, no root. The header of `tools/cable.py` is the design; the
+`QEMU_CHAOS_FLAGS` comment in the GNUmakefile is the wiring, including the
+direction trap (QEMU's `queue=rx` on the slirp netdev is the guest's UP).
+
+```bash
+python3 tools/cable.py --seed 1 &            # passthrough until told otherwise
+make run-chaos                               # run-net, wired through the cable
+tools/cable.py ctl set both loss 0.2         # weather, changed live
+tools/cable.py ctl set down reorder 0.3      # hold 30% of inbound frames 50ms
+tools/cable.py ctl set down dup 0.2
+tools/cable.py ctl link up off               # the FIN-into-the-void test
+tools/cable.py ctl stats                     # the ledger: every frame accounted for
+```
+
+Start the cable BEFORE the guest and leave it running for the guest's whole
+life: weather changes go through `ctl`, never through a restart, because a
+cable that goes away under a live QEMU 8.2.2 wedges its redirectors (half the
+chardevs never reconnect, the rest fail EPERM) — restart the guest, not the
+cable. For an agent run, add `QEMU_CHAOS_FLAGS`'s chardev/object lines to the
+blessed invocation above (the pcap path is the only thing to change).
+`up`/`down` are always the guest's view. Directions are impaired
+independently; parameters are `loss delay jitter reorder reorder_ms dup
+blackhole`, on the command line as `--up-loss 0.1` or live through `ctl`.
+The seed makes a run reproducible: same seed, same drops.
+
+**The workload has to be big enough to show the weather.** A whois is one
+data segment: holding it 50ms reorders nothing, and a duplicated pure ACK
+has no counter. Fetch a file of a hundred KB or more from `tools/os64serve.py`
+on the host (`os64get 10.0.2.2 mid.bin /home/mid.bin`) and the counters
+move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
+
+| Weather | Time | What moved |
+|---|---|---|
+| none | 2s | nothing |
+| `loss 0.1` both ways | 12s | `retransmits` |
+| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* is the table below |
+| `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
+| `reorder 0.3` down, **after reassembly** (2026-09-04) | 1s | `out_of_order_held 34`, `out_of_order_dropped 0`, `retransmits 0`; the trunk kernel the same morning, same seed: 34s and 47 dropped. Both files CRC-verified |
+| `dup 0.2` down | — | `duplicates_dropped` |
+
+**The send side has its own workload**, because our retransmit timer governs
+only the segments os64 sends, and a download's losses are the peer's timer's
+problem: `/tests/netsend HOST PORT BYTES` pushes a seeded byte stream up a
+connection and prints the milliseconds; `tools/tcpsink.py` on the host drains
+it, checks every byte against the same stream, and answers one byte — and
+**that byte is where netsend's clock stops**, because a write returns when
+its bytes are queued and a close returns with the ring still draining, so
+only the far end can say when the bytes arrived. The byte is the clock's
+verdict; the experiment's is the line the sink prints after draining to
+the sender's EOF, which is the only way to prove the stream ENDED where it
+said it would (a byte past the count may arrive after the answer went).
+100KB, seed 1, same cable,
+same 21 segments lost each time (2026-09-04 — three kernels in one day):
+
+| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO (stop-and-wait) | send window + NewReno | What moved |
+|---|---|---|---|---|
+| none | 0.8s | 0.8s | 0.03s | `srtt_ms 10`, `rto_ms 200` (the floor); the window sends 100KB in one slow-start burst |
+| `loss 0.1` up | 11.8s | 3.3s | 0.02s | `retransmits 10`, `fast_retransmits 4` — every hole found by duplicate acks, none by the timer |
+| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | 4.7s | `srtt_ms 210`; ~7 loss events at a 200ms round trip, each a recovery round trip and a halved cwnd — what NewReno costs at 10% loss; SACK is the next number down |
+
+Three of the window's own lessons are in that third column, each read off
+the capture. The first cut (Reno, RFC 5681 alone) read **6.7s on the loss
+leg — slower than stop-and-wait**: a fast retransmit filled the first hole
+and the ack landed on the second, where only two duplicates could ever
+follow, so every further hole in the window waited for a backed-off timer
+(0.6s, 0.8s, 1.6s, 3.2s). NewReno's partial-ack rule (RFC 6582) took it to
+0.09s. The second, on the delay leg: a tail loss cost 3.7s because the
+doubled timer waited for a clean sample that a windowed sender under loss
+rarely gets; 4.4BSD's rule — progress ends the backoff — took the leg from
+9.0s to 5.1s. The third, found answering the first review round: a timeout
+resent only the head, and every further hole behind it then waited for its
+own timeout (0.5s, then 1.4s, for two holes behind one). 4.4BSD's go-back-N
+— `snd_nxt = snd_una`, everything outstanding resent in order under slow
+start — took the leg to 4.7s, with no gap over a quarter second anywhere
+in its capture.
+
+**The zero-window path needs a peer that stops reading**, and slirp is in
+the way: it buffers on the guest's behalf, so a 100KB `netsend` into a host
+sink that has stopped reading never sees a zero window at all — the guest
+reports 40ms and slirp holds the bytes. A 2MB stream into a sink with a 4KB
+`SO_RCVBUF` that sleeps 12 seconds before its first read is what fills
+slirp: the capture (2026-09-04) shows the window go to zero with nothing in
+flight, probes at 1s, 2s and 4s each answered `ack == snd_una, win 0`,
+`cwnd` and `rto_ms` untouched by them, the peer's own update reopening the
+window, and the stream completing verified. The same run with the cable's
+`link down off` thrown after the second probe: the third and fourth went
+unanswered and the fourth followed the third at the interval that led to it
+(4s, then 8s) with no retransmit timeout in series, and the reopen was
+found when the link came back. (A 2000-byte stream through the same stall
+never sees the window shut — slirp holds it — so the FIN-into-a-zero-window
+case is covered by reading, not by this rig.)
+
+**Historical local-refusal experiment (2026-09-04, superseded sender):**
+a scratch virtio build dropped every seventh submission. Transfers verified,
+but it exercised only intermittent refusal. Its next-tick retry machinery
+missed sustained-refusal lifetime failures and has been removed. Those old
+`tx_refused`/zero-retransmit results do not describe the current implementation.
+The refactored sender counts `tx_local_drops`, commits loss responsibility,
+and recovers through protocol timers; see `TCP_SENDER.md` and the acceptance
+results below.
+
+Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
+under jitter, as a real pipe does, so a delay leg measures the clock and only
+the `reorder` knob measures reassembly. (The first delay leg did not keep
+order and read as a 30× slowdown; all of it was reassembly.)
+
+The pcap dump sits AFTER the cable in both directions: the capture is what
+got through, the ledger is what did not, and `orphaned` (a frame the cable
+could not hand back because QEMU's inbound socket was gone) is never zero
+silently.
+
+## Arrival wake + `micros()` acceptance (2026-09-27)
+
+What was proved, and the one thing the measurement disproved
+(ARRIVAL_WAKE.md carries the full table and the argument):
+
+| Check | Where | Result |
+|---|---|---|
+| Kernel suite, e1000, TESTRUN entry | wire | pre-boot 31/0, post-boot 33/0; `test_net_icmp_conn` prints its new figure: `arrival wake 87-150 us over 8 echoes` |
+| Same figure with both arrival wakes DISABLED (the sweep as the only waker) | wire | `15-128 us` — on an idle machine knet's park after a drain is the pass the sweep runs in; the wake earns its keep only under a loaded drain, which this rig cannot produce |
+| Ring-3 suite (`testrun`) | wire | 55 passed, 0 failed, 4 skipped |
+| `ping -n 5 10.0.2.2`, e1000 | screendump | `time=0.603` … `0.792 ms` after a 2.6 ms first echo; summary `0.603/1.079/2.629 ms` |
+| `ping -n 5 10.0.2.2`, virtio-net | screendump | `6.862` … `10.745 ms` — the drain waits for the tick (DEBTS virtio row), not the wake |
+| `ping -n 5 10.0.2.2`, OLD kernel + old ping | screendump | `0 ticks` ×4, `1 tick` ×1 — the instrument it replaces |
+| `ping`, OLD kernel + NEW `/bin` | screendump | says `this kernel has no microsecond clock` once, then measures in ticks; before that line existed it printed `0.000 ms` five times without a word |
+| `e2fsck -fn` on the root and /home images the run wrote to | host | both clean |
+
+Recipe: `vm2.sh`-style headless boot (SUCCESSION's recipe plus `-netdev
+user,id=n0 -device e1000,netdev=n0`), the TESTRUN entry (14 downs at the
+Limine menu) for the suite and the default entry for the ping; type
+`ping -n 5 10.0.2.2` through the monitor and `screendump`. The "before"
+row is the same tree with the two `if (c->waiter != NULL && …ISLEEP)`
+claims in `udp_conn_rx` / `icmp_conn_deliver` turned into `if (0 && …)`,
+rebuilt, booted, restored — five minutes that turned a belief into a
+number, and the number was not the one the belief predicted.
+
+## TLS transport acceptance (2026-09-09)
+
+The [adapter contract and commands](TLS_TRANSPORT.md) describe its host
+seams and manual guest probe. The guest used QEMU q35, TCG/qemu64, two CPUs,
+virtio-net and user networking, with a copied ext2 root, the TCP deadline
+parent's built kernel and this slice's freshly built userland. One cron
+`@reboot` script ran the four probes; the disposable config selected `/etc`.
+The peer used OpenSSL 3.0.13 via Python `ssl`, TLS 1.2 and
+ECDHE-ECDSA-AES128-GCM-SHA256 with the existing public fixture certificate.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan adapter seams | Pass; partial ciphertext in both directions, stalled writes with readable input, alternating waits, retained/trickled deadlines, final handshake/close flights, interrupted reads/writes, clock errors, ownership and wiped adapter destruction |
+| ASan/UBSan public input/engine regression | Pass; creation failures, short entropy reads, five policy handshakes, bidirectional data and clean close |
+| Strict userland build and public/private ELF audits | Pass; 30 public exports, 15 OS imports, 63 selected core sources; both public consumers linked and checked |
+| Guest `good` | 65,536 exact plaintext bytes each way, then CLEAN_EOF |
+| Guest `stall` | TIMEOUT under the configured 200 ms handshake budget; probe checks elapsed ticks and a 2 s upper tolerance |
+| Guest `truncated` | Bare TCP FIN reported TRUNCATED |
+| Guest `badname` | Wrong hostname reported CERTIFICATE |
+| Copied root after orderly shutdown | `e2fsck -fn` exited 0 |
+
+The first stall probe verdict was discarded: it measured from after client
+creation and inspected a tick sample taken before the final wait. Measuring
+the complete creation/handshake interval with a fresh ending sample passed.
+The final run used the corrected probe and final adapter build. ASan/UBSan
+were active; LeakSanitizer was disabled for the ptrace environment. These
+QEMU fixtures establish controlled TLS interoperability, not public-root
+coverage, physical NIC behavior or HTTP integration.
+
+The host adapter tests, public ELF audit and four OpenSSL guest cases were
+revalidated after moving the stack onto PR #85's round-one correction
+`ad08014`. The constructor requires the caller to supply connected TCP;
+an empty write is not used as a handle-type query. The copied root again
+passed `e2fsck -fn` after shutdown.
+
+The peer also passed the four guest cases under `python3 -S`, with installed
+site packages disabled. It uses the fixed fixture key in PEM form and Python's
+standard library; it does not require the fixture generator's `cryptography`
+dependency.
+
+**Initial-slice production checkout, reported by Chris:** all four transport cases (`good`,
+`stall`, `truncated`, `badname`) passed on the Bosgame P5 against the peer
+running on the Windows host. This adds physical-machine/network-path evidence
+to the host and QEMU checks; the peer uses the same controlled fixture trust.
+
+**Fable review corrections (2026-09-10):** the ASan/UBSan adapter suite
+checks caught interruptions during reads/writes in both polls and waits,
+prompt return without another I/O attempt, exact resumed bytes and explicit
+cancellation. It checks 5-second single-direction waits, 10 ms alternating
+waits when both directions need service, multi-second/fractional/saturated
+protocol-budget conversion and unchanged deadlines across interruption.
+The sanitized public input/engine suite, userland build and ELF audit passed
+with the byte-client EOF entry point renamed to `os64_tls_input_eof`.
+
+The copied-root QEMU rig passed the four transport cases and guest
+`testrun tlslibtest`. A temporary peer variant sent an authenticated but
+incorrect first plaintext byte; the probe rejected it and reported
+`plaintext mismatch at offset 0: expected 0x00, got 0x01` to the console and
+serial log. The peer ran with `python3 -S`; post-shutdown `e2fsck -fn` passed.
+These correction results are host/QEMU evidence; the P5 results above cover
+the initial slice.
+
+**Codex round-one correction (2026-09-10):** a new regression reproduced
+HANDSHAKE_DONE leaking through a terminal state while the final flight had
+not reached TCP. Moving the completion gate before the terminal return passed
+the ASan/UBSan suite for timeout, cancellation and write failure, with flight
+bytes in either engine or adapter storage, including repeated state queries.
+A completed final flight still retains HANDSHAKE_DONE after a later error.
+The userland build, ELF audit, four QEMU transport cases, guest `tlslibtest`
+and copied-root `e2fsck -fn` passed with the correction.
+
+## TCP window scaling acceptance (2026-09-10)
+
+A window that never grows caps a connection at window ÷ round trip, and on
+2026-09-09 the P5 was measured sitting on that ceiling (DEBTS § no window
+scaling, now paid, carries the three numbers). RFC 7323's shift count is
+negotiated in the SYN exchange, so **the peer decides whether the rig can
+show anything**, and QEMU's user networking cannot: libslirp 4.7 answers a
+SYN carrying the window-scale option with an MSS-only SYN-ACK, so both
+shifts stay 0 and the field is the old 64KB. That splits the proof three
+ways.
+
+**The parser, on the host.** `tcp_options.c` is pure (its header says why),
+so `tools/test_tcp_options_host.sh` drives it under ASan and UBSan: Linux's
+and Windows's option orders, SACK-permitted and timestamps skipped, a shift
+of 15 reported raw for the caller to clamp, wrong-length options ignored
+without losing step, end-of-list, truncation and a zero length, and the
+window-field arithmetic in both directions including the SYN's unscaled
+clamp. This is the only proof of the parser that needs no scaling peer.
+`tools/test_tcp_host.sh` splices the module in beside tcp.c, so the sender
+suite runs against the 32-bit window too.
+
+**The wire and the regression, in QEMU.** Through the chaos cable at 50ms
+each way (a 100ms round trip, so the 64KB ceiling is 655KB/s), fetching
+`ftptestd.py`'s 16MiB `huge.bin` with `/bin/ftp`, which prints its rate:
+
+| Kernel | Our SYN | slirp's SYN-ACK | 16MiB at 100ms RTT |
+|---|---|---|---|
+| userland at 00d8d7c | `MSS=1460` | `MSS=1460` | 33.1 s, 494.9 KB/s |
+| this slice | `MSS=1460 NOP WS=5` | `MSS=1460` | 30.2 s, 542.5 KB/s |
+
+Same rate within noise, which is the point: a peer that sends no shift is
+read and written unscaled, and `/sys/net/tcp`'s `win` column showed 65535
+for it. The SYN lines are `tools/tcpopts.py` reading the rig's pcap — it
+decodes every SYN and SYN-ACK's options by name (`--all` prints every
+segment's window field), because tshark is not on every host this builds
+on and the question "did they answer with a shift" is the whole slice.
+Suites on the new kernel: 30/0, 29/0, late 3/0; the data image passed
+`e2fsck -fn` after the run. (A transfer started INSIDE the late phase trips
+`task_teardown_leak`, whose third bracket counts TCP's heap moves and
+cannot tell a dial from a leak; start the fetch after the late verdict.)
+
+**The window opening, on the P5.** Only a real peer scales, so the
+acceptance was Chris's, the same day: `/bin/ftp` pulled a 30,442,855-byte
+file at **19,758.8 KB/s** (158 Mb/s), then `zero.bin` from ftp.debian.org —
+1,073,741,824 bytes — at **19,275 KB/s sustained for 54 seconds** (154
+Mb/s), watched on the Windows task manager of the ICS host the P5 reaches
+the internet through; os64get over HTTP ran near 200 Mb/s. Against
+Tuesday's 1,996 KB/s from a 28ms host that is the 64KB box gone, not a
+tuning. It is not the link either: that connection regularly shows 300
+Mb/s, and where the rest goes is the next measurement (DEBTS § the gap to
+the link), a day's work for another day.
+
+A tap netdev (`make run-tap`, root once) would put the Linux host's own
+stack behind the cable as a scaling peer and let the rig show the window
+open under injected delay; it was not set up for this slice.
+
+## TCP write patience acceptance (2026-09-09)
+
+Write's contract is beside read's patience in
+[syscall_numbers.h](abi/include/os64/syscall_numbers.h): both public write
+stubs use syscall 3, with one deadline for the complete TCP write. The host
+suite tests real TCP bodies with polls, finite expiry, wrapped copies,
+progress over timeout, interruption/reset cleanup and infinite patience.
+The syscall fixture exercises the actual dispatch prelude and console/TCP
+cases: finite console refusal, ordinary console writes, unchanged deadline
+across multiple copy chunks, partial results and cleanup. Read/write deadline
+conversion also runs with 1 ms and 10 ms ticks, including the huge finite
+interval that would otherwise wrap to forever and read's rounding overflow.
+Gopher's request fixture checks the real encoder and shared send helper:
+30-second patience, complete requests, every short prefix, and failed I/O.
+Both page fetch and save close the connection on an incomplete request.
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_tcp_write_syscall_host.py
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_gopher_request_host.py
+ASAN_OPTIONS=detect_leaks=0 tools/test_gopher_host.sh
+```
+
+For a guest or production-machine check, start the peer on a reachable host:
+
+```sh
+python3 tools/test_tcp_write_peer.py --bind HOST_IP
+```
+
+Then in os64, with the updated kernel and userland installed:
+
+```sh
+/tests/tcpwriteprobe HOST_IP 17260
+```
+
+Both sides must print PASS. The host holds data unread until the guest
+observes a full-ring poll and a 100 ms finite timeout, then checks the
+resumed stream's byte content, length and EOF. Restart the peer for each run.
+For QEMU user networking, omit `--bind` and pass `10.0.2.2` in the guest.
+This manual probe requires an external peer and is separate from `testrun`.
+
+The isolated rig uses QEMU q35, TCG/qemu64, two CPUs, virtio-net, a copied
+ext2 root and the rebuilt kernel/userland. Its disposable `/etc/os64.conf`
+selects `conf = /etc`; one cron `@reboot` script runs the probe under
+`KWORKER CRON` without `HUSK`, avoiding duplicate VT shell startup scripts.
+Host ASan/UBSan remain enabled; LeakSanitizer is disabled for the ptrace
+fixture. Physical NIC validation belongs to the production-machine check.
+
+The round-one correction passed the host suites, kernel/userland builds
+and this guest probe: the peer verified 2,025,800 exact bytes through EOF
+after timeout/retry. Guest `testrun syscall_smoke`, `fputest`, `df_test` and
+`sigpipe_test` each passed, covering the four raw-write sites that explicitly
+load infinite patience. The copied root passed `e2fsck -fn` after shutdown.
+
+## TCP sender refactor acceptance (2026-09-05)
+
+The refactor contract is `TCP_SENDER.md`. These are new runs, independent of
+previous throughput tables; timing differences are not controlled speedup
+claims. The isolated rig used QEMU q35, 8 CPUs, virtio-net, copied ext2 root/data
+images, the current built kernel, `tools/cable.py --seed 1`, and host sinks.
+The guest configuration search finds `/home/husk.rc` before `/etc/husk.rc`;
+the rig installed its startup there and used `mkdir` to let only one of the
+two VT shells start the workload. An initial run that missed this precedence
+was discarded because its output file was from an older test.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan host sender transitions | Pass; actual TCP bodies, checksummed peer input, deterministic clock/submission dispositions |
+| Host stream loss matrix | Pass; 150 KB per case, MSS 48/536/1460 crossed with peer windows 100/4000/65535, independent data and ACK loss, ring and sequence wrap, FIN through EOF |
+| 100 KB upload, clean | Verified, 70 ms guest verdict time |
+| 100 KB upload, 10% outbound loss | Verified, 430 ms |
+| 100 KB upload, same loss plus 100 ms delay each way | Verified, 3750 ms |
+| 2 MB upload, 4 KB host receive buffer, reader paused 12 seconds, return path disconnected for 10 seconds | Verified, 17520 ms; four probes, captured gaps approximately 2/4/8 seconds; window reopened and transfer completed |
+| Close with 32 KiB queued, 100 ms delay each way | Host received exactly 32768 correct bytes then EOF; post-close snapshot had FIN_WAIT_1, `inflight=14600`, `sndq=32768`, `det`; later TIME_WAIT with buffers stripped |
+| 100 KB download, clean / 30% downlink reorder / 10% downlink loss | All three byte-identical to the source (MD5 f602e2c389c0184f5bbef36b3c0b6a2b) |
+| Full build and strict changed-C compilation | Pass |
+| Completed-kernel smoke after handshake/reset invariant cleanup | 100 KB verified (30 ms); built-in suites 28 + 29 + 2 passed, zero failures |
+| Copied guest filesystems after the final run | Root and data `e2fsck -fn` both exit 0 |
+| e1000 upload attempt | Unvalidated: early boot stopped in the unchanged `e1000_enable_intx` probe, before the workload; this is not a transfer result |
+
+Run the host suite from the worktree with:
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+```
+
+Only LeakSanitizer is disabled: this environment reports that it cannot run
+under ptrace. ASan and UBSan remain active. The harness does not establish
+SMP, IRQ, DMA, or physical NIC correctness. Sustained driver drops and detached
+outages beyond the cleanup deadline are covered by the deterministic suite;
+the guest outage test exercises an owned connection reopening before close.
+
+The separate close fixture avoids mistaking queued writes for delivery:
+
+```sh
+# Host, accepts one connection and verifies through EOF:
+python3 tools/test_tcp_close.py --port 17250
+# Guest (with cable delay enabled so the ring remains outstanding):
+/tests/netclose 10.0.2.2 17250
+cat /sys/net/tcp
+```
+
+Fable's PHY work is separate. Production r8125 unplug/replug and combined-tree
+throughput remain physical-hardware acceptance work. No link notification is
+used as a substitute for ACK progress.
+
+## FTP client acceptance (2026-09-09)
+
+BROWSER.md's rung 6, and the first thing in the tree to hold two connections
+open at once. `FTP.md` is the design record; what follows is what was run.
+
+**The host suite** is `tools/test_ftp_host.sh` — plain `cc` under ASan and
+UBSan, driving `userland/apps/ftp/wire.c` at chunk sizes 1, 2, 3, 7, 17, 64
+and whole. It has something the gopher suite next door did not: **Python's
+ftplib ships the same three parsers**, so the multiline reader, `parse227` and
+`parse257` are DIFFED against a reference rather than against this code's own
+opinion written twice. Two departures from ftplib are asserted by hand and
+each is written down where it lives.
+
+Three real defects came out of it before the OS ran a byte:
+
+| Found | What it was |
+|---|---|
+| A seven-number passive-mode list matched its own TAIL | `(10,0,2,2,195,80,7)` yielded the address `0.2.2.195` — the scan resumed inside the list. Runs are now taken whole and only a list of exactly six is an address |
+| The reply text stripped its own framing inconsistently | The opening and closing lines lost their code digits and the middle ones kept theirs. Now nothing is stripped, which is both what a client prints and what makes the ftplib diff exact |
+| A deadline and a broken connection shared one sticky flag | Found in the guest, fixed in the parser: the first quiet moment poisoned the control channel for the rest of the session. `FTP_SOURCE_STALLED` / `FTP_REPLY_STALLED` now say "nothing yet" without saying "broken", and the suite asks the same question twice to prove the channel survives |
+
+**The deterministic server** is `tools/ftptestd.py` (httptestd and gophertestd's
+sibling): a multiline banner with a complete-looking `500` inside it, four
+spellings of the 227 reply, a `550` that arrives with no data connection
+activity at all, a transfer that closes cleanly and THEN reports `451`, and a
+half-minute dribbler for interrupting.
+
+**In the guest**, headless QEMU over slirp against that server:
+
+| Case | Result |
+|---|---|
+| The multiline banner | All four lines read as one reply; the decoy `500` did not end it |
+| Anonymous login, `TYPE I` | Straight to the prompt, no password asked |
+| `ls` | The server's listing printed verbatim |
+| The 227 naming an address we cannot reach | slirp made the server advertise `127.0.0.1`; the client said so and dialed the address it was already talking to. **This was not staged** — it is the NAT case, produced by the harness |
+| `get /hello.txt`, `get /big.bin` | 21 bytes and 1 MiB, staged as `.part` and renamed |
+| 1 MiB round trip (`get` then `put`) | Byte-identical on the host (SHA-256 `d824bde2acff5ab2…`) |
+| `get /noperm.txt` | `550` on the control channel, no wait on the data connection |
+| `get /cut.bin` | Data connection ended cleanly at half the promised length, control channel said `451`; `cut.bin.part` kept, nothing published |
+| Ctrl+C during the dribbler | Transfer stopped, `.part` kept, prompt returned, session alive |
+| The command AFTER an interrupt | Gets its OWN reply. The transfer's outstanding reply is counted (`s_owed`) and spent first — without it, the `226` arrived as the answer to `pwd` |
+| A 227 naming no address at all | Refused by name, twice in a row, session still usable |
+| The server killed mid-session | "the server closed the control connection", no hang |
+| Typing at the prompt | Echoes, and Backspace rubs out |
+| `user NAME` | Password read without appearing on screen, and it reaches the server intact |
+| Copied guest filesystems afterwards | Root and data `e2fsck -fn` both clean |
+
+**Chris found the one this list could not.** Every screenshot above showed
+`ftp> 250 Directory changed` with the typed command missing, and it read as
+normal for a whole session: the harness types through `sendkey` and never
+looks for its own keystrokes. **In os64 echo is the READER's job** — console.c's
+discipline is "the caller echoes", recorded in PTY.md § What os64 already
+built without meaning to — so a program with a prompt paints its own input or
+the prompt answers commands nobody can see themselves typing. Two lessons for
+whoever drives this harness next: a screendump proves what is on the glass
+only if you know what should be, and a keystroke-injecting harness is blind to
+exactly this class of bug. The same mistake had also put a raw-mode dance
+around the password prompt to "hide" what nothing was going to show.
+
+Worth knowing for anyone reading the server's log: **os64 absorbs data arriving
+on a closed connection rather than resetting it** (`TCP_DETACHED_IDLE_TICKS`),
+so a server dribbling into a data connection the client walked away from runs
+to the end of the file before it notices. That is why the owed-reply count
+exists and a drain deadline alone would not do.
+
+**The throughput defect, and why the harness could not have found it.** Chris
+measured `get` at about 11 Mb/s on the P5 against os64get's 179 Mb/s over the
+same link. The transfer loop wrote every read, so a download handed
+write-through ext2 a block or two per TCP segment. Filling a 64KB buffer
+before writing it — os64get's `GET_CHUNK` shape, and its recorded lesson —
+is the fix. Measured on the same 16 MiB fetch, same QEMU, same server:
+
+| Build | Time | Rate |
+|---|---|---|
+| Write every read, 8KB buffer | 4.1 s | 3996 KB/s |
+| Fill 64KB, then write | 2.2 s | 7447 KB/s |
+
+**Where the remaining slowness actually lives, measured on the P5 and NOT in
+this client.** After the fix, `get` from ftp.gnu.org still ran at 1996 KB/s,
+and os64get fetching over HTTP from the same host took the same time. Two
+clients, two protocols, one number puts the cap beneath both of them. The
+P5's `ping` put that host at 28ms, and 64KB ÷ 28ms is 2340 KB/s — the
+transfer flattened at 87% of the receive window's ceiling. The same P5 to a
+LAN server ran at 179 Mb/s, which is the same ceiling at a 2.9ms round trip.
+A Windows browser across the same wifi and ICS pulled ~200 Mb/s, so the path
+is not the limit. This is DEBTS § no window scaling (RFC 1323), and its
+trigger has now fired. **The lesson for this harness: a client's throughput
+cannot be judged without the round-trip time beside it**, and `ping` is one
+command.
+
+**QEMU understates this and the reason matters.** Its disk is a page-cached
+host file, so the write stall is small; on real storage it is not. And while
+the old loop sat in a synchronous write, the receive ring filled and the
+window we advertise went to zero — recovering from which costs a round trip,
+free on loopback and not free over wifi. The penalty is the disk's slowness
+multiplied by the link's latency, so the rig can show the direction of the fix
+but not its size. **A rate measured in QEMU is evidence about a change, never
+about the machine.**
+
+Run the host suite from the worktree with:
+
+```sh
+tools/test_ftp_host.sh
+```
+
+and the server, for a guest to point at, with:
+
+```sh
+python3 -u tools/ftptestd.py --port 2121 --root /tmp/uploads
+```
+
+## libpage acceptance — what a page MEANS (2026-09-12)
+
+LIBPAGE.md's rung between parsing and layout: form ownership, the submitter,
+the entry list, the encodings, reference resolution. It is pure computation
+over libhtml's tree — no syscalls, no terminal, no wire — so the whole of it
+is provable on the host, and that is where it is proved.
+
+**The suite is `tools/test_libpage_host.sh`**, plain `cc` under ASan and
+UBSan with `-fno-sanitize-recover`. Markup in, the REQUEST out: the address,
+the method, the body, the content type, the fragment, and the two facts a
+face needs before it sends. Each case names the STEPS of the standard it
+exercises, against a step list checked into the driver — so coverage is a
+number with an auditable denominator rather than a verdict to be argued, and
+adding a step without a case lowers it on purpose. The run prints it:
+
+```
+libpage: 158 cases, 0 failed
+libpage coverage: A 16/16 B 6/7 C 19/19 D 25/25 E 12/12 F 15/15 G 8/8 H 14/14 I 9/9 J 5/5 K 18/18
+  B7 has no case: a parser-inserted owner (booked: libhtml, issue #99)
+libpage sweep: each of 279 allocations failed in turn, nothing leaked
+```
+
+**The corpus is the durable artefact, which is the whole reason it exists.**
+Sixty-two findings' worth of specification reading lived inside a renderer
+marked throwaway; a case here outlives every front end written over the
+library, because the same markup must produce the same bytes whether a page
+is drawn in cells or in pixels. Every review finding of the first draft is a
+named case, marked with its round, so a fix that was only a line of code
+cannot come back.
+
+**The allocation sweep needs pages that SUCCEED.** The pathological page is
+mostly refusals, and a page that refuses allocates almost nothing — sweeping
+it alone reached a few dozen allocations and called itself done. The sweep
+drives six pages: the pathological one, a multipart POST with a value that
+has to be transcoded, a `mailto:` in both methods, a `data:` GET, and a page
+of links including a fragment that nothing claims. The count comes from a
+pass with nothing failing, because reading the ceiling off a pass that
+failed early reads a ceiling that is not there.
+
+**The two data tables are proved against their sources, not against
+themselves.** `tools/test_bidi_host.sh` digests every one of the 1,114,112
+code points through `os64_bidi_strong` and compares the hash with an
+independent parse of the pinned Unicode file — so a generator that mis-read
+the file, a binary search that walked off a range edge, and a stale `.inc`
+are three different failures instead of one silent agreement. libhtml's
+`--checks` mode does the same for windows-1252 both ways: the index is
+transcribed into the test, the encoder is asked to agree with it, and the
+DECODER is asked through an actual document, so a one-sided table edit
+fails.
+
+Refresh the generated tables deliberately, never by accident:
+
+```sh
+tools/gen_bidi_table.py --check    # is the checked-in table current?
+tools/gen_bidi_table.py --fetch    # re-download the pinned Unicode file
+```
+
+**What the guest proves at this rung is that the library LOADS**, since
+nothing calls it yet. `wend` declares the edge before it uses it for exactly
+this reason, so `wend example.com` on a boot with no network is the test:
+reaching "cannot reach example.com" means the program started, which means
+the loader resolved `/lib/libpage.so`, honoured its prelink slot, and bound
+its dependency edges on libhtml and libos64 — and a slot that collided or a
+`.so` that would not resolve refuses the spawn by name instead.
+
+Do NOT expect `/sys/shlib` to list it afterwards: unload-at-refcount-zero
+reclaims a library the moment nothing holds it, and wend has exited. That is
+the shared-object arc working, not the library missing. The first thing that
+adds `/lib/libpage.so` to a running system's list is a face that stays up.
+
+A local server's access log is the last word on a submission, and that
+arrives with the face that consumes the library.
+
+**The refresh family IS driven end to end in the guest**, because a real
+page needed it. Boot with `-netdev user`, then:
+
+```sh
+wend 'https://html.duckduckgo.com/html/?q=hobby+os+development'
+```
+
+Type a result's number and press Enter. The status row must show the
+RESULT'S address with `200 OK`, not DuckDuckGo's. Every link on that page
+goes through a click logger that answers 200 with no redirect, a script for
+a browser that runs one and a `noscript` refresh for a browser that does
+not, so before family K the answer was a blank page and an accurate sentence
+about having nothing to show. Then press `b` once: it must land back on the
+results. Twice means the redirector went into the history, which puts a page
+nobody meant to visit between a reader and where they were.
+
+Type that address WITHOUT quotes, because unquoted is how anyone types one
+and it is its own test: a `?` is a glob metacharacter, so husk used to read
+the whole word as a filename pattern, split it at its last slash, and answer
+with a complaint about a directory called `https://host`. An address is not
+a pattern and husk knows it now.
+
+Notes for the harness: `tools/vmtype` cannot type a `%` or a `+`, so use a
+query whose words are joined with `-`.
+
+**The one thing this rung cannot check is the IMAGE list.** A library that
+builds, links and passes every host case still leaves `husk: cannot run
+wend` on the glass if it is missing from `USERLAND_LIBS` in the root
+makefile — which is exactly what the first boot of this slice printed. The
+list is iterated so a new library cannot be forgotten in the COPY, but
+nothing adds it to the list for you, and the failure arrives as the CONSUMER
+refusing to start rather than as anything naming the library.
+
+## wend acceptance — the line-mode browser (2026-09-11)
+
+BROWSER.md's face: the first program that puts libfetch and libhtml together
+and points them at real pages. BROWSER.md § The face is the design record;
+what follows is what was run.
+
+**The host suite** is `tools/test_wend_host.sh` — plain `cc` under ASan and
+UBSan, driving the renderer (`userland/apps/wend/render.c`) with no kernel
+under it, because a tree in and lines out is pure computation. The FOLD gets
+its table checked entry by entry and then every code point below U+11000
+swept to prove each one folds to printable Latin-1 or to nothing. The
+WRAPPER gets cases written as "this markup, at this width, is these rows".
+The RAW-TEXT path gets the windows-1252 high range and every spelling of a
+line ending. LISTS AND ANCHORS get the page's own numbering and the row a
+`#name` lands on. And an ALLOCATION FAILURE is injected at each of the first
+seven hundred allocations of one deliberately awkward page, proving that
+what comes back is always a page you can paint and always frees clean.
+
+**The corpus is the regression test, and it is a diff to a PAGE.** The six
+saved pages libhtml keeps (`tools/html_corpus/*.html` — example.com,
+Floodgap's gopher gateway, Hacker News, textfiles.com, 68k.news, a Wikipedia
+article) are rendered at 80 columns and diffed against checked-in dumps
+beside them, with example.com rendered at 40 as well because wrapping is
+where a renderer goes wrong. The dump carries the rows, the attribute and
+spot spans under each row that has any, every spot with where it goes or
+what it would send, and every form — so a change in how a page reads
+arrives as a reviewable diff rather than as "it looks different on my
+screen". Refresh them deliberately:
+
+```sh
+tools/test_wend_host.sh            # check
+tools/test_wend_host.sh --refresh  # adopt the new rendering
+```
+
+Four defects came out of the harness before the OS ran a byte, and three of
+them are the same mistake in different clothes — **giving something back
+before the rows it governs are down**:
+
+| Found | What it was |
+|---|---|
+| A list item's second row lined up under its bullet | The indent was restored when the item's children were done, and the item's LAST word was still held: it wrapped at the outer margin |
+| Bold, underline and links broke at every space | The owed space between two words wore the pen of wherever the WALK had reached, which is past the closing tag. It now wears the pen from where the whitespace was, so a two-word link is one run and highlights as one thing |
+| A `pre` block lost the author's trailing spaces on its last row | Same shape: the block left preformatted mode before its final row was committed, and the trim for flowed rows took them |
+| A row could reach the painter unterminated | ASan, on the allocation-failure sweep: fresh storage plus a refused run reservation left bytes nobody wrote and no end marker. The buffer is terminated the moment it is reserved |
+
+**Forms are the largest part**, because what a form would ASK FOR is a
+string built from a page and is checkable without a wire. Every spot is
+asked of libpage's door exactly as the browser asks it — a button PRESSED,
+any other control FINISHED (implicit submission) — over a search box with a hidden field, a query
+the action already carried (replaced, as a GET form does), spaces and
+UTF-8 through the encoder, ticked and unticked boxes, a list's value
+rather than its words, two buttons where only the pressed one says so, a
+POST refused by name, and a control in no form at all. Then the edges the
+review rounds named: a control bound to its form by `form=<id>` and one
+naming a form that does not exist, an empty `formaction` against an absent
+one, `value=""` on a tick against no value at all, a group with two radios
+`checked`, a `multiple` list's several sent and then replaced by one pick,
+a `hidden` subtree drawn as nothing and sent in full and in TREE ORDER, and
+whitespace across a nested element inside an option, and the three that
+were live in the face until it went through the door: a `dialog` form, a
+`formmethod=dialog` button, and a disabled default button, none of which
+sends anything. One case edits the model and draws the page again at
+another width, proving that what was typed survives a re-wrap and reaches
+the query. **In the guest, the lift was driven against a host server
+whose access log is the verdict**: a `dialog` form and a `formmethod=dialog`
+button pressed with a prefilled password, a form whose hidden default
+button POSTs and one whose default button is disabled, each finished with
+Enter — and not one request reached the server; a hidden GET default
+button's own name went out with the implicit submission; a search form
+edited, its list stepped past a disabled option, its tick cleared, sent as
+exactly that; a readonly box refused and still sent; a prefilled value
+holding an em dash and curly quotes offered only to be replaced, and sent
+byte for byte when left alone; a frameset's frames followed; a
+windows-1252 page's query and `_charset_` in windows-1252; and a UTF-8
+link path percent-encoded on the wire. Then Wikipedia over HTTPS: one box,
+Enter, the implicit submission, the redirect, the article. The corpus dumps print what the MODEL says each spot is, so a
+change in what a link resolves to — the four Wikipedia links with UTF-8 in
+their paths, and one with quotation marks, that the old renderer showed as
+resolved and the fetch then refused — is a reviewable line.
+
+**In the guest** (headless QEMU, `-netdev user` with slirp to the real
+internet, screendumps read as images): example.com and its link followed to
+iana.org — which answers the downgrade prompt question, because that hop
+leaves https for http and the browser asks; Hacker News over **HTTPS** on an
+ext2 root; 68k.news and textfiles.com over http; a `text/plain` file with a
+tab and a Latin-1 byte; a 404 shown as the page it is; an `image/png` refused
+as not a page with the `os64get` command to save it instead; **Ctrl+C partway
+through a slow reply**, which leaves what arrived on screen and says
+`interrupted` in the status row; and a **resize**, by running the browser in
+a gterm and pressing Ctrl+Alt+M, which re-wraps from the parse tree without
+asking the network for a page it already has.
+
+**The Codex round (PR #98) added twelve cases' worth of ground.** Its two
+P1s were both reachable: a selection restored from the history into a page
+that came back SHORTER indexed past the spot table on the next arrow, and a
+form on an https page whose action was plain http sent what somebody typed
+in clear without asking. The rest were a page's own words being altered —
+`alt=""` drawn as `[image]`, a textarea's spacing collapsed before it was
+sent, a prefilled value replaced by its Latin-1 shadow when a field was
+opened and closed unchanged — plus a disabled control that could be
+operated and submitted, a password echoed to the glass, an 8 MB text body
+reported as whole because nothing asked for the byte past the cap, a form
+auto-sent while its checkboxes were still at their defaults, a hangup that
+waited for a keystroke inside a nested prompt, and `WEND_BAD_URL` declared
+but never returned. The fragment finding is the one that changed how the
+browser FEELS: a table of contents was twelve links that each refetched the
+article and showed its top.
+
+**Round two found nine more, three P1, and most of them were the next layer
+under a round-one fix** — the reviewer checking the repair rather than the
+original. A `y` typed while a page was loading was held as type-ahead and
+then answered the downgrade prompt it was never shown; the downgrade check
+read the page's BASE, which `<base href>` can move to http while the page
+that collected the values stays encrypted; and a `formmethod=post` button
+on a GET form would have sent a password as a query string. Then: a
+`fieldset disabled` disables its contents and wend honoured only each
+control's own attribute; a form action's `#name` was dropped where a link's
+was now kept; a text body truncated by OUR allocation failure reported
+itself whole; a re-layout that failed for memory left a NULL page that the
+edit path walked; a text file with classic-Mac carriage returns rendered as
+one line; and `Accept` advertised less than the loader would render.
+
+**Round three found six, one P1, and the P1 was a live crash on the most
+ordinary page in the corpus**: Wikipedia's Search is a `<button>`, and the
+round-two fix that taught a submit button to carry its own method had gone
+into only one of the two element types that can BE a submit — so activating
+that button read a pointer the renderer never set. (This one was found
+twice: the truth pass before submitting caught it, and the round named it
+from the other direction.) The rest were the same shape of unfinished
+rule: the submitter's action brought its own `#name` and the form's was
+used instead; a disabled `option` could be the active choice, be cycled
+onto and be sent; `readonly` was treated as ordinary and editable, when it
+means the page keeps the value and still sends it; an empty `href` — the
+standard's "this page", and what every reload link is made of — was stored
+as an unresolvable address; and once sixty-four keys of type-ahead had
+filled the buffer, the cancel predicate stopped reading the terminal, so a
+later Ctrl+C could not end a slow fetch.
+
+**Rounds four and five were recorded here as CLEAN and were not.** Both had
+landed with findings while the truth passes below were being written, and
+neither was read before the note claiming otherwise was committed. The
+record is corrected rather than removed: a verdict written without looking
+is the failure worth remembering, and the fix is to read the PR's unresolved
+threads before writing down what a round said.
+
+**Round four found twelve.** Every one was a page's own words reaching the
+wire as something else: a control naming its form with `form=<id>` was put
+in whatever form it sat inside; `formaction=""` — the document's own address
+— read as no action at all; whitespace at an element boundary dropped from
+an option's words and its value, so `A<b> B</b>` was shown and SENT as `AB`;
+two unchecked appends inside that same gather leaving a silently truncated
+value on a page claiming to be whole; a `multiple` list collapsed to its
+last selected option, dropping the rest; an inline `id` bound to the row
+AFTER the words it names, so a fragment landed below its target; `<ol
+start=5>` shown as `1.`; and — twice, from two directions — a `text/plain`
+body in windows-1252 read as ISO-8859-1, so every smart quote became `?` in
+a text file while the markup half of the same browser drew it correctly.
+Two of the twelve were already fixed by the truth passes between the rounds
+(the hidden-field tree order and the image button's coordinates).
+
+**Round five found seven, two P1.** A `y` still sitting in the TERMINAL — as
+opposed to in this program's own type-ahead buffer, which round two taught
+the confirm to drop — answered a downgrade question it was never shown,
+because nothing polls the terminal between the library's cancel checks. And
+pressing Enter in a one-box form submitted the BOX rather than the form's
+default button, so a `<button formmethod=post>` was bypassed and the
+password in the box went out as a query — the exact hazard round three's
+formmethod fix existed to prevent, reached by the other door. The rest:
+`<base href="">` skipped so a later base won; a `hidden` subtree drawn in
+full, its links followable and its controls editable; two radios of one
+group both `checked` both sent; `value=""` on a tick replaced with `on`; and
+a textarea's line breaks sent as `%0A` where a form spells them `%0D%0A`.
+
+**Round six is this one**, and both halves of the record were repaired with
+it: nineteen findings fixed, and the false "clean" claim above rewritten.
+Two of the nineteen were already gone, fixed by earlier truth passes. The
+host suite grew a case for each of the rest.
+
+**The guest found what the host suite could not see about the radio fix.**
+The query was right — one value — and the ROW still drew two dots, because
+the renderer draws each control as it meets it and the rule was being
+applied to the finished page. A group is settled from the TREE now, before
+anything is drawn. That is the round's own reminder that a pure-computation
+harness checks the answer and not the picture.
+
+**In the guest** (headless QEMU, slirp, a page served from the host at
+10.0.2.2 and the real internet beside it), with the server's access log as
+the record of what actually went on the wire:
+
+| Case | What the wire or the glass said |
+|---|---|
+| A one-box form whose only button is `formmethod=post` | `this form posts, and wend sends only forms that ask by address` — and NO request in the server log. Before, the password in the box went out as a query |
+| A one-box form with an ordinary named button | `GET /sent2?q=cats&go=now` — the default submitter's own name and value carried |
+| `select multiple`, an empty tick value, a doubled radio group | `GET /sent3?pick=1&pick=3&empty=&plain=on&r=b` — every one of those a separate finding, all on one line |
+| A control and a button bound by `form=<id>` from outside the form | `GET /A?named=yes` |
+| A `hidden` section inside a form, and a textarea | `GET /B?carried=kept&tick=on&note=line+one%0D%0Aline+two` — the hidden section's prose and link drawn nowhere, its values carried, and the break spelled CRLF |
+| `formaction=""` on a second button of that form | `GET /two.html?...` — the document's own address, not the form's `/B` |
+| `<ol start=5>` with a `<li value=9>` | `5. 6. 9. 10.` |
+| A windows-1252 `.txt` | `A "smart quote" and a dash - plus café.` Every one of those was `?` before |
+| ARPANET on Wikipedia over HTTPS, then a search typed into its box | 1447 lines, then `https://en.wikipedia.org/wiki/Packet_switching` — the real page, the real search, the redirect followed |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
+
+**Then the reviewer's hat, before the button, and it earned its keep.** Five
+more, four of them mine to have made:
+
+| Found | What it was |
+|---|---|
+| A page could WEDGE the browser | The radio-group rule searches the form once per marked radio. Forty thousand of them — a megabyte and a half, well inside libhtml's own limits — ran past two minutes on a host far faster than the guest, in a program a person cannot interrupt while it renders. The searching one render may do is budgeted now; past it a marked radio keeps the page's own answer, so the row and the wire still agree, and a form that large is longer than an address may be anyway. The same page renders in 0.4s on the host, and in the guest costs no more than an equivalent page of CHECKBOXES, which does no searching at all |
+| A `multiple` list drew an option it was not sending | With nothing marked it showed its first, exactly as a list that WAS sending that option; with a disabled first choice it showed the disabled one while sending the enabled one. The row shows an option that will actually go, and an empty list is drawn empty |
+| A default button inside a `hidden` subtree was invisible to the submitter | The same P1 round five named, through the door the `hidden` fix had just opened: the button is drawn nowhere and is no spot, and is still the one whose method and action a submission takes. The form records where the first unreachable submit control stood, and the Enter-in-one-box shortcut refuses rather than send the form as though it had no button |
+| A radio with NO name cancelled the other nameless radios | It is in no group, sends nothing whatever it shows, and has nothing to untick |
+| A Ctrl+C drained before a question answered it `no` | My own addition, not the finding: `q` then silently did nothing, a question asked with no visible reply. Draining is already enough, since only `y` ever agrees. The stop still reaches a running fetch |
+
+**Round seven found sixteen, one P1, and four were siblings of the round
+before it** — which is this PR's recurring shape and the reason a fixed rule
+sends you looking for its relatives.
+
+The P1 and the P2 beside it were one structural miss: **form ownership was
+settled only AFTER the walk**, and three questions during the walk need it.
+A submit control out of reach that named its form with `form=<id>` marked no
+form at all, so a `formmethod=post` button led straight back to a password in
+a query. And two root-level checked radios named `x`, owned by `form=a` and
+`form=b`, were one group, so the second cleared the first and form A sent
+nothing. The forms carrying an `id` are swept once now and ownership is
+answerable while the walk runs; the radio search is of the whole document,
+asking each candidate who owns it.
+
+The other two siblings: a disabled `fieldset` on the hidden-data path lost
+the first-`legend` exception the visible walk has, and `radio_pick` compared
+two ABSENT names as equal, so picking one nameless radio put out every other
+one's dot — the interactive half of a fix made a round earlier for the
+initial state.
+
+The rest were the standard read against the code: an action too long to
+resolve fell back to the page it was on rather than being refused (a
+different host to be wrong about); `readonly` was honoured on ticks and
+lists, where the standard gives it no meaning, so a form with a box and a
+`readonly` checkbox auto-sent before the checkbox could be reached; a
+nameless image button sent nothing where it must send `x=0&y=0`; a fragment
+was matched percent-encoded against an `id` that is not; `<ol reversed>`
+counted up; `_charset_` went out empty; an option's `label` was ignored in
+favour of its text; a `size=2` list invented its first option; `xmp` and
+`plaintext` were flowed rather than kept; a UTF-8 byte order mark on an
+unlabelled text file was read as windows-1252; and `<base>` was looked for
+only among `head`'s children, though libhtml keeps a misplaced one in the
+body exactly where it found it. XHTML parsed by the HTML parser is the one
+answered with a booking rather than a change: there is no XML parser here,
+and refusing the type outright would turn every XHTML page into "that is not
+a page".
+
+**One leak of my own**, caught by the suite's allocation sweep as it was
+written: the new form table was never freed.
+
+**In the guest**, every fix that reaches the wire or the glass, read off a
+local server's access log:
+
+| Case | What the wire or the glass said |
+|---|---|
+| Two root radios named `x` owned by different forms, both checked | `GET /A?x=1` and `GET /B?x=2` — each form sent its own; before, A sent nothing |
+| A nameless image button, `_charset_`, a `size=2` list | `GET /C?_charset_=UTF-8&x=0&y=0&lab=` |
+| The P1: a hidden `formmethod=post` button naming its form by id | `this form's button is not one this browser can reach`, and no request |
+| A box beside a `readonly` checkbox | Enter kept the value and sent NOTHING, the checkbox still a tick to answer |
+| Two nameless radios, one picked | both keep their dots |
+| A form action too long to be an address | `this form names a destination that is not an address this browser can resolve`, and no request |
+| `<ol reversed>`, `xmp`, an option `label`, a `size=2` list | `3. 2. 1.`, columns kept, `[v Short]`, `[v ]` |
+| `href="#the%20deep%20bit"` into `id="the deep bit"` | moved, with no "nothing named" refusal |
+| A `.txt` with a UTF-8 BOM and no charset | `A BOM then café and a "quote".` — before, `ï»¿A BOM then cafÃ©…` |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
+
+**What the truth passes BETWEEN rounds found is worth as much as the
+rounds.** Reading the diff before each submit, and putting a deliberately
+pathological page through the host driver under the sanitizers, turned up:
+the same button-submit crash round three later named, from the other
+direction; a form data set that put every hidden field in front instead of
+in tree order; an image button sending its value where the standard sends
+coordinates; a caught signal answering a confirm as "no"; `#` and `#top`
+fetching the page again to show its own top; a readonly box counting as
+something to answer; a page that rendered to nothing showing a blank
+screen with a 200 on it; and a default port that url.h asks a caller to
+drop before resolving, which would otherwise spell `host:443` into every
+relative link. The pathological page — lists nested five deep around a
+`pre`, a form inside a table inside a form, unclosed inline tags, an empty
+`select`, a readonly textarea, a disabled fieldset with a bold legend —
+is worth keeping in a scratch file when working on the renderer.
+
+**And two real searches, typed into real pages.** The Floodgap gateway's
+box, reached by typing its number, edited from the value it came with, and
+sent — the gateway answered with the gopher menu that was asked for. Then
+Wikipedia over HTTPS: arrow to the box, type, Enter, and the address that
+went out was
+`https://en.wikipedia.org/w/index.php?title=Special%3ASearch&search=ARPANET+history`
+— the hidden field carried, the colon encoded, the space a plus, and the
+results page came back with its own title.
+
+**A FAT root has no trust store**, so `https` there fails at
+`/etc/certs/roots.pem` for the browser and for os64get alike — the bundle is
+written to the ext2 root only. Boot an ext2-root entry when TLS is what you
+are testing.
+
+## The web's own oracle — the WPT runner (2026-10-21)
+
+The Modern Web arc is judged by web-platform-tests, the suite the browsers
+run against themselves (MODERN_WEB.md § The oracle). A WPT page loads
+`/resources/testharness.js`, asserts one behaviour per test, and reports
+through `/resources/testharnessreport.js`, the file the suite leaves for the
+browser running it. Ours is `tools/wpt/testharnessreport.js`: it writes each
+test's verdict into an element of the page, and the runner reads that
+element out of the tree.
+
+```
+tools/wpt_fetch.sh                              # the suite at its pin, in .vendor/wpt
+tools/test_yonder_wpt_host.sh dom/nodes         # one directory against its expectations
+tools/test_yonder_wpt_host.sh dom/nodes --update   # rewrite [passing] from this run
+tools/test_yonder_wpt_host.sh dom/nodes --only Node-cloneNode
+tools/test_yonder_wpt_host.sh --selftest        # the runner held to its own pages
+```
+
+**The suite lives outside the tree.** `tools/wpt_fetch.sh` makes a shallow,
+partial, sparse checkout of one pinned commit, holding only the directories
+its list names; a slice adds its directories there, and moving the pin moves
+it for everyone, so a PR that moves it says so. The list includes the
+suite's own `tools`, from which the script builds WPT's `MANIFEST.json`
+over what is checked out: the suite's list of its tests, their types and
+the pages each script test makes, which is how its maintainers say tests
+are to be found. `tools/wpt/pages.py` turns it into the pages the runner
+loads; without Python there is no manifest, and the runner finds the same
+pages by file name (on `dom/nodes` the two agree page for page).
+
+**Two gates and a list** (MODERN_WEB.md § The oracle). What the tree keeps
+is `tools/wpt/expected/<dir>.txt`, headed by the WPT commit it was written
+at, in three sections. `[required]` names, one by one, the tests that
+exercise what the slice's interface is for: every one must pass or the run
+fails (exit 1) naming it, and that is what gates enabling the interface.
+`--modern-off` runs the window with the arc's switch off, which is how a
+slice shows its required tests are its own surface's: the run is green
+only when none of them passes, and one that does is listed as LEAKED and
+fails it (the baseline is not compared, and `--update` is refused).
+`[passing]` is the baseline, every test that passes: one that goes missing
+fails the run and is named, and one that newly passes is listed to add.
+`[excluded]` names each page the slice knowingly does not run, with its
+reason after a tab (`needs iframe`), so what was never exercised is named,
+never counted. `--update` rewrites `[passing]` alone; the other two are
+written by hand, which is the point of them. Only a page run to a verdict
+may change the file, so it writes last, and not at all for a run that
+cannot be judged (exit 2): one with a fault in the window's fakes, one with
+a page never run (an UNJUDGED line: its source missing, too large or not
+read whole, a file it asked for in the checkout not read whole, its
+navigation never started; listed so whether the manifest or the file names
+found it), one that ran no page at all (an `--only` that selects none), and
+one whose expectation file exists and cannot be read whole (a file that
+does not exist is three empty sections). Nothing runs at all, also exit 2,
+when what was found cannot be trusted or written down: a directory or page
+outside the checkout (absolute, or climbing out with `..`), a page name an
+expectation line cannot hold (a tab, a newline, a carriage return, a
+leading `#`), a page listed twice, a `--pages` line not as `pages.py`
+writes it, a directory the walk cannot list, or the report script or the
+checkout's `testharness.js` not read whole. A slice commits its
+directory's file BEFORE its code, so the diff of that file is the proof.
+**A page whose harness did not end OK fails whole**: none of its tests is a
+pass, whatever the harness said of each, so a page that errored halfway
+cannot count the tests it reached before it died.
+
+**The page runs in yonder's own window**, headless: the runner is
+`tools/test_yonder_wpt_host.c`, which includes the scripted-page host
+(`tools/test_yonder_scripts_host.c`) for its fakes and builds through the
+same `tools/yonder_host_build.sh`, so a WPT page takes the path a page from
+the network takes — navigation, head, streamed body, verdict, the loop. It
+is served at `http://wpt.test/<dir>/...`; scripts and sheets under that
+origin come from the checkout, anything else fails as an unreachable fetch,
+and pictures and fonts always fail. The window's clock moves a 10 ms tick
+at a time once the loop has nothing to do, up to 60 s (180 s for a page
+whose timeout is long), so the harness's own timeouts fire in the same order
+every run: two runs of a directory print the same lines.
+
+**What is run, and what is not.** The manifest's testharness pages that a
+window can load: `.html`/`.htm` pages, and `.any.js` and `.window.js`
+through the page WPT generates for their window variant (`// META:
+script=`, `title=`, `timeout=long` and `variant=` are honoured), each
+variant a page of its own. NOT run, and counted on the summary by reason:
+worker and shadow-realm variants (there are no workers) and XML documents
+(`.xhtml`, `.svg`: yonder parses HTML). Reftests are not testharness tests
+and are not in that list; comparing pictures is a later runner. A `.py`
+handler is never run; tests that need one fail. Each test's line carries
+the harness's message, which is the first thing to read when a count is
+lower than expected.
+
+**The runner tests itself.** `--selftest` runs `tools/wpt/selftest/`,
+pages whose every outcome is known — a pass and a failure, timers in clock
+order, a harness that times out and so fails whole, the long budget and the
+ordinary one, a script that never ends, variants, a `.any.js` with META
+lines, a `.window.js`, an excluded page, what is served and what is
+refused, and the files that must not be run at all — found by file name and
+again through a fixture manifest, and holds the output to
+`tools/wpt/selftest.out` line for line both ways; then holds the three
+sections, `--expect`, `--update` and each refusal above to what they
+promise. Run it after
+touching the runner, `pages.py`, the fakes it borrows, or the report
+script.
 
 ## Reading the serial log
+
+**WHERE these lines live depends on the boot entry.** Every one of them is a
+`printd`, so with `LOGD=` on the cmdline they are in logd's FILE and not on the
+serial wire — this section is about reading the LOG, whichever sink holds it,
+and the only thing you may *wait* on at the wire is `"boot complete"` (see the
+headless section above). Boot an entry without `LOGD=` and they land on serial
+as they always did.
 
 Milestones of a healthy full boot, in order (the counts shown are July
 2026 values and WILL drift — nothing below depends on them):
@@ -149,28 +1210,38 @@ RAMDISK: registered ... as a block device    (RAMDisk entries only)
 BOOT: Root filesystem found, mounting     →  successfully mounted
 BUILT-IN TESTS: Running post-boot tests:  →  7 passed, 0 failed
 BOOT: All VFS tests passed successfully.
+BUILT-IN TESTS: Running late tests:       →  2 passed, 0 failed
 ```
 
 Grep count-agnostically — never hardcode test counts, they change with
 every added test:
 
 ```bash
-grep "passed, 0 failed" "$LOG"        # eyeball: exactly two lines, and
+grep "passed, 0 failed" "$LOG"        # eyeball: exactly three lines, and
                                       # each follows its phase header
-grep -c "passed, 0 failed" "$LOG"     # assert: == 2 (pre-boot AND post-boot)
+grep -c "passed, 0 failed" "$LOG"     # assert: == 3 (pre-boot, post-boot, late)
 ```
 
 A FAILED in-kernel test **panics** (TEST_FAIL → panic), so a failing phase
-never prints its "passed, 0 failed" line at all — the count-of-2 assertion
+never prints its "passed, 0 failed" line at all — the count assertion
 catches both a failure and a phase that never ran. When reviewing by eye,
-confirm the line's phase from the preceding "Running pre-boot/post-boot
-tests:" header, not from the numbers.
+confirm the line's phase from the preceding "Running … tests:" header, not
+from the numbers.
+
+**THE LATE LINE ARRIVES LAST, AND LATER THAN YOU EXPECT** (2026-08-29). It
+is written by a kernel thread that starts after the shells are seated, so it
+lands *after* `boot complete` and after husk's first prompt — a harness that
+stops reading at `boot complete` will see two lines and conclude a phase
+never ran. Wait for the late line itself when you want all three. The phase
+takes ~11s on a quiet machine and can take longer, because
+`task_teardown_leak` re-measures when something else on the machine moved
+memory under it.
 
 Standing regression greps:
 
 | Boot mode | Must show | Must NOT show |
 |---|---|---|
-| Default (non-GUI) | both `passed, 0 failed` lines (pre+post), VFS pass | `guicomp` (grep -c == 0) |
+| Default (non-GUI) | all three `passed, 0 failed` lines (pre, post, late), VFS pass | `guicomp` (grep -c == 0) |
 | GUI | compositor heartbeats (DEBUG_GUI) | panic lines |
 | RAMDisk (no disk attached!) | `RAMDISK: registered`, root mounted | `Could not find/mount root` |
 | NVMe/AHCI regression | root mounted from the real disk | any `RAMDISK:` line |
@@ -181,13 +1252,24 @@ bytes/sec is all you get).
 
 ## The in-kernel test framework
 
-`test_framework.h`: register cases, two phases — `test_run_preboot()`
-(before the scheduler starts) and `test_run_postboot()` (scheduler live;
-this is where the ELF/ring-3 tests run, loaded from the root filesystem —
-which is itself what proves the storage/VFS stack end to end). Tests live
-in `kernel/test/`. Adding one: register in the appropriate phase, keep it
-silent on success, TEST_FAIL (= panic) on failure. No doc or watcher
-updates needed — the greps above are count-agnostic by design.
+`test_framework.h`: register cases, three phases — `test_run_preboot()`
+(before the scheduler starts), `test_run_postboot()` (scheduler live, shell
+NOT yet seated; this is where the ELF/ring-3 tests run, loaded from the root
+filesystem — which is itself what proves the storage/VFS stack end to end),
+and the LATE phase (`late_tests_thread`, a kernel thread started once the
+shells are up). Tests live in `kernel/test/`. Adding one: register in the
+appropriate phase, keep it silent on success, TEST_FAIL (= panic) on
+failure. No doc or watcher updates needed — the greps above are
+count-agnostic by design.
+
+**Choosing the phase** is a question about the machine, not about the test's
+subject: PREBOOT for kernel invariants, POSTBOOT for anything needing a
+quiet machine or a verdict before a person can write to the disk (every
+`TEST_POLICY_RO` write gauntlet, by definition), LATE for slow tests that
+survive a live system. Slow is the reason to go late; tolerant is the
+permission. A late test asserting on a global that userland also moves —
+the free-page count is the one that bit — must gate on quiescence and be
+willing to SKIP, or it belongs in POSTBOOT.
 
 ## The orphan-recovery procedure (a test the suite structurally cannot run)
 
@@ -298,8 +1380,8 @@ plausible reasoning had not.
 | Platform | Uniquely catches | Notes |
 |---|---|---|
 | QEMU/TCG (WSL2) | Fast iteration; `-d int,cpu_reset,guest_errors` traces; deliberately hostile TSC desync between vCPUs | The TSC desync is a feature: it found the rdtsc-across-preemption bug |
-| VirtualBox | Real-ish I/O latency (found the NVMe locking race); stricter virtual-APIC (LVT arming order); firmware differences (virtual-wire mode NOT left on — found the dead-keyboard IMCR bug) | Boots the /mnt/c/temp ISO; disk via `make vbox-sync`, VM OFF |
-| Bosgame P5 (bare metal) | Everything virtual APICs forgive; MADT interrupt-source overrides; real 12-core log volume (crashed default logging); USB stick module-load time (~20s for the 512MB ramdisk — it is NOT hung) | RAMDisk entries need zero disk prep; use `nolog` + MAXCORES during bring-up |
+| VirtualBox | Real-ish I/O latency (found the NVMe locking race); stricter virtual-APIC (LVT arming order); firmware differences (virtual-wire mode NOT left on — found the dead-keyboard IMCR bug) | Boots the /mnt/c/temp ISO, put there by `make copy`; disk via `make vbox-sync`, VM OFF |
+| Bosgame P5 (bare metal) | Everything virtual APICs forgive; MADT interrupt-source overrides; real 12-core log volume (crashed default logging); USB stick module-load time (~20s for the 512MB ramdisk — it is NOT hung) | RAMDisk entries need zero disk prep; use `nolog` + MAXCPUS during bring-up |
 
 A change that touches interrupts, timers, storage, or SMP is not verified
 until it has seen at least QEMU + one of the other two.
@@ -335,3 +1417,68 @@ until it has seen at least QEMU + one of the other two.
   the *pattern*, but if the same compound command LAUNCHES qemu, the
   literal string in the launch line still matches your own shell — exit
   144 before the launch runs. Kill and launch in SEPARATE commands.
+
+## TLS 1.3 guest acceptance (2026-10-09)
+
+S3 used merged S2 `bba14afe`, a clean full build, QEMU q35/TCG with
+`qemu64,+rdrand,+rdseed`, two CPUs, virtio-net and slirp. Both ext2 disks
+were disposable copies/new images. The first boot ran transport and HTTP
+fixtures; the second enabled GUI for Yonder. Test configuration and fixture
+trust were confined to those disks. No TLS proxy was used.
+
+The [transport procedure](docs/design/completed/TLS_TRANSPORT.md) now
+accepts a final `12` or `13` argument; omission preserves the original
+TLS 1.2 probe. Host peers run with standard Python (`python3 -S`) and
+OpenSSL 3.0.13. Repeat its four cases with `--protocol 13`, then with
+`--protocol 12`. A separate `--protocol 13 --group secp384r1 --cases good`
+run forces HelloRetryRequest because the client initially shares X25519
+and P-256.
+
+| Check | Result |
+|---|---|
+| TLS 1.3 and explicit TLS 1.2 `good` | Each exchanged 65,536 exact bytes in both directions and ended CLEAN_EOF; authenticated version 0304/0303 respectively |
+| Both versions: `stall`, `truncated`, `badname` | TIMEOUT within the checked 200 ms–2 s window; authenticated TRUNCATED; unauthenticated CERTIFICATE |
+| TLS 1.3 P-384 retry | 65,536 exact bytes each way, authenticated 0304, CLEAN_EOF |
+| `os64get -v`, TLS 1.3-only HTTP fixture | Content-Length, gzip/chunked and close-delimited bodies each matched the 65,536-byte fixture |
+| `os64get -v`, TLS 1.2-only HTTP fixture | The same three bodies matched; each reported `TLS 1.2 (fallback)` |
+| `os64get -v https://osdev.wiki/ /home/osdev.html` | Followed two HTTPS redirects to `/wiki/Main_Page`, reported TLS 1.3, HTTP 200 and 59,688 decoded bytes |
+| Curl comparison for osdev.wiki | Byte-identical; SHA-256 `8931d5522254856ff150309c4151c4facfba6f426a3974c52ce9ac13c00c6442` |
+| Yonder, osdev.wiki | Rendered the page; diagnostics recorded TLS 1.3, HTTP 200 and 59,688 bytes; scripts disabled for this transport acceptance |
+| Public `tls13.1d.pw` | Guest fetched 7,581 bytes over TLS 1.3 with a P-384 retry; per-connection diagnostic content differs from curl, so no byte-identity claim |
+
+Chris identified osdev.wiki as one of the October 5 failures. On this run,
+`curl --http1.1 --tlsv1.2 --tls-max 1.2 https://osdev.wiki/` reproduced
+`protocol_version`; TLS 1.3 succeeded. The comparison used curl with
+`--http1.1 --tlsv1.3 --tls-max 1.3 -L` and the normal public roots. The
+fixture HTTP runs used `tools/test_os64get_https_peer.py --fixtures DIR`
+with `--protocol 13` or `12`, `example.test` mapped to `10.0.2.2`, and a
+scratch `tls.conf` selecting that fixture's `roots.pem`. The config was
+removed before public-site acceptance. Yonder's unsupported CSS diagnostics
+remain browser coverage limitations, separate from the successful TLS load.
+
+The clean build, `tools/audit_tls.py` (31 public exports, 15 OS imports,
+72 selected sources), BearSSL import check and generated TLS 1.3 vector
+check passed. Host regressions passed for pristine/adapted BearSSL crypto,
+X.509 and foundation; TLS profile, policy, store, private/public inputs,
+TLS 1.2 engine, TLS 1.3 vectors/engine and transport; fetch, fetch transport,
+way, way-fetch, os64get, Yonder and Yonder streaming. ASan/UBSan and
+LeakSanitizer ran outside the sandbox. The existing os64get
+`cancel-transition` case uses an attached GDB to inject its signal at the
+commit boundary and disables LSan for that case; its ASan/UBSan checks
+passed, but it provides no leak-check evidence. Other os64get scenarios
+retained leak detection.
+
+Text-boot `testrun`: 58 passed, 0 failed, 4 skipped (three GUI fixtures and
+TCG's unsupported SIMD exception). GUI-boot `testrun`: 61 passed, 0 failed,
+1 skipped (that SIMD exception). Kernel pre/post boot: 34/34 passed in
+each phase. The concurrent text boot's task-teardown measurement was
+inconclusive; the GUI boot repeated it successfully with two independent
+zero-loss windows. The GUI boot's three late kernel tests passed. After
+orderly shutdown of both boots, `make fsck-ext2` pointed at their scratch
+disks passed for root and home. The final probe rebuild repeated all nine
+transport cases, including the authentication assertions on negative cases.
+
+Artifacts: `/tmp/tls13-s3-guest/` contains peer logs, serial logs, saved
+bodies, page diagnostics and screenshots; `/tmp/tls13-s3-live/` holds curl
+results. Build/audit/foundation/host logs use `/tmp/tls13-s3-*.log`.
+The P5 run remains Chris's; this record makes no physical-machine claim.

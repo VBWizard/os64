@@ -24,15 +24,28 @@
 #include "os64/env.h"     // the ABI env block — os64_getenv walks it
 #include "os64/proc.h"    // os64_getenv declaration
 #include "os64/date.h"
+#include "os64/runtime.h" // publish the hand-built environment blocks
+#include "os64/str.h"
 
-// env.c's global, normally stored by launch.S before main; the test sets it
-// to a hand-built block.
-extern const os64_env_block_t *__os64_env;
+// Capture the printf veneers so parser errors and requested help can be
+// checked independently, including which stream receives them.
+static char captured[3][8192];
+static size_t captured_length[3];
 
-// fmt.c's printf veneers call os64_write; on the host, swallow it.
+static void reset_output(void)
+{
+    memset(captured, 0, sizeof(captured));
+    memset(captured_length, 0, sizeof(captured_length));
+}
 long os64_write(int handle, const void *buf, size_t len)
 {
-    (void)handle; (void)buf;
+    if (handle >= 1 && handle <= 2) {
+        size_t available = sizeof(captured[handle]) - captured_length[handle] - 1;
+        size_t copied = len < available ? len : available;
+        memcpy(captured[handle] + captured_length[handle], buf, copied);
+        captured_length[handle] += copied;
+        captured[handle][captured_length[handle]] = '\0';
+    }
     return (long)len;
 }
 
@@ -110,6 +123,35 @@ int main(void)
         int n = os64_snprintf(small, sizeof(small), "abcdefghij");
         EXPECT(n == 10);
         EXPECT(strcmp(small, "abcdefg") == 0);
+    }
+    // Shared binary-size rendering (ls -h, du -h, and df -h). The maximum
+    // case proves the fractional digit does not overflow while scaling an
+    // exbibyte remainder by ten.
+    {
+        char amount[32];
+        EXPECT(os64_format_binary_size(0, amount, sizeof(amount)) == 2);
+        EXPECT(strcmp(amount, "0B") == 0);
+        os64_format_binary_size(1023, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1023B") == 0);
+        os64_format_binary_size(1536, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1.5K") == 0);
+        os64_format_binary_size(1024 * 1024, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1.0M") == 0);
+        os64_format_binary_size(UINT64_MAX, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "15.9E") == 0);
+    }
+    // Strict decimal fields: the process tools must reject a typo or a value
+    // that wrapped, while the classic atou remains deliberately permissive.
+    {
+        uint64_t value = 99;
+        EXPECT(os64_parse_u64("0", &value) && value == 0);
+        EXPECT(os64_parse_u64("18446744073709551615", &value) &&
+               value == UINT64_MAX);
+        value = 99;
+        EXPECT(!os64_parse_u64("", &value) && value == 99);
+        EXPECT(!os64_parse_u64("12x", &value) && value == 99);
+        EXPECT(!os64_parse_u64("-1", &value) && value == 99);
+        EXPECT(!os64_parse_u64("18446744073709551616", &value) && value == 99);
     }
     // %p differs from host formatting (we pin "0x..."), so check shape only.
     {
@@ -202,12 +244,12 @@ int main(void)
         blk->count = 2;
         blk->data_end = sizeof(pairs) - 1;   // through the last pair's NUL
 
-        __os64_env = blk;
+        os64_env_publish(blk);
         EXPECT(os64_getenv("PATH") != NULL && strcmp(os64_getenv("PATH"), "/bin") == 0);
         EXPECT(os64_getenv("HOSTNAME") != NULL && strcmp(os64_getenv("HOSTNAME"), "yogi") == 0);
         EXPECT(os64_getenv("NOPE") == NULL);
         EXPECT(os64_getenv("PAT") == NULL);     // prefix of a key is not the key
-        __os64_env = NULL;
+        os64_env_publish(NULL);
         EXPECT(os64_getenv("PATH") == NULL);    // no block = honest NULL
     }
     {   // value option may end a bundle, never sit inside one
@@ -243,24 +285,52 @@ int main(void)
         EXPECT(outName != NULL && strcmp(outName, "f.txt") == 0);
         EXPECT(pos[0] != NULL && strcmp(pos[0], "/bin") == 0);
 
+        reset_output();
         // More positionals than the app declared → ERROR.
         char *argv2[] = { "ls", "p1", "p2", NULL };
         os64_args_init(&a, 3, argv2, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "usage:") == NULL);
 
+        EXPECT(strstr(captured[2], "too many operands (maximum 1)") != NULL);
+        EXPECT(strstr(captured[2], "p2") != NULL);
+        reset_output();
         // Help and unknown option come back as their sentinels.
         char *argv3[] = { "ls", "-h", NULL };
         os64_args_init(&a, 2, argv3, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_HELP);
+        EXPECT(strstr(captured[1], "usage: ls") != NULL);
+        EXPECT(captured[2][0] == '\0');
+        reset_output();
         char *argv4[] = { "ls", "-z", NULL };
         os64_args_init(&a, 2, argv4, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
 
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "invalid or incomplete option: '-z'") != NULL);
+        EXPECT(strstr(captured[2], "usage:") == NULL);
+
+        char *bad_values[][3] = {
+            {"ls", "-o", NULL}, {"ls", "--out", NULL},
+            {"ls", "-ol", NULL}, {"ls", "--long=yes", NULL}
+        };
+        for (size_t i = 0; i < sizeof(bad_values) / sizeof(bad_values[0]); i++) {
+            reset_output();
+            os64_args_init(&a, 2, bad_values[i], pspecs, 3);
+            EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+            EXPECT(captured[1][0] == '\0');
+            EXPECT(strstr(captured[2], bad_values[i][1]) != NULL);
+            EXPECT(strstr(captured[2], "invalid or incomplete option") != NULL);
+        }
+        reset_output();
         // A destination-less spec reached by parse is a programmer error.
         const os64_optspec_t bare[] = { { 'x', NULL, 0, "no home" } };
         char *argv5[] = { "prog", "-x", NULL };
         os64_args_init(&a, 2, argv5, bare, 1);
         EXPECT(os64_args_parse(&a, "prog", pos, 1) == OS64_ARG_ERROR);
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "internal error") != NULL);
 
         // pwd-shaped: zero positionals allowed (NULL, 0); flags still land.
         char *argv6[] = { "prog", "-l", NULL };
@@ -315,7 +385,7 @@ int main(void)
         blk->page_count = 1;
         blk->count = 1;
         blk->data_end = sizeof(pairs) - 1;
-        __os64_env = blk;
+        os64_env_publish(blk);
 
         os64_date_t local = {
             .year = 2026, .month = 3, .day = 8,
@@ -335,7 +405,51 @@ int main(void)
         char zone[32];
         EXPECT(os64_strftime(zone, sizeof(zone), "%T %z %Z", &local) != 0);
         EXPECT(strcmp(zone, "03:00:00 -0400 EDT") == 0);
-        __os64_env = NULL;
+        os64_env_publish(NULL);
+    }
+
+    // Every rule tzdata's zones carry (libjs's zone table, INTL.md § 5)
+    // parses, and the unusual forms answer the offset Python's zoneinfo
+    // gives at instants around their transitions: quoted names, h:mm
+    // offsets, a transition at -1 h (Greenland) and at 26 h (Israel),
+    // half-hour daylight saving (Lord Howe) and :45 zones (Chatham).
+    {
+        typedef struct { const char *name; uint16_t canonical, rule, listed; } IntlZoneName;
+#include "../userland/libjs/intl/zones.inc"
+        (void)kZoneNames; (void)kRulePreferred;
+        os64_tz_t tz;
+        for (size_t i = 0; i < sizeof(kZoneRules) / sizeof(kZoneRules[0]); i++) {
+            int64_t parsed = os64_tz_parse(kZoneRules[i], &tz);
+            if (parsed != 0) printf("  rule does not parse: %s\n", kZoneRules[i]);
+            EXPECT(parsed == 0);
+        }
+        static const struct { const char *rule; int64_t epoch; int32_t east; } kAt[] = {
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774740600, -120},   // America/Nuuk 2026-03-28T23:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774744200, -120},   // America/Nuuk 2026-03-29T00:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774747800, -60},    // America/Nuuk 2026-03-29T01:30Z, past -1 h
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1792888200, -60},    // America/Nuuk 2026-10-25T00:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1792891800, -120},   // America/Nuuk 2026-10-25T01:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1774567800, 120},         // Asia/Jerusalem 2026-03-26T23:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1774571400, 180},         // Asia/Jerusalem 2026-03-27T00:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1792881000, 180},         // Asia/Jerusalem 2026-10-24T22:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1792884600, 120},         // Asia/Jerusalem 2026-10-24T23:30Z
+            {"IST-5:30", 1780272000, 330},                           // Asia/Kolkata 2026-06-01T00:00Z
+            {"<+1030>-10:30<+11>-11,M10.1.0,M4.1.0", 1768435200, 660},          // Australia/Lord_Howe 2026-01-15
+            {"<+1030>-10:30<+11>-11,M10.1.0,M4.1.0", 1784073600, 630},          // Australia/Lord_Howe 2026-07-15
+            {"<-03>3", 1768435200, -180},                                        // America/Sao_Paulo 2026-01-15
+            {"GMT0IST,M3.5.0/1,M10.5.0", 1768435200, 0},                         // Europe/Dublin 2026-01-15
+            {"GMT0IST,M3.5.0/1,M10.5.0", 1784073600, 60},                        // Europe/Dublin 2026-07-15
+            {"<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45", 1768435200, 825},   // Pacific/Chatham 2026-01-15
+            {"<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45", 1784073600, 765},   // Pacific/Chatham 2026-07-15
+        };
+        for (size_t i = 0; i < sizeof(kAt) / sizeof(kAt[0]); i++) {
+            int32_t east = os64_tz_parse(kAt[i].rule, &tz) == 0 ? os64_tz_offset_at(&tz, kAt[i].epoch) : 99999;
+            if (east != kAt[i].east) printf("  %s at %lld: %d, not %d\n", kAt[i].rule, (long long)kAt[i].epoch, east, kAt[i].east);
+            EXPECT(east == kAt[i].east);
+        }
+        EXPECT(os64_tz_parse("<+0530-5:30", &tz) < 0 && os64_tz_parse("<+5>-5", &tz) < 0 &&
+               os64_tz_parse("EST5EDT,M3.2.0/168,M11.1.0", &tz) < 0);
+        EXPECT(os64_tz_parse("<+0530>-5:30", &tz) == 0 && !strcmp(tz.std_name, "+0530") && tz.std_offset_min == 330);
     }
 
     if (failures == 0) {

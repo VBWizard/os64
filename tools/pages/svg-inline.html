@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: first pixels</title>
+<style>
+body { margin: 24px; background: #eef3f9; color: #182b45; font: 16px sans-serif; }
+h1 { margin-bottom: 8px; } h2 { font-size: 20px; margin: 0 0 10px; }
+p { max-width: 720px; line-height: 1.5; }
+.card { display: inline-block; vertical-align: top; width: 300px; margin: 0 16px 20px 0; padding: 18px; background: white; border: 1px solid #b8c9dd; border-radius: 12px; }
+.card svg { display: block; width: 280px; height: 168px; background: #f5f8fc; }
+.icon { fill: currentColor; }
+#cascade-color { fill: #2091de; }
+#css-move { transform: translate(20px, 0px); }
+button { padding: 10px 18px; font: inherit; }
+#changed { color: #2091de; }
+</style></head><body>
+<h1>SVG: first pixels</h1>
+<p>These are live inline SVG paths drawn by Yonder. Each caption says what to look for.
+Try scrolling, resizing the window and changing the page zoom. With Modern Web switched off,
+the SVG artwork disappears.</p>
+<div class="card"><h2>1. A little landscape</h2>
+<svg viewBox="0 0 280 168"><path fill="#d8ebfb" d="M0 0H280V168H0Z"/>
+<path fill="#f4b64c" d="M222 18A22 22 0 1 1 222 62A22 22 0 1 1 222 18Z"/>
+<path fill="#6c9cbd" d="M0 130L75 44L155 140L210 80L280 138V168H0Z"/>
+<path fill="#b9d9e6" d="M51 72L75 44L100 74L80 66L69 78Z"/>
+<path fill="#376d78" d="M0 136Q70 111 140 145Q208 108 280 136V168H0Z"/>
+<path fill="none" stroke="#e9f2ed" stroke-width="5" d="M141 168Q178 144 147 135"/>
+</svg><p>Blue mountains, an amber sun and a pale winding path. The artwork keeps its proportions.</p></div>
+<div class="card"><h2>2. Opacity belongs to the group</h2>
+<svg viewBox="0 0 140 84"><g fill="#2091de" opacity=".5">
+<path d="M12 12H68V64H12Z"/><path d="M48 28H112V76H48Z"/></g></svg>
+<p>Two overlapping blue squares. Their overlap must be the same shade as the rest.</p></div>
+<div class="card"><h2>3. CSS wins</h2>
+<svg viewBox="0 0 140 84"><path id="cascade-color" fill="red" d="M10 12H50V72H10Z"/>
+<path id="css-move" fill="#e87925" transform="translate(70 0)" d="M50 12H80V72H50Z"/></svg>
+<p>A blue bar, then an orange bar with a clear gap. The stylesheet replaces the red fill and the attribute transform.</p></div>
+<div class="card"><h2>4. A hole, not white paint</h2>
+<svg viewBox="0 0 140 84"><path fill="#f4b64c" d="M0 0H140V84H0Z"/>
+<path fill="#376d78" fill-rule="evenodd" d="M20 8H120V76H20Z M48 28H92V56H48Z"/></svg>
+<p>The green frame has a hole showing the amber background. It stays amber on a dark page.</p></div>
+<div class="card"><h2>5. Round caps stretch too</h2>
+<svg viewBox="0 0 140 84"><g transform="translate(26 40) scale(4 1)">
+<path fill="none" stroke="#2091de" stroke-width="12" stroke-linecap="round" d="M0 0H22"/></g></svg>
+<p>A long blue capsule with wide elliptical ends. Ordinary strokes are expanded before scaling.</p></div>
+<div class="card"><h2>6. Color follows the document</h2>
+<svg id="changed" viewBox="0 0 140 84"><g class="icon">
+<path d="M26 42L52 68L114 16L106 8L53 53L34 34Z"/></g></svg>
+<p>A blue check mark. With scripts enabled, this button changes its inherited color.</p>
+<button id="recolor">Change the check mark</button></div>
+<p id="result">Ready. The check mark should start blue.</p>
+<script>
+document.getElementById('recolor').addEventListener('click', function () {
+  document.getElementById('changed').style.color = '#e87925';
+  document.getElementById('result').textContent = 'The check mark should now be orange.';
+});
+</script>
+</body></html>

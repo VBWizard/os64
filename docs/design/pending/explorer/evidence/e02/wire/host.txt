@@ -1,0 +1,5 @@
+PASS routing-whole-lot (133 shipped icon files routed)
+os64get: 3 installed, 0 unchanged, 0 failed
+os64get: originals kept at /home/archive/2026-09-07/000000-42-7
+PASS success
+PASS single

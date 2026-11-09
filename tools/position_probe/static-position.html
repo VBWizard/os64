@@ -1,0 +1,49 @@
+<!doctype html>
+<title>Static position probe</title>
+<style>
+  body { font: 16px sans-serif; margin: 20px }
+  .box { position: relative; width: 400px; border: 1px solid #888; padding: 0 }
+  .a { height: 40px; background: #cce; margin-bottom: 10px }
+  .b { height: 40px; background: #cec; margin-top: 40px }
+  .abs { position: absolute; width: 60px; height: 20px; background: #e66 }
+  .line { margin: 0; width: 400px }
+  pre { background: #eee; padding: 8px }
+</style>
+
+<h3>1. An absolute box between two blocks whose margins collapse</h3>
+<p>A has margin-bottom 10px, B has margin-top 40px: they collapse to 40.
+Where does the red box's top sit, measured from A's bottom edge?</p>
+<div class="box" id="c1">
+  <div class="a" id="a1">A</div>
+  <div class="abs" id="x1"></div>
+  <div class="b" id="b1">B</div>
+</div>
+
+<h3>2. An absolute SPAN and an absolute DIV written mid-line</h3>
+<div class="box" id="c2">
+  <div class="line">before <span class="abs" id="x2"></span>after, a span</div>
+  <div class="line">before <div class="abs" id="x3"></div>after, a div</div>
+</div>
+
+<h3>3. An absolute DIV that LEADS its line</h3>
+<p>Nothing is written before it: does it sit at the line's top, or a line down?</p>
+<div class="box" id="c3">
+  <div class="line"><div class="abs" id="x4"></div>after, a leading div</div>
+</div>
+
+<pre id="out">(needs script)</pre>
+<script>
+  function r(id) { return document.getElementById(id).getBoundingClientRect(); }
+  const a1 = r('a1'), x1 = r('x1'), b1 = r('b1');
+  const c2 = r('c2'), x2 = r('x2'), x3 = r('x3'), c3 = r('c3'), x4 = r('x4');
+  document.getElementById('out').textContent =
+    'Case 1: red top - A bottom = ' + (x1.top - a1.bottom) +
+    '   (B top - A bottom = ' + (b1.top - a1.bottom) + ')\n' +
+    'Case 2: span box left - container left = ' + (x2.left - c2.left) +
+    ', top - container top = ' + (x2.top - c2.top) + '\n' +
+    '        div box  left - container left = ' + (x3.left - c2.left) +
+    ', top - container top = ' + (x3.top - c2.top) + '\n' +
+    'Case 3: leading div left - container left = ' + (x4.left - c3.left) +
+    ', top - container top = ' + (x4.top - c3.top) + '\n' +
+    navigator.userAgent;
+</script>

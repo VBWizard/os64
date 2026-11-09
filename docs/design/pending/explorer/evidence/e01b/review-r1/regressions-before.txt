@@ -1,0 +1,10 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:308 [review: refresh closes invalid descendants and clears help] popup_handle()==root&&!g.status.help.text
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:314 [review: bar mode skips disabled remembered heading] os64_ui_menu_active(g.menus)&&g.bar.selected==1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:315 [review: bar mode skips disabled remembered heading] popup_handle()
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:325 [review: reject unattached and sibling menu bars] os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&foreign,NULL,NULL,&session)==OS64_UI_INVALID&&!session
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:328 [review: reject unattached and sibling menu bars] os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&foreign,NULL,NULL,&session)==OS64_UI_INVALID&&!session
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:337 [review: active menus consume owner wheel] transport.owner_wheel==wheels&&popup_handle()
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:339 [review: active menus consume owner wheel] transport.owner_wheel==wheels+1
+menu/action/status: 1885 checks, 7 failures
+Artifacts: /tmp/e1b-review-before

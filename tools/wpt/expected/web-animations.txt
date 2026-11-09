@@ -1,0 +1,663 @@
+# WPT's web-animations in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh web-animations --update
+# rewrites [passing].
+[required]
+# Slice A (WEB_ANIMATIONS.md § 6): every test that passes on the pages A
+# builds for — the timing model's animations and the update step, the
+# Animation interface's members A has, AnimationPlaybackEvent,
+# getAnimations, and the keyframe effects' values. What fails on them is
+# slice B's surface (the constructors, getKeyframes, getComputedTiming,
+# updateTiming, commitStyles, persist, setting an effect or a timeline,
+# replacement and the remove event), CSS transitions and CSSAnimation
+# objects, pseudo-element animations, frames (animate.html's realm tests,
+# which leave that page's harness unfinished, so none of its passes count),
+# CSS Typed OM, and a width read at 99.9 that layout gives in whole pixels.
+# keyframe-exceptions.html's three pass with the switch off too (each wants
+# the TypeError that animate's absence throws), so they prove nothing here.
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on parent element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using the fill value is an implicit keyframe
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size from reparenting
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on element
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on parent element
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size when computed style is not immediately flushed
+animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	An easing on a keyframe with no value for the target property is not applied
+animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	Control: the same easing on a keyframe that does specify the property is applied
+animation-model/keyframe-effects/effect-value-interval-distance.html	Interval distance is calculated correctly (precision test)
+animation-model/keyframe-effects/effect-value-overlapping-keyframes.html	Overlapping keyframes between 0 and 1 use the appropriate value on each side of the overlap point
+animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-end easing on a keyframe uses the right limit in the before phase
+animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-start easing on a keyframe uses the left limit in the after phase
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-in function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-in-out function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-out function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a easing function which produces values less than 1 does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a linear function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a step-end function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a step-start function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1, end) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1, start) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(2, end) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(2, start) function does not alter the result
+interfaces/Animatable/getAnimations.html	Does not return animations with zero playback rate in after phase
+interfaces/Animatable/getAnimations.html	Does not return animations with zero playback rate in before phase
+interfaces/Animatable/getAnimations.html	Does not return finished animations that do not fill forwards
+interfaces/Animatable/getAnimations.html	Does not return reversed finished animations that do not fill backwards
+interfaces/Animatable/getAnimations.html	Finished animation with fill: both is not lost after yielding to event loop
+interfaces/Animatable/getAnimations.html	Finished animation with fill: both on disconnected element is not lost after yielding to event loop
+interfaces/Animatable/getAnimations.html	Finished animation with fill: none is not returned
+interfaces/Animatable/getAnimations.html	Returns an empty array for an element with no animations
+interfaces/Animatable/getAnimations.html	Returns animations based on dynamic changes to individual animations' current time
+interfaces/Animatable/getAnimations.html	Returns animations for a foreign element
+interfaces/Animatable/getAnimations.html	Returns animations on descendants when subtree: true is specified
+interfaces/Animatable/getAnimations.html	Returns animations yet to reach their active phase
+interfaces/Animatable/getAnimations.html	Returns both animations for an element with two animations
+interfaces/Animatable/getAnimations.html	Returns finished animations that fill forwards
+interfaces/Animatable/getAnimations.html	Returns only the animations specific to each parent/child element
+interfaces/Animatable/getAnimations.html	Returns only the animations specific to each sibling element
+interfaces/Animatable/getAnimations.html	Returns reversed animations yet to reach their active phase
+interfaces/Animatable/getAnimations.html	Returns reversed finished animations that fill backwards
+interfaces/Animation/cancel.html	After cancelling an animation, it can still be re-used
+interfaces/Animation/cancel.html	Animated style is cleared after calling Animation.cancel()
+interfaces/Animation/finished.html	Finished promise does not report an unhandledrejection when rejected
+interfaces/Animation/finished.html	Finished promise does not resolve when pause-pending
+interfaces/Animation/finished.html	Finished promise does not resolve when paused
+interfaces/Animation/finished.html	Finished promise should be rejected after the ready promise is rejected
+interfaces/Animation/finished.html	Finished promise should be resolved after the ready promise is resolved
+interfaces/Animation/finished.html	Test finished promise changes when a prior finished promise resolved and the animation falls out finished state
+interfaces/Animation/finished.html	Test finished promise changes when playbackRate == 0
+interfaces/Animation/finished.html	Test finished promise is not resolved once the animation falls out finished state even though the current finished promise is generated soon after animation state became finished
+interfaces/Animation/finished.html	Test finished promise is not resolved when the animation falls out finished state immediately
+interfaces/Animation/finished.html	Test finished promise resolves when reaching to the natural boundary.
+interfaces/Animation/finished.html	Test new finished promise generated when finished state is checked synchronously
+interfaces/Animation/finished.html	Test no new finished promise generated when finished state is checked asynchronously
+interfaces/Animation/finished.html	Test pausing then playing does not change the finished promise
+interfaces/Animation/finished.html	Test redundant finishing of animation
+interfaces/Animation/finished.html	Test restarting a finished animation
+interfaces/Animation/finished.html	Test restarting a reversed finished animation
+interfaces/Animation/finished.html	Test synchronous finished promise resolved even if asynchronous finished promise happens just before synchronous promise
+interfaces/Animation/finished.html	Test synchronous finished promise resolved even if finished state is changed soon
+interfaces/Animation/finished.html	The finished promise is fulfilled with its Animation
+interfaces/Animation/finished.html	canceling an already-finished animation replaces the finished promise
+interfaces/Animation/finished.html	finished promise is rejected when an animation is canceled by calling cancel()
+interfaces/Animation/id.html	Animation.id initial value
+interfaces/Animation/id.html	Animation.id setter
+interfaces/Animation/oncancel.html	oncancel event is fired when animation.cancel() is called.
+interfaces/Animation/onfinish.html	Animation can be restarted from the onfinish event
+interfaces/Animation/onfinish.html	onfinish event is fired when animation.finish() is called
+interfaces/Animation/onfinish.html	onfinish event is fired when the currentTime < 0 and the playbackRate < 0
+interfaces/Animation/onfinish.html	onfinish event is fired when the currentTime > 0 and the playbackRate > 0
+interfaces/Animation/onfinish.html	onfinish event is not fired when paused
+interfaces/Animation/onfinish.html	onfinish event is not fired when the animation falls out finished state immediately
+interfaces/Animation/onfinish.html	onfinish event is not fired when the playbackRate is zero
+interfaces/Animation/pause.html	pause() a running animation
+interfaces/Animation/pause.html	pause() from idle
+interfaces/Animation/pause.html	pause() from idle with a negative playbackRate
+interfaces/Animation/pause.html	pause() from idle with a negative playbackRate and endless effect
+interfaces/Animation/pause.html	pause() on a finished animation
+interfaces/Animation/pending.html	reports true -> false when initially played
+interfaces/Animation/pending.html	reports true -> false when paused
+interfaces/Animation/play.html	play() throws when seeking an infinite-duration animation played in reverse
+interfaces/Animation/ready.html	A new ready promise is created when play()/pause() is called
+interfaces/Animation/ready.html	Redundant calls to play() do not generate new ready promise objects
+interfaces/Animation/ready.html	The ready promise does not report an unhandledrejection when rejected
+interfaces/Animation/ready.html	The ready promise is fulfilled with its Animation
+interfaces/Animation/startTime.html	startTime and currentTime are unresolved when animation is cancelled
+interfaces/Animation/startTime.html	startTime is resolved when running
+interfaces/Animation/startTime.html	startTime of a play-pending animation created using Element.animate shortcut is unresolved
+interfaces/AnimationPlaybackEvent/constructor.html	Created event reflects times specified in constructor
+interfaces/AnimationPlaybackEvent/constructor.html	Event created without an event parameter has null time values
+timing-model/animations/canceling-an-animation.html	A pause-pending ready promise should be rejected when the animation is canceled
+timing-model/animations/canceling-an-animation.html	A play-pending ready promise should be rejected when the animation is canceled
+timing-model/animations/canceling-an-animation.html	Canceling an animation should cause its start time and hold time to be unresolved
+timing-model/animations/canceling-an-animation.html	Canceling an animation should fire cancel event on orphaned element
+timing-model/animations/canceling-an-animation.html	The ready promise should be replaced when the animation is canceled
+timing-model/animations/canceling-an-animation.html	When an animation is canceled, it should create a resolved Promise
+timing-model/animations/finish-promise-after-reverse-delay.html	Finish notification steps run when reversing during positive delay
+timing-model/animations/finishing-an-animation.html	A pending playback rate should be applied immediately when an animation is finished
+timing-model/animations/finishing-an-animation.html	A pending ready promise is resolved and not replaced when the animation is finished
+timing-model/animations/finishing-an-animation.html	An exception is NOT thrown when finishing if the effective playback rate is negative and the target effect end is infinity
+timing-model/animations/finishing-an-animation.html	An exception should be thrown if the effective playback rate is zero
+timing-model/animations/finishing-an-animation.html	An exception should be thrown when finishing if the effective playback rate is positive and the target effect end is infinity
+timing-model/animations/finishing-an-animation.html	Finishing a canceled animation sets the current and start times
+timing-model/animations/finishing-an-animation.html	Finishing a pause-pending animation resolves the pending task immediately and update the start time
+timing-model/animations/finishing-an-animation.html	Finishing a pause-pending animation with negative playback rate resolves the pending task immediately
+timing-model/animations/finishing-an-animation.html	Finishing a paused animation resolves the start time
+timing-model/animations/finishing-an-animation.html	Finishing a reversed animation jumps to zero time
+timing-model/animations/finishing-an-animation.html	Finishing a reversed animation with a current time less than zero makes it jump back to zero
+timing-model/animations/finishing-an-animation.html	Finishing an animation during an aborted pause makes it finished immediately
+timing-model/animations/finishing-an-animation.html	Finishing an animation fires finish event on orphaned element
+timing-model/animations/finishing-an-animation.html	Finishing an animation fires finish event when a finish event listener is added as the finished promise resolves
+timing-model/animations/finishing-an-animation.html	Finishing an animation resolves the finished promise synchronously
+timing-model/animations/finishing-an-animation.html	Finishing an animation seeks to the end time
+timing-model/animations/finishing-an-animation.html	Finishing an animation while play-pending resolves the pending task immediately
+timing-model/animations/finishing-an-animation.html	Finishing an animation with a zero playback rate throws
+timing-model/animations/finishing-an-animation.html	Finishing an infinite animation throws
+timing-model/animations/invalidating-animation-before-start-time-synced.html	Animation invalidated before startTime is set doesn't affect startTime
+timing-model/animations/pausing-an-animation.html	A pause-pending animation maintains the current time when applying a pending playback rate
+timing-model/animations/pausing-an-animation.html	A pending ready promise should be resolved and not replaced when the animation is paused
+timing-model/animations/pausing-an-animation.html	Aborting a pause preserves the start time
+timing-model/animations/pausing-an-animation.html	Pausing a canceled animation sets the current time
+timing-model/animations/pausing-an-animation.html	Pausing clears the start time
+timing-model/animations/pausing-an-animation.html	The animation's current time remains fixed after pausing
+timing-model/animations/play-states.html	reports 'finished' for a finished-pending animation
+timing-model/animations/play-states.html	reports 'finished' when playback rate > 0 and current time = target effect end and there is a pending play task
+timing-model/animations/play-states.html	reports 'paused' for a pause-pending animation
+timing-model/animations/play-states.html	reports 'paused' for an animation with a pending pause task
+timing-model/animations/play-states.html	reports 'running' for a play-pending animation
+timing-model/animations/play-states.html	reports 'running' when playback rate > 0 and current time < target effect end and there is a pending play task
+timing-model/animations/play-states.html	reports the play state based on the pending playback rate
+timing-model/animations/playing-an-animation.html	A pending playback rate is used when determining auto-rewind behavior
+timing-model/animations/playing-an-animation.html	A pending ready promise should be resolved and not replaced when the animation enters the running state
+timing-model/animations/playing-an-animation.html	If a pause operation is interrupted, the ready promise is reused
+timing-model/animations/playing-an-animation.html	Playing a canceled animation backwards sets the start time
+timing-model/animations/playing-an-animation.html	Playing a canceled animation sets the start time
+timing-model/animations/playing-an-animation.html	Playing a finished and reversed animation seeks to end
+timing-model/animations/playing-an-animation.html	Playing a finished animation clears the start time
+timing-model/animations/playing-an-animation.html	Playing a finished animation seeks back to the start
+timing-model/animations/playing-an-animation.html	Playing a pause-pending but previously finished animation seeks back to to the start
+timing-model/animations/playing-an-animation.html	Playing a running animation leaves the current time unchanged
+timing-model/animations/playing-an-animation.html	Resuming a paused animation after enough time has elapsed that it would have ended if playing remains running
+timing-model/animations/playing-an-animation.html	Resuming an animation from paused calculates start time from hold time
+timing-model/animations/playing-an-animation.html	The ready promise should be replaced if the animation is not already pending
+timing-model/animations/reversing-an-animation.html	Reversing an animation does not cause it to leave the pending state
+timing-model/animations/reversing-an-animation.html	Reversing an animation does not cause it to resolve the ready promise
+timing-model/animations/reversing-an-animation.html	Reversing an animation inverts the playback rate
+timing-model/animations/reversing-an-animation.html	Reversing an animation maintains the same current time
+timing-model/animations/reversing-an-animation.html	Reversing an animation plays a pausing animation
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime < 0 and the target effect end is positive infinity should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime < 0 should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime > effect end should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime < 0 and the target effect end is positive infinity should throw an exception
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime < 0 should make it play from the end
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime > effect end should make it play from the end
+timing-model/animations/reversing-an-animation.html	Reversing animation when playbackRate = 0 and currentTime < 0 and the target effect end is positive infinity should NOT throw an exception
+timing-model/animations/reversing-an-animation.html	Reversing should use the negative pending playback rate
+timing-model/animations/reversing-an-animation.html	Reversing when when playbackRate == 0 should preserve the current time and playback rate
+timing-model/animations/reversing-an-animation.html	When reversing fails, it should restore any previous pending playback rate
+timing-model/animations/reversing-an-animation.html	When reversing throws an exception, the playback rate remains unchanged
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	If a pending playback rate is set multiple times, the latest wins
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	In the idle state, the playback rate is applied immediately
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	In the paused state, the playback rate is applied immediately
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a finished animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a pause-pending animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a play-pending animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate to zero on a finished animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate while running makes the animation pending
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting a negative current time with a negative playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting a negative current time with a positive playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time after the end with a negative playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time after the end with a positive playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a paused animation to unresolved throws a TypeError
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a pausing animation applies a pending playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a playing animation to unresolved throws a TypeError
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time on an animation with a zero playback rate
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Reversing the playback rate while finished restarts the animation
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting a zero playback rate while running preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate should clear any pending playback rate
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while finished preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while paused preserves the current time and state
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while play-pending preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while playing preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	The playback rate affects the rate of progress of the current time
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time of a play-pending animation applies a pending playback rate
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time of a playing animation applies a pending playback rate
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time on a reverse running animation updates the play state
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time on a running animation updates the play state
+timing-model/animations/the-current-time-of-an-animation.html	The current time does not progress if playback rate is 0
+timing-model/animations/updating-the-finished-state.html	Animation finish event is fired again after replaying from start
+timing-model/animations/updating-the-finished-state.html	Animation finish event is fired again after seeking back to start
+timing-model/animations/updating-the-finished-state.html	Animation finished promise is replaced after replaying from start
+timing-model/animations/updating-the-finished-state.html	Animation finished promise is replaced after seeking back to start
+timing-model/animations/updating-the-finished-state.html	Finish notification steps don't run when the animation seeks to finish and then seeks back again
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation completes normally
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation completes with .finish(), even if we then seek away
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation seeks past finish
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is greater than end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is less than end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is less than zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playing in reverse past zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playing past end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation before end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation exactly to zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation past zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking before end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking exactly to end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking past end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when start time is unresolved and did seek = true
+timing-model/animations/updating-the-finished-state.html	finish event is fired after the endDelay has expired
+timing-model/animations/updating-the-finished-state.html	finish event is not fired at the end of the active interval when the endDelay has not expired
+timing-model/timelines/update-and-send-events.html	Fires cancel event before requestAnimationFrame
+timing-model/timelines/update-and-send-events.html	Fires finish event before requestAnimationFrame
+timing-model/timelines/update-and-send-events.html	Playback events with the same timeline retain the order in which they arequeued
+timing-model/timelines/update-and-send-events.html	Sorts finish events by scheduled event time
+[excluded]
+[passing]
+animation-model/animation-types/accumulation-per-property-001.html	Setup
+animation-model/animation-types/accumulation-per-property-002.html	Setup
+animation-model/animation-types/addition-per-property-001.html	Setup
+animation-model/animation-types/addition-per-property-002.html	Setup
+animation-model/animation-types/discrete.html	Test discrete animation is used only for pairs of values that cannot be interpolated
+animation-model/animation-types/discrete.html	Test the 50% switch point for discrete animation is based on the effect easing
+animation-model/animation-types/discrete.html	Test the 50% switch point for discrete animation is based on the keyframe easing
+animation-model/animation-types/interpolation-per-property-001.html	Setup
+animation-model/animation-types/interpolation-per-property-002.html	Setup
+animation-model/animation-types/visibility.html	Visibility clamping behavior
+animation-model/animation-types/visibility.html	Visibility clamping behavior with an easing that has a negative component
+animation-model/combining-effects/applying-interpolated-transform.html	 apply interpolated transform on multiple keyframes
+animation-model/combining-effects/applying-the-composited-result.html	Finishing an animation that does not fill forwards causes its animation style to be cleared
+animation-model/combining-effects/clamping-001.tentative.html	10. opacity keyframes should not clamp before compositing, replace 200% + add -200% = 0
+animation-model/combining-effects/clamping-001.tentative.html	12. opacity keyframes should not clamp before compositing, replace -100% + add 200% = 1
+animation-model/combining-effects/clamping-001.tentative.html	2. opacity keyframes should not clamp before compositing, replace 1 + add -1 = 0
+animation-model/combining-effects/clamping-001.tentative.html	4. opacity keyframes should not clamp before compositing, replace 2 + add -2 = 0
+animation-model/combining-effects/clamping-001.tentative.html	6. opacity keyframes should not clamp before compositing, replace -1 + add 2 = 1
+animation-model/combining-effects/clamping-001.tentative.html	8. opacity keyframes should not clamp before compositing, replace 100% + add -100% = 0
+animation-model/keyframe-effects/background-shorthand.html	Shorthand properties expand to longhand counterparts in computed keyframes.
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on parent element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using the fill value is an implicit keyframe
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size from reparenting
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on element
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on parent element
+animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size when computed style is not immediately flushed
+animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	An easing on a keyframe with no value for the target property is not applied
+animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	Control: the same easing on a keyframe that does specify the property is applied
+animation-model/keyframe-effects/effect-value-interval-distance.html	Interval distance is calculated correctly (precision test)
+animation-model/keyframe-effects/effect-value-overlapping-keyframes.html	Overlapping keyframes between 0 and 1 use the appropriate value on each side of the overlap point
+animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-end easing on a keyframe uses the right limit in the before phase
+animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-start easing on a keyframe uses the left limit in the after phase
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-in function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-in-out function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease-out function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a easing function which produces values less than 1 does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a linear function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a step-end function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a step-start function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1, end) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(1, start) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(2, end) function does not alter the result
+animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a steps(2, start) function does not alter the result
+animation-model/keyframe-effects/keyframe-exceptions.html	Invalid offset
+animation-model/keyframe-effects/keyframe-exceptions.html	Offsets must be loosely sorted
+animation-model/keyframe-effects/keyframe-exceptions.html	Offsets must be null or in the range [0,1]
+idlharness.window.html	Animation interface object length
+idlharness.window.html	Animation interface object name
+idlharness.window.html	Animation interface: existence and properties of interface object
+idlharness.window.html	Animation interface: existence and properties of interface prototype object
+idlharness.window.html	Animation interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	Animation interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	AnimationPlaybackEvent interface object length
+idlharness.window.html	AnimationPlaybackEvent interface object name
+idlharness.window.html	AnimationPlaybackEvent interface: existence and properties of interface object
+idlharness.window.html	AnimationPlaybackEvent interface: existence and properties of interface prototype object
+idlharness.window.html	AnimationPlaybackEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	AnimationPlaybackEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	AnimationPlaybackEvent must be primary interface of new AnimationPlaybackEvent("cancel")
+idlharness.window.html	AnimationTimeline interface object length
+idlharness.window.html	AnimationTimeline interface object name
+idlharness.window.html	AnimationTimeline interface: existence and properties of interface object
+idlharness.window.html	AnimationTimeline interface: existence and properties of interface prototype object
+idlharness.window.html	AnimationTimeline interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	AnimationTimeline interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.window.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.window.html	Document includes NonElementParentNode: member names are unique
+idlharness.window.html	Document includes ParentNode: member names are unique
+idlharness.window.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.window.html	Document interface: document must inherit property "getAnimations()" with the proper type
+idlharness.window.html	Document interface: document must inherit property "timeline" with the proper type
+idlharness.window.html	DocumentFragment includes NonElementParentNode: member names are unique
+idlharness.window.html	DocumentFragment includes ParentNode: member names are unique
+idlharness.window.html	DocumentTimeline interface object length
+idlharness.window.html	DocumentTimeline interface object name
+idlharness.window.html	DocumentTimeline interface: existence and properties of interface object
+idlharness.window.html	DocumentTimeline interface: existence and properties of interface prototype object
+idlharness.window.html	DocumentTimeline interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	DocumentTimeline interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	DocumentTimeline must be primary interface of document.timeline
+idlharness.window.html	Element includes Animatable: member names are unique
+idlharness.window.html	Element includes ChildNode: member names are unique
+idlharness.window.html	Element includes NonDocumentTypeChildNode: member names are unique
+idlharness.window.html	Element includes ParentNode: member names are unique
+idlharness.window.html	Element includes Slottable: member names are unique
+idlharness.window.html	KeyframeEffect interface object name
+idlharness.window.html	KeyframeEffect interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	KeyframeEffect interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	Partial dictionary ComputedEffectTiming: member names are unique
+idlharness.window.html	Partial dictionary ComputedEffectTiming: original dictionary defined
+idlharness.window.html	Partial dictionary EffectTiming: member names are unique
+idlharness.window.html	Partial dictionary EffectTiming: original dictionary defined
+idlharness.window.html	Partial dictionary KeyframeAnimationOptions: member names are unique
+idlharness.window.html	Partial dictionary KeyframeAnimationOptions: original dictionary defined
+idlharness.window.html	Partial dictionary KeyframeEffectOptions: member names are unique
+idlharness.window.html	Partial dictionary KeyframeEffectOptions: original dictionary defined
+idlharness.window.html	Partial dictionary OptionalEffectTiming: member names are unique
+idlharness.window.html	Partial dictionary OptionalEffectTiming: original dictionary defined
+idlharness.window.html	Partial interface Animation: member names are unique
+idlharness.window.html	Partial interface Animation: original interface defined
+idlharness.window.html	Partial interface Animation: valid exposure set
+idlharness.window.html	Partial interface AnimationEffect: member names are unique
+idlharness.window.html	Partial interface AnimationEffect: original interface defined
+idlharness.window.html	Partial interface AnimationEffect: valid exposure set
+idlharness.window.html	Partial interface AnimationTimeline: member names are unique
+idlharness.window.html	Partial interface AnimationTimeline: original interface defined
+idlharness.window.html	Partial interface AnimationTimeline: valid exposure set
+idlharness.window.html	Partial interface Document: member names are unique
+idlharness.window.html	Partial interface Document: original interface defined
+idlharness.window.html	Partial interface Document[2]: member names are unique
+idlharness.window.html	Partial interface Document[3]: member names are unique
+idlharness.window.html	Partial interface KeyframeEffect: member names are unique
+idlharness.window.html	Partial interface KeyframeEffect: original interface defined
+idlharness.window.html	Partial interface mixin DocumentOrShadowRoot: member names are unique
+idlharness.window.html	Partial interface mixin DocumentOrShadowRoot: original interface mixin defined
+idlharness.window.html	ShadowRoot includes DocumentOrShadowRoot: member names are unique
+idlharness.window.html	Stringification of document.timeline
+idlharness.window.html	Stringification of new AnimationPlaybackEvent("cancel")
+idlharness.window.html	idl_test validation
+interfaces/Animatable/getAnimations.html	Does not return animations with zero playback rate in after phase
+interfaces/Animatable/getAnimations.html	Does not return animations with zero playback rate in before phase
+interfaces/Animatable/getAnimations.html	Does not return finished animations that do not fill forwards
+interfaces/Animatable/getAnimations.html	Does not return reversed finished animations that do not fill backwards
+interfaces/Animatable/getAnimations.html	Finished animation with fill: both is not lost after yielding to event loop
+interfaces/Animatable/getAnimations.html	Finished animation with fill: both on disconnected element is not lost after yielding to event loop
+interfaces/Animatable/getAnimations.html	Finished animation with fill: none is not returned
+interfaces/Animatable/getAnimations.html	Returns an empty array for an element with no animations
+interfaces/Animatable/getAnimations.html	Returns animations based on dynamic changes to individual animations' current time
+interfaces/Animatable/getAnimations.html	Returns animations for a foreign element
+interfaces/Animatable/getAnimations.html	Returns animations on descendants when subtree: true is specified
+interfaces/Animatable/getAnimations.html	Returns animations yet to reach their active phase
+interfaces/Animatable/getAnimations.html	Returns both animations for an element with two animations
+interfaces/Animatable/getAnimations.html	Returns finished animations that fill forwards
+interfaces/Animatable/getAnimations.html	Returns only the animations specific to each parent/child element
+interfaces/Animatable/getAnimations.html	Returns only the animations specific to each sibling element
+interfaces/Animatable/getAnimations.html	Returns reversed animations yet to reach their active phase
+interfaces/Animatable/getAnimations.html	Returns reversed finished animations that fill backwards
+interfaces/Animation/cancel.html	After cancelling an animation, it can still be re-used
+interfaces/Animation/cancel.html	Animated style is cleared after calling Animation.cancel()
+interfaces/Animation/finished.html	Finished promise does not report an unhandledrejection when rejected
+interfaces/Animation/finished.html	Finished promise does not resolve when pause-pending
+interfaces/Animation/finished.html	Finished promise does not resolve when paused
+interfaces/Animation/finished.html	Finished promise should be rejected after the ready promise is rejected
+interfaces/Animation/finished.html	Finished promise should be resolved after the ready promise is resolved
+interfaces/Animation/finished.html	Test finished promise changes when a prior finished promise resolved and the animation falls out finished state
+interfaces/Animation/finished.html	Test finished promise changes when playbackRate == 0
+interfaces/Animation/finished.html	Test finished promise is not resolved once the animation falls out finished state even though the current finished promise is generated soon after animation state became finished
+interfaces/Animation/finished.html	Test finished promise is not resolved when the animation falls out finished state immediately
+interfaces/Animation/finished.html	Test finished promise resolves when reaching to the natural boundary.
+interfaces/Animation/finished.html	Test new finished promise generated when finished state is checked synchronously
+interfaces/Animation/finished.html	Test no new finished promise generated when finished state is checked asynchronously
+interfaces/Animation/finished.html	Test pausing then playing does not change the finished promise
+interfaces/Animation/finished.html	Test redundant finishing of animation
+interfaces/Animation/finished.html	Test restarting a finished animation
+interfaces/Animation/finished.html	Test restarting a reversed finished animation
+interfaces/Animation/finished.html	Test synchronous finished promise resolved even if asynchronous finished promise happens just before synchronous promise
+interfaces/Animation/finished.html	Test synchronous finished promise resolved even if finished state is changed soon
+interfaces/Animation/finished.html	The finished promise is fulfilled with its Animation
+interfaces/Animation/finished.html	canceling an already-finished animation replaces the finished promise
+interfaces/Animation/finished.html	finished promise is rejected when an animation is canceled by calling cancel()
+interfaces/Animation/id.html	Animation.id initial value
+interfaces/Animation/id.html	Animation.id setter
+interfaces/Animation/oncancel.html	oncancel event is fired when animation.cancel() is called.
+interfaces/Animation/onfinish.html	Animation can be restarted from the onfinish event
+interfaces/Animation/onfinish.html	onfinish event is fired when animation.finish() is called
+interfaces/Animation/onfinish.html	onfinish event is fired when the currentTime < 0 and the playbackRate < 0
+interfaces/Animation/onfinish.html	onfinish event is fired when the currentTime > 0 and the playbackRate > 0
+interfaces/Animation/onfinish.html	onfinish event is not fired when paused
+interfaces/Animation/onfinish.html	onfinish event is not fired when the animation falls out finished state immediately
+interfaces/Animation/onfinish.html	onfinish event is not fired when the playbackRate is zero
+interfaces/Animation/pause.html	pause() a running animation
+interfaces/Animation/pause.html	pause() from idle
+interfaces/Animation/pause.html	pause() from idle with a negative playbackRate
+interfaces/Animation/pause.html	pause() from idle with a negative playbackRate and endless effect
+interfaces/Animation/pause.html	pause() on a finished animation
+interfaces/Animation/pending.html	reports true -> false when initially played
+interfaces/Animation/pending.html	reports true -> false when paused
+interfaces/Animation/play.html	play() throws when seeking an infinite-duration animation played in reverse
+interfaces/Animation/ready.html	A new ready promise is created when play()/pause() is called
+interfaces/Animation/ready.html	Redundant calls to play() do not generate new ready promise objects
+interfaces/Animation/ready.html	The ready promise does not report an unhandledrejection when rejected
+interfaces/Animation/ready.html	The ready promise is fulfilled with its Animation
+interfaces/Animation/startTime.html	startTime and currentTime are unresolved when animation is cancelled
+interfaces/Animation/startTime.html	startTime is resolved when running
+interfaces/Animation/startTime.html	startTime of a play-pending animation created using Element.animate shortcut is unresolved
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid delay value: -Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid delay value: Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid delay value: NaN
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid duration: "100"
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid duration: "abc"
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid duration: -1
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid duration: -Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid duration: NaN
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterationStart value: -1
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterationStart value: -Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterationStart value: Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterationStart value: NaN
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterations value: -1
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterations value: -Infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting invalid iterations value: NaN
+interfaces/AnimationEffect/updateTiming.html	Throws when setting the endDelay to infinity
+interfaces/AnimationEffect/updateTiming.html	Throws when setting the endDelay to negative infinity
+interfaces/AnimationPlaybackEvent/constructor.html	Created event reflects times specified in constructor
+interfaces/AnimationPlaybackEvent/constructor.html	Event created without an event parameter has null time values
+interfaces/KeyframeEffect/composite.html	Change composite value
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by -Infinity
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by NaN
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a NaN duration
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a NaN iterations
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a blank easing
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a multi-value easing
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a negative Infinity duration
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a negative Infinity iterations
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a negative duration
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a negative iterations
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a negative value
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a string duration
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by a variable easing
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by an 'inherit' easing
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by an 'initial' easing
+interfaces/KeyframeEffect/constructor.html	Invalid KeyframeEffect option by an unrecognized easing
+interfaces/KeyframeEffect/constructor.html	Invalid easing values are correctly rejected when passed to the KeyframeEffect constructor in KeyframeEffectOptions
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with a keyframe sequence with an invalid easing value
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with empty property-indexed keyframe with an invalid easing
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with empty property-indexed keyframe with an invalid easings array
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with keyframes not loosely sorted by offset
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with keyframes with an invalid composite value
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with keyframes with an out-of-bounded negative offset
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with keyframes with an out-of-bounded positive offset
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframe with an invalid easing in the unused part of the array of easings
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes not loosely sorted by offset
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes not loosely sorted by offset even though not all offsets are specified
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes with an invalid composite value
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes with an invalid composite value as one of the array values
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes with an invalid easing value
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes with an invalid easing value as one of the array values
+interfaces/KeyframeEffect/constructor.html	KeyframeEffect constructor throws with property-indexed keyframes with offsets out of range
+interfaces/KeyframeEffect/copy-constructor.html	Copied KeyframeEffect does not expose UA-shadow DOM
+interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	A non-object returned from the Symbol.iterator property should cause a TypeError to be thrown
+interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	Reading from a custom iterator that returns a keyframe with a non finite floating-point offset value and an invalid easing should throw
+interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	Reading from a custom iterator that returns a keyframe with a non finite floating-point offset value should throw
+interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	Reading from a custom iterator that returns a non-object keyframe and an invalid easing should throw
+interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	Reading from a custom iterator that returns a non-object keyframe should throw
+responsive/assorted-lengths.html	bottom responsive to style changes
+responsive/assorted-lengths.html	height responsive to style changes
+responsive/assorted-lengths.html	letterSpacing can be normal
+responsive/assorted-lengths.html	letterSpacing responsive to style changes
+responsive/assorted-lengths.html	marginRight allows percentages
+responsive/assorted-lengths.html	marginRight responsive to style changes
+responsive/assorted-lengths.html	outlineOffset responsive to style changes
+responsive/background-position-responsive.html	Animating from a neutral keyframe when the underlying style is explicitly set
+responsive/background-position-responsive.html	Animating from a neutral keyframe when the underlying style is inherited from the parent
+responsive/backgroundPosition.html	Background position responsive to style changes
+responsive/backgroundSize.html	Border image width responsive to font size changes
+responsive/borderRadius.html	Border radius lengths respond to style changes
+responsive/borderRadius.html	Border radius percentages are supported
+responsive/borderWidth.html	Border width responsive to border style changes
+responsive/borderWidth.html	Border width responsive to font size changes
+responsive/box-shadow-responsive.html	Animating from inherit responsive to change in style
+responsive/box-shadow-responsive.html	Animating to inherit responsive to change in style
+responsive/boxShadow.html	boxShadow responsive to style changes
+responsive/columnGap.html	column-gap responsive to inherited changes
+responsive/columnGap.html	column-gap responsive to style changes
+responsive/fontSize.html	Relative font size larger responsive to style changes
+responsive/fontSize.html	Relative font size smaller responsive to style changes
+responsive/fontWeight.html	Relative font weight bolder responsive to style changes
+responsive/fontWeight.html	Relative font weight lighter responsive to style changes
+responsive/lineHeight.html	lineHeight responsive to inherited changes from keyword
+responsive/lineHeight.html	lineHeight responsive to inherited changes from length
+responsive/lineHeight.html	lineHeight responsive to inherited changes from number
+responsive/lineHeight.html	lineHeight responsive to style changes
+responsive/minHeight.html	minHeight responsive to style changes
+responsive/opacity.html	opacity responsive to inherited changes
+responsive/rotate.html	Rotate responsive to inherited rotate changes
+responsive/rowGap.html	row-gap responsive to inherited changes
+responsive/rowGap.html	row-gap responsive to style changes
+responsive/textIndent.html	textIndent responsive to style changes
+responsive/to-color-change.html	Background color responsive to currentColor changes
+responsive/to-color-change.html	Border color responsive to currentColor changes
+responsive/to-color-change.html	Border color responsive to currentColor changes again
+responsive/to-color-change.html	Color animations do not expose parent visited status
+responsive/to-color-change.html	Color animations do not expose visited status
+responsive/to-color-change.html	Color interpolation uses pre-multiplied colors
+responsive/to-color-change.html	Color responsive to parent currentColor changes
+responsive/to-color-change.html	Color responsive to repeated parent currentColor changes
+responsive/to-color-change.html	Outline color responsive to currentColor changes
+responsive/to-inherited-change.html	Font size responsive to inherited changes
+responsive/to-inherited-change.html	Font size responsive to inherited changes at end
+responsive/to-inherited-change.html	Font size responsive to inherited changes at start
+responsive/to-style-change.html	Lengths responsive to style changes
+responsive/to-style-change.html	Numbers responsive to style changes
+responsive/to-style-change.html	Percentages responsive to width style changes
+responsive/transform.html	Transform responsive to font size changes
+responsive/translate.html	Translate responsive to font size changes
+responsive/width.html	width responsive to inherited changes from length
+responsive/width.html	width responsive to style changes
+timing-model/animations/canceling-an-animation.html	A pause-pending ready promise should be rejected when the animation is canceled
+timing-model/animations/canceling-an-animation.html	A play-pending ready promise should be rejected when the animation is canceled
+timing-model/animations/canceling-an-animation.html	Canceling an animation should cause its start time and hold time to be unresolved
+timing-model/animations/canceling-an-animation.html	Canceling an animation should fire cancel event on orphaned element
+timing-model/animations/canceling-an-animation.html	The ready promise should be replaced when the animation is canceled
+timing-model/animations/canceling-an-animation.html	When an animation is canceled, it should create a resolved Promise
+timing-model/animations/finish-promise-after-reverse-delay.html	Finish notification steps run when reversing during positive delay
+timing-model/animations/finishing-an-animation.html	A pending playback rate should be applied immediately when an animation is finished
+timing-model/animations/finishing-an-animation.html	A pending ready promise is resolved and not replaced when the animation is finished
+timing-model/animations/finishing-an-animation.html	An exception is NOT thrown when finishing if the effective playback rate is negative and the target effect end is infinity
+timing-model/animations/finishing-an-animation.html	An exception should be thrown if the effective playback rate is zero
+timing-model/animations/finishing-an-animation.html	An exception should be thrown when finishing if the effective playback rate is positive and the target effect end is infinity
+timing-model/animations/finishing-an-animation.html	Finishing a canceled animation sets the current and start times
+timing-model/animations/finishing-an-animation.html	Finishing a pause-pending animation resolves the pending task immediately and update the start time
+timing-model/animations/finishing-an-animation.html	Finishing a pause-pending animation with negative playback rate resolves the pending task immediately
+timing-model/animations/finishing-an-animation.html	Finishing a paused animation resolves the start time
+timing-model/animations/finishing-an-animation.html	Finishing a reversed animation jumps to zero time
+timing-model/animations/finishing-an-animation.html	Finishing a reversed animation with a current time less than zero makes it jump back to zero
+timing-model/animations/finishing-an-animation.html	Finishing an animation during an aborted pause makes it finished immediately
+timing-model/animations/finishing-an-animation.html	Finishing an animation fires finish event on orphaned element
+timing-model/animations/finishing-an-animation.html	Finishing an animation fires finish event when a finish event listener is added as the finished promise resolves
+timing-model/animations/finishing-an-animation.html	Finishing an animation resolves the finished promise synchronously
+timing-model/animations/finishing-an-animation.html	Finishing an animation seeks to the end time
+timing-model/animations/finishing-an-animation.html	Finishing an animation while play-pending resolves the pending task immediately
+timing-model/animations/finishing-an-animation.html	Finishing an animation with a zero playback rate throws
+timing-model/animations/finishing-an-animation.html	Finishing an infinite animation throws
+timing-model/animations/invalidating-animation-before-start-time-synced.html	Animation invalidated before startTime is set doesn't affect startTime
+timing-model/animations/pausing-an-animation.html	A pause-pending animation maintains the current time when applying a pending playback rate
+timing-model/animations/pausing-an-animation.html	A pending ready promise should be resolved and not replaced when the animation is paused
+timing-model/animations/pausing-an-animation.html	Aborting a pause preserves the start time
+timing-model/animations/pausing-an-animation.html	Pausing a canceled animation sets the current time
+timing-model/animations/pausing-an-animation.html	Pausing clears the start time
+timing-model/animations/pausing-an-animation.html	The animation's current time remains fixed after pausing
+timing-model/animations/play-states.html	reports 'finished' for a finished-pending animation
+timing-model/animations/play-states.html	reports 'finished' when playback rate > 0 and current time = target effect end and there is a pending play task
+timing-model/animations/play-states.html	reports 'paused' for a pause-pending animation
+timing-model/animations/play-states.html	reports 'paused' for an animation with a pending pause task
+timing-model/animations/play-states.html	reports 'running' for a play-pending animation
+timing-model/animations/play-states.html	reports 'running' when playback rate > 0 and current time < target effect end and there is a pending play task
+timing-model/animations/play-states.html	reports the play state based on the pending playback rate
+timing-model/animations/playing-an-animation.html	A pending playback rate is used when determining auto-rewind behavior
+timing-model/animations/playing-an-animation.html	A pending ready promise should be resolved and not replaced when the animation enters the running state
+timing-model/animations/playing-an-animation.html	If a pause operation is interrupted, the ready promise is reused
+timing-model/animations/playing-an-animation.html	Playing a canceled animation backwards sets the start time
+timing-model/animations/playing-an-animation.html	Playing a canceled animation sets the start time
+timing-model/animations/playing-an-animation.html	Playing a finished and reversed animation seeks to end
+timing-model/animations/playing-an-animation.html	Playing a finished animation clears the start time
+timing-model/animations/playing-an-animation.html	Playing a finished animation seeks back to the start
+timing-model/animations/playing-an-animation.html	Playing a pause-pending but previously finished animation seeks back to to the start
+timing-model/animations/playing-an-animation.html	Playing a running animation leaves the current time unchanged
+timing-model/animations/playing-an-animation.html	Resuming a paused animation after enough time has elapsed that it would have ended if playing remains running
+timing-model/animations/playing-an-animation.html	Resuming an animation from paused calculates start time from hold time
+timing-model/animations/playing-an-animation.html	The ready promise should be replaced if the animation is not already pending
+timing-model/animations/reversing-an-animation.html	Reversing an animation does not cause it to leave the pending state
+timing-model/animations/reversing-an-animation.html	Reversing an animation does not cause it to resolve the ready promise
+timing-model/animations/reversing-an-animation.html	Reversing an animation inverts the playback rate
+timing-model/animations/reversing-an-animation.html	Reversing an animation maintains the same current time
+timing-model/animations/reversing-an-animation.html	Reversing an animation plays a pausing animation
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime < 0 and the target effect end is positive infinity should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime < 0 should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate < 0 and currentTime > effect end should make it play from the start
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime < 0 and the target effect end is positive infinity should throw an exception
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime < 0 should make it play from the end
+timing-model/animations/reversing-an-animation.html	Reversing an animation when playbackRate > 0 and currentTime > effect end should make it play from the end
+timing-model/animations/reversing-an-animation.html	Reversing animation when playbackRate = 0 and currentTime < 0 and the target effect end is positive infinity should NOT throw an exception
+timing-model/animations/reversing-an-animation.html	Reversing should use the negative pending playback rate
+timing-model/animations/reversing-an-animation.html	Reversing when when playbackRate == 0 should preserve the current time and playback rate
+timing-model/animations/reversing-an-animation.html	When reversing fails, it should restore any previous pending playback rate
+timing-model/animations/reversing-an-animation.html	When reversing throws an exception, the playback rate remains unchanged
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	If a pending playback rate is set multiple times, the latest wins
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	In the idle state, the playback rate is applied immediately
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	In the paused state, the playback rate is applied immediately
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a finished animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a pause-pending animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate on a play-pending animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate to zero on a finished animation maintains the current time
+timing-model/animations/seamlessly-updating-the-playback-rate-of-an-animation.html	Updating the playback rate while running makes the animation pending
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting a negative current time with a negative playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting a negative current time with a positive playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time after the end with a negative playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time after the end with a positive playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a paused animation to unresolved throws a TypeError
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a pausing animation applies a pending playback rate
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time of a playing animation to unresolved throws a TypeError
+timing-model/animations/setting-the-current-time-of-an-animation.html	Setting the current time on an animation with a zero playback rate
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Reversing the playback rate while finished restarts the animation
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting a zero playback rate while running preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate should clear any pending playback rate
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while finished preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while paused preserves the current time and state
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while play-pending preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	Setting the playback rate while playing preserves the current time
+timing-model/animations/setting-the-playback-rate-of-an-animation.html	The playback rate affects the rate of progress of the current time
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time of a play-pending animation applies a pending playback rate
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time of a playing animation applies a pending playback rate
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time on a reverse running animation updates the play state
+timing-model/animations/setting-the-start-time-of-an-animation.html	Setting the start time on a running animation updates the play state
+timing-model/animations/the-current-time-of-an-animation.html	The current time does not progress if playback rate is 0
+timing-model/animations/updating-the-finished-state.html	Animation finish event is fired again after replaying from start
+timing-model/animations/updating-the-finished-state.html	Animation finish event is fired again after seeking back to start
+timing-model/animations/updating-the-finished-state.html	Animation finished promise is replaced after replaying from start
+timing-model/animations/updating-the-finished-state.html	Animation finished promise is replaced after seeking back to start
+timing-model/animations/updating-the-finished-state.html	Finish notification steps don't run when the animation seeks to finish and then seeks back again
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation completes normally
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation completes with .finish(), even if we then seek away
+timing-model/animations/updating-the-finished-state.html	Finish notification steps run when the animation seeks past finish
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is greater than end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is less than end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playback rate is zero and the current time is less than zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playing in reverse past zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when playing past end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation before end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation exactly to zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking a reversed animation past zero
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking before end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking exactly to end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when seeking past end
+timing-model/animations/updating-the-finished-state.html	Updating the finished state when start time is unresolved and did seek = true
+timing-model/animations/updating-the-finished-state.html	finish event is fired after the endDelay has expired
+timing-model/animations/updating-the-finished-state.html	finish event is not fired at the end of the active interval when the endDelay has not expired
+timing-model/timelines/update-and-send-events.html	Fires cancel event before requestAnimationFrame
+timing-model/timelines/update-and-send-events.html	Fires finish event before requestAnimationFrame
+timing-model/timelines/update-and-send-events.html	Playback events with the same timeline retain the order in which they arequeued
+timing-model/timelines/update-and-send-events.html	Sorts finish events by scheduled event time

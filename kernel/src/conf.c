@@ -19,6 +19,7 @@
 #include "kmalloc.h"
 #include "memory/vma.h"        // call_in_kernel_context
 #include "printd.h"
+#include "smp_core.h"          // spec_ctrl_set_policy — the root file's `speculation =`
 #include "spinlock.h"
 #include "strings/strcmp.h"
 #include "strings/strlen.h"
@@ -299,6 +300,12 @@ static void root_line(const char *key, const char *value, void *user)
 	if (strcmp(key, "conf") == 0) {
 		conf_set_path(value);
 		*found = true;
+	} else if (strcmp(key, "speculation") == 0) {
+		// The CPU's speculation controls, machine-wide (smp_core.c). Read
+		// here because this is the system's root file and the setting is
+		// upstream of every program: the threads it governs are already
+		// running by the time any other file could be found.
+		spec_ctrl_set_policy(value);
 	}
 	// Unknown keys are NOT an error here. /etc/os64.conf is the system's root
 	// config and is expected to accumulate other knobs; a walker that
@@ -471,10 +478,22 @@ int conf_find_from(const char *name, size_t from, char *out, size_t cap)
 	if (name == NULL || name[0] == '\0')
 		return -1;
 
-	// conf_name_ok holds the rule (a name is a FILE name, never a path);
-	// this is where it is announced, loudly, the way unknown open modes are.
+	// A RESOLVE IS DEBUG_SYSTEM, NOT DEBUG_BOOT, and the distinction is the
+	// difference between a milestone and an event. Establishing the search
+	// path happens once, in conf_init, next to "mounted ext2 at /" — that is
+	// a boot line and it stays one. ANSWERING "where is <name>?" happens
+	// whenever any reader asks, and since 2026-08-29 that includes a ring-3
+	// program asking every single minute: cron re-reads its crontab on every
+	// pass, which is what makes an edit take effect without a restart.
+	//
+	// Two lines a minute, forever, under the bit that carries the boot log,
+	// is a level lying about what the message is — the exact fault
+	// DEBUG_TASKSWITCH was minted to fix (CONFIG.h says so at its define).
+	// Chris caught it after an hour of watching cron run for real.
+	// /sys/conf remains the first instrument when a config seems ignored; it
+	// reports what every reader actually took, with no bit to enable.
 	if (!conf_name_ok(name)) {
-		printd(DEBUG_BOOT, "conf: refusing lookup of '%s' — a config name is a file name, not a path\n",
+		printd(DEBUG_SYSTEM, "conf: refusing lookup of '%s' — a config name is a file name, not a path\n",
 		       name);
 		return -1;
 	}
@@ -499,9 +518,9 @@ int conf_find_from(const char *name, size_t from, char *out, size_t cap)
 			if (from == 0)
 				conf_note_used(name, out);
 			if (mat > 0)
-				printd(DEBUG_BOOT, "conf: %s <- %s (no %s)\n", name, out, misses);
+				printd(DEBUG_SYSTEM, "conf: %s <- %s (no %s)\n", name, out, misses);
 			else
-				printd(DEBUG_BOOT, "conf: %s <- %s\n", name, out);
+				printd(DEBUG_SYSTEM, "conf: %s <- %s\n", name, out);
 			return (int)i;
 		}
 
@@ -518,7 +537,7 @@ int conf_find_from(const char *name, size_t from, char *out, size_t cap)
 	// a failure worth a line in the boot log or a "(not found)" row.
 	if (from == 0) {
 		conf_note_used(name, NULL);
-		printd(DEBUG_BOOT, "conf: %s NOT FOUND (no %s)\n", name, misses);
+		printd(DEBUG_SYSTEM, "conf: %s NOT FOUND (no %s)\n", name, misses);
 	}
 	return -1;
 }

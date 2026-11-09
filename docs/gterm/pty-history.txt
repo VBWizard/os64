@@ -1,0 +1,25 @@
+ptyhistorytest: PASS create
+ptyhistorytest: PASS set independent capacity
+ptyhistorytest: PASS seat producer
+ptyhistorytest: PASS burst retained without intermediate snapshots
+ptyhistorytest: PASS bounded retained history
+ptyhistorytest: PASS read old physical row
+ptyhistorytest: PASS continued output
+ptyhistorytest: PASS anchor survives new output
+ptyhistorytest: PASS clamp evicted anchor and bounded copy
+ptyhistorytest: PASS refuse oversized capacity
+ptyhistorytest: PASS reject wide capacity before narrowing
+ptyhistorytest: PASS refuse missing cells
+ptyhistorytest: PASS refuse oversized snapshot
+ptyhistorytest: PASS resize
+ptyhistorytest: PASS geometry epoch and capacity survive resize
+ptyhistorytest: PASS legacy live snapshot ABI
+ptyhistorytest: PASS disable history
+ptyhistorytest: PASS zero means no retained rows
+ptyhistorytest: PASS growing from zero preserves the live cells
+ptyhistorytest: PASS coherent bounded snapshots during concurrent resize and capacity changes
+ptyhistorytest: PASS reject wide geometry before narrowing
+ptyhistorytest: PASS quota has distinct error and preserves refused grid
+ptyhistorytest: PASS new live terminal survives aggregate history refusal
+ptyhistorytest: PASS STREAM refuses grid operations
+ptyhistorytest: 24 checks, 0 failures

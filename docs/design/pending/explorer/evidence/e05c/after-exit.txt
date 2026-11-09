@@ -1,0 +1,5 @@
+  PID  PPID TTY ST      TIME COMMAND
+   46    32   1 Is    0:00.1 husk
+   50    32   1 I     0:00.1 desktop
+   52    50   1 I     0:01.8 roam
+   75    46   1 R+    0:00.0 ps

@@ -1,0 +1,38 @@
+$ e2fsck -fn /tmp/os64-f1-review/final-text/root-ext2.img
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64EXT2: 210/65536 files (1.0% non-contiguous), 31759/262144 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+
+$ e2fsck -fn /tmp/os64-f1-review/final-text/data.img?offset=1048576
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64HOME: 15/65536 files (6.7% non-contiguous), 19582/1048576 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+
+PASS: extracted text fonttest output and both ext2 checks
+$ e2fsck -fn /tmp/os64-f1-review/final-gui/root-ext2.img
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64EXT2: 206/65536 files (1.0% non-contiguous), 31755/262144 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+
+$ e2fsck -fn /tmp/os64-f1-review/final-gui/data.img?offset=1048576
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64HOME: 15/65536 files (6.7% non-contiguous), 19568/1048576 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+
+PASS: extracted GUI fonttest output and both ext2 checks

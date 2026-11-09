@@ -1,0 +1,7 @@
+font fit: unchanged interface rows allow terminal/document changes; initial, changed-height and retry checks passed
+font envelopes: preserving component CAS, reload serials, malformed input, conflicts, allocation/I/O failure and 4096-byte refusal passed
+appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed
+appearance responsive: 17/24/28/32px, all tabs, visible footer, atomic 96px refusal and shrinking minimum passed
+appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed
+controlcenter responsive: 28px adoption, fewer rows, every tool reachable, refusal and shrinking minimum passed
+appearance: palettes, legacy themes, rounded paint, color picker, interaction and pointer queue contracts passed

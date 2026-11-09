@@ -1,0 +1,4 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:509 [PS/2/HID bursts and pointer cancellation] popup_handle()!=first&&transport.windows[popup_handle()].owner==first
+menu/action/status: 2070 checks, 1 failures
+Artifacts: /tmp/e1b-ps2-before

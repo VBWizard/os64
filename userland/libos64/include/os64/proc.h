@@ -1,9 +1,10 @@
 #ifndef OS64_PROC_H
 #define OS64_PROC_H
 
-// libos64 process control (LIBOS64.md layer). SCAFFOLDING: only yield exists
-// so far; spawn/fork/exec*/waitpid arrive when the shell work pulls them in
-// (both spawn AND fork/exec are first-class — see LIBOS64.md/ABI.md).
+// libos64 process control (LIBOS64.md layer): spawn in its shapes, wait and
+// reap, exit, the cwd, the environment, and where a command by name lives.
+// Spawn is the one way to start a program today; fork/exec are first-class
+// in the design and arrive when something asks (LIBOS64.md/ABI.md).
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,8 +34,10 @@ void os64_exit(int32_t code) __attribute__((noreturn));
 // shell BUILTIN and always has been, in every shell, ever.
 
 // Copy the cwd (canonical, absolute, NUL-terminated) into buf. Returns its
-// length, or negative if the buffer is too small. TASK_MAX_PATH_LEN is 128
-// kernel-side, so a 128-byte buffer always suffices.
+// length, or negative if the buffer is too small. A path is bounded by
+// OS64_PATH_MAX, terminator included, so a buffer of that size always
+// suffices. (This said 128 while the kernel said 256, which is the reason the
+// number is published rather than retyped.)
 int64_t os64_getcwd(char *buf, size_t len);
 
 // The ENVIRONMENT — more process state. The kernel maps every task's env
@@ -79,12 +82,18 @@ int64_t os64_chdir(const char *path);
 
 // Spawn `path` as a child, non-blocking. `argv` is a NULL-terminated array of
 // string pointers (argv[0] conventionally the program name); pass NULL for no
-// args. Returns the child's pid (> 0), or negative on error. The child
+// args. Returns the child's pid (> 0), or negative on error —
+// OS64_SPAWN_TOO_LONG when the arguments are more than a spawn carries (each
+// at most OS64_SPAWN_ARG_MAX bytes including NUL, OS64_SPAWN_MAX_ARGS
+// arguments, and a mebibyte in all including pointers). The child
 // inherits this process's environment.
 int64_t os64_spawn(const char *path, char *const argv[]);
 
 // Spawn with REDIRECTION: `in`/`out`/`err` are handles of THIS process to
-// install as the child's 0/1/2, or -1 to leave that stream on the console.
+// install as the child's 0/1/2, or -1 for this process's OWN 0/1/2 — the
+// console if that is where you are, your redirect if you have one (so a
+// program that spawns, run as `prog > log 2>&1`, sends its children's output
+// to the log too; os64_spawn is the all-minus-ones case).
 // This is how a shell builds a pipeline — the child is born reading from and
 // writing to the right places and never knows it was redirected, which is why
 // no program contains a single line of pipe-awareness:
@@ -108,11 +117,30 @@ int64_t os64_spawn_redirected(const char *path, char *const argv[],
                            uint64_t flags);
 
 // Seat the child on a pty slave (PTY.md): `master` is a handle from
-// os64_pty_create, and the child becomes that slave's shell — controlling
-// terminal, foreground, its console handles routed there — with zero
+// os64_pty_create or os64_pty_create_stream. The child becomes its shell —
+// controlling terminal, foreground, its console handles routed there — with zero
 // pty-awareness in the child. The terminal's whole job becomes: write
-// keystrokes to the master, snapshot the screen out.
+// keystrokes to the master, snapshot GRID cells or read STREAM output.
+// STREAM seating is refused after its writer closes at the end of a session;
+// a fresh master is needed for a new session. GRID permits re-seating.
 int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
+
+// Where is the program called `command`? The search a shell runs at every
+// command line, as a library verb for anything that spawns what a user typed:
+//   - a name containing '/' names a PLACE — used exactly as typed, no search
+//   - a bare name tries the cwd first (V6 shells did: `cd /bin` + `ls`
+//     worked before PATH existed), then each colon-separated directory
+//     of $PATH as this process sees it right now
+// Existence is probed with os64_stat, and a directory never wins — typing
+// `bin` at / must not spawn a directory. Returns `command` itself for a
+// place or a cwd hit, `resolved` filled with the PATH hit, or `command`
+// unresolved when nothing matched, so the spawn that follows delivers the
+// "no" and the caller reports the name the user typed. A candidate that
+// would not fit `resolved` is skipped, not truncated. The buffer must stay
+// alive until the spawn; OS64_PATH_MAX bytes is exactly what a spawnable
+// path can be, so nothing that fits there is lost for want of room here.
+const char *os64_resolve_command(const char *command, char *resolved,
+                                 size_t capacity);
 
 // Wait for a child to exit and reap it. pid > 0 waits for that specific child;
 // pid == 0 waits for the first of any child to end. Returns the pid that
@@ -190,5 +218,21 @@ int64_t os64_sleep(uint64_t ms);
 //     os64_ticks(&t);
 //     /* uptime seconds = t.ticks / t.per_second */
 int64_t os64_ticks(os64_ticks_t *out);
+
+// The same stopwatch with a finer face: microseconds since boot, as one
+// number. Read from the CPU's cycle counter, so it keeps counting through
+// the interrupts-off windows that cost the tick clock whole ticks under
+// load — measure an INTERVAL with this (a round trip, a benchmark), and use
+// os64_ticks for a CPU% (os64/ticks.h says why the two are not the same
+// clock). Never negative and never smaller than a previous answer, on any
+// core — the kernel folds every read through a high-water mark, so a
+// machine whose cores' counters disagree can stall this clock but not run
+// it backward. A lifeboat kernel without the call answers the dispatcher's
+// negative verdict, and that is the only failure there is.
+//
+//     int64_t t0 = os64_micros();
+//     ...
+//     int64_t elapsed_us = os64_micros() - t0;
+int64_t os64_micros(void);
 
 #endif // OS64_PROC_H

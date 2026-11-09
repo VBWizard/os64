@@ -1,0 +1,7 @@
+Artifacts: /tmp/e3-clock-widget-real
+core maximum: rows=100000 snapshot=12848717 projection=800072
+replacement allocation sweep: 251 preparation failure points
+font adoption allocation sweep: 204 failure points
+host 10000 rows: snapshot=3721810 metadata=92632 peak=192880 font-engine=1377569 font-peak=1448662 runs=52 leases=12 visible=12 construction-us=28603 sort-us=4740 no-match-us=786
+host 100 scroll-to-paint events after 10 warmups: median-us=1832 p95-us=1990 max-us=2157
+Details host: 14975 checks, 0 failures

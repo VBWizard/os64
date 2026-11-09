@@ -1,0 +1,7 @@
+e2fsck 1.47.0 (5-Feb-2023)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64EXT2: 247/65536 files (1.6% non-contiguous), 35541/262144 blocks

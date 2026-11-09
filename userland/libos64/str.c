@@ -1,8 +1,10 @@
+#include "os64/utf8_scalar.h"
 // str.c — libos64 string primitives. Contract and the case against strcpy
 // live in <os64/str.h>; this file is just the doing.
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "os64/str.h"
 
@@ -49,6 +51,50 @@ bool os64_streq(const char *a, const char *b)
     return *a == *b;        // both at their NUL == same string
 }
 
+int os64_strcmp(const char *a, const char *b)
+{
+    const unsigned char *left = (const unsigned char *)a;
+    const unsigned char *right = (const unsigned char *)b;
+    while (*left && *left == *right) {
+        left++;
+        right++;
+    }
+    return (int)*left - (int)*right;
+}
+
+char *os64_strchr(const char *s, int c)
+{
+    unsigned char byte = (unsigned char)c;
+    for (;;) {
+        if ((unsigned char)*s == byte)
+            return (char *)s;
+        if (!*s)
+            return NULL;
+        s++;
+    }
+}
+
+char *os64_strrchr(const char *s, int c)
+{
+    unsigned char byte = (unsigned char)c;
+    const char *last = NULL;
+    do {
+        if ((unsigned char)*s == byte)
+            last = s;
+    } while (*s++);
+    return (char *)last;
+}
+
+void *os64_memchr(const void *block, int c, size_t n)
+{
+    const unsigned char *bytes = (const unsigned char *)block;
+    unsigned char byte = (unsigned char)c;
+    for (size_t i = 0; i < n; i++)
+        if (bytes[i] == byte)
+            return (void *)(bytes + i);
+    return NULL;
+}
+
 // ASCII only, deliberately: os64 has no locale and a config key is written in
 // the same 26 letters everywhere. A table-driven fold would be a lie about
 // capabilities this system does not have.
@@ -69,77 +115,25 @@ bool os64_streq_nocase(const char *a, const char *b)
     return fold(*a) == fold(*b);
 }
 
-void *os64_memcpy(void *dst, const void *src, size_t n)
-{
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
+// Copy and fill — os64_memcpy, os64_memmove, os64_memset and the compiler's
+// names for them — are the kernel's as well, so their one source is shared
+// and every build of this file compiles it in.
+#include "../../shared/copy_fill.c"
 
-    for (size_t i = 0; i < n; i++)
-        d[i] = s[i];
-    return dst;
-}
-
-void *os64_memmove(void *dst, const void *src, size_t n)
-{
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-
-    // dst below src: copy forward. dst above: copy backward, so the bytes
-    // not yet read are never the bytes already written. Equal: nothing to do.
-    if (d < s) {
-        for (size_t i = 0; i < n; i++)
-            d[i] = s[i];
-    } else if (d > s) {
-        for (size_t i = n; i > 0; i--)
-            d[i - 1] = s[i - 1];
-    }
-    return dst;
-}
-
-// ── the compiler's four ─────────────────────────────────────────────────────
-// GCC's freestanding contract (documented, and non-negotiable): even under
-// -ffreestanding the compiler may emit CALLS to memcpy, memmove, memset,
-// and memcmp whenever it likes — a struct assignment, a big initializer, an
-// array copy. scribe's save writer found the hole (a 64KB `= { ... }`
-// emitted a memset call this world didn't link). These four exist to honor
-// that contract, NOT as API: os64 code says os64_memset and friends; the
-// bare names are for code the compiler writes on our behalf.
-
-void *memset(void *dst, int c, size_t n)
-{
-    return os64_memset(dst, c, n);
-}
-
-void *memcpy(void *dst, const void *src, size_t n)
-{
-    return os64_memcpy(dst, src, n);
-}
-
-void *memmove(void *dst, const void *src, size_t n)
-{
-    return os64_memmove(dst, src, n);
-}
-
+// The fourth name GCC may call under -ffreestanding (copy_fill.c says why);
+// the kernel has a memcmp of its own.
 int memcmp(const void *a, const void *b, size_t n)
 {
-    // No os64_ twin yet — nothing human has asked for one (the streq family
-    // covers strings). The compiler is memcmp's only client today, so the
-    // body lives here until a real consumer promotes it.
-    const unsigned char *pa = a, *pb = b;
-    for (size_t i = 0; i < n; i++) {
-        if (pa[i] != pb[i])
-            return pa[i] < pb[i] ? -1 : 1;
-    }
-    return 0;
+    return os64_memcmp(a, b, n);
 }
 
-void *os64_memset(void *dst, int c, size_t n)
+int os64_memcmp(const void *a, const void *b, size_t n)
 {
-    unsigned char *d = (unsigned char *)dst;
-
+    const unsigned char *pa = a, *pb = b;
     for (size_t i = 0; i < n; i++)
-        d[i] = (unsigned char)c;
-    return dst;
+        if (pa[i] != pb[i])
+            return pa[i] < pb[i] ? -1 : 1;
+    return 0;
 }
 
 int64_t os64_atoi(const char *s)
@@ -171,6 +165,26 @@ uint64_t os64_atou(const char *s)
     return v;
 }
 
+bool os64_parse_u64(const char *s, uint64_t *out)
+{
+    if (s == NULL || out == NULL || *s == '\0')
+        return false;
+
+    uint64_t value = 0;
+    for (const char *p = s; *p != '\0'; p++)
+    {
+        if (*p < '0' || *p > '9')
+            return false;
+        uint64_t digit = (uint64_t)(*p - '0');
+        if (value > (UINT64_MAX - digit) / 10)
+            return false;
+        value = value * 10 + digit;
+    }
+
+    *out = value;
+    return true;
+}
+
 // One hex digit's value, or -1 if the character isn't one. Kept separate so
 // the "is it a digit" test and the "what is it worth" conversion are the same
 // question asked once — the classic hand-rolled hex loop asks it twice and
@@ -181,6 +195,47 @@ static int hex_digit(char c)
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
+}
+
+// Contract, and the argument for the escaping, in str.h.
+void os64_unescape_field(char *s)
+{
+    char *out;
+    const char *in;
+
+    if (s == NULL)
+        return;
+
+    for (in = s, out = s; *in != '\0'; )
+    {
+        if (*in != '\\')
+        {
+            *out++ = *in++;
+            continue;
+        }
+        if (in[1] == '\\')
+        {
+            *out++ = '\\';
+            in += 2;
+            continue;
+        }
+        if (in[1] == 'x')
+        {
+            int hi = hex_digit(in[2]);
+            int lo = (hi >= 0) ? hex_digit(in[3]) : -1;
+            if (lo >= 0)
+            {
+                *out++ = (char)((hi << 4) | lo);
+                in += 4;
+                continue;
+            }
+        }
+        // Not an escape this encoder produces. Pass the backslash through
+        // rather than guess — a report that says something we cannot read is
+        // better read literally than read wrong.
+        *out++ = *in++;
+    }
+    *out = '\0';
 }
 
 uint64_t os64_xtou(const char *s, const char **end)
@@ -240,4 +295,119 @@ bool os64_parse_range(const char *s, uint64_t *lo, uint64_t *hi)
     if (lo != NULL) *lo = low;
     if (hi != NULL) *hi = high;
     return true;
+}
+
+// ── UTF-8 (str.h says who this is for) ──────────────────────────────────
+
+size_t os64_utf8_decode(const char *s, size_t n, uint32_t *cp)
+{
+    return os64_utf8_scalar(s, n, cp);
+}
+
+size_t os64_utf8_encode(uint32_t cp, char *out)
+{
+    if ((cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+        cp = OS64_UTF8_REPLACEMENT;
+    unsigned char *o = (unsigned char *)out;
+    if (cp < 0x80) {
+        o[0] = (unsigned char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        o[0] = (unsigned char)(0xC0 | (cp >> 6));
+        o[1] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        o[0] = (unsigned char)(0xE0 | (cp >> 12));
+        o[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+        o[2] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    o[0] = (unsigned char)(0xF0 | (cp >> 18));
+    o[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+    o[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+    o[3] = (unsigned char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+bool os64_glob_match(const char *pattern, const char *text)
+{
+    if (pattern == NULL || text == NULL)
+        return false;
+
+    while (*pattern != '\0')
+    {
+        if (*pattern == '*')
+        {
+            pattern++;
+            if (*pattern == '\0')
+                return true;                  // trailing '*' takes the rest
+            for (const char *candidate = text;; candidate++)
+            {
+                if (os64_glob_match(pattern, candidate))
+                    return true;
+                if (*candidate == '\0')
+                    return false;
+            }
+        }
+        if (*text == '\0')
+            return false;
+        if (*pattern == '?')
+        {
+            pattern++;
+            text++;
+            continue;
+        }
+        if (*pattern == '[')
+        {
+            const char *member = pattern + 1;
+            bool negate = *member == '!' || *member == '^';
+            if (negate)
+                member++;
+            bool matched = false;
+            bool first = true;
+            // `first` lets a ']' immediately after '[' (or after '!') be a
+            // literal member, the way every shell since the Bourne shell does.
+            while (*member != '\0' && (*member != ']' || first))
+            {
+                first = false;
+                if (member[1] == '-' && member[2] != '\0' &&
+                    member[2] != ']')
+                {
+                    if ((unsigned char)*text >= (unsigned char)member[0] &&
+                        (unsigned char)*text <= (unsigned char)member[2])
+                        matched = true;
+                    member += 3;
+                }
+                else
+                {
+                    if (*text == *member)
+                        matched = true;
+                    member++;
+                }
+            }
+            if (*member != ']')
+            {
+                // No closing ']': this '[' is an ordinary character, so a
+                // pattern can name /bin/[ (husk's rule, and it has to be the
+                // same rule here — husk's own expansion runs through this).
+                if (*pattern != *text)
+                    return false;
+                pattern++;
+                text++;
+                continue;
+            }
+            if (matched == negate)
+                return false;
+            pattern = member + 1;
+            text++;
+            continue;
+        }
+        if (*pattern != *text)
+            return false;
+        pattern++;
+        text++;
+    }
+    return *text == '\0';
 }

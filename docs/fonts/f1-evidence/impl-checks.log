@@ -1,0 +1,13 @@
+PASS: F0 frozen header and F1 header are byte-identical
+$ git diff --check
+
+$ tools/stale_refs.sh
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+   (none)
+
+== No new superlative claims.
+
+PASS: authored adapter/runtime/harness/build/report additions checked for trailing whitespace
+stale_refs sees tracked diffs; untracked additions and edited comments were reviewed separately.

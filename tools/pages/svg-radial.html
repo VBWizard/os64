@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: in a different light</title>
+<style>
+body { margin:24px; background:#edf3ef; color:#263f38; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:740px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b5cbbd; border-radius:12px; }
+svg, img { display:block; } button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: in a different light</h1>
+<p>A highlight has a home. Move it with scripts enabled, then explore the light from 25% to 400%.</p>
+<div class="card"><h2>1. Move the light</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<defs><radialGradient id="pearl" fx=".3" fy=".28"><stop stop-color="#fff8cf"/><stop offset=".38" stop-color="#72c7b5"/><stop offset="1" stop-color="#195c62"/></radialGradient></defs>
+<rect width="280" height="180" rx="14" fill="#e3eee8"/>
+<ellipse cx="140" cy="158" rx="76" ry="12" fill="#b8ccbd"/>
+<circle cx="140" cy="88" r="70" fill="url(#pearl)"/>
+</svg><p>One off-center highlight gives this pearl a little depth.</p>
+<button id="move">Move the light</button><p id="result">Light from the left.</p></div>
+<div class="card"><h2>2. The light travels</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<ellipse cx="140" cy="60" rx="120" ry="42" fill="url(#pearl)"/>
+<rect x="20" y="118" width="240" height="38" rx="18" fill="none" stroke="url(#pearl)" stroke-width="12"/>
+</svg><p>The same highlight follows an ellipse and a rounded outline. Each uses its own geometric bounds.</p></div>
+<div class="card"><h2>3. Ripples and returns</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<radialGradient id="rings" r=".18" spreadMethod="repeat"><stop stop-color="#407c8a"/><stop offset="1" stop-color="#f3d395"/></radialGradient>
+<radialGradient id="echo" href="#rings" spreadMethod="reflect"/>
+<circle cx="67" cy="90" r="62" fill="url(#rings)"/><circle cx="213" cy="90" r="62" fill="url(#echo)"/>
+</svg><p>Left: repeat starts over. Right: reflect turns around. Both keep their rings at every zoom.</p></div>
+<div class="card"><h2>4. A circle of warmth</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<radialGradient id="warm" gradientUnits="userSpaceOnUse" cx="140" cy="90" r="100" fx="118" fy="76" fr="26"><stop stop-color="#fff2b4"/><stop offset=".45" stop-color="#e9b477"/><stop offset="1" stop-color="#a75d66"/></radialGradient>
+<rect x="10" y="12" width="260" height="156" rx="16" fill="url(#warm)"/>
+</svg><p>The first color fills a small focal circle. The gradient spreads from its edge through shared user coordinates.</p></div>
+<div class="card"><h2>5. A softer glow</h2>
+<svg width="280" height="180" viewBox="0 0 280 180">
+<radialGradient id="glow"><stop stop-color="#f5d57e"/><stop offset="1" stop-color="#f5d57e" stop-opacity="0"/></radialGradient>
+<rect x="10" y="12" width="260" height="156" rx="12" fill="#284b60"/>
+<path d="M10 64H270M10 116H270M75 12V168M140 12V168M205 12V168" stroke="#486b7c" stroke-width="2"/>
+<ellipse cx="140" cy="90" rx="126" ry="76" fill="url(#glow)"/>
+</svg><p>Transparency lets the grid emerge as the glow fades. The edge contributes no color of its own.</p></div>
+<div class="card"><h2>6. Its private twin</h2>
+<img src="svg-radial-postcard.svg" width="280" height="180" alt="A green pearl lit from the left">
+<p>This pearl arrived as a separate SVG image. Its highlight stays on the left while the page's light moves.</p></div>
+<script>
+var right = false;
+document.getElementById('move').addEventListener('click', function () {
+  right = !right;
+  document.getElementById('pearl').setAttribute('fx', right ? '.7' : '.3');
+  document.getElementById('result').textContent = right ? 'Light from the right.' : 'Light from the left.';
+});
+</script></body></html>

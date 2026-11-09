@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Clock</title>
+<h1 id="clock">the clock has not started</h1>
+<p>setInterval, once a second. It keeps counting with another window in front.</p>
+<script>
+var n = 0;
+setInterval(function () {
+  n++;
+  document.getElementById('clock').textContent = 'tick ' + n;
+}, 1000);
+</script>

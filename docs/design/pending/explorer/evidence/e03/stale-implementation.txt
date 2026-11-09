@@ -1,0 +1,23 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- E03_DATA_VIEW
+   docs/design/pending/EXPLORER.md:373: | E3 — Data view and selection | Shared virtualized Details table, columns, keyboard/type-ahead, multi-selection and range anchor. Uses E1/E
+   docs/design/pending/EXPLORER.md:449: [E3's detailed contract](explorer/E03_DATA_VIEW.md) and
+   docs/design/pending/explorer/DECISIONS.md:264: - **Affected:** E3/E4/E5/E14. [Contract](E03_DATA_VIEW.md),
+   docs/design/pending/explorer/E03_HANDOFF.md:7: [E03_DATA_VIEW.md](E03_DATA_VIEW.md); this file supplies execution order and
+   docs/design/pending/explorer/HANDOFF.md:43: | [E3 data view and selection](E03_DATA_VIEW.md) | Implemented; review/P5 pending | Review the implementation and run [the P5 acceptance pac
+   docs/design/pending/explorer/README.md:39: - Current work: E3's [data-view contract](E03_DATA_VIEW.md) and
+   docs/design/pending/explorer/README.md:56: or [E3](E03_DATA_VIEW.md). New slices use the
+   docs/design/pending/explorer/README.md:70: | E3 | Data view and selection | Implemented; review/P5 pending | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.
+-- E03_HANDOFF
+   docs/design/pending/EXPLORER.md:373: | E3 — Data view and selection | Shared virtualized Details table, columns, keyboard/type-ahead, multi-selection and range anchor. Uses E1/E
+   docs/design/pending/EXPLORER.md:450: [implementation packet](explorer/E03_HANDOFF.md) define the next reusable
+   docs/design/pending/explorer/DECISIONS.md:265: [implementation and acceptance packet](E03_HANDOFF.md).
+   docs/design/pending/explorer/E03_DATA_VIEW.md:18: - **Implementation instructions/evidence plan:** [E03_HANDOFF.md](E03_HANDOFF.md).
+   docs/design/pending/explorer/E03_DATA_VIEW.md:379: PRs. The [handoff](E03_HANDOFF.md) names files, examples, failure combinations,
+   docs/design/pending/explorer/HANDOFF.md:43: | [E3 data view and selection](E03_DATA_VIEW.md) | Implemented; review/P5 pending | Review the implementation and run [the P5 acceptance pac
+   docs/design/pending/explorer/README.md:40: [implementation packet](E03_HANDOFF.md) have E3A/E3B code and
+   docs/design/pending/explorer/README.md:70: | E3 | Data view and selection | Implemented; review/P5 pending | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.
+
+== No new superlative claims.

@@ -1,0 +1,30 @@
+{
+  "/home/yogi/src/os64/.worktrees/text-layout/userland/bin/libos64.so": {
+    "sha256": "b17d4b69d3d46e6b9632a70a7e9a9f3bd7fe4891549a41efad4c4e2abe5823d9",
+    "bytes": 441696
+  },
+  "/home/yogi/src/os64/.worktrees/text-layout/userland/bin/libfreetype.so": {
+    "sha256": "3bd864cce0abb6e6027c01ac90f278f816d09e19c06a422bfc6cf88c2424331c",
+    "bytes": 1817016
+  },
+  "/home/yogi/src/os64/.worktrees/text-layout/userland/bin/tests/texttest": {
+    "sha256": "2edd30eba2262c63433545b90d76b0e29cf85f21f8cb0c6e7bf56eae2a194eb5",
+    "bytes": 26632
+  },
+  "/home/yogi/src/os64/.worktrees/text-layout/userland/bin/tests/textspawn": {
+    "sha256": "5d1c9f9a3144b5d4e7e59043455d698abb16a2f70df684bb8fbbc97e8a4efeb2",
+    "bytes": 16976
+  },
+  "/home/yogi/src/os64/.worktrees/text-layout/os64_kernel.iso": {
+    "sha256": "feb774a13c20b2ac6f69b241b8dd7bcf79b56583d75d8d863798fed0e70c9908",
+    "bytes": 349249536
+  },
+  "/tmp/os64-f2-guest/libos64-before.so": {
+    "sha256": "9898c058e046b142c5e4d2aaafb18be5848b1e9b93db143ed6bdee8532fa0660",
+    "bytes": 440472
+  },
+  "/tmp/os64-f2-guest/libos64-with-ft.so": {
+    "sha256": "4e6e47314904265874843654f06e4e5740492ea1898d28a107784428ddbb7f43",
+    "bytes": 440472
+  }
+}

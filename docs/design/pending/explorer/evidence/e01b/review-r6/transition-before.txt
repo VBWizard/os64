@@ -1,0 +1,6 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1389 [r6 I1/I2 declined same-view request reconciles invalid descendants] g.menus->depth==(refuse?2u:1u)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1390 [r6 I1/I2 declined same-view request reconciles invalid descendants] g.menus->panels[0].widget->selected==(refuse?0:MENU_NONE)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1391 [r6 I1/I2 declined same-view request reconciles invalid descendants] error_count==errors+refuse
+r6: 7954 checks, 3 failures
+Artifacts: /tmp/e1b-r6-transition-before

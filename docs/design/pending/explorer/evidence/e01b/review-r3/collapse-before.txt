@@ -1,0 +1,2 @@
+action/status: 495 checks, 0 failures
+/home/yogi/src/os64/.worktrees/explorer-e1b/userland/libos64/ui_menu.c:147:11: runtime error: member access within null pointer of type 'struct os64_ui_popup_t'

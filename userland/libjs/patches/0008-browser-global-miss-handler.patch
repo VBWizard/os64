@@ -1,0 +1,88 @@
+# Tell a browser host each string name a lookup on the global object did
+# not find, without changing the answer the lookup gives (YONDER_DIAGNOSTICS.md).
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -556,6 +556,10 @@
+                              const char *input, size_t input_len,
+                              const char *filename, int flags, int scope_idx);
+     void *user_opaque;
++    /* os64: told each string name a global lookup did not find
++       (JS_SetGlobalMissHandler); NULL when nobody asked. */
++    void (*global_miss)(void *opaque, const char *name);
++    void *global_miss_opaque;
+ };
+ 
+ typedef union JSFloat64Union {
+@@ -2689,6 +2693,19 @@
+     ctx->user_opaque = opaque;
+ }
+ 
++/* os64: a browser's census of what pages reach for. The handler hears the
++   name a lookup on the global object did not find, before the lookup
++   answers as it always does (undefined, or the ReferenceError), and the
++   name is in a stack buffer, so hearing it allocates nothing and cannot
++   change what the page sees. It must not call into the engine. */
++void JS_SetGlobalMissHandler(JSContext *ctx,
++                             void (*handler)(void *opaque, const char *name),
++                             void *opaque)
++{
++    ctx->global_miss = handler;
++    ctx->global_miss_opaque = opaque;
++}
++
+ /* set the new value and free the old value after (freeing the value
+    can reallocate the object data) */
+ static inline void set_value(JSContext *ctx, JSValue *pval, JSValue new_val)
+@@ -8248,6 +8265,21 @@
+     return 0;
+ }
+ 
++/* os64: a lookup that ran off the end of `obj`'s prototype chain. When
++   `obj` is the global object and a handler asked, it hears the name. A
++   symbol or an index is not a name a page reached for. The lookup has two
++   ends that say "not found": JS_GetPropertyInternal's, and the inline
++   field read in JS_CallInternal (GET_FIELD_INLINE), which never calls it
++   when the chain is plain. Both come here. */
++static void js_hear_global_miss(JSContext *ctx, JSValueConst obj, JSAtom prop)
++{
++    char buf[ATOM_GET_STR_BUF_SIZE];
++    if (JS_VALUE_GET_OBJ(obj) != JS_VALUE_GET_OBJ(ctx->global_obj) ||
++        __JS_AtomIsTaggedInt(prop) || JS_AtomGetKind(ctx, prop) != JS_ATOM_KIND_STRING)
++        return;
++    ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop));
++}
++
+ JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
+                                JSAtom prop, JSValueConst this_obj,
+                                BOOL throw_ref_error)
+@@ -8397,6 +8429,8 @@
+         if (!p)
+             break;
+     }
++    if (unlikely(ctx->global_miss != NULL) && tag == JS_TAG_OBJECT)
++        js_hear_global_miss(ctx, obj, prop);
+     if (unlikely(throw_ref_error)) {
+         return JS_ThrowReferenceErrorNotDefined(ctx, prop);
+     } else {
+@@ -19230,6 +19264,8 @@
+                         }                                               \
+                         p = p->shape->proto;                            \
+                         if (!p) {                                       \
++                            if (unlikely(ctx->global_miss != NULL))     \
++                                js_hear_global_miss(ctx, obj, atom);    \
+                             val = JS_UNDEFINED;                         \
+                             break;                                      \
+                         }                                               \
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -846,6 +846,10 @@
+ JSValue JS_GetGlobalObject(JSContext *ctx);
+ /* Browser-only legacy accessor helper; install explicitly in that context. */
+ JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function);
++/* os64: hear each string name a global-object lookup misses; NULL stops. */
++void JS_SetGlobalMissHandler(JSContext *ctx,
++                             void (*handler)(void *opaque, const char *name),
++                             void *opaque);
+ int JS_IsInstanceOf(JSContext *ctx, JSValueConst val, JSValueConst obj);
+ int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,
+                       JSAtom prop, JSValueConst val,

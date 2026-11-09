@@ -1,0 +1,523 @@
+#ifndef WAY_WAY_H
+#define WAY_WAY_H
+
+// libway — a browsing SESSION, apart from whatever draws it
+// (docs/completed/06-navigator.md): where you have been, how a page is
+// loaded, which addresses this browser follows, and when a person is asked
+// before something is sent. The name is the idiom, to wend one's way;
+// `wend` and `yonder` are two faces on it, and the library never paints and
+// never reads a key.
+//
+// TWO HALVES. The I/O half (way_load) talks to libfetch. Everything else is
+// pure over a page and a session, which is what lets a host harness drive
+// every judgement with no network under it.
+//
+// SENTENCES. What the library has to say lands in `session->status` (or a
+// leg's, for a load), the face's transient line, in the house's status-row
+// voice (a leading space, no full stop). A face that shows it elsewhere
+// trims what it likes.
+//
+// THREADS. A session belongs to the thread that made it. A load may run on
+// another, through a way_leg_t: see way_load.
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "fetch/fetch.h"
+#include "html/html.h"
+#include "page/page.h"
+#include "way/cache.h"
+#include "way/jar.h"
+#include "way/origin.h"
+
+#pragma GCC visibility push(default)
+
+#define WAY_SENTENCE_MAX 512
+// A Content-Disposition line kept for a download's name (way_leg_t.offer):
+// a name and its parameters fit with room; one longer is not kept at all,
+// since a cut one could name a different file.
+#define WAY_DISPOSITION_MAX 512
+// Oldest dropped past this: somebody sixty-four pages in wants the
+// sixty-fifth more than the first.
+#define WAY_HISTORY_MAX 64
+// A chain of immediate refreshes is capped as a chain of redirects is, and
+// for the same reason: nobody reading can tell a slow one from a stuck one.
+#define WAY_REFRESH_MAX 5
+#define WAY_POSITION_MAX 16
+
+// WHERE A PERSON WAS ON A PAGE, in the face's own terms — wend keeps a row
+// and a selection, yonder a scroll offset in pixels. The library stores it
+// and hands it back without reading it. It is a HINT: going back to another
+// document is a fetch, and the page that comes back need not be the page
+// that was left, so a face checks it against what arrived before trusting
+// it into an array.
+typedef struct {
+    uint8_t bytes[WAY_POSITION_MAX];
+} way_position_t;
+
+// A page, and everything a face needs to draw it again at another size.
+typedef struct {
+    char url[OS64_FETCH_URL_MAX];       // the address the body came from
+    os64_html_document_t *doc;          // HTML: the tree
+    char *text;                         // text/plain: the bytes
+    size_t textlen;
+    bool text_utf8;
+    // What the page MEANS (LIBPAGE.md): where its links go, what its
+    // controls hold. A person's edits live here, so they survive a relayout.
+    // NULL when memory ran out building it: the page still reads, and its
+    // links and boxes do not work.
+    os64_page_t *model;
+    bool refresh_handled;               // per loaded document, refused attempts included
+    // The `details` the reader opened or closed: the reader's state, not
+    // the page's, so it lives with the page and survives a relayout.
+    const os64_html_node_t **flipped;
+    int32_t nflipped, flippedcap;
+    // The page's standing line: the reply's status and reason, and a
+    // sentence for every way the page is incomplete.
+    char note[WAY_SENTENCE_MAX];
+    // The reply to a POST, by the FINAL method: its address alone cannot
+    // fetch it again, so a reload is the form sent again (a 303 turned a
+    // POST into a GET, and that page is an address like any other).
+    bool posted;
+} way_page_t;
+
+// How the library reaches the person.
+typedef struct {
+    void *ctx;
+    // Ask a yes/no question. The question says nothing about HOW to answer
+    // — a terminal's "(y/n)" is not a window's pair of buttons — so the face
+    // adds its own. `security` marks one where a stale or unverifiable
+    // answer could send something in clear; `refused` is the sentence for a
+    // no, NULL for none. The face owns how an answer is shown to be FRESH.
+    // NULL answers every question no: nothing goes out in clear that nobody
+    // was asked about.
+    bool (*confirm)(void *ctx, const char *question, bool security, const char *refused);
+    // Whether to stop the fetch in flight. Asked before every wait.
+    bool (*cancelled)(void *ctx);
+    // Show the load's sentence NOW: a fetch takes as long as the network
+    // takes, and a person deserves to see what is being fetched while it
+    // happens. NULL shows nothing until the face next draws.
+    void (*progress)(void *ctx, const char *sentence);
+} way_face_t;
+
+// ONE ENTRY OF THE HISTORY (HTML § Session history): where it was, and
+// where on it the person was. `document` is the face's own name for the
+// document the entry was shown in, 0 for none: two crumbs naming one
+// nonzero document are entries of that one document, and moving between
+// them is no fetch. `entry` is the face's own name for the entry itself, 0
+// for none, so a face can find one again wherever the list has moved it.
+// `state` is what the document's script left with the entry
+// (history.pushState's, serialised as the face's binding chose),
+// NUL-terminated, NULL for none. The library stores them and reads none.
+// A crumb IN THE SESSION OWNS its state: way_last and way_next copy one out
+// with its state BORROWED, good until the session next changes, and only
+// the _entry calls below hand a state in or out.
+typedef struct {
+    char url[OS64_FETCH_URL_MAX];
+    way_position_t position;
+    uint64_t document;
+    uint64_t entry;
+    char *state;
+    // How the navigation that made the entry's document was asked
+    // (way_metadata_navigation's answer, before any hop): the browser's
+    // Reload and Back replay it, as browsers do. Its `dest` is
+    // WAY_DEST_DOCUMENT when it was kept; a zeroed one kept nothing, and a
+    // face replays the browser's own then.
+    way_metadata_t asked;
+} way_crumb_t;
+
+// A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to
+// OS64_FETCH_URL_MAX bytes each — so a face keeps one in static storage, as
+// wend does, and never on a thread's stack.
+typedef struct {
+    const char *name;                   // how a sentence names this browser: "wend"
+    const char *agent;                  // the User-Agent it sends
+    // What its agent's preset sends beside it (way/origin.h), NULL for none.
+    const way_identity_t *identity;
+    // The Accept list of the pages it renders. A leg that shows pictures
+    // (way_leg_t.pictures) adds them on a GET (way_accept_compose). A leg
+    // whose preset names a navigation list of its own sends that instead
+    // (way_identity_accept).
+    const char *accept;
+    // What the face offers for a page that asks to send the reader on after
+    // a delay, appended to the sentence saying so: wend's " - press g to
+    // go". NULL or "" offers nothing.
+    const char *delayed_hint;
+    way_face_t face;
+    char status[WAY_SENTENCE_MAX];      // the transient sentence
+    way_crumb_t history[WAY_HISTORY_MAX];
+    int32_t depth;
+    // Where Forward goes: the pages Back left, newest last. Following
+    // anything new empties it.
+    way_crumb_t forward[WAY_HISTORY_MAX];
+    int32_t ahead;
+    // The browser's cookies (way/jar.h), shared by every fetch it makes on
+    // any thread; the one thing a load writes that is not its own. NULL
+    // keeps none and sends none.
+    way_jar_t *jar;
+} way_session_t;
+
+// A reply that was no page (way_leg_t.offer): the address it came from
+// after its redirects, its type, and the final head's Content-Disposition
+// as the server sent it ("" for none, or one too long to keep whole).
+typedef struct {
+    char url[OS64_FETCH_URL_MAX];
+    char type[HTTP_TYPE_MAX];
+    char disposition[WAY_DISPOSITION_MAX];
+} way_offer_t;
+
+// ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's name and
+// accept list (set before the first load and never changed while one
+// runs), sends the agent its leg carries, writes only to its own leg (its
+// sentence, and what it notes of its hops) and to the browser's jar, and
+// reaches the person only through its own face. So a face may run
+// way_load on a thread other than the session's: the leg, and the jar
+// behind its own lock, are the whole of what the two share.
+typedef struct {
+    const way_session_t *session;
+    // The User-Agent this load sends: the session's when way_leg made the
+    // leg, or the one handed to way_leg_as. A face that lets the agent
+    // change while loads run elsewhere (yonder's Settings) reads it on the
+    // session's thread when it asks for the load and makes the leg with
+    // way_leg_as, so nothing off that thread reads the session's.
+    const char *agent;
+    // What that agent's preset sends beside it, NULL for none: read with
+    // the agent, from the same place.
+    const way_identity_t *identity;
+    // What the load is and who started it, which each hop's Fetch Metadata
+    // says (way_metadata_navigation). way_leg makes it the browser's own,
+    // an address given to it; a face whose load a person on the page or the
+    // page itself started sets it before the load. The load steps it hop by
+    // hop.
+    way_metadata_t metadata;
+    way_face_t face;
+    // Parser noscript policy for this load, captured by the requesting face.
+    // The finished-document loader resumes script stops without executing.
+    bool scripting;
+    // The pictures the face shows, as an Accept list of their types (yonder's
+    // is libimage's OS64_IMAGE_ACCEPT), or NULL for none. A GET asks for
+    // them after the session's pages (way_accept_compose) unless the
+    // preset names its own list (way_session_t.accept), and a picture
+    // asked for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
+    // body the face does not read — it writes the page that shows the
+    // picture. Any other picture is not a page. way_open's alone: way_load
+    // reads every body it opens, so to it no picture is a page.
+    const char *pictures;
+    char status[WAY_SENTENCE_MAX];
+    // The page this load was asked for from — a link followed, a form sent,
+    // a refresh — which its Referer names (way_referrer). Empty for an
+    // address typed, Back, Forward and Reload.
+    char referrer[OS64_FETCH_URL_MAX];
+    // way_open's own, for way_head_t.redirects: the origin of the address
+    // asked for (origin.h's, opaque and equal to nothing for an address
+    // with no tuple origin), and the number of the first hop that left it
+    // (0 for none).
+    way_origin_t asked_origin;
+    uint32_t left_at;
+    // The cookies this load's hops left out for want of room (jar.h), for
+    // the face's record of the page.
+    way_cookies_short_t cookies_short;
+    // A REPLY THAT IS NO PAGE, kept for a face that offers to save it:
+    // way_open fills it when it refuses a GET's reply as not a page, and
+    // empties it (`url` "") at every other outcome.
+    way_offer_t offer;
+} way_leg_t;
+
+// A leg for `session`, with the session's own face, an empty sentence, and
+// the browser's own navigation for its metadata. way_leg reads the
+// session's agent and identity; way_leg_as is handed both, read earlier on
+// the session's thread, and reads only what never changes while a load
+// runs.
+way_leg_t way_leg(const way_session_t *session);
+way_leg_t way_leg_as(const way_session_t *session, const char *agent,
+                     const way_identity_t *identity);
+
+// A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
+// which arrived `encrypted` or not (its head's, way_head_t.encrypted: an
+// https page through a plain proxy did not, and its script may neither read
+// nor set a Secure cookie), at the system's clock: what it may read, at most `cap` bytes with the
+// NUL, answering the length written and whether that is all of it (false:
+// ask again with more room), and one cookie it sets ("name=value;
+// attributes", as a Set-Cookie value). The jar's script rules apply
+// (jar.h); a page that is not http or https reads "" and sets nothing.
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out,
+                          size_t cap, bool *whole);
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text,
+                       size_t len);
+
+// ── The I/O half ────────────────────────────────────────────────────────
+//
+// A LOAD IN PIECES (docs/design/pending/DOM_D4.md). way_load is the four
+// pieces below in a row, on one thread, which is how wend loads. yonder
+// runs the first two on a worker and the last two on its window: the
+// parser lives on the thread that will run the page's scripts (DOM.md
+// ruling 5), and the worker carries only bytes. Each judgement is written
+// once, here, so the two faces cannot drift.
+
+// Whether an Accept-style list ("a/b, c/d;q=0.5") names `type` exactly,
+// parameters aside.
+bool way_accept_names(const char *list, const char *type);
+
+// The Accept a navigation sends: the page types `pages`, then each type of
+// `pictures` (NULL for none) at half the weight, so a server with both
+// sends the page and one with only a picture sends that. Never longer than
+// `cap` (libfetch refuses a longer one, OS64_FETCH_ACCEPT_MAX): a picture
+// type that would not fit is left off, never cut. Answers `out`, or NULL
+// when `pages` itself does not fit, which is never cut either: the caller
+// sends `pages` as it is, for libfetch to refuse.
+const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap);
+
+// What a body is, judged from its head. A head that is none of these is not
+// a page: way_open says so and refuses. IMAGE only for a leg whose face shows
+// pictures, and never for the reply to a POST.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE } way_body_t;
+
+// The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
+// the fetch and dies with it, and the note is written from the head after
+// the fetch is closed, on another thread.
+typedef struct {
+    int32_t status;
+    char reason[HTTP_REASON_MAX];
+    char content_type[HTTP_TYPE_MAX];
+    char charset[HTTP_CHARSET_MAX];
+    char url[OS64_FETCH_URL_MAX];       // where the body came from, after redirects
+    bool posted;                        // the FINAL method was POST
+    // The final hop's transport was encrypted: https, and not through a
+    // plain proxy (libfetch's own answer, never the scheme's). What a page's
+    // script may do with Secure cookies follows it (way_script_cookies).
+    bool encrypted;
+    uint16_t tls_version;
+    bool tls_fallback;
+    way_body_t body;
+    // Navigation Timing's redirectCount: the redirects followed to get here
+    // when every one stayed on the origin of the address asked for, and 0
+    // when there were none or any left it. way_open's alone.
+    uint32_t redirects;
+    // The response's Last-Modified as written, "" when it sent none
+    // (document.lastModified reads it).
+    char last_modified[OS64_FETCH_KEEP_FIELD];
+} way_head_t;
+
+// A fetch open with its head read and judged a page. The fetch is the
+// caller's to read (way_read) and to close (os64_fetch_close).
+typedef struct {
+    os64_fetch_t *fetch;
+    way_head_t head;
+    char asked[OS64_FETCH_URL_MAX];     // the address asked for, which the sentences name
+    uint64_t shown;                     // bytes read when the sentence was last said
+} way_opening_t;
+
+// Opens `url` with the leg's own options (agent, accept, the parser's byte
+// cap, the downgrade question, cookies and Referer, a POST's body when
+// `request` is a form), reads the head and judges it. True leaves the fetch
+// open in `out`. False closes it: a head that never came (`why` says what
+// stopped it), or a reply that is not a page, with the sentence saying what
+// it is and how to keep it in `leg->status`.
+bool way_open(way_leg_t *leg, const char *url, const os64_page_request_t *request,
+              way_opening_t *out, os64_fetch_status_t *why);
+
+// One read of the body, os64_fetch_read's answer, and the "reading N KB"
+// sentence through the leg's face every 64 KB.
+int64_t way_read(way_leg_t *leg, way_opening_t *opening, void *buf, size_t cap);
+
+// Whether a text/plain body is UTF-8: by its label, else by JSON's own
+// rule, else by a byte order mark in its first bytes.
+bool way_text_utf8(const way_head_t *head, const void *first, size_t n);
+// Whether that answer waits on the body: nothing in the head decides, so
+// the first three bytes do, and a reader must have them whole before asking.
+bool way_text_sniffs(const way_head_t *head);
+
+// The page's address, whether it was posted, and its standing line: the
+// status and reason, then a sentence for every way it is incomplete — our
+// memory (`short_of_memory`), the wire (`fetch` and its `reason` sentence,
+// os64_fetch_reason's, read only when `fetch` is not OK; a NULL there says
+// only that the fetch did not finish), and the parser (`page->doc->refusal`,
+// when there is a doc).
+void way_note(way_page_t *page, const way_head_t *head, bool short_of_memory,
+              os64_fetch_status_t fetch, const char *reason);
+
+// Fetch and parse one address into `out`, which the caller zeroed.
+// `request` is the form a page is sending, or NULL for a GET of `url`: a
+// POST's body and content type go out with it, and must stay alive until
+// this returns. False when there is nothing to show, with the reason in
+// `leg->status` and `out` empty. True leaves the page in `out` and its note
+// written; the face lays it out and says what laying out found. `why` (may
+// be NULL) is the fetch's own verdict, for a face that turns a failed first
+// page into an exit code.
+bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *request,
+              way_page_t *out, os64_fetch_status_t *why);
+
+// For a fetch a face makes itself — a picture a page names — the same
+// cookies and Referer a page's own fetch carries, the lines that say who is
+// asking, and the browser's cache. way_fetch_hooks takes over `opt`'s
+// headers_for, on_set_cookie, cancelled and ctx, sets its order and
+// keep_alive from the preset (way_identity_order, way_identity_keep_alive),
+// and its accept when the preset names one for the hooks' destination
+// (way_identity_accept): the caller's own
+// cancellation goes in the hooks instead, and the hooks must live until the
+// fetch is closed.
+typedef struct {
+    way_jar_t *jar;
+    way_cache_t *cache;                     // NULL keeps nothing
+    char referrer[OS64_FETCH_URL_MAX];      // "" for none
+    const way_identity_t *identity;         // the agent's preset lines, NULL for none
+    // What the fetch is for and the page that asked (way_metadata_request),
+    // stepped hop by hop.
+    way_metadata_t metadata;
+    bool (*cancelled)(void *ctx);
+    void *cancel_ctx;
+    // way_fetch_whole's own: a redirect on the way that was not permanent
+    // (301, 308), which makes the reply one not to keep under the address
+    // asked for; and what the permanent ones said about keeping them.
+    bool passing_hop;
+    way_chain_t chain;
+    // The cookies the fetch's hops left out for want of room (jar.h), for
+    // the face's record of the page that asked.
+    way_cookies_short_t cookies_short;
+} way_hooks_t;
+
+void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);
+
+
+// A body read whole, and what came with it. `bytes` is os64_malloc'd and
+// the caller's to free.
+typedef struct {
+    uint8_t *bytes;
+    size_t len;
+    int32_t status;
+    char content_type[HTTP_TYPE_MAX];
+    char charset[HTTP_CHARSET_MAX];
+    char url[OS64_FETCH_URL_MAX];           // where it came from: a base for what it names
+    way_served_t served;
+    // The cache holds this body now: it was served from there, or stored
+    // by this fetch. What a face keeps beside it (a companion, cache.h) is
+    // asked for only then.
+    bool kept;
+    os64_fetch_status_t fetch;              // the fetch's verdict, when there was one
+} way_whole_t;
+
+// A GET of `url` read whole, of at most `cap` bytes, through the hooks'
+// cache when it has one (CACHE.md): served from it while fresh, asked
+// again with its validator when stale (fetched whole, when it came through
+// redirects), kept when the reply allows. `opt`
+// carries the rest of the request — agent, accept, extra headers — and is
+// the caller's; the hooks are set on it here. True when there is a body
+// whole, whatever its status: a 404's page is a body. False with
+// `out->fetch` saying why when there is none, or when it was longer than
+// `cap`; `out` holds no bytes then.
+bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *opt,
+                     size_t cap, way_whole_t *out);
+
+// ── Pages ───────────────────────────────────────────────────────────────
+
+// Frees what the page holds and leaves it empty.
+void way_page_clear(way_page_t *page);
+
+// Opens or closes a `details` for the reader. False on no memory.
+bool way_details_flip(way_page_t *page, const os64_html_node_t *details);
+
+// ── The history ─────────────────────────────────────────────────────────
+
+// Remembers the page being left, and where on it the person was. This is
+// a NEW way, so Forward has nowhere left to go, and the states of the
+// crumbs that were ahead are freed.
+void way_remember(way_session_t *session, const char *url, const way_position_t *where);
+// The same, for an entry the face describes whole: the crumb is copied in
+// and its state TAKEN (`left->state` is NULL after).
+void way_remember_entry(way_session_t *session, way_crumb_t *left);
+// What is ahead is let go and its states freed, as a push lets it go.
+void way_forget_ahead(way_session_t *session);
+
+// The crumb Back would return to, its state borrowed. False, with the
+// sentence, when there is none. The crumb stays until the face says it
+// went: Back to another document is a fetch, and one that fails must leave
+// the history as it was.
+bool way_last(way_session_t *session, way_crumb_t *out);
+// Back arrived and nothing is kept for Forward (wend has no Forward).
+void way_forget_last(way_session_t *session);
+// Back arrived: the crumb is spent, and the page left is where Forward goes.
+void way_went_back(way_session_t *session, const char *url, const way_position_t *where);
+// The same, for entries the face describes whole: the crumb way_last
+// answered is moved out to `arrived`, its state the caller's now (zeroed
+// when there was none), and `left` is copied in where Forward goes, its
+// state taken.
+void way_went_back_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
+
+// The crumb Forward would go to, and its arrival, the mirror of Back's:
+// the page left joins the history without emptying what is ahead.
+bool way_next(way_session_t *session, way_crumb_t *out);
+void way_went_forward(way_session_t *session, const char *url, const way_position_t *where);
+void way_went_forward_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
+// An entry put where Forward goes next, its state taken, so a face pushes
+// the furthest first; past WAY_HISTORY_MAX the furthest is let go. What a
+// face does with entries a page made ahead of itself before it was shown.
+void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
+
+// Every crumb's state freed and both lists emptied: what a face does with
+// a session it is done with.
+void way_history_clear(way_session_t *session);
+
+// ── Judgements: what to do about a request a page makes ────────────────
+
+// WHO IS ASKED before an encrypted page's request goes out in the clear.
+// Nobody for a link: a person pressed it, and where it goes is written on
+// the page. A person for a form (what goes is what they typed) and for a
+// refresh (the page chose where, and nobody pressed anything).
+typedef enum {
+    WAY_ASK_NEVER = 0,
+    WAY_ASK_SEND,
+    WAY_ASK_GO,
+} way_ask_t;
+
+typedef enum {
+    WAY_REFUSE = 0,     // the reason is in session->status
+    WAY_QUESTION,       // put `question` first; a no means `refused`
+    WAY_FETCH,          // go to request->url
+} way_judgement_kind_t;
+
+typedef struct {
+    way_judgement_kind_t kind;
+    char question[WAY_SENTENCE_MAX];
+    const char *refused;
+    bool security;
+} way_judgement_t;
+
+// The judgement on a NAVIGATE request: this browser's own list of what it
+// fetches, and the question owed before anything goes out in clear.
+way_judgement_t way_judge(way_session_t *session, const os64_page_request_t *request,
+                          way_ask_t ask);
+
+// way_judge, with the question put through the face. True: fetch
+// request->url.
+bool way_may_go(way_session_t *session, const os64_page_request_t *request, way_ask_t ask);
+
+// ── A page that asks to send you somewhere ──────────────────────────────
+
+typedef enum {
+    WAY_REFRESH_NONE = 0,   // nothing to do (a sentence may say why)
+    WAY_REFRESH_JUMP,       // move to request->anchor, in this page
+    WAY_REFRESH_GO,         // perform the request: no history entry, WAY_ASK_GO
+} way_refresh_t;
+
+// One hop of a declared refresh's chain, judged once per loaded page. The
+// caller zero-starts `*chain` for each chain and asks again after a GO, so
+// a redirector that lands on another redirector needs no keypress between
+// them. After JUMP or GO the caller frees `request`
+// (os64_page_request_free); after NONE there is nothing to free.
+way_refresh_t way_refresh_step(way_session_t *session, way_page_t *page, int32_t *chain,
+                               os64_page_request_t *request);
+
+// The address a page asks to send the reader to after a delay, or NULL —
+// what a face offers rather than follows.
+const char *way_delayed_refresh(const way_page_t *page);
+
+// ── What a person types ─────────────────────────────────────────────────
+
+// A bare `host/path` means http. An address that does not fit is refused,
+// never trimmed: a truncated URL is a different address, one nobody typed.
+bool way_typed_address(const char *typed, char *out, size_t cap);
+
+#pragma GCC visibility pop
+
+#endif

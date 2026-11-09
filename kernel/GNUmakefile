@@ -1,6 +1,11 @@
 # Nuke built-in rules and variables.
 MAKEFLAGS += -rR
+# Parallel when this is the top-level make (`make -C kernel`); under the root
+# build it inherits the root's jobserver instead, because a -j of its own
+# would drop that jobserver and run a full count beside the root's jobs.
+ifeq ($(MAKELEVEL),0)
 MAKEFLAGS += -j$(shell nproc)
+endif
 # Find all directories in `include` recursively
 INCLUDE_DIRS := $(shell find include -type d)
 # Prefix each directory with -I for GCC
@@ -26,8 +31,23 @@ $(call USER_VARIABLE,DESTDIR,)
 # Install prefix; /usr/local is a good, standard default pick.
 $(call USER_VARIABLE,PREFIX,/usr/local)
 
-# User controllable C compiler command.
+# User controllable C compiler command — with ccache in front of it WHEN THE
+# MACHINE HAS ONE, and nothing otherwise: a convenience of the dev box, never
+# a requirement of the build. ccache hashes the preprocessed source, the
+# flags and the compiler itself and hands back the stored object on a match,
+# byte for byte what the compiler would emit, so a build with it and one
+# without must not differ; if two machines ever do, this line is the first
+# question. Only `-c` compiles go through it (-S and links pass straight to
+# the tool). Decided BEFORE USER_VARIABLE, which only assigns when CC is
+# make's own; an explicit CC from the command line or the environment is
+# left alone either way.
+ifeq ($(filter-out default undefined,$(origin CC)),)
+ifneq ($(shell command -v ccache 2>/dev/null),)
+override CC := ccache x86_64-elf-gcc
+endif
+endif
 $(call USER_VARIABLE,CC,x86_64-elf-gcc)
+$(info kernel: CC is '$(CC)')
 
 # User controllable archiver command.
 $(call USER_VARIABLE,AR,x86_64-elf-ar)
@@ -139,14 +159,24 @@ override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -
 # by their own sub-Makefiles via the test-elf/test-shlib targets below, with
 # their own -fpie/-fPIC flags) — they are not kernel test code and must not
 # be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
-override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/elf/syscall_smoke.c test/elf/exit_by_return.c test/elf/file_io.c test/elf/redirect_io.c test/elf/dir_list.c test/elf/map_unmap.c test/elf/cwd_test.c test/elf/stat_test.c test/elf/sleep_test.c test/elf/memory_test.c test/elf/hog.c test/elf/env_fill.c test/elf/glutton.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
+#
+# EXCLUDED BY DIRECTORY, NOT BY NAME. This was a hand-written list of all
+# sixteen fixture files, which is an inventory of somebody else's directory
+# and went stale the first time one was renamed: hog.c became nosyscall.c on
+# 2026-08-29, the list still said hog.c, and the fixture was quietly compiled
+# INTO the kernel. Nothing complained — a spare ring-3 `_start` does not clash
+# with the kernel's entry point, so it linked, booted and ran, carrying dead
+# code nobody had asked for. A `%` pattern cannot be stale: the rule is "no
+# .c under test/elf or test/shlib", which is the rule that was meant all along.
+override TEST_CFILES := $(filter-out test/elf/% test/shlib/%,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
 override OBJ := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o)) \
     $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.o))
+override OBJ += obj/shared/decoration.c.o obj/shared/copy_fill.c.o obj/shared/damage.c.o
 override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.S=.S.d)) \
-    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d))
+    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d)) obj/shared/decoration.c.d obj/shared/copy_fill.c.d obj/shared/damage.c.d
 
 
 # Default target.
@@ -181,6 +211,10 @@ bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 -include $(HEADER_DEPS)
 
 # Compilation rules for *.c files.
+obj/shared/%.c.o: ../shared/%.c GNUmakefile
+	@mkdir -p $(@D)
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 obj/%.c.o: src/%.c GNUmakefile
 	@mkdir -p "$$(dirname $@)"
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -224,6 +258,8 @@ include/asm-offsets.h: src/asm-offsets.c GNUmakefile
 -include obj/asm-offsets.d
 
 # Compilation rules for *.S files (depend on asm-offsets.h so offsets stay current).
+obj/driver/system/usb/bt_firmware.S.o: ../firmware/intel/ibt-0041-0041.sfi ../firmware/intel/ibt-0041-0041.ddc ../firmware/intel/LICENCE.ibt_firmware
+
 obj/%.S.o: src/%.S include/asm-offsets.h GNUmakefile
 	@mkdir -p "$$(dirname $@)"
 	@$(CC) $(CFLAGS) -c $< -o $@

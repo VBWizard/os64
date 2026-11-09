@@ -1,0 +1,1636 @@
+// fetch.c — the driver: dial, ask, read the head, follow the hops, hand the
+// body over with its framing and coding taken off. LIBFETCH.md is the
+// design record; fetch.h is the contract. This file was os64get's
+// url_ask_with_trust + receive_url_body with the file, the prose and the
+// exit codes taken out, and the buffers moved off BSS and into the object.
+
+#include "fetch/fetch.h"
+
+#include "fetch/transport.h"
+#include "pool.h"
+#include "proxy.h"
+
+#include "os64/dial.h"
+#include "os64/fmt.h"
+#include "os64/io.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+
+// The wire staging buffer for a gzip body: the decoder wants an input run
+// and the framing hands over whatever arrived, so a run is accumulated here
+// before decoding. Identity bodies never touch it — they are read straight
+// into the caller's buffer.
+#define FETCH_WIRE_CHUNK 65536
+
+// A dial string: "tcp!" + the longest host the resolver accepts + "!65535".
+// The bound is checked anyway, because a truncated dial string fails with
+// the WRONG complaint — a port nobody mistyped (Codex review, 2026-08-22).
+#define FETCH_DIAL_MAX (OS64_RESOLVE_NAME_MAX + 16)
+
+struct os64_fetch {
+    os64_fetch_options_t opt;
+    char user_agent[OS64_FETCH_AGENT_MAX];
+    char accept[OS64_FETCH_ACCEPT_MAX];
+    bool accept_given;                          // `accept` was passed, empty or not
+    char accept_get[OS64_FETCH_ACCEPT_MAX];     // empty: `accept` on a GET too
+    char extra[OS64_FETCH_EXTRA_MAX];
+    char content_type[OS64_FETCH_CONTENT_TYPE_MAX];
+    char method_name[OS64_FETCH_METHOD_MAX];    // empty: `method`
+    char body_headers[OS64_FETCH_EXTRA_MAX];
+    char order[OS64_FETCH_ORDER_MAX];           // empty: libfetch's own order
+    os64_fetch_method_t method; // current request; opt.method is the initial method
+
+    // One hop's request, composed before its dial, and the fields it carries.
+    // Here rather than on the stack because the caller's fields may be as
+    // long as OS64_FETCH_EXTRA_MAX, and a fetch runs on threads whose stacks
+    // are not the library's to choose. Room for each variable part at its
+    // longest (the target, the Host line's host, the caller's fields), and
+    // 256 for the fixed text.
+    char request[HTTP_TARGET_MAX + HTTP_HOST_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX +
+                 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX + OS64_FETCH_CONTENT_TYPE_MAX +
+                 HTTP_METHOD_NAME_MAX + 256];
+    char hop_extra[OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX];
+    // What headers_for wrote for the hop, judged before it joins hop_extra
+    // (request_extras): here and not on the stack for the reason `request`
+    // is, at about 13 KB.
+    char hop_fields[OS64_FETCH_HOP_FIELDS_MAX];
+
+    // One conversation with the world: the connection, the stream reading
+    // it, and the head that came back. A redirect gives the connection back
+    // to the pool when it may be kept, closes it when not, and starts
+    // another conversation; the body is read from the LAST one. The stream
+    // holds a pointer to `io`, so these live here and are never copied while
+    // the stream reads; a connection kept between fetches is copied into
+    // `io` when it is taken and out of it when it is given back (pool.h).
+    fetch_transport_t io;
+    http_stream_t     stream;
+    http_response_t   reply;
+    http_body_t       body;
+    http_url_t        current;      // the address being asked
+    http_url_t        origin;       // the address the caller typed: what its credentials are FOR
+    fetch_proxy_t     proxy;        // who is carrying it
+    fetch_proxy_t     origin_proxy; // who was chosen to carry the typed address: what a proxy credential is FOR
+
+    os64_fetch_head_t     head;
+    os64_fetch_progress_t progress;
+    os64_fetch_detail_t   detail;
+    os64_fetch_status_t   status;
+    bool have_head;                 // `head` is filled and the connection is positioned at the body
+    bool connected;                 // io holds a live connection
+    bool reused;                    // ...taken from the pool, not dialled for this request
+    uint32_t retried;               // requests that failed on a reused connection and went again on a fresh one
+    bool body_open;                 // `body` frames the final head's body (body_prepare)
+    bool sent_whole;                // every byte of the request went before its final head came
+    // The framing was told the body is empty when the wire may hold some: a
+    // 205, which may carry no content (RFC 9110 § 15.3.6) yet is framed like
+    // any reply (RFC 9112 § 6.3), whose head promised bytes nobody reads.
+    bool wire_unread;
+    bool over;                      // read has given its final answer
+    int64_t final_answer;           // ...and this is it (0 or -1)
+
+    // The store an https hop is verified under: the caller's, or the
+    // system's the library shares (fetch_pool_trust). Never this fetch's to
+    // free.
+    os64_tls_trust *trust;
+
+    // gzip: the decoder, its cap, and the wire staging run.
+    bool gzip;
+    os64_gzip_t *gz;
+    uint64_t gz_limit;
+    bool gz_final;                  // the framing said the body is WHOLE
+    uint8_t *wire;
+    size_t wire_have, wire_next;
+
+    char reason[OS64_FETCH_WHY_MAX + OS64_FETCH_URL_MAX];
+};
+
+// ── Small things ────────────────────────────────────────────────────────
+
+static bool cancelled(os64_fetch_t *f)
+{
+    return f->opt.cancelled != NULL && f->opt.cancelled(f->opt.ctx);
+}
+
+static bool cancel_predicate(void *ctx)
+{
+    return cancelled((os64_fetch_t *)ctx);
+}
+
+// Whether the current request carries the caller's body: a POST does, and
+// a method by name does unless it is GET or HEAD.
+static bool sends_body(const os64_fetch_t *f)
+{
+    if (f->method_name[0] != '\0')
+        return !os64_streq(f->method_name, "GET") && !os64_streq(f->method_name, "HEAD");
+    return f->method == OS64_FETCH_METHOD_POST;
+}
+
+static void proxy_facts(const fetch_proxy_t *p, bool *via, char *host, size_t cap, uint16_t *port)
+{
+    *via = p->inUse;
+    if (p->inUse) {
+        os64_strcopy(host, cap, p->host);
+        *port = p->port;
+    } else {
+        host[0] = '\0';
+        *port = 0;
+    }
+}
+
+// The same ORIGIN: scheme, host and port — the web's unit of trust.
+static bool same_address_origin(const http_url_t *a, const http_url_t *b)
+{
+    return a->port == b->port &&
+           os64_streq(a->scheme, b->scheme) &&
+           os64_streq(a->host, b->host);
+}
+
+static bool same_address(const http_url_t *a, const http_url_t *b)
+{
+    return same_address_origin(a, b) && os64_streq(a->path, b->path);
+}
+
+// Browser redirect semantics: POST becomes GET on 301/302/303, while
+// 307/308 replay the method and borrowed bytes. The hop describes the
+// proposed change before the caller decides whether to send it.
+//
+// The 3xx codes deliberately NOT here, each a final answer the caller sees:
+//   300 Multiple Choices — a list for a person to pick from; its Location is
+//       a hint, and choosing on somebody's behalf is not a fetcher's job.
+//   304 Not Modified — an answer to a conditional request nothing here makes.
+//   305 Use Proxy — a stranger telling this machine to route its traffic
+//       through a machine of the stranger's choosing. Every browser dropped
+//       it for that reason; so does this.
+static bool redirect_is_followed(int32_t status)
+{
+    return status == 301 || status == 302 || status == 303 ||
+           status == 307 || status == 308;
+}
+
+// The library's URL, with the port the fetch actually used. fetch.h
+// promises a filled-in port here (a consumer that dials again wants it),
+// which is the opposite of what os64_url_absolute wants — http_url_to_os64
+// is for that direction.
+static void url_filled(const http_url_t *in, os64_url_t *out)
+{
+    http_url_to_os64(in, out);
+    out->port = in->port;
+}
+
+// ── Redirect arithmetic ─────────────────────────────────────────────────
+
+// THE WHOLE ADDRESS FIRST, AND EVERY QUESTION IS ASKED OF THAT. A Location
+// may be root-relative (`/login`), scheme-relative (`//cdn.example/x`) or
+// relative to the page (`index.html`), and none of those parses as a URL on
+// its own — so a judgement made on the raw header judged an empty host,
+// asked the proxy policy about nothing, and let a malformed relative path
+// through to be offered as a command os64get itself would refuse. Resolve,
+// then parse, then decide. (Codex review round 6, 2026-09-03.)
+static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
+                     fetch_proxy_t *carrier)
+{
+    os64_memset(hop, 0, sizeof(*hop));
+    hop->status = f->reply.status;
+    hop->from_method = f->method;
+    hop->to_method = f->method;
+    if (f->method == OS64_FETCH_METHOD_POST &&
+        (hop->status == 301 || hop->status == 302 || hop->status == 303))
+        hop->to_method = OS64_FETCH_METHOD_GET;
+    os64_strcopy(hop->reason, sizeof(hop->reason), f->reply.reason);
+    hop->keep = f->head.keep;           // what the redirect said about keeping it
+    hop->number = f->head.hops + 1;
+    proxy_facts(&f->proxy, &hop->from_via_proxy, hop->from_proxy_host,
+                sizeof(hop->from_proxy_host), &hop->from_proxy_port);
+
+    const char *location = f->reply.location;
+    if (location[0] == '\0') {
+        hop->kind = OS64_FETCH_HOP_NONE;
+        return;
+    }
+    os64_url_t base;
+    http_url_to_os64(&f->current, &base);
+    if (!os64_url_absolute(&base, location, hop->whole, sizeof(hop->whole))) {
+        hop->kind = OS64_FETCH_HOP_TOO_LONG;
+        return;
+    }
+
+    http_url_result_t parse = http_url_parse(hop->whole, target);
+    if (parse == HTTP_URL_SCHEME || parse == HTTP_URL_NOT_A_URL) {
+        // HTTP_URL_NOT_A_URL does not mean here what it means on a command
+        // line. What resolution hands back is either `scheme://...` or a
+        // reference that named its own scheme and was copied through
+        // untouched, so a refusal at this point is the second kind —
+        // `mailto:`, `data:`, `tel:` — an address of a sort this library
+        // does not fetch, rather than a bare word meant for something else.
+        hop->kind = OS64_FETCH_HOP_SCHEME;
+        return;
+    }
+    if (parse != HTTP_URL_OK) {
+        hop->kind = OS64_FETCH_HOP_UNUSABLE;
+        // http's refusals are the library's, one for one (http.c's
+        // url_result_from), so the public detail speaks the library's.
+        switch (parse) {
+            case HTTP_URL_NO_HOST:    hop->parse = OS64_URL_NO_HOST;    break;
+            case HTTP_URL_HOST_CHARS: hop->parse = OS64_URL_HOST_CHARS; break;
+            case HTTP_URL_PATH_CHARS: hop->parse = OS64_URL_PATH_CHARS; break;
+            case HTTP_URL_PORT:       hop->parse = OS64_URL_PORT;       break;
+            default:                  hop->parse = OS64_URL_TOO_LONG;   break;
+        }
+        return;
+    }
+    url_filled(target, &hop->target);
+
+    // The same URL after POST -> GET is a new request, a common form flow.
+    // Repeating both URL and method is the loop the default policy stops.
+    if (same_address(&f->current, target) && hop->from_method == hop->to_method) {
+        hop->kind = OS64_FETCH_HOP_SELF;
+        return;
+    }
+    if (os64_streq(f->current.scheme, "https") && os64_streq(target->scheme, "http")) {
+        hop->kind = OS64_FETCH_HOP_DOWNGRADE;
+        return;
+    }
+
+    // THE PROXY ASKED ABOUT IS THE TARGET'S, NOT THIS FETCH'S. They are
+    // different questions and the scheme decides each one separately — a
+    // redirect from http to https is carried by $https_proxy no matter what
+    // carried the request that produced it. Passing the current fetch's
+    // proxy in here looked obviously right and was obviously wrong the first
+    // time a plain-HTTP page redirected to https with $https_proxy set: the
+    // answer said "out of reach" about an address one hop away.
+    carrier->inUse = false;
+    if (!f->opt.no_proxy &&
+        !fetch_proxy_for(target, carrier, hop->why, sizeof(hop->why))) {
+        hop->kind = OS64_FETCH_HOP_PROXY;
+        return;
+    }
+    proxy_facts(carrier, &hop->via_proxy, hop->proxy_host, sizeof(hop->proxy_host),
+                &hop->proxy_port);
+    hop->kind = OS64_FETCH_HOP_WHOLE;
+}
+
+// The caller's verdict, or the policy's. A FOLLOW where there is nothing to
+// follow is a STOP (fetch.h says so), and a DOWNGRADE or SELF the caller
+// did not explicitly allow stops too.
+// The hop is the caller's to see and, past the verdict, the library's to
+// amend: a DOWNGRADE the caller allowed can still turn out to have no road
+// (a bad proxy setting for the target), and the hop that ends the fetch
+// must then SAY so rather than read as "your FOLLOW was not honoured"
+// (Codex, PR #92).
+static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *carrier)
+{
+    os64_fetch_verdict_t verdict = OS64_FETCH_HOP_DEFAULT;
+    if (f->opt.on_hop != NULL)
+        verdict = f->opt.on_hop(f->opt.ctx, hop);
+    // A method by name belongs to a caller that rewrites its own redirects.
+    if (verdict == OS64_FETCH_HOP_STOP || f->method_name[0] != '\0')
+        return false;
+    switch (hop->kind) {
+        case OS64_FETCH_HOP_WHOLE:
+            return true;
+        case OS64_FETCH_HOP_DOWNGRADE:
+        case OS64_FETCH_HOP_SELF:
+            if (verdict != OS64_FETCH_HOP_FOLLOW)
+                return false;
+            // The road to an explicitly allowed target is worked out now —
+            // hop_read stopped before asking, since the default never goes.
+            carrier->inUse = false;
+            if (!f->opt.no_proxy) {
+                http_url_t target;
+                if (http_url_parse(hop->whole, &target) != HTTP_URL_OK) {
+                    hop->kind = OS64_FETCH_HOP_UNUSABLE;   // cannot happen: hop_read parsed it
+                    return false;
+                }
+                if (!fetch_proxy_for(&target, carrier, hop->why, sizeof(hop->why))) {
+                    hop->kind = OS64_FETCH_HOP_PROXY;
+                    return false;
+                }
+                proxy_facts(carrier, &hop->via_proxy, hop->proxy_host,
+                            sizeof(hop->proxy_host), &hop->proxy_port);
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+// A CREDENTIAL IS FOR WHOEVER IT WAS GIVEN FOR, NOT FOR WHOEVER A REDIRECT
+// NAMES — and extra_headers can carry two kinds. `Cookie` and
+// `Authorization` are the ORIGIN's: sent to the typed origin and to any
+// hop that stays on it (same scheme, host and port), stripped from a hop
+// that leaves it — curl's rule and the Fetch standard's for Authorization.
+// `Proxy-Authorization` is the PROXY's: sent on any hop the proxy chosen
+// for the typed address carries, whatever the origin, and never on a
+// direct request, where it would hand the proxy's credential to the
+// destination. Without the first rule a 302 off the origin would collect
+// the caller's session; without the second a `no_proxy` match would leak
+// the proxy password to the site. Other fields ride along; HTTPS Referer
+// is stripped on an unencrypted connection, including a plain proxy.
+// The block is validated line by line, so the walk can trust its shape.
+typedef enum { HEADER_FREE, HEADER_ORIGINS, HEADER_PROXYS } header_owner_t;
+
+static bool name_is(const char *line, size_t nameLen, const char *want)
+{
+    if (os64_strlen(want) != nameLen)
+        return false;
+    for (size_t k = 0; k < nameLen; k++) {
+        char c = line[k];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c + ('a' - 'A'));
+        if (c != want[k])
+            return false;
+    }
+    return true;
+}
+
+static header_owner_t header_owner(const char *line, size_t nameLen)
+{
+    if (name_is(line, nameLen, "cookie") || name_is(line, nameLen, "authorization"))
+        return HEADER_ORIGINS;
+    if (name_is(line, nameLen, "proxy-authorization"))
+        return HEADER_PROXYS;
+    return HEADER_FREE;
+}
+
+static bool referer_downgrade(const char *line, const char *colon, bool encrypted)
+{
+    if (encrypted || !name_is(line, (size_t)(colon - line), "referer"))
+        return false;
+    const char *value = colon + 1;
+    while (*value == ' ' || *value == '\t')
+        value++;
+    // Compare through the colon too: https-like host names are not schemes.
+    const char *scheme = "https:";
+    for (size_t i = 0; scheme[i]; i++) {
+        char c = value[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+        if (c != scheme[i]) return false;
+    }
+    return true;
+}
+
+static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap, bool encrypted)
+{
+    out[0] = '\0';
+    if (f->extra[0] == '\0')
+        return;
+    bool originOk = same_address_origin(&f->origin, &f->current);
+    bool proxyOk  = f->proxy.inUse && f->origin_proxy.inUse &&
+                    f->proxy.port == f->origin_proxy.port &&
+                    os64_streq(f->proxy.host, f->origin_proxy.host);
+    size_t used = 0;
+    const char *p = f->extra;
+    while (*p != '\0') {
+        const char *line = p;
+        const char *colon = p;
+        while (*colon != ':')
+            colon++;
+        const char *end = colon;
+        while (!(end[0] == '\r' && end[1] == '\n'))
+            end++;
+        end += 2;
+        size_t len = (size_t)(end - line);
+        header_owner_t owner = header_owner(line, (size_t)(colon - line));
+        bool keep = owner == HEADER_FREE ||
+                    (owner == HEADER_ORIGINS && originOk) ||
+                    (owner == HEADER_PROXYS && proxyOk);
+        if (keep && !referer_downgrade(line, colon, encrypted) && used + len < cap) {
+            for (size_t i = 0; i < len; i++)
+                out[used + i] = line[i];
+            used += len;
+            out[used] = '\0';
+        }
+        p = end;
+    }
+}
+
+// The fields the per-hop callback may write, each at most once. A jar owns
+// Cookie selection, and the rest describe the browser and the request, not
+// anybody's credential; accepting arbitrary fields here would bypass the
+// Authorization and proxy-credential rules of the static block. The answer
+// is the field's bit, 0 for a name not on the list.
+static unsigned hop_field(const char *line, size_t nameLen)
+{
+    static const char *const kFields[] = {
+        "cookie", "referer", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
+        "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+        "sec-fetch-user", "upgrade-insecure-requests", "priority", "cache-control",
+    };
+    for (size_t i = 0; i < sizeof(kFields) / sizeof(kFields[0]); i++)
+        if (name_is(line, nameLen, kFields[i]))
+            return 1u << i;
+    return 0;
+}
+
+// Add the navigator's per-URL fields after static credential filtering.
+// Validate the entire callback block before emitting any of it.
+static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypted)
+{
+    extras_for_hop(f, out, cap, encrypted);
+    if (!f->opt.headers_for)
+        return true;
+    char *dynamic = f->hop_fields;
+    const size_t room = sizeof(f->hop_fields);
+    os64_memset(dynamic, 0xff, room);
+    dynamic[0] = '\0';
+    os64_url_t url;
+    url_filled(&f->current, &url);
+    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, room))
+        return false;
+    size_t len = 0;
+    while (len < room && dynamic[len]) len++;
+    if (len == room)
+        return false;
+    http_request_extras_t check = { .extra_headers = dynamic };
+    if (!http_request_extras_ok(&check))
+        return false;
+    unsigned seen = 0;
+    // Static duplicates retain their old behavior. Only a field supplied by
+    // the callback conflicts with a retained static copy of that field.
+    for (const char *p = out; *p;) {
+        const char *colon = p;
+        while (*colon != ':') colon++;
+        seen |= hop_field(p, (size_t)(colon - p));
+        while (!(p[0] == '\r' && p[1] == '\n')) p++;
+        p += 2;
+    }
+    size_t used = os64_strlen(out);
+    for (const char *p = dynamic; *p;) {
+        const char *colon = p;
+        while (*colon != ':') colon++;
+        unsigned field = hop_field(p, (size_t)(colon - p));
+        if (!field || (seen & field))
+            return false;
+        seen |= field;
+        const char *end = colon;
+        while (!(end[0] == '\r' && end[1] == '\n')) end++;
+        end += 2;
+        size_t n = (size_t)(end - p);
+        if (!referer_downgrade(p, colon, encrypted)) {
+            if (n >= cap - used) return false;
+            os64_memcpy(out + used, p, n);
+            used += n;
+            out[used] = '\0';
+        }
+        p = end;
+    }
+    return true;
+}
+
+// One caching field into its place in the head, joined to what an earlier
+// line of the same name put there.
+static void keep_field(os64_fetch_keep_t *k, char *field, const char *value, size_t len)
+{
+    size_t at = os64_strlen(field);
+    size_t need = at + (at != 0 ? 2 : 0) + len;
+    if (need >= OS64_FETCH_KEEP_FIELD) {
+        k->unreadable = true;
+        return;
+    }
+    if (at != 0) {
+        field[at++] = ',';
+        field[at++] = ' ';
+    }
+    os64_memcpy(field + at, value, len);
+    field[at + len] = '\0';
+}
+
+// Every field of a FINAL head, and nothing of an interim one: http.c offers
+// a field only once its head's status is 200 or more (header_take and the
+// over-long path), so a 1xx's fields never reach on_header, the kept
+// caching fields or on_set_cookie. A CORS check made of what on_header
+// heard is made of the answer alone (tools/test_fetch_host.c pins it).
+static bool timed_out_while_kept(const os64_fetch_t *f);
+
+static void response_header(void *ctx, const char *name, size_t name_len,
+                             const char *value, size_t value_len)
+{
+    os64_fetch_t *f = ctx;
+    // A kept connection's 408 is going again; its fields are nobody's.
+    if (timed_out_while_kept(f))
+        return;
+    if (f->opt.on_header != NULL)
+        f->opt.on_header(f->opt.ctx, name, name_len, value, value_len);
+    os64_fetch_keep_t *k = &f->head.keep;
+    static const struct { const char *name; size_t at; } kKept[] = {
+        {"cache-control", offsetof(os64_fetch_keep_t, cache_control)},
+        {"pragma", offsetof(os64_fetch_keep_t, pragma)},
+        {"etag", offsetof(os64_fetch_keep_t, etag)},
+        {"last-modified", offsetof(os64_fetch_keep_t, last_modified)},
+        {"expires", offsetof(os64_fetch_keep_t, expires)},
+        {"date", offsetof(os64_fetch_keep_t, date)},
+        {"age", offsetof(os64_fetch_keep_t, age)},
+        {"vary", offsetof(os64_fetch_keep_t, vary)},
+    };
+    for (size_t i = 0; i < sizeof(kKept) / sizeof(kKept[0]); i++)
+        if (name_is(name, name_len, kKept[i].name)) {
+            // A line too long to read was one of these: what is kept is not
+            // all the server said, and absence is not permission.
+            if (value == NULL)
+                k->unreadable = true;
+            else
+                keep_field(k, (char *)k + kKept[i].at, value, value_len);
+            return;
+        }
+    if (value == NULL || !f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
+        return;
+    // Apply the authenticated-prefix check used before redirects. TLS
+    // authentication/protocol errors suppress delivery; missing closure alone
+    // is tolerated for framed HTTP. Later reads can still fail.
+    if (!fetch_transport_complete(&f->io, true))
+        return;
+    os64_url_t url;
+    url_filled(&f->current, &url);
+    f->opt.on_set_cookie(f->opt.ctx, &url, f->io.encrypted, value, value_len);
+}
+
+// ── The head: dial, ask, read, and follow ───────────────────────────────
+
+static void head_fill(os64_fetch_t *f)
+{
+    os64_fetch_head_t *h = &f->head;
+    h->status = f->reply.status;
+    h->method = f->method;
+    os64_strcopy(h->reason, sizeof(h->reason), f->reply.reason);
+    os64_strcopy(h->content_type, sizeof(h->content_type), f->reply.contentType);
+    os64_strcopy(h->charset, sizeof(h->charset), f->reply.charset);
+    h->has_length = f->reply.hasLength;
+    h->length = f->reply.length;
+    os64_strcopy(h->encoding, sizeof(h->encoding), f->reply.contentEncoding);
+    h->has_location = f->reply.hasLocation;
+    h->location = f->reply.location;
+    url_filled(&f->current, &h->url);
+    http_url_render(&f->current, h->url_text, sizeof(h->url_text));
+    h->encrypted = f->io.encrypted;
+    proxy_facts(&f->proxy, &h->via_proxy, h->proxy_host, sizeof(h->proxy_host), &h->proxy_port);
+    f->progress.has_length = h->has_length;
+    f->progress.length = h->length;
+    f->have_head = true;
+}
+
+static void tls_snapshot(os64_fetch_t *f)
+{
+    f->detail.tls = f->io.error.status;
+    f->detail.tls_policy = f->io.error.policy_reason;
+    f->detail.tls_engine = f->io.error.upstream_error;
+    f->detail.tls_version = f->io.error.version;
+}
+
+static os64_fetch_status_t drop_connection(os64_fetch_t *f, os64_fetch_status_t status)
+{
+    if (f->connected) {
+        fetch_transport_close(&f->io, false);
+        f->connected = false;
+    }
+    if (status == OS64_FETCH_TLS_FAILED)
+        tls_snapshot(f);
+    if (cancelled(f))
+        return OS64_FETCH_INTERRUPTED;
+    return status;
+}
+
+// ── Keeping the connection (pool.h, WIRE.md § 2) ────────────────────────
+
+// What a connection for this hop is for: the peer dialled, and how.
+static void pool_key(const os64_fetch_t *f, bool encrypted, fetch_pool_key_t *k)
+{
+    os64_memset(k, 0, sizeof(*k));
+    k->tls = encrypted;
+    k->via_proxy = f->proxy.inUse;
+    os64_strcopy(k->host, sizeof(k->host), f->proxy.inUse ? f->proxy.host : f->current.host);
+    k->port = f->proxy.inUse ? f->proxy.port : f->current.port;
+    k->trust = encrypted ? f->trust : NULL;
+}
+
+// The facts connection_reusable judges, read off the exchange this fetch
+// holds the connection for.
+static void reuse_facts(os64_fetch_t *f, fetch_reuse_facts_t *x)
+{
+    os64_memset(x, 0, sizeof(*x));
+    x->request_http11 = true;       // http_request asks in HTTP/1.1, always,
+    x->request_close = false;       // ...and never says Connection: close
+    x->request_whole = f->sent_whole;
+    x->response_http11 = f->reply.http11;
+    x->response_close = f->reply.connectionClose;
+    x->bodiless = os64_streq(f->method_name, "HEAD") || f->reply.status == 204 ||
+                  f->reply.status == 304;
+    if (f->body_open) {
+        x->framing = f->body.framing;
+        // DONE once a read found the end; a length-framed body with nothing
+        // left is whole before anyone reads it (Content-Length: 0).
+        x->consumed = !f->wire_unread &&
+                      (f->body.result == HTTP_BODY_DONE ||
+                       (f->body.result == HTTP_BODY_OPEN && f->body.framing == HTTP_FRAMING_LENGTH &&
+                        f->body.remaining == 0));
+    } else {
+        // A redirect this library follows itself, whose courtesy body nobody
+        // reads: only an empty one leaves the connection at a message's end.
+        const char *te = f->reply.transferEncoding;
+        if (te[0] != '\0' && !os64_streq(te, "identity"))
+            x->framing = os64_streq(te, "chunked") ? HTTP_FRAMING_CHUNKED : HTTP_FRAMING_CLOSE;
+        else
+            x->framing = f->reply.hasLength ? HTTP_FRAMING_LENGTH : HTTP_FRAMING_CLOSE;
+        x->consumed = x->framing == HTTP_FRAMING_LENGTH && f->reply.length == 0;
+    }
+    x->leftover = f->stream.next < f->stream.have;
+    x->transport_ok = !f->stream.ended && !f->stream.failed &&
+                      !(f->over && f->status != OS64_FETCH_OK) && !cancelled(f) &&
+                      fetch_transport_reusable(&f->io);
+}
+
+// The connection goes back to the pool when every clause allows it, and is
+// closed when one does not: with a bounded TLS closure when `normal` (the
+// fetch ended whole, as a body read to the close does), at once otherwise.
+static void release_connection(os64_fetch_t *f, bool normal)
+{
+    if (!f->connected)
+        return;
+    f->connected = false;
+    fetch_reuse_facts_t facts;
+    reuse_facts(f, &facts);
+    if (connection_reusable(&facts)) {
+        fetch_pool_key_t key;
+        pool_key(f, f->io.encrypted, &key);
+        fetch_pool_put(&key, &f->io);
+        f->io.handle = -1;          // the pool's now; the diagnostics stay here
+        f->io.tls = NULL;
+        return;
+    }
+    fetch_transport_close(&f->io, normal);
+}
+
+static bool idempotent(const os64_fetch_t *f);
+
+// A kept connection for this hop that still answers its probe, adopted:
+// true with it in `io`. One the probe refuses is closed, and the next is
+// tried. A request the retry rule would not send again takes only one used
+// moments ago (FETCH_POOL_ONCE_MS), since nothing could save it from one
+// its server closed while it sat idle.
+static bool take_kept(os64_fetch_t *f, const fetch_pool_key_t *key)
+{
+    fetch_transport_t io;
+    uint32_t idle_most = idempotent(f) ? FETCH_POOL_IDLE_MS : FETCH_POOL_ONCE_MS;
+    while (fetch_pool_take(key, idle_most, &io)) {
+        if (fetch_transport_idle_ok(&io)) {
+            f->io = io;
+            fetch_transport_adopt(&f->io, f->opt.idle_ms, cancel_predicate, f);
+            tls_snapshot(f);                // the version its handshake chose
+            f->detail.tls_fallback = false; // no dial on this hop at all
+            return true;
+        }
+        fetch_transport_close(&io, false);
+    }
+    return false;
+}
+
+// RFC 9110 § 9.2.2's idempotent methods, as WIRE.md § 2 lists them: the
+// ones whose request, sent twice, does what once would.
+static bool idempotent(const os64_fetch_t *f)
+{
+    if (f->method_name[0] == '\0')
+        return f->method == OS64_FETCH_METHOD_GET;
+    static const char *const kOnce[] = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"};
+    for (size_t i = 0; i < sizeof(kOnce) / sizeof(kOnce[0]); i++)
+        if (os64_streq(f->method_name, kOnce[i]))
+            return true;
+    return false;
+}
+
+// THE RETRY RULE (RFC 9110 § 9.2.2). A kept connection whose server closed
+// its idle side fails the next request before any byte of a reply arrives,
+// and the server may never have read the request. That request goes once
+// more, on a connection dialled for it, when sending it twice cannot do
+// twice what once would. A failure on a connection dialled for the request
+// (the second try's among them, so a request goes at most twice), one after
+// a reply began, a silence, or a non-idempotent method's (POST, PATCH, any
+// name the list does not hold, or one in lower case), is the caller's as it
+// always was. That last is why such a request rides only a connection used
+// moments ago (take_kept): the close it cannot recover from is the one a
+// connection meets while it sits idle.
+static bool retry_on_fresh(os64_fetch_t *f)
+{
+    return f->reused && f->io.received == 0 && !f->io.silent && !cancelled(f) && idempotent(f);
+}
+
+// A 408 ON A KEPT CONNECTION is the same close in words: a server that
+// timed the idle connection out and answers the next request with 408
+// before it closes (Chrome treats it so). Such a request is retried on the
+// retry rule's terms, and its head is not the fetch's: none of its fields
+// reaches an observer (response_header), so a page's script, a cache and
+// the cookie jar hear the answer the retry brings back, alone.
+static bool timed_out_while_kept(const os64_fetch_t *f)
+{
+    return f->reply.status == 408 && f->reused && idempotent(f);
+}
+
+static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool encrypted,
+                                    const fetch_pool_key_t *key, bool fresh, bool *again);
+static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
+                                uint16_t peerPort);
+
+// Ask, and keep asking wherever the answers point, until an answer is the
+// thing itself or a verdict says stop. On OK the connection is open and
+// positioned at the first byte of the body and `current` names who served
+// it; REDIRECT_STOPPED and TOO_MANY_HOPS leave the last head readable the
+// same way; on anything else the connection is closed.
+static os64_fetch_status_t ask(os64_fetch_t *f)
+{
+    for (;;) {
+        if (cancelled(f))
+            return OS64_FETCH_INTERRUPTED;
+
+        bool encrypted = os64_streq(f->current.scheme, "https") && !f->proxy.inUse;
+        // Compose before dialing so a refused callback costs no connection.
+        char *request = f->request, *extraForHop = f->hop_extra;
+        if (!request_extras(f, extraForHop, sizeof(f->hop_extra), encrypted)) {
+            os64_strcopy(f->detail.why, sizeof(f->detail.why), "per-hop headers were refused or malformed");
+            return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_REQUEST_FAILED;
+        }
+        if (f->opt.headers_for && cancelled(f))
+            return OS64_FETCH_INTERRUPTED;
+        bool get_accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0];
+        const char *accept = get_accept ? f->accept_get : f->accept;
+        http_request_extras_t extras = {
+            .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
+            .accept        = get_accept || f->accept_given ? accept : NULL,
+            .extra_headers = extraForHop[0] ? extraForHop : NULL,
+            .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
+            .body_len = sends_body(f) ? f->opt.body_len : 0,
+            .body_present = sends_body(f) && f->opt.body != NULL,
+            .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
+                                ? f->content_type : NULL,
+            .method_name = f->method_name[0] ? f->method_name : NULL,
+            .body_headers = f->body_headers[0] ? f->body_headers : NULL,
+            .identity = f->opt.identity,
+            .keep_alive = f->opt.keep_alive,
+            .order = f->order[0] ? f->order : NULL,
+        };
+        if (!http_request(request, sizeof(f->request), &f->current, f->proxy.inUse, &extras)) {
+            os64_strcopy(f->detail.why, sizeof(f->detail.why),
+                         "the request does not fit, or a header holds a byte a header cannot");
+            return OS64_FETCH_REQUEST_FAILED;
+        }
+
+        // The store an https hop is verified under, settled before the pool
+        // is asked, since a kept connection is kept for its store: the
+        // caller's, or the system's every other fetch shares.
+        if (encrypted && f->trust == NULL) {
+            os64_tls_store_status_t loaded = fetch_pool_trust(&f->trust, &f->detail.store_report);
+            if (cancelled(f))
+                return OS64_FETCH_INTERRUPTED;
+            if (loaded != OS64_TLS_STORE_OK) {
+                f->detail.store_failed = true;
+                f->detail.store = loaded;
+                return OS64_FETCH_TLS_FAILED;
+            }
+        }
+
+        // On a kept connection when there is one, and once more on a fresh
+        // one when the kept one failed as a closed idle connection does
+        // (retry_on_fresh).
+        fetch_pool_key_t key;
+        pool_key(f, encrypted, &key);
+        bool again = false;
+        os64_fetch_status_t asked = exchange(f, request, encrypted, &key, false, &again);
+        if (again) {
+            f->retried++;
+            asked = exchange(f, request, encrypted, &key, true, &again);
+        }
+        if (asked != OS64_FETCH_OK)
+            return asked;
+
+        head_fill(f);
+        if (!redirect_is_followed(f->reply.status))
+            return OS64_FETCH_OK;
+
+        os64_fetch_hop_t hop;
+        http_url_t target;
+        fetch_proxy_t carrier = {0};
+        hop_read(f, &hop, &target, &carrier);
+        bool followed = hop_followed(f, &hop, &carrier);
+        f->detail.hop = hop;                        // AFTER the verdict: it may have amended the kind
+        if (!followed)
+            return OS64_FETCH_REDIRECT_STOPPED;     // the head stays readable
+        if (hop.number > f->opt.max_hops)
+            return OS64_FETCH_TOO_MANY_HOPS;        // so does this one
+
+        // The redirect's own body is a courtesy page for a browser to
+        // display, and nobody reads it here: the connection is kept for the
+        // next hop's key only when that body is empty, and closed otherwise
+        // whatever is left unread on it.
+        release_connection(f, false);
+        f->have_head = false;
+        if (hop.kind == OS64_FETCH_HOP_WHOLE)
+            f->current = target;
+        else
+            http_url_parse(hop.whole, &f->current);   // DOWNGRADE/SELF: parsed OK in hop_read
+        f->method = hop.to_method;
+        f->proxy = carrier;
+        f->head.hops = hop.number;
+    }
+}
+
+// One request on one connection, to the end of its final head: a kept
+// connection for `key` when one answers its probe, unless `fresh` (the retry
+// rule's second try), and one dialled otherwise. On OK the head is in
+// `reply` and the connection positioned at the body; on anything else the
+// connection is closed, and `*again` says whether the failure is one the
+// retry rule sends again (retry_on_fresh).
+static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool encrypted,
+                                    const fetch_pool_key_t *key, bool fresh, bool *again)
+{
+    *again = false;
+    // The CONNECTION goes to whoever is answering; the ADDRESS stays in the
+    // request line. That split is the whole of proxying. Who is being asked
+    // is recorded before the attempt, so a DIAL_FAILED and a TLS_FAILED can
+    // both name the peer (for TLS the peer IS the origin: a proxied hop is
+    // never encrypted).
+    const char *peerHost = f->proxy.inUse ? f->proxy.host : f->current.host;
+    uint16_t    peerPort = f->proxy.inUse ? f->proxy.port : f->current.port;
+    f->detail.dial_was_proxy = f->proxy.inUse;
+    os64_strcopy(f->detail.dial_host, sizeof(f->detail.dial_host), peerHost);
+    f->detail.dial_port = peerPort;
+    f->detail.dial_hop = f->head.hops;
+
+    f->reused = !fresh && take_kept(f, key);
+    if (!f->reused) {
+        os64_fetch_status_t dialled = dial(f, encrypted, peerHost, peerPort);
+        if (dialled != OS64_FETCH_OK)
+            return dialled;
+    }
+    f->connected = true;
+
+    // Upload and response heads share the connection. A final response
+    // ends the upload; an interim response resumes at the accepted byte.
+    http_stream_init(&f->stream, fetch_transport_read, &f->io);
+    // A redirect's caching fields are not its target's.
+    os64_memset(&f->head.keep, 0, sizeof(f->head.keep));
+    size_t head_sent = 0, body_sent = 0;
+    bool head_done = false, body_done = !sends_body(f) || !f->opt.body_len;
+    unsigned interim = 0;
+    http_head_result_t hrc;
+    for (;;) {
+        // A read may contain an interim head followed by a final one.
+        // Consume those buffered bytes before sending more of the body.
+        if (f->stream.next == f->stream.have) {
+            fetch_write_result_t written = FETCH_WRITE_DONE;
+            if (!head_done) {
+                written = fetch_transport_write(&f->io, request, os64_strlen(request), &head_sent);
+                head_done = written == FETCH_WRITE_DONE;
+            }
+            if (written == FETCH_WRITE_DONE && !body_done) {
+                written = fetch_transport_write(&f->io, f->opt.body, f->opt.body_len, &body_sent);
+                body_done = written == FETCH_WRITE_DONE;
+            }
+            if (written == FETCH_WRITE_ERROR) {
+                os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request");
+                tls_snapshot(f);
+                *again = retry_on_fresh(f);
+                return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
+            }
+        }
+        hrc = http_head_read_one_with_headers(&f->stream, &f->reply, response_header, f);
+        if (hrc != HTTP_HEAD_OK || f->reply.status >= 200) break;
+        if (++interim > HTTP_INTERIM_MAX) {
+            hrc = HTTP_HEAD_TOO_MUCH;
+            break;
+        }
+    }
+    // Counted, not judged by the writes' answers: a write that saw the reply
+    // arrive answers RESPONSE even when its last byte had gone.
+    f->sent_whole = head_sent == os64_strlen(request) &&
+                    (!sends_body(f) || body_sent == f->opt.body_len);
+    if (hrc != HTTP_HEAD_OK) {
+        f->detail.head = hrc;
+        tls_snapshot(f);
+        *again = retry_on_fresh(f);
+        if (hrc == HTTP_HEAD_SOURCE && f->io.silent) {
+            f->detail.silent_after_body = false;
+            return drop_connection(f, OS64_FETCH_SILENT);
+        }
+        // A framing header too long to read, or a 101 that hands the
+        // connection to another protocol, is not a MALFORMED reply — it
+        // is a legal one this library cannot honestly act on, the same
+        // answer the coding refusals give, reached a different way.
+        if (hrc == HTTP_HEAD_FRAMING || hrc == HTTP_HEAD_SWITCHED) {
+            os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported),
+                         hrc == HTTP_HEAD_SWITCHED ? "101" : "head");
+            return drop_connection(f, OS64_FETCH_UNSUPPORTED);
+        }
+        return drop_connection(f, OS64_FETCH_BAD_HEAD);
+    }
+
+    // An authenticated prefix can accompany a TLS protocol failure.
+    // Check before following redirects; missing closure alone is tolerated
+    // for framed HTTP. Cookie delivery applies this check as lines arrive.
+    // It is a BAD_HEAD, not a TLS_FAILED: the handshake succeeded and the
+    // head arrived, and what is untrustworthy is the reply as a whole —
+    // the reason carries the transport's verdict in its tail.
+    if (!fetch_transport_complete(&f->io, true)) {
+        f->detail.head = HTTP_HEAD_SOURCE;
+        tls_snapshot(f);
+        return drop_connection(f, OS64_FETCH_BAD_HEAD);
+    }
+    // Nothing of a kept connection's 408 is read past its head: the
+    // connection goes, and the request with it, once more.
+    if (timed_out_while_kept(f)) {
+        *again = !cancelled(f);
+        return drop_connection(f, OS64_FETCH_BAD_HEAD);
+    }
+    return OS64_FETCH_OK;
+}
+
+// A connection dialled for this request: the dial, then TLS under the store
+// ask settled on.
+static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
+                                uint16_t peerPort)
+{
+    char dialstring[FETCH_DIAL_MAX];
+    int32_t dn = os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%u",
+                               peerHost, (unsigned)peerPort);
+    if (dn < 0 || (size_t)dn >= sizeof(dialstring)) {
+        os64_snprintf(f->detail.why, sizeof(f->detail.why),
+                      "the host name is too long to dial (limit %d)", OS64_RESOLVE_NAME_MAX);
+        return OS64_FETCH_REQUEST_FAILED;
+    }
+
+    const os64_tls_name_t alpn = {"http/1.1", 8};
+    os64_tls_config_t config = {
+        .hostname = {f->current.host, os64_strlen(f->current.host)},
+        .alpn = &alpn, .alpn_count = 1, .trust = f->trust
+    };
+    f->detail.tls_version = 0;
+    f->detail.tls_fallback = false;
+    for (;;) {
+        int64_t conn = os64_dial(dialstring);
+        // A dial refused for want of resources (a handle above all) may be
+        // refused for the pool's sake: a kept connection holds one. The
+        // least recently used is let go and the dial tried once more.
+        if (conn == OS64_NET_ERR_NO_RESOURCES && !cancelled(f) && fetch_pool_evict_one())
+            conn = os64_dial(dialstring);
+        if (cancelled(f)) {
+            if (conn >= 0) os64_close((int32_t)conn);
+            return OS64_FETCH_INTERRUPTED;
+        }
+        if (conn < 0) {
+            f->detail.dial = conn;
+            return OS64_FETCH_DIAL_FAILED;
+        }
+        if (fetch_transport_open(&f->io, (int32_t)conn, encrypted ? &config : NULL,
+                                 f->opt.idle_ms, cancel_predicate, f)) {
+            tls_snapshot(f);
+            return OS64_FETCH_OK;
+        }
+        // The failed adapter has closed its handle. A recognized 1.2
+        // ServerHello permits one fresh Bear connection with a downgrade
+        // guard; alerts, certificate failures and timeouts do not permit retry.
+        tls_snapshot(f);
+        if (cancelled(f)) return OS64_FETCH_INTERRUPTED;
+        if (!encrypted || config.protocol != OS64_TLS_PROTOCOL_DEFAULT ||
+            f->detail.tls != OS64_TLS_PEER_CHOSE_TLS12) return OS64_FETCH_TLS_FAILED;
+        config.protocol = OS64_TLS_PROTOCOL_TLS12_FALLBACK;
+        f->detail.tls_fallback = true;
+    }
+}
+// ── The body: framing off, coding off ───────────────────────────────────
+
+// The wire length is only known in advance under a Content-Length; a chunked
+// or close-framed gzip body gets the ceiling and nothing finer.
+static uint64_t gzip_limit_for(const http_response_t *reply)
+{
+    if (!reply->hasLength)
+        return OS64_FETCH_GZIP_OUTPUT_MAX;
+    uint64_t limit;
+    if (reply->length > OS64_FETCH_GZIP_OUTPUT_MAX / OS64_FETCH_GZIP_RATIO_MAX)
+        limit = OS64_FETCH_GZIP_OUTPUT_MAX;
+    else
+        limit = reply->length * OS64_FETCH_GZIP_RATIO_MAX;
+    if (limit < OS64_FETCH_GZIP_OUTPUT_FLOOR)
+        limit = OS64_FETCH_GZIP_OUTPUT_FLOOR;
+    if (limit > OS64_FETCH_GZIP_OUTPUT_MAX)
+        limit = OS64_FETCH_GZIP_OUTPUT_MAX;
+    return limit;
+}
+
+// A FRAMING OR A CODING THIS LIBRARY CANNOT UNDO MUST NEVER BECOME BYTES
+// FOR A CONSUMER. What would land is the envelope wearing the letter's
+// name, and a page full of chunk lengths or of a compression nothing here
+// speaks is worse than no page at all, because it looks like a successful
+// fetch. The rule outlives the list: whatever this library learns to read
+// moves out of these branches by being handled (chunked and gzip did), and
+// whatever it has not learned is refused by name.
+static os64_fetch_status_t body_prepare(os64_fetch_t *f)
+{
+    // A 204, a 205, a 304 and a HEAD's reply carry NO body whatever their
+    // headers say (RFC 9112
+    // §6.3: a Content-Length or a Content-Encoding on a 304 describes the
+    // representation that was NOT sent), so both the framing and the
+    // coding are cleared here — the framing forced to zero bytes so the
+    // body reader cannot wait for bytes that will never come, the coding
+    // dropped so no decoder is built for an empty body and no coding is
+    // refused for one (Codex, PR #92 rd2 and rd3). The head keeps the
+    // headers as metadata; head_fill has already copied them. A 304 is
+    // reachable: a caller may send If-Modified-Since in extra_headers. 1xx
+    // never reaches here — the head reader consumes interim replies and
+    // refuses 101. A 205 carries none either (RFC 9110 § 15.3.6), and
+    // neither does the reply to a HEAD, whose Content-Length is the length
+    // of what a GET WOULD have sent: framed by it, the read would wait for
+    // bytes no server sends until the idle deadline.
+    if (f->reply.status == 204 || f->reply.status == 205 || f->reply.status == 304 ||
+        os64_streq(f->method_name, "HEAD")) {
+        // Of the four, only a 205's head frames its body as any reply's is
+        // framed (RFC 9112 § 6.3): one that promised bytes leaves them on
+        // the wire unread, and the connection is not kept after it.
+        f->wire_unread = f->reply.status == 205 && !os64_streq(f->method_name, "HEAD") &&
+                         !(f->reply.hasLength && f->reply.length == 0 &&
+                           f->reply.transferEncoding[0] == '\0');
+        f->reply.hasLength = true;
+        f->reply.length = 0;
+        f->reply.transferEncoding[0] = '\0';
+        f->reply.contentEncoding[0] = '\0';
+        f->head.has_length = true;
+        f->head.length = 0;
+        f->progress.has_length = true;
+        f->progress.length = 0;
+    }
+    if (!http_body_open(&f->body, &f->stream, &f->reply)) {
+        os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported),
+                     f->reply.transferEncoding);
+        return OS64_FETCH_UNSUPPORTED;
+    }
+    f->body_open = true;
+    // gzip is the one content coding this library undoes (BROWSER.md 3(d)),
+    // and it is undone DOWNSTREAM of the framing: a gzip body may arrive
+    // chunked, and the two envelopes come off in the order they went on.
+    f->gzip = os64_streq(f->reply.contentEncoding, "gzip");
+    if (f->reply.contentEncoding[0] != '\0' &&
+        !os64_streq(f->reply.contentEncoding, "identity") && !f->gzip) {
+        os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported),
+                     f->reply.contentEncoding);
+        return OS64_FETCH_UNSUPPORTED;
+    }
+    if (f->gzip) {
+        f->gz_limit = gzip_limit_for(&f->reply);
+        f->detail.gzip_limit = f->gz_limit;
+        f->gz = os64_gzip_create(f->gz_limit);
+        f->wire = (uint8_t *)os64_malloc(FETCH_WIRE_CHUNK);
+        if (f->gz == NULL || f->wire == NULL)
+            return OS64_FETCH_NO_MEMORY;
+    }
+    return OS64_FETCH_OK;
+}
+
+// read's final word, remembered so a second read after the end says the
+// same thing instead of asking a closed connection.
+static int64_t finish(os64_fetch_t *f, os64_fetch_status_t status, int64_t answer)
+{
+    f->over = true;
+    f->status = status;
+    f->final_answer = answer;
+    return answer;
+}
+
+// What the framing's 0 or < 0 means, in the library's vocabulary.
+static int64_t framing_ended(os64_fetch_t *f, int64_t n)
+{
+    f->detail.body = f->body.result;
+    if (n == 0) {
+        if (f->body.result == HTTP_BODY_DONE) {
+            // HTTP removes framing before gzip decoding. For a close-framed
+            // HTTPS body, the transport requires authenticated TLS closure;
+            // plain HTTP has no way to tell a complete reply from a raw FIN.
+            if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
+                tls_snapshot(f);
+                return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
+            }
+            return finish(f, OS64_FETCH_OK, 0);
+        }
+        return finish(f, OS64_FETCH_CUT, 0);
+    }
+    if (cancelled(f))
+        return finish(f, OS64_FETCH_INTERRUPTED, -1);
+    switch (f->body.result) {
+        case HTTP_BODY_BROKE:
+            tls_snapshot(f);
+            if (f->io.silent) {
+                f->detail.silent_after_body = true;
+                return finish(f, OS64_FETCH_SILENT, -1);
+            }
+            return finish(f, OS64_FETCH_BROKE, -1);
+        default:
+            // The server's chunk framing stopped being HTTP: "that was not
+            // speech", the same verdict a broken head earns. The transport's
+            // verdict is snapshotted too: an authenticated prefix can arrive
+            // beside a terminal TLS status, and the reason's tail names it.
+            tls_snapshot(f);
+            return finish(f, OS64_FETCH_BAD_HEAD, -1);
+    }
+}
+
+// How many bytes may still be handed over under max_body; SIZE_MAX = no cap.
+static size_t room(const os64_fetch_t *f)
+{
+    if (f->opt.max_body == 0)
+        return (size_t)-1;
+    if (f->progress.produced >= f->opt.max_body)
+        return 0;
+    uint64_t left = f->opt.max_body - f->progress.produced;
+    return left > (size_t)-1 ? (size_t)-1 : (size_t)left;
+}
+
+static int64_t read_identity(os64_fetch_t *f, uint8_t *buf, size_t cap)
+{
+    size_t want = room(f);
+    uint8_t probe;
+    uint8_t *dst = buf;
+    if (want == 0) {
+        // At the cap exactly. One more byte from the wire is the LIMIT; none
+        // is a body that fit — the probe is never handed over either way.
+        // The READ is one byte too: the destination is a byte on the stack,
+        // and the first draft narrowed only the destination (Codex, PR #92
+        // rd7 — a body with many bytes past the cap would have overrun it).
+        dst = &probe;
+        cap = 1;
+    } else if (want < cap) {
+        cap = want;
+    }
+    int64_t n = http_body_read(&f->body, dst, cap);
+    if (n <= 0)
+        return framing_ended(f, n);
+    f->progress.wire += (uint64_t)n;
+    if (dst == &probe)
+        return finish(f, OS64_FETCH_LIMIT, -1);
+    f->progress.produced += (uint64_t)n;
+    return n;
+}
+
+static os64_fetch_status_t gzip_verdict(os64_gzip_status_t status)
+{
+    // An unsupported method and a local expansion policy are both honest
+    // "this reply cannot be decoded here" answers. Every other terminal gzip
+    // result says the bytes claimed to be gzip but did not form one complete,
+    // verified gzip stream, which is corruption rather than missing support.
+    if (status == OS64_GZIP_UNSUPPORTED)
+        return OS64_FETCH_UNSUPPORTED;
+    if (status == OS64_GZIP_LIMIT)
+        return OS64_FETCH_LIMIT;
+    return OS64_FETCH_CORRUPT;
+}
+
+static int64_t read_gzip(os64_fetch_t *f, uint8_t *buf, size_t cap)
+{
+    for (;;) {
+        if (cancelled(f))
+            return finish(f, OS64_FETCH_INTERRUPTED, -1);
+
+        // Decode what is staged, or the final empty run once the framing
+        // has said the body is whole (the decoder needs to be TOLD, so it
+        // can verify the trailer and refuse trailing bytes).
+        if (f->wire_next < f->wire_have || f->gz_final) {
+            size_t want = room(f);
+            uint8_t probe;
+            uint8_t *dst = buf;
+            size_t space = cap;
+            if (want == 0) {
+                dst = &probe;
+                space = 1;
+            } else if (want < space) {
+                space = want;
+            }
+            const uint8_t *input = f->wire + f->wire_next;
+            size_t inputLeft = f->wire_have - f->wire_next;
+            uint8_t *output = dst;
+            size_t outputLeft = space;
+            os64_gzip_status_t st = os64_gzip_process(f->gz, &input, &inputLeft,
+                                                      &output, &outputLeft, f->gz_final);
+            f->wire_next = f->wire_have - inputLeft;
+            size_t produced = space - outputLeft;
+            f->detail.gzip = st;
+            if (produced != 0) {
+                if (dst == &probe)
+                    return finish(f, OS64_FETCH_LIMIT, -1);
+                f->progress.produced += produced;
+                return (int64_t)produced;
+            }
+            if (st == OS64_GZIP_DONE) {
+                if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
+                    tls_snapshot(f);
+                    return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
+                }
+                return finish(f, OS64_FETCH_OK, 0);
+            }
+            if (st == OS64_GZIP_NEED_OUTPUT)
+                continue;                        // space was the probe byte; try again
+            if (st == OS64_GZIP_NEED_INPUT) {
+                // Asked for more with the whole body already given is a
+                // stream that ends before its trailer; asked for more while
+                // holding some is the decoder breaking its word.
+                if (f->gz_final) {
+                    f->detail.gzip = OS64_GZIP_TRUNCATED;
+                    return finish(f, OS64_FETCH_CORRUPT, -1);
+                }
+                if (inputLeft != 0) {
+                    f->detail.gzip = OS64_GZIP_BAD_ARGUMENT;
+                    return finish(f, OS64_FETCH_CORRUPT, -1);
+                }
+                // fall through to refill
+            } else {
+                return finish(f, gzip_verdict(st), -1);
+            }
+        }
+
+        // Refill the staging run from the framing.
+        int64_t n = http_body_read(&f->body, f->wire, FETCH_WIRE_CHUNK);
+        if (n > 0) {
+            f->wire_have = (size_t)n;
+            f->wire_next = 0;
+            f->progress.wire += (uint64_t)n;
+            continue;
+        }
+        if (n == 0 && f->body.result == HTTP_BODY_DONE) {
+            // The framing is satisfied: tell the decoder, and let the next
+            // pass verify the trailer. The transport's closure is checked
+            // when the decoder says DONE, not here.
+            f->gz_final = true;
+            f->wire_have = f->wire_next = 0;
+            continue;
+        }
+        // CUT or a failure: the decoder's work is unfinished, and that is
+        // the FRAMING's verdict to give, not the decoder's — a truncated
+        // transfer must read as "cut short", the same as an identity body.
+        return framing_ended(f, n);
+    }
+}
+
+// ── The calls ───────────────────────────────────────────────────────────
+
+os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
+{
+    os64_fetch_t *f = (os64_fetch_t *)os64_malloc(sizeof(*f));
+    if (f == NULL)
+        return NULL;
+    os64_memset(f, 0, sizeof(*f));
+    if (opt != NULL)
+        f->opt = *opt;
+    if (f->opt.max_hops == 0)
+        f->opt.max_hops = OS64_FETCH_HOPS_DEFAULT;
+    f->trust = f->opt.trust;              // caller-owned, or NULL until an https hop
+    f->io.handle = -1;
+    f->method = f->opt.method;
+    bool named = f->opt.method_name != NULL;
+    if (named && os64_strcopy(f->method_name, sizeof(f->method_name), f->opt.method_name) >=
+                     sizeof(f->method_name))
+        f->method_name[0] = '\0';                   // judged below as no name at all
+    if ((f->method != OS64_FETCH_METHOD_GET && f->method != OS64_FETCH_METHOD_POST) ||
+        (f->opt.body_len && !f->opt.body) ||
+        (named && (f->method_name[0] == '\0' || f->method != OS64_FETCH_METHOD_GET ||
+                   f->opt.content_type != NULL || (f->opt.body_len && !sends_body(f)))) ||
+        (!named && f->opt.body_headers != NULL) ||
+        (!named && f->method == OS64_FETCH_METHOD_GET &&
+         (f->opt.body || f->opt.body_len || f->opt.content_type))) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), "invalid request method or body options");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
+
+    // The caller's strings, copied now so they need not outlive the call;
+    // one that does not fit is a header this library will not send.
+    f->accept_given = opt != NULL && opt->accept != NULL;
+    if ((opt && opt->user_agent &&
+         os64_strcopy(f->user_agent, sizeof(f->user_agent), opt->user_agent) >= sizeof(f->user_agent)) ||
+        (opt && opt->accept &&
+         os64_strcopy(f->accept, sizeof(f->accept), opt->accept) >= sizeof(f->accept)) ||
+        (opt && opt->accept_get &&
+         os64_strcopy(f->accept_get, sizeof(f->accept_get), opt->accept_get) >= sizeof(f->accept_get)) ||
+        (opt && opt->content_type &&
+         os64_strcopy(f->content_type, sizeof(f->content_type), opt->content_type) >= sizeof(f->content_type)) ||
+        (opt && opt->extra_headers &&
+         os64_strcopy(f->extra, sizeof(f->extra), opt->extra_headers) >= sizeof(f->extra)) ||
+        (opt && opt->body_headers &&
+         os64_strcopy(f->body_headers, sizeof(f->body_headers), opt->body_headers) >= sizeof(f->body_headers)) ||
+        (opt && opt->order && os64_strcopy(f->order, sizeof(f->order), opt->order) >= sizeof(f->order))) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), "a request header is longer than this will send");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
+    // ...and one that holds a byte a header cannot is refused HERE, before a
+    // dial: a header composed from page content is a header an attacker
+    // composes, and the refusal must not cost a connection to find out.
+    http_request_extras_t extras = {
+        .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
+        .accept        = f->accept_given ? f->accept : NULL,
+        .extra_headers = f->extra[0] ? f->extra : NULL,
+        .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
+        .body_len = f->opt.body_len,
+        .body_present = sends_body(f) && f->opt.body != NULL,
+        .content_type = f->content_type[0] ? f->content_type : NULL,
+        .method_name = f->method_name[0] ? f->method_name : NULL,
+        .body_headers = f->body_headers[0] ? f->body_headers : NULL,
+        .identity = f->opt.identity,
+        .keep_alive = f->opt.keep_alive,
+        .order = f->order[0] ? f->order : NULL,
+    };
+    http_request_extras_t get_extras = extras;
+    get_extras.accept = f->accept_get[0] ? f->accept_get : NULL;
+    if (!http_request_extras_ok(&extras) || !http_request_extras_ok(&get_extras)) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why),
+                     "a request header is malformed or reserved by libfetch");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
+
+    http_url_result_t urc = http_url_parse(url, &f->current);
+    if (urc == HTTP_URL_SCHEME) {
+        os64_strcopy(f->detail.scheme, sizeof(f->detail.scheme), f->current.scheme);
+        f->status = OS64_FETCH_UNSUPPORTED_SCHEME;
+        return f;
+    }
+    if (urc != HTTP_URL_OK) {
+        switch (urc) {
+            case HTTP_URL_NOT_A_URL:  f->detail.url = OS64_URL_NOT_A_URL;  break;
+            case HTTP_URL_NO_HOST:    f->detail.url = OS64_URL_NO_HOST;    break;
+            case HTTP_URL_HOST_CHARS: f->detail.url = OS64_URL_HOST_CHARS; break;
+            case HTTP_URL_PATH_CHARS: f->detail.url = OS64_URL_PATH_CHARS; break;
+            case HTTP_URL_PORT:       f->detail.url = OS64_URL_PORT;       break;
+            default:                  f->detail.url = OS64_URL_TOO_LONG;   break;
+        }
+        f->status = OS64_FETCH_BAD_URL;
+        return f;
+    }
+
+    f->origin = f->current;          // what the caller's credentials are for, whatever the hops do
+
+    if (!f->opt.no_proxy &&
+        !fetch_proxy_for(&f->current, &f->proxy, f->detail.why, sizeof(f->detail.why))) {
+        f->status = OS64_FETCH_PROXY_BAD;
+        return f;
+    }
+    f->origin_proxy = f->proxy;      // and who was chosen to carry it: what a proxy credential is for
+
+    f->status = ask(f);
+    f->opt.body = NULL; // the borrowed upload is no longer needed after open
+    f->opt.body_len = 0;
+    f->opt.content_type = NULL;
+    if (f->have_head) {
+        // OK, REDIRECT_STOPPED, TOO_MANY_HOPS: a head and a positioned
+        // connection. The body is prepared now so read() has nothing left
+        // to decide. For an OK head a framing or coding refusal outranks
+        // the status, because a page nobody can read is not a page; for a
+        // STOPPED redirect the verdict stands — the courtesy body is
+        // merely unreadable (the coding is in detail.unsupported and read
+        // answers -1), and a caller that was told "the road was refused"
+        // must not be told "the envelope was" instead (Codex, PR #92 rd6).
+        os64_fetch_status_t prepared = body_prepare(f);
+        if (prepared != OS64_FETCH_OK) {
+            os64_fetch_status_t dropped = drop_connection(f, prepared);
+            bool verdict = f->status == OS64_FETCH_REDIRECT_STOPPED ||
+                           f->status == OS64_FETCH_TOO_MANY_HOPS;
+            if (!verdict || dropped == OS64_FETCH_INTERRUPTED)
+                f->status = dropped;
+            f->over = true;
+            f->final_answer = -1;
+        }
+    }
+    return f;
+}
+
+os64_fetch_status_t os64_fetch_status(const os64_fetch_t *f) { return f->status; }
+const os64_fetch_detail_t *os64_fetch_detail(const os64_fetch_t *f) { return &f->detail; }
+const os64_fetch_head_t *os64_fetch_head(const os64_fetch_t *f)
+{
+    return f->have_head ? &f->head : NULL;
+}
+const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f) { return &f->progress; }
+
+int64_t os64_fetch_read(os64_fetch_t *f, void *buf, size_t cap)
+{
+    if (f->over)
+        return f->final_answer;
+    if (!f->have_head || !f->connected)
+        return finish(f, f->status == OS64_FETCH_OK ? OS64_FETCH_BROKE : f->status, -1);
+    // A zero-capacity read is a caller's mistake, refused without touching
+    // anything: answering 0 would read as "the body ended whole" to the
+    // loop that made it (Codex, PR #92). fetch.h says so.
+    if (cap == 0)
+        return -1;
+    if (cancelled(f))
+        return finish(f, OS64_FETCH_INTERRUPTED, -1);
+    return f->gzip ? read_gzip(f, (uint8_t *)buf, cap)
+                   : read_identity(f, (uint8_t *)buf, cap);
+}
+
+const char *os64_fetch_status_name(os64_fetch_status_t status)
+{
+    switch (status) {
+        case OS64_FETCH_OK:                 return "ok";
+        case OS64_FETCH_BAD_URL:            return "bad-url";
+        case OS64_FETCH_UNSUPPORTED_SCHEME: return "unsupported-scheme";
+        case OS64_FETCH_DIAL_FAILED:        return "dial-failed";
+        case OS64_FETCH_PROXY_BAD:          return "proxy-bad";
+        case OS64_FETCH_TLS_FAILED:         return "tls-failed";
+        case OS64_FETCH_REQUEST_FAILED:     return "request-failed";
+        case OS64_FETCH_BAD_HEAD:           return "bad-head";
+        case OS64_FETCH_UNSUPPORTED:        return "unsupported";
+        case OS64_FETCH_SILENT:             return "silent";
+        case OS64_FETCH_REDIRECT_STOPPED:   return "redirect-stopped";
+        case OS64_FETCH_TOO_MANY_HOPS:      return "too-many-hops";
+        case OS64_FETCH_CUT:                return "cut";
+        case OS64_FETCH_BROKE:              return "broke";
+        case OS64_FETCH_CORRUPT:            return "corrupt";
+        case OS64_FETCH_LIMIT:              return "limit";
+        case OS64_FETCH_INTERRUPTED:        return "interrupted";
+        case OS64_FETCH_NO_MEMORY:          return "no-memory";
+    }
+    return "unknown";
+}
+
+const char *os64_fetch_reason(os64_fetch_t *f)
+{
+    const os64_fetch_detail_t *d = &f->detail;
+    char *out = f->reason;
+    size_t cap = sizeof(f->reason);
+    switch (f->status) {
+        case OS64_FETCH_OK:
+            os64_strcopy(out, cap, "no problem");
+            break;
+        case OS64_FETCH_BAD_URL:
+            os64_snprintf(out, cap, "%s", os64_url_reason(d->url));
+            break;
+        case OS64_FETCH_UNSUPPORTED_SCHEME:
+            os64_snprintf(out, cap, "%s is not a scheme this fetches (http and https are)", d->scheme);
+            break;
+        case OS64_FETCH_DIAL_FAILED:
+            os64_snprintf(out, cap, "cannot reach %s%s:%u: %s",
+                          d->dial_was_proxy ? "the proxy at " : "", d->dial_host,
+                          (unsigned)d->dial_port, os64_dial_reason(d->dial));
+            break;
+        case OS64_FETCH_PROXY_BAD:
+        case OS64_FETCH_REQUEST_FAILED:
+            os64_snprintf(out, cap, "%s", d->why);
+            break;
+        case OS64_FETCH_TLS_FAILED:
+            if (d->store_failed)
+                os64_snprintf(out, cap, "TLS trust %s (%s: %s, line %lu, policy %u)",
+                              os64_tls_store_status_name(d->store),
+                              d->store_report.config_stage ? "config" : "bundle",
+                              d->store_report.config_stage ? d->store_report.config_path
+                                                           : d->store_report.bundle_path,
+                              (unsigned long)d->store_report.detail.line,
+                              (unsigned)d->store_report.detail.policy_reason);
+            else
+                os64_snprintf(out, cap, "TLS %s: %s (policy %u, engine %d)",
+                              os64_tls_status_name(d->tls),
+                              os64_tls_error_description(d->tls, d->tls_policy, d->tls_engine),
+                              (unsigned)d->tls_policy, d->tls_engine);
+            break;
+        case OS64_FETCH_BAD_HEAD:
+            if (d->head != HTTP_HEAD_OK)
+                os64_snprintf(out, cap, "%s", http_head_reason(d->head));
+            else
+                os64_snprintf(out, cap, "after %lu bytes, %s",
+                              (unsigned long)f->progress.wire, http_body_reason(d->body));
+            break;
+        case OS64_FETCH_UNSUPPORTED:
+            if (os64_streq(d->unsupported, "101"))
+                os64_strcopy(out, cap, "the server switched protocols, and the bytes that follow are not HTTP");
+            else if (os64_streq(d->unsupported, "head"))
+                os64_strcopy(out, cap, "a header the fetch depends on was too long to read");
+            else if (d->gzip == OS64_GZIP_UNSUPPORTED)
+                os64_strcopy(out, cap, "the gzip reply uses a method this cannot decode");
+            else
+                os64_snprintf(out, cap, "the reply is framed or coded as '%s', which this does not read",
+                              d->unsupported);
+            break;
+        case OS64_FETCH_SILENT:
+        {
+            // The budget in the caller's own unit: whole seconds when it is
+            // whole seconds, milliseconds otherwise — "0 seconds" for a
+            // 500 ms budget was a false duration (Codex, PR #92 rd4).
+            char idle[32];
+            if (f->io.idle_ms % 1000u == 0)
+                os64_snprintf(idle, sizeof(idle), "%u seconds", f->io.idle_ms / 1000u);
+            else
+                os64_snprintf(idle, sizeof(idle), "%u ms", f->io.idle_ms);
+            if (d->silent_after_body)
+                os64_snprintf(out, cap, "the server went silent for %s after %lu bytes",
+                              idle, (unsigned long)f->progress.wire);
+            else
+                os64_snprintf(out, cap, "the server went silent for %s before the reply was whole",
+                              idle);
+            break;
+        }
+        case OS64_FETCH_REDIRECT_STOPPED:
+            switch (d->hop.kind) {
+                case OS64_FETCH_HOP_WHOLE:
+                    os64_snprintf(out, cap, "%ld %s -> %s, and the caller said stop",
+                                  (long)d->hop.status, f->head.reason, d->hop.whole);
+                    break;
+                case OS64_FETCH_HOP_NONE:
+                    os64_snprintf(out, cap, "%ld %s, and it does not say where to",
+                                  (long)d->hop.status, f->head.reason);
+                    break;
+                case OS64_FETCH_HOP_TOO_LONG:
+                    os64_snprintf(out, cap, "%ld %s, and the address it points at is longer than this will hold",
+                                  (long)d->hop.status, f->head.reason);
+                    break;
+                case OS64_FETCH_HOP_UNUSABLE:
+                    os64_snprintf(out, cap, "it points at %s, which is not a usable address: %s",
+                                  d->hop.whole, os64_url_reason(d->hop.parse));
+                    break;
+                case OS64_FETCH_HOP_SCHEME:
+                    os64_snprintf(out, cap, "it points at %s, and this fetches http and https addresses",
+                                  d->hop.whole);
+                    break;
+                case OS64_FETCH_HOP_DOWNGRADE:
+                    os64_snprintf(out, cap, "refusing HTTPS-to-HTTP downgrade to %s; the target is unencrypted",
+                                  d->hop.whole);
+                    break;
+                case OS64_FETCH_HOP_PROXY:
+                    os64_snprintf(out, cap, "it points at %s, and %s", d->hop.whole, d->hop.why);
+                    break;
+                case OS64_FETCH_HOP_SELF:
+                    os64_snprintf(out, cap, "it points back at %s, the address that just answered; the server is going in a circle",
+                                  d->hop.whole);
+                    break;
+            }
+            break;
+        case OS64_FETCH_TOO_MANY_HOPS:
+            os64_snprintf(out, cap, "sent somewhere else %u times and still going (next: %s)",
+                          (unsigned)f->opt.max_hops, d->hop.whole);
+            break;
+        case OS64_FETCH_CUT:
+            if (f->head.has_length)
+                os64_snprintf(out, cap, "the reply ended after %lu of %lu bytes",
+                              (unsigned long)f->progress.wire, (unsigned long)f->head.length);
+            else
+                os64_snprintf(out, cap, "the reply ended after %lu bytes, before its last chunk",
+                              (unsigned long)f->progress.wire);
+            break;
+        case OS64_FETCH_BROKE:
+            os64_snprintf(out, cap, "the connection broke after %lu bytes", (unsigned long)f->progress.wire);
+            break;
+        case OS64_FETCH_CORRUPT:
+            os64_snprintf(out, cap, "bad gzip reply: %s", os64_gzip_status_name(d->gzip));
+            break;
+        case OS64_FETCH_LIMIT:
+            if (d->gzip == OS64_GZIP_LIMIT)
+                os64_snprintf(out, cap, "the gzip reply expands past its %lu-byte safety limit"
+                              " (at most %lux wire size and %lu MiB overall)",
+                              (unsigned long)d->gzip_limit, (unsigned long)OS64_FETCH_GZIP_RATIO_MAX,
+                              (unsigned long)(OS64_FETCH_GZIP_OUTPUT_MAX / 1024 / 1024));
+            else
+                os64_snprintf(out, cap, "the body is larger than the %lu bytes asked for",
+                              (unsigned long)f->opt.max_body);
+            break;
+        case OS64_FETCH_INTERRUPTED:
+            os64_strcopy(out, cap, "interrupted");
+            break;
+        case OS64_FETCH_NO_MEMORY:
+            os64_strcopy(out, cap, "out of memory");
+            break;
+    }
+    // Every sentence is ASCII: the glass is Latin-1/CP437 and draws a UTF-8
+    // dash as three glyphs, and these sentences are headed for a status line.
+    // A body that ended badly on an encrypted transport has the transport's
+    // verdict behind it (a truncation the peer never authenticated, an
+    // engine error), and the numbers are worth the tail of the sentence.
+    if ((f->status == OS64_FETCH_CUT || f->status == OS64_FETCH_BROKE ||
+         f->status == OS64_FETCH_SILENT || f->status == OS64_FETCH_BAD_HEAD) &&
+        fetch_transport_tls_failed(&f->io)) {
+        size_t have = os64_strlen(out);
+        if (have < cap)
+            os64_snprintf(out + have, cap - have, " (TLS %s: %s; policy %u, engine %d)",
+                          os64_tls_status_name(d->tls),
+                          os64_tls_error_description(d->tls, d->tls_policy, d->tls_engine),
+                          (unsigned)d->tls_policy, d->tls_engine);
+    }
+    // The retry rule's one trace (retry_on_fresh), on whatever the outcome
+    // was, so a record of the fetch can carry it: how many of its requests
+    // went again, each at most once.
+    if (f->retried != 0) {
+        size_t have = os64_strlen(out);
+        if (have < cap && f->retried == 1)
+            os64_snprintf(out + have, cap - have, " (retried once on a fresh connection)");
+        else if (have < cap)
+            os64_snprintf(out + have, cap - have, " (%u requests retried, each once on a fresh connection)",
+                          (unsigned)f->retried);
+    }
+    return f->reason;
+}
+
+void os64_fetch_close(os64_fetch_t *f)
+{
+    if (f == NULL)
+        return;
+    // Kept for the next fetch when the exchange allows it (connection_reusable),
+    // and otherwise closed: with a bounded TLS closure only for a body that
+    // ended whole, since a fetch that stopped anywhere else does not wait on
+    // the peer. A fetch its owner closes mid-body or cancels has not read its
+    // body to the end, or is cancelled, and its connection is closed.
+    release_connection(f, f->over && f->status == OS64_FETCH_OK);
+    if (f->gz != NULL)
+        os64_gzip_destroy(f->gz);
+    if (f->wire != NULL)
+        os64_free(f->wire);
+    os64_free(f);
+}

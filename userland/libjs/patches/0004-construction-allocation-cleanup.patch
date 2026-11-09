@@ -1,0 +1,40 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -2604,6 +2604,7 @@
+     ctx->class_proto = js_malloc_rt(rt, sizeof(ctx->class_proto[0]) *
+                                     rt->class_count);
+     if (!ctx->class_proto) {
++        remove_gc_object(&ctx->header);
+         js_free_rt(rt, ctx);
+         return NULL;
+     }
+@@ -8195,8 +8196,10 @@
+         JSVarRef *var_ref;
+         /* in the global object we use references */
+         var_ref = js_create_var_ref(ctx, FALSE);
+-        if (!var_ref)
++        if (!var_ref) {
++            JS_FreeValue(ctx, val);
+             return -1;
++        }
+         prs->flags |= JS_PROP_VARREF;
+         pr->u.var_ref = var_ref;
+         var_ref->value = val; 
+@@ -51329,7 +51332,7 @@
+         goto fail;
+     if (JS_DefinePropertyValueStr(ctx, ctx->global_obj, "Proxy",
+                                   obj1, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+-        goto fail;
++        return -1;
+     return 0;
+  fail:
+     JS_FreeValue(ctx, obj1);
+@@ -56179,6 +56182,8 @@
+     {
+         JSObject *p;
+         obj = JS_NewObjectProtoClassAlloc(ctx, JS_NULL, JS_CLASS_OBJECT, 4);
++        if (JS_IsException(obj))
++            return -1;
+         p = JS_VALUE_GET_OBJ(ctx->global_obj);
+         p->u.global_object.uninitialized_vars = obj;
+     }

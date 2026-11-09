@@ -1,0 +1,49 @@
+gallery focus handle=3 gained=1 other=0
+gallery windows=1 font-bytes=101002 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery key handle=3 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=3 edge=1 ascii=102 scan=33 mods=4
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery key handle=4 edge=2 ascii=102 scan=33 mods=4
+gallery windows=2 font-bytes=105784 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery surface handle=4 width=202 height=50 pitch=202
+gallery key handle=4 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=4 edge=1 ascii=27 scan=80 mods=0
+gallery key handle=4 edge=1 ascii=91 scan=80 mods=0
+gallery key handle=4 edge=1 ascii=66 scan=80 mods=0
+gallery key handle=4 edge=1 ascii=27 scan=77 mods=0
+gallery key handle=4 edge=1 ascii=91 scan=77 mods=0
+gallery key handle=4 edge=1 ascii=67 scan=77 mods=0
+gallery focus handle=5 gained=1 other=4
+gallery focus handle=4 gained=0 other=5
+gallery windows=3 font-bytes=337584 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery surface handle=4 width=202 height=50 pitch=202
+gallery surface handle=5 width=458 height=766 pitch=458
+gallery key handle=5 edge=1 ascii=27 scan=79 mods=0
+gallery key handle=5 edge=1 ascii=91 scan=79 mods=0
+gallery key handle=5 edge=1 ascii=70 scan=79 mods=0
+gallery key handle=5 edge=1 ascii=0 scan=56 mods=4
+gallery focus handle=5 gained=0 other=0
+gallery windows=1 font-bytes=104938 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery focus handle=3 gained=1 other=0
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=3 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=3 edge=1 ascii=97 scan=30 mods=4
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery key handle=4 edge=2 ascii=97 scan=30 mods=4
+gallery windows=2 font-bytes=116416 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery surface handle=4 width=248 height=101 pitch=248
+gallery key handle=4 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=4 edge=1 ascii=0 scan=56 mods=4
+gallery focus handle=3 gained=1 other=4
+gallery windows=1 font-bytes=105922 target-hits=0,0
+gallery surface handle=3 width=878 height=719 pitch=1024
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=3 edge=1 ascii=0 scan=56 mods=4
+gallery exit font-bytes=0 refs=0,0 hits=0,0

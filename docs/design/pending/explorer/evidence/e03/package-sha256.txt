@@ -1,0 +1,6 @@
+d8a03d6af26bf861a32599ed38c6b14a3a363715993d539978f5f4305e30883e  pack-fat/actiongallery  PASS
+d8a03d6af26bf861a32599ed38c6b14a3a363715993d539978f5f4305e30883e  pack-ext2/actiongallery  PASS
+a7f207ab203db6eea225e2cd0b82478c2dd552dd43347d195764ff09ba8bad2b  pack-fat/libos64.so  PASS
+a7f207ab203db6eea225e2cd0b82478c2dd552dd43347d195764ff09ba8bad2b  pack-ext2/libos64.so  PASS
+80826fb9fdddd803e99034a441bee0ba35900859b06549200292047fb303db5c  pack-fat/libimage.so  PASS
+80826fb9fdddd803e99034a441bee0ba35900859b06549200292047fb303db5c  pack-ext2/libimage.so  PASS

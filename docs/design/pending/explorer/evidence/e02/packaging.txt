@@ -1,0 +1,7 @@
+E2 icon packaging, 2026-10-13
+Actual GNUmakefile recipes: /tmp/e2-icon-package-check/ext2.img and disk.img built successfully (make.log).
+FAT: 130 PNGs + theme.conf + provenance.json + LICENSE + /etc/icons.conf extracted; all byte-identical to sources.
+ext2: 130 PNGs + theme.conf + provenance.json + LICENSE + /etc/icons.conf extracted; all byte-identical to sources.
+Dependency probes used /tmp/e2-icon-package-check/asset-mirror and make --trace -n: changed, added and deleted PNG each scheduled ext2.img and disk.img rebuilds. Added PNG appeared in copy command; deleted PNG was absent.
+Kernel artifacts and Limine came from existing main-tree build via temporary symlinks; make -o kernel skipped kernel-deps network fetch. Symlinks were removed. No repository disk image was written.
+Final provider rebuild: both actual recipes reran (make-final.log) and both images were recreated. Re-extracted 130 PNGs, three icon metadata files, /etc/icons.conf and /lib/libimage.so from FAT and ext2; all byte-identical to current sources/final binary. Temporary artifact symlinks removed again; no tracked kernel or disk changes.

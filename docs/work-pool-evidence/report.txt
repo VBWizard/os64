@@ -1,0 +1,6 @@
+testrun - fixtures matching 'worktest'
+worktest: twenty jobs, four workers, ordered products and heap checked
+worktest: cap through DONE, FIFO, queued/running cancellation, full table, destroy checked
+worktest: PASS (0 failures)
+  PASS  /tests/worktest
+1 passed, 0 failed, 0 skipped

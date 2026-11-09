@@ -1,0 +1,1321 @@
+// http.c — the world's dialect. See http.h for what this is and is not.
+
+#include "fetch/http.h"
+
+#include "os64/fmt.h"
+#include "os64/str.h"
+
+// ── Bytes ───────────────────────────────────────────────────────────────
+
+static bool is_digit(char c) { return c >= '0' && c <= '9'; }
+static bool is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+static bool is_blank(char c) { return c == ' ' || c == '\t'; }
+// What a reason phrase or a field value may hold: RFC 9110's field-vchar,
+// obs-text and the blanks — bytes a terminal draws, not bytes it obeys. Both
+// are the origin's words and both get printed to the person's terminal, so
+// a control byte is refused once, here, rather than escaped at every print.
+static bool is_field_byte(char c)
+{
+    return c == '\t' || ((unsigned char)c >= 0x20 && c != 0x7F);
+}
+static char to_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c; }
+
+// A FIELD NAME IS A TOKEN, and both places that read one judge it by this.
+// RFC 7230's tchar: letters, digits, and "!#$%&'*+-.^_`|~". Nothing else —
+// no space, no tab, no colon, no control byte.
+//
+// It exists because the two paths were judging names by different rules and
+// the looser one was reachable. `Transfer-Encoding :` is refused by
+// header_take (which checks the byte before the colon) and was ACCEPTED by
+// overlong_verdict, whose name simply carried the trailing blank and matched
+// nothing — so the malformed short form was rejected while the malformed
+// LONG form was dropped, and dropping it published chunk markers as a file.
+// A shared rule cannot drift like two spellings of one rule can.
+// (Codex review round 3, 2026-09-02.)
+static bool is_token_byte(char c)
+{
+    return is_alpha(c) || is_digit(c) ||
+           c == '!' || c == '#' || c == '$'  || c == '%' || c == '&' ||
+           c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+           c == '^' || c == '_' || c == '`'  || c == '|' || c == '~';
+}
+
+// os64_strcopy's contract (the wanted length, not the written one), plus
+// ASCII case folding. Case matters here in exactly one direction: a scheme
+// and a coding name are compared, so they are folded once on the way in
+// rather than at every comparison; a path and a Location are DATA and are
+// copied verbatim.
+static size_t copy_lower(char *dst, size_t cap, const char *src, size_t len)
+{
+    size_t i = 0;
+    if (cap != 0) {
+        for (; i < len && i + 1 < cap; i++)
+            dst[i] = to_lower(src[i]);
+        dst[i] = '\0';
+    }
+    return len;
+}
+
+static size_t copy_span(char *dst, size_t cap, const char *src, size_t len)
+{
+    size_t i = 0;
+    if (cap != 0) {
+        for (; i < len && i + 1 < cap; i++)
+            dst[i] = src[i];
+        dst[i] = '\0';
+    }
+    return len;
+}
+
+// ── A URL, taken apart ──────────────────────────────────────────────────
+
+static uint16_t scheme_default_port(const char *scheme);
+
+// The grammar is os64_url_parse's; what is left here is the part that is
+// HTTP's own. One refusal maps to another, one for one, so that os64get's
+// diagnostics keep saying "not http or https" in http's words rather than
+// the library's more general ones.
+static http_url_result_t url_result_from(os64_url_result_t rc)
+{
+    switch (rc) {
+        case OS64_URL_OK:         return HTTP_URL_OK;
+        case OS64_URL_NOT_A_URL:  return HTTP_URL_NOT_A_URL;
+        case OS64_URL_NO_HOST:    return HTTP_URL_NO_HOST;
+        case OS64_URL_HOST_CHARS: return HTTP_URL_HOST_CHARS;
+        case OS64_URL_PATH_CHARS: return HTTP_URL_PATH_CHARS;
+        case OS64_URL_PORT:       return HTTP_URL_PORT;
+        case OS64_URL_TOO_LONG:   return HTTP_URL_TOO_LONG;
+    }
+    return HTTP_URL_NOT_A_URL;
+}
+
+http_url_result_t http_url_parse(const char *url, http_url_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+
+    os64_url_t parsed;
+    os64_url_result_t rc = os64_url_parse(url, &parsed);
+
+    // AN UNSUPPORTED SCHEME OUTRANKS EVERY OTHER COMPLAINT, which is why the
+    // scheme is judged before `rc` is. Telling somebody that their `ftp://`
+    // address has a bad port answers a question they cannot use the answer
+    // to; naming the scheme sends them somewhere that can help. The library
+    // fills the scheme before it looks at anything else, so it is readable
+    // on a failed parse as well as a good one — and http.h promises it.
+    if (parsed.scheme[0] != '\0') {
+        copy_span(out->scheme, sizeof(out->scheme), parsed.scheme,
+                  os64_strlen(parsed.scheme));
+        if (!os64_streq(out->scheme, "http") && !os64_streq(out->scheme, "https"))
+            return HTTP_URL_SCHEME;
+    }
+    if (rc != OS64_URL_OK)
+        return url_result_from(rc);
+
+    // Both HTTP schemes share URL grammar. The caller selects direct TLS
+    // or an explicit proxy and owns the trust/routing decisions.
+    copy_span(out->host, sizeof(out->host), parsed.host, os64_strlen(parsed.host));
+    copy_span(out->path, sizeof(out->path), parsed.path, os64_strlen(parsed.path));
+
+    // The library reports port 0 for "the URL named none", which is where
+    // the scheme's default gets applied — the one place in this program
+    // that knows what http and https imply.
+    out->port = parsed.port != 0 ? parsed.port : scheme_default_port(out->scheme);
+    return HTTP_URL_OK;
+}
+
+const char *http_url_reason(http_url_result_t rc)
+{
+    switch (rc) {
+        case HTTP_URL_OK:         return "no problem";
+        case HTTP_URL_NOT_A_URL:  return "not a URL (a URL starts 'scheme://')";
+        case HTTP_URL_SCHEME:     return "not http or https";
+        case HTTP_URL_NO_HOST:    return "no host between the '//' and the path";
+        case HTTP_URL_HOST_CHARS: return "the host holds something a host name cannot"
+                                         " (a user@, an IPv6 literal in brackets, or junk)";
+        case HTTP_URL_PATH_CHARS: return "the path holds a space or a control byte";
+        case HTTP_URL_PORT:       return "the port is not a number from 1 to 65535";
+        case HTTP_URL_TOO_LONG:   return "too long to hold";
+    }
+    return "refused";
+}
+
+// The port a scheme implies when a URL does not spell one. Used in two
+// places that must agree: the Host header (which omits a default port,
+// because a server matching virtual hosts on the literal string is entitled
+// to treat "example.com" and "example.com:80" as different names, and the
+// short form is the one everybody writes) and http_url_render.
+static uint16_t scheme_default_port(const char *scheme)
+{
+    return os64_streq(scheme, "https") ? 443 : 80;
+}
+
+// Write a parsed URL back out as text. The inverse of http_url_parse for
+// everything the parse KEPT — which means a rendered URL has lost its
+// fragment and any default port that was spelled out, both on purpose.
+//
+// It exists because a proxied request puts the whole address in the request
+// line, and reconstructing that from the struct rather than replaying what
+// the person typed is what keeps a fragment (`#top`, which has never crossed
+// the wire) from reaching a server that was never asked for it.
+bool http_url_render(const http_url_t *url, char *out, size_t cap)
+{
+    int32_t n;
+    if (url->port != scheme_default_port(url->scheme))
+        n = os64_snprintf(out, cap, "%s://%s:%u%s", url->scheme, url->host,
+                          (unsigned)url->port, url->path);
+    else
+        n = os64_snprintf(out, cap, "%s://%s%s", url->scheme, url->host, url->path);
+    return n > 0 && (size_t)n < cap;
+}
+
+void http_url_to_os64(const http_url_t *url, os64_url_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    copy_span(out->scheme, sizeof(out->scheme), url->scheme, os64_strlen(url->scheme));
+    copy_span(out->host, sizeof(out->host), url->host, os64_strlen(url->host));
+    copy_span(out->path, sizeof(out->path), url->path, os64_strlen(url->path));
+    out->port = url->port != scheme_default_port(url->scheme) ? url->port : 0;
+}
+
+static bool name_in(const char *name, size_t len, const char *const *list, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (os64_strlen(list[i]) != len)
+            continue;
+        size_t j = 0;
+        while (j < len && to_lower(name[j]) == list[i][j])
+            j++;
+        if (j == len)
+            return true;
+    }
+    return false;
+}
+
+// A second spelling of framing or routing would let a peer parse a
+// different message from the one whose bytes we send. Body metadata is
+// reserved too, so POST -> GET cannot leave a stale representation header:
+// it goes in body_headers, beside a method_name whose redirects the caller
+// rewrites.
+static bool request_reserved(const char *name, size_t len)
+{
+    static const char *const owned[] = {
+        "host", "content-length", "content-type", "content-encoding",
+        "content-language", "content-location", "transfer-encoding",
+        "connection", "expect", "trailer", "te", "upgrade",
+        "accept-encoding", "user-agent", "accept"
+    };
+    return name_in(name, len, owned, sizeof(owned) / sizeof(owned[0]));
+}
+
+static bool body_header(const char *name, size_t len)
+{
+    static const char *const body[] = {
+        "content-type", "content-encoding", "content-language", "content-location"
+    };
+    return name_in(name, len, body, sizeof(body) / sizeof(body[0]));
+}
+
+// What a caller-supplied text is: one header value, extra_headers' lines,
+// or body_headers' lines.
+typedef enum { CLEAN_VALUE, CLEAN_EXTRA_LINES, CLEAN_BODY_LINES } clean_t;
+
+// A caller-supplied header value, judged byte by byte. Whole lines are for
+// extra_headers and body_headers, where CR LF is the line ending the caller
+// wrote and is legal only as the pair, at a line's end: a lone LF, a lone
+// CR, or a CR with anything but LF after it is the splitting shape and
+// refuses.
+static bool extras_clean(const char *text, clean_t kind)
+{
+    if (text == NULL)
+        return true;
+    if (kind == CLEAN_VALUE) {
+        for (const char *p = text; *p != '\0'; p++)
+            if (!is_field_byte(*p))
+                return false;
+        return true;
+    }
+    // Whole lines: each one is a FIELD — a token name, a colon, field bytes,
+    // CR LF — and nothing else is a line. An empty line is the head's
+    // terminator, so "\r\nGET /admin HTTP/1.1\r\n" would end the request
+    // and start a second one (Codex, PR #92); a line with no colon or a
+    // name that is not a token would be refused by any server and hides
+    // the same shape. Judged by the same is_token_byte / is_field_byte the
+    // reply parser judges the server by.
+    const char *p = text;
+    while (*p != '\0') {
+        const char *name = p;
+        while (is_token_byte(*p))
+            p++;
+        if (p == name || *p != ':')
+            return false;
+        if (kind == CLEAN_EXTRA_LINES ? request_reserved(name, (size_t)(p - name))
+                                      : !body_header(name, (size_t)(p - name)))
+            return false;
+        p++;
+        while (*p != '\0' && *p != '\r' && *p != '\n') {
+            if (!is_field_byte(*p))
+                return false;
+            p++;
+        }
+        if (p[0] != '\r' || p[1] != '\n')
+            return false;         // a bare CR or LF, or a last line with no ending
+        p += 2;
+    }
+    return true;
+}
+
+static bool method_is(const char *name, const char *want)
+{
+    return name != NULL && os64_streq(name, want);
+}
+
+// CONNECT is refused, in any case: its 2xx turns the connection into a
+// tunnel whose bytes are no longer HTTP's, which no reply reader here
+// follows and no kept connection may be, and no caller asks for it (Fetch
+// forbids it to a page: way_method_forbidden).
+static bool method_name_ok(const char *name)
+{
+    size_t len = os64_strlen(name);
+    if (len == 0 || len >= HTTP_METHOD_NAME_MAX)
+        return false;
+    static const char *const tunnel[] = {"connect"};
+    if (name_in(name, len, tunnel, 1))
+        return false;
+    for (size_t i = 0; i < len; i++)
+        if (!is_token_byte(name[i]))
+            return false;
+    return true;
+}
+
+// An order is field names, commas and blanks: nothing it holds is written,
+// but a name it cannot hold is a list somebody got wrong.
+static bool order_clean(const char *order)
+{
+    for (const char *p = order; p != NULL && *p != '\0'; p++)
+        if (!is_token_byte(*p) && *p != ',' && !is_blank(*p))
+            return false;
+    return true;
+}
+
+bool http_request_extras_ok(const http_request_extras_t *extras)
+{
+    if (extras == NULL)
+        return true;
+    if (!order_clean(extras->order))
+        return false;
+    if (extras->method != HTTP_METHOD_GET && extras->method != HTTP_METHOD_POST)
+        return false;
+    if (extras->method_name != NULL) {
+        if (extras->method != HTTP_METHOD_GET || extras->content_type != NULL ||
+            !method_name_ok(extras->method_name))
+            return false;
+        if ((method_is(extras->method_name, "GET") || method_is(extras->method_name, "HEAD")) &&
+            (extras->body_len || extras->body_present))
+            return false;
+    } else {
+        if (extras->body_headers != NULL)
+            return false;
+        if (extras->method == HTTP_METHOD_GET && (extras->body_len || extras->body_present || extras->content_type))
+            return false;
+    }
+    return extras_clean(extras->content_type, CLEAN_VALUE) &&
+           extras_clean(extras->user_agent, CLEAN_VALUE) && extras_clean(extras->accept, CLEAN_VALUE) &&
+           extras_clean(extras->extra_headers, CLEAN_EXTRA_LINES) &&
+           extras_clean(extras->body_headers, CLEAN_BODY_LINES);
+}
+
+// ── The request's lines, and their order ────────────────────────────────
+
+// Two field names, the same without case.
+static bool name_matches(const char *a, const char *b, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (to_lower(a[i]) != to_lower(b[i]))
+            return false;
+    return true;
+}
+
+// Whether `order` names `name`: anywhere when `before` is NULL, else at a
+// place before `before` (a pointer into `order`), which is how a name the
+// list repeats is placed once.
+static bool name_listed(const char *order, const char *before, const char *name, size_t len)
+{
+    for (const char *p = order; *p != '\0' && (before == NULL || p < before);) {
+        while (*p == ',' || is_blank(*p))
+            p++;
+        const char *at = p;
+        while (*p != '\0' && *p != ',' && !is_blank(*p))
+            p++;
+        if (before != NULL && at >= before)
+            break;
+        if ((size_t)(p - at) == len && name_matches(at, name, len))
+            return true;
+    }
+    return false;
+}
+
+// One line of the head after Host: its field name, and either the whole
+// line as a caller's block holds it (`line`, CR LF and all) or a value this
+// writer puts after the name, so nothing the caller gave is copied twice.
+typedef struct {
+    const char *name;
+    size_t name_len;
+    const char *line;           // a block's whole line, or NULL
+    size_t line_len;
+    const char *value;          // ...else the value, written as "name: value\r\n"
+} head_line_t;
+
+// Where a walk over those lines is, in this writer's own order: the fixed
+// lines in turn (`slot`), then the lines of `body_headers` and of
+// `extra_headers` as given (`at`, inside the block being walked). `length` is the
+// Content-Length's digits, "" for none.
+typedef struct {
+    const http_request_extras_t *x;
+    const char *length;
+    int slot;
+    const char *at;
+} head_lines_t;
+
+static void head_line_fixed(head_line_t *line, const char *name, const char *value)
+{
+    *line = (head_line_t){ .name = name, .name_len = os64_strlen(name), .value = value };
+}
+
+// The next line, true while there is one. The blocks were judged whole
+// lines by extras_clean before anything is written, so the walk may trust
+// that each line has a colon and ends in CR LF.
+static bool head_lines_next(head_lines_t *w, head_line_t *line)
+{
+    for (;;) {
+        const http_request_extras_t *x = w->x;
+        int slot = w->slot;
+        if (slot >= 6) {
+            const char *block = slot == 6 ? x->body_headers : slot == 7 ? x->extra_headers : NULL;
+            if (slot > 7)
+                return false;
+            if (w->at == NULL)
+                w->at = block != NULL ? block : "";
+            if (*w->at == '\0') {
+                w->slot++;
+                w->at = NULL;
+                continue;
+            }
+            const char *start = w->at, *colon = start, *end = start;
+            while (*colon != ':')
+                colon++;
+            while (!(end[0] == '\r' && end[1] == '\n'))
+                end++;
+            end += 2;
+            w->at = end;
+            *line = (head_line_t){ .name = start, .name_len = (size_t)(colon - start),
+                                   .line = start, .line_len = (size_t)(end - start) };
+            return true;
+        }
+        w->slot++;
+        // Name both codings this client can turn back into the
+        // representation, or identity alone when the caller asked for it
+        // (a byte Range). A missing Accept-Encoding means any coding may be
+        // acceptable; an explicit list lets a server choose gzip without
+        // licensing br, compress, or another envelope that would otherwise
+        // have to be refused afterward.
+        switch (slot) {
+        case 0: if (x->user_agent == NULL) continue;
+                head_line_fixed(line, "User-Agent", x->user_agent); return true;
+        case 1: if (x->accept == NULL) continue;
+                head_line_fixed(line, "Accept", x->accept); return true;
+        case 2: head_line_fixed(line, "Accept-Encoding", x->identity ? "identity" : "gzip, identity");
+                return true;
+        case 3: if (!x->keep_alive) continue;
+                head_line_fixed(line, "Connection", "keep-alive"); return true;
+        case 4: if (w->length[0] == '\0') continue;
+                head_line_fixed(line, "Content-Length", w->length); return true;
+        default: if (x->content_type == NULL) continue;
+                head_line_fixed(line, "Content-Type", x->content_type); return true;
+        }
+    }
+}
+
+// `n` bytes of `s` onto `out` at `*at`, keeping room for the NUL.
+static bool head_put(char *out, size_t cap, size_t *at, const char *s, size_t n)
+{
+    if (n >= cap - *at)
+        return false;
+    os64_memcpy(out + *at, s, n);
+    *at += n;
+    out[*at] = '\0';
+    return true;
+}
+
+static bool head_line_put(char *out, size_t cap, size_t *at, const head_line_t *line)
+{
+    if (line->line != NULL)
+        return head_put(out, cap, at, line->line, line->line_len);
+    return head_put(out, cap, at, line->name, line->name_len) && head_put(out, cap, at, ": ", 2) &&
+           head_put(out, cap, at, line->value, os64_strlen(line->value)) &&
+           head_put(out, cap, at, "\r\n", 2);
+}
+
+bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
+                  const http_request_extras_t *extras)
+{
+    static const http_request_extras_t none = {0};
+    if (extras == NULL)
+        extras = &none;
+    if (!http_request_extras_ok(extras))
+        return false;
+
+    char host[HTTP_HOST_MAX + 8];
+    if (url->port != scheme_default_port(url->scheme)) {
+        if (os64_snprintf(host, sizeof(host), "%s:%u", url->host, (unsigned)url->port) >=
+            (int32_t)sizeof(host))
+            return false;
+    } else {
+        if (os64_strcopy(host, sizeof(host), url->host) >= sizeof(host))
+            return false;
+    }
+
+    // THE REQUEST TARGET IS THE WHOLE URL WHEN A PROXY IS ANSWERING. That is
+    // "absolute-form" (RFC 7230 §5.3.2), and it is how every proxy since the
+    // CERN one in 1994 has been told which origin a request is for — the
+    // connection goes to the proxy, so the path alone would name a file on
+    // the proxy instead of a page on the web. `Host:` still names the ORIGIN,
+    // which is what lets the proxy pass it on unchanged.
+    char target[HTTP_TARGET_MAX];
+    const char *requestTarget = url->path;
+    if (absoluteForm) {
+        if (!http_url_render(url, target, sizeof(target)))
+            return false;
+        requestTarget = target;
+    }
+
+    // A body is framed by its length, an empty one included, so a server can
+    // tell it from none; a POST or a PUT says its emptiness even with no
+    // body, since a server may refuse one that says nothing (Fetch § 4.6).
+    const char *method = extras->method_name != NULL ? extras->method_name
+                       : extras->method == HTTP_METHOD_POST ? "POST" : "GET";
+    char length[64] = {0};
+    if (extras->body_len || extras->body_present || method_is(method, "POST") || method_is(method, "PUT"))
+        os64_snprintf(length, sizeof(length), "%lu", (uint64_t)extras->body_len);
+
+    int32_t n = os64_snprintf(out, cap, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, requestTarget, host);
+    if (n <= 0 || (size_t)n >= cap)
+        return false;
+    size_t at = (size_t)n;
+
+    // Then every other line, the ones the caller's order names first, each
+    // where the order puts it, and the rest after them in this writer's own
+    // order (head_lines_next); the blank line is written LAST and only here.
+    const char *order = extras->order != NULL ? extras->order : "";
+    for (const char *p = order; *p != '\0';) {
+        while (*p == ',' || is_blank(*p))
+            p++;
+        const char *name = p;
+        while (*p != '\0' && *p != ',' && !is_blank(*p))
+            p++;
+        size_t len = (size_t)(p - name);
+        if (len == 0 || name_listed(order, name, name, len) || (len == 4 && name_matches(name, "host", 4)))
+            continue;
+        head_lines_t lines = { .x = extras, .length = length };
+        head_line_t line;
+        while (head_lines_next(&lines, &line))
+            if (line.name_len == len && name_matches(line.name, name, len) &&
+                !head_line_put(out, cap, &at, &line))
+                return false;
+    }
+    head_lines_t lines = { .x = extras, .length = length };
+    head_line_t line;
+    while (head_lines_next(&lines, &line))
+        if (!name_listed(order, NULL, line.name, line.name_len) && !head_line_put(out, cap, &at, &line))
+            return false;
+    return head_put(out, cap, &at, "\r\n", 2);
+}
+
+
+// ── The stream ──────────────────────────────────────────────────────────
+
+void http_stream_init(http_stream_t *s, http_source_fn source, void *ctx)
+{
+    os64_memset(s, 0, sizeof(*s));
+    s->source = source;
+    s->ctx = ctx;
+}
+
+// 1 there are unspent bytes, 0 the peer is done, -1 the connection broke.
+static int stream_fill(http_stream_t *s)
+{
+    if (s->next < s->have)
+        return 1;
+    if (s->failed)
+        return -1;
+    if (s->ended)
+        return 0;
+
+    s->next = 0;
+    s->have = 0;
+    int64_t n = s->source(s->ctx, s->buf, sizeof(s->buf));
+    if (n < 0) { s->failed = true; return -1; }
+    if (n == 0) { s->ended = true; return 0; }
+    s->have = (size_t)n;
+    return 1;
+}
+
+typedef enum {
+    LINE_OK = 0,
+    LINE_LONG,     // read and thrown away: longer than we will hold
+    LINE_NUL,      // a NUL byte: not a line at all, and not one to keep reading
+    LINE_END,      // the peer stopped talking mid-head
+    LINE_ERROR
+} line_result_t;
+
+// One line, CRLF or bare LF, the terminator stripped. `*consumed` counts the
+// RAW bytes eaten — including the ones a long line threw away — because that
+// is the number the head's size cap has to be measured in.
+//
+// `budget` bounds the DRAIN, and it is the difference between a cap and a
+// promise. Without it, a peer that streams forever and never sends a newline
+// is read forever: the caller's cap is checked between lines, and this call
+// would never return to be checked. Running out of budget reads as an
+// over-long line, which is what it is.
+//
+// A NUL BYTE IS REFUSED WHEREVER IT FALLS IN THE LINE, because the line is
+// handed on as a C string and a NUL inside it ends the string early. A line
+// that BEGAN with one read as empty — the blank line that ends the head — so
+// `\0Transfer-Encoding: chunked` was taken for the terminator, the framing
+// header behind it was read as body, and the raw chunk markers were published
+// as the file. No HTTP head may contain NUL (RFC 9110 §5.5 forbids it in
+// values, and a name is a token), so there is no reply to save by tolerating
+// it. (Codex review round 4, 2026-09-03.)
+static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
+                               size_t budget, size_t *consumed)
+{
+    size_t len = 0;
+    bool overlong = false;
+
+    *consumed = 0;
+    for (;;) {
+        if (*consumed >= budget)
+            return LINE_LONG;
+
+        int r = stream_fill(s);
+        if (r < 0)
+            return LINE_ERROR;
+        if (r == 0)
+            return LINE_END;         // no newline ever came: the head is a fragment
+
+        char c = (char)s->buf[s->next++];
+        (*consumed)++;
+        if (c == '\n')
+            break;
+        if (c == '\0')
+            return LINE_NUL;
+        if (len + 1 < cap)
+            out[len++] = c;
+        else
+            overlong = true;
+    }
+
+    if (len > 0 && out[len - 1] == '\r')
+        len--;
+    out[len] = '\0';
+    return overlong ? LINE_LONG : LINE_OK;
+}
+
+// ── The answer ──────────────────────────────────────────────────────────
+
+// "HTTP/1.1 404 Not Found" — the version is read for one fact only, whether
+// it is HTTP/1.1 (or a later 1.x), which is what lets the connection be kept
+// (RFC 9112 § 9.3); a 1.0 server answers a 1.1 request with a 1.0 reply, and
+// every framing either may use is one http_body_read reads. The code must be
+// exactly three digits, and the reason phrase is the server's own words,
+// kept so a refusal can be reported in them rather than in ours.
+static bool status_parse(const char *line, http_response_t *out)
+{
+    if (line[0] != 'H' || line[1] != 'T' || line[2] != 'T' || line[3] != 'P' || line[4] != '/')
+        return false;
+
+    // HTTP-version is "HTTP/" DIGIT "." DIGIT (RFC 9112 § 2.3), exactly.
+    out->http11 = line[5] == '1' && line[6] == '.' && line[7] >= '1' && line[7] <= '9' &&
+                  line[8] == ' ';
+    const char *p = line + 5;
+    if (!is_digit(*p))
+        return false;
+    while (is_digit(*p) || *p == '.')
+        p++;
+    if (*p != ' ')
+        return false;
+    while (*p == ' ')
+        p++;
+
+    if (!is_digit(p[0]) || !is_digit(p[1]) || !is_digit(p[2]))
+        return false;
+    out->status = (p[0] - '0') * 100 + (p[1] - '0') * 10 + (p[2] - '0');
+    p += 3;
+    if (*p != '\0' && *p != ' ')
+        return false;                    // "2000" is not a status code
+    while (*p == ' ')
+        p++;
+
+    for (const char *q = p; *q != '\0'; q++)
+        if (!is_field_byte(*q))
+            return false;            // a reason phrase that would drive the terminal
+    copy_span(out->reason, sizeof(out->reason), p, os64_strlen(p));
+    return true;
+}
+
+// Store a coding name. A SECOND, DIFFERENT answer to the same question is
+// refused rather than resolved: which of two Transfer-Encodings a stream is
+// in has no correct guess, and guessing wrong writes a file of framing bytes.
+// THE SAME answer twice is not a conflict, it is a LIST — RFC 7230 §3.2.2
+// joins repeated field lines with commas, so two `Content-Encoding: gzip`
+// lines say `gzip, gzip`: encoded twice. The list is kept as the value, so
+// the caller meets a coding it does not speak and refuses it by name,
+// instead of undoing one layer and publishing the other as the page (Codex
+// review of PR #54, 2026-09-03).
+//
+// THE VALUE IS JUDGED BEFORE IT IS STORED, because the slot is small and
+// "absent" is spelled by an empty slot. An EMPTY value stored there read as
+// no header at all — so `Transfer-Encoding:` with nothing after it slipped
+// past the conflict check and the framing refusal both, and a chunked body
+// or a body beside a Content-Length went through as if nothing framed it
+// (Codex review round 7, 2026-09-03). A value LONGER than the slot used to
+// be folded into it truncated, so two different long values compared equal
+// and a truncated name matched nothing — safe only by accident. A coding
+// this program will act on is a short word; one that does not fit, or a
+// list that no longer does, is a framing header it cannot read, and says so.
+static http_head_result_t coding_take(char *slot, size_t cap, const char *value, size_t vlen)
+{
+    if (vlen == 0)
+        return HTTP_HEAD_SYNTAX;      // a coding header must name a coding
+    if (vlen >= HTTP_TOKEN_MAX)
+        return HTTP_HEAD_FRAMING;
+
+    char folded[HTTP_TOKEN_MAX];
+    copy_lower(folded, sizeof(folded), value, vlen);
+    if (slot[0] == '\0') {
+        os64_strcopy(slot, cap, folded);
+        return HTTP_HEAD_OK;
+    }
+    if (!os64_streq(slot, folded))
+        return HTTP_HEAD_CONFLICT;
+
+    size_t have = os64_strlen(slot);
+    if (have + 2 + vlen >= cap)
+        return HTTP_HEAD_FRAMING;
+    slot[have] = ',';
+    slot[have + 1] = ' ';
+    os64_strcopy(slot + have + 2, cap - have - 2, folded);
+    return HTTP_HEAD_OK;
+}
+
+static http_head_result_t header_take(char *line, http_response_t *out,
+                                       http_header_fn on_header, void *ctx)
+{
+    // THE NAME IS A TOKEN, judged by the same is_token_byte the over-long
+    // path uses — which is the point, because these two used to judge it
+    // differently and the looser one was reachable. That single rule covers
+    // what were three separate checks: a line beginning with whitespace
+    // (obs-fold, a continuation of the line above, deprecated by RFC 7230
+    // §3.2.4 and required to be rejected by anything that is not a proxy), a
+    // blank before the colon, and any other byte a field name may not hold.
+    // Each of those, left through, hides a framing header under a name that
+    // matches nothing and gets its chunk markers published as a file.
+    char *colon = line;
+    while (*colon != '\0' && *colon != ':') {
+        if (!is_token_byte(*colon))
+            return HTTP_HEAD_SYNTAX;
+        colon++;
+    }
+    if (*colon != ':' || colon == line)
+        return HTTP_HEAD_SYNTAX;
+    *colon = '\0';
+
+    char *value = colon + 1;
+    while (is_blank(*value))
+        value++;
+    size_t vlen = os64_strlen(value);
+    while (vlen > 0 && is_blank(value[vlen - 1]))
+        value[--vlen] = '\0';
+    for (size_t i = 0; i < vlen; i++)
+        if (!is_field_byte(value[i]))
+            return HTTP_HEAD_SYNTAX;  // a Location that would clear the screen
+
+    // An interim (1xx) head's fields are not the answer's: an observer that
+    // judged them would let a 103's Access-Control-Allow-Origin or
+    // Set-Cookie stand for a final head that has neither.
+    if (on_header && out->status >= 200)
+        on_header(ctx, line, (size_t)(colon - line), value, vlen);
+
+    if (os64_streq_nocase(line, "Content-Length")) {
+        uint64_t length = 0;
+        if (!os64_parse_u64(value, &length))
+            return HTTP_HEAD_SYNTAX;
+        if (out->hasLength && out->length != length)
+            return HTTP_HEAD_CONFLICT;
+        out->hasLength = true;
+        out->length = length;
+    } else if (os64_streq_nocase(line, "Transfer-Encoding")) {
+        http_head_result_t rc = coding_take(out->transferEncoding,
+                                            sizeof(out->transferEncoding), value, vlen);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
+    } else if (os64_streq_nocase(line, "Content-Encoding")) {
+        http_head_result_t rc = coding_take(out->contentEncoding,
+                                            sizeof(out->contentEncoding), value, vlen);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
+    } else if (os64_streq_nocase(line, "Content-Type")) {
+        // `type/subtype; charset=x; other=y`. Both the type and the charset
+        // label are folded to lowercase (RFC 2045: a media type is
+        // case-insensitive; the Encoding Standard: so is a label), quotes
+        // around the charset stripped.
+        // Two Content-Type lines is a reply that does not know what it is
+        // sending; the first is kept and the second ignored, the same
+        // "nothing about the framing depends on it" reasoning that lets an
+        // over-long one be dropped — refusing here would cost a fetch over a
+        // header the consumer only advises on.
+        if (out->contentType[0] != '\0')
+            return HTTP_HEAD_OK;
+        size_t tlen = 0;
+        while (tlen < vlen && value[tlen] != ';' && !is_blank(value[tlen]))
+            tlen++;
+        if (tlen == 0 || tlen >= sizeof(out->contentType))
+            return HTTP_HEAD_OK;      // unreadable type: the consumer sniffs instead
+        copy_lower(out->contentType, sizeof(out->contentType), value, tlen);
+
+        const char *p = value + tlen;
+        while (*p != '\0') {
+            while (*p == ';' || is_blank(*p))
+                p++;
+            const char *name = p;
+            while (*p != '\0' && *p != '=' && *p != ';')
+                p++;
+            if (*p != '=')
+                continue;
+            size_t nlen = (size_t)(p - name);
+            while (nlen > 0 && is_blank(name[nlen - 1]))
+                nlen--;                   // blanks around '=' are tolerated, not licensed
+            p++;
+            while (is_blank(*p))
+                p++;
+            // The value is a token or a quoted-string. A quoted one runs to
+            // its closing quote, backslash-escapes and all — a semicolon
+            // inside it is data, not the next parameter, or
+            // `note="x;charset=y"; charset=utf-8` would take the charset
+            // out of the note (Codex, PR #92 rd2). The label is kept
+            // verbatim inside the quotes (escapes are legal there but no
+            // charset label has ever needed one).
+            bool quoted = (*p == '"');
+            if (quoted)
+                p++;
+            const char *cs = p;
+            if (quoted) {
+                while (*p != '\0' && *p != '"') {
+                    if (*p == '\\' && p[1] != '\0')
+                        p++;
+                    p++;
+                }
+            } else {
+                while (*p != '\0' && *p != ';')
+                    p++;
+            }
+            size_t clen = (size_t)(p - cs);
+            while (!quoted && clen > 0 && is_blank(cs[clen - 1]))
+                clen--;
+            if (quoted && *p == '"')
+                p++;
+            char pname[16];
+            if (nlen < sizeof(pname))
+                copy_lower(pname, sizeof(pname), name, nlen);
+            else
+                pname[0] = '\0';
+            if (os64_streq(pname, "charset") && clen != 0 && clen < sizeof(out->charset)) {
+                copy_lower(out->charset, sizeof(out->charset), cs, clen);
+                break;
+            }
+        }
+    } else if (os64_streq_nocase(line, "Location")) {
+        // Location is a singleton: a redirect has ONE destination, and two
+        // different ones is a reply with no unambiguous destination at all —
+        // an intermediary that combines or reorders the lines would send
+        // another client somewhere else. The same answer given twice is one
+        // answer, as for Content-Length. PRESENCE IS ITS OWN FLAG, because
+        // an empty value is a legal Location that names nowhere, and
+        // spelling "seen" as "non-empty" let `Location:` then `Location:
+        // /target` through while the reverse order was refused — the same
+        // reply, judged by field order (Codex review of PR #60, rounds 1
+        // and 2).
+        char seen[HTTP_LINE_MAX];
+        copy_span(seen, sizeof(seen), value, vlen);
+        if (out->hasLocation)
+            return os64_streq(out->location, seen) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
+        out->hasLocation = true;
+        copy_span(out->location, sizeof(out->location), value, vlen);
+    } else if (os64_streq_nocase(line, "Connection")) {
+        // A list of options (RFC 9110 § 7.6.1); `close` among them, in any
+        // case and on any of the lines, ends the connection with this reply.
+        for (size_t i = 0; i < vlen;) {
+            while (i < vlen && (value[i] == ',' || is_blank(value[i])))
+                i++;
+            size_t from = i;
+            while (i < vlen && value[i] != ',' && !is_blank(value[i]))
+                i++;
+            if (i - from == 5 && to_lower(value[from]) == 'c' && to_lower(value[from + 1]) == 'l' &&
+                to_lower(value[from + 2]) == 'o' && to_lower(value[from + 3]) == 's' &&
+                to_lower(value[from + 4]) == 'e')
+                out->connectionClose = true;
+        }
+    }
+    return HTTP_HEAD_OK;
+}
+
+// WHAT WAS THAT LINE, before we throw it away. An over-long header is
+// dropped rather than fatal (see HTTP_LINE_MAX in http.h), and that is safe
+// for optional metadata: the observer receives no truncated value. It is
+// NOT safe for the headers that decide how the body is framed and coded: a server chooses the length of
+// its own header lines, so `Transfer-Encoding:` followed by three kilobytes
+// of the optional whitespace RFC 7230 permits and then `chunked` would be
+// dropped, leave the reply looking unframed, and end with raw chunk lengths
+// published as the file — the precise failure the refusal rule exists to
+// prevent. (Codex review, 2026-09-02. The rule was right; the premise under
+// it — "the headers this acts on are all short" — was the server's to break,
+// not ours to assume.) NOR is it safe for Location, since redirects are
+// followed: Location is a singleton, and dropping an unreadable one lets a
+// readable twin through the conflict check — `Location: /safe` beside a
+// padded `Location: /evil` reads as an unambiguous /safe, in either order
+// (Codex review of PR #60, round 3). A destination too long to read is a
+// redirect this program cannot honestly follow, whatever the status.
+//
+// The NAME is readable even when the value is not: it arrives first and is
+// short, so the truncated prefix still carries it. A line so long that not
+// even a colon fits is refused too — an unidentifiable multi-kilobyte header
+// is not something to shrug at.
+//
+// A Connection line too long to read is dropped like the optional metadata
+// it otherwise is, but it might have said `close`, so the reply is marked
+// as one that did: the connection is not kept on a guess.
+static http_head_result_t overlong_verdict(const char *prefix, http_response_t *out,
+                                           http_header_fn on_header, void *ctx)
+{
+    // The name, judged by is_token_byte — the SAME rule header_take applies,
+    // so the two paths cannot disagree about what a header is called. Any
+    // byte that is not a token byte ends the walk: a blank, a control byte,
+    // or the obs-fold whitespace that starts a continuation line.
+    char name[HTTP_TOKEN_MAX];
+    size_t n = 0;
+    while (prefix[n] != '\0' && prefix[n] != ':') {
+        if (!is_token_byte(prefix[n]))
+            return HTTP_HEAD_SYNTAX;  // malformed, exactly as the short form would be
+        if (n + 1 >= sizeof(name))
+            return HTTP_HEAD_OK;      // a legal name, too long to BE one this depends on
+        name[n] = prefix[n];
+        n++;
+    }
+    if (prefix[n] != ':' || n == 0)
+        return HTTP_HEAD_FRAMING;     // no name and no colon in the whole prefix
+    name[n] = '\0';
+
+    if (os64_streq_nocase(name, "Content-Length") ||
+        os64_streq_nocase(name, "Transfer-Encoding") ||
+        os64_streq_nocase(name, "Content-Encoding") ||
+        os64_streq_nocase(name, "Location"))
+        return HTTP_HEAD_FRAMING;
+    if (os64_streq_nocase(name, "Connection"))
+        out->connectionClose = true;
+
+    // Optional metadata is omitted whole, and the observer told whose it
+    // was: a cache must not read a `Cache-Control: no-store` it never saw as
+    // no Cache-Control at all.
+    if (on_header != NULL)
+        on_header(ctx, name, n, NULL, 0);
+    return HTTP_HEAD_OK;
+}
+
+http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
+                                          http_header_fn on_header, void *ctx)
+{
+    char line[HTTP_LINE_MAX];
+    size_t consumed = 0;
+    size_t used = 0;
+
+    os64_memset(out, 0, sizeof(*out));
+
+    switch (line_read(s, line, sizeof(line), HTTP_HEAD_MAX, &consumed)) {
+        case LINE_OK:    break;
+        // Two kilobytes without a CRLF is not a status line, and neither is
+        // sixty-four of them: both come back LINE_LONG, and the answer to
+        // both is that whatever is on the far end is not an HTTP server.
+        case LINE_LONG:  return HTTP_HEAD_STATUS;
+        case LINE_NUL:   return HTTP_HEAD_STATUS;
+        case LINE_END:   return HTTP_HEAD_SOURCE;
+        case LINE_ERROR: return HTTP_HEAD_SOURCE;
+    }
+    used += consumed;
+    if (!status_parse(line, out))
+        return HTTP_HEAD_STATUS;
+
+    // `fields` counts header FIELDS — dropped over-long ones included, since
+    // they were fields too — and the blank line is not one, so it is
+    // recognised before the count is judged: a reply with exactly
+    // HTTP_HEADERS_MAX fields is legal, and the cap means what it says.
+    size_t fields = 0;
+    for (;;) {
+        line_result_t r = line_read(s, line, sizeof(line), HTTP_HEAD_MAX - used + 1, &consumed);
+        used += consumed;
+        if (used > HTTP_HEAD_MAX)
+            return HTTP_HEAD_TOO_MUCH;
+
+        if (r == LINE_END || r == LINE_ERROR)
+            return HTTP_HEAD_SOURCE;
+        if (r == LINE_NUL)
+            return HTTP_HEAD_SYNTAX;
+        if (r == LINE_OK && line[0] == '\0')
+        {
+            // The blank line: the head is whole. A HEAD THAT NAMES BOTH A
+            // TRANSFER CODING AND A LENGTH IS REFUSED HERE, as the same
+            // conflict two Content-Lengths are: when both are present the
+            // coding is the framing and the length is to be ignored (RFC
+            // 9112 §6.3), so a body read to the length — even under a
+            // coding of `identity` that changes nothing — is a PREFIX of the
+            // body, published as the whole of it. A server must never send
+            // both; one that does is confused or hostile, and neither gets
+            // a guess. (Codex review round 6, 2026-09-03.)
+            if (out->hasLength && out->transferEncoding[0] != '\0')
+                return HTTP_HEAD_CONFLICT;
+            // 101 switches protocols; no HTTP response follows it.
+            return out->status == 101 ? HTTP_HEAD_SWITCHED : HTTP_HEAD_OK;
+        }
+
+        if (fields >= HTTP_HEADERS_MAX)
+            return HTTP_HEAD_TOO_MUCH;
+        fields++;
+
+        if (r == LINE_LONG)
+        {
+            // Omit oversized metadata; framing and redirect fields must fit.
+            // Interim heads are not offered, as header_take does not.
+            http_head_result_t verdict =
+                overlong_verdict(line, out, out->status >= 200 ? on_header : NULL, ctx);
+            if (verdict != HTTP_HEAD_OK)
+                return verdict;
+            continue;
+        }
+
+        http_head_result_t rc = header_take(line, out, on_header, ctx);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
+    }
+}
+
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out)
+{
+    return http_head_read_one_with_headers(s, out, NULL, NULL);
+}
+
+http_head_result_t http_head_read(http_stream_t *s, http_response_t *out)
+{
+    return http_head_read_with_headers(s, out, NULL, NULL);
+}
+
+// A 1xx is an INTERIM answer — the server clearing its throat before the
+// real one — and a client that mistook one for the response would save an
+// empty file and call it a page. They are read and discarded, but not
+// forever: a peer that only ever clears its throat is a peer to hang up on.
+
+http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t *out,
+                                               http_header_fn on_header, void *ctx)
+{
+    for (int i = 0; i <= HTTP_INTERIM_MAX; i++) {
+        http_head_result_t rc = http_head_read_one_with_headers(s, out, on_header, ctx);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
+        if (out->status < 100 || out->status >= 200)
+            return HTTP_HEAD_OK;
+    }
+    return HTTP_HEAD_TOO_MUCH;
+}
+
+const char *http_head_reason(http_head_result_t rc)
+{
+    switch (rc) {
+        case HTTP_HEAD_OK:       return "no problem";
+        case HTTP_HEAD_SOURCE:   return "the connection ended before the reply was whole";
+        case HTTP_HEAD_STATUS:   return "the first line is not an HTTP status line";
+        case HTTP_HEAD_SYNTAX:   return "a header line is not 'Name: value'";
+        case HTTP_HEAD_TOO_MUCH: return "more headers than this program will read";
+        case HTTP_HEAD_CONFLICT: return "the headers answer one question two ways";
+        case HTTP_HEAD_FRAMING:  return "a header this fetch depends on was too long to read";
+        case HTTP_HEAD_SWITCHED: return "the server switched protocols (101), which a fetch cannot follow";
+    }
+    return "refused";
+}
+
+int64_t http_stream_read(http_stream_t *s, void *out, size_t cap)
+{
+    if (cap == 0)
+        return 0;
+
+    size_t held = s->have - s->next;
+    if (held == 0) {
+        if (s->failed)
+            return -1;
+        if (s->ended)
+            return 0;
+        // A caller asking for more than this buffer holds gets the socket
+        // read straight into its own buffer. The head's over-read is what
+        // this buffer exists for; a five-megabyte body has no reason to be
+        // copied twice on the way to the disk.
+        if (cap >= sizeof(s->buf)) {
+            int64_t n = s->source(s->ctx, out, cap);
+            if (n < 0) { s->failed = true; return -1; }
+            if (n == 0) { s->ended = true; return 0; }
+            return n;
+        }
+        int r = stream_fill(s);
+        if (r < 0)
+            return -1;
+        if (r == 0)
+            return 0;
+        held = s->have - s->next;
+    }
+
+    size_t n = held < cap ? held : cap;
+    os64_memcpy(out, s->buf + s->next, n);
+    s->next += n;
+    return (int64_t)n;
+}
+
+// ── The body, with its framing taken off ────────────────────────────────
+
+// Where a chunked reader is between calls. The framing is a grammar
+// (RFC 9112 §7.1) — size line, data, CRLF, repeat; a zero size, then trailer
+// lines to a blank one — and a read may hand the caller only part of one
+// chunk's data, so the position has to outlive the call.
+enum {
+    CHUNK_SIZE = 0,   // a chunk-size line is next
+    CHUNK_DATA,       // inside chunk-data, `remaining` bytes to go
+    CHUNK_DATA_END,   // the CRLF that closes a chunk's data is next
+    CHUNK_TRAILER,    // after the last chunk: trailer lines until a blank one
+    CHUNK_FINISHED
+};
+
+bool http_body_open(http_body_t *b, http_stream_t *s, const http_response_t *reply)
+{
+    os64_memset(b, 0, sizeof(*b));
+    b->s = s;
+    b->result = HTTP_BODY_OPEN;
+
+    if (reply->transferEncoding[0] != '\0' &&
+        !os64_streq_nocase(reply->transferEncoding, "identity")) {
+        if (!os64_streq_nocase(reply->transferEncoding, "chunked"))
+            return false;
+        b->framing = HTTP_FRAMING_CHUNKED;
+        b->state = CHUNK_SIZE;
+        return true;
+    }
+    if (reply->hasLength) {
+        b->framing = HTTP_FRAMING_LENGTH;
+        b->remaining = reply->length;
+        return true;
+    }
+    b->framing = HTTP_FRAMING_CLOSE;
+    return true;
+}
+
+static int64_t body_finish(http_body_t *b, http_body_result_t rc)
+{
+    b->result = rc;
+    return (rc == HTTP_BODY_DONE || rc == HTTP_BODY_CUT) ? 0 : -1;
+}
+
+// Read `cap` bytes at most of the current chunk's data (or of a length-framed
+// body — the same arithmetic). Ending here is a CUT: the peer promised more.
+static int64_t body_read_counted(http_body_t *b, void *out, size_t cap)
+{
+    if (b->remaining < (uint64_t)cap)
+        cap = (size_t)b->remaining;
+    int64_t n = http_stream_read(b->s, out, cap);
+    if (n < 0)
+        return body_finish(b, HTTP_BODY_BROKE);
+    if (n == 0)
+        return body_finish(b, HTTP_BODY_CUT);
+    b->remaining -= (uint64_t)n;
+    b->delivered += (uint64_t)n;
+    return n;
+}
+
+// "1a2f;ext=val" → 0x1a2f. Hex digits, then optional blanks, then either the
+// end or a ';' opening a chunk extension, which is ignored whole: this code
+// defines none, and RFC 9112 §7.1.1 says a recipient that does not define one
+// ignores it. Anything else on the line is not a chunk size.
+//
+// THE BOUND IS THE VALUE, NOT THE DIGIT COUNT. The grammar is 1*HEXDIG, so
+// `00000000000000001` is a legal spelling of 1 and a digit cap refused it
+// (Codex review of PR #60, round 2); what no body can have is a size past
+// 2^64-1, which is caught as the arithmetic is about to lose it. Leading
+// zeros are bounded by the line buffer the size line arrives in.
+static bool chunk_size_parse(const char *line, uint64_t *size)
+{
+    const char *p = line;
+    uint64_t value = 0;
+    size_t digits = 0;
+
+    for (;; p++) {
+        uint64_t d;
+        if (is_digit(*p))                 d = (uint64_t)(*p - '0');
+        else if (*p >= 'a' && *p <= 'f')  d = (uint64_t)(*p - 'a') + 10;
+        else if (*p >= 'A' && *p <= 'F')  d = (uint64_t)(*p - 'A') + 10;
+        else break;
+        if (value > (UINT64_MAX >> 4))
+            return false;
+        value = value << 4 | d;
+        digits++;
+    }
+    if (digits == 0)
+        return false;
+    while (is_blank(*p))
+        p++;
+    if (*p != '\0' && *p != ';')
+        return false;
+    *size = value;
+    return true;
+}
+
+// A token, then a colon: the NAME is every byte before the colon, and each
+// one is judged by is_token_byte — the rule header_take applies, so the
+// trailer section cannot be looser about what a field is called than the
+// head is (it was: only the first byte was checked, and `X Bad: value`
+// ended a body as DONE — Codex review of PR #60, round 4). Nothing past the
+// colon is read, so nothing past it is judged.
+static bool field_line_shaped(const char *line)
+{
+    if (!is_token_byte(line[0]))
+        return false;
+    for (const char *p = line; *p != '\0'; p++) {
+        if (*p == ':')
+            return true;
+        if (!is_token_byte(*p))
+            return false;
+    }
+    return false;
+}
+
+static int64_t body_read_chunked(http_body_t *b, void *out, size_t cap)
+{
+    char line[HTTP_LINE_MAX];
+    size_t consumed;
+
+    for (;;) {
+        switch (b->state) {
+        case CHUNK_SIZE: {
+            line_result_t r = line_read(b->s, line, sizeof(line), sizeof(line), &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_LONG)  return body_finish(b, HTTP_BODY_TOO_MUCH);
+            uint64_t size;
+            if (!chunk_size_parse(line, &size))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            if (size == 0) {
+                b->state = CHUNK_TRAILER;
+                break;
+            }
+            b->remaining = size;
+            b->state = CHUNK_DATA;
+            break;
+        }
+        case CHUNK_DATA: {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->state = CHUNK_DATA_END;
+            return n;
+        }
+        case CHUNK_DATA_END: {
+            // Exactly a line terminator. The budget of two is the length of
+            // CRLF: a third byte before the newline is data the size line
+            // did not count, and line_read reports it as an over-long line.
+            line_result_t r = line_read(b->s, line, sizeof(line), 2, &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r != LINE_OK || line[0] != '\0')
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            b->state = CHUNK_SIZE;
+            break;
+        }
+        case CHUNK_TRAILER: {
+            // Trailer fields are read to find their end and otherwise
+            // ignored: nothing this program does depends on one, and a
+            // sender may not put framing there (RFC 9110 §6.5.1). Bounded
+            // exactly as the head is, or the trailer is the endless-head
+            // attack wearing a different hat. An over-long trailer line is
+            // dropped, as an over-long non-framing header is.
+            line_result_t r = line_read(b->s, line, sizeof(line),
+                                        HTTP_HEAD_MAX - b->trailerUsed + 1, &consumed);
+            b->trailerUsed += consumed;
+            if (b->trailerUsed > HTTP_HEAD_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_OK && line[0] == '\0') {
+                b->state = CHUNK_FINISHED;
+                return body_finish(b, HTTP_BODY_DONE);
+            }
+            if (b->trailers >= HTTP_HEADERS_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            b->trailers++;
+            // The shape of a field line, checked so far as it costs nothing:
+            // a name, a colon. A line beginning with whitespace is obs-fold,
+            // refused here for the reason the head refuses it.
+            if (r == LINE_OK && !field_line_shaped(line))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            break;
+        }
+        default:
+            return body_finish(b, HTTP_BODY_DONE);
+        }
+    }
+}
+
+int64_t http_body_read(http_body_t *b, void *out, size_t cap)
+{
+    if (b->result != HTTP_BODY_OPEN)
+        return (b->result == HTTP_BODY_DONE || b->result == HTTP_BODY_CUT) ? 0 : -1;
+    if (cap == 0)
+        return 0;
+
+    switch (b->framing) {
+    case HTTP_FRAMING_LENGTH:
+        if (b->remaining == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->result = HTTP_BODY_DONE;   // the next call answers 0
+            return n;
+        }
+    case HTTP_FRAMING_CHUNKED:
+        return body_read_chunked(b, out, cap);
+    default: {
+        int64_t n = http_stream_read(b->s, out, cap);
+        if (n < 0)
+            return body_finish(b, HTTP_BODY_BROKE);
+        if (n == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        b->delivered += (uint64_t)n;
+        return n;
+    }
+    }
+}
+
+const char *http_body_reason(http_body_result_t rc)
+{
+    switch (rc) {
+    case HTTP_BODY_OPEN:     return "the body is still arriving";
+    case HTTP_BODY_DONE:     return "the body arrived whole";
+    case HTTP_BODY_CUT:      return "the connection closed before the body was whole";
+    case HTTP_BODY_BROKE:    return "the connection broke";
+    case HTTP_BODY_SYNTAX:   return "the chunk framing is not chunk framing";
+    case HTTP_BODY_TOO_MUCH: return "more chunk framing than this will read";
+    }
+    return "unknown";
+}

@@ -1,0 +1,16 @@
+{'return': ''}
+{'return': ''}
+{'return': ''}
+{'return': ''}
+owned: 2502 (0x002e) AP2: [user] husk: task 53 (popuptest) exited code 1
+{'return': ''}
+{'return': ''}
+{'return': ''}
+{'return': ''}
+full: 3985 (0x002e) AP3: [user] husk: task 58 (popuptest) exited code 1
+{'return': ''}
+{'return': ''}
+{'return': ''}
+{'return': ''}
+ordinary: 5571 (0x002e) AP2: [user] husk: task 63 (popuptest) exited code 0
+{'return': ''}

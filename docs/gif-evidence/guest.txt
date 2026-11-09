@@ -1,0 +1,1 @@
+PASS GIF palettes, transparency, interlace, offset canvas, LZW, truncation, file loading and heap cleanup

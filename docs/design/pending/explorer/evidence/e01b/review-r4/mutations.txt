@@ -1,0 +1,11 @@
+refresh-detaches-surviving-child: DETECTED (exit 1)
+refresh-skips-bar-damage: DETECTED (exit 1)
+external-loss-keeps-held-input: DETECTED (exit 1)
+bar-mode-silences-stale-target: DETECTED (exit 1)
+disabled: DETECTED (exit 1)
+stale-target: DETECTED (exit 1)
+callback-before-close: DETECTED (exit 1)
+stale-status-token: DETECTED (exit 1)
+skip-font-close: DETECTED (exit 1)
+arrow-as-escape: DETECTED (exit 1)
+Artifacts: /tmp/e1b-r4-release-mutations

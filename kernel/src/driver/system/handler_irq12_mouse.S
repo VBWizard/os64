@@ -1,6 +1,7 @@
 .code64
 .intel_syntax noprefix
 #include "utility_macros.inc"
+#include "irq_accounting.inc"
 
 # IRQ12 (PS/2 mouse) entry. Identical shape to handler_irq1_keyboard.S — the
 # shared C dispatch (ps2_handle_irq) drains the 8042 and routes each byte by
@@ -24,6 +25,7 @@ handler_irq12_asm:
     push r9
     push r10
     push r11
+	IRQ_ACCOUNT_ENTER 88
 
     sub rsp, 8              # Align stack to 16 bytes before calling C code
     call ps2_handle_irq
@@ -45,6 +47,7 @@ irq12_send_pic_eoi:
     out 0x20, al            # EOI to master PIC (cascade)
 
 irq12_eoi_done:
+	IRQ_ACCOUNT_EXIT
     pop r11
     pop r10
     pop r9

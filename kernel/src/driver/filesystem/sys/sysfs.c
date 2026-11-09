@@ -25,8 +25,39 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        nine entries: "bus", "cpu", "net", "cache",
-//                                "conf", "gui", "log", "shlib", "clipboard"
+//   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
+//                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse"
+//   /sys/acpi                    everything the firmware's ACPI tables
+//                                said, used or not: every table, the
+//                                FADT's power-management facts, the MADT's
+//                                CPUs and interrupt controllers, PCI's
+//                                configuration windows, the HPET, \_S5, and
+//                                the walk's problems. Read it FIRST on a
+//                                machine meeting os64 for the first time
+//   /sys/bluetooth/scan          discovery status; write "scan" to request.
+//   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
+//   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
+//   /sys/console/font            the face the virtual terminals draw with.
+//                                READ: which face, its cell, the grid it
+//                                gives this screen, and the verdict on the
+//                                last one offered. WRITE: a PSF2 image, in
+//                                as many pieces as the writer likes, judged
+//                                at CLOSE — or the word "boot". The write
+//                                side is console_font.h; CONSOLE_FONTS.md
+//                                is the design.
+//   /sys/memory/frames           the frame table (FRAMES.md): the books,
+//                                frames by owner, runs by length, and its
+//                                lock's waits and holds. Read it FIRST when
+//                                memory or a stall is the question
+//   /sys/memory/ledger           the small-object ledger: rows against its
+//                                wall, entries, borrowed chunks, policy
+//                                counters, common free holes, its lock
+//   /sys/random                  the entropy pool: which instructions the
+//                                CPU advertises and which passed the boot
+//                                variation check, what seeded the pool,
+//                                and every counter it keeps (RANDOM.md).
+//                                Read it FIRST when a TLS handshake stalls
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -35,24 +66,32 @@
 //                                filename grows the day the scan does)
 //   /sys/bus/pci/00:1f.3         the function, one "key: value" fact per line
 //   /sys/cpu/                    the processors: "count", then one directory
-//                                per core, named by core number
-//   /sys/cpu/count               how many cores the scheduler runs, bare
-//   /sys/cpu/<n>/time            the core's CPU-time ledger (was /proc/cores
+//                                per CPU, named by CPU number
+//   /sys/cpu/count               how many CPUs the scheduler runs, bare
+//   /sys/cpu/<n>/time            the CPU's time ledger (was /proc/cores
 //                                until 2026-08-12 — a machine fact wearing a
 //                                process-tree address; top(1) followed it here)
-//   /sys/cpu/<n>/state           the roster bits that can strike a core off
-//                                the schedule — READ, side-effect free, no NMI
+//   /sys/cpu/<n>/state           its APIC ID, and the bits that can strike a
+//                                CPU off the schedule — READ, side-effect
+//                                free, no NMI
 //   /sys/cpu/<n>/probe           WRITE "probe": fire a diagnostic NMI at the
 //                                core.  READ: the last snapshot, rendered.
-//   /sys/net/                    the networking view: "ip", "dhcp", then one
-//                                file per REGISTERED NIC, named as the driver
-//                                registered it ("r8125_0") — never by index,
-//                                which would renumber if probe order changed
+//   /sys/net/                    the networking view: "ip", "dhcp", "tcp",
+//                                then one file per REGISTERED NIC, named as
+//                                the driver registered it ("r81250") — never
+//                                by index, which would renumber if probe
+//                                order changed
 //   /sys/net/ip                  the machine's address. MACHINE-wide and it
 //                                says so: os64 is single-homed (one
 //                                kNetIPv4Address, up to NET_MAX_DEVICES cards)
 //   /sys/net/dhcp                how that address was come by — state, lease,
 //                                and the conversation's counters
+//   /sys/net/tcp                 the transport: the machine-wide counters,
+//                                then one row per connection, the recently
+//                                dead lingering briefly (the morgue) —
+//                                netstat's data, and the shakedown
+//                                instruments for the day this stack meets
+//                                the real internet
 //   /sys/net/<card>              one NIC: model/location (both optional),
 //                                mac, mtu, link, whether it carries the
 //                                address, and the traffic counters
@@ -65,16 +104,23 @@
 //                                say where it DID (conf.h, 2026-08-23)
 //   /sys/clipboard               THE system clipboard, read AND write:
 //                                `... > /sys/clipboard` copies, `cat` pastes.
-//                                Two firsts for /sys, both worth naming: it
-//                                is the only node with DURABLE content (every
-//                                other file is generated fresh at open), and
-//                                the only write that STORES instead of
-//                                COMMANDS (cpu/<n>/probe fires a gun; this
-//                                keeps your bytes). The standing rule is
-//                                untouched — reading it changes nothing.
+//                                Copies accumulate and seal at close.
 //                                Store and rulings: clipboard.c, CLIPBOARD.md
 //
-// Every file is TEXT. The PCI values are the enumeration's saved headers —
+//   /sys/appearance              session appearance: generation header plus
+//                                opaque payload. Readers own a snapshot;
+//                                each write compares and publishes atomically.
+//                                Store and rulings: appearance.c, APPEARANCE.md
+//
+//   /sys/decorations             prepared window decoration: generation plus
+//                                content fingerprint and length on read;
+//                                staged compare-and-publish commands on write.
+//                                Store and contract: decorations.c, FRAME_STUDIO.md
+//
+// /sys/mouse carries fixed-size versioned binary device snapshots and atomic
+// preference commands (os64/mouse.h). Other generated reports are text; stored
+// appearance and decoration payloads have their own versioned contracts.
+// The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
 // by init_PCI before the scheduler exists and never touched again, which is
 // why every PCI read here is lock-free and safe: the snapshot machinery
@@ -116,30 +162,50 @@
 #include "strings/strings.h"
 #include "sprintf.h"
 #include "serial_logging.h"
+#include "ata.h"      // eATADeviceType — /sys/block names devices by bus
+#include "memcmp.h"   // the /sys/block mounted-at GUID match
 #include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
-#include "smp.h"                    // core_local_storage_t, kMPCoreCount
+#include "smp.h"                    // core_local_storage_t, kCPUCount
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
-#include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "conf.h"                       // /sys/conf — the config search path and its takers
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
+#include "knet.h"                       // /sys/net/knet — the drainer's counters
+#include "driver/system/usb/xhci.h"
+#include "driver/system/usb/bt_scan.h"
+#include "memcpy.h"
+#include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
+#include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
+#include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
+#include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
+#include "random.h"                     // /sys/random — the entropy pool's counters
+#include "driver/system/acpi.h"         // /sys/acpi — the firmware's tables, as walked at boot
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
+#include "gui/gui_internal.h"           // /sys/gui — kGuiLock's counts by site (gui_lock)
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
+#include "appearance.h"
+#include "gui/input.h"
+#include "os64/mouse.h"
+#include "decorations.h"
+#include "os64/decoration.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
+#include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
+#include "allocator.h"      // /sys/memory — the frame table and the ledger
+#include "accounting.h"
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
-extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 extern volatile bool mp_acctSettleAck[MAX_CPUS];
 extern bool mp_schedulerEnabled[MAX_CPUS];
+extern bool      kNetPoll;              // kernel.c — the NETPOLL flashlight, for /sys/net/knet
 
 // ── The unified PCI view ────────────────────────────────────────────────────
 // init_PCI files what it finds into three arrays: kPCIDeviceHeaders
@@ -301,10 +367,29 @@ typedef enum
 	SYS_NODE_NETDIR,     // /net — the networking view (2026-08-20)
 	SYS_NODE_NETIP,      // /net/ip — the machine's address, and it is ONE
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
+	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
+	SYS_NODE_NETKNET,    // /net/knet — the drainer thread and its doorbell (DOORBELL.md)
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
+	SYS_NODE_BTDIR,      // /bluetooth — on-demand discovery
+	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
+	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE HID peer sessions
+	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
+	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
+	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
+	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
+	SYS_NODE_MOUSE, // /mouse — per-device pointer preferences and live devices
+	SYS_NODE_DECORATIONS,
+	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
+	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
+	SYS_NODE_ACPIFILE,   // /acpi — what the firmware's ACPI tables said (acpi_tables.h)
+	SYS_NODE_CONSOLEDIR, // /console
+	SYS_NODE_CONSOLEFONT,// /console/font — the VTs' face, readable and writable (CONSOLE_FONTS.md)
+	SYS_NODE_MEMDIR,     // /memory — the physical allocator (FRAMES.md)
+	SYS_NODE_MEMFRAMES,  // /memory/frames — the frame table and its lock
+	SYS_NODE_MEMLEDGER,  // /memory/ledger — the small-object ledger and its lock
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -359,7 +444,7 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		// core that exists — "/cpu/9" on an 8-core machine is a name that
 		// does not exist, same as a task ID /proc never issued.
 		uint64_t n;
-		if (!synth_parse_u64(comp, &n) || n >= kMPCoreCount)
+		if (!synth_parse_u64(comp, &n) || n >= kCPUCount)
 			return;
 		out->cpu = (uint32_t)n;
 		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
@@ -373,6 +458,20 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CPUFILE;
+		return;
+	}
+
+	if (strcmp(comp, "bluetooth") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp))) {
+			out->type = SYS_NODE_BTDIR;
+			return;
+		}
+		sys_node_type_t type = strcmp(comp, "scan") == 0 ? SYS_NODE_BTSCAN :
+		    strcmp(comp, "devices") == 0 ? SYS_NODE_BTDEVICES :
+		    strcmp(comp, "connection") == 0 ? SYS_NODE_BTCONNECTION : SYS_NODE_INVALID;
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = type;
 		return;
 	}
 
@@ -417,6 +516,64 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		return;
 	}
 
+	if (strcmp(comp, "acpi") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_ACPIFILE;
+		return;
+	}
+
+	if (strcmp(comp, "random") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_RANDOMFILE;
+		return;
+	}
+
+	if (strcmp(comp, "mounts") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_MOUNTSFILE;
+		return;
+	}
+
+	if (strcmp(comp, "openfiles") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_OPENFILESFILE;
+		return;
+	}
+
+	if (strcmp(comp, "block") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_BLOCKFILE;
+		return;
+	}
+
+	if (strcmp(comp, "mouse") == 0) {
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_MOUSE; return;
+	}
+
+	if (strcmp(comp, "decorations") == 0) {
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_DECORATIONS;
+		return;
+	}
+
+	if (strcmp(comp, "appearance") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_APPEARANCE;
+		return;
+	}
+
 	if (strcmp(comp, "clipboard") == 0)
 	{
 		// A file, and a file it stays: history, when it comes, arrives BESIDE
@@ -425,6 +582,34 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CLIPFILE;
+		return;
+	}
+
+	if (strcmp(comp, "memory") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_MEMDIR;
+			return;
+		}
+		bool is_frames = strcmp(comp, "frames") == 0;
+		if ((!is_frames && strcmp(comp, "ledger") != 0) ||
+		    synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = is_frames ? SYS_NODE_MEMFRAMES : SYS_NODE_MEMLEDGER;
+		return;
+	}
+
+	if (strcmp(comp, "console") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_CONSOLEDIR;
+			return;
+		}
+		if (strcmp(comp, "font") != 0 || synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CONSOLEFONT;
 		return;
 	}
 
@@ -437,17 +622,21 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		}
 		bool is_ip   = (strcmp(comp, "ip") == 0);
 		bool is_dhcp = (strcmp(comp, "dhcp") == 0);
-		if (is_ip || is_dhcp)
+		bool is_tcp  = (strcmp(comp, "tcp") == 0);
+		bool is_knet = (strcmp(comp, "knet") == 0);
+		if (is_ip || is_dhcp || is_tcp || is_knet)
 		{
 			// Decide BEFORE the lookahead: synth_next_component writes into
 			// `comp`, so testing it afterwards would be reading the wrong
 			// component (or a leftover one).
 			if (synth_next_component(path, &pos, comp, sizeof(comp)))
 				return;   // nothing lives inside a file
-			out->type = is_ip ? SYS_NODE_NETIP : SYS_NODE_NETDHCP;
+			out->type = is_ip ? SYS_NODE_NETIP
+			          : is_dhcp ? SYS_NODE_NETDHCP
+			          : is_knet ? SYS_NODE_NETKNET : SYS_NODE_NETTCP;
 			return;
 		}
-		// A card is addressed by the name the DRIVER registered ("r8125_0"),
+		// A card is addressed by the name the DRIVER registered ("r81250"),
 		// not by an index — the index is an implementation detail of
 		// kNetDevices and would renumber if probe order ever changed. Only a
 		// name that is actually registered exists, same rule as /cpu/<n>.
@@ -534,10 +723,9 @@ static void sys_gen_pci_device(synth_text_t *t, const sys_pci_view_t *v)
 }
 
 // ── The cpu generators ──────────────────────────────────────────────────────
-// Core numbers here are APIC IDs — the standing house convention
-// (kCoreLocalStorage, kIdleTasks and the mp_* arrays are all indexed by it,
-// and init_SMP brings cores up 0..kMPCoreCount-1 contiguous). If discontiguous
-// APIC IDs ever arrive, every one of those arrays learns together.
+// <n> is a CPU number (cpu_roster.h), dense 0..kCPUCount-1 — what every
+// per-CPU table in the kernel is indexed by. The APIC ID is a fact ABOUT a
+// CPU, and the state file says it.
 
 // TSC cycles → microseconds, at the read boundary. Raw cycles never leave
 // the kernel (the ABI speaks TIME — same doctrine as sleep's milliseconds):
@@ -553,7 +741,7 @@ static void sys_gen_cpu_count(synth_text_t *t)
 	// Bare number, newline — the filename already says what it counts, and
 	// a script wants the value, not a parse (Linux's cpu*/online files set
 	// the precedent).
-	synth_text_addf(t, "%u\n", (unsigned)kMPCoreCount);
+	synth_text_addf(t, "%u\n", (unsigned)kCPUCount);
 }
 
 // /sys/cache — the block cache confesses its size and its effectiveness
@@ -590,7 +778,7 @@ static void sys_gen_log(synth_text_t *t)
 	synth_text_addf(t, "ticks_per_second: %d\n", TICKS_PER_SECOND);
 
 	uint64_t used_total = 0, cap_total = 0, lost_total = 0;
-	for (int c = 0; c < kMPCoreCount; c++)
+	for (uint32_t c = 0; c < kCPUCount; c++)
 	{
 		log_buffer_t *b = &core_log_buffers[c];
 		if (b->capacity == 0)
@@ -652,6 +840,281 @@ static void sys_gen_cache(synth_text_t *t)
 	synth_text_addf(t, "updates: %lu\n", s.updates);
 	synth_text_addf(t, "bypass_edge: %lu\n", s.bypass_edge);
 	synth_text_addf(t, "discarded_races: %lu\n", s.discarded_races);
+}
+
+// ── /sys/random (RANDOM.md) ─────────────────────────────────────────────
+// The pool's own account of itself: what the CPU offers, what seeded the
+// pool and by which door, and the counters behind every claim. Rendered
+// from kRandomStats without the pool's lock — the timing counters are
+// bumped from interrupt context and a torn read of a counter is a
+// counter off by one, which is what a snapshot is.
+static void sys_gen_random(synth_text_t *t)
+{
+	const random_stats_t *r = &kRandomStats;
+	synth_text_addf(t, "seeded: %s\n", r->seeded ? "yes" : "no");
+	synth_text_addf(t, "seeded_by: %s\n", r->seeded ? r->seeded_by : "-");
+	synth_text_addf(t, "rdrand: %s\n", !r->cpuid_rdrand ? "absent" : r->rdrand_trusted ? "ok" : "failed");
+	synth_text_addf(t, "rdseed: %s\n", !r->cpuid_rdseed ? "absent" : r->rdseed_trusted ? "ok" : "failed");
+	synth_text_addf(t, "hw_words: %lu\n", r->hw_words);
+	synth_text_addf(t, "hw_retries: %lu\n", r->hw_retries);
+	synth_text_addf(t, "hw_exhausted: %lu\n", r->hw_exhausted);
+	synth_text_addf(t, "jitter_samples: %lu\n", r->jitter_samples);
+	synth_text_addf(t, "timing_tick: %lu\n", r->timing_events[RANDOM_SOURCE_TICK]);
+	synth_text_addf(t, "timing_nic: %lu\n", r->timing_events[RANDOM_SOURCE_NIC]);
+	synth_text_addf(t, "timing_drain: %lu\n", r->timing_events[RANDOM_SOURCE_DRAIN]);
+	synth_text_addf(t, "timing_rejected: %lu\n", r->timing_rejected);
+	synth_text_addf(t, "folds: %lu\n", r->folds);
+	synth_text_addf(t, "reseeds: %lu\n", r->reseeds);
+	synth_text_addf(t, "bytes_served: %lu\n", r->bytes_served);
+	synth_text_addf(t, "mixes: %lu\n", r->mixes);
+	synth_text_addf(t, "reads_refused: %lu\n", r->reads_refused);
+}
+
+// ── /sys/acpi (acpi_tables.h) ───────────────────────────────────────────
+// What the firmware's ACPI tables said, used or not — rendered from the
+// record acpi_init wrote once at boot, so no lock and no firmware memory:
+// the tables themselves were unmapped when the walk ended. One fact per
+// line; a list repeats its key. The OEM fields and signatures are DATA,
+// escaped like every other column that came off somebody's hardware.
+
+static void sys_acpi_flags(synth_text_t *t, const char *key, uint32_t value,
+                           const char *(*name)(unsigned bit))
+{
+	synth_text_addf(t, "%s: 0x%08x", key, value);
+	for (unsigned bit = 0; bit < 32; bit++)
+	{
+		if (!(value & (1u << bit)))
+			continue;
+		const char *n = name(bit);
+		if (n != NULL)
+			synth_text_addf(t, " %s", n);
+		else
+			synth_text_addf(t, " bit%u", bit);
+	}
+	synth_text_addf(t, "\n");
+}
+
+static void sys_acpi_gas(synth_text_t *t, const char *key, const acpi_gas_t *g, const char *tail)
+{
+	if (g->address == 0)
+	{
+		synth_text_addf(t, "%s: none\n", key);
+		return;
+	}
+	const char *space = g->space == ACPI_SPACE_IO ? "io" :
+	                    g->space == ACPI_SPACE_MEMORY ? "memory" :
+	                    g->space == ACPI_SPACE_PCI ? "pci" : "other";
+	synth_text_addf(t, "%s: %s 0x%lx%s\n", key, space, g->address, tail);
+}
+
+// MPS INTI flags: polarity in bits 0-1, trigger in bits 2-3; 0 = "conforms
+// to the bus", which for ISA is active-high, edge.
+static const char *sys_acpi_polarity(uint16_t flags)
+{
+	static const char *const names[] = { "bus", "high", "reserved", "low" };
+	return names[flags & 3];
+}
+
+static const char *sys_acpi_trigger(uint16_t flags)
+{
+	static const char *const names[] = { "bus", "edge", "reserved", "level" };
+	return names[(flags >> 2) & 3];
+}
+
+static void sys_gen_acpi(synth_text_t *t)
+{
+	const acpi_info_t *a = acpi_info();
+	const acpi_used_t *used = acpi_used();
+	char e1[4 * 8 + 1], e2[4 * 8 + 1], e3[4 * 8 + 1];
+
+	synth_text_escape(a->rsdp_oem_id, e1, sizeof(e1));
+	synth_text_addf(t, "rsdp: 0x%016lx revision %u oem %s\n", a->rsdp_phys, a->rsdp_revision,
+	                e1[0] ? e1 : "-");
+	if (a->root_signature[0])
+		synth_text_addf(t, "root: %s 0x%016lx entries %u\n", a->root_signature, a->root_phys, a->root_entries);
+	else
+		synth_text_addf(t, "root: none\n");
+
+	for (uint32_t i = 0; i < a->table_count; i++)
+	{
+		const acpi_table_t *x = &a->tables[i];
+		synth_text_escape(x->signature, e1, sizeof(e1));
+		synth_text_escape(x->oem_id, e2, sizeof(e2));
+		synth_text_escape(x->oem_table_id, e3, sizeof(e3));
+		synth_text_addf(t, "table: %s 0x%016lx length %u revision %u oem %s %s checksum %s%s\n",
+		                e1, x->phys, x->length, x->revision, e2[0] ? e2 : "-", e3[0] ? e3 : "-",
+		                x->checksum_ok ? "ok" : "BAD", x->via_fadt ? " via-fadt" : "");
+	}
+
+	const acpi_fadt_info_t *f = &a->fadt;
+	if (!f->present)
+		synth_text_addf(t, "fadt: none\n");
+	else
+	{
+		synth_text_addf(t, "fadt: revision %u.%u profile %s sci_irq %u\n",
+		                f->revision, f->minor_version, acpi_profile_name(f->pm_profile), f->sci_interrupt);
+		synth_text_addf(t, "acpi_mode: smi_command 0x%x enable 0x%02x\n", f->smi_command, f->acpi_enable);
+		synth_text_addf(t, "pm1: event 0x%x/0x%x control 0x%x/0x%x\n",
+		                f->pm1a_event, f->pm1b_event, f->pm1a_control, f->pm1b_control);
+		synth_text_addf(t, "gpe: 0x%x/%u 0x%x/%u\n", f->gpe0, f->gpe0_length, f->gpe1, f->gpe1_length);
+		if (f->pm_timer)
+			synth_text_addf(t, "pm_timer: 0x%x %s\n", f->pm_timer, f->pm_timer_32bit ? "32-bit" : "24-bit");
+		else
+			synth_text_addf(t, "pm_timer: none\n");
+		if (f->century)
+			synth_text_addf(t, "rtc_century: cmos 0x%02x\n", f->century);
+		else
+			synth_text_addf(t, "rtc_century: none\n");
+		sys_acpi_flags(t, "boot_arch", f->boot_arch, acpi_boot_arch_flag_name);
+		sys_acpi_flags(t, "fadt_flags", f->flags, acpi_fadt_flag_name);
+		char tail[40];
+		sprintf(tail, " value 0x%02x%s", f->reset_value,
+		        (f->flags & ACPI_FADT_RESET_REG_SUP) ? "" : " (not supported)");
+		sys_acpi_gas(t, "reset", &f->reset_register, tail);
+		sys_acpi_gas(t, "sleep_control", &f->sleep_control, "");
+		if (f->hypervisor_vendor)
+			synth_text_addf(t, "hypervisor: 0x%016lx\n", f->hypervisor_vendor);
+	}
+
+	const acpi_madt_info_t *m = &a->madt;
+	if (!m->present)
+		synth_text_addf(t, "madt: none\n");
+	else
+	{
+		synth_text_addf(t, "madt: lapic 0x%lx flags 0x%x%s\n", m->lapic_address, m->flags,
+		                (m->flags & 1) ? " pcat-compat" : "");
+		synth_text_addf(t, "cpus: listed %u enabled %u online_capable %u x2apic %u\n",
+		                m->cpus, m->cpus_enabled, m->cpus_online_capable, m->x2apic_cpus);
+		for (uint32_t i = 0; i < m->ioapic_count; i++)
+			synth_text_addf(t, "ioapic: id %u 0x%08x gsi_base %u%s\n", m->ioapics[i].id,
+			                m->ioapics[i].address, m->ioapics[i].gsi_base,
+			                used->ioapic == (int)i ? " used" : "");
+		for (uint32_t i = 0; i < m->override_count; i++)
+		{
+			const acpi_override_t *o = &m->overrides[i];
+			synth_text_addf(t, "override: bus %u irq %u gsi %u polarity %s trigger %s\n",
+			                o->bus, o->source, o->gsi, sys_acpi_polarity(o->flags), sys_acpi_trigger(o->flags));
+		}
+		for (uint32_t i = 0; i < m->lapic_nmi_count; i++)
+		{
+			const acpi_lapic_nmi_t *n = &m->lapic_nmis[i];
+			if (n->uid == 0xFFFFFFFFu)
+				synth_text_addf(t, "lapic_nmi: cpu all lint %u polarity %s trigger %s\n",
+				                n->lint, sys_acpi_polarity(n->flags), sys_acpi_trigger(n->flags));
+			else
+				synth_text_addf(t, "lapic_nmi: cpu %u lint %u polarity %s trigger %s\n",
+				                n->uid, n->lint, sys_acpi_polarity(n->flags), sys_acpi_trigger(n->flags));
+		}
+		synth_text_addf(t, "madt_other: nmi_sources %u unknown_entries %u\n", m->nmi_sources, m->unknown_entries);
+	}
+
+	if (a->mcfg_count == 0)
+		synth_text_addf(t, "mcfg: none\n");
+	for (uint32_t i = 0; i < a->mcfg_count; i++)
+		synth_text_addf(t, "mcfg: segment %u buses %u-%u 0x%016lx%s\n", a->mcfg[i].segment,
+		                a->mcfg[i].start_bus, a->mcfg[i].end_bus, a->mcfg[i].base,
+		                used->mcfg == (int)i ? " used" : "");
+
+	const acpi_hpet_info_t *h = &a->hpet;
+	if (h->present)
+		synth_text_addf(t, "hpet: %s 0x%lx number %u comparators %u counter %s%s vendor 0x%04x min_tick %u\n",
+		                h->space == ACPI_SPACE_MEMORY ? "memory" : "other", h->address, h->number,
+		                h->comparators, h->counter_64bit ? "64-bit" : "32-bit",
+		                h->legacy_replacement ? " legacy-replacement" : "", h->vendor, h->min_tick);
+	else
+		synth_text_addf(t, "hpet: none\n");
+
+	const acpi_bgrt_info_t *b = &a->bgrt;
+	if (b->present)
+		synth_text_addf(t, "boot_logo: 0x%016lx type %s at %u,%u%s\n", b->image_address,
+		                b->image_type == 0 ? "bmp" : "other", b->offset_x, b->offset_y,
+		                (b->status & 1) ? " displayed" : "");
+	else
+		synth_text_addf(t, "boot_logo: none\n");
+
+	if (a->s5.present)
+		synth_text_addf(t, "s5: slp_typ_a %u slp_typ_b %u\n", a->s5.slp_typ_a, a->s5.slp_typ_b);
+	else
+		synth_text_addf(t, "s5: none\n");
+
+	synth_text_addf(t, "problems: %u\n", a->problem_count);
+	uint32_t kept = a->problem_count < ACPI_MAX_PROBLEMS ? a->problem_count : ACPI_MAX_PROBLEMS;
+	for (uint32_t i = 0; i < kept; i++)
+	{
+		const acpi_problem_t *p = &a->problems[i];
+		synth_text_escape(p->signature, e1, sizeof(e1));
+		synth_text_addf(t, "problem: %s 0x%016lx value 0x%lx %s\n", e1[0] ? e1 : "-",
+		                p->phys, p->value, acpi_problem_name(p->code));
+	}
+}
+
+// ── /sys/memory ─────────────────────────────────────────────────────────────
+
+static void sys_gen_memory_lock(synth_text_t *t, const char *name, const allocator_lock_stats_t *l)
+{
+	synth_text_addf(t, "%s lock: %lu acquisitions, %lu waited, %lu us waiting in all\n",
+	                name, l->acquires, l->contended, sys_cycles_to_us(l->wait_cycles));
+	synth_text_addf(t, "  worst wait %lu us, worst hold %lu us since boot\n",
+	                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
+	synth_text_addf(t, "  worst wait %lu us, worst hold %lu us since this file was last read\n",
+	                sys_cycles_to_us(l->window_max_wait_cycles), sys_cycles_to_us(l->window_max_hold_cycles));
+}
+
+static void sys_gen_memory_frames(synth_text_t *t)
+{
+	allocator_stats_t s;
+	allocator_stats(&s, ALLOCATOR_WINDOW_FRAMES);
+	// THE BOOKS FIRST: everything else is detail on them.
+	uint64_t accounted = s.free_bytes + s.used_bytes;
+	if (accounted == s.usable_bytes)
+		synth_text_addf(t, "books: usable %lu = free %lu + used %lu (held %lu): balanced\n",
+		                s.usable_bytes, s.free_bytes, s.used_bytes, s.held_bytes);
+	else
+		synth_text_addf(t, "books: usable %lu != free %lu + used %lu (held %lu): DRIFT of %ld bytes\n",
+		                s.usable_bytes, s.free_bytes, s.used_bytes, s.held_bytes,
+		                (int64_t)(accounted - s.usable_bytes));
+	synth_text_addf(t, "frames: %lu usable = %lu free + %lu in runs + %lu lent to the ledger\n",
+	                s.frames_usable, s.frames_free, s.frames_run, s.frames_ledger);
+	synth_text_addf(t, "free runs: %lu, longest %lu frames (%lu MiB)\n",
+	                s.free_runs, s.largest_free_frames, s.largest_free_frames * PAGE_SIZE >> 20);
+	synth_text_addf(t, "allocations: %lu, refused %lu; fallback walks %lu over %lu runs\n",
+	                s.allocs, s.refusals, s.fallback_walks, s.fallback_examined);
+	synth_text_addf(t, "runs by length    live      free\n");
+	for (unsigned b = 0; b < FRAMES_SIZE_BUCKETS; b++)
+	{
+		char range[24];
+		if (b + 1 < FRAMES_SIZE_BUCKETS && frames_bucket_low(b + 1) == frames_bucket_low(b) + 1)
+			snprintf(range, sizeof(range), "%lu", frames_bucket_low(b));
+		else if (b + 1 < FRAMES_SIZE_BUCKETS)
+			snprintf(range, sizeof(range), "%lu-%lu", frames_bucket_low(b), frames_bucket_low(b + 1) - 1);
+		else
+			snprintf(range, sizeof(range), "%lu+", frames_bucket_low(b));
+		synth_text_addf(t, "  %-12s %9lu %9lu\n", range, s.live_runs_sized[b], s.free_runs_sized[b]);
+	}
+	sys_gen_memory_lock(t, "frame", &s.frame_lock);
+}
+
+static void sys_gen_memory_ledger(synth_text_t *t)
+{
+	allocator_stats_t s;
+	allocator_stats(&s, ALLOCATOR_WINDOW_LEDGER);
+	synth_text_addf(t, "rows: %lu of %lu (high water %lu)\n",
+	                s.ledger_rows, s.ledger_rows_max, s.ledger_high_water);
+	synth_text_addf(t, "entries: %lu live, %lu free, %lu dead\n",
+	                s.ledger_inuse, s.ledger_free, s.ledger_dead);
+	synth_text_addf(t, "chunks: %lu frames lent (%lu KiB); %lu bytes live, %lu free, longest free hole %lu\n",
+	                s.frames_ledger, s.frames_ledger * PAGE_SIZE / 1024,
+	                s.ledger_live_bytes, s.ledger_free_bytes, s.ledger_largest_free);
+	synth_text_addf(t, "policy: exactfit %lu, splits %lu, merges %lu, compactions %lu\n",
+	                s.exactfit, s.splits, s.merges, s.compactions);
+	synth_text_addf(t, "common free holes: %lux%lu %lux%lu %lux%lu %lux%lu; %lu of a chunk or more\n",
+	                s.top_hole_count[0], s.top_hole_size[0], s.top_hole_count[1], s.top_hole_size[1],
+	                s.top_hole_count[2], s.top_hole_size[2], s.top_hole_count[3], s.top_hole_size[3],
+	                s.ledger_chunk_holes);
+	// The ledger lock's holds include report walks like the one that
+	// produced this file: the walk is real time other allocations waited.
+	// Reading a file restarts its own lock's "since last read" window.
+	sys_gen_memory_lock(t, "ledger", &s.ledger_lock);
 }
 
 // /sys/shlib — every shared object the system has loaded, and what each one
@@ -742,6 +1205,15 @@ static void sys_gen_shlib(synth_text_t *t)
 		                (uint64_t)resident, (uint64_t)so->total_pages,
 		                (uint64_t)resident * PAGE_SIZE);
 		synth_text_addf(t, "  refs: %u\n", so->refcount);
+		// WHICH FILE this is (shared_object.h `ident`) and whether the name
+		// still points at it. A RETIRED object is the whole reason this line
+		// exists: it is resident, it is costing pages, and it does not appear
+		// at its own path any more — so a reader asking "why are there two
+		// libos64.so?" gets the answer here instead of inferring it from a
+		// resident_bytes total that grew for no visible reason.
+		synth_text_addf(t, "  file: id %lu%s\n", so->ident,
+		                so->retired ? " (RETIRED — replaced on disk; here for the "
+		                              "programs already running it)" : "");
 		for (size_t i = 0; i < so->dep_count; i++)
 			synth_text_addf(t, "  needs: %s\n",
 			                so->deps[i] != NULL ? so->deps[i]->path : "?");
@@ -781,6 +1253,210 @@ static void sys_gen_shlib(synth_text_t *t)
 // The lines are facts, not history: a name that is looked up twice shows its
 // latest answer, because the file a reader is using is a property of now.
 // A name with no path after it was searched for and not found anywhere.
+// ── /sys/openfiles — the open-file registry as columns (2026-08-31) ─────────
+// One line per open file on a DISK filesystem — the same list unmount's BUSY
+// arithmetic trusts, so this file answers "busy with WHAT?". lsof's deep
+// half: /proc/<pid>/handles knows WHO holds what, but only this list sees
+// the kernel's own holds — a running program's image kept open for demand
+// paging, a resident shared object, an orphan pinned by its last opener —
+// and handles==0 marks exactly those (no task handle references the file).
+// Synthetic files (procfs, sysfs, pipes) never register; their story stays
+// in the handle tables. ident is the fs-local file identity (ext2 inode,
+// FAT start cluster — vfs.h f_ident). The path and mount columns are DATA,
+// so both are escaped — synth_text_escape in synthfs.h carries the rule and
+// the reason.
+static void sys_gen_openfiles(synth_text_t *t)
+{
+	synth_text_addf(t, "# path mount ident handles\n");
+	int capacity = vfs_openfiles_snapshot(NULL, 0);
+	if (capacity == 0)
+		return;
+	vfs_openfile_row_t *rows = NULL;
+	int total = 0;
+	while (capacity > 0)
+	{
+		rows = kmalloc((size_t)capacity * sizeof(*rows));
+		if (rows == NULL)
+			return;
+		total = vfs_openfiles_snapshot(rows, capacity);
+		if (total <= capacity)
+			break;
+
+		// The registry grew between the count and the copy. Retry at its new
+		// size rather than publishing a plausible-looking partial listing.
+		kfree(rows);
+		rows = NULL;
+		capacity = total;
+	}
+	for (int i = 0; i < total; i++)
+	{
+		// Root's prefix is "" so prefix+tail concatenates to the full path;
+		// the mount column still says "/" out loud.
+		//
+		// Both are ESCAPED (synthfs.h): a filename may hold whatever a
+		// filename may hold, and so may a mount path. Escaping the two
+		// halves separately and joining them is the same bytes as escaping
+		// the join — the transform is per-byte.
+		const char *m = rows[i].mount[0] != '\0' ? rows[i].mount : "/";
+		char emount[sizeof(rows[i].mount) * 4];
+		char etail[sizeof(rows[i].tail) * 4];
+		char ecolumn[sizeof(emount)];
+		synth_text_escape(rows[i].mount, emount, sizeof(emount));
+		synth_text_escape(rows[i].tail, etail, sizeof(etail));
+		synth_text_escape(m, ecolumn, sizeof(ecolumn));
+		// Several calls, not one, and each escaped field ALONE in its call:
+		// a fully-escaped path can fill synth_text_addf's per-call line
+		// buffer by itself (synthfs.c says so), and a row that overflows it
+		// is TRUNCATED — half a field, which a column reader rejects whole.
+		// Even the separator rides on the next call, so nothing here depends
+		// on a field being a few bytes under the cap.
+		synth_text_addf(t, "%s", emount);
+		synth_text_addf(t, "%s", etail);
+		synth_text_addf(t, " %s %lu %d\n", ecolumn, rows[i].ident, rows[i].handles);
+	}
+	kfree(rows);
+}
+
+// ── /sys/mounts — the mount table as columns (2026-08-30) ───────────────────
+// One line per live mount, whitespace-separated, '#' header naming the
+// columns; "-" is the honest absent value. df reads this file — the numbers
+// come from each filesystem's space fop (real disk I/O for FAT, which is why
+// this renders in kernel context like every synth file). The dir count rides
+// beside the file count because unmount's BUSY answer is their sum, and the
+// person df'ing before an unmount deserves the same arithmetic. The prefix
+// and GPT-name columns are DATA and are escaped — synth_text_escape in
+// synthfs.h carries the rule and the reason.
+static void sys_gen_mounts(synth_text_t *t)
+{
+	synth_text_addf(t, "# prefix fstype device part name guid mode blocksz total free open_files open_dirs\n");
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_filesystem_t *fs = kMountTable[i].fs;
+		if (fs == NULL)
+			continue;
+		const char *fstype = kMountTable[i].fstype ? kMountTable[i].fstype : "?";
+
+		char guid[40] = "-";
+		char dev[16] = "-";
+		char part[8] = "-";
+		// A GPT name is 36 characters of somebody else's data, so it is
+		// ESCAPED into a field four times that (synthfs.h) — otherwise
+		// "Basic data partition" hands df fifteen columns where twelve
+		// were promised and the whole report reads as malformed.
+		char name[36 * 4 + 1] = "-";
+		if (fs->block_device_info != NULL)
+		{
+			vfs_format_guid(kMountTable[i].part_guid, guid);
+			block_device_t *bd = fs->block_device_info->block_device;
+			if (bd != NULL && bd->dev_name[0] != '\0')
+				sprintf(dev, "%s", bd->dev_name);
+			sprintf(part, "%d", fs->partNumber);
+			partEntry_t *pe = (bd != NULL && bd->partition_table != NULL &&
+			                   fs->partNumber < bd->part_count)
+			                  ? bd->partition_table->parts[fs->partNumber] : NULL;
+			if (pe != NULL && pe->partName[0] != '\0')
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, name, sizeof(name));
+			}
+		}
+
+		// The prefix is a path, and a path may hold whatever a filename may.
+		char prefix[VFS_MOUNT_PREFIX_MAX * 4];
+		synth_text_escape(kMountTable[i].prefix, prefix, sizeof(prefix));
+
+		uint64_t total = 0, free_b = 0;
+		bool have_space = (fs->fops != NULL && fs->fops->space != NULL &&
+		                   fs->fops->space(fs, &total, &free_b) == 0);
+
+		synth_text_addf(t, "%s %s %s %s %s %s %s ",
+		                prefix, fstype, dev, part, name, guid,
+		                fs->read_only ? "ro" : "rw");
+		if (fs->blockSize > 0)
+			synth_text_addf(t, "%d ", fs->blockSize);
+		else
+			synth_text_addf(t, "- ");
+		if (have_space)
+			synth_text_addf(t, "%lu %lu ", total, free_b);
+		else
+			synth_text_addf(t, "- - ");
+		synth_text_addf(t, "%d %d\n", vfs_openfiles_on(fs), fs->open_dir_count);
+	}
+}
+
+// ── /sys/block — every device and partition, named and located ──────────────
+// "dev" rows then their "part" rows, in enumeration order. The device name is
+// THE system name ("nvme0" — block_assign_dev_names, and the future /dev
+// nodes). A partition's last column is where it is mounted, or "-": the
+// answer to "what CAN I mount?" is every "-" row with a filesystem word.
+// The GPT-name and mounted-at columns are DATA and are escaped —
+// synth_text_escape in synthfs.h carries the rule and the reason.
+static void sys_gen_block(synth_text_t *t)
+{
+	synth_text_addf(t, "# dev  <name> <kind> <sectors> <sector_bytes>\n");
+	synth_text_addf(t, "# part <dev> <n> <gpt_name> <fs> <guid> <mounted_at>\n");
+	for (int i = 0; i < kBlockDeviceInfoCount; i++)
+	{
+		block_device_t *bd = kBlockDeviceInfo[i].block_device;
+		if (bd == NULL)
+			continue;
+		const char *kind = "?";
+		switch (kBlockDeviceInfo[i].ATADeviceType)
+		{
+			case ATA_DEVICE_TYPE_NVME_HD: kind = "nvme"; break;
+			case ATA_DEVICE_TYPE_SATA_HD: kind = "sata"; break;
+			case ATA_DEVICE_TYPE_HD:      kind = (bd->dev_name[0] == 'r') ? "ram" : "disk"; break;
+			case ATA_DEVICE_TYPE_CD:
+			case ATA_DEVICE_TYPE_SATA_CD: kind = "cd"; break;
+		}
+		synth_text_addf(t, "dev %s %s %u %u\n",
+		                bd->dev_name[0] ? bd->dev_name : "-", kind,
+		                kBlockDeviceInfo[i].totalSectorCount,
+		                kBlockDeviceInfo[i].sectorSize);
+
+		for (int p = 0; bd->partition_table != NULL && p < bd->part_count; p++)
+		{
+			partEntry_t *pe = bd->partition_table->parts[p];
+			if (pe == NULL)
+				continue;
+			const char *fsword = "-";
+			switch (pe->filesystemType)
+			{
+				case FILESYSTEM_TYPE_FAT:
+				case FILESYSTEM_TYPE_FAT32: fsword = "fat";  break;
+				case FILESYSTEM_TYPE_EXT2:  fsword = "ext2"; break;
+				default: break;
+			}
+			char guid[40];
+			vfs_format_guid(pe->uniquePartGUID, guid);
+
+			// Both of these are DATA in a whitespace-columned row — a GPT
+			// name off the disk and a mount path — so both are escaped
+			// (synthfs.h). Windows names its data partition "Basic data
+			// partition"; unescaped, that is four columns.
+			char at[VFS_MOUNT_PREFIX_MAX * 4] = "-";
+			for (int mi = 0; mi < kMountCount; mi++)
+				if (kMountTable[mi].fs != NULL &&
+				    memcmp(kMountTable[mi].part_guid, pe->uniquePartGUID, 16) == 0)
+				{
+					synth_text_escape(kMountTable[mi].prefix, at, sizeof(at));
+					break;
+				}
+			char pname[36 * 4 + 1] = "-";
+			if (pe->partName[0] != '\0')
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, pname, sizeof(pname));
+			}
+			synth_text_addf(t, "part %s %d %s %s %s %s\n",
+			                bd->dev_name[0] ? bd->dev_name : "-", p,
+			                pname, fsword, guid, at);
+		}
+	}
+}
+
 static void sys_gen_conf(synth_text_t *t)
 {
 	synth_text_addf(t, "path: ");
@@ -836,6 +1512,53 @@ static void sys_gen_gui(synth_text_t *t)
 	// (GRAPHICS.md's capacity reservation), so this scales with resolution.
 	synth_text_addf(t, "bytes_per_window: %lu\n",
 	                2ull * kFrameBuffer.width * kFrameBuffer.height * 4);
+	// Who is watching the screen through /dev/glass (gui/glass.h) — a
+	// remote viewer is otherwise invisible from the machine it watches.
+	synth_text_addf(t, "glass_viewers: %u\n", glass_view_count());
+	// The scheduler's owed wakes (WAKE_OWED.md), machine-wide, here until the
+	// scheduler has a file of its own. paid counts wakes that landed mid-park
+	// and would have waited for the backstop; refused counts slots that
+	// outlived their thread's wait. owed = paid + voided + outstanding.
+	scheduler_wake_counts_t wakes = scheduler_wake_counts();
+	synth_text_addf(t, "wakes_owed: %lu\n", wakes.owed);
+	synth_text_addf(t, "wakes_paid: %lu\n", wakes.paid);
+	synth_text_addf(t, "wakes_voided: %lu\n", wakes.voided);
+	synth_text_addf(t, "wakes_refused: %lu\n", wakes.refused);
+	// Who waits for kGuiLock and who holds it (gui_lock): every taker names
+	// its site, so a stall reads as "the ring waited this long while publish
+	// held it". Totals since boot, so a read before and after a workload
+	// measures it; the worst of each since this file was last read.
+	gui_lock_count_t locks[GUI_LOCK_SITES];
+	gui_composite_count_t comp;
+	gui_lock_counts(locks, &comp, true);
+	for (int s = 0; s < GUI_LOCK_SITES; s++) {
+		const gui_lock_count_t *l = &locks[s];
+		synth_text_addf(t, "lock %s: %lu acquisitions, %lu waited, %lu us waiting, %lu us holding; "
+		                "worst wait %lu us, worst hold %lu us since this file was last read\n",
+		                gui_lock_site_name((gui_lock_site_t)s), l->acquires, l->contended,
+		                sys_cycles_to_us(l->wait_cycles), sys_cycles_to_us(l->hold_cycles),
+		                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
+	}
+	// What the compositor's passes did, totals since boot: a pass that
+	// composited nothing is mostly the idle wake at the tick; a collapse is the
+	// damage list full and turned into one union of everything, which makes
+	// the next pass long (GUI_LOCK.md). Then its holds by length.
+	synth_text_addf(t, "compositor: %lu passes, %lu drew, %lu rectangles, %lu pixels, "
+	                "%lu collapses of the damage list into one\n",
+	                comp.passes, comp.drawn, comp.rects, comp.pixels, comp.collapses);
+	// Each damaged pixel is drawn by the one layer visible there, so painted
+	// over pixels is exactly 1.00 unless a rectangle's claim walk stopped
+	// early (the old painter draws what it left once per layer) or its pieces
+	// did not add up to it, which is a bug in the geometry and counted apart.
+	uint64_t times_x100 = comp.pixels ? comp.painted * 100 / comp.pixels : 0;
+	synth_text_addf(t, "compositor painted: %lu pixels by the background and windows, "
+	                "%lu.%02lu times each damaged pixel, %lu rectangles finished by the old "
+	                "painter, %lu partition faults\n",
+	                comp.painted, times_x100 / 100, times_x100 % 100, comp.stops, comp.faults);
+	synth_text_addf(t, "compositor holds: under 250 us %lu, under 500 us %lu, under 1 ms %lu, "
+	                "under 2 ms %lu, under 4 ms %lu, under 8 ms %lu, 8 ms or more %lu\n",
+	                comp.holds[0], comp.holds[1], comp.holds[2], comp.holds[3], comp.holds[4],
+	                comp.holds[5], comp.holds[6]);
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────
@@ -888,9 +1611,14 @@ static void sys_gen_net_ip(synth_text_t *t)
 	// installed will otherwise reasonably wonder which one this belongs to —
 	// and the honest answer is "the machine", until addressing goes
 	// per-interface. Naming the card that carries it costs one line and saves
-	// that question.
-	synth_text_addf(t, "scope: machine (os64 is single-homed: one address, %u NIC slot(s))\n",
+	// that question. Loopback is the one other address, and it is on no card.
+	synth_text_addf(t, "scope: machine (os64 is single-homed: one LAN address, %u NIC slot(s))\n",
 	                (unsigned)NET_MAX_DEVICES);
+	if (kNetLoopback != NULL)
+		synth_text_addf(t, "loopback: 127.0.0.1 (lo, 127.0.0.0/8, TCP only)\n");
+	// A 127/8 source or destination arriving on a card: a forgery, dropped
+	// (ipv4_input). Nonzero means something on the LAN is trying.
+	synth_text_addf(t, "martians_dropped: %lu\n", kIPv4Stats.rx_martian);
 }
 
 // net/dhcp — how the address above was come by, and whether it is still a
@@ -951,6 +1679,339 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 	synth_text_addf(t, "ignored: %lu\n", kDhcpStats.ignored);
 }
 
+// net/tcp — the transport. Counters first, then one row per connection the
+// machine currently holds — TIME_WAIT ghosts included (they are real: each
+// one is a port pair still spoken for), and the recently dead too, kept
+// listed for TCP_MORGUE_TICKS so the aftermath of a failed dial or a
+// finished fetch is readable instead of gone by the next poll (tcp_poll
+// owns that linger and says why). netstat(1) is the pretty-printer —
+// kernel emits the truth, userland makes it sing, the lspci division. The
+// rows are the house table dialect: a `#` header naming the columns,
+// whitespace-separated fields. Nothing here needs escaping; every column
+// is machine-made.
+//
+// The counters are the shakedown instruments. This stack spent its first
+// weeks on a LAN, where retransmits and out_of_order_held read zero
+// forever; the chaos rig (VERIFICATION.md) and the real internet are where
+// they report weather, and whether a booked v1 debt (SACK — tcp.h states
+// it) is worth paying is a question these numbers answer with data instead
+// of theory. Reassembly was the first one paid that way (out_of_order_dropped
+// priced it, out_of_order_held is the receipt), the measured retransmit
+// timer the second (retransmits priced it; rto and srtt are the receipt),
+// the send window the third (an upload's seconds priced it; inflight, sndq
+// and cwnd are the receipt), and window scaling the fourth (a download's
+// rate against its round trip priced it; a win column past 65535 is the
+// receipt).
+static void sys_gen_net_tcp(synth_text_t *t)
+{
+	// RFC 793's own vocabulary, netstat's spelling since 4.2BSD.
+	static const char *kTcpStateNames[] = {
+		"CLOSED", "LISTEN", "SYN_SENT", "SYN_RECEIVED", "ESTABLISHED",
+		"FIN_WAIT_1", "FIN_WAIT_2", "CLOSE_WAIT", "CLOSING", "LAST_ACK",
+		"TIME_WAIT"
+	};
+
+	synth_text_addf(t, "connections_opened: %lu\n", kTcpStats.connections_opened);
+	synth_text_addf(t, "connections_refused: %lu\n", kTcpStats.connections_refused);
+	synth_text_addf(t, "connect_timeouts: %lu\n", kTcpStats.connect_timeouts);
+	synth_text_addf(t, "connections_reaped: %lu\n", kTcpStats.connections_reaped);
+	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
+	synth_text_addf(t, "connections_accepted: %lu\n", kTcpStats.connections_accepted);
+	synth_text_addf(t, "syns_dropped_full: %lu\n", kTcpStats.syns_dropped_full);
+	synth_text_addf(t, "passive_buffered: %lu\n", kTcpStats.passive_buffered);
+	synth_text_addf(t, "passive_buffer_limit: %u\n", TCP_PASSIVE_BUFFER_LIMIT);
+	synth_text_addf(t, "syns_dropped_storage: %lu\n", kTcpStats.syns_dropped_storage);
+	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
+	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
+	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
+	synth_text_addf(t, "fast_retransmits: %lu\n", kTcpStats.fast_retransmits);
+	synth_text_addf(t, "window_probes: %lu\n", kTcpStats.window_probes);
+	synth_text_addf(t, "tx_local_drops: %lu\n", kTcpStats.tx_local_drops);
+	synth_text_addf(t, "rtt_samples: %lu\n", kTcpStats.rtt_samples);
+	synth_text_addf(t, "out_of_order_held: %lu\n", kTcpStats.out_of_order_held);
+	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
+	synth_text_addf(t, "duplicates_dropped: %lu\n", kTcpStats.duplicates_dropped);
+	synth_text_addf(t, "heap_moves: %lu\n", kTcpStats.heap_moves);
+	synth_text_addf(t, "bad_checksum: %lu\n", kTcpStats.bad_checksum);
+	synth_text_addf(t, "no_connection: %lu\n", kTcpStats.no_connection);
+
+	// tcp_poll's discipline for READING — the list lock across the walk,
+	// each conn's own lock for its fields — and NO FORMATTING under
+	// either: synth_text_addf grows its buffer by kmalloc/copy/kfree, and
+	// the list lock is irqsave, so rendering the table inside it held
+	// interrupts off on this core for the whole render while every TCP
+	// user on the other cores spun on the lock (Codex, PR #46). So the
+	// walk fills a row-snapshot array — one bounded kmalloc, sized by the
+	// count just taken — and the formatting runs after both locks are
+	// gone.
+	struct tcp_row
+	{
+		uint32_t peer_ip;
+		uint16_t peer_port;
+		uint16_t local_port;
+		uint32_t state;
+		uint16_t mss;
+		uint32_t win;          // the peer's window, after its shift — past 16 bits when it scales
+		uint32_t buf_used;
+		uint64_t rx, tx, rexmit, ooo, held;
+		uint32_t rto_ms, srtt_ms;
+		uint32_t inflight, sndq, cwnd;
+		bool     detached, zwin, rst;
+	};
+
+	// The snapshot lives in PAGE-SIZED CHUNKS, linked, never one array.
+	// The allocator does not fail — exhaustion is a panic, by name
+	// (allocator.c) — so "what if kmalloc returns NULL" is not the
+	// question; "how big a contiguous block does cat'ing this file
+	// demand" is. One array sized by the count is ~1MB at the full
+	// ephemeral range, the largest single request in sysfs and, on a
+	// fragmented map, the request likeliest to be the one that finds no
+	// free block (Codex, PR #46). A chunk is one page — the size class
+	// the renderer's own buffer growth asks for — so the snapshot risks
+	// nothing the file's text does not already.
+	//
+	// Chunks are allocated between the census and the copy, under no
+	// lock; a list that grew in that gap overflows the chunks, and the
+	// overflow is REPORTED, not silently cropped.
+	struct tcp_row_chunk
+	{
+		struct tcp_row_chunk *next;
+		struct tcp_row rows[(PAGE_SIZE - sizeof(void *)) / sizeof(struct tcp_row)];
+	};
+	const uint32_t rows_per_chunk = sizeof(((struct tcp_row_chunk *)0)->rows) / sizeof(struct tcp_row);
+
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint32_t count = 0;
+	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+		count++;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	struct tcp_row_chunk *chunks = NULL, **link = &chunks;
+	uint32_t capacity = 0;
+	while (capacity < count)
+	{
+		struct tcp_row_chunk *ch = kmalloc(sizeof(*ch));
+		*link = ch;
+		link = &ch->next;
+		capacity += rows_per_chunk;
+	}
+
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint32_t n = 0, omitted = 0;
+	struct tcp_row_chunk *fill = chunks;
+	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+	{
+		if (n >= capacity)
+		{
+			omitted++;
+			continue;
+		}
+		if (n > 0 && n % rows_per_chunk == 0)
+			fill = fill->next;
+		struct tcp_row *r = &fill->rows[n % rows_per_chunk];
+		n++;
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		r->peer_ip    = c->peer_ip;
+		r->peer_port  = c->peer_port;
+		r->local_port = c->local_port;
+		r->state      = (uint32_t)c->state;
+		r->mss        = c->snd_mss;
+		r->win        = c->snd_wnd;
+		r->buf_used   = c->rcv_count;
+		r->rx         = c->rx_bytes;
+		r->tx         = c->tx_bytes;
+		r->rexmit     = c->retransmits;
+		r->ooo        = c->out_of_order_dropped;
+		r->held       = c->out_of_order_held;
+		// THE TIMER IN FORCE, not the estimator's answer: after a timeout
+		// rto_ticks is the doubled value the next deadline will use and
+		// stays so until the peer acknowledges new data, while c->rto is
+		// what the last sample said. A row reading the estimator during a backoff
+		// experiment would show 200 while the deadline was 800 (Codex, PR
+		// #62).
+		r->rto_ms     = (c->rto_backed_off ? c->rto_ticks : c->rto) * 1000u / TICKS_PER_SECOND;
+		r->srtt_ms    = (c->srtt_x8 >> 3) * 1000u / TICKS_PER_SECOND;
+		// Submission flight includes SYN/FIN sequence units; sndq is
+		// ring bytes, including those waiting behind the window. Flight
+		// stays visible while a retransmission cursor walks it again.
+		r->inflight   = c->snd_max - c->snd_una;
+		r->sndq       = c->snd_count;
+		r->cwnd       = c->cwnd;
+		r->detached   = c->detached;
+		r->zwin       = c->zero_window;
+		r->rst        = c->reset;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	// The announced ports (SERVERS.md § 1): copied out under the lock like
+	// the rows above, formatted after it. `pending` is half-open plus
+	// queued-unread against the backlog; a rising `dropped` beside a full
+	// `pending` is a listener nobody reads, or a flood.
+	struct listener_row { uint16_t port; uint32_t ip, pending; uint64_t accepted, dropped; };
+	struct listener_row lrows[16];
+	uint32_t ln = 0, lomitted = 0;
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	for (tcp_listener_t *l = kTcpListenerList; l != NULL; l = l->next)
+	{
+		if (ln >= sizeof(lrows) / sizeof(lrows[0]))
+		{
+			lomitted++;
+			continue;
+		}
+		spinlock_acquire(&l->lock);
+		lrows[ln].port = l->port;
+		lrows[ln].ip = l->ip;
+		lrows[ln].pending = l->pending;
+		lrows[ln].accepted = l->accepted;
+		lrows[ln].dropped = l->syns_dropped;
+		spinlock_release(&l->lock);
+		ln++;
+	}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+	synth_text_addf(t, "listeners: %u\n", ln + lomitted);
+	if (ln > 0)
+	{
+		// The address is the LAST column so the earlier ones keep their
+		// positions: `*` for every address, else the loopback address the
+		// door was opened on.
+		synth_text_addf(t, "# port state pending backlog accepted dropped address\n");
+		for (uint32_t i = 0; i < ln; i++)
+		{
+			if (lrows[i].ip == 0)
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu *\n", lrows[i].port, lrows[i].pending,
+				                (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted, lrows[i].dropped);
+			else
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu %u.%u.%u.%u\n", lrows[i].port,
+				                lrows[i].pending, (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted,
+				                lrows[i].dropped, NET_IPV4_OCTETS(lrows[i].ip));
+		}
+	}
+
+	synth_text_addf(t, "connections: %u\n", n + omitted);
+	if (n > 0)
+	{
+		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo held rto_ms srtt_ms inflight sndq cwnd flags\n");
+		struct tcp_row_chunk *ch = chunks;
+		for (uint32_t i = 0; i < n; i++)
+		{
+			if (i > 0 && i % rows_per_chunk == 0)
+				ch = ch->next;
+			struct tcp_row *r = &ch->rows[i % rows_per_chunk];
+
+			// `win` is the PEER's advertised window — the term of
+			// throughput = window/RTT that tcp.c's TCPRX trace watches
+			// from the other direction. `buf` is our side of the same
+			// bargain: how full the receive ring the peer is throttled
+			// by. `zwin` in flags means we have told them to stop.
+			// `rst` is what separates a morgue row that was REFUSED or
+			// reset from one that timed out or ended politely — the
+			// same split dial reports to its caller, readable after
+			// the fact. Comma-joined by hand; "-" when nothing is set.
+			char flags[16];
+			size_t fl = 0;
+			if (r->detached) { flags[fl++] = 'd'; flags[fl++] = 'e'; flags[fl++] = 't'; }
+			if (r->zwin)
+			{
+				if (fl) flags[fl++] = ',';
+				flags[fl++] = 'z'; flags[fl++] = 'w'; flags[fl++] = 'i'; flags[fl++] = 'n';
+			}
+			if (r->rst)
+			{
+				if (fl) flags[fl++] = ',';
+				flags[fl++] = 'r'; flags[fl++] = 's'; flags[fl++] = 't';
+			}
+			if (fl == 0)
+				flags[fl++] = '-';
+			flags[fl] = '\0';
+
+			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %lu %u %u %u %u %u %s\n",
+			                (unsigned)r->local_port,
+			                NET_IPV4_OCTETS(r->peer_ip), (unsigned)r->peer_port,
+			                r->state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
+			                    ? kTcpStateNames[r->state] : "?",
+			                (unsigned)r->mss, (unsigned)r->win,
+			                (unsigned)r->buf_used, (unsigned)TCP_RCV_BUF,
+			                r->rx, r->tx, r->rexmit, r->ooo, r->held, r->rto_ms, r->srtt_ms,
+			                (unsigned)r->inflight, (unsigned)r->sndq, (unsigned)r->cwnd, flags);
+		}
+	}
+	if (omitted > 0)
+		// The count above is the live list; the rows are the census's.
+		// Connections dialed between the two overflowed the chunks, and
+		// saying so beats a table that looks complete and is not.
+		synth_text_addf(t, "# rows omitted: %u (dialed after the snapshot was sized)\n", omitted);
+
+	while (chunks != NULL)
+	{
+		struct tcp_row_chunk *next = chunks->next;
+		kfree(chunks);
+		chunks = next;
+	}
+}
+
+// net/knet — the drainer thread and the doorbell it parks on (DOORBELL.md).
+// The numbers a person reads when a transfer is slower than the wire: how
+// often the drainer woke, how many drain rounds those wakes took, how often
+// its budget ran out while a round was still moving (so it rang itself to
+// come back and check), and the longest single wake. The bell's own tally
+// says who rang: `rings` counts every ring
+// (interrupt handlers and the tick alike), `wakes` the ones that found the
+// thread parked and relinked it — the rest found it already awake.
+static void sys_gen_net_knet(synth_text_t *t)
+{
+	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (networking disabled)");
+	synth_text_addf(t, "mode: %s\n", kNetPoll ? "tick-driven (NETPOLL)" : "doorbell");
+	synth_text_addf(t, "wakes: %lu\n", kKnetWakes);
+	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
+	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
+	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
+	// How long rings waited to be answered (knet.h), in microseconds, over
+	// the rings that were timed (stamped on knet's own core) and split by
+	// what they waited on: `wake_latency_*` is the scheduler (the park had
+	// slept), `response_latency_*` is a running loop coming round (the ring
+	// landed mid-drain; the loop's work plus any preemption of it). A NIC's
+	// rx_overruns climbing beside wake late_10ms says a parked drainer was
+	// scheduled too late; beside response late_10ms, that a running one
+	// took that long to come round.
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	if (per_us == 0)
+		per_us = 1;
+	synth_text_addf(t, "wake_latency_samples: %lu\n", kKnetWakeLatencySamples);
+	synth_text_addf(t, "wake_latency_max_us: %lu\n", kKnetWakeLatencyMax / per_us);
+	synth_text_addf(t, "wake_latency_avg_us: %lu\n",
+	                kKnetWakeLatencySamples != 0
+	                    ? (kKnetWakeLatencyTotal / per_us) / kKnetWakeLatencySamples : 0);
+	synth_text_addf(t, "wake_latency_late_1ms: %lu\n", kKnetWakeLatencyLate1ms);
+	synth_text_addf(t, "wake_latency_late_10ms: %lu\n", kKnetWakeLatencyLate10ms);
+	synth_text_addf(t, "response_latency_samples: %lu\n", kKnetResponseLatencySamples);
+	synth_text_addf(t, "response_latency_max_us: %lu\n", kKnetResponseLatencyMax / per_us);
+	synth_text_addf(t, "response_latency_late_10ms: %lu\n", kKnetResponseLatencyLate10ms);
+	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
+	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
+	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);
+	// lo's queue, which knet drains beside the cards (loopback.h). A
+	// depth_max near slots means a sender outran the drainer; dropped_full
+	// is what that cost, in segments TCP had to send again.
+	if (kNetLoopback != NULL)
+	{
+		loopback_stats_t lo;
+		loopback_get_stats(&lo);
+		synth_text_addf(t, "lo: queued %lu delivered %lu dropped_full %lu depth %u depth_max %u slots %u\n",
+		                lo.queued, lo.delivered, lo.dropped_full, lo.depth, lo.depth_max, lo.slots);
+	}
+	// Every bell in the registry, for the day there is a second daemon on
+	// one — async NVMe is the named next customer.
+	for (uint32_t i = 0; i < doorbell_count(); i++)
+	{
+		doorbell_t *db = doorbell_at(i);
+		if (db == NULL)
+			continue;
+		synth_text_addf(t, "bell %s: rings %lu wakes %lu rung_runnable %lu\n",
+		                db->name != NULL ? db->name : "?", db->rings, db->wakes, db->rung_runnable);
+	}
+}
+
 // net/<card> — one registered NIC: what it is, whether the wire is good, and
 // what has actually moved through it.
 static void sys_gen_net_card(synth_text_t *t, uint32_t index)
@@ -972,15 +2033,20 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 	                d->mac[0], d->mac[1], d->mac[2], d->mac[3], d->mac[4], d->mac[5]);
 	synth_text_addf(t, "mtu: %u\n", d->mtu);
 	// Speed/duplex when the card knows them (link_mbps 0 = unknown: virtio has
-	// no wire, and an 8125 at 2.5GbE reports through a bit its driver does not
-	// decode). Same silence-over-guessing contract as model and location — and
-	// the whole reason those fields moved onto the seam, since until 2026-08-20
-	// the e1000 knew its speed and had nowhere to say it.
+	// no wire, and a link word a driver cannot decode is still a link). Same
+	// silence-over-guessing contract as model and location — and the whole
+	// reason those fields moved onto the seam, since until 2026-08-20 the
+	// e1000 knew its speed and had nowhere to say it.
 	if (d->link_up && d->link_mbps != 0)
 		synth_text_addf(t, "link: up, %u/%s\n", d->link_mbps,
 		                d->full_duplex ? "full" : "half");
 	else
 		synth_text_addf(t, "link: %s\n", d->link_up ? "up" : "down");
+	// The register behind that line, verbatim, when the driver has one
+	// (net_device.h): the number to read against the chip's datasheet when
+	// "up, 100/full" is not the answer anyone expected.
+	if (d->link_raw[0] != '\0')
+		synth_text_addf(t, "link_raw: %s\n", d->link_raw);
 
 	// Does this card carry the machine's one address? kNetDevices[0] does:
 	// syscall dial hands it to tcp/udp/icmp_conn_dial, and kernel_init hands
@@ -1002,19 +2068,18 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 	// NET_FRAME_MAX (counted, never truncated — net_device.h's rule).
 	synth_text_addf(t, "rx_dropped_no_handler: %lu\n", d->rx_dropped_no_handler);
 	synth_text_addf(t, "rx_dropped_too_big: %lu\n", d->rx_dropped_too_big);
+	// The card ran out of ring and dropped frames (net_device.h): the number
+	// that says a download's pauses are the drainer arriving late, read
+	// beside /sys/net/knet's wake_latency_late_10ms.
+	synth_text_addf(t, "rx_overruns: %lu\n", d->rx_overruns);
 }
 
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
 // table until 2026-08-12, split per-core when it moved to the machine's tree).
 //
-// busy is DERIVED (total - idle - sched): the accounting charges threads,
-// the idle thread among them, and the scheduler's own passes; what the
-// three don't explain is genuinely unaccounted (early boot, ISR time —
-// documented v1 honesty). All values are written only by each core's own
-// scheduler pass — reading them cross-core here is safe (worst case one
-// slice stale); SUBTRACTING a remote TSC from a local rdtsc would not be,
-// which is why total comes from the core's own two stamps, never from
-// "now".
+// A coherent core tuple partitions committed time into user, system, idle
+// and scheduler spans. The per-core sequence protects the copy across
+// another core's short charge; no remote/local TSC subtraction is needed.
 static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
 {
 	// Settle-on-read: every core charges its in-flight span (locally, own
@@ -1027,24 +2092,31 @@ static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
 	core_local_storage_t *cls = get_core_local_storage_for_core(core);
 	if (cls == NULL)
 		return;
+	accounting_core_cycles_t cycles;
+	if (accounting_read_core(cls, &cycles))
+	{
+		// Round the disjoint buckets first. A remainder derived from
+		// separately rounded totals can decrease while its raw cycles grow.
+		uint64_t idle = sys_cycles_to_us(cycles.idle);
+		uint64_t sched = sys_cycles_to_us(cycles.sched);
+		uint64_t user = sys_cycles_to_us(cycles.user);
+		uint64_t system = sys_cycles_to_us(cycles.system);
+		uint64_t busy = user + system;
+		uint64_t total = busy + idle + sched;
+		synth_text_addf(t, "total_us: %lu\n", total);
+		synth_text_addf(t, "busy_us: %lu\n", busy);
+		synth_text_addf(t, "idle_us: %lu\n", idle);
+		synth_text_addf(t, "sched_us: %lu\n", sched);
+		synth_text_addf(t, "user_us: %lu\n", user);
+		synth_text_addf(t, "system_us: %lu\n", system);
+		return;
+	}
 
-	uint64_t total = (cls->acctLastDispatchTSC > cls->acctZeroTSC)
-	                 ? cls->acctLastDispatchTSC - cls->acctZeroTSC : 0;
-	uint64_t sched = cls->acctSchedCycles;
-	uint64_t idle  = 0;
-	if (kIdleTasks[core] != NULL && kIdleTasks[core]->threads != NULL)
-		idle = kIdleTasks[core]->threads->runCycles;
-
-	uint64_t accounted = idle + sched;
-	uint64_t busy = (total > accounted) ? total - accounted : 0;
-
-	synth_text_addf(t, "total_us: %lu\n", sys_cycles_to_us(total));
-	synth_text_addf(t, "busy_us: %lu\n",  sys_cycles_to_us(busy));
-	synth_text_addf(t, "idle_us: %lu\n",  sys_cycles_to_us(idle));
-	synth_text_addf(t, "sched_us: %lu\n", sys_cycles_to_us(sched));
+	// An empty report marks a bounded coherent-read failure. Rendering a
+	// mixture of raw counters here can create a plausible but false delta.
 }
 
-// cpu/<n>/state — the roster bits, raw. This file exists because of a core
+// cpu/<n>/state — its APIC ID and the scheduling bits, raw. This file exists because of a core
 // that spent thirteen hours struck off the P5's schedule while every
 // instrument we owned needed that core's cooperation to say so (2026-08-11).
 // These are plain globals in the shared upper half: reading them cross-core
@@ -1064,7 +2136,10 @@ static void sys_gen_cpu_state(synth_text_t *t, uint32_t core)
 {
 	core_local_storage_t *cls = get_core_local_storage_for_core(core);
 
-	synth_text_addf(t, "core: %u\n", core);
+	synth_text_addf(t, "cpu: %u\n", core);
+	// The hardware's name for this CPU: what CPUID reports to a program
+	// running on it, so ring 3 can turn that answer into a CPU number.
+	synth_text_addf(t, "apic: %u\n", kCPUs[core].apic.id);
 	// The three bits that can each strike a core off the roster alone
 	// (nmi_probe.h walks through the three disappearances in_scheduler
 	// causes). in_scheduler STUCK at 1 was the leading hypothesis for the
@@ -1099,7 +2174,7 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 	const nmi_probe_snapshot_t *s = nmi_probe_last(core);
 	if (s == NULL)
 	{
-		synth_text_addf(t, "no snapshot for core %u — write \"probe\" here to fire a diagnostic NMI\n", core);
+		synth_text_addf(t, "no snapshot for CPU %u — write \"probe\" here to fire a diagnostic NMI\n", core);
 		return;
 	}
 	nmi_probe_render(s, sys_cpu_probe_line, t);
@@ -1107,15 +2182,19 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 
 // ── File operations ─────────────────────────────────────────────────────────
 
-// What an open handle IS, when it is not just a rendered snapshot. Everything
-// except these two is served by the bare snapshot; the probe file carries its
-// target, and the clipboard carries the entry it is reading or the copy it is
-// accumulating (same embed-the-head pattern as procfs's ctl handle).
+// Ordinary nodes own rendered snapshots. Probe handles also carry a target;
+// clipboard handles hold an entry or pending copy. Appearance writers issue
+// complete publication commands and do not accumulate bytes at close.
 typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
+	SYS_HANDLE_MOUSE_WRITE,
+	SYS_HANDLE_APPEARANCE_WRITE,
+	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
+	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
+	SYS_HANDLE_BTWRITE,        // Bluetooth commands assembled until close
 } sys_handle_kind_t;
 
 typedef struct
@@ -1134,6 +2213,12 @@ typedef struct
 	sys_handle_kind_t kind;
 	snarf_entry_t    *entry;     // CLIPREAD: the entry this handle is reading
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
+	decoration_pending_t *decoration;
+	console_font_pending_t *font; // FONTWRITE: the image being accumulated
+	char bt_command[64];
+	bool bt_connection;
+	uint8_t bt_length;
+	bool bt_refused;
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -1143,21 +2228,117 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	sys_parse_path(path, &sp);
 
-	// /sys is read-only EXCEPT two nodes: cpu/<n>/probe, the trigger (reads
-	// side-effect free, the gun behind a write — the header's ruling), and
-	// clipboard, the one node that STORES what you write. Rejecting the write
-	// modes at the boundary beats a write that silently goes nowhere.
-	//
-	// Mode "a" is REFUSED here along with everything else that is not exactly
-	// "r" or "w", and for the clipboard that refusal is deliberate rather than
-	// incidental: entries are immutable, and appending to one needs a consumer
-	// to justify it (CLIPBOARD.md). The single-character test does the work.
+	// Writable nodes opt in here; append and combined read/write modes have
+	// no contract for these command or immutable-snapshot interfaces.
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
-	if (mode == NULL || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
+	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
+	bool is_mouse = (sp.type == SYS_NODE_MOUSE);
+	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
+	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
+	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
+	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse)
 		return -1;
+
+	if (is_bt || sp.type == SYS_NODE_BTDEVICES) {
+		synth_text_t text = {0};
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, BT_SCAN_TEXT_BYTES)) return -1;
+			text.len = xhci_bluetooth_read(text.buf, text.cap,
+			    sp.type == SYS_NODE_BTCONNECTION ? 2 : sp.type == SYS_NODE_BTDEVICES ? 1 : 0);
+		}
+		sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		    sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (!h) return -1;
+		if (mode[0] == 'w') h->kind = SYS_HANDLE_BTWRITE;
+		h->bt_connection = sp.type == SYS_NODE_BTCONNECTION;
+		return 0;
+	}
+
+	// The console's face. A reader gets the status text as an ordinary
+	// snapshot; a writer gets an empty handle that owns the image it is about
+	// to be given, the clipboard writer's arrangement and for its reason — a
+	// half-written font must never reach the glass, so nothing is judged
+	// until close.
+	if (is_font)
+	{
+		synth_text_t text = {0};
+		console_font_pending_t *font = NULL;
+		if (mode[0] == 'r')
+		{
+			if (!synth_text_init(&text, 512)) return -1;
+			text.len = console_font_status(text.buf, text.cap);
+		}
+		else if ((font = console_font_begin()) == NULL)
+			return -1;
+
+		sys_file_handle_t *fh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (fh == NULL)
+		{
+			// The open is failing: the caller never gets a handle and never
+			// writes a byte, so there is nothing to judge. Discard, not submit.
+			console_font_discard(font);
+			return -1;
+		}
+		if (mode[0] == 'w')
+		{
+			fh->kind = SYS_HANDLE_FONTWRITE;
+			fh->font = font;
+		}
+		return 0;
+	}
+
+	if (is_decoration) {
+		synth_text_t text = {0};
+		decoration_pending_t *pending = NULL;
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, OS64_DECOR_STATUS_MAX)) return -1;
+			int n = decorations_status(text.buf, text.cap);
+			if (n < 0) { kfree(text.buf); return -1; }
+			text.len = (size_t)n;
+		} else if (!(pending = decorations_begin())) return -1;
+		sys_file_handle_t *dh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+			sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (!dh) { decorations_discard(pending); return -1; }
+		if (pending) { dh->kind = SYS_HANDLE_DECORATIONS_WRITE; dh->decoration = pending; }
+		return 0;
+	}
+
+	if (is_mouse) {
+        synth_text_t text={0};
+        if(mode[0]=='r') {
+            if(!synth_text_init(&text,sizeof(os64_mouse_snapshot_t))) return -1;
+            int n=input_mouse_snapshot(text.buf,text.cap);
+            if(n<0) { kfree(text.buf); return -1; }
+            text.len=(size_t)n;
+        }
+        sys_file_handle_t *h=synth_snapshot_publish(vfs_file,&text,path,vfs_fs,
+            sizeof(sys_file_handle_t),FILETYPE_SYSFILE);
+        if(!h) return -1;
+        if(mode[0]=='w') h->kind=SYS_HANDLE_MOUSE_WRITE;
+        return 0;
+    }
+
+	if (is_appearance)
+	{
+		synth_text_t text = {0};
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, OS64_APPEARANCE_MAX)) return -1;
+			int n = appearance_snapshot(text.buf, text.cap);
+			if (n < 0) { kfree(text.buf); return -1; }
+			text.len = (size_t)n;
+		}
+		sys_file_handle_t *ah = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (!ah) return -1;
+		if (mode[0] == 'w') ah->kind = SYS_HANDLE_APPEARANCE_WRITE;
+		return 0;
+	}
 
 	// The clipboard is served from the store, not from generated text, so it
 	// leaves the generator ladder below entirely. Both directions publish a
@@ -1225,8 +2406,14 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
-	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD
-	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE)
+	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETTCP
+	         && sp.type != SYS_NODE_NETKNET
+	         && sp.type != SYS_NODE_NETCARD
+	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
+	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
+	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
+	         && sp.type != SYS_NODE_ACPIFILE
+	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1243,12 +2430,30 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_gui(&text);
 	else if (sp.type == SYS_NODE_SHLIBFILE)
 		sys_gen_shlib(&text);
+	else if (sp.type == SYS_NODE_RANDOMFILE)
+		sys_gen_random(&text);
+	else if (sp.type == SYS_NODE_ACPIFILE)
+		sys_gen_acpi(&text);
+	else if (sp.type == SYS_NODE_MEMFRAMES)
+		sys_gen_memory_frames(&text);
+	else if (sp.type == SYS_NODE_MEMLEDGER)
+		sys_gen_memory_ledger(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
+	else if (sp.type == SYS_NODE_MOUNTSFILE)
+		sys_gen_mounts(&text);
+	else if (sp.type == SYS_NODE_BLOCKFILE)
+		sys_gen_block(&text);
+	else if (sp.type == SYS_NODE_OPENFILESFILE)
+		sys_gen_openfiles(&text);
 	else if (sp.type == SYS_NODE_NETIP)
 		sys_gen_net_ip(&text);
 	else if (sp.type == SYS_NODE_NETDHCP)
 		sys_gen_net_dhcp(&text);
+	else if (sp.type == SYS_NODE_NETTCP)
+		sys_gen_net_tcp(&text);
+	else if (sp.type == SYS_NODE_NETKNET)
+		sys_gen_net_knet(&text);
 	else if (sp.type == SYS_NODE_NETCARD)
 		sys_gen_net_card(&text, sp.net);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
@@ -1271,13 +2476,9 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Writing to /sys means one of exactly two things, and they are different in
-// kind. cpu/<n>/probe is a COMMAND aimed at the machine — same contract as
-// /proc's ctl, first whitespace-delimited word is the verb, the whole write
-// reports as consumed on success (a partial write would make `echo` retry the
-// tail, exactly wrong for a command). clipboard is CONTENT — every byte is
-// kept, and the accumulated copy is sealed at close. Everywhere else, -1 at
-// the fops layer is louder than a write that "succeeds" into nothing.
+// Probe, appearance and mouse writes are complete commands, never partial streams.
+// Clipboard writes accumulate content which becomes visible at close;
+// Bluetooth scan writes assemble one bounded command, submitted at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -1286,6 +2487,24 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	if (h == NULL || buffer == NULL)
 		return -1;
+	if (h->kind == SYS_HANDLE_BTWRITE) {
+		if (h->bt_refused || size > (h->bt_connection ? sizeof(h->bt_command) : 32u) - h->bt_length) {
+			h->bt_refused = true;
+			return -1;
+		}
+		memcpy(h->bt_command + h->bt_length, buffer, size);
+		h->bt_length += size;
+		return (int)size;
+	}
+
+	if (h->kind == SYS_HANDLE_DECORATIONS_WRITE)
+		return decorations_write(h->decoration, buffer, size);
+
+	if (h->kind == SYS_HANDLE_MOUSE_WRITE)
+		return input_mouse_apply(buffer, size);
+
+	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
+		return appearance_publish(buffer, size);
 
 	if (h->kind == SYS_HANDLE_CLIPWRITE)
 	{
@@ -1295,6 +2514,17 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		// the copy and said so on the glass; -1 here is for the tools that do
 		// check, and the poison is for the ones that don't.
 		if (clipboard_append(h->pending, buffer, size) < 0)
+			return -1;
+		return (int)size;
+	}
+
+	if (h->kind == SYS_HANDLE_FONTWRITE)
+	{
+		if (size == 0)
+			return 0;
+		// Past the loader's size fence the image is poisoned, so the close
+		// refuses it whether or not the writer looked at this -1.
+		if (console_font_append(h->font, buffer, size) < 0)
 			return -1;
 		return (int)size;
 	}
@@ -1337,21 +2567,37 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	return (int)size;
 }
 
-// Close is the ONE file op the clipboard has to have its own version of. Read,
-// seek and tell are the generic snapshot ones unchanged, because a ref-held
-// immutable entry IS a snapshot — that is the whole reason the entries are
-// refcounted instead of copied. But the generic close frees snap.data, and
-// those bytes belong to the store, not to this handle.
-//
-// It is also where a copy becomes visible to everyone else: the seal happens
-// HERE, which is what makes "a multi-write copy is one snarf" true.
+// Close releases borrowed clipboard storage and submits accumulated writes.
+// Bluetooth assembles the command here because echo can write its word and
+// newline separately; malformed or oversized writes must not start a procedure.
 static int sys_close(vfs_file_t *vfs_file)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
+	int verdict = 0;
 
 	if (h != NULL)
 	{
-		if (h->kind == SYS_HANDLE_CLIPWRITE)
+		if (h->kind == SYS_HANDLE_BTWRITE) {
+			if (h->bt_refused || (h->bt_length &&
+			    (h->bt_connection ? !xhci_bluetooth_connection(h->bt_command, h->bt_length) :
+			     (!bt_scan_request_valid(h->bt_command, h->bt_length) || !xhci_bluetooth_scan()))))
+				verdict = -1;
+		}
+		else if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
+			decorations_discard(h->decoration);
+			h->decoration = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_FONTWRITE)
+		{
+			// Judged here, installed later: the submit validates the image
+			// and queues it for kworker, because this close may be running
+			// with interrupts off or inside a burial (console_font.h). A
+			// refusal is what this function returns; the REASON is in
+			// /sys/console/font, which is what a program should read.
+			verdict = console_font_submit(h->font);
+			h->font = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_CLIPWRITE)
 		{
 			// Publishes, or discards a poisoned copy. Either way the pending
 			// is freed and the handle owns nothing afterwards.
@@ -1369,7 +2615,8 @@ static int sys_close(vfs_file_t *vfs_file)
 		}
 	}
 
-	return synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	int closed = synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	return verdict < 0 ? verdict : closed;
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -1390,7 +2637,8 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
-	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR)
+	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR &&
+	    sp.type != SYS_NODE_CONSOLEDIR && sp.type != SYS_NODE_MEMDIR && sp.type != SYS_NODE_BTDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -1433,8 +2681,8 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// as the "log" entry that went missing from a merge in August —
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
-			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "cache", "conf", "gui", "log", "shlib", "clipboard" };
+			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -1448,12 +2696,12 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			{
 				const char *name = kSysRootFiles[h->index - kDirCount];
 				strncpy(entry->name, name, OS64_DIRENT_NAME_MAX);
-				// Size 0 for the generated files — their content does not
-				// exist until something opens them. The clipboard is the
-				// exception BECAUSE its content is durable: `ls -l /sys` can
-				// honestly say how much is on the clipboard right now.
+				// Stored snapshots report their current sizes; generated
+				// reports use zero until opened.
 				if (strcmp(name, "clipboard") == 0)
 					entry->size = clipboard_length();
+				if (strcmp(name, "appearance") == 0)
+					entry->size = appearance_length();
 				h->index++;
 				return 1;
 			}
@@ -1471,7 +2719,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 				return 1;
 			}
 			int core = h->index - 1;
-			if (core < (int)kMPCoreCount)
+			if (core < (int)kCPUCount)
 			{
 				h->index++;
 				entry->flags = OS64_DE_DIR;
@@ -1504,13 +2752,35 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			return 0;
 		}
 
+		case SYS_NODE_CONSOLEDIR:
+			if (h->index != 0)
+				return 0;
+			h->index = 1;
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
+			return 1;
+
+		case SYS_NODE_MEMDIR:
+		{
+			static const char *kSysMemoryFiles[] = { "frames", "ledger" };
+			if (h->index >= (int)(sizeof(kSysMemoryFiles) / sizeof(kSysMemoryFiles[0])))
+				return 0;
+			strncpy(entry->name, kSysMemoryFiles[h->index], OS64_DIRENT_NAME_MAX);
+			h->index++;
+			return 1;
+		}
+
+		case SYS_NODE_BTDIR:
+			if (h->index >= 3) return 0;
+			strncpy(entry->name, h->index == 0 ? "scan" : h->index == 1 ? "devices" : "connection", OS64_DIRENT_NAME_MAX);
+			h->index++;
+			return 1;
 		case SYS_NODE_NETDIR:
 		{
-			// The machine's two facts first — a reader asking "what are my
+			// The machine's own facts first — a reader asking "what are my
 			// network settings" wants `ip` before a card roster — then one
 			// file per REGISTERED card, in registration order, which is the
 			// order that decides who carries the address.
-			static const char *kSysNetFiles[] = { "ip", "dhcp" };
+			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp", "knet" };
 			const int kNetFileCount = (int)(sizeof(kSysNetFiles) / sizeof(kSysNetFiles[0]));
 			if (h->index < kNetFileCount)
 			{
@@ -1592,6 +2862,19 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "sys", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_BTDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "bluetooth", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTSCAN:
+			strncpy(entry->name, "scan", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTCONNECTION:
+			strncpy(entry->name, "connection", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTDEVICES:
+			strncpy(entry->name, "devices", OS64_DIRENT_NAME_MAX);
+			return 0;
 		case SYS_NODE_BUSDIR:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "bus", OS64_DIRENT_NAME_MAX);
@@ -1631,9 +2914,40 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "conf", OS64_DIRENT_NAME_MAX);
 			return 0;
 
-		// The clipboard reports its REAL length here (the only /sys node that
-		// can), which is how userland sizes a paste before reading one — and
-		// how `ls -l /sys` stops lying about the one file that has content.
+		case SYS_NODE_RANDOMFILE:
+			strncpy(entry->name, "random", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_ACPIFILE:
+			strncpy(entry->name, "acpi", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MOUNTSFILE:
+			strncpy(entry->name, "mounts", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_BLOCKFILE:
+			strncpy(entry->name, "block", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_OPENFILESFILE:
+			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MOUSE:
+			strncpy(entry->name, "mouse", OS64_DIRENT_NAME_MAX);
+			entry->size = sizeof(os64_mouse_snapshot_t);
+			return 0;
+		case SYS_NODE_DECORATIONS:
+			strncpy(entry->name, "decorations", OS64_DIRENT_NAME_MAX);
+			entry->size = 0;
+			return 0;
+		case SYS_NODE_APPEARANCE:
+			strncpy(entry->name, "appearance", OS64_DIRENT_NAME_MAX);
+			entry->size = appearance_length();
+			return 0;
+
+		// Stored bytes have a size even before a reader opens a snapshot.
 		case SYS_NODE_CLIPFILE:
 			strncpy(entry->name, "clipboard", OS64_DIRENT_NAME_MAX);
 			entry->size = clipboard_length();
@@ -1669,12 +2983,42 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "net", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_CONSOLEDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "console", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONSOLEFONT:
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "memory", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMFRAMES:
+			strncpy(entry->name, "frames", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMLEDGER:
+			strncpy(entry->name, "ledger", OS64_DIRENT_NAME_MAX);
+			return 0;
+
 		case SYS_NODE_NETIP:
 			strncpy(entry->name, "ip", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETDHCP:
 			strncpy(entry->name, "dhcp", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETKNET:
+			strncpy(entry->name, "knet", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETTCP:
+			strncpy(entry->name, "tcp", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETCARD:

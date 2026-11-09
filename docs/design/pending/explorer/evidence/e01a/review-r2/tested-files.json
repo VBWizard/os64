@@ -1,0 +1,11 @@
+{
+  "reviewed_base": "63f1211c0c3f6c4471e85c58d79b5700893e36c5",
+  "branch": "codex/explorer-e01a",
+  "finding": "https://github.com/VBWizard/os64/pull/254#discussion_r4243591851",
+  "sha256": {
+    "tools/test_ui_action_host.c": "0ec435d4b9c76a0b4a9b2c89c4405a4caa26c52e5992f6b9f26bec2196c8795d",
+    "userland/apps/actiongallery/actiongallery.c": "5240de9ca421fee18bf494c0061f5f1b7473f3f66a695d98d04a05af2d780fc7",
+    "userland/bin/actiongallery": "4fb1aae436eca07430a085b93992d9efa6cbb55415e7e5689a6da997ed35f183",
+    "userland/bin/libos64.so": "3277d5061e4e9428b5e01467723d69f3cc4cbff6a3cd5706125aeb23dbc53d3f"
+  }
+}

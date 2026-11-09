@@ -1,0 +1,7 @@
+ASAN_OPTIONS=detect_leaks=1 /tmp/dialog-polish-host/test_file_dialog userland/libfreetype/fixtures /tmp/dialog-polish-host/save.ppm
+file dialogs: 4223 checks, 0 failures
+
+ASAN_OPTIONS=detect_leaks=1 /tmp/dialog-polish-scribe/test_scribe userland/libfreetype/fixtures
+test_scribe_host: 2584 checks, 0 failures
+
+Both binaries built with ASan and UBSan; these runs completed outside the sandbox with LeakSanitizer enabled.

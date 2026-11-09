@@ -1,0 +1,159 @@
+fill 0 0 800 600 #000000
+fill 10 283 162 22 #00ff00
+fill 174 283 58 22 #00dd00
+fill 234 283 556 22 #00aa00
+text "General Computer Textfiles" 8 36 #00ff00
+text "Your one-stop shop for all files of a "computery" nature, that cover how to rebuild a piece of computer hardware to do" 8 83 #00ff00
+text "something it was never meant to do, or to see someone go really deeply into a computing subject that would cause most" 8 103 #00ff00
+text "people to yawn and look for the snack table. Since BBSes were on computers, it was natural for people who used BBSes" 8 123 #00ff00
+text "to focus on all aspects of these wonderful machines. The evidence of their interest and their experimentation resides" 8 143 #00ff00
+text "below." 8 163 #00ff00
+text "Of course, nearly ALL textfiles are computer-related in some fashion, and some subjects might fit here but fit even better" 8 199 #00ff00
+text "in another section. For example, you should most definitely check out the " 8 219 #00ff00
+text "programming" 488 219 #00ff00
+fill 488 220 84 1 #00ff00
+text " and " 572 219 #00ff00
+text "apple" 604 219 #00ff00
+fill 604 220 36 1 #00ff00
+text " sections as well, as" 640 219 #00ff00
+text "you might not agree with what I decided should go where." 8 239 #00ff00
+text "Filename" 11 298 #000000
+text "Size" 175 298 #000000
+text "Description of the Textfile" 235 298 #000000
+text "ASTRESEARCH" 11 322 #00ff00
+fill 11 323 88 1 #00ff00
+text "Technical Bulletins from AST Research" 235 322 #00ff00
+text "CYBERSPACE" 11 346 #00ff00
+fill 11 347 80 1 #00ff00
+text "Files Concering the Idea of "Cyberspace"" 235 346 #00ff00
+text "DOCUMENTATION" 11 370 #00ff00
+fill 11 371 108 1 #00ff00
+text "Documentation Files and Instruction Sets" 235 370 #00ff00
+text "HARDDRIVES" 11 394 #00ff00
+fill 11 395 80 1 #00ff00
+text "Hard Drive Technical Information" 235 394 #00ff00
+text "PRESSRELEASE" 11 418 #00ff00
+fill 11 419 96 1 #00ff00
+text "Press Releases by Companies Long Forgotten" 235 418 #00ff00
+text " " 11 442 #00ff00
+text "1003v-mm" 11 466 #00ff00
+fill 11 467 68 1 #00ff00
+text "4347" 175 466 #00ff00
+text "Information on the Western Digital 1000v-MMx Series" 235 466 #00ff00
+text "1006v-sr" 11 490 #00ff00
+fill 11 491 56 1 #00ff00
+text "4347" 175 490 #00ff00
+text "Information on the Western Digital WD1006V-SR1 and 2" 235 490 #00ff00
+text "1080mods" 11 514 #00ff00
+fill 11 515 64 1 #00ff00
+text "3610" 175 514 #00ff00
+text "Amiga 1080 Monitor Modifications" 235 514 #00ff00
+text "1105.txt" 11 538 #00ff00
+fill 11 539 44 1 #00ff00
+text "2468" 175 538 #00ff00
+text "How to Boot with DR DOS (October 31, 1991)" 235 538 #00ff00
+text "144_ctrl.txt" 11 562 #00ff00
+fill 11 563 68 1 #00ff00
+text "6819" 175 562 #00ff00
+text "Zaphod Beeblebrox' Notes on using PC 1.44mb 3.5" Drives with Atari STs and STEs" 235 562 #00ff00
+text "144disk.txt" 11 586 #00ff00
+fill 11 587 68 1 #00ff00
+text "6178" 175 586 #00ff00
+text "Edited Textfile about 3.5" Diskette Formats, from Kevin Maier of IBM Corporation" 235 586 #00ff00
+text "(May 10, 1989)" 235 606 #00ff00
+-- 3000
+fill 0 3000 800 600 #000000
+text "backdoor.txt" 11 3018 #00ff00
+fill 11 3019 80 1 #00ff00
+text "12384" 175 3018 #00ff00
+text "Collection of Back Doors to computer games, by George Knochel" 235 3018 #00ff00
+text "bartle-m" 11 3042 #00ff00
+fill 11 3043 56 1 #00ff00
+text "450025" 175 3042 #00ff00
+text "Interactive Multi-User Computer Games, a Report by Richard Bartle, 1990" 235 3042 #00ff00
+text "basunix.hac" 11 3066 #00ff00
+fill 11 3067 80 1 #00ff00
+text "15360" 175 3066 #00ff00
+text "Basic UNIX Use by Lord Lawless" 235 3066 #00ff00
+text "bat&conf.txt" 11 3090 #00ff00
+fill 11 3091 76 1 #00ff00
+text "7401" 175 3090 #00ff00
+text "Tricks to Use with Batch Files" 235 3090 #00ff00
+text "batch.txt" 11 3114 #00ff00
+fill 11 3115 56 1 #00ff00
+text "51183" 175 3114 #00ff00
+text "Batch Files for Efficiency: Getting Real Work Done" 235 3114 #00ff00
+text "battery.txt" 11 3138 #00ff00
+fill 11 3139 64 1 #00ff00
+text "26055" 175 3138 #00ff00
+text "Rechargeable Batteries and Laptop Computers" 235 3138 #00ff00
+text "bauer.lst" 11 3162 #00ff00
+fill 11 3163 56 1 #00ff00
+text "10217" 175 3162 #00ff00
+text "Optimizing in a Parallel Environment by Barr E. Bauer (199)" 235 3162 #00ff00
+text "bb" 11 3186 #00ff00
+fill 11 3187 16 1 #00ff00
+text "12057" 175 3186 #00ff00
+text "Beta Bits by Tim Conner, Jr. (1986)" 235 3186 #00ff00
+text "bbsnoise.txt" 11 3210 #00ff00
+fill 11 3211 80 1 #00ff00
+text "3251" 175 3210 #00ff00
+text "Your System Has Noise, by Bill Noel" 235 3210 #00ff00
+text "begunix.txt" 11 3234 #00ff00
+fill 11 3235 72 1 #00ff00
+text "337256" 175 3234 #00ff00
+text "A Beginner's Guide to UNIX, from the Denver Office (September 16, 1991)" 235 3234 #00ff00
+text "being.txt" 11 3258 #00ff00
+fill 11 3259 56 1 #00ff00
+text "38959" 175 3258 #00ff00
+text "Being in Nothingness: Virtual Reality and the Pioneers of Cyberspace, by John Perry" 235 3258 #00ff00
+text "Barlow" 235 3278 #00ff00
+text "best.cps" 11 3302 #00ff00
+fill 11 3303 56 1 #00ff00
+text "11430" 175 3302 #00ff00
+text "Get the Best out of JRCOMM and your DUALST 14.4kbps on your Amiga, from The Spirit" 235 3302 #00ff00
+text "(May 19, 1991)" 235 3322 #00ff00
+text "bev105.res" 11 3346 #00ff00
+fill 11 3347 68 1 #00ff00
+text "10421" 175 3346 #00ff00
+text "The Hack Report Volume 2, Number 3 (March 7, 1993)" 235 3346 #00ff00
+text "biblio.lst" 11 3370 #00ff00
+fill 11 3371 56 1 #00ff00
+text "28958" 175 3370 #00ff00
+text "Bibliography of PC Interrupt Fuctions by Ralf Brown (February 11, 1996)" 235 3370 #00ff00
+text "bibliog.txt" 11 3394 #00ff00
+fill 11 3395 64 1 #00ff00
+text "24448" 175 3394 #00ff00
+text "Laptop and Portable Computer Books" 235 3394 #00ff00
+text "bill" 11 3418 #00ff00
+fill 11 3419 20 1 #00ff00
+text "8784" 175 3418 #00ff00
+text "Bill Gates Interview from PC Magazine" 235 3418 #00ff00
+text "bill1035.pro" 11 3442 #00ff00
+fill 11 3443 72 1 #00ff00
+text "16647" 175 3442 #00ff00
+text "Description and Call to Arms on H.R. 1035" 235 3442 #00ff00
+text "bios1215.man" 11 3466 #00ff00
+fill 11 3467 84 1 #00ff00
+text "4123" 175 3466 #00ff00
+text "AMI 286 and 386 BIOS New Release Notes (December 15, 1988)" 235 3466 #00ff00
+text "bios225.man" 11 3490 #00ff00
+fill 11 3491 84 1 #00ff00
+text "6288" 175 3490 #00ff00
+text "AMI 286 and 386 BIOS Release Notes (February 25, 1989)" 235 3490 #00ff00
+text "bios330.man" 11 3514 #00ff00
+fill 11 3515 84 1 #00ff00
+text "4264" 175 3514 #00ff00
+text "AMI 286 and 386 BIOS Release Notes (March 30, 1989)" 235 3514 #00ff00
+text "biprint.txt" 11 3538 #00ff00
+fill 11 3539 60 1 #00ff00
+text "9485" 175 3538 #00ff00
+text "Making your PC Parallel Port Bi-Directional by Mark F. Bower (IBM PC) ((July 1991)" 235 3538 #00ff00
+text "bitsbaud.txt" 11 3562 #00ff00
+fill 11 3563 76 1 #00ff00
+text "10112" 175 3562 #00ff00
+text "Bits, Baud Rate, and BPS: Taking the Mystery Out of Modem Speeds, by Michael A." 235 3562 #00ff00
+text "Banks" 235 3582 #00ff00
+text "blt6" 11 3606 #00ff00
+text "21816" 175 3606 #00ff00
+text "Techniques for Off-Line Mail Reading, by Robert Dionne (May 6, 1990)" 235 3606 #00ff00

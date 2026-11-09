@@ -2,18 +2,21 @@
 #define GUI_INPUT_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #include "os64/gui.h"   // the ring-3 names these constants must keep matching
+#include "os64/mouse.h"
 
 // Unified input event queue — layer 2 of the GUI.
 //
 // One ring carries keyboard AND mouse events in arrival order, so the
 // compositor sees a single interleaved timeline (a click can't jump ahead of
-// the keystroke that preceded it). Producers are the PS/2 IRQ handlers;
-// the only consumer is the compositor's frame loop.
+// the keystroke that preceded it). Device drivers and /dev/glass produce
+// events; the compositor's frame loop consumes them.
 //
-// HARD RULE for producers: IRQ handlers ONLY enqueue. They must never wake
+// HARD RULE for producers: IRQ handlers enqueue or update deferred text-VT
+// scroll state, without painting. They must never wake
 // threads (scheduler_wake_task_waiter -> scheduler_trigger does sti/hlt,
 // which is fatal in IRQ context). The compositor polls each frame instead.
 
@@ -24,21 +27,18 @@ typedef enum input_event_type
     INPUT_EVENT_MOUSE_MOVE,
     INPUT_EVENT_MOUSE_BUTTON_DOWN,
     INPUT_EVENT_MOUSE_BUTTON_UP,
-    // Not an INPUT event by origin — the window system synthesizes this one
-    // and delivers it straight to a window's queue when its content area
-    // changes size. It rides this ring's TYPE space (never the ring itself)
-    // because an app already has exactly one place it learns things: its
-    // event queue. Geometry news on its own channel would mean every app
-    // grows a second thing to poll. X11 made the same call — ConfigureNotify
-    // is an ordinary event, not a signal — and it is why an event loop is a
-    // loop instead of a switchboard.
+    // The WM sends content-size changes to the window's queue for layout and
+    // repaint, covering gestures and automatic adjustments. Sharing the event
+    // loop with input avoids a separate geometry channel. This record does
+    // not pass through the device-input ring consumed by the compositor.
     INPUT_EVENT_WINDOW_RESIZE,
     // Synthesized like RESIZE (2026-08-23): the user asked for this window
     // to go away (Alt+F4). It is a REQUEST, delivered to the owner, because
     // the window is the app's — an editor with unsaved work gets to say so.
     // The window system never closes a window itself; what it does if the
-    // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
-    // which is the app's business to avoid by answering the first one.
+    // request is ignored is escalate (Alt+F4 again = SIGTERM to the task)
+    // for windows without a popup owner. Owned popups repeat the request
+    // without risking the document in their task.
     INPUT_EVENT_WINDOW_CLOSE,
     // Synthesized (2026-08-25, the root-menu slice): keyboard focus arrived
     // at, or left, this window. GRAPHICS.md § Event delivery had already
@@ -54,6 +54,14 @@ typedef enum input_event_type
     // flips. The flag is the state; these only say it changed.
     INPUT_EVENT_WINDOW_COVERED,
     INPUT_EVENT_WINDOW_UNCOVERED,
+    INPUT_EVENT_POINTER_STATE,
+    INPUT_EVENT_APPEARANCE,
+    INPUT_EVENT_MOUSE_WHEEL,
+    INPUT_EVENT_DOORBELL,
+    INPUT_EVENT_SETTINGS,
+    INPUT_EVENT_INPUT_LOST,
+    INPUT_EVENT_WINDOW_PLACEMENT,
+    INPUT_EVENT_WINDOW_PIN_CHANGED,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -61,6 +69,15 @@ _Static_assert(INPUT_EVENT_WINDOW_CLOSE     == OS64_GUI_EVENT_WINDOW_CLOSE,     
 _Static_assert(INPUT_EVENT_WINDOW_FOCUS     == OS64_GUI_EVENT_WINDOW_FOCUS,     "event ABI: focus");
 _Static_assert(INPUT_EVENT_WINDOW_COVERED   == OS64_GUI_EVENT_WINDOW_COVERED,   "event ABI: covered");
 _Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, "event ABI: uncovered");
+_Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event ABI: pointer state");
+
+_Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
+_Static_assert(INPUT_EVENT_MOUSE_WHEEL == OS64_GUI_EVENT_MOUSE_WHEEL, "event ABI: wheel");
+_Static_assert(INPUT_EVENT_SETTINGS == OS64_GUI_EVENT_SETTINGS, "event ABI: settings");
+_Static_assert(INPUT_EVENT_INPUT_LOST == OS64_GUI_EVENT_INPUT_LOST, "event ABI: input loss");
+_Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
+_Static_assert(INPUT_EVENT_WINDOW_PLACEMENT == OS64_GUI_EVENT_WINDOW_PLACEMENT, "event ABI: placement");
+_Static_assert(INPUT_EVENT_WINDOW_PIN_CHANGED == OS64_GUI_EVENT_WINDOW_PIN_CHANGED, "event ABI: pin state");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -87,8 +104,8 @@ typedef struct input_event
         } key;
         struct {
             int32_t x, y;       // cursor position, screen coords (filled by
-                                // the mouse driver's position tracking)
-            int16_t dx, dy;     // raw motion delta this packet
+                                // unified input position tracking)
+            int16_t dx, dy;     // motion pixels, or signed notches for WHEEL
             uint8_t buttons;    // current button state bitmask
             uint8_t button;     // for BUTTON_DOWN/UP: which button changed
             uint8_t modifiers;  // keyboard_modifiers_t bitmask at event time
@@ -105,18 +122,67 @@ typedef struct input_event
         struct {
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is owned by the same task
+            uint16_t other_handle; // same-task party at delivery; 0 otherwise
         } focus;
+        struct {
+            int32_t x, y;
+            uint8_t inside;
+        } pointer;
+        struct {
+            // Split words preserve the event union's four-byte ABI alignment.
+            uint32_t generation_lo, generation_hi;
+        } appearance;
+        struct {
+            uint32_t mask;
+        } doorbell;
+        struct {
+            int32_t x, y;
+            uint32_t width, height, changed;
+        } placement;
     };
-    uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
+    uint64_t tick;  // enqueue ticks; zero for synthesized INPUT_LOST
 } input_event_t;
 
-// Called by gui_start(). Until this runs, inject calls are cheap no-ops —
-// the OS without the GUI has no input consumer, so queueing would be waste.
+// Called by gui_start(). Before this, GUI events are discarded; text-VT
+// wheel scrolling works independently of the compositor.
 void input_init(void);
 
-// Producer side (IRQ context safe: irqsave spinlock, enqueue only).
+// One pointing device's held buttons and relative-motion preferences. Each
+// mouse driver and each /dev/glass view owns one and passes it with each packet. A button is down while ANY
+// source holds it (X's core pointer), so a DOWN edge is the first holder's
+// press and an UP edge the last holder's release: a local mouse moving with
+// no buttons cannot end a remote viewer's drag, nor the reverse. The owner
+// serializes calls for its own source; input.c's lock covers the rest.
+typedef struct input_pointer_source
+{
+	uint8_t buttons;   // Logical buttons currently held by this source.
+	uint8_t raw_buttons;
+	bool right_primary; // Latched until the physical button chord is released.
+	uint16_t settings_slot; // One-based registry slot; zero uses defaults.
+	uint32_t speed;
+	int32_t fraction_x, fraction_y;
+	char settings_key[OS64_MOUSE_KEY], settings_name[OS64_MOUSE_NAME];
+} input_pointer_source_t;
+
+// Drivers register a stable identity once the source is live. Registration is
+// idempotent; a full registry retries on relative input after Forget frees a slot.
+// Unregister releases held buttons and preserves saved preferences.
+void input_pointer_register(input_pointer_source_t *, const char *key, const char *name);
+void input_pointer_unregister(input_pointer_source_t *);
+int input_mouse_snapshot(void *out, size_t capacity);
+int input_mouse_apply(const void *command, size_t length);
+
+// Producer side (IRQ-safe state updates, no painting or task wakeups).
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
-void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons);
+// wheel is signed notches, positive down. A GUI packet queues its wheel
+// after movement and button edges, under the same lock.
+void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
+                        uint8_t buttons, int16_t wheel);
+// The pointer at an ABSOLUTE position (clamped to the screen) — /dev/glass's,
+// whose viewer says where rather than how far. Same events as a mouse.
+void input_inject_pointer(input_pointer_source_t *src, int32_t x, int32_t y, uint8_t buttons);
+// Lift every button `src` holds, where the pointer is: a source going away.
+void input_release_pointer(input_pointer_source_t *src);
 
 // Consumer side (compositor only). Returns false when the queue is empty.
 bool input_pop(input_event_t *out);

@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- pile 3, S3: border styles, border-radius, box-shadow and text-shadow. Compare with Chrome: Chrome draws round dots where yonder draws square ones, and its ridge tones differ. -->
+<html><head><title>edges</title>
+<style>
+body { margin: 16px; font-family: sans-serif; background: #eef }
+.row { display: flex; gap: 18px; margin-bottom: 22px; flex-wrap: wrap }
+.b { width: 110px; height: 60px; background: #fff; font-size: 14px; padding: 4px }
+.dotted { border: 3px dotted #c00 }
+.dashed { border: 3px dashed #06c }
+.double { border: 6px double #080 }
+.ridge { border: 6px ridge #888 }
+.r1 { border-radius: 12px; border: 2px solid #333; background: #fc6 }
+.r2 { border-radius: 50%; background: #39f; border: 4px solid #036 }
+.r3 { border-radius: 30px 0 30px 0 / 15px 0 15px 0; background: #9c6; border: 3px solid #360 }
+.r4 { border-radius: 8px; border-width: 2px 8px 2px 8px; border-style: solid; border-color: #c00 #00c #c00 #00c }
+.s1 { box-shadow: 6px 6px #333 }
+.s2 { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); border-radius: 10px }
+.s3 { box-shadow: inset 0 0 12px #000 }
+.s4 { box-shadow: 0 0 0 4px #f80, 8px 8px 6px rgba(0, 0, 160, 0.6); border-radius: 6px }
+.t1 { text-shadow: 2px 2px #f00; font-size: 26px; font-weight: bold }
+.t2 { text-shadow: 1px 1px 0 #fff, -1px -1px 0 #888; font-size: 22px; color: #556; background: #ccd; padding: 6px }
+</style></head>
+<body>
+<div class=row><div class="b dotted">dotted</div><div class="b dashed">dashed</div><div class="b double">double</div><div class="b ridge">ridge</div></div>
+<div class=row><div class="b r1">radius 12</div><div class="b r2">50%</div><div class="b r3">elliptic</div><div class="b r4">mixed sides</div></div>
+<div class=row><div class="b s1">hard shadow</div><div class="b s2">soft, round</div><div class="b s3">inset</div><div class="b s4">spread + two</div></div>
+<div class=row><div class=t1>Text shadow</div><div class=t2>Embossed</div></div>
+</body></html>

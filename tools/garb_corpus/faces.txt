@@ -1,0 +1,178 @@
+# @font-face (Fonts 4 § 4), worked by hand: each PAGE laid before a
+# VIEWPORT; WANT is each face garb_cascade_font_faces answers, in order —
+# `"FAMILY" WEIGHTS STYLE [RANGES] sheet N`, then its sources, each
+# `url(TEXT) [format(F)]` or `local(NAME)` — and `(N lost)` when any were,
+# ending (end).
+
+# The whole of a face: a string family; url() unquoted and quoted, with
+# format() as a string and as a keyword; local() as a string and as words;
+# a weight range written backwards; italic; ranges as a point, a range and
+# a wildcard. Defaults: weight 400, normal, every code point. A generic's
+# word inside a longer name is a name (Chromium and Gecko read it so, and
+# `Noto Serif` unquoted is everywhere); a range spelled with an escape is
+# none; a rule with a prelude is no rule.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face {
+  font-family: "Pixel Operator";
+  src: local("Pixel Operator"), local(Pixel   Op Mono), url(fonts/po.woff2) format("woff2"),
+       url("fonts/po.ttf") format(truetype);
+  font-weight: 700 300;
+  font-style: italic;
+  unicode-range: U+0025, U+0-7F, U+4??;
+}
+@font-face { font-family: Plain Words; src: url(a.ttf) }
+@font-face { font-family: Noto Serif; src: url(ns.ttf); unicode-range: U+30; unicode-range: u\+41 }
+@font-face bogus { font-family: Prelude; src: url(p.ttf) }
+</style>
+WANT
+"Pixel Operator" 300-700 italic U+25-25, U+0-7F, U+400-4FF sheet 0
+  local(Pixel Operator)
+  local(Pixel Op Mono)
+  url(fonts/po.woff2) format(woff2)
+  url(fonts/po.ttf) format(truetype)
+"Plain Words" 400 normal sheet 0
+  url(a.ttf)
+"Noto Serif" 400 normal U+30-30 sheet 0
+  url(ns.ttf)
+(end)
+END
+
+# Weights: keywords, one number, a fraction kept, auto; oblique with up
+# to two angles from -90 to 90 degrees, and nothing else after it. A rule
+# with no family, no src, or a generic for its family (ui-serif among
+# them) or a system font's keyword unquoted, or a CSS-wide keyword or
+# `default` as any of its words, is no face; `auto` weighs and slants as
+# normal; a src
+# entry written wrong or with tech() is dropped and the rest kept; a
+# later declaration of a descriptor wins, an invalid one is dropped.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: A; src: url(a1); font-weight: bold }
+@font-face { font-family: B; src: url(b1); font-weight: 250; font-style: oblique 10deg 20deg }
+@font-face { font-family: C; src: url(c1); font-weight: 700; font-weight: auto }
+@font-face { src: url(none) }
+@font-face { font-family: D }
+@font-face { font-family: serif; src: url(generic) }
+@font-face { font-family: E; src: url(e1) tech(variations), bogus, url(e2) format(woff) format(woff2), local(L) format(woff), url(e3) }
+@font-face { font-family: F; src: url(f1); font-weight: 600; font-weight: 9000; font-style: sideways }
+@font-face { font-family: G; src: url(g1); font-weight: 400.9; font-style: oblique -0.25turn 1.5rad }
+@font-face { font-family: H; src: url(h1); font-style: italic; font-style: oblique sideways }
+@font-face { font-family: I; src: url(i1); font-style: italic; font-style: oblique 91deg }
+@font-face { font-family: J; src: url(j1); font-style: italic; font-style: oblique 1deg 2deg 3deg }
+@font-face { font-family: K; src: url(k1); font-style: italic; font-style: oblique 0.3turn }
+@font-face { font-family: ui-serif; src: url(generic2) }
+@font-face { font-family: initial; src: url(keyword) }
+@font-face { font-family: caption; src: url(system) }
+@font-face { font-family: Good initial; src: url(wide) }
+@font-face { font-family: Good; src: local(Good default), url(o1); font-style: italic; font-style: auto }
+@font-face { font-family: "caption"; src: local(menu), local("Status-Bar"), url(n1) }
+</style>
+WANT
+"A" 700 normal sheet 0
+  url(a1)
+"B" 250 oblique sheet 0
+  url(b1)
+"C" 400 normal sheet 0
+  url(c1)
+"E" 400 normal sheet 0
+  url(e3)
+"F" 600 normal sheet 0
+  url(f1)
+"G" 400.9 oblique sheet 0
+  url(g1)
+"H" 400 italic sheet 0
+  url(h1)
+"I" 400 italic sheet 0
+  url(i1)
+"J" 400 italic sheet 0
+  url(j1)
+"K" 400 italic sheet 0
+  url(k1)
+"Good" 400 normal sheet 0
+  url(o1)
+"caption" 400 normal sheet 0
+  local(Status-Bar)
+  url(n1)
+(end)
+END
+
+# Ranges written wrong are a dropped descriptor (every code point), as is
+# one past U+10FFFF or backwards, and a list holding one such among good
+# ones; a range in two hex runs about a dash.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: R1; src: url(r1); unicode-range: U+0100-024F, u+a0-FF }
+@font-face { font-family: R2; src: url(r2); unicode-range: U+110000 }
+@font-face { font-family: R3; src: url(r3); unicode-range: U+FF-0 }
+@font-face { font-family: R4; src: url(r4); unicode-range: U+4?F }
+@font-face { font-family: R5; src: url(r5); unicode-range: U+1F600-1F64F }
+@font-face { font-family: R6; src: url(r6); unicode-range: U+0-7F, U+110000 }
+</style>
+WANT
+"R1" 400 normal U+100-24F, U+A0-FF sheet 0
+  url(r1)
+"R2" 400 normal sheet 0
+  url(r2)
+"R3" 400 normal sheet 0
+  url(r3)
+"R4" 400 normal sheet 0
+  url(r4)
+"R5" 400 normal U+1F600-1F64F sheet 0
+  url(r5)
+"R6" 400 normal sheet 0
+  url(r6)
+(end)
+END
+
+# Only the @media that holds: a face inside one that does not is no face.
+# Rules of one family with the same weights, style and ranges are all
+# kept, in order — one composite face, the later tried first (Fonts 4
+# § 4.5.1), which is the matcher's to read. The sheet a face came from.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: Same; src: url(first) }
+@font-face { font-family: Same; font-style: italic; src: url(italic) }
+@media (max-width: 10px) { @font-face { font-family: Hidden; src: url(no) } }
+@media (min-width: 10px) { @font-face { font-family: Shown; src: url(yes) } }
+</style><style>
+@font-face { font-family: SAME; src: url(second) }
+@font-face { font-family: Same; src: url(third) }
+</style>
+WANT
+"Same" 400 normal sheet 0
+  url(first)
+"Same" 400 italic sheet 0
+  url(italic)
+"Shown" 400 normal sheet 0
+  url(yes)
+"SAME" 400 normal sheet 1
+  url(second)
+"Same" 400 normal sheet 1
+  url(third)
+(end)
+END
+
+# A family name and a local() name of any length, unquoted words and
+# all. format() read whole: one keyword from the list, or strings
+# separated by commas, the first the hint; anything else drops the source.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: Long xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; src: local(yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy two), local("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), url(m1) }
+@font-face { font-family: M; src: url(m2) format("woff2", "woff"), url(m3) format(woff2 bogus), url(m4) format(woff2,), url(m5) format(bogus), url(m6) format("woff2" "woff"), url(m7) format(), url(m8) format(woff2-variations), url(m9) format("woff2-variations"), url(m10) format(, "woff"), url(m11) format("woff",), url(m12) format("a" "b" "c") }
+</style>
+WANT
+"Long xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 400 normal sheet 0
+  local(yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy two)
+  local(zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz)
+  url(m1)
+"M" 400 normal sheet 0
+  url(m2) format(woff2)
+  url(m9) format(woff2-variations)
+(end)
+END

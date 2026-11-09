@@ -1,0 +1,278 @@
+// scale.c — a picture into its box (scale.h).
+
+#include "scale.h"
+
+#include "os64/mem.h"
+#include "os64/str.h"
+
+static int64_t max64(int64_t a, int64_t b)
+{
+    return a > b ? a : b;
+}
+
+static int64_t min64(int64_t a, int64_t b)
+{
+    return a < b ? a : b;
+}
+
+// One channel of `s` over `d` at alpha `a` (0..255), rounded.
+static uint32_t over(uint32_t s, uint32_t d, uint32_t a)
+{
+    return (s * a + d * (255 - a) + 127) / 255;
+}
+
+// One source pixel onto one destination pixel, by its alpha.
+static void put(uint32_t *out, uint32_t p, bool premultiplied)
+{
+    uint32_t a = p >> 24;
+    if (a == 0)
+        return;
+    if (a == 255) {
+        *out = p;
+        return;
+    }
+    uint32_t d = *out;
+    if (premultiplied) {
+        *out = 0xff000000u |
+            ((((p >> 16) & 255) + (((d >> 16) & 255) * (255-a) + 127) / 255) << 16) |
+            ((((p >> 8) & 255) + (((d >> 8) & 255) * (255-a) + 127) / 255) << 8) |
+            ((p & 255) + ((d & 255) * (255-a) + 127) / 255);
+        return;
+    }
+    *out = 0xff000000u | over((p >> 16) & 0xff, (d >> 16) & 0xff, a) << 16 |
+           over((p >> 8) & 0xff, (d >> 8) & 0xff, a) << 8 | over(p & 0xff, d & 0xff, a);
+}
+
+// `v` modulo `m` for m > 0, never negative.
+static uint32_t wrap(int64_t v, uint32_t m)
+{
+    int64_t r = v % (int64_t)m;
+    return (uint32_t)(r < 0 ? r + m : r);
+}
+
+// Which of `n` source pixels lands at `u` of a copy `size` across: the one
+// whose span covers u's middle, floor((u + 1/2) * n / size).
+static uint32_t source_at(uint32_t u, uint32_t n, int32_t size)
+{
+    return (uint32_t)(((int64_t)u * 2 + 1) * n / ((int64_t)size * 2));
+}
+
+// Where `u` of a copy `size` across falls among `n` source pixels, between
+// pixel *i and the next at *f of 256: (u + 1/2) * n / size - 1/2, each end
+// held to the picture's edge pixel.
+static void between(uint32_t u, uint32_t n, int32_t size, uint32_t *i, uint32_t *f)
+{
+    double s = ((double)u + 0.5) * n / size - 0.5;
+    if (s <= 0) {
+        *i = 0;
+        *f = 0;
+    } else if (s >= n - 1) {
+        *i = n - 1;
+        *f = 0;
+    } else {
+        *i = (uint32_t)s;
+        *f = (uint32_t)((s - *i) * 256 + 0.5);
+        if (*f == 256) {
+            (*i)++;
+            *f = 0;
+        }
+    }
+}
+
+// The picture at (u, v) of a copy `tw` x `th`, mixed from the four source
+// pixels round it by how near each is — their colours weighed by their
+// alphas for a straight source, or directly for a premultiplied source.
+// The result retains the source alpha convention.
+static uint32_t smooth_at(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t u, int32_t tw,
+                          uint32_t v, int32_t th, size_t stride, bool premultiplied)
+{
+    uint32_t x, fx, y, fy;
+    between(u, sw, tw, &x, &fx);
+    between(v, sh, th, &y, &fy);
+    uint32_t x1 = x + 1 < sw ? x + 1 : x, y1 = y + 1 < sh ? y + 1 : y;
+    const uint32_t p[4] = {src[(uint64_t)y * stride + x], src[(uint64_t)y * stride + x1],
+                           src[(uint64_t)y1 * stride + x], src[(uint64_t)y1 * stride + x1]};
+    const uint32_t w[4] = {(256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy};
+    uint64_t a = 0, r = 0, g = 0, b = 0;
+    for (int k = 0; k < 4; k++) {
+        uint64_t wa = (uint64_t)w[k] * (p[k] >> 24);
+        a += wa;
+        uint64_t wc = premultiplied ? w[k] : wa;
+        r += wc * ((p[k] >> 16) & 0xff);
+        g += wc * ((p[k] >> 8) & 0xff);
+        b += wc * (p[k] & 0xff);
+    }
+    if (a == 0)
+        return 0;
+    if (premultiplied)
+        return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + 32768) >> 16) << 16 |
+               (uint32_t)((g + 32768) >> 16) << 8 | (uint32_t)((b + 32768) >> 16);
+    return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + a / 2) / a) << 16 |
+           (uint32_t)((g + a / 2) / a) << 8 | (uint32_t)((b + a / 2) / a);
+}
+
+void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t area,
+                         os64_gui_rect_t tile, bool repeat_x, bool repeat_y, bool smooth,
+                         const uint32_t *src, uint32_t sw, uint32_t sh)
+{
+    if (area.w <= 0 || area.h <= 0 || tile.w <= 0 || tile.h <= 0 || sw == 0 || sh == 0)
+        return;
+    // Edges add in 64 bits, as yonder_draw_picture's do: a box's area may
+    // reach as far as an int32_t says.
+    int32_t x0 = (int32_t)max64(area.x, clip.x), y0 = (int32_t)max64(area.y, clip.y);
+    int32_t x1 = (int32_t)min64((int64_t)area.x + area.w, (int64_t)clip.x + clip.w);
+    int32_t y1 = (int32_t)min64((int64_t)area.y + area.h, (int64_t)clip.y + clip.h);
+    // An axis that does not repeat has its one copy, where the tile is.
+    if (!repeat_x) {
+        x0 = (int32_t)max64(x0, tile.x);
+        x1 = (int32_t)min64(x1, (int64_t)tile.x + tile.w);
+    }
+    if (!repeat_y) {
+        y0 = (int32_t)max64(y0, tile.y);
+        y1 = (int32_t)min64(y1, (int64_t)tile.y + tile.h);
+    }
+    // A copy at the picture's own size steps through its row; a scaled one
+    // asks which source pixel each of its columns shows, or, smoothed, what
+    // the four round it make.
+    bool own = (uint32_t)tile.w == sw;
+    smooth = smooth && !(own && (uint32_t)tile.h == sh);
+    for (int32_t y = y0; y < y1; y++) {
+        uint32_t v = wrap((int64_t)y - tile.y, (uint32_t)tile.h);
+        const uint32_t *row = src + (uint64_t)source_at(v, sh, tile.h) * sw;
+        uint32_t *out = dst + (uint64_t)y * pitch;
+        uint32_t u = x0 < x1 ? wrap((int64_t)x0 - tile.x, (uint32_t)tile.w) : 0;
+        for (int32_t x = x0; x < x1; x++) {
+            put(&out[x], smooth ? smooth_at(src, sw, sh, u, tile.w, v, tile.h, sw, false)
+                                : row[own ? u : source_at(u, sw, tile.w)], false);
+            if (++u == (uint32_t)tile.w)
+                u = 0;
+        }
+    }
+}
+
+bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
+                          bool smooth, const draw2d_surface_t *source)
+{
+    if (!source || (source->format != DRAW2D_ARGB8_PREMULTIPLIED && source->format != DRAW2D_ARGB8_STRAIGHT) ||
+        draw2d_surface_validate(source) != DRAW2D_OK) return false;
+    const uint32_t *src = source->pixels;
+    uint32_t sw = source->width, sh = source->height;
+    size_t stride = source->stride / sizeof(uint32_t);
+    bool premultiplied = source->format == DRAW2D_ARGB8_PREMULTIPLIED;
+    if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
+        return true;
+    bool own = (uint32_t)box.w == sw && (uint32_t)box.h == sh;
+    smooth = smooth && !own;
+    // Edges are added in 64 bits: a picture may be as wide as an int32_t
+    // says (a width of 1000000% three tables deep), and its box need not
+    // start at zero. What is walked is cut to `clip`, a real surface's.
+    int32_t x0 = (int32_t)max64(box.x, clip.x), y0 = (int32_t)max64(box.y, clip.y);
+    int32_t x1 = (int32_t)min64((int64_t)box.x + box.w, (int64_t)clip.x + clip.w);
+    int32_t y1 = (int32_t)min64((int64_t)box.y + box.h, (int64_t)clip.y + clip.h);
+    for (int32_t y = y0; y < y1; y++) {
+        // The source row whose span covers the middle of this one:
+        // floor((y - box.y + 1/2) * sh / box.h), in integers.
+        uint32_t sy = own ? (uint32_t)((int64_t)y - box.y) :
+            (uint32_t)((((int64_t)y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
+        const uint32_t *row = src + (uint64_t)sy * stride;
+        uint32_t *out = dst + (uint64_t)y * pitch;
+        // At native size the pixel centers coincide. Walk the clipped row
+        // directly instead of dividing to rediscover each source position.
+        if (own) {
+            for (int32_t x = x0; x < x1; x++)
+                put(&out[x], row[(size_t)((int64_t)x - box.x)], premultiplied);
+            continue;
+        }
+        for (int32_t x = x0; x < x1; x++) {
+            if (smooth) {
+                put(&out[x], smooth_at(src, sw, sh, (uint32_t)((int64_t)x - box.x), box.w,
+                                       (uint32_t)((int64_t)y - box.y), box.h, stride, premultiplied), premultiplied);
+                continue;
+            }
+            uint32_t sx = (uint32_t)((((int64_t)x - box.x) * 2 + 1) * sw / ((int64_t)box.w * 2));
+            put(&out[x], row[sx], premultiplied);
+        }
+    }
+    return true;
+}
+
+void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
+                         bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
+{
+    if ((uint64_t)sw * sh > SIZE_MAX / sizeof(uint32_t)) return;
+    draw2d_surface_t source = {(void *)src, sw, sh, (size_t)sw * 4, (size_t)sw * sh * 4,
+                                DRAW2D_ARGB8_STRAIGHT};
+    (void)yonder_draw_surface(dst, pitch, clip, box, smooth, &source);
+}
+
+void yonder_picture_kept_size(uint32_t nw, uint32_t nh, uint32_t dw, uint32_t dh, uint32_t *kw,
+                              uint32_t *kh)
+{
+    if (nw == 0 || nh == 0 || dw == 0 || dh == 0) {
+        *kw = nw;
+        *kh = nh;
+        return;
+    }
+    uint64_t w, h;
+    if ((uint64_t)dw * nh >= (uint64_t)dh * nw) {
+        w = dw;
+        h = ((uint64_t)nh * dw + nw - 1) / nw;
+    } else {
+        h = dh;
+        w = ((uint64_t)nw * dh + nh - 1) / nh;
+    }
+    *kw = w < nw ? (uint32_t)w : nw;
+    *kh = h < nh ? (uint32_t)h : nh;
+}
+
+bool yonder_reduce_picture(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t *dst,
+                           uint32_t dw, uint32_t dh)
+{
+    if (sw == 0 || sh == 0 || dw == 0 || dh == 0 || dw > sw || dh > sh)
+        return false;
+    // Measured in 1/dw of a source column and 1/dh of a source row, source
+    // pixel i spans [i * dw, (i + 1) * dw) and output pixel o spans
+    // [o * sw, (o + 1) * sw): every overlap is a whole number, and every
+    // output pixel's weights add to sw * sh. A row's sums: weight times
+    // alpha, then that times each colour, which stay within 64 bits for
+    // any picture of fewer than 2^28 pixels.
+    uint64_t *sum = os64_calloc((size_t)dw * 4, sizeof(*sum));
+    if (sum == NULL)
+        return false;
+    uint64_t total = (uint64_t)sw * sh;
+    for (uint32_t oy = 0; oy < dh; oy++) {
+        os64_memset(sum, 0, (size_t)dw * 4 * sizeof(*sum));
+        uint64_t y0 = (uint64_t)oy * sh, y1 = y0 + sh;
+        for (uint64_t sy = y0 / dh; sy * dh < y1; sy++) {
+            uint64_t top = sy * dh > y0 ? sy * dh : y0;
+            uint64_t bottom = (sy + 1) * dh < y1 ? (sy + 1) * dh : y1;
+            uint64_t wy = bottom - top;
+            const uint32_t *row = src + sy * sw;
+            for (uint32_t ox = 0; ox < dw; ox++) {
+                uint64_t x0 = (uint64_t)ox * sw, x1 = x0 + sw;
+                uint64_t *s = sum + (size_t)ox * 4;
+                for (uint64_t sx = x0 / dw; sx * dw < x1; sx++) {
+                    uint64_t left = sx * dw > x0 ? sx * dw : x0;
+                    uint64_t right = (sx + 1) * dw < x1 ? (sx + 1) * dw : x1;
+                    uint32_t p = row[sx];
+                    uint64_t wa = (right - left) * wy * (p >> 24);
+                    s[0] += wa;
+                    s[1] += wa * ((p >> 16) & 0xff);
+                    s[2] += wa * ((p >> 8) & 0xff);
+                    s[3] += wa * (p & 0xff);
+                }
+            }
+        }
+        uint32_t *out = dst + (uint64_t)oy * dw;
+        for (uint32_t ox = 0; ox < dw; ox++) {
+            const uint64_t *s = sum + (size_t)ox * 4;
+            uint64_t a = s[0];
+            out[ox] = a == 0 ? 0
+                             : (uint32_t)((a + total / 2) / total) << 24 |
+                                   (uint32_t)((s[1] + a / 2) / a) << 16 |
+                                   (uint32_t)((s[2] + a / 2) / a) << 8 | (uint32_t)((s[3] + a / 2) / a);
+        }
+    }
+    os64_free(sum);
+    return true;
+}

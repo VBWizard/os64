@@ -1,0 +1,3 @@
+fontsettest: 12px mono cell 7x15 baseline 12, refusal retained old set
+fontsettest: 28px mono cell 17x33 baseline 26, refusal retained old set
+fontsettest: PASS, three roles, two sizes, zero live bytes

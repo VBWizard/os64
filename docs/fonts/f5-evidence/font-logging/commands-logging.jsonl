@@ -1,0 +1,1 @@
+[["key", "ctrl-alt-f2"], ["enter", "logd /home/font-log.txt &"], ["wait", 2], ["enter", "appearance > /home/appearance-out.txt &"], ["wait", 1], ["enter", "controlcenter > /home/center-out.txt &"], ["wait", 2], ["snap", "console"], ["key", "alt-f8"], ["snap", "retained-workshop"], ["key", "ctrl-alt-f2"], ["enter", "sync"], ["wait", 2], ["hmp", "quit"]]

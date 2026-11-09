@@ -67,12 +67,16 @@ typedef struct {
 	uint64_t rip, cs, rflags, rsp, ss;
 } nmi_frame_t;
 
+// How many configuration MSRs a snapshot can carry (nmi_probe_init
+// builds the list from CPUID; it is a dozen and a half on a Zen).
+#define NMI_PROBE_MSR_MAX 24
+
 // Everything one core can truthfully say about itself in an NMI handler.
 // Filled ONLY by that core, read by everyone else — so every field is written
 // once, before done is published, and never touched again.
 typedef struct {
 	// Identity and freshness.
-	uint32_t apic_id;
+	uint32_t cpu;
 	uint64_t tsc;                  // when the snapshot was taken
 
 	// Where it was and how it got there.
@@ -91,8 +95,8 @@ typedef struct {
 	// these can strike a core off the roster on its own:
 	//   inScheduler   — set: the nudge loop skips this core (scheduler.c:231),
 	//                   send_ipi drops its schedule IPI (smp_core.c:143), AND
-	//                   acct_settle_ISR refuses to settle (smp_core.c:641).
-	//                   One bit, three independent disappearances.
+	//                   acct_settle_ISR skips the scheduler's short guard
+	//                   windows around its charged pass (smp_core.c).
 	//   settleAck     — the liveness beacon mpAcctSettleAll already clears and
 	//                   sets and nothing has ever read.
 	//   lastIretqRIP  — where this core last returned to from a scheduler pass.
@@ -106,6 +110,16 @@ typedef struct {
 	uint32_t apicInServiceVector;  // highest ISR bit, 0 = nothing in service
 	uint32_t apicTPR, apicPPR, apicLVTTimer;
 
+	// The per-thread configuration registers (the table in nmi_probe.c),
+	// read standing on the core for the same reason the LAPIC fields are: an
+	// MSR answers for the thread that executes rdmsr. Some os64 writes on
+	// every thread (EFER, PAT, SPEC_CTRL); the rest are whatever the firmware
+	// and the previous boot left, so two threads of one core can differ and
+	// nothing else says so. Diff them when one thread is inexplicably slow.
+	uint32_t msrCount;
+	uint64_t msr[NMI_PROBE_MSR_MAX];
+	uint64_t dr7;
+
 	// Published LAST. A reader that sees this true is guaranteed to see every
 	// field above it, because the write is release-ordered by the compiler
 	// barrier in the capture path.
@@ -118,6 +132,11 @@ typedef struct {
 // has always handled vector 2.
 bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame);
 
+// Build the MSR table from CPUID. Once, single-threaded, before any core can
+// be probed: the capture reads the table from an NMI handler and must never
+// see it half-built.
+void nmi_probe_init(void);
+
 // Fire an NMI at one core and wait — WITH INTERRUPTS ENABLED — for its answer.
 // Returns false on timeout, which is not a failure but a verdict: a core that
 // will not answer an NMI is off the bus or in SMM (the verdict line prints
@@ -126,7 +145,7 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame);
 // three callers want three different things: the boot sweep wants one summary
 // line, /sys/cpu/<n>/probe wants the full text in a file, and a live wedge
 // hunt wants it on the wire.
-bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks);
+bool nmi_probe_core(uint32_t cpu, uint32_t timeout_ticks);
 
 // Probe every core but this one and print a ONE-LINE liveness summary per
 // core (glass + wire). The full dumps stay in the snapshot slots, readable
@@ -136,7 +155,7 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks);
 void nmi_probe_sweep(void);
 
 // The last snapshot taken for a core, or NULL if it has never answered.
-const nmi_probe_snapshot_t *nmi_probe_last(uint32_t apic_id);
+const nmi_probe_snapshot_t *nmi_probe_last(uint32_t cpu);
 
 // Render a snapshot as text, one line at a time, through a caller-supplied
 // emitter — THE formatting lives here and only here, so the wire report and
@@ -150,6 +169,6 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 // under the exception wire lock. This is the crash-insurance copy the /sys
 // probe trigger writes the moment an answer lands: if the machine dies before
 // anyone reads the file, the answer still exists somewhere permanent.
-void nmi_probe_report_wire(uint32_t apic_id);
+void nmi_probe_report_wire(uint32_t cpu);
 
 #endif // NMI_PROBE_H

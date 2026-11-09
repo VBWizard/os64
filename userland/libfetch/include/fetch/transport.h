@@ -1,0 +1,83 @@
+#ifndef FETCH_TRANSPORT_H
+#define FETCH_TRANSPORT_H
+// transport.h — the byte source under the HTTP parser: one connected socket,
+// plain or wrapped in TLS, with the idle deadline and the caller's
+// cancellation applied to every wait. fetch.c owns one per hop, dialled for
+// it or taken from the connections kept between fetches (pool.h), until it
+// closes it or gives it back; the host harness
+// (tools/test_fetch_transport_host.sh) drives it with scripted
+// os64_read_for/os64_tls_transport_* stubs.
+#include "tls/transport.h"
+
+#define FETCH_IDLE_MS_DEFAULT 30000u
+
+// One owner, referenced in place by the HTTP stream. Error detail survives
+// cleanup so the HTTP caller can explain a failed read after releasing I/O.
+//
+// CANCELLATION IS THE CALLER'S PREDICATE, asked before every wait and after
+// every interrupted one. The thing that cancels is a signal handler or a UI
+// thread, and both already keep a flag of their own; a library-side flag
+// would be that flag written twice. NULL = never cancelled.
+typedef struct {
+    int32_t handle;
+    os64_tls_transport *tls;
+    struct {
+        os64_tls_status_t status;
+        os64_tls_policy_reason_t policy_reason;
+        int upstream_error;
+        uint16_t version;
+    } error;
+    bool encrypted, silent;
+    bool have_lookahead;
+    unsigned char lookahead; // preserves a plain TCP response discovered during upload
+    uint32_t idle_ms;                // upload idle limit; per-read and handshake budget
+    // Bytes the reader has been handed since the connection was opened or
+    // adopted: the retry rule's "before any byte of the response arrived".
+    uint64_t received;
+    bool (*cancelled)(void *ctx);
+    void *cancel_ctx;
+} fetch_transport_t;
+
+// Takes ownership of the connected handle, including on failure. NULL config
+// selects plain TCP. TLS success includes authentication and flight submission.
+// `idle_ms` 0 = FETCH_IDLE_MS_DEFAULT.
+bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
+                          const os64_tls_config_t *config, uint32_t idle_ms,
+                          bool (*cancel_fn)(void *ctx), void *cancel_ctx);
+typedef enum { FETCH_WRITE_ERROR, FETCH_WRITE_DONE, FETCH_WRITE_RESPONSE } fetch_write_result_t;
+// Resume at *sent, advancing it only for accepted bytes. RESPONSE leaves the
+// response unread for the HTTP parser; an interim head permits another call.
+// Accepted bytes and successful TLS progress renew the upload idle budget;
+// empty/interrupted waits retain it, including while draining ciphertext.
+fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *data,
+                                           size_t length, size_t *sent);
+// http_source_fn's shape: `context` is the fetch_transport_t.
+int64_t fetch_transport_read(void *context, void *data, size_t capacity);
+// Validate transport status at a completed HTTP boundary (headers or body).
+// Independent framing can survive missing closure; protocol failures cannot.
+bool fetch_transport_complete(fetch_transport_t *io, bool independently_framed);
+// Normal completion attempts bounded TLS closure. Failure/redirect cleanup
+// does not wait. Repeated cleanup is harmless; it does not clear diagnostics.
+void fetch_transport_close(fetch_transport_t *io, bool normal);
+// Was the transport's failure a TLS one worth naming? (The status is only
+// meaningful on an encrypted transport that did not end cleanly.)
+bool fetch_transport_tls_failed(const fetch_transport_t *io);
+
+// ── A connection kept between fetches (pool.h) ──────────────────────────
+//
+// Whether a connection whose message is done may be kept: no transport or
+// TLS failure, no TLS closure begun or heard, and nothing of the peer's
+// waiting unread (a plain lookahead byte, TLS plaintext). One of the facts
+// connection_reusable judges.
+bool fetch_transport_reusable(fetch_transport_t *io);
+// Whether a kept connection is still worth a request, asked when it is
+// taken: a poll that waits for nothing. A plain one with a byte or the
+// peer's close waiting is not (bytes nobody asked for, or a server that
+// closed its idle side); a TLS one that hears plaintext, a closure or a
+// failure is not. NewSessionTicket and the like are the engine's and pass.
+bool fetch_transport_idle_ok(fetch_transport_t *io);
+// A kept connection taken by a fetch: its patience and its cancellation
+// now, and its count of bytes received started again.
+void fetch_transport_adopt(fetch_transport_t *io, uint32_t idle_ms,
+                           bool (*cancel_fn)(void *ctx), void *cancel_ctx);
+#endif

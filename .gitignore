@@ -23,6 +23,7 @@ pci.ids
 /tmp
 *.o
 *.swp
+/etc/fonts
 
 # VSCode IntelliSense database (machine-specific absolute paths; regenerate
 # with `make compdb`)
@@ -35,3 +36,7 @@ compile_commands.json
 # settings.local.json is per-machine and must not.
 .claude/settings.local.json
 net_capture.pcap
+
+# Python bytecode from running tools/*.py
+__pycache__/
+tools/pages/fonts/

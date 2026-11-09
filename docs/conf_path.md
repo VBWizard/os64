@@ -79,6 +79,9 @@ honest shape.
 ### 3. Every reader migrated
 
 logd, husk (`husk.rc`), os64get, the resolver (`hosts`, `net.conf`), desktop.
+`bootenv.conf` (2026-08-30, `kernel/src/bootenv.c`) was born on the ladder —
+the environment every task inherits, applied by the kernel right after
+`conf_init`, merged last-directory-first so `/home` layers over `/etc`.
 Each lost its private ladder. husk's lifeboat spellings (`/fat/husk.rc`,
 `/husk.rc`) stay hardcoded and stay LAST — the lifeboat is for the day the
 ext2 root is broken, and the search path's own root file lives on that root.

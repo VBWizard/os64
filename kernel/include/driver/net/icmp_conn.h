@@ -34,6 +34,7 @@
 
 #define ICMP_CONN_ERR_INTERRUPTED (-3L)
 #define ICMP_CONN_ERR_TIMEOUT     (-4L)   // read deadline expired; the reply is not coming
+#define ICMP_CONN_ERR_CLOSED      (-5L)   // the handle was closed under the wait (a sibling thread's close)
 
 typedef struct icmp_conn
 {
@@ -48,8 +49,22 @@ typedef struct icmp_conn
 	uint8_t (*slots)[ICMP_CONN_MAX_PAYLOAD];
 	thread_t* volatile waiter;
 
+	// LIFETIME, the udp_conn.h shape (handle.c § The pin): `holders` is
+	// the task handle plus every pinned operation in flight; the handle's
+	// close sets `closed` and wakes a parked reader to ICMP_CONN_ERR_CLOSED;
+	// the last holder's release frees. Listed until freed — the sweep must
+	// still reach that reader, and delivery skips a closed conn.
+	volatile uint32_t holders;
+	volatile bool closed;
+	// Writers between "not closed" and the request leaving (the udp_conn.h
+	// rule): the close waits this out, so no request can be sent after the
+	// conversation is hung up — a request whose reply delivery would
+	// discard. Under `lock`, like `closed`.
+	uint32_t sending;
+
 	uint64_t requests_sent, replies_delivered;
 	uint64_t dropped_full;   // replies arriving faster than they're read
+	uint64_t last_arrival_tsc;   // rdtsc at the last enqueue (udp_conn.h says why)
 
 	struct icmp_conn* next;
 } icmp_conn_t;
@@ -69,14 +84,22 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 // negative (oversize, or the wire refused after ARP retries).
 long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len);
 
+// Hang up (the handle-table close hook): mark closed, wake a parked
+// reader, drop the handle's hold. The pin's hold and release beside it;
+// a release at zero leaves the list and frees.
 void icmp_conn_close(icmp_conn_t* c);
+void icmp_conn_ref(icmp_conn_t* c);
+void icmp_conn_release(icmp_conn_t* c);
 
 // Called by icmp.c when an echo REPLY arrives: routes it to the handle
-// whose identifier matches, or nowhere. RX context.
+// whose identifier matches, or nowhere, and wakes a parked reader on
+// arrival. Thread context (knet, or a test at the seam) — it takes the
+// scheduler's queue lock, which an ISR may not.
 void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
                        const void* payload, uint16_t length);
 
-// Level-triggered wake sweep, beside its UDP and TCP siblings.
+// Level-triggered wake sweep, beside its UDP and TCP siblings: the backstop
+// for a reader that registered but had not parked when its reply landed.
 void icmp_conn_wake_if_ready(void);
 
 #endif // ICMP_CONN_H

@@ -3,20 +3,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "os64/rect.h"
 
-// Shared GUI value types. Deliberately dependency-free (stdint only) so any
-// layer — and eventually userland — can include this without dragging in
-// kernel headers.
+// Shared GUI value types. Deliberately dependency-free (stdint, and
+// os64/rect.h, which is stdint alone) so any layer — and eventually
+// userland — can include this without dragging in kernel headers.
 
-// A screen-space or surface-space rectangle. Signed x/y/w/h on purpose:
-// window frames can hang partially off-screen (negative origin) during a
-// drag, and clipping math is much cleaner when intermediate results are
-// allowed to go negative instead of wrapping.
-typedef struct rect
-{
-    int32_t x, y;
-    int32_t w, h;
-} rect_t;
+// A screen-space or surface-space rectangle: ring 3's own type (os64/rect.h,
+// which says why it is signed), so the code the kernel shares with libui
+// (os64/damage.h) works on one type.
+typedef os64_gui_rect_t rect_t;
 
 // A pixel canvas. Everything the GUI renders — the backbuffer, each window's
 // content, icon/cursor art — is one of these. Format is fixed 32-bpp XRGB

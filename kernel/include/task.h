@@ -9,6 +9,7 @@
 #include "time.h"
 #include "env.h"
 #include "handle.h"
+#include "syscall_numbers.h"   // OS64_SPAWN_MAX_ARGS bounds the child argv block
 
 #define TASK_MAX_EXIT_HANDLERS 10
 #define TASK_DEFAULT_PRIORITY 0
@@ -40,8 +41,8 @@
 // tight — and NOTHING CHECKED IT. A blob that outgrew the gap would have been
 // mapped straight over TASK_ENV_VIRT by paging_map_pages, and the child's
 // environment would silently become the tail of its own argv. That guard now
-// exists (task.c, TASK_ARGV_MAX_BYTES); this layout gives it room to never
-// fire.
+// exists (TASK_ARGV_MAX_BYTES, below), and the window is the real bound on
+// how much argument a child can be handed.
 //
 // ARGV STAYS AT 0x6f000000 on purpose: it is the one address a program can
 // observe directly (arg_echo asserts on it), so the window grows upward and
@@ -56,8 +57,12 @@
 //   0x70000000  TASK_HEAP_START
 #define TASK_ARGV_VIRT 0x6f000000
 // The most the argv blob may occupy before it would collide with the
-// environment. Enforced in task_create — see the packing comment there.
+// environment, pointer slots included. A ring-3 spawn is measured against it
+// before anything is copied (syscall.c, measure_user_argv, which answers
+// OS64_SPAWN_TOO_LONG), and task_create checks the blob it builds against it
+// too — see the packing comment there.
 #define TASK_ARGV_MAX_BYTES 0x100000
+#define TASK_ARGV_MAX_ARGS OS64_SPAWN_MAX_ARGS
 #define TASK_ENV_VIRT 0x6f100000
 // The env block's growth ceiling — the fixed-VA window between TASK_ENV_VIRT
 // and the exit trampoline. ENFORCED since 2026-08-14: env_grow (env.c) caps
@@ -98,12 +103,12 @@
 // key\0val\0 block replaced. Referenced by nothing; same species of furniture
 // as TASK_ENVP_VIRT above, removed the same week. The REAL env sizing lives
 // in env.h (ENV_DATA_CAPACITY) and TASK_ENV_MAX_BYTES above.)
-// Longest single path/argument the kernel will carry, NUL included. Raised
-// 128 -> 256 on 2026-08-13 (Chris: "even the path max length makes me kind of
-// nervous"). Costs nothing per task now that the argv blob packs its strings
-// end to end — this is a CAP, no longer a per-argument reservation. It is
-// still the width of the fixed `raw[]`/`path[]` scratch buffers in syscall.c's
-// path handlers, which live on an 80KB kernel stack, so doubling them is noise.
+// Longest path the kernel will carry, NUL included — OS64_PATH_MAX in the ABI,
+// and syscall.c asserts the two agree. Raised 128 -> 256 on 2026-08-13 (Chris:
+// "even the path max length makes me kind of nervous"). It is the width of
+// the fixed `raw[]`/`path[]` scratch buffers in syscall.c's path handlers,
+// which live on an 80KB kernel stack, so doubling them was noise. A spawn
+// ARGUMENT is not a path and has its own, far larger cap (OS64_SPAWN_ARG_MAX).
 #define TASK_MAX_PATH_LEN 256
 
 	struct timeval {
@@ -240,10 +245,11 @@
         // parked the MAIN thread instead and left the reaper spinning in
         // ring 0 for the shell's whole life (top showed /bin/desktop at 52%
         // of a core with one gterm child). Set by task_wait to the calling
-        // thread before it parks, cleared when it returns; read by the
-        // dead-child wake under kDeadChildLock, together with the flag
-        // above, so the wake can never target a thread that has already
-        // stopped waiting. One waiter per task, like the flag it travels with.
+        // thread before it parks, cleared by that thread at the top of its
+        // next pass, before any return; read by the dead-child wake under
+        // kDeadChildLock, together with the flag above, so the wake can never
+        // target a thread that has already stopped waiting. One waiter per
+        // task, like the flag it travels with.
         thread_t* waitThread;
         bool autoReap;
         // THE DEATH CERTIFICATE (ruling 2026-08-06: kworker buries only the
@@ -257,12 +263,15 @@
         // which is not a leak, it is the 1971 contract: a zombie IS an exit
         // status nobody has claimed yet.
         volatile bool retValCollected;
+        // Storage lifetime across publication: even a collected task stays
+        // linked and unburied while held. This does not prevent task exit
+        // or keep its handles/terminal seat open. Changed atomically.
+        volatile uint32_t lifetimeHolds;
         // Private link for the undertaker's two-phase burial list (task.c).
         // NOT the deadChild chain and NOT the kTaskList spine: a corpse on
         // THIS list has already been unlinked from both and is invisible to
-        // every walker; it waits here exactly one kworker pass (the grace
-        // period that protects lockless /proc walkers standing on it) before
-        // task_destroy frees it for real.
+        // new list walks; the next kworker pass frees it. Passes need not
+        // sleep, so this is not a storage-lifetime guarantee for a reader.
         struct task* burialNext;
         // The one task Ctrl+C must never kill: husk sitting at its prompt.
         // Tagged by the kernel when it launches the shell (kernel.c). When the
@@ -284,6 +293,13 @@
         // not a different object wired into the child's handle 0: fg must be
         // able to re-attach input without surgery on a running task's table.
         bool backgroundJob;
+        // RAW MODE IS THIS TASK'S WISH, not the terminal's state (SIGINT.md
+        // § Raw mode): the terminal is raw exactly while its foreground task
+        // wants it so. Set by the task itself (a write of `raw` to
+        // /proc/self/tty), never inherited, dies with the task — so the seat
+        // is cooked again the instant the foreground moves to a task that
+        // did not ask, and no shared holder word exists to race over.
+        bool wantsRaw;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -313,7 +329,7 @@
         uint32_t lastChildNumber;
         bool foreground, stdinRedirected, stdoutRedirected, stderrRedirected;
         uintptr_t *stackInitialPage;
-        uint32_t minorFaults, majorFaults, cSwitches;
+        uint32_t cSwitches;
 		uint64_t* pml4, *pml4v;
 		// Every table page of THIS address space — the PML4 and each PDPT/PD/
 		// PT — comes from here and dies with it (arena_destroy at burial, see
@@ -338,6 +354,11 @@
 		// stderr fields above are the OLD (unused) placeholders from the first
 		// OS — this array is the real thing.
 		handle_t handles[TASK_MAX_HANDLES];
+		// Makes a handle's resolve-and-reference one operation against a
+		// sibling's close (handle.c § The pin). Held for a few instructions
+		// by handle_pin and by handle_close's claim, never across a park or
+		// a release; the object's own lock nests INSIDE it, never outside.
+		spinlock_t handleLock;
 		// The controlling terminal (tty.h): which virtual terminal this task
 		// reads, writes, and answers Ctrl+C on. Inherited from the parent at
 		// task_create — a shell's children work its terminal, which is the
@@ -351,10 +372,22 @@
 	// (kForegroundTask, 2026-07..2026-08-08, promoted.) The foreground task
 	// — "the task the controlling shell is currently blocked waiting on" —
 	// lives in tty_t.fgTask now, one per terminal, exactly as its birth
-	// comment promised. Everything else about it survived the move: task_wait
-	// still moves it (keying the transfer on WAIT, not spawn, so a
-	// backgrounded (&) child never takes the console), and the keyboard IRQ
-	// path still reads it as a single aligned pointer, atomically, no lock.
+	// comment promised. What moved with it: the SPAWN hands the console to
+	// a foreground child at submission (a child can reach a syscall before
+	// its parent reaches wait, and "am I the foreground?" is asked at
+	// startup — tty_set_raw), a wait on a NAMED child makes that child the
+	// foreground (a pipeline's shell waits on its stages in order while
+	// the last one holds the spawn's hand-off; a wildcard wait moves
+	// nothing at its entry) and follows a wait DOWN through a middleman,
+	// a wait's FINISH restores the waiter but never over a LIVE child of
+	// its own, so an older wait cannot undo a newer spawn's hand-off —
+	// a dead child hands it to a live foreground
+	// parent on the same terminal or else to the shell (tty_task_departed),
+	// a backgrounded (&) child never takes it at any of those points. Each
+	// of those hand-offs is a check-then-store made under the terminal's
+	// foreground lock (tty_t.fg_lock), so no two of them interleave; the
+	// keyboard IRQ path still reads it as a single aligned pointer,
+	// atomically, no lock.
 
 	// THE RECLAIM LEDGER (task.c; the 2026-08-13 deferral ledger, PAID
 	// 2026-08-15). Cumulative bytes/pages of VMA backing memory the
@@ -371,7 +404,26 @@
 	// exited). Incremented as task_destroy's very last act.
 	extern uint64_t kTaskBurialCount;
 
-		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
+    // Initialize a fresh task's private page tables, without threads or scheduling.
+    // Release tableArena after the address space is no longer in use.
+    void task_init_page_tables(task_t *task);
+
+    // Is this pointer a live (not exited) task on the task list? By POINTER,
+    // for a caller holding one it did not take a reference on — the walk
+    // compares addresses and never dereferences the candidate.
+    bool task_is_live(const task_t *candidate);
+
+    // Caller already owns the storage lifetime: the task is unpublished or
+    // protected by an existing hold. These do not validate a stale pointer.
+    // Release is the caller's last access; burial may follow immediately.
+    void task_hold(task_t *task);
+    void task_release(task_t *task);
+
+		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU);
+	// Like task_create, with a failure verdict: -1 or OS64_SPAWN_TOO_LONG.
+	// The verdict covers interpreter-rewritten arguments before construction.
+	task_t *task_create_checked(char *path, int argc, char **argv, task_t *parent,
+	                            bool kernel, uint64_t affinity, int64_t *error);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit
 	// Block until a child of parentTask exits, collect it, and return its
@@ -408,6 +460,9 @@
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
+	// The same, for a stack the caller can do without: NULL when the frames
+	// are not there, where task_alloc_guarded_stack panics (SCRIPT_STACK.md).
+	void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
 	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
 
 	// OR a signal bit into EVERY thread this task owns — unless the signal's

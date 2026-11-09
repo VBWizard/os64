@@ -1,0 +1,7 @@
+first view paint: allocation attempts=0, caret pixels=58
+refused adoption: budget, origin, scroll, run identities and caret preserved
+LIMIT + Help (font change=0): budget 6144 -> 6144, origin 655360 -> 655360, left 73149 -> 73149, caret pixels 58 -> 58
+first view paint: allocation attempts=0, caret pixels=58
+refused adoption: budget, origin, scroll, run identities and caret preserved
+LIMIT + Help (font change=1): budget 6144 -> 786432, origin 655360 -> 655360, left 73149 -> 7863736, caret pixels 58 -> 48
+Harness checks: 30; failures: 0

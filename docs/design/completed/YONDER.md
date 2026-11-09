@@ -1,0 +1,932 @@
+# YONDER.md — the graphical browser's face
+
+*Written 2026-09-25 by Opus, the evening libflow's six slices were pushed.
+The campaign is [BROWSER.md](../../../BROWSER.md), what a page means is
+[LIBPAGE.md](../../../LIBPAGE.md), where its boxes go is
+[LAYOUT.md](LAYOUT.md), and the gaps are the packets in
+[docs/completed/](../../completed/). This is rung 2 of yonder's ladder:
+a window you can read the web in.*
+
+## What it is
+
+(How to use it is `docs/yonder.md`, the user's guide; this is how it is
+built.)
+
+`yonder` is a libui program. It links libhtml, libpage, libflow and libway
+(and libfetch through libway) unchanged, and adds what a window needs of
+its own: a PAGE VIEW widget that paints a flow tree and scrolls it, the
+window around it — a toolbar (back, forward, reload, stop, the address
+field) above the view, a question bar and a status line below it — and
+the running of its fetches on a work pool (§ Y3).
+
+Nothing about a page's meaning or geometry is decided here. The view asks
+libflow where a box is, libpage what a node means, and libway what to do
+about a click; it decides only how things LOOK on the glass and how a
+person moves around them.
+
+## The window
+
+```
++--------------------------------------------------------------+
+| [<] [>] [R]  [ http://68k.news/                            ] |
++--------------------------------------------------------------+
+|                                                            |^|
+|   the page view                                            | |
+|                                                            | |
+|                                                            |v|
++--------------------------------------------------------------+
+| http://68k.news/article.php?a=...          (status line)     |
++--------------------------------------------------------------+
+```
+
+- **The status line is where a link says where it goes.** os64 has no
+  pointer shapes (the compositor draws one arrow; there is no syscall to
+  change it), so hovering a link changes the status line, not the
+  cursor, which is what Mosaic did before anybody had a hand. It also
+  carries the sentences: loading, an incomplete page, a refusal.
+- **Hover needs yonder's own event loop.** libui hands a widget pointer
+  moves only while a button is held, so yonder reads MOUSE_MOVE itself
+  before `os64_ui_dispatch` — Scribe's shape for its shortcuts — and asks
+  `flow_hit` what is under the pointer. P5 testing of Million Dollar Homepage
+  exposed paint starvation under continuous motion: input batches consume at
+  most 32 samples, merging consecutive idle moves before dispatch. Rendering
+  and page tasks get a turn while input remains queued. Buttons, modifier
+  boundaries and other event types keep their order; question bars arm after
+  their pending input drains. [D11's regression record](../pending/DOM_D11.md#p5-testing-hover-repaint-starvation)
+  records the evidence and the current bounded policy.
+- **The window's title is the page's `<title>`**, and follows the page on
+  screen (`os64_gui_window_set_title`).
+
+## Settings
+
+The title bar's Settings action opens yonder's Settings window — the
+shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
+Close — with five settings: default zoom (and beside it dark pages, below); whether pictures and style sheets are
+kept on disk and in how much room (CACHE.md is that one's record: a box,
+a size, a button that empties the cache, and what it holds on the status
+line), and **who yonder says it is**, the
+User-Agent every fetch sends, pages, sheets and pictures alike. Sites
+answer by it (theoldnet serves a browser it does not know as a 1996 one),
+and comparing yonder with another browser means asking as that browser
+asks.
+
+The fourth setting is **Run page scripts**, off by default. Apply changes this
+window; Save as default also writes `scripts = on` or `off` to `yonder.conf`.
+Only `on` enables scripting at startup. Changing the mode cancels queued
+scripts and in-flight navigation, destroys the current runtime, and reloads
+the shown page with the chosen `noscript` parsing policy. A POST reply keeps
+the existing resend confirmation. The status line begins **SCRIPTS ON** while
+the setting is enabled. Beside it, **Script time limit** (a slider, 1 to 60
+seconds, 5 by default, `script_seconds` in `yonder.conf`) is how long one
+script task may run before the page is stopped and goes on without script;
+Apply reaches every page's next task. Scripts run in the order HTML gives
+them, as the page is parsed, with timers, events and handler attributes:
+[DOM_D7.md](../pending/DOM_D7.md) is the design and
+[DOM.md § D7a](../pending/DOM.md#d7a-as-built) and § D7b the record, with the
+remaining gates before recommending scripts for ordinary browsing.
+
+- **The presets** (`agent.c`) are yonder's own, Chrome and Firefox on
+  Windows, Safari on an iPhone (a lighter page from many sites), Netscape
+  4 on Windows 98 (what the vintage-web sites serve an old browser) and
+  Lynx (a text-only version, where a site keeps one). Picking one fills the field; anything
+  typed there is sent as typed, once it is printable ASCII a header can
+  carry and the config file keeps: no `#`, no space at either end, under
+  `OS64_FETCH_AGENT_MAX`.
+- **A preset is a whole identity**: beside its string, every request
+  carries the lines that browser sends on every request, byte for byte
+  as it sends them: Chrome's client hints (`sec-ch-ua`,
+  `sec-ch-ua-mobile`, `sec-ch-ua-platform`, to a potentially trustworthy
+  address only), Firefox's `Priority` for each kind of request, and
+  `Accept-Language` for Chrome, Firefox and Safari. yonder's own asks for
+  English too (`en-US,en;q=0.9`), as a real browser does. A typed agent,
+  Netscape and Lynx claim nothing beyond their strings. A default saved
+  as a preset's earlier string (Chrome 154, Firefox 156) is read as that
+  preset's current one (`yonder_agent_current`), lines and all. Every
+  request, whatever the agent, also says what it is for (libway's Fetch
+  Metadata, `way/origin.h`).
+- **Apply** changes it for this window, from the next fetch on; **Save as
+  default** writes `agent =` to `yonder.conf` at the top of the
+  configuration ladder, where every yonder reads it at start. An agent
+  that is not valid there is ignored, and yonder's own is used.
+- **It is said while it is in force**: the status line ends `- asking as
+  Chrome on Windows` (or `a typed agent`), so a page answering an assumed
+  identity never passes for one answering yonder.
+- **An agent, once applied, lives as long as yonder does**: a job already
+  submitted reads the agent it was handed when it opens its fetch, which
+  may be after another is applied, so none is freed before the workers
+  are gone.
+- **The zoom every page starts at** (PILE3.md § Zoom): a whole percent
+  from 25 to 500. Apply sets it and lays the page out again at once; Save
+  as default writes `zoom =` to `yonder.conf`; Ctrl+0 goes back to it.
+- **Dark pages**, at the zoom row's right end, `appearance = dark` (or
+  `light`, the default) in `yonder.conf`. A page with a dark design of its
+  own is told to use it: libgarb answers `prefers-color-scheme: dark`. What
+  is left the painter darkens (paint.h's `yonder_dark_t`): every colour is
+  drawn at its brightness (luminance) moved, hue and saturation kept, a
+  background or a gradient going dark when it looks brighter than mid grey
+  and text, a decoration, a bullet or a border going light when it looks
+  darker, so a moved ink on a moved paper is at least 5.3 to 1 (WCAG) and a
+  bright yellow panel's black text stays readable (Quinn, #238).
+  So a page that paints its own white (Google, DuckDuckGo's HTML page) is
+  dark, a pale blue box a dark blue one, a navy link a pale blue one; a
+  mid colour and every picture are the page's, and a dark design of the
+  page's own has nothing to move. A page that set no colours is laid on
+  white's dark counterpart. Form controls keep the desktop theme's colours.
+  Apply re-judges the cascade and lays the page out again.
+- **Run animations** and **Reduce motion**, on a row of their own
+  (PILE3.md § The animation model). Run animations is on unless
+  `yonder.conf` says `animations = off`; off, no layout is handed the
+  page's timeline, so no CSS animation runs. Reduce motion,
+  `motion = reduce`, has pages told `prefers-reduced-motion: reduce`;
+  otherwise they are told `no-preference`. Apply re-judges the cascade
+  and lays the page out again.
+- **Modern web surface**, on a row of its own: the Modern Web arc's kill
+  switch (MODERN_WEB.md, rule 4), `modern = on | off`, on when absent. A
+  navigation captures it beside the parser mode and the page keeps it, so
+  Apply reaches the next page and not the one on screen; a page made with
+  it off has none of the arc's globals or CSS properties, and its record
+  says `modern: off`. **Clear page storage** sits at that row's right and
+  acts at once, as Empty the cache does (`yonder_settings_on_clear_storage`
+  hands it to `storage_clear`, which removes every site's store from the
+  profile's `storage/` folder, one unlink each, and has every page open
+  forget its maps; a window mid-commit may then publish the store as it read
+  it before the clear, with its own changes).
+- **yonder's loop waits on every window it owns** and reads them through
+  an `os64_ui_dispatcher` (DROPDOWN.md § Step 1), so the dialog is
+  registered with it (`os64_ui_settings_attach`): a turn delivers its
+  events and paints it, and it closes itself when asked.
+
+## The page view
+
+A custom libui class (the container pattern, `os64_ui_class_t`). It owns
+the current `flow_tree_t`, a scroll position in page pixels, and the two
+scrollbars, which are ordinary `os64_ui_scrollbar_t`s beside it.
+
+**Painting is libflow's walk, drawn through four verbs**
+(`userland/apps/yonder/paint.c`). `yonder_paint` takes the viewport in
+page coordinates, calls `flow_visit`, and draws each box it is handed
+through a small table — `fill(rect, colour)`, `text(box, clip, colour)`,
+`image(box, content, clip)`, `control(box, content, clip)` — never
+straight to `os64_draw_*`. In the guest the table draws, moving page
+coordinates onto the glass; on the host it RECORDS, one line per call, so
+the painter gets libflow's kind of proof (`tools/test_yonder_host.sh`): a
+recording worked out by hand for each fixture, and a `.paint` regression
+beside each corpus page's `.boxes` — its first screen at 800x600 and a
+screen from its middle. Every fill is cut to the viewport by the painter,
+and the executor cuts to the view's rect again, because libui passes a
+paint hook no clip and its primitives clip only to the canvas.
+
+What each kind of box draws:
+
+- **The canvas first.** CSS 2.1 §14.2: the root's background paints the
+  whole canvas, and when the root has none, the body's does. This is the
+  rule that makes `<body bgcolor>` fill the window rather than the body's
+  box, and 1998 depends on it. With neither, `env.paper`.
+- **Block, table, caption, row group, row, cell:** the background over
+  the border box, then the borders — the styles the struct can hold.
+  `solid` is one colour a side; `inset`, `outset` and `groove` are the
+  two-tone bevel (each channel halved toward white or toward black, the
+  way every browser of the era drew `<table border>`). The sides are drawn
+  a row at a time and meet on the diagonals, every pixel drawn once. `hr`
+  needs nothing of its own: the Rendering chapter makes it an inset
+  border. Rows are painted before their cells because the walk hands them
+  over first, which is what makes Hacker News's `<tr bgcolor>` work.
+- **Span:** its background, if it has one (`mark`). Not its borders: an
+  inline box's borders open on its first piece and close on its last,
+  which the public tree does not say (booked).
+- **Text:** the run through `os64_text_draw` at the box's baseline in the
+  style's colour, then its decorations from the box's `decoration`, each
+  in its own colour (`underline_color`, `line_through_color` — the colour
+  of the element that drew it): underline one thickness below the
+  baseline, line-through 3/10 of the size above it, a thickness of a
+  sixteenth of the size and never less than a pixel.
+- **Marker:** a numbered one is its text. Disc, circle and square are
+  drawn as SHAPES, the way browsers draw them: the text engine's Western
+  profile does not reach the geometric-shapes block, and a face without
+  it would draw a missing-glyph box. A third of the size across, on the
+  height a line-through takes.
+- **Atomic:** a picture is a frame with its alt text until images arrive
+  (slice Y5); a control is drawn inert until it becomes a real widget
+  (Y4).
+- **Nothing** for a box whose `visibility` is hidden (its children answer
+  for themselves), and nothing for a line.
+
+**Scrolling.** The wheel moves three lines of the default font a notch,
+and a tilt moves sideways — the innermost box under the pointer that can
+still move that way first, then the boxes outside it, then the page
+(PILE3.md § Scrolling boxes); the arrow keys move a line; Page Up and Page Down a view less one line of
+overlap; Home and End the ends. The horizontal bar appears only when
+`flow_width` is wider than the view. The layout width is the view's width
+LESS the vertical bar, and the bar's space is always reserved, so a page
+that grows past one screen does not change width, re-wrap, and shrink back
+below it. The view's HEIGHT is handed to the cascade and to libflow as one
+number (`flow_env_t.viewport_height`, the initial containing block), and a
+page is laid out again when it changes only if it has sheets or a
+positioned box — nothing else can read it.
+
+**A fixed box stays where it is on the glass** while the page scrolls
+under it (POSITION.md, P2): the painter moves it by the scroll, clicks
+find it there, and a form field a fixed box is drawn over hides its widget
+— the header's pixels are the header's, and so is the click. **A sticky
+box** (P4) rides the same rule: it is drawn where the scroll pushes it, and
+it is clicked there.
+
+**`p` lays pages out with positioning off**, every box `static` — the
+page as it reads in document order — until `p` again brings back pages
+as they were designed to look (POSITION.md § What positioning costs,
+ruling 8). It is a MODE, kept across navigation, and every page laid out
+while it is on says POSITIONING OFF on the status line. A form control's
+widget is drawn whatever its opacity, unless the pointer cannot reach its
+centre (rulings 6 and 9). With no script to close a
+cookie wall or a menu that covers the page, it is how the text under one
+is read, and it is the Chrome comparison's instrument: one page, one
+keypress apart.
+
+**Resizing lays the page out again, and keeps your place.** Before the
+new layout, the view notes the node of the box at the top of the
+viewport; after it, `flow_box_for` finds that node's new box and scrolls
+there. The new tree is built BESIDE the old one and the old one freed
+last (LAYOUT.md § Bounds). A layout that returns NULL keeps the old tree
+and says so on the status line; an incomplete one is painted as far as it
+goes, with the sentence. A resize is laid out ONCE, after the events that
+arrived with it are drained: a drag sends a stream of them, and a big
+page takes seconds to lay out under emulation. The status line says how
+long the last layout took, because that number is the one to watch.
+
+**A file names no encoding.** A page from disk has no Content-Type, and
+one that declares no `<meta charset>` is windows-1252 by the standard's
+default — which turned Hacker News's UTF-8 dashes into `â€“`. Bytes that
+are valid UTF-8 and not plain ASCII are read as UTF-8, the file detector
+browsers use. The answer goes to libhtml as the transport's label, which
+outranks the page's own, so when the detector fires a `<meta>` is not read
+at all: a page that declares windows-1252 and is UTF-8 is read as UTF-8.
+
+**The window is named `<title> - yonder`**, fitted to the title's 31
+bytes (the boundary refuses a longer one rather than cutting it) with an
+ellipsis, and ASCII only, because the title bar is drawn in the kernel's
+face. The name follows the page on screen (`title_follow`, through
+`os64_gui_window_set_title`): worked out again once per pass of the main
+loop when another page is shown or the shown page's tree has moved, and
+sent only when it differs from the one the window wears. A page given on
+the command line is still read before the window exists, so the window
+is born with its name.
+
+**Fonts.** Every page view shares ONE text context of its own, apart from
+libui's chrome context, and on it packet 04's family cache: serif, sans
+and mono, each regular, bold, italic and bold italic, at any size, from
+`fonts.conf`'s family lines or the shipped DejaVu faces. libflow asks for
+a style's family list, bold, italic and size (`page_fonts`, through
+`os64_font_family_open`), and the list is borrowed until the next ask.
+When the configured families will not all open, yonder falls back to
+whatever of the shipped twelve it can read — a missing style takes its
+family's regular, a missing family the sans — and says on its terminal
+what was missing; with none of them, the engine's bitmap face.
+
+## Slices
+
+Built the way libflow was: each slice finished, tested by its builder,
+committed and pushed, the next stacked on it; Chris tests as he is able
+and requests review when he is happy. A userland program is reviewed
+in-house (CLAUDE.md's reviewer-to-risk rule).
+
+| Slice | What | Proof |
+|---|---|---|
+| Y1 | The page view on a LOCAL FILE: `yonder /tests/pages/hacker-news.html`, or a path typed in the address field. The painter and its four verbs, the canvas rule, borders and bevels, decorations, markers as shapes, scrolling in both directions, resize with the anchor, the status line on hover | `tools/test_yonder_host.sh`: hand-computed recordings for fixtures and a corpus regression; guest screendumps read |
+| Y2 | Packet 06: the navigator out of `wend` into its library | the packet's own evidence; `wend`'s acceptance passes unchanged |
+| Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
+| Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | § Y3b below |
+| Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls, clipped to the view and hidden when none of it is in view (libui's `clipped`, 2026-10-26; before it, hidden when not wholly in view), submitted through libpage's form model, GET or POST | § Y4 below |
+| Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
+| Y5b | Moving pictures and pictures behind: GIF animation on a frame clock that sleeps when nothing can be seen, and the `background` attribute of the body and of tables, tiled | § Y5b below |
+
+Y1 needs none of the open packets, which is why it came first. Packets 06
+(Y2), 07 (the pool and the doorbell), 02 (blending) and 03 (GIF) are in;
+05 (libfetch's request body and cookie hooks) is in review, and Y3 starts
+once it merges.
+
+## Y3 — the network
+
+**The window never waits for the network.** A navigation is a job on
+packet 07's pool (`os64/work.h`); the window keeps painting, scrolling and
+answering its close box while a page loads, and hears the job through
+07's doorbell (`on_doorbell`, `OS64_GUI_EVENT_DOORBELL`). One pool, made
+at start with four workers, which Y5's pictures will share.
+
+**What runs where.** The worker does the FETCH, and only that, since
+DOM D4 ([DOM_D4.md](../pending/DOM_D4.md)): it opens the address and
+judges the head with libway's `way_open`, and posts the head, the body in
+chunks and the fetch's verdict down the navigation's mailbox. The parse
+and the model are the window's, a slice per turn of its loop, because the
+thread that parses a page is the thread that will run its scripts (DOM.md
+ruling 5). Everything else was always the UI thread's: layout, because
+every page shares one text context and a context is not for two threads
+at once; the history; the painting. Once the verdict is in and the ring is
+drained the window finishes the parse, builds the model, and lays the page
+out BESIDE the page on screen, swapping only when the layout exists (the
+rule wend has always kept, now in two faces). Until D4 the worker ran the
+whole of `way_load` and handed over a finished `way_page_t`; wend still
+loads that way, on its own thread.
+
+**A load gets its own leg of the session.** `way_load` writes its
+sentences into the session and reaches the person through its face, and a
+worker must not share either with the UI thread. So libway splits the
+session: the browser's identity (name, agent, accept) and the history stay
+in `way_session_t`, owned by the UI thread; a load runs on a `way_leg_t` —
+the identity by pointer, read-only, and its own face and its own sentence.
+wend builds a leg for each load and runs it where it always has, so its
+screens do not change; yonder builds one per job. (A leg of a journey, the
+part between two stops.)
+
+**The mailbox outlives whoever lets go of it last.** Progress and a
+question travel between a job and the window through a MAILBOX (and, since
+D4, the page's head, body and verdict: `mail.h`), and the
+job cannot own it: cancelling a job hands it to the pool's `release`,
+which may free it at once — immediately, if the job had already finished
+— and a lock protects concurrent access, not freed memory. So the mailbox
+is its own object, REFERENCE-COUNTED, one reference held by the window's
+navigation and one by the job; each side drops its own (the window when
+the navigation is superseded or reaped, the job in `release`), and the
+last to let go frees it and closes its answer pipe. Every mailbox carries
+the GENERATION of the navigation that made it, and every bell the window
+hears is checked against the current generation: a progress sentence or
+a question from an obsolete job is dropped unread.
+
+**Progress, cancel and the one navigation.** The job's face has three
+answers:
+
+- `progress` copies the sentence into the mailbox under its
+  `os64_lock_t` and rings the PROGRESS bit; the status line shows the
+  latest one on the next bell. Coalescing is right here: a person wants
+  the newest byte count, not every one.
+- `cancelled` is the POOL's predicate — the one `run` is handed — and
+  nothing else. Stop, a new navigation and the close box cancel through
+  `os64_work_cancel`, and the pool also cancels on its own infrastructure
+  failures and at destroy; a private flag would hear the first three and
+  miss the rest, and a fetch or a question still waiting at destroy would
+  hang it. Only one navigation is in flight: starting another cancels the
+  one before, and a reap for any id but the current one is released
+  unread — a cancelled job can finish before it notices.
+- `confirm` is the hard one, below.
+
+**A question asked on a worker is answered in the window.** libfetch's
+downgrade hop asks mid-fetch, on the worker. The worker publishes the
+question in the mailbox with a QUESTION NUMBER, rings the QUESTION bit, and
+waits on the mailbox's answer pipe — `os64_read_for` in 100 ms steps,
+asking the pool's predicate between them, because 07's rule is that a
+worker must never wait on something that cancellation cannot end. The UI
+thread shows the QUESTION BAR — the question and two buttons, Yes and No,
+above the status line — and writes the answer down the pipe TOGETHER WITH
+the question's number; an answer carrying any other number is not an
+answer to this question and the worker keeps waiting. Stop, a new
+navigation and the close box CANCEL the job rather than answer it, and the
+cancel ends the wait unanswered, which is No; a question replaced by a
+newer one is answered No.
+
+**A question asked on the UI thread is not a nested loop.** A form that
+leaves https for http, or a refresh that does, is judged BEFORE any job
+exists: `way_judge` returns the question instead of asking it, the window
+shows the same bar, and the navigation starts only when Yes is clicked —
+the bar's continuation is the request. So `way_may_go`, the blocking
+convenience, stays wend's; yonder asks and acts in two steps.
+
+**What makes an answer fresh** is the face's to say (libway's contract),
+and a click is NOT fresh by itself: a doorbell can be handed over ahead
+of mouse events queued before it, so a press made before the question
+existed could land on a Yes that appeared under the pointer. So the bar is
+born DISARMED (its buttons greyed). It arms only once the window has
+PAINTED it and then found its event queue EMPTY — everything waiting
+before that may have been done before the bar could be seen, so it is
+dispatched to a disarmed bar first — and Yes answers only a press AND
+release that both arrive while it is armed (`bar.c`, pure and
+host-tested). The bar reads its own clicks before libui does, so a
+button's own click never answers. Each bar is bound to its question's
+number, so a bar replaced by a newer question cannot answer the newer
+one. The keyboard's Enter is not bound to Yes; Escape is No.
+
+**A question says nothing about how to answer it.** libway's questions end
+at the question mark; wend adds its " (y/n) " (its row reads exactly as it
+did) and yonder has its buttons.
+
+**The toolbar.** Back, Forward, Reload and Stop beside the address field;
+Stop is lit while a page loads and Reload while one is shown. The address
+field takes
+what `way_typed_address` takes, and a path that begins with `/` is still a
+file, read as in Y1.
+
+**Forward is libway's**, decided now that a face asks (packet 06 booked
+it). The history grows a second stack: going Back pushes the page left
+onto it, following anything new clears it, going Forward pops it. wend
+has no Forward key and calls neither new function, so nothing changes for
+it. The position in each crumb is yonder's scroll offset, checked against
+the page that comes back before it is used.
+
+**Links.** A click — press and release on the same link — asks libpage
+(`os64_page_activate`): a FRAGMENT scrolls to `flow_box_for` its anchor
+with no fetch; a NAVIGATE goes through `way_judge`; a refusal is the
+status line's sentence. A control is Y4's; clicking one says so.
+
+**Declared refreshes** are judged on arrival, as wend does:
+`way_refresh_step`, a chain counted from the last navigation a person
+started, a JUMP a scroll, a GO a new job that leaves no history entry. The
+delayed-refresh sentence names wend's key today ("press g to go"); libway
+takes the hint from the face instead (`session->delayed_hint`), so wend's
+row reads exactly as it does and yonder's says what yonder offers.
+
+**A text/plain page** arrives as bytes. It is laid out by handing libhtml
+`<plaintext>` and then the bytes, in the encoding libway chose — the
+standard's own element for "everything after this is text", so libflow
+sees a `pre` and nothing new is needed.
+
+**A picture asked for by itself** (a link straight to a `.png`) is shown
+as a browser shows one, since census batch 3: libway judges it a page,
+`WAY_BODY_IMAGE`, for a leg whose face shows pictures (wend's does not, and
+still refuses it with the os64get line), never for a POST's reply, and only
+for a type the face says it shows. yonder's list is libimage's own
+(`OS64_IMAGE_ACCEPT`, which yonder also asks for by), so a format joins it
+with its decoder; a WebP or an icon is still a file to save, not a page
+with a broken picture on it. The trip reads none of its body; yonder writes the page itself
+(`image_page`): the picture alone in the middle of a dark page, titled by
+its file's name, fetched as any page's picture is.
+
+**POST.** Quinn's packet 05 gives libfetch a request body and wend a POST
+submission. Y3's rebase carries that behaviour into libway — `way_judge`
+stops refusing POST, `way_load` takes the method and body — so both faces
+have it, and Quinn reads the port. Three of her rules travel with it: the
+explicit warning before a POST is REPLAYED unencrypted; the download
+advice ("save it with os64get") judged on the FINAL method, because a
+reply to a POST cannot be fetched again by an address alone; and the
+request body kept alive for the whole asynchronous fetch — it belongs to
+the job's input, released by the pool's `release` and not before.
+
+**Evidence, as run.** In the guest, yonder walked the local rules server
+that proved Y2 — links clicked, the toolbar clicked — and the server's log
+matched wend's walk request for request: gopher and mailto refused in
+yonder's words, a 404 shown as a page, text/plain drawn, a picture refused
+with its os64get command, a redirector followed and skipped by Back, a
+delayed refresh offered in the address field, a chain stopped at its sixth
+page, a self-refresh refused; a fragment link scrolled with no request;
+Back and Forward fetched what they should. `httptestd.py`'s `/stall`
+(half a head, then silence) kept the window painting and scrolling while it
+hung, and Stop ended it at once ("stopped"). Against the HTTPS test peer
+(`tools/test_os64get_https_peer.py`, its roots and host names written into
+the guest's /home), `/downgrade` put the worker's question in the bar;
+Yes followed it to plain http, No stopped at the hop (libfetch hands the
+redirect itself back as the page, as wend shows it), and closing the
+window with the question up and its worker waiting shut it within three
+seconds. On the host: the bar's arming fed the sequences that must not
+answer (a press before the question, a press before arming with its
+release after, a press on a replaced question); the mailbox whole until
+its last holder lets go, then gone with its pipe; the answer bound to its
+question's number; a cancelled wait ending as No; and libway's leg,
+Forward and delayed hint. wend's walk again: identical. Not run in the
+guest: a question asked on the window's own thread (a form or refresh
+leaving https), for want of an https page with such a form — its judgement
+is libway's harness's and its bar is the same bar.
+
+## Y3b — cookies, and where a request came from
+
+A daily-driver browser logs in, and logging in is a cookie: the server
+sets one on the reply to the form and asks for it back on every page
+after. Packet 05 gave libfetch the two doors — `on_set_cookie` hands over
+each `Set-Cookie` with the URL that set it, `headers_for` asks for the
+`Cookie` and `Referer` lines of each hop — and left the JAR to the
+navigator. This is the jar.
+
+**The jar is libway's, and one per browser.** `way_jar_t` sits beside the
+history in the session, so wend and yonder both have one, and it is
+shared by everything the browser fetches: a page on a worker, the
+pictures on the other workers, all at once. So it carries its own lock,
+and it is the one thing in the session a leg writes. Nothing about it
+knows a clock or a network: every question takes the URL, whether the
+connection is encrypted, and the time, so the host harness asks it all
+of RFC 6265 without either.
+
+**What it keeps is RFC 6265 as the browsers ship it** (the 6265bis draft
+where the two differ, because that is what a server written this decade
+expects):
+
+- a `Set-Cookie` is a name and a value and its attributes; a value with
+  no `=` is a nameless cookie, as browsers take it;
+- `Max-Age` outranks `Expires`, `Expires` is read by §5.1.1's own
+  forgiving date algorithm (the web writes dates every way there is), a
+  cookie with neither lives as long as the browser runs, and one whose
+  time has passed deletes the one it names;
+- `Domain` widens a cookie to the subdomains of a domain the setting host
+  is in, and nothing else; without it the cookie is the host's alone;
+- `Path` scopes it, defaulting to the directory of the address that set
+  it;
+- `Secure` is only set, and only sent, over an encrypted connection — the
+  fact libfetch reports, not the scheme in an address — and an unencrypted
+  reply cannot overwrite a secure cookie of the same name; the `__Secure-`
+  and `__Host-` prefixes are held to their promises;
+- `HttpOnly` keeps a cookie from a page's script (`document.cookie`
+  neither reads nor sets one) and decides which cookies go first when a
+  request's do not all fit (below); `SameSite` is kept and changes
+  nothing, booked below with what it needs.
+
+Limits are the browsers': 4096 bytes a cookie, 180 a domain, 3000 in all;
+past a limit the expired go first and then the cookie used longest ago —
+sending counts as use, so the login every page carries is the last to go.
+
+**Sent in the order the RFC gives** (the longest path first, then the
+oldest), whole cookies only. A hop's `Cookie` line may take 8 KiB
+(libway's `WAY_COOKIE_LINE_MAX`, beside its argument: Apache and nginx
+refuse a longer field by default), with room of its own beside it for the
+lines that say who is asking and a 4 KiB Referer, all inside libfetch's
+`OS64_FETCH_HOP_FIELDS_MAX`. When a site's cookies pass 8 KiB, the
+HttpOnly ones are kept first and then the rest, the NEWEST first within
+each, and what does not fit is left out whole: the RFC orders the header
+but says nothing of which to cut, and its order would cut the cookies a
+site set last, which after a sign-in are the sign-in itself (Chris's
+first login looked logged out for exactly that, at the kilobyte this
+budget had before); and a session is the server's own memory, which it
+sets HttpOnly, where whatever a page's scripts set (analytics, consent)
+can never be, so those go first however new. A page whose requests left cookies out says so
+on its record: `FAILED cookies: left out of a request to <host> (N)`,
+N the most one request left out (YONDER_DIAGNOSTICS.md).
+
+**The `Referer` is the browsers' default policy,
+strict-origin-when-cross-origin**: the whole address of the page a request
+came from (no fragment) when it goes to the same scheme, host and port;
+just its origin when it goes elsewhere; nothing when an encrypted page's
+request goes out in the clear. It goes with a link followed, a form sent,
+a refresh the page declared, and every picture the page names; not with
+an address typed, Back or Forward, or a Reload. A page's own
+`Referrer-Policy` is not read yet (booked).
+
+**No questions.** A cookie is a server remembering a person the way that
+person asked it to by logging in, so nothing is asked. Nothing was written
+to disk in this slice: the jar lived as long as the browser. The login
+slice (2026-10-25) keeps it across restarts, in the profile's `cookies`
+file (YONDER_HONEY_DO.md § 4); a cookie with no expiry still lives as long
+as the browser that heard it.
+
+**Evidence, as run.** libway's host harness, 73 new checks under ASan and
+UBSan: §5.1.1's dates in HTTP's three spellings and on nonsense, a leap day
+and a day that does not exist; scope by path (not above, not a sibling
+spelled alike, the query ignored) and by domain (a subdomain yes, a name
+that merely ends alike no; another domain, a bare suffix and a narrower
+name refused; an address takes only itself); the secure rules and both
+prefixes in either case; `Max-Age` over `Expires`, deletion by either,
+unreadable values ignored; replacement keeping a cookie's age; text trimmed,
+nameless values, control bytes refused, the 4096-byte line; the order, whole
+cookies into a cap, a hop's lines with the Referer yielding to the cookies;
+both limits; every allocation failed in turn. Five mutants of `jar.c`
+(secure sent in the clear, the dot of a domain match, the path boundary,
+the downgrade Referer, a secure cookie set in the clear) are all caught.
+Counts: libway 148.
+
+The guest, against a local login in miniature that logs each request's
+`Cookie` and `Referer`: Members refused with no cookie, its Referer the
+front door; Back with none; the form posted with the front door as its
+Referer, its 302 setting the session and a second cookie, the page it led
+to sent both; the badge picture fetched with the cookie and the members
+page as its Referer, drawn; Log out's `Max-Age=0` deleting the session and
+leaving the other, Members refused again. wend through the same jar:
+httptestd's `/set-cookie` 302 to `/needs-cookie`, "cookie accepted". Live,
+over https: `httpbin.org/cookies/set` setting two cookies on its redirect,
+and its `/cookies` echoing both back. Not run: logging in to a site that
+needs a real account.
+
+## Y4 — forms
+
+Mosaic drew its forms with Motif widgets embedded in the page; yonder
+does the same with libui's. Chris's order: forms after pictures, before
+cookies.
+
+**One widget per control libflow placed**, made when the page arrives and
+let go with it. They are children of the window's root, after the window's
+own widgets, so a page's widgets leave together: libui has no call that
+removes a widget, so the list is cut back to the window's own after
+interaction is cancelled (a hover and a press grab must not outlive the
+widget they point at, nor the focus — which goes to the page view when a
+page widget held it, and otherwise stays put, so the keys still scroll the
+page that arrived) and each widget's retained text runs are released the
+way libui's own teardown releases them (the class's `destroy`, then `run`
+and `run_staged`) — a run left behind would hold the window's text context
+busy for good.
+
+| The control | Its widget |
+|---|---|
+| text, search, email, url, tel, number, and the date/time types; a `textarea` | a text field (a textarea is one line in this slice; booked) |
+| password | a text field that only ever holds bullets: yonder takes the keys for it itself (below) |
+| checkbox, radio | a checkbox; a radio's group is libpage's, and picking one refreshes the rest |
+| submit, button, reset, `button` | a button labelled with its value |
+| `select` | a list box, one row per option, the page's choice selected; it shows the rows its `size` asks for, else up to four — enough to pick with the pointer, since a drop-down is booked |
+| file | a disabled button — nothing here can choose a file yet (booked) |
+| hidden | nothing: libflow gave it no box |
+
+**A control's box is the widget's size.** libflow's size for a control it
+knows nothing about is a text field's — ten ems by a line — and a tick
+drawn across that is a slab, a list one line high shows no rows at all. So
+yonder answers libflow's `replaced_size` for them as it does for pictures:
+a checkbox or radio is the theme's tick square; a select is its rows at the
+list box's own pitch, as wide as its longest option in the window's face.
+The page's own `width` and `height` still win, as they do for a picture.
+
+**Where the widget is.** On every paint that moves the page — a scroll, a
+relayout, an arrival — each widget is put at its control's box on the
+glass, clipped to the page view (libui's `clipped`: its paint is cut
+there, and a point outside it is not the widget's), so a control half
+scrolled out of the view is half a control and takes no click on the
+toolbar. A widget none of which is in the view is hidden, and the painter
+draws the inert frame in its place (the painter draws a control's frame
+only for a hidden widget). Until 2026-10-26 libui could not clip a child,
+and a widget not WHOLLY in the view was hidden; its frame then showed a
+captionless well over the page's own button styling. Disabled controls get disabled widgets; a readonly one, a disabled
+text field.
+
+**The values are the page model's.** A checkbox, radio or list writes its
+change to libpage at once (`os64_page_set_checked`,
+`os64_page_set_chosen`). A text field's edits are not (libui's `on_change`
+raises the page's `input` event and nothing else), so every text field's
+contents are written to libpage (`os64_page_set_text`) before anything is
+sent — the model is what a submission reads. Until then the
+FIELD holds the newer value, so a tick or a choice rewrites only ticks and
+lists from the model. Text buffers flush before a script task as well as
+activation. Widgets are keyed by native node and retain their addresses,
+focus, caret and selection across unrelated rebuilds. A native value change
+updates the editor; an unchanged projected value preserves intermediate
+edits, including an incomplete numeric value. State-only script changes
+refresh widgets independently of the HTML version.
+
+**Sending.** A button that submits activates its control
+(`OS64_PAGE_ACTIVATE_CONTROL`); Enter in a text field is the standard's
+IMPLICIT SUBMISSION (`OS64_PAGE_ACTIVATE_IMPLICIT`), and libpage decides
+whether the form has a default button and whether a field blocks it. A
+NAVIGATE goes through `way_judge` with `WAY_ASK_SEND` — the question bar
+for a form leaving https — and POST travels as Y3 carries it. A refusal is
+libpage's sentence on the status line, and an INVALID one puts the focus on
+the control that failed.
+
+**A password is never on the glass.** libui's text field does not mask, so
+yonder keeps a password's value itself and feeds the field one bullet per
+character: typed characters append, Backspace removes the last, Enter
+submits, Tab moves on, and everything else — arrows, selection, paste — is
+swallowed, because a field that holds only bullets cannot edit in the
+middle of a value it does not show. The value reaches libpage like any
+other text field's.
+
+**Reload on the reply to a form sends the form again, and asks first.** A
+POST's reply cannot be fetched again by its address (Y3's rule), and
+whatever the form did — an order, a post — it does twice. So the page
+keeps the request that produced it, MOVED out of the job when the reply
+arrives, and libway says whether the reply was to a POST by the FINAL
+method (`way_page_t.posted`): a 303 turned the POST into a GET, and that
+page is an address like any other. Reload puts "Send the form again?" in
+the bar — or libway's own warning, when the form would go out in the
+clear, because a yes to that is a yes to sending. Back and Forward to such
+a reply fetch its address, as wend does (booked).
+
+**What a browser shows as text** (libway, riding along at Chris's ask):
+`text/*`, and the application types that are text in all but name — JSON
+and `+json` (what an API, and httpbin, answers a form with), JavaScript,
+XML and `+xml`. JSON with no charset is read as UTF-8, its RFC's rule. This
+is what arrives as the PAGE. A page's own scripts, inline and `src`, run on
+the window thread as the parser reaches them (DOM_D7.md); a script's source
+is fetched as a sheet is, on the pool.
+
+**Evidence, as run.** The guest, against a local server that echoes what
+it is sent: a page of every kind of control drawn as widgets at their
+boxes (ticks square, the list showing its three options with the page's
+choice selected, fields holding the page's values). A password typed and
+shown as six bullets; L picked from a radio group (M cleared); `blue`
+picked; the tick cleared; sent with the required field empty — refused,
+"a field the form requires is not filled in", the focus on that field.
+Filled and sent with Enter: the server logged
+`/echo?who=Ada&pw=s3cret&size=l&colour=blue&needed=yes+please`, exactly —
+the unticked box absent, the password whole. The POST form: body
+`note=hello+there`, `application/x-www-form-urlencoded`. Reload on its
+reply: the question; No — "The form was not sent again.", nothing in the
+server's log; Yes — the same body posted a second time. A form posted to
+`https://httpbin.org/post` from an http page: httpbin's JSON echo shown as
+text, the field, length, type and yonder's agent in it. A UTF-8 JSON reply
+with no charset: `café`, right. A tall page of fields scrolled one step:
+the field crossing the view's top edge hidden and drawn as its frame, the
+toolbar untouched. The host harnesses, unchanged in count: libflow 10485,
+yonder 49, libway 75, wend's renderer 177954, none failed. Not run: an
+https page's form sending to http (the question is `way_judge`'s, proven
+in Y3), and a search on the live web.
+
+## Y5 — pictures
+
+Chris's order after Y3: pictures first (almost every page he visited had
+them), then forms (Y4), then cookies (Y3b).
+
+**What is fetched.** libpage's picture list (`os64_page_image`) is the
+record: every `img` with a src that resolved, in tree order. Pictures are
+kept per ADDRESS, not per element — forty spacer GIFs are one fetch — and
+the page's pictures belong to the page: the page stays on screen, pictures
+still arriving, until the next one replaces it, and then every one still
+in flight is cancelled and the page takes its pixels with it. A picture
+finished for a page no longer shown is let go unread (the page's serial
+number rides in its job).
+
+**Each picture is a job on the same pool** as the page, run by
+`picture.c`: libfetch for the bytes (`os64_fetch_open`, the browser's
+agent, an Accept of image types, libimage's 20 MiB file cap), then
+`os64_image_decode`, which knows PNG, JPEG, GIF and BMP by their bytes
+rather than by what the server claims. The product is the decoded image,
+0xAARRGGBB; the job's input and product are released by the pool if the
+page is left first. The DECLARED RESERVE is honest to the decoders'
+defaults: 20 MiB of body and 128 MiB of decoding (libjpeg's memory cap,
+which also bounds PNG: its 16-megapixel raster is 64 MiB, and it inflates
+through a 32 KiB window straight into it), and the pool's budget grows to
+768 MiB so a page and three pictures run at once. A picture over the
+decoders' caps is refused by them and drawn as its placeholder.
+
+**Three at a time, and yonder holds the rest.** The pool admits work in
+the order it was given, so a page's forty pictures handed over at once
+would put a person's next click forty-first in line — and past the pool's
+table, the rest refused for good. So yonder keeps the page's pictures
+itself and hands the pool the next as each comes back, never more than one
+fewer than the pool has workers: a navigation finds a worker free once
+whatever was cancelled before it — a page left behind's pictures, a
+navigation it replaced — has seen its cancel and let the worker go.
+Leaving a page cancels the few in the pool and forgets the rest.
+
+**The size is the layout's question, the pixels the painter's.** libflow
+asks the face for a picture's intrinsic size (`replaced_size`); yonder
+answers from the pictures that have arrived, and "unknown" for the rest —
+libflow then lays out the alt text, or the box the width and height give.
+When a picture arrives whose box the page did not fix — libflow's rule,
+`flow_replaced_fixed`, asked of the element's box, since a `width="auto"`
+is written but fixes nothing — the page is laid out AGAIN (keeping the
+reader's place, as a resize does), because its size may move everything
+below it. Relayouts are coalesced: at most one per drained batch of
+doorbells. On a page whose layout takes more than 100 ms, a batch lays it
+out again only when its last picture is in, or when the last layout is two
+seconds old and twice its own cost — so laying out takes at most a third
+of the time while pictures trickle in. The moment it goes stale is a
+deadline on the window's clock (§ Y5b's ticker), so the page settles on
+time with nobody at the mouse, however long its last picture takes — a
+server that trickles a byte at a time can take as long as it likes, since
+libfetch's patience is 30 s of silence. Without a ticker (its thread could
+not start) the page settles at the first event after that moment. A
+picture whose box is fixed needs no relayout at all; the old web wrote
+both attributes on most.
+
+**Drawing.** The painter's `image` verb draws the picture into its box's
+content rectangle, SCALED when the box and the picture differ (a `width=`
+stretching a spacer, a thumbnail shrunk) — smoothed, or nearest-neighbour
+where `image-rendering` asks for hard pixels (PILE3.md § Zoom) — and blended by
+its alpha over what is beneath, one row of the visible part at a time
+(`scale.c`, pure and host-tested). A picture that has not arrived, or will
+not, keeps Y1's frame. A GIF's other frames are § Y5b's.
+
+**Memory kept.** Decoded pictures stay while their page is shown, up to
+256 MiB of retained pixels or SVG document storage; past that, a picture is not kept and draws as its frame,
+and the status line says how many were left out. Back and Forward decode
+them again, from the disk when the cache kept them (CACHE.md) and from
+the network when it did not.
+
+**Evidence, as run.** The host: the scaler and blender against hand-worked
+pixels (an opaque copy, a 2x enlargement, a 3-to-2 shrink, a
+half-transparent source over a known ground, a transparent pixel, a clip
+cutting all four sides, a box hanging off the surface's top left). The
+guest, a page served locally with a picture of each kind: a PNG with no
+size given (the page laid out again around it), a half-transparent PNG
+blended over a blue cell, a GIF scaled 2x, a JPEG scaled by `width=` with
+its shape kept, a 1x1 spacer stretched to a 200-pixel bar, a BMP, a
+missing picture showing its alt text, a broken one keeping its frame, and
+one address used four times fetched once — "pictures 6 of 8". Then live:
+Wikipedia's article on Mosaic over https, its screenshots of Mosaic drawn
+from upload.wikimedia.org (its logos are SVG, which libimage does not
+decode, and keep their frames); and a page left nine seconds into its
+pictures, the next page's count untouched by the late arrivals.
+
+## Y5b — moving pictures, and pictures behind
+
+Chris's order after Y4: the old web's GIFs move (theoldnet's guestbook,
+its Angelfire badge), and its pages sit on tiled backgrounds.
+
+### Animation
+
+**A GIF with more than one frame is kept as a SEQUENCE**
+(`image/sequence.h`, GIF_ANIMATION.md): libimage's handle that decodes a
+frame when it is asked for the next one, disposes the last and composites
+onto one canvas, honouring the loop count. The job decodes a GIF as a
+sequence first — the handle copies its input, so the fetched bytes and the
+sequence together stay inside the declared reserve — and keeps it when
+there is more than one frame; a still GIF is let go and decoded the Y5
+way. So nothing changes for any picture that does not move. What a
+sequence costs is counted against the page's 256 MiB as its canvas, its
+expansion buffer, its restore rectangle and its copied input, which is
+libimage's own account of what a handle owns.
+
+**The window has no clock, so a TICKER gives it one.** yonder's loop
+sleeps in `os64_gui_event_wait`, which takes no timeout, so a thread of
+its own holds the next frame's deadline: it sleeps on a pipe with
+`os64_read_for` until the deadline or until the window writes to say the
+deadline moved, and at the deadline it rings the window's doorbell and
+forgets it. The ring is the only thing it does; the window thread does
+everything else, so no picture is touched by two threads. Rung, the window
+advances every animation that is due AND ON SCREEN — some box showing it
+meets the view — repaints only those boxes, and hands the ticker the
+earliest deadline left among the ones on screen. Only those boxes, because
+the view paints only its dirty part: the kernel takes exactly the
+rectangle libui publishes, so nothing outside it is ever seen, and a
+moving bullet costs its own sixteen pixels rather than the page (a full
+repaint a frame cost a third of a core for three small GIFs). A picture
+scrolled away is not advanced (decoding frames nobody sees is the waste
+the frame clock exists to stop) and moves again when it is back; a window
+that is covered (`OS64_GUI_WINDOW_COVERED`, re-read on the
+COVERED/UNCOVERED nudge, since the flag is the truth) hands the ticker no
+deadline at all. A page with nothing moving costs a sleeping thread. The
+same deadline serves § Y5's relayout: the window hands the ticker the
+earlier of the next frame and the moment a slow page's layout goes stale.
+
+**The timing is gview's and the browsers'**: a frame's delay starts when
+it is shown; a delay of 0 or 10 ms is shown for 100 ms (what every browser
+does with the GIFs that ask for "as fast as you can"); a finite loop count
+is honoured, so a GIF that plays once stops on its last frame, as Chrome
+stops it. A frame that fails to decode holds the last good one and that
+picture stops, while the rest play on.
+
+### Pictures behind
+
+**The attribute, not the property.** The Rendering chapter maps the
+`background` attribute of `body`, `table`, `thead`, `tbody`, `tfoot`, `tr`,
+`td` and `th` to `background-image`. The cascade will bring the property
+and its relatives (`repeat`, `position`); this slice brings what the old
+web wrote.
+
+**libpage lists them**, beside the pictures: WHERE A PICTURE COMES FROM IS
+A FACT ABOUT THE PAGE, and a background's address is resolved against the
+base like every other reference, so two resolvers never disagree about a
+`<base>`. `os64_page_background(page, i)` names the element and its
+resolved address; `os64_page_background_for(page, node)` answers the other
+way. wend reads neither, because a terminal has no background to put one
+in.
+
+**Fetched with the page's pictures**, from the same table, per address —
+a picture used as an `img` and as a background is one fetch — and animated
+by the same machinery. An arrival never lays the page out again: a
+background sizes nothing.
+
+**Painted after the box's colour and under its content, TILED** from the
+top-left of its border box across that box, blended by its alpha over the
+colour (`scale.c`, beside the scaler, and host-tested the same way). The
+body's background is the CANVAS's, as its colour already is (CSS 2.1
+§14.2): tiled from the page's top-left across the whole page, so it
+scrolls with the page, as the attribute always did.
+
+**Evidence, as run.** The host: the tiler against hand-worked pixels
+(whole tiles and a cut last one, a clip that does not move the tiles, an
+origin outside the area, a half-transparent tile over a colour); libpage's
+list for every element that takes the attribute, a relative address under
+a `<base>`, empty attributes and a `div`'s not listed, an address that
+will not resolve listed as refused, and the fail-every-allocation sweep;
+the painter's recordings — the body's picture as the canvas's with and
+without a colour, tiled from the page's corner in a scrolled view, and a
+cell's picture over its colour from its own corner. Counts: yonder 59,
+libpage 178722, libflow 10485, libway 75, none failed.
+
+The guest, on a local server: a looping GIF, a play-once GIF stopped on
+its last frame, a zero-delay GIF, and a scaled copy sharing its sequence,
+all moving; yonder's CPU time over 20 seconds — 1.5 s with them on screen
+(7.5 s before the view painted only its dirty part), 0.0 s scrolled away,
+0.1 s behind a maximized terminal. A page on a tiled body picture with no
+colour, a cell with a half-transparent picture over yellow, and a cell
+whose picture moves, all scrolling with the page. Live: the 1996 Space Jam
+site on its starfield, 13 of 13 pictures; theoldnet's GIFs moving on the
+P5 (Chris). Its `bullet02.gif`, which ends with a timing block for a frame
+that never comes, moves since Quinn's libimage fix (PR #142): a local GIF
+of the same shape cycles through its seven frames in the guest.
+
+**Sixteen handles were not enough.** The ticker's pipe and thread took
+yonder to fourteen of the kernel's sixteen before its first fetch, and the
+page failed with "out of handles or ports"; the table is 64 now
+(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`).
+
+## Booked, with their triggers
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| ~~Cookies kept across restarts~~ PAID by the login slice (2026-10-25): `<profile>/cookies`, Netscape's cookies.txt, `cookies = on \| session \| off`, Clear cookies in Settings (YONDER_HONEY_DO.md § 4 has the as-built). Who may read the file waits on the filesystem having modes; it is written closed the day it does | the jar is the browser's memory of a login and lives as long as it; a file of them is a file of credentials, and wants a decision about where it lives and who may read it | Chris asks to stay logged in (reached) |
+| `SameSite`, and the public-suffix list | `SameSite` is judged by SITE, the registrable domain, which needs the list of suffixes under which anyone may register (co.uk, github.io); without it a `Domain=` on a host under such a suffix is taken as the host's own, and a form on another site sends the cookies of the site it posts to | before yonder is the browser a person logs in to their bank with |
+| A way to see cookies (clearing them all is built: Clear cookies in Settings) | nothing in the window lists them yet, nor clears one site's alone | the first time a site needs its own cookies cleared |
+| A page's `Referrer-Policy` | the default is the browsers' own and sends no more than they do | a page that asks for less |
+| A hand pointer over links | the compositor draws one fixed arrow; a pointer shape is a kernel and ABI change | somebody misses it more than the status line answers it |
+| Unequal border widths, tested | the diagonal corner rule is exercised only where sides differ, and no producer sets one side alone until the cascade (a mutation to the corner arithmetic survives today for that reason) | the cascade |
+| An inline box's borders | the public tree does not mark a span's first and last piece | a page that needs them |
+| Layout time on big pages | On the P5, Wikipedia (800 KB) lays out in 600 ms; fetch.spec.whatwg.org (1.9 MB) takes 4 s to load and 6 s to lay out again at full screen (Chris, 2026-09-25) | a libflow profiling slice, with those two pages as its benchmark |
+| Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
+| A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
+| Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address with GET, which a server may answer with something else; Chrome shows the page from its back-forward cache or an HTTP cache keyed by the upload, and a "resubmit?" page only when it has neither. BROWSER_DEBTS.md has the first site it showed on, and the fix | a second site depends on it |
+| Broader SVG pictures | [The image route](../pending/SVG_IMAGES.md) supports the secure-static solid-graphics subset; gradients, text and raster-variant caching remain | corpus evidence and the remaining SVG slices |
+| ~~`data:` pictures~~ PAID (2026-10-31): the picture worker decodes one with the processor yonder's Fetch uses, from markup and sheets, at any length; Save is DEBTS.md's | a data: address needs no fetch but a decoder of its own | a page that needs one (reached: a search page's thumbnails) |
+| Decoded pictures between pages | the cache (CACHE.md) keeps the download, and Back and Forward decode it again | decoding shows in the time to a laid-out page |
+| Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |
+| Cookies and `Referer` | slice Y3b: libway's jar on packet 05's hooks. `on_set_cookie` carries whether the reply came over an encrypted connection (Quinn, 2026-09-25), so the jar enforces `Secure` itself — libfetch hands over the facts, libway owns the policy | packet 05 merged and Y3 in |
+| Selecting and copying text | `flow_hit` and the run's own hit test give the pieces; the drag, the highlight and the clipboard are a slice of their own | the first time Chris wants to quote a page |
+| Find in page | a walk of the tree's text boxes | same |
+| Keyboard link navigation (Tab through links) | a focus ring over boxes | same |
+| View source | a textview over the bytes that arrived | it is small; take it when a slice has room |
+| Zoom | — | done: the whole page, not only its text (PILE3.md § Zoom) |
+| Tabs | one navigator session per tab is the design; the session exists first | after Y3 |
+| The cascade | yonder's ladder rung 4, its own arc | the ladder gets there |
+
+## Review record
+
+*(empty — Chris reads first)*

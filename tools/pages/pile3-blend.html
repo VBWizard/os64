@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- pile 3, S2: translucent colours and opacity. Compare with Chrome: the stripes show through the red veil, through the 0.5 card AND its green box, and through the in-flow 0.35 block laid over both. -->
+<html><head><title>blend</title>
+<style>
+body { margin: 0; font-family: sans-serif; }
+.stripes { height: 220px; background: #fff; position: relative }
+.s { height: 20px }
+.s:nth-child(odd) { background: #2050c0 }
+.s:nth-child(even) { background: #f0c020 }
+.veil { position: absolute; top: 20px; left: 20px; width: 260px; height: 160px; background: rgba(255, 0, 0, 0.4); color: rgba(0, 0, 0, 0.5); font-size: 28px; padding: 8px }
+.card { position: absolute; top: 20px; left: 320px; width: 220px; height: 160px; opacity: 0.5; background: #000; color: #fff; padding: 8px; font-size: 22px }
+.card .inner { background: #0f0; color: #000; margin-top: 10px; padding: 4px }
+.flow { opacity: 0.35; background: #c000c0; color: #fff; height: 60px; margin-top: -40px; font-size: 22px; padding: 6px }
+.hover { background: rgba(0, 128, 0, 0.6); color: #fff; padding: 6px; margin: 10px }
+</style></head>
+<body>
+<div class=stripes>
+  <div class=s></div><div class=s></div><div class=s></div><div class=s></div><div class=s></div>
+  <div class=s></div><div class=s></div><div class=s></div><div class=s></div><div class=s></div>
+  <div class=s></div>
+  <div class=veil>rgba red veil, half-black text</div>
+  <div class=card>opacity 0.5 card<div class=inner>green inside the group</div></div>
+</div>
+<div class=flow>in-flow opacity 0.35, over the stripes by a negative margin</div>
+<p class=hover>rgba(0,128,0,0.6) background on the page paper</p>
+</body></html>

@@ -1,0 +1,112 @@
+# WPT's html/infrastructure/common-dom-interfaces/collections in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/infrastructure/common-dom-interfaces/collections --update
+# rewrites [passing].
+[required]
+# 0f's phases (MODERN_WEB.md § 0f's P3b, as built), this directory joining
+# the run whole with P3b: each line fails with the switch off, the earlier
+# phases' members among them. The passes not listed pass either way.
+detached-root-gc.html	fieldset.elements
+detached-root-gc.html	input.labels
+detached-root-gc.html	select.options
+detached-root-gc.html	select.selectedOptions
+historical.html	HTMLOptionsCollection legacycaller should not be supported
+htmlformcontrolscollection.html	The HTMLFormControlsCollection interface is used for collections of listed elements in fieldset element
+htmlformcontrolscollection.html	The namedItem(name) must return RadioNodeList
+htmlformcontrolscollection.html	The namedItem(name) must return an Element
+htmlformcontrolscollection.html	The namedItem(name) must return the items with id or name attribute
+htmloptionscollection.html	HTMLOptionsCollection [index] method return the item with index
+htmloptionscollection.html	HTMLOptionsCollection [name] method return the item with name
+htmloptionscollection.html	HTMLOptionsCollection.add method insert HTMLOptionElement Option element
+htmloptionscollection.html	HTMLOptionsCollection.item(index) method return the item with index
+htmloptionscollection.html	HTMLOptionsCollection.item(name) method return the item with index 0
+htmloptionscollection.html	HTMLOptionsCollection.remove method remove Option element by index
+htmloptionscollection.html	Insert <optgroup><optgroup><option>6</option></optgroup></optgroup> into <select>
+htmloptionscollection.html	Insert <optgroup><option>6</option></optgroup> into <select>
+htmloptionscollection.html	Insert <p><option>6</option></p> into <select>
+htmloptionscollection.html	Insert <select><option>6</option></select> into <select>
+htmloptionscollection.html	Original length
+htmloptionscollection.html	Setting length to longer value
+htmloptionscollection.html	Setting length to original value has no effect
+htmloptionscollection.html	Setting length to shorter value
+htmloptionscollection.html	namedItem doesn't match anything
+htmloptionscollection.html	namedItem id attribute
+htmloptionscollection.html	namedItem id attribute multiple attributes one element
+htmloptionscollection.html	namedItem multiple IDs
+htmloptionscollection.html	namedItem multiple name and ID
+htmloptionscollection.html	namedItem multiple name and ID with multiple attributes
+htmloptionscollection.html	namedItem multiple names
+htmloptionscollection.html	namedItem name attribute
+htmloptionscollection.html	namedItem name attribute multiple attributes one element
+radionodelist.html	Check the RadioNodeList.value on getting
+radionodelist.html	Check the RadioNodeList.value on setting
+radionodelist.html	Check the RadioNodeList.value on setting to 'on'
+radionodelist.html	The RadioNodeList.value must be the first checked radio button's value
+radionodelist.html	The value attribute should be empty if no element is checked
+# 0f's P6b (MODERN_WEB.md § 0f's P6b, as built): the tables' collections
+# and a map's areas. Each fails with the switch off.
+detached-root-gc.html	map.areas
+detached-root-gc.html	table.rows
+detached-root-gc.html	table.tBodies
+detached-root-gc.html	tbody.rows
+detached-root-gc.html	tr.cells
+[excluded]
+[passing]
+detached-root-gc.html	fieldset.elements
+detached-root-gc.html	form.elements
+detached-root-gc.html	input.labels
+detached-root-gc.html	map.areas
+detached-root-gc.html	select.options
+detached-root-gc.html	select.selectedOptions
+detached-root-gc.html	table.rows
+detached-root-gc.html	table.tBodies
+detached-root-gc.html	tbody.rows
+detached-root-gc.html	tr.cells
+historical.html	HTMLFormControlsCollection legacycaller should not be supported
+historical.html	HTMLOptionsCollection legacycaller should not be supported
+htmlallcollection.html	legacy caller is not a constructor
+htmlformcontrolscollection.html	Controls can be indexed by id or name attribute
+htmlformcontrolscollection.html	HTMLFormControlsCollection is not callable
+htmlformcontrolscollection.html	HTMLFormControlsCollection.item(index) must return the indexed item
+htmlformcontrolscollection.html	HTMLFormControlsCollection.namedItem(name) must return the named item
+htmlformcontrolscollection.html	HTMLFormControlsCollection[index] must return the indexed item
+htmlformcontrolscollection.html	HTMLFormControlsCollection[name] must return the named item
+htmlformcontrolscollection.html	Keygen controls do not show up at all
+htmlformcontrolscollection.html	The HTMLFormControlsCollection interface is used for collections of listed elements in fieldset element
+htmlformcontrolscollection.html	The HTMLFormControlsCollection interface is used for collections of listed elements in form element
+htmlformcontrolscollection.html	The controls in the form element must be sorted in tree order
+htmlformcontrolscollection.html	The length attribute must return the number of elements in the form
+htmlformcontrolscollection.html	The namedItem(name) must return RadioNodeList
+htmlformcontrolscollection.html	The namedItem(name) must return an Element
+htmlformcontrolscollection.html	The namedItem(name) must return null if the name is empty
+htmlformcontrolscollection.html	The namedItem(name) must return null if there is no matched element
+htmlformcontrolscollection.html	The namedItem(name) must return the items with id or name attribute
+htmloptionscollection.html	Add non-option to collection
+htmloptionscollection.html	HTMLOptionsCollection [index] method return the item with index
+htmloptionscollection.html	HTMLOptionsCollection [name] method return the item with name
+htmloptionscollection.html	HTMLOptionsCollection.add method insert HTMLOptionElement Option element
+htmloptionscollection.html	HTMLOptionsCollection.item(index) method return the item with index
+htmloptionscollection.html	HTMLOptionsCollection.item(name) method return the item with index 0
+htmloptionscollection.html	HTMLOptionsCollection.remove method remove Option element by index
+htmloptionscollection.html	Insert <optgroup><optgroup><option>6</option></optgroup></optgroup> into <select>
+htmloptionscollection.html	Insert <optgroup><option>6</option></optgroup> into <select>
+htmloptionscollection.html	Insert <p><option>6</option></p> into <select>
+htmloptionscollection.html	Insert <select><option>6</option></select> into <select>
+htmloptionscollection.html	Original length
+htmloptionscollection.html	Setting length to longer value
+htmloptionscollection.html	Setting length to original value has no effect
+htmloptionscollection.html	Setting length to shorter value
+htmloptionscollection.html	namedItem doesn't match anything
+htmloptionscollection.html	namedItem id attribute
+htmloptionscollection.html	namedItem id attribute multiple attributes one element
+htmloptionscollection.html	namedItem multiple IDs
+htmloptionscollection.html	namedItem multiple name and ID
+htmloptionscollection.html	namedItem multiple name and ID with multiple attributes
+htmloptionscollection.html	namedItem multiple names
+htmloptionscollection.html	namedItem name attribute
+htmloptionscollection.html	namedItem name attribute multiple attributes one element
+radionodelist.html	Check the RadioNodeList.value on getting
+radionodelist.html	Check the RadioNodeList.value on setting
+radionodelist.html	Check the RadioNodeList.value on setting to 'on'
+radionodelist.html	The RadioNodeList.value must be the first checked radio button's value
+radionodelist.html	The value attribute should be empty if no element is checked

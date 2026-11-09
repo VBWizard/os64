@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-29",
+  "candidate_code_commit": "12d9bda405442286733b781db9f7706910073085",
+  "userland_base": "837f5c33a35e361811583e6422d6b447ef777fd9",
+  "svg_integration_tip": "f9b39a6e666664445f3a68298a1e8cf862e819f0",
+  "merge_resolution": "Combined current DOM modules with SVG/image modules and production SVG library membership in the host harness; corrected two stale stylesheet-predicate documentation references.",
+  "sanitizers": [
+    "ASan",
+    "UBSan",
+    "LeakSanitizer"
+  ],
+  "libflow_extra_sanitizer": "float-cast-overflow",
+  "browser": {
+    "checks": 11687,
+    "failures": 0
+  },
+  "libflow": {
+    "checks": 24093,
+    "failures": 0,
+    "sampled_fuzz_trees": 597
+  },
+  "libpage": {
+    "checks": 254352,
+    "failures": 0,
+    "allocation_failure_positions": 399
+  },
+  "native_svg": "pass",
+  "cssom_wpt": {
+    "pin": "a699fb16767be39ba3e61a8e8b6bef60383f08ee",
+    "passes": 1107,
+    "failures": 1284,
+    "timeouts": 18,
+    "notrun": 36,
+    "lost_expected_passes": 0,
+    "computed_style_subtest": "pass",
+    "expectations_changed_by_release": false
+  },
+  "freestanding_build": [
+    "yonder",
+    "flowdump"
+  ],
+  "qemu": {
+    "gallery": "/tests/pages/svg-show-goes-on.html",
+    "inline_boats": "pass",
+    "isolated_svg_postcard": "pass",
+    "label_button_round_trip": "pass",
+    "paint_button_round_trip": "pass",
+    "zoom_percent": [
+      25,
+      100
+    ],
+    "clean_shutdown": true
+  },
+  "hardware_acceptance": "Feature slices accepted on P5, most recently partial artwork and both buttons on 2026-10-29. The combined release binaries were smoke-tested in QEMU; no new P5 run claimed.",
+  "cohort_manifest": "part1-qemu.sha256",
+  "cohort_files": 41,
+  "limits": "Accepted static subset only. Full intrinsic sizing, wider graphics and performance follow-ups remain documented in DEBTS.md and SVG_PART1.md."
+}

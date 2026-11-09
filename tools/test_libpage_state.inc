@@ -1,0 +1,1320 @@
+// State regressions from PRs #98 and #100, including allocation recovery.
+static const char *state_html =
+    "<form method=post action=/send><select name=s>"
+    "<option label=Short>A<option>B</select>"
+    "<input type=radio name=r value=a checked>"
+    "<input type=radio name=r value=b checked>"
+    "<input name=t value=base><input type=file name=f value=fake.txt>"
+    "<button>Send</button></form>";
+
+static void state_expect(const char *name, bool condition)
+{
+    checks++;
+    if (!condition)
+        fail(name, "state contract failed");
+}
+
+static void state_value(const char *name, os64_page_t *page, int32_t index, const char *value)
+{
+    const os64_page_control_t *c = os64_page_control(page, index);
+    state_expect(name, c != NULL && c->value_len == strlen(value) &&
+                       strcmp(c->value, value) == 0);
+}
+
+static void state_body(const char *name, os64_page_t *page, const char *body)
+{
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, 5, 0, 0};
+    os64_page_verdict_t got = os64_page_activate(page, what, &req);
+    state_expect(name, got == OS64_PAGE_NAVIGATE && req.body != NULL &&
+                       req.body_len == strlen(body) && !memcmp(req.body, body, strlen(body)));
+    os64_page_request_free(&req);
+}
+
+static void state_initial(const char *name, os64_page_t *page)
+{
+    state_expect(name, !os64_page_incomplete(page) && os64_page_ncontrols(page) == 6);
+    state_value(name, page, 0, "A");
+    const os64_page_control_t *select = os64_page_control(page, 0);
+    state_expect(name, select->noptions == 2 && select->options[0].selected &&
+                       !select->options[1].selected &&
+                       !strcmp(select->options[0].label, "Short"));
+    state_expect(name, !os64_page_control(page, 1)->checked &&
+                       os64_page_control(page, 2)->checked);
+    state_value(name, page, 3, "base");
+    state_value(name, page, 4, "");
+    state_body(name, page, "s=A&r=b&t=base&f=");
+}
+
+static void state_group_reset(void)
+{
+    os64_html_document_t *doc = parse(state_html, "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_initial("state: initial defaults", page);
+    state_expect("state: edit text", os64_page_set_text(page, 3, "a\r\nb", 4) == 0);
+    state_value("state: shared text sanitizer", page, 3, "ab");
+    state_expect("state: edit radio", os64_page_set_checked(page, 1, true) == 0);
+    state_expect("state: edit select", os64_page_set_chosen(page, 0, 1, true) == 0);
+    state_value("state: select publishes current value", page, 0, "B");
+    state_body("state: edited submission", page, "s=B&r=a&t=ab&f=");
+    state_expect("state: file cannot be text", os64_page_set_text(page, 4, "fake", 4) ==
+                 -OS64_PAGE_REASON_WRONG_KIND);
+    size_t before = allocations;
+    fail_at = before + 1;
+    state_expect("state: reset succeeds without memory", os64_page_reset(page, 0) == 0);
+    fail_at = 0;
+    state_expect("state: reset allocates nothing", allocations == before);
+    state_initial("state: reset normalized defaults", page);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+static void state_tick_values(void)
+{
+    os64_html_document_t *doc=parse("<form method=post><input type=checkbox name=c checked>"
+        "<input type=radio name=r checked><button>Send</button></form>","utf-8");
+    os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
+    // A tick's value is the page's word about what it sends; nobody types it.
+    for (int32_t i=0;i<2;i++) {
+        state_value("tick: default value",page,i,"on");
+        state_expect("tick: value takes no typing",
+                     os64_page_set_text(page,i,"edited",6)==-OS64_PAGE_REASON_WRONG_KIND);
+        state_value("tick: refused edit leaves value",page,i,"on");
+    }
+    os64_page_request_t req;
+    os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,2,0,0};
+    state_expect("tick: submit current value",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE &&
+        req.body != NULL && !strcmp((const char *)req.body,"c=on&r=on"));
+    os64_page_request_free(&req);
+    state_expect("tick: reset",os64_page_reset(page,0)==0);
+    state_value("tick: reset checkbox",page,0,"on");
+    state_value("tick: reset radio",page,1,"on");
+    os64_page_free(page);os64_html_document_free(doc);
+}
+
+static void state_sanitizers(void)
+{
+    static const struct { const char *html, *edit, *want; } cases[] = {
+        {"<input type=number value=1>", "abc", ""},
+        {"<input type=email>", " a@example.com\r\n ", "a@example.com"},
+        {"<input type=email multiple>", " a@b , c@d ", "a@b,c@d"},
+        {"<input type=url>", " https://host/\r\n ", "https://host/"},
+        {"<input type=color>", "#AbCdEf", "#abcdef"},
+        {"<input type=date>", "2024-02-30", ""},
+        {"<textarea>base</textarea>", "a\r\nb\rc", "a\nb\nc"}
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        os64_html_document_t *doc = parse(cases[i].html, "utf-8");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        state_expect("state: sanitizer accepts edit",
+                     os64_page_set_text(page, 0, cases[i].edit, strlen(cases[i].edit)) == 0);
+        state_value("state: sanitized edit", page, 0, cases[i].want);
+        state_expect("state: ownerless reset", os64_page_reset(page, -1) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
+static void state_selection_cases(void)
+{
+    value_case("H13", "state: default skips disabled option and optgroup",
+               "<select><option disabled>A<optgroup disabled><option>B</optgroup>"
+               "<option>C</select>", 0, "C");
+    value_case("H13", "state: multirow single select has no default",
+               "<select size=2><option>A<option>B</select>", 0, "");
+    value_case("H13", "state: multiple select has no default",
+               "<select multiple><option>A<option>B</select>", 0, "");
+    value_case("H13", "state: all-disabled select has no default",
+               "<select><option disabled>A<option disabled>B</select>", 0, "");
+    value_case("H13", "state: last selected wins in single select",
+               "<select><option selected>A<option selected>B</select>", 0, "B");
+    value_case("H13", "state: HTML display size parsing",
+               "<select size=' +2trailing'><option>A<option>B</select>", 0, "");
+    value_case("H13", "state: invalid display size defaults to one",
+               "<select size=bad><option>A<option>B</select>", 0, "A");
+    run((PCase){.steps="I4", .name="state: invalid size still has placeholder validation",
+                .html="<form><select required size=bad><option value=''>Choose<option>B</select>"
+                      "<button>Send</button></form>", .index=1,
+                .verdict=OS64_PAGE_NOTHING, .check_reason=true,
+                .reason=OS64_PAGE_REASON_INVALID});
+    os64_html_document_t *doc = parse(
+        "<input type=radio form=f name=x checked><form id=f>"
+        "<input type=radio name=x checked hidden>"
+        "<input type=radio checked><input type=radio checked></form>"
+        "<form><input type=radio name=x checked></form>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("state: explicit owners and hidden radios share group",
+                 !os64_page_control(page,0)->checked && os64_page_control(page,1)->checked);
+    state_expect("state: nameless radios and separate owners stay independent",
+                 os64_page_control(page,2)->checked && os64_page_control(page,3)->checked &&
+                 os64_page_control(page,4)->checked);
+    state_expect("state: change explicit radio", os64_page_set_checked(page,0,true) == 0);
+    state_expect("state: reset group", os64_page_reset(page,0) == 0);
+    state_expect("state: group defaults restored",
+                 !os64_page_control(page,0)->checked && os64_page_control(page,1)->checked);
+    os64_page_free(page); os64_html_document_free(doc);
+}
+
+static int64_t state_edit(os64_page_t *page, int op)
+{
+    if (op == 0)
+        return os64_page_set_text(page, 3, "changed", 7);
+    if (op == 1)
+        return os64_page_set_chosen(page, 0, 1, true);
+    return os64_page_set_checked(page, 1, true);
+}
+
+static void state_allocation_failures(void)
+{
+    os64_html_document_t *doc = parse(state_html, "utf-8");
+    size_t before = allocations;
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    size_t builds = allocations - before;
+    os64_page_free(page);
+    fail_single = true;
+    for (size_t point = 1; point <= builds; point++) {
+        fail_at = allocations + point;
+        page = os64_page_build(doc, kPage, NULL, NULL);
+        fail_at = 0;
+        if (page != NULL && !os64_page_incomplete(page)) {
+            state_initial("state: successful build has every control and option", page);
+        } else if (page != NULL) {
+            os64_page_request_t req;
+            os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, 5, 0, 0};
+            state_expect("state: incomplete page cannot submit",
+                         os64_page_activate(page,what,&req) == OS64_PAGE_REFUSED &&
+                         req.reason == OS64_PAGE_REASON_NO_MEMORY);
+            os64_page_request_free(&req);
+            state_expect("state: incomplete page cannot reset",
+                         os64_page_reset(page,0) == -OS64_PAGE_REASON_NO_MEMORY);
+        }
+        os64_page_free(page);
+    }
+    for (int op = 0; op < 3; op++) {
+        page = os64_page_build(doc,kPage,NULL, NULL);
+        before = allocations;
+        state_expect("state: count successful edit", state_edit(page,op) == 0);
+        size_t edits = allocations - before;
+        os64_page_free(page);
+        for (size_t point = 1; point <= edits; point++) {
+            page = os64_page_build(doc,kPage,NULL, NULL);
+            fail_at = allocations + point;
+            int64_t result = state_edit(page,op);
+            fail_at = 0;
+            state_expect("state: edit reports allocation failure", result == -OS64_PAGE_REASON_NO_MEMORY);
+            state_initial("state: failed edit preserves published state",page);
+            state_expect("state: edit recovers after failure", state_edit(page,op) == 0);
+            state_expect("state: reset after recovered edit", os64_page_reset(page,0) == 0);
+            state_initial("state: reset after recovered edit restores defaults",page);
+            os64_page_free(page);
+        }
+    }
+    fail_single = false;
+    os64_html_document_free(doc);
+}
+
+static void state_large_group(void)
+{
+    char html[4096];
+    size_t len = (size_t)snprintf(html,sizeof(html),"<form>");
+    for (int i = 0; i < 32; i++)
+        len += (size_t)snprintf(html+len,sizeof(html)-len,
+                               "<input type=radio name=r %s>",i == 0 ? "checked" : "");
+    snprintf(html+len,sizeof(html)-len,"</form>");
+    os64_html_document_t *doc = parse(html,"utf-8");
+    os64_page_t *page = os64_page_build(doc,kPage,NULL, NULL);
+    size_t before = allocations;
+    state_expect("state: large group edit",os64_page_set_checked(page,31,true) == 0);
+    size_t count = allocations-before;
+    os64_page_free(page);
+    fail_single = true;
+    for (size_t point = 1; point <= count; point++) {
+        page = os64_page_build(doc,kPage,NULL, NULL);
+        fail_at = allocations+point;
+        int64_t result = os64_page_set_checked(page,31,true);
+        fail_at = 0;
+        state_expect("state: group reservation reports failure",result == -OS64_PAGE_REASON_NO_MEMORY);
+        bool same = true;
+        for (int i = 0; i < 32; i++)
+            same = same && os64_page_control(page,i)->checked == (i == 0);
+        state_expect("state: failed group edit preserves all members",same);
+        state_expect("state: group edit recovers",os64_page_set_checked(page,31,true) == 0);
+        same = true;
+        for (int i = 0; i < 32; i++)
+            same = same && os64_page_control(page,i)->checked == (i == 31);
+        state_expect("state: recovered group has one selection",same);
+        state_expect("state: group reset",os64_page_reset(page,0) == 0);
+        same = true;
+        for (int i = 0; i < 32; i++)
+            same = same && os64_page_control(page,i)->checked == (i == 0);
+        state_expect("state: reset restores entire group",same);
+        os64_page_free(page);
+    }
+    fail_single = false;
+    os64_html_document_free(doc);
+}
+
+static void state_long_reset(void)
+{
+    char html[6200];
+    const char *prefix = "<form method=post><input name=t maxlength=1 value='";
+    size_t n = strlen(prefix);
+    memcpy(html,prefix,n);
+    memset(html+n,'x',6000);
+    strcpy(html+n+6000,"'><button>Send</button></form>");
+    os64_html_document_t *doc = parse(html,"utf-8");
+    os64_page_t *page = os64_page_build(doc,kPage,NULL, NULL);
+    state_expect("state: long default edit",os64_page_set_text(page,0,"z",1) == 0);
+    size_t before = allocations;
+    fail_at = before+1;
+    state_expect("state: long default reset",os64_page_reset(page,0) == 0);
+    fail_at = 0;
+    state_expect("state: long reset allocates nothing",allocations == before);
+    const os64_page_control_t *c = os64_page_control(page,0);
+    state_expect("state: long default intact",c->value_len == 6000 && c->value[5999] == 'x');
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
+    // The value exceeds maxlength but reset cleared its dirty flag.
+    state_expect("state: reset clears dirty value",os64_page_activate(page,what,&req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_free(page); os64_html_document_free(doc);
+}
+
+static void state_byte_spans(void)
+{
+    static const struct {
+        const char *control, *edit;
+        size_t edit_len;
+        const char *want;
+        size_t want_len;
+        const char *body;
+    } cases[] = {
+#define SPAN(s) s, sizeof(s)-1
+        {"<input name=q>", SPAN("a\0b\r\nc"), SPAN("a\0bc"), "q=a%00bc"},
+        {"<input type=search name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=tel name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=password name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=url name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=email name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=email multiple name=q>", SPAN(" a\0b , c@d "), SPAN("a\0b,c@d"), "q=a%00b%2Cc%40d"},
+        {"<textarea name=q></textarea>", SPAN("a\0b\r\nc"), SPAN("a\0b\nc"), "q=a%00b%0D%0Ac"},
+        {"<textarea name=q wrap=hard cols=2></textarea>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00%0D%0Ab"},
+        {"<input type=number name=q>", SPAN("12\0x"), SPAN(""), "q="},
+        {"<input type=date name=q>", SPAN("2024-01-01\0x"), SPAN(""), "q="},
+        {"<input type=month name=q>", SPAN("2024-01\0x"), SPAN(""), "q="},
+        {"<input type=week name=q>", SPAN("2024-W01\0x"), SPAN(""), "q="},
+        {"<input type=time name=q>", SPAN("12:30\0x"), SPAN(""), "q="},
+        {"<input type=datetime-local name=q>", SPAN("2024-01-01T12:30\0x"), SPAN(""), "q="},
+        {"<input type=range name=q>", SPAN("75\0x"), SPAN("50"), "q=50"},
+        {"<input type=color name=q>", SPAN("#ff0000\0x"), SPAN("#000000"), "q=%23000000"},
+        // The byte after the supplied span belongs to the caller, not the edit.
+        {"<input name=q>", "a\0bX", 3, SPAN("a\0b"), "q=a%00b"},
+        {"<input name=q>", SPAN("\0"), SPAN("\0"), "q=%00"},
+#undef SPAN
+    };
+    for (size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++) {
+        char html[256], name[80];
+        // novalidate: these spans are judged by what is sent, and several
+        // are a typeMismatch or a person's bad input that validation stops.
+        snprintf(html,sizeof(html),"<form method=post novalidate>%s<button>Go</button></form>",cases[i].control);
+        snprintf(name,sizeof(name),"byte span: case %zu",i);
+        os64_html_document_t *doc=parse(html,"utf-8");
+        os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
+        const os64_page_control_t *c=os64_page_control(page,0);
+        const char *initial=c->value;size_t initial_len=c->value_len;
+        state_expect(name,os64_page_set_text(page,0,cases[i].edit,cases[i].edit_len)==0);
+        state_expect(name,c->value_len==cases[i].want_len &&
+            !memcmp(c->value,cases[i].want,cases[i].want_len) && c->value[c->value_len]=='\0');
+        os64_page_request_t req;
+        os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
+        state_expect(name,os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE &&
+            req.body_len==strlen(cases[i].body) && !memcmp(req.body,cases[i].body,req.body_len));
+        os64_page_request_free(&req);
+        state_expect(name,os64_page_reset(page,0)==0 && c->value_len==initial_len &&
+            !memcmp(c->value,initial,initial_len));
+        os64_page_free(page);os64_html_document_free(doc);
+    }
+    static const char *enctypes[]={"text/plain","multipart/form-data"};
+    for (size_t i=0;i<2;i++) {
+        char html[256];
+        snprintf(html,sizeof(html),"<form method=post enctype=%s><input name=q><button>Go</button></form>",enctypes[i]);
+        os64_html_document_t *doc=parse(html,"utf-8");
+        os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
+        state_expect("byte span: text edit",os64_page_set_text(page,0,"a\0b",3)==0);
+        os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
+        state_expect("byte span: raw submission",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE);
+        const char *needle=i==0 ? "q=a\0b\r\n" : "\r\n\r\na\0b\r\n";
+        size_t len=i==0 ? 7 : 9;bool found=false;
+        for (size_t at=0;at+len<=req.body_len;at++)
+            if (!memcmp(req.body+at,needle,len)) found=true;
+        state_expect("byte span: serializer retains NUL and suffix",found);
+        os64_page_request_free(&req);
+        os64_page_free(page);os64_html_document_free(doc);
+    }
+}
+
+// The edit verbs refuse what the page took away, because every face would
+// otherwise have to remember to (PR #98's disabled and readonly findings).
+static void state_taken_away(void)
+{
+    os64_html_document_t *doc = parse(
+        "<form method=post>"
+        "<input name=ro readonly value=fixed>"                          // 0
+        "<input name=off disabled value=gone>"                          // 1
+        "<fieldset disabled><input type=checkbox name=box>"             // 2
+        "<legend>no</legend></fieldset>"
+        "<fieldset disabled><legend><input name=live value=l></legend>" // 3
+        "</fieldset>"
+        "<select name=pick><option value=a>A<option value=b disabled>B" // 4
+        "<optgroup disabled><option value=c>C</optgroup></select>"
+        "<select name=one><option value=x>X<option value=y>Y</select>"  // 5
+        "<select name=rows size=2><option value=p selected>P"           // 6
+        "<option value=q>Q</select>"
+        "<select name=gone disabled><option>G<option>H</select>"        // 7
+        "<input type=hidden name=h value=v>"                            // 8
+        "<input type=submit name=s value=S>"                            // 9
+        "<input type=radio name=rad disabled>"                          // 10
+        "<textarea name=note readonly>kept</textarea>"                  // 11
+        "<input type=checkbox name=tick readonly>"                      // 12
+        "<button name=b>Go</button></form>",                            // 13
+        "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("taken: control count", os64_page_ncontrols(page) == 14);
+    state_expect("taken: readonly text",
+                 os64_page_set_text(page, 0, "x", 1) == -OS64_PAGE_REASON_READONLY);
+    state_value("taken: readonly keeps value", page, 0, "fixed");
+    state_expect("taken: disabled text",
+                 os64_page_set_text(page, 1, "x", 1) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: fieldset-disabled tick",
+                 os64_page_set_checked(page, 2, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: tick stays clear", !os64_page_control(page, 2)->checked);
+    state_expect("taken: legend control is live", os64_page_set_text(page, 3, "m", 1) == 0);
+    state_expect("taken: disabled option",
+                 os64_page_set_chosen(page, 4, 1, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: optgroup-disabled option",
+                 os64_page_set_chosen(page, 4, 2, true) == -OS64_PAGE_REASON_DISABLED);
+    state_value("taken: list keeps its answer", page, 4, "a");
+    state_expect("taken: disabled option may be put down",
+                 os64_page_set_chosen(page, 4, 1, false) == 0);
+    state_expect("taken: drop-down cleared", os64_page_set_chosen(page, 5, 0, false) == 0);
+    state_value("taken: drop-down is never empty", page, 5, "x");
+    state_expect("taken: drop-down moved", os64_page_set_chosen(page, 5, 1, true) == 0 &&
+                                           os64_page_set_chosen(page, 5, 1, false) == 0);
+    state_value("taken: cleared drop-down holds its first", page, 5, "x");
+    state_expect("taken: list box cleared", os64_page_set_chosen(page, 6, 0, false) == 0);
+    state_value("taken: list box may hold nothing", page, 6, "");
+    state_expect("taken: disabled list",
+                 os64_page_set_chosen(page, 7, 1, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: hidden value takes no typing",
+                 os64_page_set_text(page, 8, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: submit value takes no typing",
+                 os64_page_set_text(page, 9, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: disabled radio",
+                 os64_page_set_checked(page, 10, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: readonly textarea",
+                 os64_page_set_text(page, 11, "x", 1) == -OS64_PAGE_REASON_READONLY);
+    state_expect("taken: readonly means nothing on a tick",
+                 os64_page_set_checked(page, 12, true) == 0);
+    state_expect("taken: button value takes no typing",
+                 os64_page_set_text(page, 13, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: refusal has a name",
+                 strcmp(os64_page_reason_name(OS64_PAGE_REASON_READONLY), "unknown refusal") != 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// A frame names a document, resolved by the same door as an href.
+static void state_frames(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://other/dir/\"></head>"
+        "<frameset><frame name=menu src=\" menu.html#top%20part \">"
+        "<frame name=empty><frame src=\"\"><frame src=\" \t\"></frameset>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("frames: one link per frame whose src names something",
+                 os64_page_nlinks(page) == 1);
+    const os64_page_link_t *link = os64_page_link(page, 0);
+    state_expect("frames: resolved against the base",
+                 link != NULL && link->href.url != NULL &&
+                 strcmp(link->href.url, "http://other/dir/menu.html") == 0 &&
+                 link->href.has_fragment && strcmp(link->href.fragment, "top part") == 0);
+    state_expect("frames: an empty or blank src is the blank page, not the base",
+                 os64_page_link(page, 1) == NULL);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// An iframe is offered as a frame is, by the same rule: an empty or blank
+// src is the blank page, which is nowhere to go.
+static void state_iframes(void)
+{
+    os64_html_document_t *doc = parse(
+        "<body><a href=a.html>a</a><iframe src=\"ad.html#x\">fallback</iframe>"
+        "<iframe></iframe><iframe src=\" \t\"></iframe>"
+        "<iframe src=\"\"></iframe></body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("iframes: only the one that names a document", os64_page_nlinks(page) == 2);
+    const os64_page_link_t *link = os64_page_link(page, 1);
+    state_expect("iframes: resolved like a frame, fragment kept apart",
+                 link != NULL && link->node != NULL &&
+                 link->node->tag == OS64_HTML_TAG_IFRAME && link->href.url != NULL &&
+                 strcmp(link->href.url, "http://host/dir/ad.html") == 0 &&
+                 link->href.has_fragment && strcmp(link->href.fragment, "x") == 0);
+    state_expect("iframes: the node names its link",
+                 link != NULL && os64_page_link_for(page, link->node) == 1);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// Every picture the page names, in tree order, resolved against the base;
+// alt kept as written, absent and empty told apart; an empty src listed
+// nowhere, because fetching the page itself as a picture is the bug.
+static void state_images(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://pics/lib/\"></head><body>"
+        "<img src=\" cat.png \" alt=\"A cat\">"
+        "<img src=dog.gif alt=\"\">"
+        "<img src=\"\" alt=empty><img alt=none><img src=\"  \">"
+        "<form><input type=IMAGE src=\"/go.png\" name=go></form>"
+        "<input type=submit src=x.png>"
+        "<img src=\"http://[bad\">"
+        "<svg><img src=foreign.png></svg>"
+        "<template><img src=inert.png></template>"
+        "</body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("images: every img and image input that names a src",
+                 os64_page_nimages(page) == 5);
+    const os64_page_image_t *image = os64_page_image(page, 0);
+    state_expect("images: resolved against the base, space trimmed",
+                 image != NULL && image->src.url != NULL &&
+                 strcmp(image->src.url, "http://pics/lib/cat.png") == 0 &&
+                 image->alt != NULL && strcmp(image->alt, "A cat") == 0);
+    image = os64_page_image(page, 1);
+    state_expect("images: an empty alt is empty, not absent",
+                 image != NULL && image->alt != NULL && image->alt[0] == '\0');
+    image = os64_page_image(page, 2);
+    state_expect("images: an image button is a picture too",
+                 image != NULL && image->node != NULL &&
+                 image->node->tag == OS64_HTML_TAG_INPUT && image->alt == NULL &&
+                 image->src.url != NULL && strcmp(image->src.url, "http://pics/go.png") == 0 &&
+                 os64_page_control_for(page, image->node) >= 0);
+    image = os64_page_image(page, 3);
+    state_expect("images: an address that will not resolve is listed, refused",
+                 image != NULL && image->src.url == NULL &&
+                 image->src.refused != OS64_PAGE_REASON_OK);
+    image = os64_page_image(page, 4);
+    state_expect("images: HTML inside a foreign element still counts",
+                 image != NULL && image->src.url != NULL &&
+                 strcmp(image->src.url, "http://pics/lib/foreign.png") == 0);
+    for (int32_t i = 0; i < os64_page_nimages(page); i++) {
+        image = os64_page_image(page, i);
+        state_expect("images: every node names its image",
+                     image != NULL && os64_page_image_for(page, image->node) == i);
+    }
+    state_expect("images: out of range is NULL",
+                 os64_page_image(page, -1) == NULL && os64_page_image(page, 5) == NULL &&
+                 os64_page_image_for(page, NULL) < 0 && os64_page_image_for(NULL, NULL) < 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// A picture's data: address past OS64_URL_REF_MAX is kept whole, spelled as
+// a short one is (scheme in lower case, fragment apart); the same address
+// as a link is still refused, and so is a long address of any other scheme.
+static void state_long_data_pictures(void)
+{
+    size_t body = OS64_URL_REF_MAX + 512;
+    char *data = malloc(body + 64), *html = malloc(4 * body + 512), *want = malloc(body + 64);
+    int n = snprintf(data, body + 64, "DaTa:image/png;base64,");
+    while ((size_t)n < body) data[n++] = 'A';
+    data[n] = '\0';
+    snprintf(want, body + 64, "data%s", data + 4);
+    snprintf(html, 4 * body + 512,
+             "<body background='%s'><img src=' %s#frag '><a href='%s'>x</a>"
+             "<img src='http://host/%s'></body>", data, data, data, data + 5);
+    os64_html_document_t *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    const os64_page_image_t *image = os64_page_image(page, 0);
+    state_expect("long data: an image's data: address past the limit is kept whole",
+                 image != NULL && image->src.url != NULL && strcmp(image->src.url, want) == 0 &&
+                 image->src.has_fragment && image->src.fragment != NULL &&
+                 strcmp(image->src.fragment, "frag") == 0);
+    const os64_page_background_t *b = os64_page_background(page, 0);
+    state_expect("long data: and so is a background's",
+                 b != NULL && b->src.url != NULL && strcmp(b->src.url, want) == 0);
+    const os64_page_link_t *l = os64_page_link(page, 0);
+    state_expect("long data: the same address as a link is still too long",
+                 l != NULL && l->href.url == NULL && l->href.refused == OS64_PAGE_REASON_TOO_LONG);
+    image = os64_page_image(page, 1);
+    state_expect("long data: a long address of another scheme is still too long",
+                 image != NULL && image->src.url == NULL &&
+                 image->src.refused == OS64_PAGE_REASON_TOO_LONG);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(data);
+    free(html);
+    free(want);
+}
+
+// The pictures a page puts behind things: the `background` attribute of
+// the body and the table elements, resolved against the base; an empty one
+// names nothing, and the attribute on any other element is not the
+// Rendering chapter's and is not listed.
+static void state_backgrounds(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://pics/lib/\"></head><body background=\" sky.gif \">"
+        "<table background=/wall.png><thead background=h.gif><tr><th background=th.gif>x"
+        "<tbody background=b.gif><tr background=\"\"><td background=td.jpg>y"
+        "<td background=\"   \">z<tfoot background=f.gif></table>"
+        "<div background=no.gif>not this</div><p background=nor.gif>nor this"
+        "<table><tr background=\"http://[bad\"><td>w</table>"
+        "</body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    static const struct { os64_html_tag_t tag; const char *url; } want[] = {
+        {OS64_HTML_TAG_BODY, "http://pics/lib/sky.gif"},
+        {OS64_HTML_TAG_TABLE, "http://pics/wall.png"},
+        {OS64_HTML_TAG_THEAD, "http://pics/lib/h.gif"},
+        {OS64_HTML_TAG_TH, "http://pics/lib/th.gif"},
+        {OS64_HTML_TAG_TBODY, "http://pics/lib/b.gif"},
+        {OS64_HTML_TAG_TD, "http://pics/lib/td.jpg"},
+        {OS64_HTML_TAG_TFOOT, "http://pics/lib/f.gif"},
+    };
+    int32_t n = (int32_t)(sizeof(want) / sizeof(want[0]));
+    state_expect("backgrounds: the body's and the table elements', empty ones not, a div's not",
+                 os64_page_nbackgrounds(page) == n + 1);
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_background_t *b = os64_page_background(page, i);
+        state_expect("backgrounds: in tree order, resolved against the base, space trimmed",
+                     b != NULL && b->node != NULL && b->node->tag == want[i].tag &&
+                     b->src.url != NULL && strcmp(b->src.url, want[i].url) == 0 &&
+                     os64_page_background_for(page, b->node) == i);
+    }
+    const os64_page_background_t *bad = os64_page_background(page, n);
+    state_expect("backgrounds: an address that will not resolve is listed, refused",
+                 bad != NULL && bad->node->tag == OS64_HTML_TAG_TR && bad->src.url == NULL &&
+                 bad->src.refused != OS64_PAGE_REASON_OK);
+    state_expect("backgrounds: out of range is NULL",
+                 os64_page_background(page, -1) == NULL &&
+                 os64_page_background(page, n + 1) == NULL &&
+                 os64_page_background_for(page, NULL) < 0 &&
+                 os64_page_background_for(NULL, NULL) < 0 && os64_page_nbackgrounds(NULL) == 0);
+    state_expect("backgrounds: not pictures",
+                 os64_page_nimages(page) == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// The page's style sheets, in document order: a `style` and a
+// `link rel=stylesheet`, the rel read as tokens without regard to case,
+// alternates and disabled links off, another language's `type` not ours,
+// an empty href naming nothing, SVG `style` in the same order, `template` inert.
+static void state_sheets(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://css/lib/\">"
+        "<link rel=stylesheet href=a.css>"
+        "<style media=\"screen and (max-width: 600px)\">p{}</style>"
+        "<link rel=\"Preload  STYLESHEET\" href=/b.css media=print>"
+        "<link rel=\"alternate stylesheet\" href=alt.css>"
+        "<link rel=stylesheet href=off.css disabled>"
+        "<link rel=stylesheet href=\"  \">"
+        "<link rel=stylesheet type=text/less href=x.less>"
+        "<style type=text/plain>not css</style>"
+        "<link rel=icon href=fav.ico>"
+        "<style type=\"TEXT/CSS\">q{}</style>"
+        "</head><body><link rel=stylesheet href=\"http://[bad\">"
+        "<svg><style>circle{}</style></svg>"
+        "<template><style>t{}</style></template>"
+        "<style>late{}</style></body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("sheets: the style elements and stylesheet links, and only those",
+                 os64_page_nsheets(page) == 7);
+    const os64_page_sheet_t *s = os64_page_sheet(page, 0);
+    state_expect("sheets: a link, resolved against the base, no media",
+                 s != NULL && s->linked && s->href.url != NULL &&
+                 strcmp(s->href.url, "http://css/lib/a.css") == 0 && s->media == NULL);
+    s = os64_page_sheet(page, 1);
+    state_expect("sheets: a style element in its place, its media as written",
+                 s != NULL && !s->linked && s->node->tag == OS64_HTML_TAG_STYLE && s->media != NULL &&
+                 strcmp(s->media, "screen and (max-width: 600px)") == 0 && s->href.url == NULL);
+    s = os64_page_sheet(page, 2);
+    state_expect("sheets: rel is tokens, in any case",
+                 s != NULL && s->linked && strcmp(s->href.url, "http://css/b.css") == 0 &&
+                 s->media != NULL && strcmp(s->media, "print") == 0);
+    s = os64_page_sheet(page, 3);
+    state_expect("sheets: a type of text/css in any case is CSS",
+                 s != NULL && !s->linked && s->node->first_child != NULL);
+    s = os64_page_sheet(page, 4);
+    state_expect("sheets: an address that will not resolve is listed, refused",
+                 s != NULL && s->linked && s->href.url == NULL &&
+                 s->href.refused != OS64_PAGE_REASON_OK);
+    s = os64_page_sheet(page, 5);
+    state_expect("sheets: an SVG style participates before the later HTML style",
+                 s != NULL && !s->linked && s->node->ns == OS64_HTML_NS_SVG &&
+                 strcmp(s->node->name, "style") == 0 && s->node->first_child != NULL &&
+                 strcmp(s->node->first_child->text, "circle{}") == 0);
+    s = os64_page_sheet(page, 6);
+    state_expect("sheets: one in the body counts, last",
+                 s != NULL && !s->linked && s->node->ns == OS64_HTML_NS_HTML &&
+                 s->node->tag == OS64_HTML_TAG_STYLE && s->node->first_child != NULL &&
+                 strcmp(s->node->first_child->text, "late{}") == 0);
+    state_expect("sheets: out of range is NULL",
+                 os64_page_sheet(page, -1) == NULL && os64_page_sheet(page, 7) == NULL &&
+                 os64_page_nsheets(NULL) == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// What a page writes in an href is percent-encoded part by part, as every
+// browser does: a path in UTF-8, a query in the document's encoding, a
+// fragment left for the matcher.
+static void state_reference_bytes(void)
+{
+    static const struct { const char *html, *charset, *url, *fragment; } cases[] = {
+        {"<a href='/wiki/H\xC3\xA5kon Wium'>x</a>", "utf-8",
+         "http://host/wiki/H%C3%A5kon%20Wium", NULL},
+        {"<a href='/a\"b<c>d`e{f}'>x</a>", "utf-8",
+         "http://host/a%22b%3Cc%3Ed%60e%7Bf%7D", NULL},
+        {"<a href='/s?q=caf\xC3\xA9 \"x\"&k=`{}`'>x</a>", "utf-8",
+         "http://host/s?q=caf%C3%A9%20%22x%22&k=`{}`", NULL},
+        // A windows-1252 page's query is windows-1252, and a character it
+        // cannot hold is the markup that names it, escaped.
+        {"<a href='/s?q=caf\xE9\x92&#9731;'>x</a>", "windows-1252",
+         "http://host/s?q=caf%E9%92%26%239731%3B", NULL},
+        // ...and its path is UTF-8 all the same.
+        {"<a href='/caf\xE9'>x</a>", "windows-1252", "http://host/caf%C3%A9", NULL},
+        {"<a href='/p#H\xC3\xA5kon'>x</a>", "utf-8", "http://host/p", "H\xC3\xA5kon"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        os64_html_document_t *doc = parse(cases[i].html, cases[i].charset);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        const os64_page_link_t *link = os64_page_link(page, 0);
+        char name[64];
+        snprintf(name, sizeof(name), "reference bytes: case %zu", i);
+        state_expect(name, link != NULL && link->href.url != NULL &&
+                           strcmp(link->href.url, cases[i].url) == 0);
+        if (link != NULL && link->href.url != NULL && strcmp(link->href.url, cases[i].url) != 0)
+            fprintf(stderr, "    got %s\n", link->href.url);
+        if (cases[i].fragment != NULL)
+            state_expect(name, link != NULL && link->href.fragment != NULL &&
+                               strcmp(link->href.fragment, cases[i].fragment) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
+// Per-control questions answered once. Each of these was N² before: a
+// legendless disabled fieldset rescanned its children for every control, a
+// radio group was walked whole at every member, and a `dir=auto` subtree
+// was rescanned for every `dirname` control under it. At these sizes the
+// old code would run for minutes; the suite would visibly stall.
+static void state_scale(void)
+{
+    enum { N = 60000 };
+    size_t cap = (size_t)N * 64 + 256, at = 0;
+    char *html = malloc(cap);
+    if (html == NULL)
+        abort();
+    at += (size_t)snprintf(html + at, cap - at, "<form method=post><fieldset disabled>");
+    for (int i = 0; i < N; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input name=f>");
+    at += (size_t)snprintf(html + at, cap - at, "</fieldset>");
+    for (int i = 0; i < N; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input type=radio name=r required%s>",
+                               i == N - 1 ? " checked" : "");
+    at += (size_t)snprintf(html + at, cap - at, "<div dir=auto>");
+    for (int i = 0; i < N / 4; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input name=t dirname=d>");
+    snprintf(html + at, cap - at, "</div><button>Go</button></form>");
+    os64_html_document_t *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("scale: builds whole", page != NULL && !os64_page_incomplete(page));
+    state_expect("scale: fieldset disables its first and last",
+                 os64_page_control(page, 0)->disabled && os64_page_control(page, N - 1)->disabled);
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, os64_page_ncontrols(page) - 1, 0, 0};
+    state_expect("scale: submits", os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE &&
+                                   req.body != NULL);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+
+    // The rules, on small pages: a fieldset's exception is its OWN first
+    // legend, nested ones included.
+    doc = parse("<form><fieldset disabled><p>x</p>"
+                "<legend><fieldset disabled><legend><input name=a></legend>"
+                "<input name=b></fieldset></legend>"
+                "<legend><input name=c></legend><input name=d></fieldset></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("fieldset: inner legend live", !os64_page_control(page, 0)->disabled);
+    state_expect("fieldset: inner body off", os64_page_control(page, 1)->disabled);
+    state_expect("fieldset: second legend off", os64_page_control(page, 2)->disabled);
+    state_expect("fieldset: outer body off", os64_page_control(page, 3)->disabled);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    // A group judged where its first unbarred member stands, over every
+    // member: a disabled checked radio still answers it.
+    doc = parse("<form><input name=t><input type=radio name=r disabled required>"
+                "<input type=radio name=r><button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
+    state_expect("radio group judged past a barred head",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 2);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    doc = parse("<form><input type=radio name=r disabled required checked>"
+                "<input type=radio name=r><button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0};
+    state_expect("radio group answered by a disabled tick",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    doc = parse("<form><input name=t><input type=radio name=r><input type=radio name=r required>"
+                "<button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
+    state_expect("radio group failure names its first member",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 1);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// An empty `label` is no label; the words fall back to the text.
+static void state_option_labels(void)
+{
+    os64_html_document_t *doc = parse("<select><option label='' value=x>Fallback"
+                                      "<option label=Short value=y>Long</select>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    const os64_page_control_t *c = os64_page_control(page, 0);
+    state_expect("option: empty label falls back to text",
+                 c != NULL && c->noptions == 2 && strcmp(c->options[0].label, "Fallback") == 0 &&
+                 strcmp(c->options[1].label, "Short") == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+static int validity_calls;
+static char validity_last[64];
+
+/* A matcher that says `value` matches when it equals the pattern. */
+static int validity_equal(void *opaque, const char *pattern, const char *value, size_t len)
+{
+    (void)opaque;
+    validity_calls++;
+    snprintf(validity_last, sizeof(validity_last), "%.*s", (int)len, value);
+    if (strcmp(pattern, "[") == 0)
+        return -1;
+    return strlen(pattern) == len && memcmp(pattern, value, len) == 0;
+}
+
+/* The first element with this tag under `at`, in tree order. */
+static const os64_html_node_t *validity_find(const os64_html_node_t *at, os64_html_tag_t tag)
+{
+    for (; at != NULL; at = at->next) {
+        if (at->kind == OS64_HTML_ELEMENT && at->tag == tag)
+            return at;
+        const os64_html_node_t *inner = validity_find(at->first_child, tag);
+        if (inner != NULL)
+            return inner;
+    }
+    return NULL;
+}
+
+static uint32_t validity_of(os64_page_t *page, int32_t control, os64_page_pattern_t matcher)
+{
+    uint32_t flags = 0xffffffffu;
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validity(os64_page_shared_state(page), c->node, matcher, NULL, &flags) < 0)
+        return 0xffffffffu;
+    return flags;
+}
+
+static const char *validity_message(os64_page_t *page, int32_t control)
+{
+    static char out[128];
+    uint32_t flags = validity_of(page, control, NULL);
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validation_message(os64_page_shared_state(page), c->node, flags, out,
+                                                       sizeof(out)) < 0)
+        return "(refused)";
+    return out;
+}
+
+/* Constraint validation by node (0f's P4): the judge's flags and sentences,
+ * the custom message's life, a person's bad input, and the submission that
+ * obeys them. */
+static void state_validity(void)
+{
+    os64_html_document_t *doc = parse("<form action=/s method=get>"
+        "<input name=q required>"                                   // 0
+        "<input type=email name=e value=nope>"                      // 1
+        "<input type=url name=u value=http://x.example>"            // 2
+        "<input type=number name=n>"                                // 3
+        "<input name=p pattern=abc value=abd>"                      // 4
+        "<input name=l maxlength=2>"                                // 5
+        "<input type=radio required>"                               // 6
+        "<input type=checkbox name=k readonly required>"            // 7
+        "<input type=hidden name=h>"                                // 8
+        "<button name=b>Go</button></form>"                         // 9
+        "<fieldset id=fs></fieldset><div id=d></div>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    state_expect("validity: missing", validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    state_expect("validity: missing's sentence", strcmp(validity_message(page, 0), "Please fill out this field.") == 0);
+    state_expect("validity: email", validity_of(page, 1, NULL) == OS64_PAGE_VALIDITY_TYPE);
+    state_expect("validity: email's sentence", strcmp(validity_message(page, 1), "Please enter an email address.") == 0);
+    state_expect("validity: url", validity_of(page, 2, NULL) == 0);
+    state_expect("validity: no matcher, no pattern", validity_of(page, 4, NULL) == 0 && validity_calls == 0);
+    state_expect("validity: the matcher judges the value",
+                 validity_of(page, 4, validity_equal) == OS64_PAGE_VALIDITY_PATTERN && validity_calls == 1 &&
+                 strcmp(validity_last, "abd") == 0);
+    state_expect("validity: an unnamed radio is never missing", validity_of(page, 6, NULL) == 0);
+    bool will = true;
+    const os64_page_control_t *tick = os64_page_control(page, 7);
+    state_expect("validity: readonly bars a tick",
+                 os64_page_node_will_validate(state, tick->node, &will) == 0 && !will &&
+                 validity_of(page, 7, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    will = true;
+    state_expect("validity: hidden is barred",
+                 os64_page_node_will_validate(state, os64_page_control(page, 8)->node, &will) == 0 && !will);
+    const os64_html_node_t *fs = validity_find(doc->document, OS64_HTML_TAG_FIELDSET);
+    const os64_html_node_t *d = validity_find(doc->document, OS64_HTML_TAG_DIV);
+    will = true;
+    uint32_t flags = 1;
+    state_expect("validity: a fieldset never validates",
+                 fs != NULL && os64_page_node_will_validate(state, fs, &will) == 0 && !will &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == 0);
+    state_expect("validity: a div is no kind",
+                 d != NULL && os64_page_node_validity(state, d, NULL, NULL, &flags) == -OS64_PAGE_REASON_WRONG_KIND &&
+                 os64_page_node_set_custom_validity(state, d, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    /* the custom message: kept until cleared, by a reset too; a fieldset's alone */
+    const os64_page_control_t *b = os64_page_control(page, 9);
+    state_expect("validity: custom", os64_page_node_set_custom_validity(state, b->node, "No\xc3\xa9", 4) == 0 &&
+                 validity_of(page, 9, NULL) == OS64_PAGE_VALIDITY_CUSTOM &&
+                 strcmp(validity_message(page, 9), "No\xc3\xa9") == 0);
+    state_expect("validity: a fieldset's custom",
+                 os64_page_node_set_custom_validity(state, fs, "f", 1) == 0 &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == OS64_PAGE_VALIDITY_CUSTOM);
+    /* a person's text a number cannot hold, and what clears it */
+    state_expect("validity: bad input", os64_page_set_text(page, 3, "abc", 3) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 strcmp(validity_message(page, 3), "Please enter a number.") == 0);
+    state_expect("validity: white space is no input", os64_page_set_text(page, 3, "  ", 2) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    state_expect("validity: bad again", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT);
+    const os64_page_control_t *n = os64_page_control(page, 3);
+    state_expect("validity: a script's value clears it",
+                 os64_page_node_set_value(state, n->node, "abc", 3) == 0 && validity_of(page, 3, NULL) == 0);
+    state_expect("validity: a reset clears it", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT && os64_page_reset(page, 0) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    /* a person's text past maxlength, and its sentence */
+    state_expect("validity: too long", os64_page_set_text(page, 5, "abc", 3) == 0 &&
+                 validity_of(page, 5, NULL) == OS64_PAGE_VALIDITY_TOO_LONG &&
+                 strcmp(validity_message(page, 5), "Please shorten this text to 2 characters or less.") == 0);
+    /* the submission obeys the judge: the first invalid control, in order */
+    os64_page_set_text(page, 0, "q", 1);
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, 9, 0, 0};
+    state_expect("validity: submission stops at the email",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 1);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 1, "a@b.c", 5);
+    os64_page_set_text(page, 5, "ab", 2);
+    state_expect("validity: then at the custom error",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING && req.control == 9);
+    os64_page_request_free(&req);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    state_expect("validity: cleared, it is sent (the pattern unjudged)",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 0, "", 0);
+    state_expect("validity: invalid again", os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING);
+    os64_page_request_free(&req);
+    state_expect("validity: a submission the scripts validated is not judged again",
+                 os64_page_activate_validated(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    /* a long custom message's sentence is cut between characters, and a
+     * NUL in an address is no address character */
+    char long_message[600];
+    for (int k = 0; k < 300; k++) { long_message[2 * k] = (char)0xc3; long_message[2 * k + 1] = (char)0xa9; }
+    char cut[256];
+    uint32_t custom = OS64_PAGE_VALIDITY_CUSTOM;
+    size_t whole = 0;
+    const char *kept = NULL;
+    state_expect("validity: a long message, cut between characters",
+                 os64_page_node_set_custom_validity(state, b->node, long_message, 600) == 0 &&
+                 os64_page_node_validation_message(state, b->node, custom, cut, sizeof(cut)) == 0 &&
+                 strlen(cut) == 254 && os64_page_node_custom_validity(state, b->node, &kept, &whole) == 0 &&
+                 whole == 600 && memcmp(kept, long_message, 600) == 0);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    const os64_page_control_t *mail = os64_page_control(page, 1);
+    state_expect("validity: a NUL in an address",
+                 os64_page_node_set_value(state, mail->node, "a\0b@c.d", 7) == 0 &&
+                 (validity_of(page, 1, NULL) & OS64_PAGE_VALIDITY_TYPE) != 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* the submitter a submission would take */
+    doc = parse("<form><input name=a><input name=b><button>Go</button></form>"
+                "<form><input name=c></form><form><input name=d><input name=e></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    int32_t who = 5;
+    state_expect("submitter: the button pressed",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0}, &who) && who == 2);
+    state_expect("submitter: Enter takes the default button",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 0, 0, 0}, &who) && who == 2);
+    state_expect("submitter: one field submits its form itself",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 3, 0, 0}, &who) && who == -1);
+    state_expect("submitter: two fields and no button submit nothing",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 4, 0, 0}, &who));
+    state_expect("submitter: a form has none",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_FORM, 0, 0, 0}, &who));
+    state_expect("submitter: a link or a refresh is no submission",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_LINK, 0, 0, 0}, &who) &&
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0}, &who));
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a placeholder whose only text is a script's: its value is empty, as
+     * the option's own text leaves scripts out */
+    doc = parse("<select required><option><script>0</script></option><option>A</option></select>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("validity: a script's text is no option text",
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a type change is a new field: it clears the bad input */
+    doc = parse("<input type=number>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state = os64_page_shared_state(page);
+    const os64_html_node_t *field = os64_page_control(page, 0)->node;
+    uint32_t after = 0;
+    state_expect("validity: a type that cannot be bad is not",
+                 os64_page_set_text(page, 0, "x", 1) == 0 &&
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 os64_page_node_set_attr(state, field, "type", "text", 4, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 &&
+                 (after & OS64_PAGE_VALIDITY_BAD_INPUT) == 0);
+    state_expect("validity: and back to a number, the old text is not this field's",
+                 os64_page_node_set_attr(state, field, "value", "7", 1, false) == 0 &&
+                 os64_page_node_set_attr(state, field, "type", "number", 6, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 && after == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+/* 0f's P4b: min, max and step, over each type read as a number. Each case
+ * is one input, judged with its flags. */
+static void state_validity_range(void)
+{
+    static const struct { const char *html, *value; uint32_t want; const char *message; } cases[] = {
+        {"<input type=number min=2>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 2."},
+        {"<input type=number max=2>", "3", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be less than or equal to 2."},
+        {"<input type=number>", "-.8", OS64_PAGE_VALIDITY_STEP, "Please enter a valid value."},
+        {"<input type=number step=0.003>", "3.6", 0, ""},
+        {"<input type=number step=1e-12>", "-12345678.9", 0, ""},
+        {"<input type=number step=3e-15>", "17", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number step=any>", "0.5", 0, ""},
+        {"<input type=number step=0>", "0.5", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number min=0.5 step=1>", "1.5", 0, ""},
+        /* a min that does not convert: the value attribute is the base */
+        {"<input type=number step=2 value=3 min=nope>", NULL, 0, NULL},
+        /* a range's max below its min is its min: the value it is put at is valid */
+        {"<input type=range value=50 min=60 max=40>", NULL, 0, NULL},
+        {"<input type=date min=2000-01-02>", "2000-01-01", OS64_PAGE_VALIDITY_UNDERFLOW,
+         "Value must be 2000-01-02 or later."},
+        {"<input type=date max=275760-09-13>", "2000-01-01", 0, ""},
+        {"<input type=date step=2>", "1970-01-02", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=date step=2>", "1970-01-03", 0, NULL},
+        {"<input type=month step=2>", "1970-04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=month max=2000-01>", "2000-02", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2000-01 or earlier."},
+        {"<input type=week step=2>", "1970-W04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=week step=2>", "1970-W03", 0, NULL},
+        {"<input type=week min=2009-W53>", "2010-W01", 0, NULL},
+        {"<input type=week min=2010-W01>", "2009-W53", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=time step=120>", "12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=time step=0.001>", "12:00:00.001", 0, NULL},
+        {"<input type=time step=0.5>", "12:00:00.5", 0, NULL},
+        /* the scale multiplied in decimal: 16.1 s is 16100 ms exactly */
+        {"<input type=time step=16.1>", "00:00:16.1", 0, NULL},
+        {"<input type=datetime-local step=1.001>", "1970-01-01T00:00:01.001", 0, NULL},
+        {"<input type=week step=1e300>", "1970-W01", 0, NULL},
+        /* min, max and the base read as the sanitizer reads them */
+        {"<input type=range min='10 ' step=3>", NULL, 0, NULL},
+        {"<input type=number min='+10'>", "5", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a year past a Date's does not convert (DEBTS.md § libpage) */
+        {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
+        {"<input type=range min=150 max=abc>", NULL, 0, NULL},
+        /* the value a range's sanitizer chose, a grid point held as the
+         * nearest double, is on the grid: a step finer than the value's
+         * precision, and a step of seventeen digits */
+        {"<input type=range step=0.12345678901234567>", NULL, 0, NULL},
+        {"<input type=range min=0 max=1e17 step=0.3>", NULL, 0, NULL},
+        /* a range pinned at its min is snapped to no step, nor judged by one */
+        {"<input type=range max=-10 value=0.5>", NULL, 0, NULL},
+        /* a bound's fraction of any length, its first three digits kept */
+        {"<input type=time min=09:00:00.0000>", "08:00", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a number's bound said as the number it was read as */
+        {"<input type=number min=5px>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 5."},
+        /* a date whose max is below its min does not wrap: one bound is said */
+        {"<input type=date min=2020-01-01 max=2019-01-01>", "2019-06-01",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2020-01-01 or later."},
+        {"<input type=time min=22:00 max=02:00>", "23:00", 0, NULL},
+        {"<input type=time min=22:00 max=02:00>", "12:00",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW,
+         "Value must be 22:00 or later, or 02:00 or earlier."},
+        {"<input type=datetime-local step=120>", "1970-01-01T12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=datetime-local min=2000-01-01T00:00>", "1999-12-31T23:59", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=text min=5>", "1", 0, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "validity range: %s", cases[i].html);
+        os64_html_document_t *doc = parse(cases[i].html, "utf-8");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        if (cases[i].value != NULL)
+            os64_page_node_set_value(os64_page_shared_state(page), os64_page_control(page, 0)->node, cases[i].value,
+                                     strlen(cases[i].value));
+        uint32_t got = validity_of(page, 0, NULL);
+        if (got != cases[i].want)
+            fprintf(stderr, "%s: flags %#x, wanted %#x\n", name, got, cases[i].want);
+        bool said = cases[i].message == NULL || strcmp(validity_message(page, 0), cases[i].message) == 0;
+        if (!said)
+            fprintf(stderr, "%s: said '%s'\n", name, validity_message(page, 0));
+        state_expect(name, got == cases[i].want && said);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
+/* 0f's P5: valueAsNumber, valueAsDate, stepUp and stepDown, each case one
+ * input. A NULL value leaves the input's own. */
+static os64_page_t *value_as_page(const char *html, const char *value, os64_html_document_t **doc,
+                                  const os64_html_node_t **node)
+{
+    *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(*doc, kPage, NULL, NULL);
+    *node = os64_page_control(page, 0)->node;
+    if (value != NULL)
+        os64_page_node_set_value(os64_page_shared_state(page), *node, value, strlen(value));
+    return page;
+}
+
+static const char *value_of(os64_page_t *page, const os64_html_node_t *node)
+{
+    const char *text = NULL;
+    size_t len = 0;
+    return os64_page_node_value(os64_page_shared_state(page), node, &text, &len) == 0 ? text : "(refused)";
+}
+
+static void state_value_as(void)
+{
+    const double nan = __builtin_nan("");
+    static const struct { const char *html, *value; os64_page_as_t as; double want; bool applies; } reads[] = {
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_NUMBER, 1575936000000.0, true},
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_DATE, 1575936000000.0, true},
+        {"<input type=date>", "", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_NUMBER, 599, true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_DATE, 1575158400000.0, true},
+        {"<input type=month>", "1969-12", OS64_PAGE_AS_DATE, -2678400000.0, true},
+        {"<input type=week>", "1969-W20", OS64_PAGE_AS_NUMBER, -20217600000.0, true},
+        {"<input type=time>", "23:59", OS64_PAGE_AS_DATE, 86340000, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_NUMBER, 1575979200000.0, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        {"<input type=number>", "1e3", OS64_PAGE_AS_NUMBER, 1000, true},
+        {"<input type=number>", "1", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        /* a range's sanitized value: no value is its midpoint */
+        {"<input type=range>", NULL, OS64_PAGE_AS_NUMBER, 50, true},
+        {"<input type=text>", "5", OS64_PAGE_AS_NUMBER, __builtin_nan(""), false},
+        /* a year past a Date's is kept, and converts to nothing */
+        {"<input type=date>", "300000-01-01", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+    };
+    for (size_t i = 0; i < sizeof(reads) / sizeof(reads[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: read %s %s %d", reads[i].html, reads[i].value ? reads[i].value : "-",
+                 (int)reads[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(reads[i].html, reads[i].value, &doc, &node);
+        double got = 0;
+        bool applies = !reads[i].applies;
+        int64_t status = os64_page_node_value_as(os64_page_shared_state(page), node, reads[i].as, &got, &applies);
+        bool same = got == reads[i].want || (got != got && reads[i].want != reads[i].want);
+        if (!same) fprintf(stderr, "%s: %.17g\n", name, got);
+        state_expect(name, status == 0 && same && applies == reads[i].applies);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html; double number; os64_page_as_t as; const char *want; bool applies; } writes[] = {
+        {"<input type=date>", 0, OS64_PAGE_AS_NUMBER, "1970-01-01", true},
+        /* rounded to the nearest millisecond, as Blink rounds */
+        {"<input type=date>", 86399999.5, OS64_PAGE_AS_NUMBER, "1970-01-02", true},
+        {"<input type=date>", -62135596800000.0, OS64_PAGE_AS_NUMBER, "0001-01-01", true},
+        /* before year 1, or past 275760: nothing to spell, so empty */
+        {"<input type=date value=2000-01-01>", -62135596800001.0, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=date value=2000-01-01>", 8.7e15, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=datetime-local>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=month>", -1, OS64_PAGE_AS_NUMBER, "1969-12", true},
+        {"<input type=month>", 2.5, OS64_PAGE_AS_NUMBER, "1970-04", true},
+        {"<input type=month>", 1575936000000.0, OS64_PAGE_AS_DATE, "2019-12", true},
+        {"<input type=week>", 0, OS64_PAGE_AS_NUMBER, "1970-W01", true},
+        {"<input type=week>", -20217600000.0, OS64_PAGE_AS_NUMBER, "1969-W20", true},
+        /* a Sunday is its ISO week's last day, in the year its Thursday is */
+        {"<input type=week>", 1609632000000.0, OS64_PAGE_AS_DATE, "2020-W53", true},
+        /* a time's place in its day, exact however large the number */
+        {"<input type=time>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "10:54:10.944", true},
+        {"<input type=time>", -3600000, OS64_PAGE_AS_NUMBER, "23:00", true},
+        {"<input type=time>", -0.5, OS64_PAGE_AS_NUMBER, "23:59:59.999", true},
+        {"<input type=time>", 1000, OS64_PAGE_AS_DATE, "00:00:01", true},
+        {"<input type=datetime-local>", -86400000, OS64_PAGE_AS_NUMBER, "1969-12-31T00:00", true},
+        /* the local date and time's sanitizer shortens the fraction */
+        {"<input type=datetime-local>", 500, OS64_PAGE_AS_NUMBER, "1970-01-01T00:00:00.5", true},
+        {"<input type=number>", 123.456, OS64_PAGE_AS_NUMBER, "123.456", true},
+        {"<input type=number>", 1e21, OS64_PAGE_AS_NUMBER, "1e+21", true},
+        {"<input type=number value=4>", __builtin_nan(""), OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=time value=12:00>", __builtin_nan(""), OS64_PAGE_AS_DATE, "", true},
+        {"<input type=range>", 100, OS64_PAGE_AS_NUMBER, "100", true},
+        {"<input type=checkbox value=on>", 5, OS64_PAGE_AS_NUMBER, "on", false},
+        {"<input type=datetime-local value=2000-01-01T00:00>", 0, OS64_PAGE_AS_DATE, "2000-01-01T00:00", false},
+    };
+    for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: write %s %.17g %d", writes[i].html, writes[i].number,
+                 (int)writes[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(writes[i].html, NULL, &doc, &node);
+        bool applies = !writes[i].applies;
+        int64_t status = os64_page_node_set_value_as(os64_page_shared_state(page), node, writes[i].as,
+                                                     writes[i].number, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, writes[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == writes[i].applies && strcmp(got, writes[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html, *value; int32_t n; bool down; const char *want; bool applies; } steps[] = {
+        /* WPT's input-stepdown-02: a value that did not convert is 0, and
+         * moves wherever its clamp puts it */
+        {"<input type=number>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "", 1, true, "7", true},
+        {"<input type=number min=-7>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "7", 1, true, "7", true},
+        {"<input type=number min=7>", "3", 1, true, "3", true},
+        {"<input type=number min=7>", "10", 1, true, "9", true},
+        {"<input type=number max=30 step=3>", "30", 5, true, "15", true},
+        {"<input type=number min=300 step=1>", "200", 1, true, "200", true},
+        /* in decimal: 1.2 - 0.3 is 0.9, where binary64 makes 0.8999... */
+        {"<input type=number step=0.3>", "1.2", 1, true, "0.9", true},
+        {"<input type=number min=0 step=2>", "5", 1, false, "6", true},
+        {"<input type=number min=0 step=3>", "8", 1, true, "6", true},
+        {"<input type=number min=10 max=5>", "0", 1, false, "0", true},
+        {"<input type=number step=3 max=7>", "0", 3, false, "6", true},
+        /* the snap onto the grid is one of the steps (Blink, Gecko) */
+        {"<input type=number step=2>", "5", 3, false, "10", true},
+        {"<input type=number step=2>", "5", -2, false, "2", true},
+        /* a step down that snaps, then clamps up to the min, is the wrong
+         * way for a value that converted: nothing changes (the spec's step
+         * 10 and Gecko; Blink counts the snap off first and moves it) */
+        {"<input type=number min=5 step=2>", "4", 1, true, "4", true},
+        /* step 10 by the signed count, as Blink and Gecko read it, where
+         * the spec names the method: stepDown(-1) moves up */
+        {"<input type=number>", "5", -1, true, "6", true},
+        /* the min is the step base, so always a grid point: a value that
+         * did not convert snaps up onto it */
+        {"<input type=number min=1 max=2 step=5>", "", 1, false, "1", true},
+        /* a stride times a count past the decimal base: its carry spans
+         * words, and the clamp compares it whole */
+        {"<input type=number step=999999999 max=1e18>", "0", INT32_MAX, false, "1000000000000000000", true},
+        /* and taken from a value it outgrows, which compares them whole */
+        {"<input type=number step=999999999>", "1500000000000000000", INT32_MAX, true, "-647483644352516400", true},
+        /* -(INT32_MIN) steps */
+        {"<input type=number>", "0", INT32_MIN, true, "2147483648", true},
+        /* past the largest double: nothing changes */
+        {"<input type=number step=1e308>", "1.7976931348623157e308", 1, false, "1.7976931348623157e308", true},
+        {"<input type=date>", "", 1, false, "1970-01-02", true},
+        {"<input type=month>", "", 1, false, "1970-02", true},
+        /* week 1 of 1970 began on 1969-12-29: 0 is off its grid */
+        {"<input type=week>", "", 1, false, "1970-W02", true},
+        {"<input type=time>", "", 1, false, "00:01", true},
+        {"<input type=datetime-local>", "", 1, false, "1970-01-01T00:01", true},
+        {"<input type=time step=2>", "00:00:01", 1, false, "00:00:02", true},
+        {"<input type=range>", NULL, 1, false, "51", true},
+        {"<input type=range min=60 max=40>", NULL, 1, false, "60", true},
+        {"<input type=number step=any>", "1", 1, false, "1", false},
+        {"<input type=text>", "1", 1, false, "1", false},
+    };
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: step %s %s %d %s", steps[i].html, steps[i].value ? steps[i].value : "-",
+                 (int)steps[i].n, steps[i].down ? "down" : "up");
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(steps[i].html, steps[i].value, &doc, &node);
+        bool applies = !steps[i].applies;
+        int64_t status = os64_page_node_step(os64_page_shared_state(page), node, steps[i].n, steps[i].down, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, steps[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == steps[i].applies && strcmp(got, steps[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    /* An infinite number is the caller's TypeError; a node that is no
+     * input, any member's WRONG_KIND. */
+    os64_html_document_t *doc;
+    const os64_html_node_t *node;
+    os64_page_t *page = value_as_page("<input type=number>", NULL, &doc, &node);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    bool applies = false;
+    double got = 0;
+    state_expect("value as: infinity refused",
+                 os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, 1.0 / 0.0, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("value as: NaN taken", os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, nan, &applies) ==
+                                            0 && applies);
+    state_expect("value as: not an input",
+                 os64_page_node_value_as(state, node->parent, OS64_PAGE_AS_NUMBER, &got, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND &&
+                     os64_page_node_step(state, node->parent, 1, false, &applies) == -OS64_PAGE_REASON_WRONG_KIND);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+static void state_cases(void)
+{
+    state_validity();
+    state_validity_range();
+    state_value_as();
+    state_option_labels();
+    state_scale();
+    state_taken_away();
+    state_frames();
+    state_iframes();
+    state_images();
+    state_long_data_pictures();
+    state_backgrounds();
+    state_sheets();
+    state_reference_bytes();
+    state_group_reset();
+    state_sanitizers();
+    state_tick_values();
+    state_byte_spans();
+    state_selection_cases();
+    state_allocation_failures();
+    state_large_group();
+    state_long_reset();
+}

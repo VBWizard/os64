@@ -1,0 +1,13 @@
+<!doctype html>
+<meta name="timeout" content="long">
+<title>The runner's own: a long timeout</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// The harness's own timer is off, so the runner's budget is all that ends
+// the page: seventy seconds is past the ordinary sixty and inside the long.
+setup({explicit_timeout: true});
+async_test(function(t) {
+  t.step_timeout(t.step_func_done(), 70000);
+}, "a page that says its timeout is long has the runner's long budget");
+</script>

@@ -14,6 +14,7 @@
 #include "os64/proc.h"     // os64_getenv — where the TZ policy arrives from
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 static void date_set_zone(os64_date_t *date, int32_t offset, const char *name)
@@ -137,18 +138,33 @@ static int32_t is_digit(char c)
     return c >= '0' && c <= '9';
 }
 
-// A zone name: 3+ letters (the classic minimum). Copies up to 7 into dst,
+// A zone name: 3+ letters (the classic minimum), or, quoted in angle
+// brackets, 3+ letters, digits, `+` and `-` (POSIX's form for a name that
+// is a number, which tzdata writes for every zone with no abbreviation of
+// its own: `<+0530>-5:30`). Copies up to 7 into dst, the quotes left off;
 // returns the cursor past the name, or NULL if it isn't one.
 static const char *tz_scan_name(const char *p, char *dst)
 {
-    int32_t n = 0;
-    while (is_letter(*p)) {
+    int32_t n = 0, length = 0;
+    bool quoted = *p == '<';
+    if (quoted)
+        p++;
+    while (is_letter(*p) || (quoted && (is_digit(*p) || *p == '+' || *p == '-'))) {
         if (n < 7)
             dst[n++] = *p;
+        length++;
         p++;
     }
     dst[n] = '\0';
-    return (n >= 3) ? p : NULL;
+    if (quoted && *p++ != '>')
+        return NULL;
+    return (length >= 3) ? p : NULL;
+}
+
+// Whether a zone name starts here (tz_scan_name's first character).
+static bool tz_name_starts(char c)
+{
+    return is_letter(c) || c == '<';
 }
 
 // An offset: [+|-]h[h][:mm], hours WEST of UTC (the V7 prank) — converted
@@ -182,8 +198,11 @@ static const char *tz_scan_offset(const char *p, int32_t *east_min)
     return p;
 }
 
-// A transition rule: ,M<month>.<week>.<weekday>[/h[:mm]]. Only the M form —
-// it is the one humans write and the only one with named semantics.
+// A transition rule: ,M<month>.<week>.<weekday>[/[+|-]h[:mm]]. Only the M
+// form, which is the one humans write and the only one tzdata's zones use.
+// The time may be negative or past 24 hours (POSIX allows -167 to 167):
+// tzdata writes Greenland's `/-1` and Israel's `/26`, an instant measured
+// from the rule's day in the rule's own local time.
 static const char *tz_scan_rule(const char *p, os64_tz_rule_t *r)
 {
     if (*p != ',' || p[1] != 'M')
@@ -213,22 +232,25 @@ static const char *tz_scan_rule(const char *p, os64_tz_rule_t *r)
     r->minute = 120;   // 2:00 local — POSIX's default switch time
     if (*p == '/') {
         p++;
+        int32_t sign = 1;
+        if (*p == '+' || *p == '-')
+            sign = *p++ == '-' ? -1 : 1;
         if (!is_digit(*p))
             return NULL;
         int32_t h = 0;
-        while (is_digit(*p))
+        while (is_digit(*p) && h <= 167)
             h = h * 10 + (*p++ - '0');
         int32_t m = 0;
         if (*p == ':') {
             p++;
             if (!is_digit(*p))
                 return NULL;
-            while (is_digit(*p))
+            while (is_digit(*p) && m <= 59)
                 m = m * 10 + (*p++ - '0');
         }
-        if (h > 24 || m > 59)
+        if (h > 167 || m > 59)
             return NULL;
-        r->minute = h * 60 + m;
+        r->minute = sign * (h * 60 + m);
     }
     return p;
 }
@@ -246,7 +268,7 @@ int64_t os64_tz_parse(const char *s, os64_tz_t *tz)
     if (p == NULL)
         return -1;
 
-    if (is_letter(*p)) {
+    if (tz_name_starts(*p)) {
         p = tz_scan_name(p, tz->dst_name);
         if (p == NULL)
             return -1;

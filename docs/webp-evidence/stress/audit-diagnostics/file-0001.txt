@@ -1,0 +1,12 @@
+address: file:///home/webp-stress/start.html
+verdict: 1 FAILED
+FAILED link refused:  that is a file: address, which yonder does not fetch (1)
+script file:///home/webp-stress/start.html#inline-1: ran
+bytes: 282
+final address: file:///home/webp-stress/start.html
+arrived after: 265 ms
+laid out at: 828 px in 60 ms
+written: when the page was left
+pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
+sheets: 1, 1 ready
+script file:///home/webp-stress/start.html#timer-1: ran

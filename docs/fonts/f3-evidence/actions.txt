@@ -1,0 +1,176 @@
+sendkey down
+sendkey ret
+sendkey ctrl-alt-f1
+sendkey g
+sendkey t
+sendkey e
+sendkey r
+sendkey m
+sendkey f
+sendkey o
+sendkey n
+sendkey t
+sendkey t
+sendkey e
+sendkey s
+sendkey t
+sendkey spc
+sendkey shift-dot
+sendkey spc
+sendkey slash
+sendkey h
+sendkey o
+sendkey m
+sendkey e
+sendkey slash
+sendkey f
+sendkey 3
+sendkey minus
+sendkey t
+sendkey e
+sendkey r
+sendkey m
+sendkey i
+sendkey n
+sendkey a
+sendkey l
+sendkey dot
+sendkey l
+sendkey o
+sendkey g
+sendkey ret
+sendkey alt-f8
+screendump /tmp/os64-f3-guest/final/builtin.ppm
+sendkey 1
+screendump /tmp/os64-f3-guest/final/font12.ppm
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 43 45
+mouse_button 1
+mouse_move 42 0
+screendump /tmp/os64-f3-guest/final/selected12.ppm
+mouse_button 0
+sendkey 6
+sendkey 2
+screendump /tmp/os64-f3-guest/final/font28.ppm
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 43 45
+mouse_button 1
+mouse_move 109 0
+screendump /tmp/os64-f3-guest/final/selected28.ppm
+mouse_button 0
+sendkey 6
+sendkey 3
+sendkey 6
+sendkey 4
+screendump /tmp/os64-f3-guest/final/refused28.ppm
+sendkey ctrl-alt-m
+screendump /tmp/os64-f3-guest/final/maximized28.ppm
+sendkey ctrl-alt-m
+screendump /tmp/os64-f3-guest/final/restored28.ppm
+sendkey 1
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 43 45
+mouse_button 1
+mouse_move 42 0
+sendkey 2
+mouse_button 0
+screendump /tmp/os64-f3-guest/final/switched-drag.ppm
+sendkey 6
+sendkey q
+sendkey ret
+sendkey ctrl-alt-f1
+sendkey c
+sendkey a
+sendkey t
+sendkey spc
+sendkey slash
+sendkey h
+sendkey o
+sendkey m
+sendkey e
+sendkey slash
+sendkey f
+sendkey 3
+sendkey minus
+sendkey t
+sendkey e
+sendkey r
+sendkey m
+sendkey i
+sendkey n
+sendkey a
+sendkey l
+sendkey dot
+sendkey l
+sendkey o
+sendkey g
+sendkey ret
+screendump /tmp/os64-f3-guest/final/report.ppm
+sendkey g
+sendkey t
+sendkey e
+sendkey r
+sendkey m
+sendkey ret
+sendkey alt-f8
+screendump /tmp/os64-f3-guest/final/production-builtin.ppm
+sendkey e
+sendkey c
+sendkey h
+sendkey o
+sendkey spc
+sendkey a
+sendkey l
+sendkey i
+sendkey v
+sendkey e
+sendkey ret
+screendump /tmp/os64-f3-guest/final/production-typing.ppm
+sendkey e
+sendkey x
+sendkey i
+sendkey t
+sendkey ret
+sendkey ctrl-alt-f1
+sendkey s
+sendkey h
+sendkey u
+sendkey t
+sendkey d
+sendkey o
+sendkey w
+sendkey n
+sendkey ret

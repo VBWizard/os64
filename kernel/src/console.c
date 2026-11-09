@@ -47,11 +47,20 @@ extern volatile uint64_t kTicksSinceStart;
 bool console_unread(char c)
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	tty_t *tty = task_tty(cls ? cls->task : NULL);
-	if (tty->pushbackCount >= CONSOLE_PUSHBACK_MAX)
+	// Held like every touch of a task's terminal (tty.h task_tty_hold): a
+	// pty slave already buried by a sibling's teardown has no slot to push
+	// into, and the byte is refused the way a full slot is.
+	tty_t *tty = task_tty_hold(cls ? cls->task : NULL);
+	if (tty == NULL)
 		return false;
-	tty->pushback[tty->pushbackCount++] = c;
-	return true;
+	bool ok = false;
+	if (tty->pushbackCount < CONSOLE_PUSHBACK_MAX)
+	{
+		tty->pushback[tty->pushbackCount++] = c;
+		ok = true;
+	}
+	task_tty_release(tty);
+	return ok;
 }
 
 // How long the reader sleeps before waking to re-check, as a BACKSTOP only.
@@ -88,7 +97,19 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	if (tty == NULL)
 		tty = &kTTY[0];
 
+	// ONE read of the foreground decides both what the byte means and whom
+	// it is aimed at. The pointer changes hands at a spawn, a wait and a
+	// departure; classify by one task's wish and then signal whatever the
+	// pointer names a moment later, and a cooked program gets 0x03 as data
+	// or a program whose raw request succeeded gets killed.
 	task_t *fg = tty->fgTask;
+
+	// RAW (SIGINT.md § Raw mode): the terminal interprets nothing, so the
+	// byte is data for whoever is reading — telnet sends it down the wire
+	// as IAC IP itself, the way character-mode telnet has since 4.2BSD.
+	if (fg != NULL && fg->wantsRaw)
+		return false;
+
 	if (fg == NULL || fg->controllingShell)
 		return false;               // no owner yet, or the shell: stays data
 
@@ -110,10 +131,23 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	return true;                    // consumed: the byte never enters the ring
 }
 
-// The keyboard's spelling: the keystroke happened on the FOCUSED terminal.
-bool console_intr_intercept(char ascii)
+// The terminal's mode is its foreground's wish, read at the moment of
+// asking. The pointer is read once; a foreground that is dying is replaced
+// in that pointer by its own departure, the same exposure every other
+// reader of fgTask in this file has always had. A caller that goes on to
+// ACT on the foreground must not ask here and then read the pointer again
+// — it takes its own snapshot and asks that task's wish directly.
+bool console_tty_raw(tty_t *tty)
 {
-	return console_intr_intercept_tty(kTTYFocused, ascii);
+	if (tty == NULL)
+		tty = &kTTY[0];
+	task_t *fg = tty->fgTask;
+	return fg != NULL && fg->wantsRaw;
+}
+
+void console_classify_tty(tty_t *tty, keyboard_event_t *ev)
+{
+	ev->eof = (ev->ascii == CONSOLE_EOT && !console_tty_raw(tty));
 }
 
 long console_read(char *buf, size_t len)
@@ -122,16 +156,35 @@ long console_read(char *buf, size_t len)
 	return console_read_deadline(buf, len, 0);
 }
 
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline);
+
 long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 {
 	if (len == 0)
 		return 0;
 
 	core_local_storage_t *cls = get_core_local_storage();
+	// The terminal this reader answers to, HELD across the read (tty.h
+	// task_tty_hold). NULL-safe all the way down — early-boot probes and
+	// kernel threads read the system console, VT1, which needs no hold. A
+	// pty slave's seat keeps it alive only until the task's own teardown
+	// drops that seat, and a sibling thread parked here can outlive that by
+	// a scheduler pass — the shape handle.c § The pin closes for handles,
+	// met here on the terminal instead. A slave already buried is a line
+	// that is dead, and an empty read on a dead line has always been EOF.
+	tty_t *tty = task_tty_hold(cls->task);
+	if (tty == NULL)
+		return 0;
+	long r = console_read_held(tty, buf, len, deadline);
+	task_tty_release(tty);
+	return r;
+}
+
+// The body of the read, on a terminal the wrapper above holds.
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline)
+{
+	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
-	// The terminal this reader answers to. NULL-safe all the way down —
-	// early-boot probes and kernel threads read the system console, VT1.
-	tty_t *tty = task_tty(cls->task);
 
 	// An EOT from a previous drain is a promised EOF — deliver it first.
 	if (tty->eofPending)
@@ -199,7 +252,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		keyboard_event_t ev;
 		while (n < len && tty_input_pop(tty, &ev))
 		{
-			if (ev.ascii == CONSOLE_EOT)
+			// End-of-input was decided when the key entered the ring
+			// (console_classify_tty): on a raw terminal the same 0x04 is
+			// a byte, and a mode change never re-reads a queued key.
+			if (ev.eof)
 			{
 				if (n == 0)
 				{
@@ -224,6 +280,26 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 			if (kTTYFocused == tty)
 				renderer_cursor_hide();
 			return (long)n;   // got input — return it (terminal semantics)
+		}
+
+		// THE LINE IS DEAD. A pty whose master has closed can never receive
+		// another byte, so an empty read on one is EOF — the same answer a
+		// hung-up terminal has given since the modem era, and the reason
+		// masterClosed is checked HERE and not only announced as SIGHUP.
+		// The signal alone was not enough: it is consumed on delivery, so a
+		// program that CATCHES SIGHUP (rather than dying of it) came back
+		// from its handler, called read again, and parked forever on a line
+		// nobody held — keeping its seat, and keeping the pty from ever
+		// being buried, which is the orphan the hangup exists to prevent.
+		// After the drain, so whatever the master typed before it left is
+		// delivered first: bytes, then EOF.
+		if (tty->is_pty && tty->masterClosed)
+		{
+			if (tty->waiter == self)
+				tty->waiter = NULL;
+			if (kTTYFocused == tty)
+				renderer_cursor_hide();
+			return 0;
 		}
 
 		// Empty-handed and out of patience: the deadline verdict. Checked

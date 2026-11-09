@@ -1,0 +1,190 @@
+{
+  "origin": "OpenAI built-in image generation",
+  "date": "2026-10-25",
+  "reference": "Generated for this project without third-party reference images",
+  "master_transform": "ImageMagick Lanczos export to 256x256 RGBA; metadata stripped. Generated original SHA-256 retained per icon.",
+  "icons": [
+    {
+      "key": "app",
+      "source": "app.png",
+      "generated_sha256": "b7c1f8b60e083569ae8388bf2934f876fba8a8fe0a95071c2df8bae1856807ec",
+      "master_sha256": "07953c4676a94fa3134f519151f507499820f9a6a7e842f5d95d1db840c5098c",
+      "prompt": "One original desktop icon for the Yonder XP family, closely inspired by Windows XP Luna's colorful early-2000s icons. A miniature computer application window: royal-blue title bar, cream content panel, three colored simple squares in the content area, crisp blue beveled outer frame. No readable text. Match an approved golden-yellow folder with warm glossy highlights: crisp shaded edges, gentle dimensional bevels, saturated friendly colors, upper-left lighting, simple substantial shapes legible at 16 and 32 pixels. Slight three-quarter perspective where appropriate. Not modern flat, not emoji, not photorealistic. One centered icon occupying about 80% of a square canvas. Transparent background, no surrounding interface, no words, no branding, no large ground shadow."
+    },
+    {
+      "key": "document-open",
+      "source": "document-open.png",
+      "generated_sha256": "377b11fe2309817120b77229194fb55491f4d97767f336bd23f1ed07ec32e78b",
+      "master_sha256": "961a43f65ad97981417b7206bd6e6a25bd3112507a4434142225141a4cdcebd0",
+      "prompt": "One original desktop icon for the Yonder XP family, closely inspired by Windows XP Luna's colorful early-2000s icons. A single ivory-white document sheet with the upper-right corner folded over, subtle cool-blue shaded outline, three short muted blue horizontal marks suggesting lines (not readable text). Match an approved golden-yellow folder with warm glossy highlights: crisp shaded edges, gentle dimensional bevels, saturated friendly colors, upper-left lighting, simple substantial shapes legible at 16 and 32 pixels. Slight three-quarter perspective where appropriate. Not modern flat, not emoji, not photorealistic. One centered icon occupying about 80% of a square canvas. Transparent background, no surrounding interface, no words, no branding, no large ground shadow."
+    },
+    {
+      "key": "document-save",
+      "source": "document-save.png",
+      "generated_sha256": "1aba5ff71bea77619f689553529f5325ac94d38bc13a02d63e3cb8be42566e91",
+      "master_sha256": "695e6be69a52e7db09c9291da0e4cda4cfca0d4fc8cd17b1e74a21e42d0783de",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One royal-blue 3.5-inch floppy disk, front facing, metallic silver shutter at the top, warm white label at bottom with no writing, two simple square bottom corners. Floppy disk alone. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "document-save-as",
+      "source": "document-save-as.png",
+      "generated_sha256": "8c9885478ea346dbb88372ef0e6ffde5a0b0b73ede52505c49b92ebc82f67f62",
+      "master_sha256": "f2742434cf6d60f280483a7c15b6329c6b6afe2e1ab0fdfd9d08853e0643907c",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One royal-blue 3.5-inch floppy disk, silver top shutter, warm white bottom label, and a golden-yellow pencil diagonally across its lower right. Save As symbol, these two objects only. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "drive",
+      "source": "drive.png",
+      "generated_sha256": "3643da5341b38530a1a84421ca807dbe2de2905f5e98ea9c088c49e6adac6c19",
+      "master_sha256": "f564332ea72843e17ed238e5e7fe564e6b400953d46b6519d1cf171d9f428293",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: Only one compact silver hard disk drive in gentle three-quarter view, navy front panel, tiny green status light, subtle circular platter emboss on top. The drive is the whole icon. NO folder, NO other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "edit-copy",
+      "source": "edit-copy.png",
+      "generated_sha256": "4a0a7d660d041b7339ad35034d20bb8c6882475c9e710b92536bca00b4ba7e00",
+      "master_sha256": "686df5a5ab20bc17472a04c1338f22e32bff833442909976b4718955a4f45d8a",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: Two overlapping ivory-white document sheets with folded upper-right corners and blue shaded edges, back sheet offset up and left. Three broad pale-blue lines on the front sheet, no writing. Only the pair of sheets. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "edit-cut",
+      "source": "edit-cut.png",
+      "generated_sha256": "f3ee233dd5e1eefe4e18943fda6bd152a3c57908dd7a48d927b8f563506b560d",
+      "master_sha256": "670697d6f037b6f68e31b59f066c84f21e97ad3a0de76b0a824407281bd1aee4",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: A single open pair of scissors with royal-blue rounded handles and silver blades, diagonal orientation, simple strong silhouette. Only scissors. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "edit-delete",
+      "source": "edit-delete.png",
+      "generated_sha256": "4434d76e19d90b67e1c38edcfcd18b80dd90053467a013cf313627982adb9064",
+      "master_sha256": "6cb45a679e1e97e34f69a9edce1c31724f59714dc636be96e1e926c86de53584",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One chunky bold red X symbol, symmetrical, viewed straight-on, glossy beveled red material. X alone, no trash can, no circle, no other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "edit-paste",
+      "source": "edit-paste.png",
+      "generated_sha256": "4637e26aa863077d045f26aca36415d14c6f14a636ef7fe1ffdfd9ffc4ee922e",
+      "master_sha256": "d7d526318904cc0770ddcb585ee51a42ad9e1bf82455db22054439ffda973620",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One warm tan clipboard with a silver clip at its top and an ivory document attached, three broad pale-blue horizontal lines on the paper. Only this clipboard. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "file",
+      "source": "file.png",
+      "generated_sha256": "be23b119329221a2bf64491263b719e0cd3394e5f5fd974d291d909dca1d91ac",
+      "master_sha256": "4255eb32754753350400ddc72320c697db3b182d3d8e159b938543fba4dc2ca2",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: Only one ivory-white document sheet with the upper-right corner folded, subtle cool-blue outline, three short muted blue horizontal marks suggesting lines. The whole icon is the sheet itself. NO folder, NO other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "folder",
+      "source": "folder.png",
+      "generated_sha256": "328d0f2fc7e5846cfbce2d51577e683ecbe37ee4062d8c2d426bd4fad618d2d7",
+      "master_sha256": "ecd6d8610687cb281bc0803992ca400737d0aa1545b612f7db881aaec3684035",
+      "prompt": "Create one transparent PNG desktop folder icon for an original Yonder icon family inspired closely by Windows XP's early-2000s Luna visual style. A single closed golden-yellow manila file folder, slightly open at the top, tab at upper left, front face angled subtly in three-quarter perspective, warm amber side edge, soft creamy highlights from upper left, crisp shaded edges with restrained dark golden contour. Friendly substantial shape, immediately legible at 16 and 32 pixels, large simple areas, no tiny details. Faithful period computer-icon aesthetic, not modern flat, not emoji, not photorealistic. Centered isolated icon filling about 80 percent of square canvas, genuinely transparent background, no text, no branding, no surrounding interface, no ground plane or large cast shadow."
+    },
+    {
+      "key": "folder-new",
+      "source": "folder-new.png",
+      "generated_sha256": "89c17bd004f9aa12e5671e09621a87baa4f84b0359b4faec083ed568bae0d598",
+      "master_sha256": "358dec9c1552b66cd5adb7cdef6f5a791cb8e29287f978f04e28049b22e74f0b",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: A golden-yellow manila folder with upper-left tab and a large green plus badge overlapping its lower right. Clearly New Folder. Only this folder and plus symbol. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "go-back",
+      "source": "go-back.png",
+      "generated_sha256": "4773eec338767c85aa33386e247bb24ff5af2e5fbed735039c8d6a58c3373689",
+      "master_sha256": "97d75a9fd3cdcd0a2463f006c174862b206185c13ac2129377973c83d4dd37b6",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One chunky grass-green left-pointing arrow, viewed straight-on, lightly beveled. Arrow points LEFT. Arrow alone, no circle or other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark green contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "go-forward",
+      "source": "go-forward.png",
+      "generated_sha256": "02bd31c12a01c7feff6b05bd97ace3b61548d993dc5d27221ab4e93526090c53",
+      "master_sha256": "30655345988f8f29df9e63e780508e4cdc5f0dd719ab08f301e0adf2f646ad1f",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One chunky grass-green right-pointing arrow, viewed straight-on, lightly beveled. Arrow points RIGHT. Arrow alone, no circle or other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark green contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "go-up",
+      "source": "go-up.png",
+      "generated_sha256": "bd9891c26a570d6284f9b0aa5fbb56e2b5e045b8754e51e06ef1c53297730e10",
+      "master_sha256": "e35aad37cd4e33d1f4f5542cd0e351b5f35f8bd8a7404625fe6d8324cdd58bf6",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One chunky grass-green upward-pointing arrow, viewed straight-on, lightly beveled. Arrow points UP. Arrow alone, no circle or other objects. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark green contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "help",
+      "source": "help.png",
+      "generated_sha256": "2fd7b8fef19ce99aec502cc89229cde06e24a8dff6d77e742fc2b25c928c911a",
+      "master_sha256": "733b49ed5e102675a7def2e26c88b448afcb1bdda62ca56c010dad2913a05557",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One rich royal-blue circular button with a large clean ivory-white question mark centered on it. The question mark is the only character. Front facing, button alone. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "home",
+      "source": "home.png",
+      "generated_sha256": "fc29a8aa1bbb54416a9837f984961f56ce37b9a134d27d054ca9286cc9f7b37b",
+      "master_sha256": "156133d81d4b602fc866796af00e0e93bc3ff3d64766b2b9d78e21a7dac400e5",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One small cozy house with a terracotta-red pitched roof, pale cream walls, blue front door and one simple blue window. Friendly desktop Home symbol. House alone; NO folder, NO background scene. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with generous transparent margins. Genuine transparent background; no words, branding, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "search",
+      "source": "search.png",
+      "generated_sha256": "8f6031c456d0a869dda05a68c3c461af215915e5a4e6b4d0ea145a6b182cb901",
+      "master_sha256": "e3cf26579ac2888cf30e4dd5c61f31c5b4307f5d6c719f29d170bcbcdb9e1458",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One magnifying glass with a clear pale blue lens, silver rim and royal-blue handle extending toward the lower right at 45 degrees. Only magnifying glass. STYLE: warm glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "settings",
+      "source": "settings.png",
+      "generated_sha256": "dc75c0fe90377c31de9a138f148e4ceb9686e5f5703a7e5f80eb5f49b6dc1d94",
+      "master_sha256": "8bc9083cd5c823e5d858d98c740f4748eefe1e567a59db00b09aa151183a0325",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One silver open-ended wrench crossed diagonally with a royal-blue-handled screwdriver. Two simple tools forming a compact X silhouette. No gear, no folder, no other objects. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "tab-new",
+      "source": "tab-new.png",
+      "generated_sha256": "82988005b1729db79dc495580be58b8d73fd76c492bd1c40642b97bc39f5efd9",
+      "master_sha256": "e032dd1d2f9d8e1f461706fc4dec6f329ebc7b9da1ca33149d2e62c8917e7ed3",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One small front-facing cream browser tab panel with a royal-blue beveled outline and a raised tab at the upper left, overlaid by one large green plus at lower right. Clear New Tab symbol. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "view-details",
+      "source": "view-details.png",
+      "generated_sha256": "1337dfb7111966698e7b798476ff1ae3dee646b7544f77b61b845dfe68a9ff31",
+      "master_sha256": "763c87514b7dfbccd884b95e909fa460495c283812e1af0581739dcb4a8aa80e",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One small front-facing rectangular ivory-white list panel with a royal-blue beveled border. Inside are three horizontal rows, each row has one small golden square at left and one thick blue horizontal line at right. This is the Details List view symbol. No writing. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "view-icons",
+      "source": "view-icons.png",
+      "generated_sha256": "547e8f5c4abaad209a3fb7ef9daf77ddb7da7703da381b6083ba2187bf96c7c5",
+      "master_sha256": "50a073732552c24eee3ff031e86008b77b4dc6f9bbf273d0a16e1d774b8437f5",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: Four separate small golden-yellow rounded beveled squares arranged in an evenly spaced two-by-two grid, inside one ivory panel with a royal-blue rectangular border. Straight-on front view. This is the Icons Grid view symbol. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "view-preview",
+      "source": "view-preview.png",
+      "generated_sha256": "bdc870aca4944aab878d4bdfb6aa08f3e128c3691efc38345dae8c66384435b2",
+      "master_sha256": "10ad459018f29aaf433404418fce6b82af1107c64fca15667519630aa610f146",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One landscape picture thumbnail in a royal-blue beveled rectangular frame. Inside the frame a simple grassy-green hill below a cyan-blue sky with one round golden sun. This is the Picture Preview view symbol. Straight-on front view. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "view-refresh",
+      "source": "view-refresh.png",
+      "generated_sha256": "42b5736f27b107cca68ebfcf723251c7cf10a36a6ca6d4783f0e41aed9ed7194",
+      "master_sha256": "8f512e191644264220a329964c6659b5f6d55ac4c7dd803ad2d4491263a5b2d6",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: Two chunky green curved arrows chasing each other around a circular empty center, clear reload symbol. Symbol alone. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, folders, additional objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "view-split",
+      "source": "view-split.png",
+      "generated_sha256": "86f0f6cf993d1d7764f30dc232c5da362dbec5f52b666690bf08db9f6ba82dd2",
+      "master_sha256": "2880aa4b5a21c500b1cc0bc573b13d9c4286c250f2f27fe445ef798daeafea4b",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One front-facing rectangular ivory panel with a royal-blue beveled outer frame and a strong blue vertical divider exactly down the center, making two equal panes. Each pane has two short broad muted-blue horizontal lines. This is the Split Pane view symbol. No writing. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    },
+    {
+      "key": "window-close",
+      "source": "window-close.png",
+      "generated_sha256": "58064c08009a1c60f3b7cc56ddfd9f9a9ff5f48bb576b02b30068db6251952c3",
+      "master_sha256": "d4a2124c61639b0c2859409c26a2f8423d976d03460b2479de46f0c3509c04ff",
+      "prompt": "Create one original desktop toolbar icon in a consistent Windows XP Luna inspired early-2000s style. SUBJECT: One red rounded-square glossy button with a bold simple white X centered on it, viewed straight-on. Red square and white X only. Clear Close Window symbol, visually distinct from a free-standing red delete X. STYLE: glossy upper-left highlights, crisp shaded edges and restrained dark contour, gentle dimensional bevels, friendly saturated colors, substantial simple silhouette legible at 16 and 32 pixels. Not modern flat, not emoji, not photorealistic. Single centered icon fills about 80% of square canvas with transparent margins. Genuine transparent background; no words, branding, unrelated objects, surrounding interface or cast ground shadow."
+    }
+  ]
+}

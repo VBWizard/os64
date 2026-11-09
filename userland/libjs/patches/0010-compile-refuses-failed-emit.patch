@@ -1,0 +1,26 @@
+# A dbuf failure while the parser emits bytecode leaves fd->byte_code cut short
+# with a sticky error the parser never reads, and js_create_function then
+# transforms it as if whole, reading one instruction as another (a garbage
+# atom, an ASan SEGV). The check lives where every def becomes a function
+# (eval, new Function, modules, class bodies, each child through the same
+# call): an out-of-memory parse is an exception, never a function.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -36152,6 +36152,17 @@
+     int closure_var_offset, vardefs_offset;
+     BOOL strip_var_debug;
+     
++    /* os64: a parse whose emit ran out of memory left fd->byte_code cut
++       short with a sticky error the parser never reads; transforming it
++       would read one instruction as another. Every def becomes a function
++       here (eval, new Function, modules, class bodies, and each child
++       below through this same call), so the check is here, before
++       anything is transformed. */
++    if (dbuf_error(&fd->byte_code)) {
++        JS_ThrowOutOfMemory(ctx);
++        goto fail;
++    }
++
+     /* recompute scope linkage */
+     for (scope = 0; scope < fd->scope_count; scope++) {
+         fd->scopes[scope].first = -1;

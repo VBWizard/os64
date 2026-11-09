@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Intl on the glass</title>
+<style>
+  body { font: 18px sans-serif; margin: 24px; }
+  td { padding: 4px 12px; border-bottom: 1px solid #ccc; }
+  .ok { color: #070; } .bad { color: #b00; font-weight: bold; }
+  #verdict { font-weight: bold; margin-top: 16px; font-size: 22px; }
+</style>
+<h1>Intl on the glass</h1>
+<p>Intl's en-US strings, as Chrome writes them (INTL.md § 8, its capture,
+and for numbers § 9.6): each row is checked byte for byte, except the
+German request, which resolves to the only locale os64 holds. Chrome writes
+an ASCII space where CLDR has a narrow no-break or thin space, in format,
+parts and ranges alike, and a no-break space between a currency code and its
+digits. With the Modern Web switch off there is no Intl, and the page says
+so.</p>
+<table id="rows"></table>
+<div id="verdict">running</div>
+<script>
+  const rows = document.getElementById('rows');
+  const at = Date.UTC(2026, 6, 4, 16, 5, 9);
+  function row(what, actual, expected) {
+    const tr = rows.insertRow();
+    tr.insertCell().textContent = what;
+    tr.insertCell().textContent = actual;
+    const ok = actual === expected;
+    const verdict = tr.insertCell();
+    verdict.textContent = ok ? 'same' : 'expected ' + JSON.stringify(expected);
+    verdict.className = ok ? 'ok' : 'bad';
+    return ok;
+  }
+  if (typeof Intl !== 'object') {
+    document.getElementById('verdict').textContent = 'no Intl here (is modern = on?)';
+  } else {
+    const ny = {timeZone: 'America/New_York'};
+    const cases = [
+      ['dateStyle full, timeStyle long', () => new Intl.DateTimeFormat('en-US', {...ny, dateStyle: 'full', timeStyle: 'long'}).format(at),
+       'Saturday, July 4, 2026 at 12:05:09 PM EDT'],
+      ['parts, ASCII spaces', () => new Intl.DateTimeFormat('en-US', {...ny, timeStyle: 'short'}).formatToParts(at).map(p => p.value).join(''),
+       '12:05 PM'],
+      ['a range, same day', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', minute: 'numeric'}).formatRange(at, at + 5400000),
+       '12:05 – 1:35 PM'],
+      ['a range of days', () => new Intl.DateTimeFormat('en-US', {...ny, month: 'short', day: 'numeric'}).formatRange(at, at + 5 * 86400000),
+       'Jul 4 – 9'],
+      ['generic zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Kolkata', hour: 'numeric', timeZoneName: 'longGeneric'}).format(at),
+       '9 PM India Standard Time'],
+      ['offset zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Europe/Paris', timeZoneName: 'longOffset'}).format(at),
+       '7/4/2026, GMT+02:00'],
+      ['day period', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', dayPeriod: 'long'}).format(at),
+       '12 noon'],
+      // Not Chrome's answer by design: os64's data is en-US's, so a request for
+      // German resolves to it, as ECMA-402 permits (INTL.md § 3).
+      ['de-DE resolves to en-US', () => new Intl.DateTimeFormat('de-DE').resolvedOptions().locale, 'en-US'],
+      ['Locale', () => new Intl.Locale('EN-latn-us', {hourCycle: 'h23'}).toString(), 'en-Latn-US-u-hc-h23'],
+      ['currency', () => new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(-1234.5), '-$1,234.50'],
+      ['currency code', () => new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', currencyDisplay: 'code'}).format(42),
+       'USD\u00a042.00'],
+      ['accounting', () => new Intl.NumberFormat('en-US', {style: 'currency', currency: 'EUR', currencySign: 'accounting'}).format(-5),
+       '(€5.00)'],
+      ['compact', () => new Intl.NumberFormat('en-US', {notation: 'compact'}).format(1234567), '1.2M'],
+      ['compact, long', () => new Intl.NumberFormat('en-US', {notation: 'compact', compactDisplay: 'long'}).format(15300), '15 thousand'],
+      ['a unit per a unit', () => new Intl.NumberFormat('en-US', {style: 'unit', unit: 'kilometer-per-hour', unitDisplay: 'long'}).format(50),
+       '50 kilometers per hour'],
+      ['percent', () => new Intl.NumberFormat('en-US', {style: 'percent', maximumFractionDigits: 1}).format(0.256), '25.6%'],
+      ['a BigInt, exactly', () => new Intl.NumberFormat('en-US').format(12345678901234567890n), '12,345,678,901,234,567,890'],
+      ['a compact range', () => new Intl.NumberFormat('en-US', {notation: 'compact'}).formatRange(3000, 5000), '3K – 5K'],
+      ['a currency range', () => new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).formatRange(3, 5), '$3.00 – $5.00'],
+      ['ordinal', () => new Intl.PluralRules('en-US', {type: 'ordinal'}).select(23), 'few'],
+      ['yesterday', () => new Intl.RelativeTimeFormat('en-US', {numeric: 'auto'}).format(-1, 'day'), 'yesterday'],
+      ['relative time', () => new Intl.RelativeTimeFormat('en-US', {style: 'short'}).format(-3, 'months'), '3 mo. ago'],
+      ['a list', () => new Intl.ListFormat('en-US').format(['Motorcycle', 'Bus', 'Car']), 'Motorcycle, Bus, and Car'],
+      ['a list of units', () => new Intl.ListFormat('en-US', {type: 'unit', style: 'narrow'}).format(['5 lb', '12 oz']), '5 lb 12 oz'],
+      ['a sort', () => ['b', 'A', 'a', 'B', '\u00e1', '_', '1', '\u0100'].sort(new Intl.Collator('en-US').compare).join(' '), '_ 1 a A \u00e1 \u0100 b B'],
+      ['a numeric sort, base letters', () => ['item 10', 'Item 9', 'item 1', '\u00e9clair', 'Eclair', 'Zoe', 'zo\u00eb', '_x', 'apple']
+         .sort(new Intl.Collator('en-US', {numeric: true, sensitivity: 'base'}).compare).join(', '),
+       '_x, apple, \u00e9clair, Eclair, item 1, Item 9, item 10, Zoe, zo\u00eb'],
+      ['toLocaleDateString', () => new Date(at).toLocaleDateString('en-US', {...ny, weekday: 'long', month: 'long', day: 'numeric'}),
+       'Saturday, July 4'],
+      ['an array toLocaleString', () => [1234.5, 'x', null].toLocaleString(), '1,234.5,x,'],
+      ['localeCompare', () => ['b', 'A', 'a', 'B'].sort((x, y) => x.localeCompare(y)).join(' '), 'a A b B'],
+    ];
+    let good = 0;
+    for (const [what, f, expected] of cases) {
+      let actual;
+      try { actual = f(); } catch (e) { actual = 'threw ' + e; }
+      if (row(what, actual, expected)) good++;
+    }
+    document.getElementById('verdict').textContent = good === cases.length
+      ? `PASS: ${good} of ${cases.length} as Chrome writes them`
+      : `FAIL: ${good} of ${cases.length}`;
+  }
+</script>

@@ -1,0 +1,379 @@
+// The Modern Web arc's slice 4, CSS batch A (MODERN_WEB_BRIEFS.md § Slice
+// 4): what the painter draws for each property that is drawn, worked by
+// hand as test_yonder_cases.inc's are. The view is 200 x 100.
+
+// A picture's place in its content box (yonder_object_rect), each worked
+// by hand: the box 10, 20, 100 x 50; a square picture 100 x 100, and a
+// small one 40 x 30. A percentage position is of the room left, which is
+// negative where the picture is the bigger.
+static bool object_rect_is(flow_object_fit_t fit, flow_length_t x, flow_length_t y, uint32_t iw,
+                           uint32_t ih, int32_t ax, int32_t ay, int32_t aw, int32_t ah)
+{
+    flow_style_t s;
+    memset(&s, 0, sizeof(s));
+    s.object_fit = fit;
+    s.object_position[0] = x;
+    s.object_position[1] = y;
+    os64_gui_rect_t r = yonder_object_rect(&s, (os64_gui_rect_t){10, 20, 100, 50}, iw, ih);
+    return r.x == ax && r.y == ay && r.w == aw && r.h == ah;
+}
+
+static void object_rect_cases(void)
+{
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    const flow_length_t zero = {FLOW_LENGTH_PERCENT, 0, 0};
+    // `right 10px` and `bottom 0`: 100% less 10px, and 100%.
+    const flow_length_t right10 = {FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    const flow_length_t bottom = {FLOW_LENGTH_PERCENT, 100 * 64, 0};
+    expect("object-fit: fill is the content box",
+           object_rect_is(FLOW_OBJECT_FILL, half, half, 100, 100, 10, 20, 100, 50), NULL);
+    // The square is taller in shape than the box: it fits by the height,
+    // 50 x 50, centred in the 50 left across: x 35.
+    expect("object-fit: contain fits inside, centred",
+           object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 100, 100, 35, 20, 50, 50), NULL);
+    // And covers by the width, 100 x 100, half the -50 left down: y -5.
+    expect("object-fit: cover covers, centred, past the box",
+           object_rect_is(FLOW_OBJECT_COVER, half, half, 100, 100, 10, -5, 100, 100), NULL);
+    expect("object-position: cover from the top left",
+           object_rect_is(FLOW_OBJECT_COVER, zero, zero, 100, 100, 10, 20, 100, 100), NULL);
+    // 40 x 30 at its size, centred: 30 and 10 in.
+    expect("object-fit: none is its own size",
+           object_rect_is(FLOW_OBJECT_NONE, half, half, 40, 30, 40, 30, 40, 30), NULL);
+    expect("object-fit: scale-down is none when that fits",
+           object_rect_is(FLOW_OBJECT_SCALE_DOWN, half, half, 40, 30, 40, 30, 40, 30), NULL);
+    expect("object-fit: scale-down is contain when none does not",
+           object_rect_is(FLOW_OBJECT_SCALE_DOWN, half, half, 100, 100, 35, 20, 50, 50), NULL);
+    // 60 left across, less 10: 10 + 50; 20 down: 20 + 20.
+    expect("object-position: an edge and an offset",
+           object_rect_is(FLOW_OBJECT_NONE, right10, bottom, 40, 30, 60, 40, 40, 30), NULL);
+    // A 1 x 10000000 picture covers the box 100 wide and a billion tall,
+    // held to a quarter of an int32_t (536870911); at 100% down its top is
+    // 20 + 50 - that, inside the hold.
+    expect("object-fit: cover of an extreme picture is held",
+           object_rect_is(FLOW_OBJECT_COVER, zero, bottom, 1, 10000000, 10, 70 - 536870911, 100,
+                          536870911), NULL);
+    expect("object-fit: a picture with no size fills",
+           object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 0, 30, 10, 20, 100, 50), NULL);
+}
+
+// Each is the cold reader's case, worked by hand: the div 40 wide, the
+// ellipsis 8, the limit 32.
+static void ellipsis_review_cases(void)
+{
+    const char *kDiv = "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                       " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+                       " color: #00ff00 } b { font-weight: normal } i { display: inline-block;"
+                       " background: #0000ff } span { background: #0000ff }</style>";
+    char html[512];
+    // ab is 16; an inline-block past the limit, with content or empty, is
+    // left out whole, and the ellipsis follows ab.
+    snprintf(html, sizeof(html), "%s<div>ab<i>cdefghij</i></div>"
+             "<div>ab<i style='width: 30px; height: 10px'></i></div>", kDiv);
+    paint_page_case("text-overflow: an inline-block past the limit is left out",
+                    html, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"ab\" 0 14 #00ff00 clip 0 0 40 20\n"
+                    "text \"\" 16 14 #00ff00 clip 0 0 40 20\n"
+                    "text \"ab\" 0 34 #00ff00 clip 0 20 40 20\n"
+                    "text \"\" 16 34 #00ff00 clip 0 20 40 20\n");
+    // abcd ends at the limit and efgh is left out; a repaint of only the
+    // ellipsis's part of the glass (34, 0, 6 x 20) draws it, the line
+    // being handed over whatever piece of it meets the view.
+    snprintf(html, sizeof(html), "%s<div>abcd<b>efgh</b></div>", kDiv);
+    paint_page_case("text-overflow: a repaint of only the ellipsis draws it",
+                    html, 200, (os64_gui_rect_t){34, 0, 6, 20}, true,
+                    "fill 34 0 6 20 #fefefe\n"
+                    "text \"\" 32 14 #00ff00\n");
+    // An inline box's piece is cut where what is kept ends: its background
+    // 0..32, as its text.
+    snprintf(html, sizeof(html), "%s<div><span>abcdefghij</span></div>", kDiv);
+    paint_page_case("text-overflow: an inline box's piece is cut with its text",
+                    html, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 2 32 16 #0000ff\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
+    // Codex round 1: a box with no room before the ellipsis keeps its first
+    // character, clipped rather than ellipsed, and the ellipsis follows it
+    // (Overflow 4 § 4.1). 12 wide: the limit is 4, which a, 8 wide, passes;
+    // a is kept, 0..8, and the ellipsis drawn at 8, both clipped at 12.
+    // 4 wide, the same, the box's clip cutting both at 4.
+    paint_page_case("text-overflow: no room before the ellipsis keeps the first character",
+                    "<!doctype html><style>body { margin: 0 } div { overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }</style>"
+                    "<div style='width: 12px'>abc</div><div style='width: 4px'>abc</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abc\" 0 14 #00ff00 clip 0 0 8 20\n"
+                    "text \"\" 8 14 #00ff00 clip 0 0 12 20\n"
+                    "text \"abc\" 0 34 #00ff00 clip 0 20 4 20\n"
+                    "text \"\" 8 34 #00ff00 clip 0 20 4 20\n");
+    // A box that scrolls across: the ellipsis sits at its visible end, and
+    // what scrolls into view is drawn, not ellipsed (Overflow 4 § 4.1).
+    // abcdefghij is 68 wide in a box of 40, so it scrolls 28. At 0 the
+    // limit is 32; scrolled 20 the visible end is 60 in the content, the
+    // limit 52, drawn at 32 on the glass; scrolled to its end (40 asks
+    // for 28) the text ends at the visible end and there is no ellipsis.
+    static const char *const kScrolled[] = {
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n",
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" -20 14 #00ff00 clip 0 0 32 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n",
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" -28 14 #00ff00 clip 0 0 40 20\n",
+    };
+    for (int32_t k = 0; k < 3; k++) {
+        s_paint_scrolls = true;
+        s_paint_scroll = (flow_point_t){20 * k, 0};
+        paint_page_case(k == 0 ? "text-overflow: a box that scrolls, at its start"
+                        : k == 1 ? "text-overflow: a box scrolled part way"
+                                 : "text-overflow: a box scrolled to its end shows its end",
+                        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                        " overflow-x: auto; overflow-y: hidden; white-space: nowrap;"
+                        " text-overflow: ellipsis; color: #00ff00 }</style><div>abcdefghij</div>",
+                        200, (os64_gui_rect_t){0, 0, 200, 100}, true, kScrolled[k]);
+        s_paint_scrolls = false;
+    }
+    // The ellipsis is filled as the block's text is: with
+    // -webkit-text-fill-color red over a green colour, both the kept text
+    // and the ellipsis are red.
+    paint_page_case("text-overflow: the ellipsis takes the text's fill",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00;"
+                    " -webkit-text-fill-color: #ff0000 }</style><div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abcdefghij\" 0 14 #ff0000 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #ff0000 clip 0 0 40 20\n");
+    // What the cut keeps is what is drawn, by the rule flow_hit reads
+    // (flow_line_cut_keeps, flow_box_cut_away). Three links blue after
+    // abcd in divs 40 wide: an inline-block with a transform, a stacked
+    // atom on the line, is left out; an absolute box in a relative inline
+    // is out of flow and not on the line, which does not overflow — no
+    // ellipsis — so it is drawn (32, 22, cut to the div at 8 x 8); a
+    // transformed inline-block inside an inline is left out.
+    paint_page_case("text-overflow: a stacked atom past the cut is not drawn",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }"
+        " a { background: #0000ff }</style>"
+        "<div>abcd<a href=x style='display: inline-block; width: 30px; height: 10px;"
+        " transform: translate(1px, 0)'></a></div>"
+        "<div>abcd<i style='position: relative'><a href=x style='position: absolute; left: 0;"
+        " top: 0; width: 20px; height: 8px'></a></i></div>"
+        "<div>abcd<i><a href=x style='transform: translate(1px, 0); display: inline-block;"
+        " width: 20px; height: 8px'></a></i></div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcd\" 0 14 #00ff00 clip 0 0 40 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n"
+        "text \"abcd\" 0 34 #00ff00 clip 0 20 40 20\n"
+        "text \"abcd\" 0 54 #00ff00 clip 0 40 40 20\n"
+        "text \"\" 32 54 #00ff00 clip 0 40 40 20\n"
+        "fill 32 22 8 8 #0000ff\n");
+    // An atom is kept whole only when it ends by the limit (32): of two
+    // inline-blocks 30 wide, the second pulled back 4 (26..56) is left
+    // out though it starts before the ellipsis, which follows the first at
+    // 30.
+    paint_page_case("text-overflow: an atom that does not end by the limit is not drawn",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }"
+        " i { display: inline-block; width: 30px; height: 10px; background: #0000ff }</style>"
+        "<div><i></i><i style='margin-left: -4px; background: #00ff00'></i></div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "fill 0 4 30 10 #0000ff\n"
+        "text \"\" 30 14 #00ff00 clip 0 0 40 20\n");
+    // A gradient heading (background-clip: text, a transparent fill): the
+    // ellipsis is text the clip holds, drawn in its pen into the mask with
+    // the kept text, so it takes the gradient; and drawn transparent in
+    // the ordinary pass, as the text is.
+    paint_page_case("text-overflow: a text clip holds the ellipsis",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+        " background: linear-gradient(#ff0000, #0000ff); background-clip: text;"
+        " -webkit-text-fill-color: transparent }</style><div>abcdefghij</div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "clip 0 0 40 20\n"
+        "text \"\" 32 14 #ffffff clip 0 0 40 20\n"
+        "text \"abcdefghij\" 0 14 #ffffff clip 0 0 32 20\n"
+        "fill clip\n"
+        "pixels 0 0 40 20 fff90006 ff0600f9\n"
+        "end clip\n"
+        "text \"abcdefghij\" 0 14 #000000/0 clip 0 0 32 20\n"
+        "text \"\" 32 14 #000000/0 clip 0 0 40 20\n");
+    // The same, the face refusing the clip: the text and the ellipsis in
+    // the gradient's middle, opaque (clip_solid).
+    s_clip_refused = true;
+    paint_page_case("text-overflow: a refused text clip draws the ellipsis in its solid pen",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+        " background: linear-gradient(#ff0000, #0000ff); background-clip: text;"
+        " -webkit-text-fill-color: transparent }</style><div>abcdefghij</div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"\" 32 14 #800080 clip 0 0 40 20\n"
+        "text \"abcdefghij\" 0 14 #800080 clip 0 0 32 20\n"
+        "text \"abcdefghij\" 0 14 #000000/0 clip 0 0 32 20\n"
+        "text \"\" 32 14 #000000/0 clip 0 0 40 20\n");
+    s_clip_refused = false;
+    // The ellipsis is drawn as the block's text is, its shadows under it:
+    // a red shadow 2 across and 1 down under the kept text and under the
+    // ellipsis, each then in its green fill.
+    paint_page_case("text-overflow: the ellipsis takes the text's shadows",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00;"
+                    " text-shadow: 2px 1px #ff0000 }</style><div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abcdefghij\" 2 15 #ff0000 clip 0 0 32 20\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 34 15 #ff0000 clip 0 0 40 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
+    // pre-wrap: abc and six spaces end the first line, 48 wide, but the
+    // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
+    paint_page_case("text-overflow: spaces that hang do not overflow a line",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                    " overflow: hidden; white-space: pre-wrap; text-overflow: ellipsis }</style>"
+                    "<div>abc      de</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abc      \" 0 14 #101010 clip 0 0 40 40\n"
+                    "text \"de\" 0 34 #101010 clip 0 0 40 40\n");
+}
+
+// A line of 2,000 bold x's, 4,000 boxes (each b's piece and its text),
+// that ends in an ellipsis: each box the view shows asks where the line is
+// cut, and the painter asks libflow once a paint (yonder_paint_cuts).
+// paint_of paints a page eight times at most (the paint and its oracle's),
+// so 8 bounds it; asking for each box was one a box a paint.
+static void ellipsis_bound_case(void)
+{
+    size_t pieces = 2000;
+    char *html = malloc(pieces * 8 + 256);
+    strcpy(html, "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                 " white-space: nowrap; text-overflow: ellipsis } b { font-weight: normal }"
+                 "</style><div>");
+    for (size_t i = 0; i < pieces; i++)
+        strcat(html, "<b>x</b>");
+    uint64_t was = yonder_paint_cuts;
+    bool escaped = false;
+    char *got = paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    uint64_t cuts = yonder_paint_cuts - was;
+    expect("text-overflow: a line's cut is worked once a paint, not once a piece",
+           got != NULL && cuts <= 8, NULL);
+    if (cuts > 8)
+        fprintf(stderr, "    %llu cuts for one line\n", (unsigned long long)cuts);
+    free(got);
+    free(html);
+}
+
+// An outline is painted last in its stacking context (CSS 2.1 Appendix E,
+// step 10): over a later sibling's background, and over the box's own
+// content.
+static void outline_order_cases(void)
+{
+    // The div 0, 0, 20 x 10, its ring -2, -2, 24 x 14; the p after it,
+    // 0, 10, 30 x 10, green. The ring's bottom rows (y 11, then 10) and
+    // its right columns (x 21, then 20) are drawn after the p, over it;
+    // its top rows and left columns are off the view.
+    paint_page_case("outline: drawn over what follows it",
+                    "<!doctype html><style>body { margin: 0 } div { height: 10px; width: 20px;"
+                    " outline: 2px solid #ff0000 } p { margin: 0; height: 10px; width: 30px;"
+                    " background: #00ff00 }</style><div></div><p></p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 10 30 10 #00ff00\n"
+                    "fill 0 11 22 1 #ff0000\nfill 0 10 21 1 #ff0000\n"
+                    "fill 21 0 1 11 #ff0000\nfill 20 0 1 10 #ff0000\n");
+    // An inset ring, the usual focus ring: the div 5, 5, 20 x 10 with an
+    // offset of -4, so the ring is 7, 7, 16 x 6, inside the box, over its
+    // child's green.
+    paint_page_case("outline: an inset ring is drawn over the box's content",
+                    "<!doctype html><style>body { margin: 0 } div { margin: 5px; width: 20px;"
+                    " height: 10px; outline: 2px solid #ff0000; outline-offset: -4px }"
+                    " p { margin: 0; height: 10px; background: #00ff00 }</style><div><p></p></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 5 5 20 10 #00ff00\n"
+                    "fill 7 7 16 1 #ff0000\nfill 8 8 14 1 #ff0000\n"
+                    "fill 7 12 16 1 #ff0000\nfill 8 11 14 1 #ff0000\n"
+                    "fill 7 8 1 4 #ff0000\nfill 8 9 1 2 #ff0000\n"
+                    "fill 22 8 1 4 #ff0000\nfill 21 9 1 2 #ff0000\n");
+}
+
+static void batch_a_paint_cases(void)
+{
+    object_rect_cases();
+    ellipsis_review_cases();
+    ellipsis_bound_case();
+    outline_order_cases();
+    // text-overflow: the div is 40 wide, its line abcdefghij 68. The
+    // ellipsis is 8 (16px serif), so what is kept ends by 32: abcd, a-d
+    // 8 each. The text is drawn cut there, and then, the line handed over
+    // after its pieces, the ellipsis at 32 on the line's baseline, in the
+    // div's colour.
+    paint_page_case("text-overflow: an ellipsis ends a line that passes its end",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }</style>"
+                    "<div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
+    // Across boxes: ab (16), then the b's cdefgh from 16; the limit 32
+    // keeps cd of it, to 32, which is where its ellipsis goes; the i
+    // element past the limit is not drawn. A line that fits has none, and
+    // nor has a block whose overflow is visible: its text runs on.
+    paint_page_case("text-overflow: the ellipsis after the last box kept, none where it fits",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis } p { margin: 0; width: 40px;"
+                    " white-space: nowrap; text-overflow: ellipsis }</style>"
+                    "<div>ab<b>cdefgh</b><i>xyz</i></div><div>abc</div><p>abcdefghij</p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"ab\" 0 14 #101010 clip 0 0 40 20\n"
+                    "text \"cdefgh\" 16 14 #101010 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #101010 clip 0 0 40 20\n"
+                    "text \"abc\" 0 34 #101010 clip 0 20 40 20\n"
+                    "text \"abcdefghij\" 0 54 #101010\n");
+    // An outline is a ring round the border box (5, 5, 20 x 10), out by its
+    // offset, 1, and 2 wide: -3 a side from the box to 2, 2, 26 x 16,
+    // drawn as a square 2px border is, after the box's background.
+    paint_page_case("outline: a ring past the border box, by its offset",
+                    "<!doctype html><style>body { margin: 0 } div { margin: 5px; width: 20px;"
+                    " height: 10px; background: #0000ff; outline: 2px solid #ff0000;"
+                    " outline-offset: 1px }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 5 5 20 10 #0000ff\n"
+                    // The top two rows and the bottom two, each giving up a
+                    // column at each end to the sides on the diagonal.
+                    "fill 2 2 26 1 #ff0000\nfill 3 3 24 1 #ff0000\n"
+                    "fill 2 17 26 1 #ff0000\nfill 3 16 24 1 #ff0000\n"
+                    // The left two columns, and the right two.
+                    "fill 2 3 1 14 #ff0000\nfill 3 4 1 12 #ff0000\n"
+                    "fill 27 3 1 14 #ff0000\nfill 26 4 1 12 #ff0000\n");
+    // A dotted one is a border's dots; a style of none draws nothing, nor
+    // does the outline of an inline box's piece (booked).
+    paint_page_case("outline: dotted as a border is, none not at all",
+                    "<!doctype html><style>body { margin: 0 } div { margin: 4px; width: 8px; height: 2px;"
+                    " outline: 2px dotted #ff0000 } p { margin: 0; height: 4px;"
+                    " outline: 3px none #00ff00 }</style><div></div><p></p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    // The ring 2, 2, 12 x 6. Its rows: squares 2 across, 2
+                    // apart, from its edge; the inner row gives up a column
+                    // at each end, cutting the first square to one.
+                    "fill 2 2 2 1 #ff0000\nfill 6 2 2 1 #ff0000\nfill 10 2 2 1 #ff0000\n"
+                    "fill 3 3 1 1 #ff0000\nfill 6 3 2 1 #ff0000\nfill 10 3 2 1 #ff0000\n"
+                    "fill 2 7 2 1 #ff0000\nfill 6 7 2 1 #ff0000\nfill 10 7 2 1 #ff0000\n"
+                    "fill 3 6 1 1 #ff0000\nfill 6 6 2 1 #ff0000\nfill 10 6 2 1 #ff0000\n"
+                    // The sides' outer columns, 3..7 down: the squares from
+                    // the top edge meet them at 3 and 6; the inner columns,
+                    // 4..6, meet none.
+                    "fill 2 3 1 1 #ff0000\nfill 2 6 1 1 #ff0000\n"
+                    "fill 13 3 1 1 #ff0000\nfill 13 6 1 1 #ff0000\n");
+}

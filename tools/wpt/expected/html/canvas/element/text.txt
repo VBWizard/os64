@@ -1,0 +1,45 @@
+# WPT's html/canvas/element/text in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/text --update
+# rewrites [passing].
+[required]
+2d.text.font.default.html	Canvas test: 2d.text.font.default
+2d.text.draw.fill.unaffected.html	fillText does not start a new path or subpath
+2d.text.draw.stroke.unaffected.html	strokeText does not start a new path or subpath
+[excluded]
+[passing]
+2d.text.align.default.html	Canvas test: 2d.text.align.default
+2d.text.align.invalid.html	Canvas test: 2d.text.align.invalid
+2d.text.align.valid.html	Canvas test: 2d.text.align.valid
+2d.text.baseline.default.html	Canvas test: 2d.text.baseline.default
+2d.text.baseline.invalid.html	Canvas test: 2d.text.baseline.invalid
+2d.text.baseline.valid.html	Canvas test: 2d.text.baseline.valid
+2d.text.direction.default.html	Canvas test: 2d.text.direction.default
+2d.text.direction.invalid.html	Canvas test: 2d.text.direction.invalid
+2d.text.direction.valid.html	Canvas test: 2d.text.direction.valid
+2d.text.draw.fill.maxWidth.NaN.html	fillText handles maxWidth correctly
+2d.text.draw.fill.maxWidth.negative.html	fillText handles maxWidth correctly
+2d.text.draw.fill.maxWidth.small.html	fillText handles maxWidth correctly
+2d.text.draw.fill.maxWidth.zero.html	fillText handles maxWidth correctly
+2d.text.draw.fill.unaffected.html	fillText does not start a new path or subpath
+2d.text.draw.stroke.unaffected.html	strokeText does not start a new path or subpath
+2d.text.drawing.style.measure.direction.html	Measurement should follow text direction
+2d.text.drawing.style.measure.rtl.text.html	Measurement should follow canvas direction instead text direction
+2d.text.drawing.style.measure.textAlign.html	Measurement should be related to textAlignment
+2d.text.drawing.style.reset.TextRendering.html	TextRendering stays the same after font change.
+2d.text.drawing.style.reset.fontKerning.none.html	crbug/338965374, fontKerning still works after setting font for a second time.
+2d.text.font.default.html	Canvas test: 2d.text.font.default
+2d.text.font.parse.basic.html	Canvas test: 2d.text.font.parse.basic
+2d.text.font.parse.complex.html	Canvas test: 2d.text.font.parse.complex
+2d.text.font.parse.complex2.html	Canvas test: 2d.text.font.parse.complex2
+2d.text.font.parse.family.html	Canvas test: 2d.text.font.parse.family
+2d.text.font.parse.invalid.html	Canvas test: 2d.text.font.parse.invalid
+2d.text.font.parse.size.percentage.default.html	Canvas test: 2d.text.font.parse.size.percentage.default
+2d.text.font.parse.size.percentage.html	Canvas test: 2d.text.font.parse.size.percentage
+2d.text.font.parse.system.html	System fonts must be computed to explicit values
+2d.text.font.parse.tiny.html	Canvas test: 2d.text.font.parse.tiny
+2d.text.font.relative_size.html	Canvas test: 2d.text.font.relative_size
+2d.text.font.weight.html	Canvas test: 2d.text.font.weight
+2d.text.lang.valid.html	Canvas test: 2d.text.lang.valid
+2d.text.setFont.mathFont.html	crbug.com/1212190, make sure offscreencanvas doesn't crash with Math Font
+parent-style-relative-units.html	Font-size based on canvas element font-size

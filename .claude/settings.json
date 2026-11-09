@@ -22,6 +22,8 @@
       "Bash(fdisk -l *)",
       "Bash(rm /tmp/claude-1000/*)",
       "Bash(rm -f /tmp/claude-1000/*)",
+      "Bash(tools/cable.py *)",
+      "Bash(python3 tools/cable.py *)",
       "Bash(tools/vmcmd *)",
       "Bash(tools/vmtype *)",
       "Bash(./tools/vmcmd *)",

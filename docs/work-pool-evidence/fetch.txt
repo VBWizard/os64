@@ -1,0 +1,2 @@
+worktest: fetch 20 whole, 0 cancelled, 42 frames, heap restored
+worktest: PASS (0 failures)

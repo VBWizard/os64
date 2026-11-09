@@ -1,0 +1,4692 @@
+// props.c — each property's grammar, and a declaration read against it
+// (garb/values.h). The grammars are the specifications' own, section named
+// at each; where one is read short of its whole grammar the missing part is
+// named at the reader, and a value using it is invalid rather than guessed.
+
+#include "values_internal.h"
+#include "os64/fmt.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+
+// ── The table ───────────────────────────────────────────────────────────
+
+// `modern`: the Modern Web arc added it, so a reading with `modern_off`
+// does not know it (garb_prop_modern). Every property the arc adds is
+// marked, and the shorthands and aliases it adds below are too.
+typedef struct {
+    const char *name;
+    bool inherited;
+    bool modern;
+} Prop;
+
+static const Prop kProps[GARB_NPROPS] = {
+    [GARB_DISPLAY] = {"display", false, false},
+    [GARB_X] = {"x", false, true},
+    [GARB_Y] = {"y", false, true},
+    [GARB_CX] = {"cx", false, true},
+    [GARB_CY] = {"cy", false, true},
+    [GARB_R] = {"r", false, true},
+    [GARB_RX] = {"rx", false, true},
+    [GARB_RY] = {"ry", false, true},
+    [GARB_STOP_COLOR] = {"stop-color", false, true},
+    [GARB_STOP_OPACITY] = {"stop-opacity", false, true},
+    [GARB_CONTENT] = {"content", false, true},
+    [GARB_COUNTER_RESET] = {"counter-reset", false, true},
+    [GARB_COUNTER_INCREMENT] = {"counter-increment", false, true},
+    [GARB_COUNTER_SET] = {"counter-set", false, true},
+    [GARB_QUOTES] = {"quotes", true, true},
+    [GARB_FILTER] = {"filter", false, true},
+    [GARB_BACKDROP_FILTER] = {"backdrop-filter", false, true},
+    [GARB_MIX_BLEND_MODE] = {"mix-blend-mode", false, true},
+    [GARB_ISOLATION] = {"isolation", false, true},
+    [GARB_FILL] = {"fill", true, true},
+    [GARB_STROKE] = {"stroke", true, true},
+    [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
+    [GARB_STROKE_OPACITY] = {"stroke-opacity", true, true},
+    [GARB_CLIP_PATH] = {"clip-path", false, true},
+    [GARB_CLIP_RULE] = {"clip-rule", true, true},
+    [GARB_FILL_RULE] = {"fill-rule", true, true},
+    [GARB_STROKE_WIDTH] = {"stroke-width", true, true},
+    [GARB_STROKE_LINECAP] = {"stroke-linecap", true, true},
+    [GARB_STROKE_LINEJOIN] = {"stroke-linejoin", true, true},
+    [GARB_STROKE_MITERLIMIT] = {"stroke-miterlimit", true, true},
+    [GARB_STROKE_DASHOFFSET] = {"stroke-dashoffset", true, true},
+    [GARB_STROKE_DASHARRAY] = {"stroke-dasharray", true, true},
+    [GARB_VECTOR_EFFECT] = {"vector-effect", false, true},
+    [GARB_COLOR_INTERPOLATION] = {"color-interpolation", true, true},
+    [GARB_COLOR] = {"color", true, false},
+    [GARB_BACKGROUND_COLOR] = {"background-color", false, false},
+    [GARB_BACKGROUND_IMAGE] = {"background-image", false, false},
+    [GARB_BACKGROUND_REPEAT] = {"background-repeat", false, false},
+    [GARB_BACKGROUND_POSITION_X] = {"background-position-x", false, false},
+    [GARB_BACKGROUND_POSITION_Y] = {"background-position-y", false, false},
+    [GARB_BACKGROUND_SIZE] = {"background-size", false, false},
+    [GARB_BACKGROUND_ORIGIN] = {"background-origin", false, false},
+    [GARB_BACKGROUND_CLIP] = {"background-clip", false, false},
+    [GARB_MARGIN_TOP] = {"margin-top", false, false},
+    [GARB_MARGIN_RIGHT] = {"margin-right", false, false},
+    [GARB_MARGIN_BOTTOM] = {"margin-bottom", false, false},
+    [GARB_MARGIN_LEFT] = {"margin-left", false, false},
+    [GARB_PADDING_TOP] = {"padding-top", false, false},
+    [GARB_PADDING_RIGHT] = {"padding-right", false, false},
+    [GARB_PADDING_BOTTOM] = {"padding-bottom", false, false},
+    [GARB_PADDING_LEFT] = {"padding-left", false, false},
+    [GARB_BORDER_TOP_WIDTH] = {"border-top-width", false, false},
+    [GARB_BORDER_RIGHT_WIDTH] = {"border-right-width", false, false},
+    [GARB_BORDER_BOTTOM_WIDTH] = {"border-bottom-width", false, false},
+    [GARB_BORDER_LEFT_WIDTH] = {"border-left-width", false, false},
+    [GARB_BORDER_TOP_STYLE] = {"border-top-style", false, false},
+    [GARB_BORDER_RIGHT_STYLE] = {"border-right-style", false, false},
+    [GARB_BORDER_BOTTOM_STYLE] = {"border-bottom-style", false, false},
+    [GARB_BORDER_LEFT_STYLE] = {"border-left-style", false, false},
+    [GARB_BORDER_TOP_COLOR] = {"border-top-color", false, false},
+    [GARB_BORDER_RIGHT_COLOR] = {"border-right-color", false, false},
+    [GARB_BORDER_BOTTOM_COLOR] = {"border-bottom-color", false, false},
+    [GARB_BORDER_LEFT_COLOR] = {"border-left-color", false, false},
+    [GARB_WIDTH] = {"width", false, false},
+    [GARB_HEIGHT] = {"height", false, false},
+    [GARB_MIN_WIDTH] = {"min-width", false, false},
+    [GARB_MAX_WIDTH] = {"max-width", false, false},
+    [GARB_MIN_HEIGHT] = {"min-height", false, false},
+    [GARB_MAX_HEIGHT] = {"max-height", false, false},
+    [GARB_BOX_SIZING] = {"box-sizing", false, false},
+    [GARB_FONT_FAMILY] = {"font-family", true, false},
+    [GARB_FONT_SIZE] = {"font-size", true, false},
+    [GARB_FONT_WEIGHT] = {"font-weight", true, false},
+    [GARB_FONT_STYLE] = {"font-style", true, false},
+    [GARB_FONT_VARIANT] = {"font-variant", true, false},
+    [GARB_LINE_HEIGHT] = {"line-height", true, false},
+    [GARB_TEXT_ALIGN] = {"text-align", true, false},
+    [GARB_VERTICAL_ALIGN] = {"vertical-align", false, false},
+    [GARB_WHITE_SPACE] = {"white-space", true, false},
+    [GARB_TEXT_DECORATION_LINE] = {"text-decoration-line", false, false},
+    [GARB_TEXT_INDENT] = {"text-indent", true, false},
+    [GARB_TEXT_TRANSFORM] = {"text-transform", true, false},
+    [GARB_VISIBILITY] = {"visibility", true, false},
+    [GARB_LIST_STYLE_TYPE] = {"list-style-type", true, false},
+    [GARB_LIST_STYLE_POSITION] = {"list-style-position", true, false},
+    [GARB_LIST_STYLE_IMAGE] = {"list-style-image", true, false},
+    [GARB_BORDER_SPACING] = {"border-spacing", true, false},
+    [GARB_BORDER_COLLAPSE] = {"border-collapse", true, false},
+    [GARB_CAPTION_SIDE] = {"caption-side", true, false},
+    [GARB_FLOAT] = {"float", false, false},
+    [GARB_CLEAR] = {"clear", false, false},
+    [GARB_OVERFLOW_X] = {"overflow-x", false, false},
+    [GARB_OVERFLOW_Y] = {"overflow-y", false, false},
+    [GARB_POSITION] = {"position", false, false},
+    [GARB_TOP] = {"top", false, false},
+    [GARB_RIGHT] = {"right", false, false},
+    [GARB_BOTTOM] = {"bottom", false, false},
+    [GARB_LEFT] = {"left", false, false},
+    [GARB_Z_INDEX] = {"z-index", false, false},
+    [GARB_OPACITY] = {"opacity", false, false},
+    [GARB_POINTER_EVENTS] = {"pointer-events", true, false},
+    [GARB_FLEX_DIRECTION] = {"flex-direction", false, false},
+    [GARB_FLEX_WRAP] = {"flex-wrap", false, false},
+    [GARB_JUSTIFY_CONTENT] = {"justify-content", false, false},
+    [GARB_ALIGN_ITEMS] = {"align-items", false, false},
+    [GARB_ALIGN_SELF] = {"align-self", false, false},
+    [GARB_ALIGN_CONTENT] = {"align-content", false, false},
+    [GARB_FLEX_GROW] = {"flex-grow", false, false},
+    [GARB_FLEX_SHRINK] = {"flex-shrink", false, false},
+    [GARB_FLEX_BASIS] = {"flex-basis", false, false},
+    [GARB_ORDER] = {"order", false, false},
+    [GARB_ROW_GAP] = {"row-gap", false, false},
+    [GARB_COLUMN_GAP] = {"column-gap", false, false},
+    [GARB_GRID_TEMPLATE_COLUMNS] = {"grid-template-columns", false, false},
+    [GARB_GRID_TEMPLATE_ROWS] = {"grid-template-rows", false, false},
+    [GARB_GRID_TEMPLATE_AREAS] = {"grid-template-areas", false, false},
+    [GARB_GRID_AUTO_COLUMNS] = {"grid-auto-columns", false, false},
+    [GARB_GRID_AUTO_ROWS] = {"grid-auto-rows", false, false},
+    [GARB_GRID_AUTO_FLOW] = {"grid-auto-flow", false, false},
+    [GARB_GRID_COLUMN_START] = {"grid-column-start", false, false},
+    [GARB_GRID_COLUMN_END] = {"grid-column-end", false, false},
+    [GARB_GRID_ROW_START] = {"grid-row-start", false, false},
+    [GARB_GRID_ROW_END] = {"grid-row-end", false, false},
+    [GARB_JUSTIFY_ITEMS] = {"justify-items", false, false},
+    [GARB_JUSTIFY_SELF] = {"justify-self", false, false},
+    [GARB_BORDER_TOP_LEFT_RADIUS] = {"border-top-left-radius", false, false},
+    [GARB_BORDER_TOP_RIGHT_RADIUS] = {"border-top-right-radius", false, false},
+    [GARB_BORDER_BOTTOM_RIGHT_RADIUS] = {"border-bottom-right-radius", false, false},
+    [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false, false},
+    [GARB_BOX_SHADOW] = {"box-shadow", false, false},
+    [GARB_TEXT_SHADOW] = {"text-shadow", true, false},
+    [GARB_IMAGE_RENDERING] = {"image-rendering", true, false},
+    [GARB_CLIP] = {"clip", false, false},
+    [GARB_TRANSFORM] = {"transform", false, false},
+    [GARB_TRANSFORM_ORIGIN] = {"transform-origin", false, false},
+    [GARB_TRANSLATE] = {"translate", false, false},
+    [GARB_ROTATE] = {"rotate", false, false},
+    [GARB_SCALE] = {"scale", false, false},
+    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true, false},
+    [GARB_ANIMATION_NAME] = {"animation-name", false, false},
+    [GARB_ANIMATION_DURATION] = {"animation-duration", false, false},
+    [GARB_ANIMATION_TIMING_FUNCTION] = {"animation-timing-function", false, false},
+    [GARB_ANIMATION_ITERATION_COUNT] = {"animation-iteration-count", false, false},
+    [GARB_ANIMATION_DIRECTION] = {"animation-direction", false, false},
+    [GARB_ANIMATION_PLAY_STATE] = {"animation-play-state", false, false},
+    [GARB_ANIMATION_DELAY] = {"animation-delay", false, false},
+    [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false, false},
+    [GARB_WILL_CHANGE] = {"will-change", false, false},
+    [GARB_CURSOR] = {"cursor", true, true},
+    [GARB_USER_SELECT] = {"user-select", false, true},
+    [GARB_WORD_BREAK] = {"word-break", true, true},
+    [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
+    [GARB_LETTER_SPACING] = {"letter-spacing", true, true},
+    [GARB_TEXT_OVERFLOW] = {"text-overflow", false, true},
+    [GARB_OUTLINE_WIDTH] = {"outline-width", false, true},
+    [GARB_OUTLINE_STYLE] = {"outline-style", false, true},
+    [GARB_OUTLINE_COLOR] = {"outline-color", false, true},
+    [GARB_OUTLINE_OFFSET] = {"outline-offset", false, true},
+    [GARB_OBJECT_FIT] = {"object-fit", false, true},
+    [GARB_OBJECT_POSITION] = {"object-position", false, true},
+    [GARB_ASPECT_RATIO] = {"aspect-ratio", false, true},
+};
+
+const char *garb_prop_name(garb_prop_t prop)
+{
+    return prop < GARB_NPROPS ? kProps[prop].name : "";
+}
+
+bool garb_prop_inherited(garb_prop_t prop)
+{
+    return prop < GARB_NPROPS && kProps[prop].inherited;
+}
+
+// Whether a name of the tables is marked modern: the table's mark. The
+// harnesses prove the mark on names of every kind (a longhand, a
+// shorthand, an alias) before the arc has marked one of each, by compiling
+// with GARB_MODERN_PROBE, a list of names marked as if the tables said so.
+static bool marked(const char *name, bool modern)
+{
+#ifdef GARB_MODERN_PROBE
+    static const char *const kProbe[] = {GARB_MODERN_PROBE};
+    for (size_t k = 0; k < sizeof(kProbe) / sizeof(kProbe[0]); k++)
+        if (os64_streq(name, kProbe[k]))
+            return true;
+#else
+    (void)name;
+#endif
+    return modern;
+}
+
+bool garb_prop_modern(garb_prop_t prop)
+{
+    return prop < GARB_NPROPS && marked(kProps[prop].name, kProps[prop].modern);
+}
+
+// ── Keywords ────────────────────────────────────────────────────────────
+
+static const char *const kWide[] = {"inherit", "initial", "unset", "revert", "revert-layer", NULL};
+bool garb_family_word_reserved(const char *text, size_t len)
+{
+    for (int k = 0; kWide[k] != NULL; k++)
+        if (ieq(text, len, kWide[k]))
+            return true;
+    return ieq(text, len, "default");
+}
+static const char *const kDisplay[] = {
+    "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
+    "table-row-group", "table-header-group", "table-footer-group", "table-row",
+    "table-column-group", "table-column", "table-cell", "table-caption", "contents",
+    "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
+// Values this grammar reads but nothing lays out or draws as written yet
+// (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
+// the cascade keeps them; not SUPPORTED, so @supports tells a page to use
+// the fallback it wrote for exactly this. `contents` is not here: libflow
+// gives such an element no box and flows its children into its parent,
+// which is what it says. The list is for what a page writes a fallback for
+// — asks for one thing and is handed another, or nothing — and each joins
+// it the day its mapping is written and leaves the day the slice that draws
+// it lands; it ends at the row with no keyword. A transform is judged by
+// what it does, not by a keyword (transform_approximated, below).
+static const struct {
+    garb_prop_t prop;
+    const char *keyword;
+} kApproximated[] = {
+    {GARB_NPROPS, NULL},
+};
+
+// An image kept by name and drawn as nothing — a conic gradient, an
+// image-set — is approximated the same way; a linear or radial gradient and
+// a url() are drawn.
+static bool image_drawn(const garb_val_t *v)
+{
+    return v->kind != GARB_V_IMAGE || v->nitems > 0;
+}
+
+// What a calc() of numbers and percentages comes to — a percentage in its
+// own unit, `*number` false — worked in the order libflow works it
+// (style.c's calc), so the two agree to the bit; false when it holds a
+// length, which only layout settles.
+static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
+{
+    static const int32_t clamp_order[3] = {1, 2, 0};
+    switch (k->op) {
+    case GARB_CALC_LEAF:
+        if (k->leaf.kind != GARB_V_NUMBER && k->leaf.kind != GARB_V_PERCENTAGE)
+            return false;
+        *number = k->leaf.kind == GARB_V_NUMBER;
+        *v = garb_hold(k->leaf.number, *number ? GARB_TRANSFORM_NUMBER_MAX
+                                               : GARB_TRANSFORM_NUMBER_MAX * 100);
+        return true;
+    case GARB_CALC_SUM:
+        *v = 0;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            if (!calc_settled(k->args[i], &t, number))
+                return false;
+            *v += k->invert != NULL && k->invert[i] ? -t : t;
+        }
+        return true;
+    case GARB_CALC_PRODUCT:
+        *v = 1;
+        *number = true;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            bool n;
+            if (!calc_settled(k->args[i], &t, &n))
+                return false;
+            bool divide = k->invert != NULL && k->invert[i];
+            if (n) {
+                if (divide && t == 0)
+                    return false;
+                *v *= divide ? 1 / t : t;
+            } else if (*number && !divide) {
+                *v = t * *v;
+                *number = false;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    case GARB_CALC_MIN: case GARB_CALC_MAX: case GARB_CALC_CLAMP:
+        if (k->nargs == 0 || (k->op == GARB_CALC_CLAMP && k->nargs != 3))
+            return false;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            int32_t at = k->op == GARB_CALC_CLAMP ? clamp_order[i] : i;
+            if (!calc_settled(k->args[at], &t, number))
+                return false;
+            bool smaller = k->op == GARB_CALC_MIN || (k->op == GARB_CALC_CLAMP && i == 1);
+            if (i == 0 || (smaller ? t < *v : t > *v))
+                *v = t;
+        }
+        return true;
+    }
+    return false;
+}
+
+// A matrix3d() argument as libflow reads it: a number, or a calc() of
+// numbers as it comes to, held to the domain (values.h), so that what the
+// matrix does is known before anything is laid out.
+static bool settled(const garb_val_t *v, double *out)
+{
+    bool number;
+    if (v->kind == GARB_V_NUMBER)
+        *out = v->number;
+    else if (!(v->kind == GARB_V_CALC && v->calc != NULL && calc_settled(v->calc, out, &number) &&
+               number))
+        return false;
+    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);
+    return true;
+}
+
+// Whether a transform function is drawn FLAT (PILE3.md § Transforms, the
+// painter): its w, in the flat drawing's x' = (m0 x + m4 y + m12) / w,
+// w = m3 x + m7 y + m11 z + m15, reads nothing but itself — every 2D
+// function and every 3D rotation, scale and translation. perspective()
+// with a length is not, and a matrix3d() is not unless m3, m7 and m11
+// are 0 and m15 is above 0 as written. Judged a function at a time: a w
+// that reads z is no flat drawing once another function writes z from y.
+static bool drawn_flat(const garb_val_t *f)
+{
+    const char *n = f->keyword;
+    const garb_val_t *a = f->items;
+    if (os64_streq(n, "perspective"))
+        return a[0].kind == GARB_V_KEYWORD;
+    if (!os64_streq(n, "matrix3d"))
+        return true;
+    double m3, m7, m11, m15;
+    return settled(&a[3], &m3) && settled(&a[7], &m7) && settled(&a[11], &m11) &&
+           settled(&a[15], &m15) && m3 == 0 && m7 == 0 && m11 == 0 && m15 > 0;
+}
+
+// What of a transform value is drawn as something other than it says, by
+// the name of the function: one that is not drawn flat. A number past the
+// domain is held at its limit (values.h), which is how the page's value is
+// read, and Chrome's @supports says yes to it too. The individual
+// properties are always flat.
+// Each function is judged by its own numbers: ones that compose, or scale
+// to device units, past what the face draws are not named here (the
+// numeric contract, PILE3.md § Transforms, the painter, Booked).
+static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
+{
+    if (v->kind == GARB_V_KEYWORD || prop != GARB_TRANSFORM)
+        return NULL;
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!drawn_flat(&v->items[i]))
+            return v->items[i].keyword;
+    return NULL;
+}
+
+// What is approximated, by the name the page wrote — the keyword, or the
+// image function — or NULL when the value is laid out as it says.
+static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
+{
+    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
+        prop == GARB_TRANSLATE)
+        return transform_approximated(prop, v);
+    // plus-darker, drawn as normal (MIX_BLEND.md § 2).
+    if (prop == GARB_MIX_BLEND_MODE && v->kind == GARB_V_KEYWORD &&
+        os64_streq(v->keyword, "plus-darker"))
+        return "plus-darker";
+    // A filter list's SVG references, which draw it unfiltered.
+    if ((prop == GARB_FILTER || prop == GARB_BACKDROP_FILTER) && v->kind == GARB_V_FUNCTIONS) {
+        for (int32_t i = 0; i < v->nitems; i++)
+            if (v->items[i].kind == GARB_V_URL)
+                return "url";
+        return NULL;
+    }
+    // `content`'s items read and drawn as nothing (GENERATED_CONTENT.md §
+    // 2): pictures.
+    if (prop == GARB_CONTENT) {
+        for (int32_t i = 0; i < v->nitems; i++) {
+            const garb_val_t *it = &v->items[i];
+            if (it->kind == GARB_V_URL)
+                return "url";
+            if (it->kind == GARB_V_IMAGE)
+                return it->text;
+        }
+        return NULL;
+    }
+    if (!image_drawn(v))
+        return v->text;
+    // A list of layers is approximated when any layer is: the page asked
+    // for all of them.
+    if (v->kind == GARB_V_LAYERS) {
+        for (int32_t i = 0; i < v->nitems; i++) {
+            const char *name = value_approximated(prop, &v->items[i]);
+            if (name != NULL)
+                return name;
+        }
+        return NULL;
+    }
+    if (v->kind != GARB_V_KEYWORD)
+        return NULL;
+    for (size_t k = 0; kApproximated[k].keyword != NULL; k++)
+        if (prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
+            return kApproximated[k].keyword;
+    return NULL;
+}
+
+bool garb_set_approximated(const garb_set_t *set)
+{
+    return value_approximated(set->prop, &set->value) != NULL;
+}
+
+const char *garb_set_approximation(const garb_set_t *set)
+{
+    return value_approximated(set->prop, &set->value);
+}
+
+static const char *const kBorderStyle[] = {"none", "hidden", "dotted", "dashed", "solid", "double",
+                                           "groove", "ridge", "inset", "outset", NULL};
+static const char *const kBorderWidth[] = {"thin", "medium", "thick", NULL};
+static const char *const kAuto[] = {"auto", NULL};
+static const char *const kNone[] = {"none", NULL};
+static const char *const kSizeWords[] = {"auto", "min-content", "max-content", "fit-content", NULL};
+static const char *const kMaxWords[] = {"none", "min-content", "max-content", "fit-content", NULL};
+static const char *const kBoxSizing[] = {"content-box", "border-box", NULL};
+static const char *const kGeneric[] = {"serif", "sans-serif", "monospace", "cursive", "fantasy",
+                                       "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
+                                       "ui-rounded", "math", "emoji", "fangsong", NULL};
+bool garb_generic_family(const char *text, size_t len)
+{
+    for (int k = 0; kGeneric[k] != NULL; k++)
+        if (ieq(text, len, kGeneric[k]))
+            return true;
+    return false;
+}
+
+static const char *const kFontSize[] = {"xx-small", "x-small", "small", "medium", "large",
+                                        "x-large", "xx-large", "xxx-large", "larger", "smaller",
+                                        NULL};
+static const char *const kFontWeight[] = {"normal", "bold", "bolder", "lighter", NULL};
+static const char *const kFontStyle[] = {"normal", "italic", "oblique", NULL};
+static const char *const kFontVariant[] = {"normal", "small-caps", NULL};
+static const char *const kFontStretch[] = {"normal", "ultra-condensed", "extra-condensed",
+                                           "condensed", "semi-condensed", "semi-expanded",
+                                           "expanded", "extra-expanded", "ultra-expanded", NULL};
+static const char *const kSystemFont[] = {"caption", "icon", "menu", "message-box",
+                                          "small-caption", "status-bar", NULL};
+bool garb_system_font(const char *text, size_t len)
+{
+    for (int k = 0; kSystemFont[k] != NULL; k++)
+        if (ieq(text, len, kSystemFont[k]))
+            return true;
+    return false;
+}
+
+static const char *const kNormal[] = {"normal", NULL};
+static const char *const kTextAlign[] = {"left", "right", "center", "justify", "start", "end",
+                                         "match-parent", NULL};
+static const char *const kVerticalAlign[] = {"baseline", "sub", "super", "text-top",
+                                             "text-bottom", "middle", "top", "bottom", NULL};
+static const char *const kWhiteSpace[] = {"normal", "pre", "nowrap", "pre-wrap", "pre-line",
+                                          "break-spaces", NULL};
+static const char *const kLines[] = {"underline", "overline", "line-through", "blink", NULL};
+static const char *const kDecorationStyle[] = {"solid", "double", "dotted", "dashed", "wavy", NULL};
+static const char *const kThickness[] = {"auto", "from-font", NULL};
+static const char *const kTransform[] = {"none", "capitalize", "uppercase", "lowercase",
+                                         "full-width", "full-size-kana", NULL};
+static const char *const kIndentWords[] = {"hanging", "each-line", NULL};
+static const char *const kVisibility[] = {"visible", "hidden", "collapse", NULL};
+static const char *const kImageRendering[] = {
+    "auto", "smooth", "high-quality", "pixelated", "crisp-edges",
+    // Before pixelated: Firefox's, Chrome's, and SVG's two.
+    "-moz-crisp-edges", "-webkit-optimize-contrast", "optimizespeed", "optimizequality", NULL};
+static const char *const kListPosition[] = {"inside", "outside", NULL};
+static const char *const kCollapse[] = {"collapse", "separate", NULL};
+static const char *const kCaption[] = {"top", "bottom", NULL};
+static const char *const kFloat[] = {"left", "right", "none", "inline-start", "inline-end", NULL};
+static const char *const kClear[] = {"none", "left", "right", "both", "inline-start",
+                                     "inline-end", NULL};
+static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
+static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
+static const char *const kBlendModes[] = {
+    "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn",
+    "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color",
+    "luminosity", "plus-lighter", "plus-darker", NULL};
+static const char *const kIsolation[] = {"auto", "isolate", NULL};
+// CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
+// auto: read so a sheet written for both keeps its declaration.
+static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
+                                             "visiblestroke", "visible", "painted", "fill",
+                                             "stroke", "all", "bounding-box", NULL};
+// Flexbox 1 § 5 and the Box Alignment 3 values a flex container reads.
+// `safe` and `last baseline` are not read: a value using one is invalid,
+// and the page's fallback stands (FLEX.md § Booked); `unsafe` is what
+// every value means without it, and is read as that.
+static const char *const kFlexDirection[] = {"row", "row-reverse", "column", "column-reverse",
+                                             NULL};
+static const char *const kFlexWrap[] = {"nowrap", "wrap", "wrap-reverse", NULL};
+static const char *const kJustify[] = {"normal", "flex-start", "flex-end", "center",
+                                       "space-between", "space-around", "space-evenly",
+                                       "start", "end", "left", "right", "stretch", NULL};
+static const char *const kAlignItems[] = {"normal", "stretch", "flex-start", "flex-end",
+                                          "center", "baseline", "start", "end", "self-start",
+                                          "self-end", NULL};
+static const char *const kAlignSelf[] = {"auto", "normal", "stretch", "flex-start", "flex-end",
+                                         "center", "baseline", "start", "end", "self-start",
+                                         "self-end", NULL};
+static const char *const kAlignContent[] = {"normal", "stretch", "flex-start", "flex-end",
+                                            "center", "space-between", "space-around",
+                                            "space-evenly", "start", "end", "baseline", NULL};
+static const char *const kBasisWords[] = {"auto", "content", "min-content", "max-content",
+                                          "fit-content", NULL};
+static const char *const kJustifyItems[] = {"normal", "stretch", "start", "end", "center",
+                                            "left", "right", "self-start", "self-end",
+                                            "flex-start", "flex-end", "baseline", "legacy", NULL};
+static const char *const kJustifySelf[] = {"auto", "normal", "stretch", "start", "end", "center",
+                                           "left", "right", "self-start", "self-end",
+                                           "flex-start", "flex-end", "baseline", NULL};
+static const char *const kUnsafe[] = {"unsafe", NULL};
+// Grid 2 § 7.2: a track's sizing keywords, and repeat()'s automatic counts.
+static const char *const kTrackWords[] = {"auto", "min-content", "max-content", NULL};
+static const char *const kAutoRepeat[] = {"auto-fill", "auto-fit", NULL};
+static const char *const kFlowAxis[] = {"row", "column", NULL};
+static const char *const kDense[] = {"dense", NULL};
+static const char *const kSpan[] = {"span", NULL};
+static const char *const kFirst[] = {"first", NULL};
+static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
+static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
+static const char *const kAttachment[] = {"scroll", "fixed", "local", NULL};
+static const char *const kBox[] = {"border-box", "padding-box", "content-box", NULL};
+static const char *const kClipBox[] = {"border-box", "padding-box", "content-box", "text", NULL};
+static const char *const kBgSize[] = {"cover", "contain", NULL};
+static const char *const kPosX[] = {"left", "right", "center", NULL};
+static const char *const kPosY[] = {"top", "bottom", "center", NULL};
+static const char *const kPosAll[] = {"left", "right", "top", "bottom", "center", NULL};
+// Easing 1 § 2: the easings a keyword names, and a step's positions.
+static const char *const kEasings[] = {"linear", "ease", "ease-in", "ease-out", "ease-in-out",
+                                       "step-start", "step-end", NULL};
+static const char *const kStepPositions[] = {"jump-start", "jump-end", "jump-none", "jump-both",
+                                             "start", "end", NULL};
+// Animations 1 § 4.4 to § 4.8, and Animations 2's `auto` duration.
+static const char *const kInfinite[] = {"infinite", NULL};
+static const char *const kDirection[] = {"normal", "reverse", "alternate", "alternate-reverse",
+                                         NULL};
+static const char *const kPlayState[] = {"running", "paused", NULL};
+static const char *const kFillMode[] = {"none", "forwards", "backwards", "both", NULL};
+// CSS UI 4 § 5.1.1: the shapes a cursor names.
+static const char *const kCursor[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
+    "grab", "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize",
+    "se-resize", "sw-resize", "w-resize", "ew-resize", "ns-resize", "nesw-resize",
+    "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out", NULL};
+// CSS UI 4 § 6.1.
+static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all", NULL};
+// CSS Text 3 § 5.1 (`break-word` is its legacy value, read as `normal`
+// beside `overflow-wrap: anywhere`) and § 5.4.
+static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word", NULL};
+static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", NULL};
+// CSS Overflow 4 § 4.1 as one value: its strings, fade() and the second
+// value of a pair are not read, and a value using one is invalid.
+static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
+// CSS UI 4 § 3.3: a border's styles but `hidden`, and `auto`.
+static const char *const kOutlineStyle[] = {"auto", "none", "dotted", "dashed", "solid", "double",
+                                            "groove", "ridge", "inset", "outset", NULL};
+// CSS Images 3 § 4.5; Images 4's pairs (`cover scale-down`) are not read.
+static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down", NULL};
+// The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
+// CSS-wide keywords and `default`.
+static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
+                                         "revert-layer", "default", NULL};
+
+// ── Building the answer ─────────────────────────────────────────────────
+
+typedef struct {
+    garb_set_t *out;
+    int32_t n;
+    Arena a;
+    bool quirks;
+    bool modern_off;
+} Sets;
+
+// Whether the reading knows longhand `p`: one marked modern is unknown to a
+// reading with `modern_off`, which is an engine that never had it. A
+// shorthand reads a part of its value only when a longhand that part sets
+// is known, so a value only a marked longhand's grammar takes makes the
+// shorthand invalid, as it would be in that engine; set() then leaves the
+// marked longhand's reset out of the answer.
+static bool knows(const Sets *s, garb_prop_t p)
+{
+    return !(s->modern_off && garb_prop_modern(p));
+}
+
+// A longhand into the answer; one the reading does not know is left out,
+// which is what keeps it out of a shorthand that resets it beside
+// longhands that are known.
+static void set(Sets *s, garb_prop_t p, const garb_val_t *v)
+{
+    if (s->modern_off && garb_prop_modern(p))
+        return;
+    if (s->n < GARB_SETS_MAX) {
+        s->out[s->n].prop = p;
+        s->out[s->n].value = *v;
+        s->n++;
+    }
+}
+
+static garb_val_t kw(const char *word)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_KEYWORD;
+    v.keyword = word;
+    return v;
+}
+
+static garb_val_t percent(double n)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_PERCENTAGE;
+    v.number = n;
+    return v;
+}
+
+static garb_val_t initial_color(void)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_COLOR;
+    v.color.current = true;
+    v.color.a = 1;
+    return v;
+}
+
+static garb_val_t transparent(void)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_COLOR;
+    return v;
+}
+
+static const garb_val_t *keep(Sets *s, const garb_val_t *items, int32_t n)
+{
+    garb_val_t *copy = os64_arena_alloc(s->a.arena, (size_t)(n > 0 ? n : 1) * sizeof(*copy));
+    if (copy == NULL) {
+        s->a.short_of_memory = true;
+        return NULL;
+    }
+    for (int32_t k = 0; k < n; k++)
+        copy[k] = items[k];
+    return copy;
+}
+
+// ── Pieces grammars share ───────────────────────────────────────────────
+
+// A keyword from `allowed` or a length/percentage as `accept` allows.
+static bool kw_or_dim(Sets *s, VCur *c, const char *const *allowed, int accept, bool negative,
+                      bool quirky, garb_val_t *out)
+{
+    const char *k = allowed != NULL ? vc_keyword(c, allowed) : NULL;
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    return vc_dim(c, accept, negative, quirky && s->quirks, &s->a, out);
+}
+
+// One to four values for top, right, bottom, left (CSS 2.1 § 8.3's box).
+// Whether each of `n` values of a one-to-four list (top right bottom left,
+// or a corner's four) sets a side the reading knows: the sides each value
+// fills, by how many were given.
+static bool four_known(const Sets *s, garb_prop_t first, int n)
+{
+    static const uint8_t kFills[4][4] = {{0xF}, {0x5, 0xA}, {0x1, 0xA, 0x4}, {0x1, 0x2, 0x4, 0x8}};
+    for (int i = 0; i < n; i++) {
+        bool any = false;
+        for (int side = 0; side < 4; side++)
+            any |= (kFills[n - 1][i] >> side & 1) && knows(s, (garb_prop_t)(first + side));
+        if (!any)
+            return false;
+    }
+    return true;
+}
+
+// Whether a pair's `n` values (one, or two) set a longhand the reading
+// knows: one value sets both, two set one each.
+static bool pair_known(const Sets *s, garb_prop_t a, garb_prop_t b, int n)
+{
+    return n == 1 ? knows(s, a) || knows(s, b) : knows(s, a) && knows(s, b);
+}
+
+static bool box4(Sets *s, VCur *c, garb_prop_t first,
+                 bool (*one)(Sets *, VCur *, garb_val_t *))
+{
+    garb_val_t v[4];
+    int n = 0;
+    while (n < 4 && !vc_done(c) && one(s, c, &v[n]))
+        n++;
+    if (n == 0 || !vc_done(c) || !four_known(s, first, n))
+        return false;
+    garb_val_t top = v[0], right = n > 1 ? v[1] : top, bottom = n > 2 ? v[2] : top,
+               left = n > 3 ? v[3] : right;
+    set(s, first, &top);
+    set(s, (garb_prop_t)(first + 1), &right);
+    set(s, (garb_prop_t)(first + 2), &bottom);
+    set(s, (garb_prop_t)(first + 3), &left);
+    return true;
+}
+
+// A corner's radius as one value of two items, horizontal and vertical:
+// `n` given, the second the first's when only one is.
+static bool radius_pair(Sets *s, const garb_val_t *given, int n, garb_val_t *out)
+{
+    garb_val_t two[2] = {given[0], n > 1 ? given[1] : given[0]};
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
+// `border-radius` (Backgrounds 3 § 5.1): one to four horizontal radii,
+// then `/` and one to four vertical ones, each list filled out as margin's
+// is — top-left, top-right, bottom-right, bottom-left — and the vertical
+// list the horizontal one when there is no slash.
+static bool radius_shorthand(Sets *s, VCur *c)
+{
+    garb_val_t h[4], v[4];
+    int nh = 0, nv = 0;
+    while (nh < 4 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &h[nh]))
+        nh++;
+    if (nh == 0)
+        return false;
+    const garb_value_t *t = vc_peek(c);
+    if (is_delim_v(t, '/')) {
+        c->i++;
+        while (nv < 4 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &v[nv]))
+            nv++;
+        if (nv == 0)
+            return false;
+    }
+    if (!vc_done(c) || !four_known(s, GARB_BORDER_TOP_LEFT_RADIUS, nh) ||
+        (nv > 0 && !four_known(s, GARB_BORDER_TOP_LEFT_RADIUS, nv)))
+        return false;
+    if (nv == 0) {
+        os64_memcpy(v, h, sizeof(h));
+        nv = nh;
+    }
+    garb_val_t *lists[2] = {h, v};
+    int counts[2] = {nh, nv};
+    for (int k = 0; k < 2; k++) {
+        garb_val_t *l = lists[k];
+        if (counts[k] < 2)
+            l[1] = l[0];
+        if (counts[k] < 3)
+            l[2] = l[0];
+        if (counts[k] < 4)
+            l[3] = l[1];
+    }
+    for (int corner = 0; corner < 4; corner++) {
+        garb_val_t pair[2] = {h[corner], v[corner]}, one;
+        if (!radius_pair(s, pair, 2, &one))
+            return false;
+        set(s, (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + corner), &one);
+    }
+    return true;
+}
+
+static const char *const kInset[] = {"inset", NULL};
+
+// One shadow (Backgrounds 3 § 7.1; Text Decoration 3 § 4): two to four
+// lengths together — x, y, a blur that is not negative, and for a box a
+// spread — with a colour and, for a box, `inset`, each at most once, on
+// either side of them. Read as one value whose items are always the same:
+// `inset` first when it is there, the four lengths (0 for what was left
+// out), and the colour, currentColor for none.
+static bool shadow_one(Sets *s, VCur *c, bool box, garb_val_t *out)
+{
+    garb_val_t items[6], len[4], colour = {0};
+    int n = 0;
+    bool have_colour = false, have_inset = false, lengths_over = false;
+    while (!vc_done(c) && vc_peek(c)->kind != GARB_COMMA) {
+        if (box && !have_inset && vc_keyword(c, kInset) != NULL) {
+            have_inset = true;
+            lengths_over = n > 0;
+        } else if (!have_colour && vc_color(c, &colour)) {
+            have_colour = true;
+            lengths_over = n > 0;
+        } else if (!lengths_over && n < (box ? 4 : 3) &&
+                   vc_dim(c, ACCEPT_LENGTH, n != 2, false, &s->a, &len[n])) {
+            n++;
+        } else {
+            return false;
+        }
+    }
+    if (n < 2)
+        return false;
+    int k = 0;
+    if (have_inset)
+        items[k++] = kw("inset");
+    for (int i = 0; i < 4; i++) {
+        if (i < n) {
+            items[k++] = len[i];
+        } else {
+            os64_memset(&items[k], 0, sizeof(items[k]));
+            items[k].kind = GARB_V_LENGTH;
+            items[k++].unit = GARB_U_PX;
+        }
+    }
+    if (!have_colour) {
+        os64_memset(&colour, 0, sizeof(colour));
+        colour.kind = GARB_V_COLOR;
+        colour.color.current = true;
+    }
+    items[k++] = colour;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, items, k);
+    out->nitems = k;
+    return out->items != NULL;
+}
+
+// `none`, or shadows separated by commas, the first painted on top — as
+// many as a page writes: pixel art is drawn with hundreds of them.
+static bool shadow_list(Sets *s, VCur *c, bool box, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t *list = NULL;
+    int32_t n = 0, cap = 0;
+    bool ok = true;
+    for (;;) {
+        if (n == cap) {
+            int32_t cap2 = cap != 0 ? cap * 2 : 8;
+            garb_val_t *grown = os64_realloc(list, (size_t)cap2 * sizeof(*grown));
+            if (grown == NULL) {
+                // Not the arena's, so said here: a list cut short by memory
+                // is an incomplete read, never an invalid declaration
+                // (Quinn, #203).
+                s->a.short_of_memory = true;
+                ok = false;
+                break;
+            }
+            list = grown;
+            cap = cap2;
+        }
+        if (!shadow_one(s, c, box, &list[n])) {
+            ok = false;
+            break;
+        }
+        n++;
+        if (vc_done(c))
+            break;
+        c->i++;                 // shadow_one stopped at a comma
+    }
+    if (ok) {
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->items = keep(s, list, n);
+        out->nitems = n;
+        out->comma = true;
+        ok = out->items != NULL;
+    }
+    os64_free(list);
+    return ok;
+}
+
+static bool margin_one(Sets *s, VCur *c, garb_val_t *out)
+{
+    return kw_or_dim(s, c, kAuto, ACCEPT_LENGTH | ACCEPT_PERCENT, true, true, out);
+}
+
+static bool padding_one(Sets *s, VCur *c, garb_val_t *out)
+{
+    return kw_or_dim(s, c, NULL, ACCEPT_LENGTH | ACCEPT_PERCENT, false, true, out);
+}
+
+static bool bwidth_one(Sets *s, VCur *c, garb_val_t *out)
+{
+    return kw_or_dim(s, c, kBorderWidth, ACCEPT_LENGTH, false, true, out);
+}
+
+static bool bstyle_one(Sets *s, VCur *c, garb_val_t *out)
+{
+    (void)s;
+    const char *k = vc_keyword(c, kBorderStyle);
+    if (k == NULL)
+        return false;
+    *out = kw(k);
+    return true;
+}
+
+static bool bcolor_one(Sets *s, VCur *c, garb_val_t *out)
+{
+    (void)s;
+    return vc_color(c, out);
+}
+
+// `border` and `border-top` alike (Backgrounds 3 § 4.4): a width, a style
+// and a colour, any order, each at most once; each left out is its
+// initial value (medium, none, currentColor).
+static bool border_side(Sets *s, VCur *c, const garb_prop_t *sides, int nsides)
+{
+    garb_val_t width = kw("medium"), style = kw("none"), color = initial_color();
+    bool have_w = false, have_s = false, have_c = false;
+    bool know_w = false, know_s = false, know_c = false;
+    for (int k = 0; k < nsides; k++) {
+        know_w |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_WIDTH + sides[k]));
+        know_s |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_STYLE + sides[k]));
+        know_c |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_COLOR + sides[k]));
+    }
+    while (!vc_done(c)) {
+        garb_val_t v;
+        if (!have_w && know_w && bwidth_one(s, c, &v)) {
+            width = v;
+            have_w = true;
+        } else if (!have_s && know_s && bstyle_one(s, c, &v)) {
+            style = v;
+            have_s = true;
+        } else if (!have_c && know_c && vc_color(c, &v)) {
+            color = v;
+            have_c = true;
+        } else {
+            return false;
+        }
+    }
+    if (!have_w && !have_s && !have_c)
+        return false;
+    for (int k = 0; k < nsides; k++) {
+        set(s, (garb_prop_t)(GARB_BORDER_TOP_WIDTH + sides[k]), &width);
+        set(s, (garb_prop_t)(GARB_BORDER_TOP_STYLE + sides[k]), &style);
+        set(s, (garb_prop_t)(GARB_BORDER_TOP_COLOR + sides[k]), &color);
+    }
+    return true;
+}
+
+// ── Fonts (CSS Fonts 4 § 2-3) ───────────────────────────────────────────
+
+// font-family: family names — a string, or identifiers joined by single
+// spaces — and generic families, comma-separated.
+static bool families(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t items[64];
+    int32_t n = 0;
+    for (;;) {
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL || n == 64)
+            return false;
+        garb_val_t item = {0};
+        if (t->kind == GARB_STRING) {
+            item.kind = GARB_V_STRING;
+            item.text = t->text;
+            item.len = t->len;
+            c->i++;
+        } else if (t->kind == GARB_IDENT) {
+            const char *generic = NULL;
+            VCur look = *c;
+            look.i++;
+            const garb_value_t *after = vc_peek(&look);
+            if (after == NULL || after->kind == GARB_COMMA)
+                generic = vc_keyword(c, kGeneric);
+            if (generic != NULL) {
+                item = kw(generic);
+            } else {
+                // Identifiers joined with one space each; a CSS-wide or
+                // `default` keyword may not be one of them.
+                size_t total = 0;
+                int32_t start = c->i, words = 0;
+                while ((t = vc_peek(c)) != NULL && t->kind == GARB_IDENT) {
+                    if (garb_family_word_reserved(t->text, t->len))
+                        return false;
+                    total += t->len + 1;
+                    words++;
+                    c->i++;
+                }
+                char *name = os64_arena_alloc(s->a.arena, total);
+                if (name == NULL) {
+                    s->a.short_of_memory = true;
+                    return false;
+                }
+                size_t at = 0;
+                for (int32_t k = start; k < c->i; k++) {
+                    if (c->v[k].kind != GARB_IDENT)
+                        continue;
+                    if (at > 0)
+                        name[at++] = ' ';
+                    os64_memcpy(name + at, c->v[k].text, c->v[k].len);
+                    at += c->v[k].len;
+                }
+                name[at] = '\0';
+                (void)words;
+                item.kind = GARB_V_STRING;
+                item.text = name;
+                item.len = at;
+            }
+        } else {
+            return false;
+        }
+        items[n++] = item;
+        t = vc_peek(c);
+        if (t == NULL)
+            break;
+        if (t->kind != GARB_COMMA)
+            return false;
+        c->i++;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->items = keep(s, items, n);
+    if (out->items == NULL)
+        return false;
+    out->nitems = n;
+    out->comma = true;
+    out->kind = GARB_V_STRING;
+    return true;
+}
+
+static bool font_size(Sets *s, VCur *c, garb_val_t *out)
+{
+    return kw_or_dim(s, c, kFontSize, ACCEPT_LENGTH | ACCEPT_PERCENT, false, true, out);
+}
+
+static bool font_weight(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kFontWeight);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    VCur look = *c;
+    if (!vc_dim(&look, ACCEPT_NUMBER, false, false, &s->a, out))
+        return false;
+    if (out->kind == GARB_V_NUMBER && (out->number < 1 || out->number > 1000))
+        return false;
+    *c = look;
+    return true;
+}
+
+static bool font_style(Sets *s, VCur *c, garb_val_t *out)
+{
+    (void)s;
+    const char *k = vc_keyword(c, kFontStyle);
+    if (k == NULL)
+        return false;
+    *out = kw(k);
+    // `oblique <angle>`: the angle is read and not kept — an oblique is
+    // drawn as the italic face (packet 04's faces).
+    const garb_value_t *t = vc_peek(c);
+    if (k == kFontStyle[2] && t != NULL && t->kind == GARB_DIMENSION &&
+        (ieq(t->unit, t->unit_len, "deg") || ieq(t->unit, t->unit_len, "rad") ||
+         ieq(t->unit, t->unit_len, "grad") || ieq(t->unit, t->unit_len, "turn")))
+        c->i++;
+    return true;
+}
+
+static bool line_height(Sets *s, VCur *c, garb_val_t *out)
+{
+    return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH | ACCEPT_PERCENT | ACCEPT_NUMBER, false, false,
+                     out);
+}
+
+// The `font` shorthand (Fonts 4 § 3.7): [style || variant || weight ||
+// stretch]? size [/ line-height]? family — or a system font. Everything it
+// leaves out is reset to its initial value.
+static bool font_shorthand(Sets *s, VCur *c)
+{
+    const char *system = vc_keyword(c, kSystemFont);
+    if (system != NULL) {
+        if (!vc_done(c))
+            return false;
+        // The system's own font: this machine's is the UI's sans.
+        garb_val_t fam = {0}, item = kw("system-ui");
+        fam.kind = GARB_V_STRING;
+        fam.items = keep(s, &item, 1);
+        fam.nitems = 1;
+        fam.comma = true;
+        garb_val_t size = kw("medium"), normal = kw("normal");
+        set(s, GARB_FONT_FAMILY, &fam);
+        set(s, GARB_FONT_SIZE, &size);
+        set(s, GARB_FONT_WEIGHT, &normal);
+        set(s, GARB_FONT_STYLE, &normal);
+        set(s, GARB_FONT_VARIANT, &normal);
+        set(s, GARB_LINE_HEIGHT, &normal);
+        return fam.items != NULL;
+    }
+    garb_val_t style = kw("normal"), variant = kw("normal"), weight = kw("normal");
+    bool have_style = false, have_variant = false, have_weight = false, have_stretch = false;
+    int normals = 0;
+    for (int k = 0; k < 4; k++) {
+        garb_val_t v;
+        VCur look = *c;
+        if (vc_keyword(&look, kNormal) != NULL) {
+            // `normal` fills whichever of the four has not been named.
+            *c = look;
+            normals++;
+            continue;
+        }
+        if (!have_style && knows(s, GARB_FONT_STYLE) && font_style(s, c, &v)) {
+            style = v;
+            have_style = true;
+        } else if (!have_variant && knows(s, GARB_FONT_VARIANT) &&
+                   vc_keyword(&look, kFontVariant) != NULL) {
+            *c = look;
+            variant = kw("small-caps");
+            have_variant = true;
+        } else if (!have_weight && knows(s, GARB_FONT_WEIGHT) && font_weight(s, c, &v)) {
+            weight = v;
+            have_weight = true;
+        } else if (!have_stretch && vc_keyword(c, kFontStretch) != NULL) {
+            have_stretch = true;
+        } else {
+            break;
+        }
+    }
+    if (normals + have_style + have_variant + have_weight + have_stretch > 4)
+        return false;
+    garb_val_t size, lh = kw("normal"), fam;
+    if (!knows(s, GARB_FONT_SIZE) || !font_size(s, c, &size))
+        return false;
+    if (is_delim_v(vc_peek(c), '/')) {
+        c->i++;
+        if (!knows(s, GARB_LINE_HEIGHT) || !line_height(s, c, &lh))
+            return false;
+    }
+    if (!knows(s, GARB_FONT_FAMILY) || !families(s, c, &fam) || !vc_done(c))
+        return false;
+    set(s, GARB_FONT_STYLE, &style);
+    set(s, GARB_FONT_VARIANT, &variant);
+    set(s, GARB_FONT_WEIGHT, &weight);
+    set(s, GARB_FONT_SIZE, &size);
+    set(s, GARB_LINE_HEIGHT, &lh);
+    set(s, GARB_FONT_FAMILY, &fam);
+    return true;
+}
+
+// ── Backgrounds (Backgrounds 3 § 3) ─────────────────────────────────────
+
+// <bg-position> (Backgrounds 3 § 3.6), read into the two longhands: a
+// keyword and an offset from its edge become an offset from the left or
+// top — `right 10px` is calc(100% - 10px), as the property computes.
+static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, garb_val_t *out)
+{
+    bool far = edge != NULL && (ieq(edge, os64_strlen(edge), "right") ||
+                                ieq(edge, os64_strlen(edge), "bottom"));
+    bool middle = edge != NULL && ieq(edge, os64_strlen(edge), "center");
+    if (middle) {
+        *out = percent(50);
+        return offset == NULL;
+    }
+    if (offset == NULL) {
+        *out = percent(far ? 100 : 0);
+        return true;
+    }
+    if (!far) {
+        *out = *offset;
+        return true;
+    }
+    // 100% - offset, as a sum.
+    garb_calc_t *sum = os64_arena_calloc(s->a.arena, 1, sizeof(*sum));
+    garb_calc_t *hundred = os64_arena_calloc(s->a.arena, 1, sizeof(*hundred));
+    garb_calc_t *off = os64_arena_calloc(s->a.arena, 1, sizeof(*off));
+    const garb_calc_t **args = os64_arena_alloc(s->a.arena, 2 * sizeof(*args));
+    bool *inv = os64_arena_alloc(s->a.arena, 2 * sizeof(*inv));
+    if (sum == NULL || hundred == NULL || off == NULL || args == NULL || inv == NULL) {
+        s->a.short_of_memory = true;
+        return false;
+    }
+    hundred->op = GARB_CALC_LEAF;
+    hundred->leaf = percent(100);
+    if (offset->kind == GARB_V_CALC) {
+        *off = *offset->calc;
+    } else {
+        off->op = GARB_CALC_LEAF;
+        off->leaf = *offset;
+    }
+    args[0] = hundred;
+    args[1] = off;
+    inv[0] = false;
+    inv[1] = true;
+    sum->op = GARB_CALC_SUM;
+    sum->args = (const garb_calc_t *const *)args;
+    sum->invert = inv;
+    sum->nargs = 2;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_CALC;
+    out->calc = sum;
+    return true;
+}
+
+// A position, x and y (Values 4 § 8.3): one keyword or length-percentage, two,
+// or two keywords each with an offset. `three` also takes Backgrounds 3's
+// three-part form, a keyword pair with one offset (`<bg-position>`), which
+// only a background's position may be written in.
+static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
+{
+    // Up to four parts, each a keyword or a length-percentage.
+    const char *word[4] = {NULL, NULL, NULL, NULL};
+    garb_val_t off[4];
+    bool has_off[4] = {false, false, false, false};
+    int n = 0;
+    while (n < 4) {
+        const char *k = vc_keyword(c, kPosAll);
+        if (k != NULL) {
+            word[n++] = k;
+            continue;
+        }
+        garb_val_t v;
+        if (!vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, &v))
+            break;
+        off[n] = v;
+        has_off[n] = true;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    #define IS(i, w) (word[i] != NULL && os64_streq(word[i], (w)))
+    #define HORIZ(i) (IS(i, "left") || IS(i, "right"))
+    #define VERT(i) (IS(i, "top") || IS(i, "bottom"))
+    if (n == 1) {
+        if (VERT(0))
+            return edge_offset(s, "center", NULL, x) && edge_offset(s, word[0], NULL, y);
+        if (has_off[0])
+            *x = off[0];
+        else if (!edge_offset(s, word[0], NULL, x))
+            return false;
+        return edge_offset(s, "center", NULL, y);
+    }
+    if (n == 2) {
+        // A keyword pair may come in either order; with a length the first
+        // is horizontal.
+        if (word[0] != NULL && word[1] != NULL && (VERT(0) || HORIZ(1))) {
+            if (VERT(1) || HORIZ(0))
+                return false;
+            return edge_offset(s, word[1], NULL, x) && edge_offset(s, word[0], NULL, y);
+        }
+        if (VERT(0) || HORIZ(1))
+            return false;
+        if (has_off[0])
+            *x = off[0];
+        else if (!edge_offset(s, word[0], NULL, x))
+            return false;
+        if (has_off[1])
+            *y = off[1];
+        else if (!edge_offset(s, word[1], NULL, y))
+            return false;
+        return true;
+    }
+    // Three or four: keyword-offset pairs, an offset after any keyword but
+    // center, one pair horizontal and one vertical, in either order.
+    if (n == 3 && !three)
+        return false;
+    const char *pw[2];
+    const garb_val_t *po[2];
+    int pairs = 0;
+    for (int i = 0; i < n; i++) {
+        if (word[i] == NULL || pairs == 2)
+            return false;               // an offset must follow its keyword
+        pw[pairs] = word[i];
+        po[pairs] = NULL;
+        if (i + 1 < n && has_off[i + 1]) {
+            if (IS(i, "center"))
+                return false;
+            po[pairs] = &off[i + 1];
+            i++;
+        }
+        pairs++;
+    }
+    if (pairs != 2)
+        return false;
+    bool swap = (pw[0] != NULL && (os64_streq(pw[0], "top") || os64_streq(pw[0], "bottom"))) ||
+                (pw[1] != NULL && (os64_streq(pw[1], "left") || os64_streq(pw[1], "right")));
+    const char *kx = pw[swap ? 1 : 0], *ky = pw[swap ? 0 : 1];
+    const garb_val_t *ox = po[swap ? 1 : 0], *oy = po[swap ? 0 : 1];
+    if (os64_streq(kx, "top") || os64_streq(kx, "bottom") || os64_streq(ky, "left") ||
+        os64_streq(ky, "right"))
+        return false;
+    return edge_offset(s, kx, ox, x) && edge_offset(s, ky, oy, y);
+    #undef IS
+    #undef HORIZ
+    #undef VERT
+}
+
+// One or two repeat keywords, as the single keyword they amount to.
+// ── Gradients (Images 3 § 3) ────────────────────────────────────────────
+//
+// Whether a gradient is VALID decides what a `background` does: the
+// pre-standard `linear-gradient(top, …)` (no `to`) is refused by every
+// browser, so the `background: #333` before it stands, and a page that
+// relied on that is dark. So a linear or radial gradient is read against
+// its grammar and kept for drawing; conic gradients and image-set are
+// accepted by name, kept as nothing, and approximated for @supports.
+
+// One comma-separated argument group of a gradient: [from, to) of `v`.
+typedef struct {
+    const garb_value_t *v;
+    int32_t n;
+} Group;
+
+static bool only_ws(const Group *g)
+{
+    for (int32_t i = 0; i < g->n; i++)
+        if (g->v[i].kind != GARB_WHITESPACE)
+            return false;
+    return true;
+}
+
+static bool angle(VCur *c)
+{
+    garb_val_t v;
+    return vc_angle(c, true, &v);   // Images 3: a unitless zero
+}
+
+static bool length_percentage(Sets *s, VCur *c)
+{
+    garb_val_t v;
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &v);
+}
+
+// `<color> <length-percentage>{0,2}` (a stop), or one length-percentage
+// alone (a hint).
+static bool stop(Sets *s, const Group *g, bool *hint)
+{
+    VCur c = {g->v, g->n, 0};
+    garb_val_t v;
+    *hint = false;
+    if (vc_color(&c, &v)) {
+        for (int k = 0; k < 2 && !vc_done(&c); k++)
+            if (!length_percentage(s, &c))
+                return false;
+        return vc_done(&c);
+    }
+    *hint = true;
+    return length_percentage(s, &c) && vc_done(&c);
+}
+
+// §3.4: at least two stops, a hint only between two of them.
+static bool stops(Sets *s, const Group *g, int32_t n)
+{
+    int32_t colours = 0;
+    bool last_hint = true;          // nothing before the first: it may not be a hint
+    for (int32_t i = 0; i < n; i++) {
+        bool hint;
+        if (!stop(s, &g[i], &hint) || (hint && last_hint))
+            return false;
+        colours += !hint;
+        last_hint = hint;
+    }
+    return colours >= 2 && !last_hint;
+}
+
+// `to` [left | right] || [top | bottom], or an angle.
+static bool linear_prelude(const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kTo[] = {"to", NULL};
+    static const char *const kX[] = {"left", "right", NULL};
+    static const char *const kY[] = {"top", "bottom", NULL};
+    if (vc_keyword(&c, kTo) != NULL) {
+        bool x = vc_keyword(&c, kX) != NULL, y = vc_keyword(&c, kY) != NULL;
+        if (!x && vc_keyword(&c, kX) != NULL)
+            x = true;
+        return (x || y) && vc_done(&c);
+    }
+    return angle(&c) && vc_done(&c);
+}
+
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out);
+
+// Whether a calc() tree has a percentage in it anywhere: its type is then
+// a length-percentage, never a plain length.
+static bool calc_percent(const garb_calc_t *c)
+{
+    if (c == NULL)
+        return false;
+    if (c->op == GARB_CALC_LEAF)
+        return c->leaf.kind == GARB_V_PERCENTAGE;
+    for (int32_t k = 0; k < c->nargs; k++)
+        if (calc_percent(c->args[k]))
+            return true;
+    return false;
+}
+
+// [<ending-shape> || <size>]? [at <position>]?, one of them at least. A
+// size written as lengths is one length for a circle — never a percentage,
+// written or inside a calc() — and two length-percentages for an ellipse
+// (Images 3 § 3.2.1): anything else is drawn as SOME gradient, so it has
+// to be refused here or the declaration it is in would not fall back. A
+// negative LITERAL is refused too; a calc() that works out negative is not
+// — Values 4 § 10.12 range-checks a calculation where it is used, so the
+// painter takes it as 0, as Chrome computes it.
+static bool radial_prelude(Sets *s, const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kShape[] = {"circle", "ellipse", NULL};
+    static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
+                                          "farthest-corner", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    const char *shape = NULL;
+    bool size = false, any = false, percent = false;
+    int lengths = 0;
+    for (int k = 0; k < 2; k++) {
+        garb_val_t r;
+        if (shape == NULL && (shape = vc_keyword(&c, kShape)) != NULL) {
+            any = true;
+        } else if (!size && vc_keyword(&c, kExtent) != NULL) {
+            size = any = true;
+        } else if (!size && lp_val(s, &c, &r)) {
+            for (lengths = 1; ; lengths++) {
+                if (r.kind != GARB_V_CALC && r.number < 0)
+                    return false;
+                percent |= r.kind == GARB_V_PERCENTAGE ||
+                           (r.kind == GARB_V_CALC && calc_percent(r.calc));
+                if (lengths == 2 || !lp_val(s, &c, &r))
+                    break;
+            }
+            size = any = true;
+        }
+    }
+    bool circle = shape != NULL ? os64_streq(shape, "circle") : lengths == 1;
+    if ((lengths == 1 && (percent || !circle)) || (lengths == 2 && circle))
+        return false;
+    if (vc_keyword(&c, kAt) != NULL) {
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t x, y;
+        bool ok = position(&strict, &c, false, &x, &y);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        any = true;
+    }
+    return any && vc_done(&c);
+}
+
+// Whether `f`, a linear or radial gradient function, fits its grammar.
+static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
+{
+    Group g[64];
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++)
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            if (n == (int32_t)(sizeof(g) / sizeof(g[0])))
+                return false;               // past 63 stops: refused, not guessed
+            g[n++] = (Group){f->children + from, i - from};
+            from = i + 1;
+        }
+    for (int32_t i = 0; i < n; i++)
+        if (only_ws(&g[i]))
+            return false;
+    if (n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0])))
+        return stops(s, g + 1, n - 1);
+    return stops(s, g, n);
+}
+
+// ── A gradient kept (values.h's GARB_V_IMAGE) ──
+
+// One length-percentage, read.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out)
+{
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+}
+
+static garb_val_t number_val(double n)
+{
+    garb_val_t v;
+    os64_memset(&v, 0, sizeof(v));
+    v.kind = GARB_V_NUMBER;
+    v.number = n;
+    return v;
+}
+
+// The stops of groups [0, n), each a COLOR with its position or a hint,
+// appended to `out` from `*k`; a stop written with two positions is two.
+// The grammar is already checked.
+static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, int32_t *k)
+{
+    for (int32_t i = 0; i < n; i++) {
+        VCur c = {g[i].v, g[i].n, 0};
+        garb_val_t colour, pos;
+        if (!vc_color(&c, &colour)) {
+            if (!lp_val(s, &c, &out[*k]))
+                return false;
+            (*k)++;
+            continue;
+        }
+        int positions = 0;
+        while (!vc_done(&c) && lp_val(s, &c, &pos)) {
+            out[*k] = colour;
+            out[*k].items = keep(s, &pos, 1);
+            out[*k].nitems = 1;
+            if (out[*k].items == NULL)
+                return false;
+            (*k)++;
+            positions++;
+        }
+        if (positions == 0)
+            out[(*k)++] = colour;
+    }
+    return true;
+}
+
+// `v` taken into [0, whole), exactly, for every finite `v`: each step
+// subtracts the largest whole * 2^k not above what is left, and a
+// subtraction of two doubles within a factor of two of each other is exact
+// (Sterbenz), so this is fmod's answer without libmath. NaN and infinity
+// have no remainder and are 0.
+static double round_the_turn(double v, double whole)
+{
+    if (!(v - v == 0))
+        return 0;
+    double m = v < 0 ? -v : v;
+    while (m >= whole) {
+        double s = whole;
+        while (s <= m / 2)
+            s *= 2;
+        m -= s;
+    }
+    double r = v < 0 && m > 0 ? whole - m : m;
+    return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
+}
+
+// The angle a linear gradient's prelude names, in degrees in [0, 360), or
+// its `to`.
+static garb_val_t linear_geometry(const Group *g, bool have)
+{
+    static const char *const kTo[] = {"to", NULL};
+    static const char *const kX[] = {"left", "right", NULL};
+    static const char *const kY[] = {"top", "bottom", NULL};
+    static const char *const kNames[3][3] = {
+        {"to top left", "to top", "to top right"},
+        {"to left", NULL, "to right"},
+        {"to bottom left", "to bottom", "to bottom right"},
+    };
+    if (!have)
+        return number_val(180);             // the initial direction: to bottom
+    VCur c = {g->v, g->n, 0};
+    if (vc_keyword(&c, kTo) != NULL) {
+        int x = 1, y = 1;
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w = vc_keyword(&c, kX);
+            if (w != NULL)
+                x = os64_streq(w, "left") ? 0 : 2;
+            else if ((w = vc_keyword(&c, kY)) != NULL)
+                y = os64_streq(w, "top") ? 0 : 2;
+        }
+        return kw(kNames[y][x]);
+    }
+    const garb_value_t *t = vc_peek(&c);
+    double n = t->number;
+    if (t->kind == GARB_DIMENSION) {
+        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
+        // past a double, and a direction is the remainder, not the size.
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
+    }
+    return number_val(n);
+}
+
+// A radial gradient's prelude, or its initial one: an ellipse to the
+// farthest corner, at the centre. A shape left out is a circle when one
+// length is its size, else an ellipse (Images 3 § 3.2).
+static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
+{
+    static const char *const kShape[] = {"circle", "ellipse", NULL};
+    static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
+                                          "farthest-corner", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    garb_val_t parts[4];
+    parts[0] = kw("farthest-corner");
+    parts[1] = kw("auto");
+    garb_val_t half;
+    os64_memset(&half, 0, sizeof(half));
+    half.kind = GARB_V_PERCENTAGE;
+    half.number = 50;
+    parts[2] = parts[3] = half;
+    const char *shape = NULL;
+    int lengths = 0;
+    if (have) {
+        VCur c = {g->v, g->n, 0};
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w;
+            garb_val_t a, b;
+            if (shape == NULL && (w = vc_keyword(&c, kShape)) != NULL) {
+                shape = w;
+            } else if ((w = vc_keyword(&c, kExtent)) != NULL) {
+                parts[0] = kw(w);
+            } else if (lp_val(s, &c, &a)) {
+                parts[0] = a;
+                lengths = 1;
+                if (lp_val(s, &c, &b)) {
+                    parts[1] = b;
+                    lengths = 2;
+                }
+            }
+        }
+        if (vc_keyword(&c, kAt) != NULL) {
+            Sets strict = *s;
+            strict.quirks = false;
+            bool ok = position(&strict, &c, false, &parts[2], &parts[3]);
+            s->a.short_of_memory |= strict.a.short_of_memory;
+            if (!ok)
+                return false;
+        }
+    }
+    *out = kw(shape != NULL ? shape : lengths == 1 ? "circle" : "ellipse");
+    out->items = keep(s, parts, 4);
+    out->nitems = 4;
+    return out->items != NULL;
+}
+
+// The gradient `f` (its grammar checked) as values.h describes it, into
+// `out`, which vc_image has made its IMAGE.
+static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val_t *out)
+{
+    Group g[64];
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++)
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            g[n++] = (Group){f->children + from, i - from};
+            from = i + 1;
+        }
+    // The prelude by gradient_ok's own test, which asks it first: a unitless
+    // 0 is an angle there, though it would read as a hint too.
+    bool prelude = n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0]));
+    garb_val_t items[1 + 2 * 64];
+    int32_t k = 1;
+    if (radial) {
+        if (!radial_geometry(s, &g[0], prelude, &items[0]))
+            return false;
+    } else {
+        items[0] = linear_geometry(&g[0], prelude);
+    }
+    if (!gradient_stops(s, g + prelude, n - prelude, items, &k))
+        return false;
+    out->items = keep(s, items, k);
+    out->nitems = k;
+    out->comma = true;
+    return out->items != NULL;
+}
+
+// An <image>: a url, or a gradient the grammar above admits, kept whole,
+// or one this library takes by name (vc_image).
+static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    bool linear = false, radial = false;
+    if (t != NULL && t->kind == GARB_FUNCTION) {
+        linear = ieq(t->text, t->len, "linear-gradient") ||
+                 ieq(t->text, t->len, "repeating-linear-gradient");
+        radial = ieq(t->text, t->len, "radial-gradient") ||
+                 ieq(t->text, t->len, "repeating-radial-gradient");
+        if ((linear || radial) && !gradient_ok(s, t, radial))
+            return false;
+    }
+    if (!vc_image(c, out))
+        return false;
+    return !(linear || radial) || gradient_value(s, t, radial, out);
+}
+
+static bool repeat(VCur *c, garb_val_t *out)
+{
+    const char *one = vc_keyword(c, kRepeat);
+    if (one != NULL) {
+        *out = kw(one);
+        return true;
+    }
+    const char *a = vc_keyword(c, kRepeat2);
+    if (a == NULL)
+        return false;
+    const char *b = vc_keyword(c, kRepeat2);
+    // What the tiler can draw: `space` and `round` tile as `repeat` does.
+    bool ra = !os64_streq(a, "no-repeat"), rb = b == NULL ? ra : !os64_streq(b, "no-repeat");
+    *out = kw(ra && rb ? "repeat" : ra ? "repeat-x" : rb ? "repeat-y" : "no-repeat");
+    return true;
+}
+
+// A background value per layer, gathered as a list is read.
+typedef struct {
+    garb_val_t *v;
+    int32_t n, cap;
+} Layers;
+
+static bool layers_add(Sets *s, Layers *l, const garb_val_t *v)
+{
+    if (l->n == l->cap) {
+        int32_t cap = l->cap != 0 ? l->cap * 2 : 4;
+        garb_val_t *grown = os64_realloc(l->v, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            // Not the arena's, so said here, as shadow_list says it.
+            s->a.short_of_memory = true;
+            return false;
+        }
+        l->v = grown;
+        l->cap = cap;
+    }
+    l->v[l->n++] = *v;
+    return true;
+}
+
+// The list as one value — its one layer's, or a LAYERS of them all — and
+// the list freed. False when the arena is out of room.
+static bool layers_done(Sets *s, Layers *l, garb_val_t *out)
+{
+    bool ok = l->n > 0;
+    if (ok && l->n == 1) {
+        *out = l->v[0];
+    } else if (ok) {
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LAYERS;
+        out->items = keep(s, l->v, l->n);
+        out->nitems = l->n;
+        out->comma = true;
+        ok = out->items != NULL;
+    }
+    os64_free(l->v);
+    *l = (Layers){0};
+    return ok;
+}
+
+// <bg-size> (Backgrounds 3 § 3.9): cover, contain, or a width and a height,
+// each a length-percentage or auto, the height auto when not written.
+static bool bg_size(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kBgSize);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    garb_val_t two[2];
+    int n = 0;
+    while (n < 2 && kw_or_dim(s, c, kAuto, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &two[n]))
+        n++;
+    if (n == 0)
+        return false;
+    if (n == 1)
+        two[1] = kw("auto");
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
+static garb_val_t auto_size(Sets *s)
+{
+    garb_val_t v;
+    garb_val_t two[2] = {kw("auto"), kw("auto")};
+    os64_memset(&v, 0, sizeof(v));
+    v.kind = GARB_V_LENGTH;
+    v.items = keep(s, two, 2);
+    v.nitems = 2;
+    return v;
+}
+
+// The longhands each layer of the `background` shorthand sets, in the
+// order they are set.
+enum { L_IMAGE, L_REPEAT, L_X, L_Y, L_SIZE, L_ORIGIN, L_CLIP, L_N };
+static const garb_prop_t kLayerProps[L_N] = {
+    GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+    GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+    GARB_BACKGROUND_CLIP,
+};
+
+// The shorthand's layers, each one's values added to `lists`, and the
+// colour the last may carry.
+static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *color)
+{
+    for (;;) {
+        bool have_img = false, have_pos = false, have_rep = false, have_att = false,
+             have_color = false;
+        int boxes = 0;
+        const char *box[2] = {NULL, NULL};
+        garb_val_t l[L_N] = {kw("none"), kw("repeat"), percent(0), percent(0), auto_size(s),
+                             kw("padding-box"), kw("border-box")};
+        if (l[L_SIZE].items == NULL)
+            return false;
+        for (;;) {
+            const garb_value_t *t = vc_peek(c);
+            if (t == NULL || t->kind == GARB_COMMA)
+                break;
+            garb_val_t v, x, y;
+            bool know_img = knows(s, GARB_BACKGROUND_IMAGE);
+            if (!have_img && know_img && vc_keyword(c, kNone) != NULL) {
+                have_img = true;
+            } else if (!have_img && know_img && bg_image(s, c, &v)) {
+                l[L_IMAGE] = v;
+                have_img = true;
+            } else if (!have_pos &&
+                       (knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y)) &&
+                       position(s, c, true, &x, &y)) {
+                l[L_X] = x;
+                l[L_Y] = y;
+                have_pos = true;
+                if (is_delim_v(vc_peek(c), '/')) {
+                    c->i++;
+                    if (!knows(s, GARB_BACKGROUND_SIZE) || !bg_size(s, c, &l[L_SIZE]))
+                        return false;
+                }
+            } else if (!have_rep && knows(s, GARB_BACKGROUND_REPEAT) && repeat(c, &v)) {
+                l[L_REPEAT] = v;
+                have_rep = true;
+            } else if (!have_att && vc_keyword(c, kAttachment) != NULL) {
+                have_att = true;
+            } else if (boxes < 2 && (box[boxes] = vc_keyword(c, kClipBox)) != NULL) {
+                boxes++;
+            } else if (!have_color && knows(s, GARB_BACKGROUND_COLOR) && vc_color(c, &v)) {
+                *color = v;
+                have_color = true;
+            } else {
+                return false;
+            }
+        }
+        bool last = vc_peek(c) == NULL;
+        if (have_color && !last)
+            return false;               // only the final layer has a colour
+        if (!have_img && !have_pos && !have_rep && !have_att && boxes == 0 && !have_color)
+            return false;               // an empty layer
+        // `text` clips and never places: the origin is the other box, or
+        // stays as it was when there is none.
+        if (boxes == 2 && os64_streq(box[0], "text"))
+            return false;
+        // One box sets the origin and the clip, two set one each.
+        if (boxes > 0 && !pair_known(s, GARB_BACKGROUND_ORIGIN, GARB_BACKGROUND_CLIP, boxes))
+            return false;
+        if (boxes > 0) {
+            l[L_CLIP] = kw(box[boxes - 1]);
+            if (!os64_streq(box[0], "text"))
+                l[L_ORIGIN] = kw(box[0]);
+        }
+        for (int k = 0; k < L_N; k++)
+            if (!layers_add(s, &lists[k], &l[k]))
+                return false;
+        if (last)
+            return true;
+        c->i++;                         // the comma
+    }
+}
+
+// The `background` shorthand: comma-separated layers, the top one first,
+// the last of which may carry the colour (Backgrounds 3 § 3.10). One box
+// sets the origin and the clip; two, the origin then the clip.
+static bool background(Sets *s, VCur *c)
+{
+    Layers lists[L_N] = {{0}};
+    garb_val_t color = transparent(), v[L_N];
+    bool ok = background_layers(s, c, lists, &color);
+    for (int k = 0; k < L_N; k++)
+        ok = layers_done(s, &lists[k], &v[k]) && ok;    // each list freed, whatever
+    if (!ok)
+        return false;
+    set(s, GARB_BACKGROUND_COLOR, &color);
+    for (int k = 0; k < L_N; k++)
+        set(s, kLayerProps[k], &v[k]);
+    return true;
+}
+
+// ── Text decoration and lists ───────────────────────────────────────────
+
+// <text-decoration-line>: none, or any of the lines, each once.
+static bool decoration_line(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t items[4];
+    int32_t n = 0;
+    const char *k;
+    while ((k = vc_keyword(c, kLines)) != NULL) {
+        for (int32_t j = 0; j < n; j++)
+            if (items[j].keyword == k)
+                return false;
+        items[n++] = kw(k);
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_KEYWORD;
+    out->keyword = items[0].keyword;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
+// `text-decoration` (Text Decoration 3 § 2.4): the line is kept; its style,
+// colour and thickness are read for validity and not drawn yet.
+static bool text_decoration(Sets *s, VCur *c)
+{
+    garb_val_t line = kw("none"), v;
+    bool have_line = false, have_style = false, have_color = false, have_thick = false;
+    while (!vc_done(c)) {
+        if (!have_line && knows(s, GARB_TEXT_DECORATION_LINE) && decoration_line(s, c, &v)) {
+            line = v;
+            have_line = true;
+        } else if (!have_style && vc_keyword(c, kDecorationStyle) != NULL) {
+            have_style = true;
+        } else if (!have_color && vc_color(c, &v)) {
+            have_color = true;
+        } else if (!have_thick && kw_or_dim(s, c, kThickness, ACCEPT_LENGTH | ACCEPT_PERCENT,
+                                            false, false, &v)) {
+            have_thick = true;
+        } else {
+            return false;
+        }
+    }
+    if (!have_line && !have_style && !have_color && !have_thick)
+        return false;
+    set(s, GARB_TEXT_DECORATION_LINE, &line);
+    return true;
+}
+
+// <counter-style>: any identifier names one (Lists 3); `none` is none.
+static bool list_type(Sets *s, VCur *c, garb_val_t *out)
+{
+    (void)s;
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    if (t->kind == GARB_STRING) {
+        out->kind = GARB_V_STRING;
+        out->text = t->text;
+        out->len = t->len;
+    } else if (t->kind == GARB_IDENT && vc_keyword(&(VCur){c->v, c->n, c->i}, kWide) == NULL) {
+        // Predefined names match without case; the table keeps them lowercase.
+        char *low = os64_arena_alloc(s->a.arena, t->len + 1);
+        if (low == NULL) {
+            s->a.short_of_memory = true;
+            return false;
+        }
+        for (size_t k = 0; k < t->len; k++)
+            low[k] = t->text[k] >= 'A' && t->text[k] <= 'Z' ? (char)(t->text[k] + 32) : t->text[k];
+        low[t->len] = '\0';
+        out->kind = GARB_V_KEYWORD;
+        out->keyword = low;
+    } else {
+        return false;
+    }
+    c->i++;
+    return true;
+}
+
+// `list-style` (Lists 3 § 3.4): type, position and image in any order; a
+// lone `none` sets whichever of type and image was not otherwise named.
+static bool list_style(Sets *s, VCur *c)
+{
+    garb_val_t type = kw("disc"), pos = kw("outside"), image = kw("none"), v;
+    bool have_type = false, have_pos = false, have_image = false;
+    int nones = 0;
+    while (!vc_done(c)) {
+        VCur look = *c;
+        if (vc_keyword(&look, kNone) != NULL) {
+            *c = look;
+            nones++;
+            continue;
+        }
+        const char *k;
+        if (!have_pos && knows(s, GARB_LIST_STYLE_POSITION) &&
+            (k = vc_keyword(c, kListPosition)) != NULL) {
+            pos = kw(k);
+            have_pos = true;
+        } else if (!have_image && knows(s, GARB_LIST_STYLE_IMAGE) && vc_url(c, &v)) {
+            image = v;
+            have_image = true;
+        } else if (!have_type && knows(s, GARB_LIST_STYLE_TYPE) && list_type(s, c, &v)) {
+            type = v;
+            have_type = true;
+        } else {
+            return false;
+        }
+    }
+    if (nones > 2 || (nones == 2 && (have_type || have_image)) ||
+        (nones == 1 && have_type && have_image))
+        return false;
+    // A `none` is the type's or the image's, whichever is not named: two
+    // are one each, and one is whichever of those the reading knows.
+    bool none_type = !have_type && knows(s, GARB_LIST_STYLE_TYPE),
+         none_image = !have_image && knows(s, GARB_LIST_STYLE_IMAGE);
+    if ((nones == 2 && !(none_type && none_image)) || (nones == 1 && !none_type && !none_image))
+        return false;
+    if (nones >= 1 && !have_type)
+        type = kw("none");
+    if (!have_type && !have_pos && !have_image && nones == 0)
+        return false;
+    set(s, GARB_LIST_STYLE_TYPE, &type);
+    set(s, GARB_LIST_STYLE_POSITION, &pos);
+    set(s, GARB_LIST_STYLE_IMAGE, &image);
+    return true;
+}
+
+// ── One property ────────────────────────────────────────────────────────
+
+typedef enum {
+    G_KEYWORDS,             // one keyword from `words`
+    G_SVG_CLIP, G_SVG_POSITION, G_SVG_RADIUS, G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
+    G_COLOR,
+    G_MARGIN, G_PADDING, G_BWIDTH, G_BSTYLE, G_BCOLOR,
+    G_SIZE,                 // width, height, min-*: auto | lp >= 0 | the content words
+    G_MAX,                  // max-*: none | lp >= 0 | the content words
+    G_FAMILY, G_FONT_SIZE, G_FONT_WEIGHT, G_FONT_STYLE, G_LINE_HEIGHT,
+    G_VALIGN, G_DECORATION_LINE, G_INDENT, G_LIST_TYPE, G_LIST_IMAGE, G_BG_IMAGE,
+    G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_BG_SIZE,
+    G_BG_BOX,               // background-origin, -clip: a box from `words`
+    G_SPACING,
+    G_Z_INDEX,              // auto | <integer>
+    G_CLIP,                // auto | rect(top, right, bottom, left)
+    G_ALPHA,                // <alpha-value>: a number or a percentage, clamped when computed
+    G_ALIGN,                // an alignment keyword from `words`, `unsafe` or `first` before it
+    G_FACTOR,               // <number [0,∞]>: flex-grow, flex-shrink
+    G_BASIS,                // flex-basis: `words` | lp >= 0
+    G_INTEGER,              // <integer>: order
+    G_GAP,                  // normal | lp >= 0
+    G_TEMPLATE,             // grid-template-*: none | a track list
+    G_AUTO_TRACKS,          // grid-auto-*: one or more track sizes
+    G_AREAS,                // none | strings, a rectangle per name
+    G_AUTO_FLOW,            // [row | column] || dense
+    G_GRID_LINE,            // auto | <integer> | span <integer> | <custom-ident>
+    G_RADIUS,               // a corner: <lp [0,∞]>{1,2}, horizontal then vertical
+    G_SHADOW,               // none | <shadow>#, a box's (`inset`, spread) or text's
+    G_TRANSFORM,            // none | <transform-function>+
+    G_ORIGIN,               // transform-origin: a position and a z
+    G_TRANSLATE,            // none | <lp> [<lp> <length>?]?
+    G_ROTATE,               // none | <angle> && [x | y | z | <number>{3}]?
+    G_SCALE,                // none | [<number> | <percentage>]{1,3}
+    // One animation's (Animations 1 § 4), each read as a list, one item an
+    // animation: a name, a duration, a delay, an easing, an iteration
+    // count, or a keyword from `words`.
+    G_ANIM_NAME,            // none | <keyframes-name>
+    G_DURATION,             // <time [0s,∞]> | auto
+    G_DELAY,                // <time>
+    G_EASING,               // <easing-function>
+    G_ITERATIONS,           // infinite | <number [0,∞]>
+    G_ANIM_KEYWORD,
+    G_WILL_CHANGE,          // auto | <animateable-feature>#
+    G_CURSOR,               // [[<url> | image-set()] [<x> <y>]?,]* <keyword>
+    G_SPACING_TEXT,         // normal | <length>, a unitless one in quirks
+    G_OUTLINE_WIDTH,        // <line-width>, never unitless
+    G_OUTLINE_COLOR,        // auto | <color>
+    G_LENGTH,               // <length>, negative too
+    G_POSITION,             // <position>, as x and y
+    G_RATIO,                // auto || <ratio>
+    G_CONTENT,              // normal | none | <content-list> [/ <string>+]?
+    G_COUNTERS,             // none | [<custom-ident> <integer>?]+
+    G_QUOTES,               // auto | none | [<string> <string>]+
+    G_FILTER,               // none | <filter-value-list>
+} Grammar;
+
+typedef struct {
+    garb_prop_t prop;
+    Grammar g;
+    const char *const *words;
+} Longhand;
+
+static const char *const kSvgRule[] = {"nonzero", "evenodd", NULL};
+static const char *const kSvgCap[] = {"butt", "round", "square", NULL};
+static const char *const kSvgJoin[] = {"miter", "miter-clip", "round", "bevel", "arcs", NULL};
+static const char *const kSvgVector[] = {"none",         "non-scaling-stroke", "non-scaling-size",
+                                         "non-rotation", "fixed-position",     NULL};
+static const char *const kSvgColor[] = {"auto", "srgb", "linearrgb", NULL};
+static const char *const kSvgPaint[] = {"none", "context-fill", "context-stroke", NULL};
+static const Longhand kLonghands[] = {
+    {GARB_X, G_SVG_POSITION, NULL},
+    {GARB_Y, G_SVG_POSITION, NULL},
+    {GARB_CX, G_SVG_POSITION, NULL},
+    {GARB_CY, G_SVG_POSITION, NULL},
+    {GARB_R, G_SVG_LENGTH, NULL},
+    {GARB_RX, G_SVG_RADIUS, NULL},
+    {GARB_RY, G_SVG_RADIUS, NULL},
+    {GARB_STOP_COLOR, G_COLOR, NULL},
+    {GARB_STOP_OPACITY, G_ALPHA, NULL},
+    {GARB_CONTENT, G_CONTENT, NULL},
+    {GARB_COUNTER_RESET, G_COUNTERS, NULL},
+    {GARB_COUNTER_INCREMENT, G_COUNTERS, NULL},
+    {GARB_COUNTER_SET, G_COUNTERS, NULL},
+    {GARB_QUOTES, G_QUOTES, NULL},
+    {GARB_FILTER, G_FILTER, NULL}, {GARB_BACKDROP_FILTER, G_FILTER, NULL},
+    {GARB_MIX_BLEND_MODE, G_KEYWORDS, kBlendModes}, {GARB_ISOLATION, G_KEYWORDS, kIsolation},
+    {GARB_FILL, G_SVG_PAINT, NULL},
+    {GARB_STROKE, G_SVG_PAINT, NULL},
+    {GARB_FILL_OPACITY, G_ALPHA, NULL},
+    {GARB_STROKE_OPACITY, G_ALPHA, NULL},
+    {GARB_CLIP_PATH, G_SVG_CLIP, NULL},
+    {GARB_CLIP_RULE, G_KEYWORDS, kSvgRule},
+    {GARB_FILL_RULE, G_KEYWORDS, kSvgRule},
+    {GARB_STROKE_WIDTH, G_SVG_LENGTH, NULL},
+    {GARB_STROKE_LINECAP, G_KEYWORDS, kSvgCap},
+    {GARB_STROKE_LINEJOIN, G_KEYWORDS, kSvgJoin},
+    {GARB_STROKE_MITERLIMIT, G_SVG_MITER, NULL},
+    {GARB_STROKE_DASHOFFSET, G_SVG_POSITION, NULL},
+    {GARB_STROKE_DASHARRAY, G_SVG_DASHES, NULL},
+    {GARB_VECTOR_EFFECT, G_KEYWORDS, kSvgVector},
+    {GARB_COLOR_INTERPOLATION, G_KEYWORDS, kSvgColor},
+    {GARB_DISPLAY, G_KEYWORDS, kDisplay}, {GARB_COLOR, G_COLOR, NULL},
+    {GARB_TEXT_FILL_COLOR, G_COLOR, NULL},
+    {GARB_BACKGROUND_COLOR, G_COLOR, NULL}, {GARB_BACKGROUND_IMAGE, G_BG_IMAGE, NULL},
+    {GARB_BACKGROUND_REPEAT, G_BG_REPEAT, NULL}, {GARB_BACKGROUND_POSITION_X, G_BG_POS_X, NULL},
+    {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL}, {GARB_BACKGROUND_SIZE, G_BG_SIZE, NULL},
+    {GARB_BACKGROUND_ORIGIN, G_BG_BOX, kBox}, {GARB_BACKGROUND_CLIP, G_BG_BOX, kClipBox},
+    {GARB_MARGIN_TOP, G_MARGIN, NULL}, {GARB_MARGIN_RIGHT, G_MARGIN, NULL},
+    {GARB_MARGIN_BOTTOM, G_MARGIN, NULL}, {GARB_MARGIN_LEFT, G_MARGIN, NULL},
+    {GARB_PADDING_TOP, G_PADDING, NULL}, {GARB_PADDING_RIGHT, G_PADDING, NULL},
+    {GARB_PADDING_BOTTOM, G_PADDING, NULL}, {GARB_PADDING_LEFT, G_PADDING, NULL},
+    {GARB_BORDER_TOP_WIDTH, G_BWIDTH, NULL}, {GARB_BORDER_RIGHT_WIDTH, G_BWIDTH, NULL},
+    {GARB_BORDER_BOTTOM_WIDTH, G_BWIDTH, NULL}, {GARB_BORDER_LEFT_WIDTH, G_BWIDTH, NULL},
+    {GARB_BORDER_TOP_STYLE, G_BSTYLE, NULL}, {GARB_BORDER_RIGHT_STYLE, G_BSTYLE, NULL},
+    {GARB_BORDER_BOTTOM_STYLE, G_BSTYLE, NULL}, {GARB_BORDER_LEFT_STYLE, G_BSTYLE, NULL},
+    {GARB_BORDER_TOP_COLOR, G_BCOLOR, NULL}, {GARB_BORDER_RIGHT_COLOR, G_BCOLOR, NULL},
+    {GARB_BORDER_BOTTOM_COLOR, G_BCOLOR, NULL}, {GARB_BORDER_LEFT_COLOR, G_BCOLOR, NULL},
+    {GARB_WIDTH, G_SIZE, NULL}, {GARB_HEIGHT, G_SIZE, NULL}, {GARB_MIN_WIDTH, G_SIZE, NULL},
+    {GARB_MIN_HEIGHT, G_SIZE, NULL}, {GARB_MAX_WIDTH, G_MAX, NULL},
+    {GARB_MAX_HEIGHT, G_MAX, NULL}, {GARB_BOX_SIZING, G_KEYWORDS, kBoxSizing},
+    {GARB_FONT_FAMILY, G_FAMILY, NULL}, {GARB_FONT_SIZE, G_FONT_SIZE, NULL},
+    {GARB_FONT_WEIGHT, G_FONT_WEIGHT, NULL}, {GARB_FONT_STYLE, G_FONT_STYLE, NULL},
+    {GARB_FONT_VARIANT, G_KEYWORDS, kFontVariant}, {GARB_LINE_HEIGHT, G_LINE_HEIGHT, NULL},
+    {GARB_TEXT_ALIGN, G_KEYWORDS, kTextAlign}, {GARB_VERTICAL_ALIGN, G_VALIGN, NULL},
+    {GARB_WHITE_SPACE, G_KEYWORDS, kWhiteSpace},
+    {GARB_TEXT_DECORATION_LINE, G_DECORATION_LINE, NULL}, {GARB_TEXT_INDENT, G_INDENT, NULL},
+    {GARB_TEXT_TRANSFORM, G_KEYWORDS, kTransform}, {GARB_VISIBILITY, G_KEYWORDS, kVisibility},
+    {GARB_LIST_STYLE_TYPE, G_LIST_TYPE, NULL},
+    {GARB_LIST_STYLE_POSITION, G_KEYWORDS, kListPosition},
+    {GARB_LIST_STYLE_IMAGE, G_LIST_IMAGE, NULL}, {GARB_BORDER_SPACING, G_SPACING, NULL},
+    {GARB_BORDER_COLLAPSE, G_KEYWORDS, kCollapse}, {GARB_CAPTION_SIDE, G_KEYWORDS, kCaption},
+    {GARB_FLOAT, G_KEYWORDS, kFloat}, {GARB_CLEAR, G_KEYWORDS, kClear},
+    {GARB_OVERFLOW_X, G_KEYWORDS, kOverflow}, {GARB_OVERFLOW_Y, G_KEYWORDS, kOverflow},
+    // Position 3 § 3.1. The insets are the margins' grammar exactly — auto
+    // or a length-percentage, negative allowed — and are on the Quirks
+    // standard's unitless-length list (§ 3.2) with them.
+    {GARB_POSITION, G_KEYWORDS, kPosition},
+    {GARB_TOP, G_MARGIN, NULL}, {GARB_RIGHT, G_MARGIN, NULL},
+    {GARB_BOTTOM, G_MARGIN, NULL}, {GARB_LEFT, G_MARGIN, NULL},
+    {GARB_CLIP, G_CLIP, NULL},
+    {GARB_Z_INDEX, G_Z_INDEX, NULL}, {GARB_OPACITY, G_ALPHA, NULL},
+    {GARB_POINTER_EVENTS, G_KEYWORDS, kPointerEvents},
+    {GARB_FLEX_DIRECTION, G_KEYWORDS, kFlexDirection}, {GARB_FLEX_WRAP, G_KEYWORDS, kFlexWrap},
+    {GARB_JUSTIFY_CONTENT, G_ALIGN, kJustify}, {GARB_ALIGN_ITEMS, G_ALIGN, kAlignItems},
+    {GARB_ALIGN_SELF, G_ALIGN, kAlignSelf}, {GARB_ALIGN_CONTENT, G_ALIGN, kAlignContent},
+    {GARB_FLEX_GROW, G_FACTOR, NULL}, {GARB_FLEX_SHRINK, G_FACTOR, NULL},
+    {GARB_FLEX_BASIS, G_BASIS, kBasisWords}, {GARB_ORDER, G_INTEGER, NULL},
+    {GARB_ROW_GAP, G_GAP, NULL}, {GARB_COLUMN_GAP, G_GAP, NULL},
+    {GARB_GRID_TEMPLATE_COLUMNS, G_TEMPLATE, NULL}, {GARB_GRID_TEMPLATE_ROWS, G_TEMPLATE, NULL},
+    {GARB_GRID_TEMPLATE_AREAS, G_AREAS, NULL},
+    {GARB_GRID_AUTO_COLUMNS, G_AUTO_TRACKS, NULL}, {GARB_GRID_AUTO_ROWS, G_AUTO_TRACKS, NULL},
+    {GARB_GRID_AUTO_FLOW, G_AUTO_FLOW, NULL},
+    {GARB_GRID_COLUMN_START, G_GRID_LINE, NULL}, {GARB_GRID_COLUMN_END, G_GRID_LINE, NULL},
+    {GARB_GRID_ROW_START, G_GRID_LINE, NULL}, {GARB_GRID_ROW_END, G_GRID_LINE, NULL},
+    {GARB_JUSTIFY_ITEMS, G_ALIGN, kJustifyItems}, {GARB_JUSTIFY_SELF, G_ALIGN, kJustifySelf},
+    {GARB_BORDER_TOP_LEFT_RADIUS, G_RADIUS, NULL}, {GARB_BORDER_TOP_RIGHT_RADIUS, G_RADIUS, NULL},
+    {GARB_BORDER_BOTTOM_RIGHT_RADIUS, G_RADIUS, NULL},
+    {GARB_BORDER_BOTTOM_LEFT_RADIUS, G_RADIUS, NULL},
+    {GARB_BOX_SHADOW, G_SHADOW, NULL}, {GARB_TEXT_SHADOW, G_SHADOW, NULL},
+    {GARB_IMAGE_RENDERING, G_KEYWORDS, kImageRendering},
+    {GARB_TRANSFORM, G_TRANSFORM, NULL}, {GARB_TRANSFORM_ORIGIN, G_ORIGIN, NULL},
+    {GARB_TRANSLATE, G_TRANSLATE, NULL}, {GARB_ROTATE, G_ROTATE, NULL},
+    {GARB_SCALE, G_SCALE, NULL},
+    {GARB_ANIMATION_NAME, G_ANIM_NAME, NULL}, {GARB_ANIMATION_DURATION, G_DURATION, NULL},
+    {GARB_ANIMATION_TIMING_FUNCTION, G_EASING, NULL},
+    {GARB_ANIMATION_ITERATION_COUNT, G_ITERATIONS, NULL},
+    {GARB_ANIMATION_DIRECTION, G_ANIM_KEYWORD, kDirection},
+    {GARB_ANIMATION_PLAY_STATE, G_ANIM_KEYWORD, kPlayState},
+    {GARB_ANIMATION_DELAY, G_DELAY, NULL}, {GARB_ANIMATION_FILL_MODE, G_ANIM_KEYWORD, kFillMode},
+    {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
+    {GARB_CURSOR, G_CURSOR, kCursor}, {GARB_USER_SELECT, G_KEYWORDS, kUserSelect},
+    {GARB_WORD_BREAK, G_KEYWORDS, kWordBreak}, {GARB_OVERFLOW_WRAP, G_KEYWORDS, kOverflowWrap},
+    // Text 3 § 7.2; the Quirks standard's unitless lengths include it (§
+    // 3.2). Text 4's percentage of the font size is not read.
+    {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
+    {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
+    {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+    {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
+    {GARB_OBJECT_FIT, G_KEYWORDS, kObjectFit}, {GARB_OBJECT_POSITION, G_POSITION, NULL},
+    {GARB_ASPECT_RATIO, G_RATIO, NULL},
+};
+
+static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
+
+// ── Grid (Grid 2 § 7, § 8) ──────────────────────────────────────────────
+
+// A function's arguments, split at their commas: up to `max` cursors.
+static int32_t fn_args(const garb_value_t *f, VCur *args, int32_t max)
+{
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++) {
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            if (n == max)
+                return -1;
+            args[n++] = (VCur){f->children + from, i - from, 0};
+            from = i + 1;
+        }
+    }
+    return n;
+}
+
+static bool is_fn(const garb_value_t *t, const char *name)
+{
+    return t != NULL && t->kind == GARB_FUNCTION && ieq(t->text, t->len, name);
+}
+
+static garb_val_t fn_val(Sets *s, const char *name, const garb_val_t *args, int32_t n)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_FUNCTION;
+    v.keyword = name;
+    v.items = keep(s, args, n);
+    v.nitems = v.items != NULL ? n : 0;
+    v.comma = true;
+    return v;
+}
+
+// A track breadth: a length or percentage (never negative), a flexible
+// `<n>fr` where `flex` allows, or a sizing keyword where `words` does.
+static bool track_breadth(Sets *s, VCur *c, bool flex, bool words, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_DIMENSION && ieq(t->unit, t->unit_len, "fr")) {
+        if (!flex || t->number < 0)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->unit = GARB_U_FR;
+        out->number = t->number;
+        c->i++;
+        return true;
+    }
+    const char *k = words ? vc_keyword(c, kTrackWords) : NULL;
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+}
+
+static bool fixed_breadth(const garb_val_t *v)
+{
+    return v->kind == GARB_V_PERCENTAGE || v->kind == GARB_V_CALC ||
+           (v->kind == GARB_V_LENGTH && v->unit != GARB_U_FR);
+}
+
+// A track size (§ 7.2.1): a breadth, minmax(min, max) — whose minimum is
+// never flexible — or fit-content(length-percentage). `fixed` says it has
+// a fixed size at one end, which an auto-repeated track must.
+static bool track_size(Sets *s, VCur *c, garb_val_t *out, bool *fixed)
+{
+    const garb_value_t *t = vc_peek(c);
+    VCur args[2];
+    garb_val_t two[2];
+    if (is_fn(t, "minmax")) {
+        if (fn_args(t, args, 2) != 2 || !track_breadth(s, &args[0], false, true, &two[0]) ||
+            !vc_done(&args[0]) || !track_breadth(s, &args[1], true, true, &two[1]) ||
+            !vc_done(&args[1]))
+            return false;
+        c->i++;
+        *out = fn_val(s, "minmax", two, 2);
+        *fixed = fixed_breadth(&two[0]) || fixed_breadth(&two[1]);
+        return out->nitems == 2;
+    }
+    if (is_fn(t, "fit-content")) {
+        if (fn_args(t, args, 1) != 1 ||
+            !vc_dim(&args[0], ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &two[0]) ||
+            !vc_done(&args[0]))
+            return false;
+        c->i++;
+        *out = fn_val(s, "fit-content", two, 1);
+        *fixed = false;
+        return out->nitems == 1;
+    }
+    if (!track_breadth(s, c, true, true, out))
+        return false;
+    *fixed = fixed_breadth(out);
+    return true;
+}
+
+// Line names in brackets, read and dropped (GRID.md, decision 3): each an
+// identifier, and never `span` or `auto`.
+static bool line_names(VCur *c)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_BLOCK || t->open != '[')
+        return true;
+    for (int32_t i = 0; i < t->nchildren; i++) {
+        const garb_value_t *n = &t->children[i];
+        if (n->kind == GARB_WHITESPACE)
+            continue;
+        if (n->kind != GARB_IDENT || ieq(n->text, n->len, "span") || ieq(n->text, n->len, "auto"))
+            return false;
+    }
+    c->i++;
+    return true;
+}
+
+// A track list (§ 7.2): track sizes and repeat()s, line names between.
+// `repeat` allows repeat(); `autos` counts the auto-repeats met, of which
+// a list may hold one, alongside fixed tracks only.
+static bool track_list(Sets *s, VCur *c, bool repeat, int *autos, bool *all_fixed, garb_val_t *out)
+{
+    garb_val_t tracks[GARB_TRACKS_MAX];
+    int32_t n = 0;
+    *all_fixed = true;
+    while (!vc_done(c)) {
+        if (!line_names(c))
+            return false;
+        if (vc_done(c))
+            break;
+        if (n == GARB_TRACKS_MAX)
+            return false;
+        const garb_value_t *t = vc_peek(c);
+        if (repeat && is_fn(t, "repeat")) {
+            VCur args[2];
+            garb_val_t two[2];
+            if (fn_args(t, args, 2) != 2)
+                return false;
+            const char *k = vc_keyword(&args[0], kAutoRepeat);
+            if (k != NULL) {
+                two[0] = kw(k);
+                (*autos)++;
+            } else {
+                const garb_value_t *count = vc_peek(&args[0]);
+                if (count == NULL || count->kind != GARB_NUMBER || !count->integer ||
+                    count->number < 1)
+                    return false;
+                args[0].i++;
+                os64_memset(&two[0], 0, sizeof(two[0]));
+                two[0].kind = GARB_V_NUMBER;
+                two[0].number = count->number;
+            }
+            int inner = 0;
+            bool fixed;
+            if (!vc_done(&args[0]) || !track_list(s, &args[1], false, &inner, &fixed, &two[1]))
+                return false;
+            if (k != NULL && !fixed)
+                return false;           // an auto-repeat repeats fixed sizes only
+            *all_fixed &= fixed;
+            c->i++;
+            tracks[n++] = fn_val(s, "repeat", two, 2);
+            if (tracks[n - 1].nitems != 2)
+                return false;
+            continue;
+        }
+        bool fixed;
+        if (!track_size(s, c, &tracks[n], &fixed))
+            return false;
+        *all_fixed &= fixed;
+        n++;
+    }
+    if (n == 0 || *autos > 1 || (*autos == 1 && !*all_fixed))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_TRACKS;
+    out->items = keep(s, tracks, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+int32_t garb_area_cells(const char *s, uint32_t len, garb_area_cell_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    uint32_t i = 0;
+    while (i < len) {
+        char ch = s[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f') {
+            i++;
+            continue;
+        }
+        uint32_t from = i;
+        if (ch == '.') {
+            while (i < len && s[i] == '.')
+                i++;
+            if (n < cap)
+                out[n] = (garb_area_cell_t){s + from, 0};
+            n++;
+            continue;
+        }
+        // A name is ident code points: letters, digits, `-`, `_`, and
+        // anything past ASCII.
+        while (i < len) {
+            unsigned char u = (unsigned char)s[i];
+            if (!(u >= 0x80 || (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') ||
+                  (u >= '0' && u <= '9') || u == '-' || u == '_'))
+                break;
+            i++;
+        }
+        if (i == from)
+            return -1;
+        if (n < cap)
+            out[n] = (garb_area_cell_t){s + from, i - from};
+        n++;
+    }
+    return n;
+}
+
+static bool cell_is(garb_area_cell_t c, garb_area_cell_t name)
+{
+    return c.len == name.len && c.len > 0 && os64_memcmp(c.text, name.text, c.len) == 0;
+}
+
+// Whether every name in the rows covers a rectangle and nothing else
+// (§ 7.3): the bounding box of its cells holds nothing but it.
+static bool areas_rectangular(const garb_val_t *rows, int32_t nrows, int32_t ncols)
+{
+    garb_area_cell_t cells[GARB_TRACKS_MAX * 4];
+    if ((int64_t)nrows * ncols > (int64_t)(sizeof(cells) / sizeof(cells[0])))
+        return false;
+    for (int32_t r = 0; r < nrows; r++)
+        (void)garb_area_cells(rows[r].text, rows[r].len, cells + r * ncols, ncols);
+    for (int32_t k = 0; k < nrows * ncols; k++) {
+        garb_area_cell_t name = cells[k];
+        if (name.len == 0)
+            continue;
+        int32_t r0 = nrows, r1 = -1, c0 = ncols, c1 = -1, count = 0;
+        for (int32_t j = 0; j < nrows * ncols; j++)
+            if (cell_is(cells[j], name)) {
+                int32_t r = j / ncols, cc = j % ncols;
+                r0 = r < r0 ? r : r0;
+                r1 = r > r1 ? r : r1;
+                c0 = cc < c0 ? cc : c0;
+                c1 = cc > c1 ? cc : c1;
+                count++;
+            }
+        if (count != (r1 - r0 + 1) * (c1 - c0 + 1))
+            return false;
+        for (int32_t r = r0; r <= r1; r++)
+            for (int32_t cc = c0; cc <= c1; cc++)
+                if (!cell_is(cells[r * ncols + cc], name))
+                    return false;
+    }
+    return true;
+}
+
+// grid-template-areas (§ 7.3): strings of the same number of cells, each
+// name covering a rectangle, a run of dots for none.
+static bool areas(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t rows[GARB_TRACKS_MAX];
+    int32_t n = 0, cols = -1;
+    const garb_value_t *t;
+    while ((t = vc_peek(c)) != NULL && t->kind == GARB_STRING) {
+        if (n == GARB_TRACKS_MAX)
+            return false;
+        int32_t cells = garb_area_cells(t->text, t->len, NULL, 0);
+        if (cells <= 0 || (cols >= 0 && cells != cols))
+            return false;
+        cols = cells;
+        os64_memset(&rows[n], 0, sizeof(rows[n]));
+        rows[n].kind = GARB_V_STRING;
+        rows[n].text = t->text;
+        rows[n].len = t->len;
+        n++;
+        c->i++;
+    }
+    if (n == 0 || !vc_done(c) || !areas_rectangular(rows, n, cols))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, rows, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// A grid line (§ 8.3): auto, an integer other than 0, `span` with a
+// positive integer or a name, or a name. A name beside a number — the
+// n-th line of that name — is booked with named lines, and is invalid
+// here.
+static bool grid_line(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kAuto) != NULL) {
+        *out = kw("auto");
+        return true;
+    }
+    bool span = vc_keyword(c, kSpan) != NULL;
+    const garb_value_t *t = vc_peek(c);
+    if (t != NULL && t->kind == GARB_NUMBER && t->integer && t->number != 0 &&
+        (!span || t->number > 0)) {
+        garb_val_t num = {0};
+        num.kind = GARB_V_NUMBER;
+        num.number = t->number;
+        c->i++;
+        *out = span ? fn_val(s, "span", &num, 1) : num;
+        return !span || out->nitems == 1;
+    }
+    if (t != NULL && t->kind == GARB_IDENT && !ieq(t->text, t->len, "span") &&
+        !ieq(t->text, t->len, "auto") && vc_keyword(&(VCur){c->v, c->n, c->i}, kWide) == NULL) {
+        garb_val_t name = {0};
+        name.kind = GARB_V_STRING;
+        name.text = t->text;
+        name.len = t->len;
+        c->i++;
+        *out = span ? fn_val(s, "span", &name, 1) : name;
+        return !span || out->nitems == 1;
+    }
+    return false;
+}
+
+// ── Transforms (Transforms 1 § 4-5, § 9; Transforms 2 § 5-6, § 12) ─────
+
+// Each transform function by its lowercase name, and its arguments, comma
+// separated, one letter each: `p` a length-percentage, `l` a length, `n` a
+// number, `s` a number or a percentage, `a` an angle or a unitless 0 — the
+// first `min` of them written, the rest optional.
+static const struct {
+    const char *name;
+    const char *args;
+    int32_t min;
+} kTransformFns[] = {
+    {"matrix", "nnnnnn", 6}, {"matrix3d", "nnnnnnnnnnnnnnnn", 16},
+    {"translate", "pp", 1}, {"translatex", "p", 1}, {"translatey", "p", 1},
+    {"translatez", "l", 1}, {"translate3d", "ppl", 3},
+    {"scale", "ss", 1}, {"scalex", "s", 1}, {"scaley", "s", 1}, {"scalez", "s", 1},
+    {"scale3d", "sss", 3},
+    {"rotate", "a", 1}, {"rotatex", "a", 1}, {"rotatey", "a", 1}, {"rotatez", "a", 1},
+    {"rotate3d", "nnna", 4},
+    {"skew", "aa", 1}, {"skewx", "a", 1}, {"skewy", "a", 1},
+    // `none`, or a length that is not negative.
+    {"perspective", "l", 1},
+};
+
+static bool transform_fn(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *f = vc_peek(c);
+    if (f == NULL || f->kind != GARB_FUNCTION)
+        return false;
+    for (size_t k = 0; k < sizeof(kTransformFns) / sizeof(kTransformFns[0]); k++) {
+        if (!ieq(f->text, f->len, kTransformFns[k].name))
+            continue;
+        const char *kinds = kTransformFns[k].args;
+        bool perspective = os64_streq(kTransformFns[k].name, "perspective");
+        VCur args[16];
+        garb_val_t vals[16];
+        int32_t n = fn_args(f, args, (int32_t)os64_strlen(kinds));
+        if (n < kTransformFns[k].min)
+            return false;
+        for (int32_t i = 0; i < n; i++) {
+            VCur *a = &args[i];
+            bool ok;
+            switch (kinds[i]) {
+            case 'p': ok = vc_dim(a, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &vals[i]); break;
+            case 'l':
+                if (perspective && vc_keyword(a, kNone) != NULL) {
+                    vals[i] = kw("none");
+                    ok = true;
+                } else {
+                    ok = vc_dim(a, ACCEPT_LENGTH, !perspective, false, &s->a, &vals[i]);
+                }
+                break;
+            case 'n': ok = vc_dim(a, ACCEPT_NUMBER, true, false, &s->a, &vals[i]); break;
+            case 's': ok = vc_dim(a, ACCEPT_NUMBER | ACCEPT_PERCENT, true, false, &s->a, &vals[i]); break;
+            default: ok = vc_angle(a, true, &vals[i]); break;
+            }
+            if (!ok || !vc_done(a))
+                return false;
+        }
+        *out = fn_val(s, kTransformFns[k].name, vals, n);
+        c->i++;
+        return out->nitems == n;
+    }
+    return false;
+}
+
+// Filter Effects 1 § 13's functions by their lowercase names, and what
+// each takes: 'b' blur's length, 's' a number or percentage, 'a'
+// hue-rotate's angle (a unitless 0 too), 'd' drop-shadow's colour and
+// lengths. Negatives are refused but for hue-rotate's angle and
+// drop-shadow's offsets.
+static const struct {
+    const char *name;
+    char kind;
+} kFilterFns[] = {
+    {"blur", 'b'}, {"brightness", 's'}, {"contrast", 's'}, {"grayscale", 's'},
+    {"hue-rotate", 'a'}, {"invert", 's'}, {"opacity", 's'}, {"saturate", 's'},
+    {"sepia", 's'}, {"drop-shadow", 'd'},
+};
+
+// drop-shadow(<color>? && [<length>{2} <length [0,∞]>?]): the colour, or
+// currentcolor, then the lengths, into `vals`; `*n` their count.
+static bool drop_shadow_args(Sets *s, VCur *a, garb_val_t *vals, int32_t *n)
+{
+    // vc_color clears what it is handed when no colour is there, so each
+    // look is into `got`, and the default stands until one is found.
+    garb_val_t colour = initial_color(), got, len[3];
+    bool have = vc_color(a, &got);
+    if (have)
+        colour = got;
+    int32_t lens = 0;
+    while (lens < 3 && !vc_done(a) && vc_dim(a, ACCEPT_LENGTH, lens < 2, false, &s->a, &len[lens]))
+        lens++;
+    if (lens < 2)
+        return false;
+    if (!have && !vc_done(a) && vc_color(a, &got))
+        colour = got;
+    vals[0] = colour;
+    for (int32_t i = 0; i < lens; i++)
+        vals[1 + i] = len[i];
+    *n = 1 + lens;
+    return true;
+}
+
+static bool filter_fn(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *f = vc_peek(c);
+    if (f != NULL && (f->kind == GARB_URL || is_fn(f, "url")))
+        return vc_url(c, out);
+    if (f == NULL || f->kind != GARB_FUNCTION)
+        return false;
+    for (size_t k = 0; k < sizeof(kFilterFns) / sizeof(kFilterFns[0]); k++) {
+        if (!ieq(f->text, f->len, kFilterFns[k].name))
+            continue;
+        VCur args[1];
+        garb_val_t vals[4];
+        int32_t n = 0;
+        if (fn_args(f, args, 1) != 1)
+            return false;
+        char kind = kFilterFns[k].kind;
+        VCur *a = &args[0];
+        bool ok = true;
+        if (vc_done(a))
+            ok = kind != 'd';               // omitted: the default, but drop-shadow's lengths
+        else if (kind == 'b')
+            ok = vc_dim(a, ACCEPT_LENGTH, false, false, &s->a, &vals[n++]);
+        else if (kind == 's')
+            ok = vc_dim(a, ACCEPT_NUMBER | ACCEPT_PERCENT, false, false, &s->a, &vals[n++]);
+        else if (kind == 'a')
+            ok = vc_angle(a, true, &vals[n++]);
+        else
+            ok = drop_shadow_args(s, a, vals, &n);
+        if (!ok || !vc_done(a))
+            return false;
+        *out = fn_val(s, kFilterFns[k].name, vals, n);
+        out->comma = false;
+        c->i++;
+        return out->nitems == n;
+    }
+    return false;
+}
+
+// filter and backdrop-filter (Filter Effects 1 § 5, Filter Effects 2 § 3):
+// none, or functions and url() references, applied in order.
+static bool filter_list(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return vc_done(c);
+    }
+    garb_val_t fns[GARB_FILTERS_MAX];
+    int32_t n = 0;
+    while (!vc_done(c)) {
+        if (n == GARB_FILTERS_MAX || !filter_fn(s, c, &fns[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_FUNCTIONS;
+    out->items = keep(s, fns, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+static bool transform_list(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t fns[GARB_TRANSFORMS_MAX];
+    int32_t n = 0;
+    while (!vc_done(c)) {
+        if (n == GARB_TRANSFORMS_MAX || !transform_fn(s, c, &fns[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_FUNCTIONS;
+    out->items = keep(s, fns, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// One of transform-origin's first two values: a keyword, as its
+// percentage, with `*axis` 0 for x, 1 for y and -1 for `center`, which is
+// either; or a length-percentage, `*axis` 2.
+static bool origin_part(Sets *s, VCur *c, garb_val_t *out, int *axis)
+{
+    static const char *const kWords[] = {"left", "center", "right", "top", "bottom", NULL};
+    const char *k = vc_keyword(c, kWords);
+    if (k == NULL) {
+        *axis = 2;
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+    }
+    bool start = os64_streq(k, "left") || os64_streq(k, "top");
+    bool centre = os64_streq(k, "center");
+    *out = percent(start ? 0 : centre ? 50 : 100);
+    *axis = centre ? -1 : os64_streq(k, "left") || os64_streq(k, "right") ? 0 : 1;
+    return true;
+}
+
+// Transforms 1 § 5: one value names its own axis (a length is x) and the
+// other is the centre; two are x then y, or two keywords in either order;
+// a z may follow two. Kept as x, y and z.
+static bool origin(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t v[3];
+    int ax[2];
+    if (!origin_part(s, c, &v[0], &ax[0]))
+        return false;
+    if (vc_done(c)) {
+        if (ax[0] == 1) {
+            v[1] = v[0];
+            v[0] = percent(50);
+        } else {
+            v[1] = percent(50);
+        }
+    } else {
+        if (!origin_part(s, c, &v[1], &ax[1]))
+            return false;
+        bool in_order = ax[0] != 1 && ax[1] != 0;
+        bool swapped = (ax[0] == 1 || ax[0] == -1) && (ax[1] == 0 || ax[1] == -1);
+        if (!in_order && !swapped)
+            return false;
+        if (!in_order) {
+            garb_val_t x = v[1];
+            v[1] = v[0];
+            v[0] = x;
+        }
+    }
+    os64_memset(&v[2], 0, sizeof(v[2]));
+    v[2].kind = GARB_V_LENGTH;
+    v[2].unit = GARB_U_PX;
+    if (!vc_done(c) && !vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, &v[2]))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, v, 3);
+    out->nitems = out->items != NULL ? 3 : 0;
+    return out->nitems == 3;
+}
+
+// `translate` and `scale` (Transforms 2 § 5): `none`, or one to three
+// values — for translate a length-percentage, another, then a length; for
+// scale each a number or a percentage — kept as a `kind` list.
+static bool individual(Sets *s, VCur *c, bool translate, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t v[3];
+    int32_t n = 0;
+    while (n < 3 && !vc_done(c)) {
+        int accept = translate ? (n < 2 ? ACCEPT_LENGTH | ACCEPT_PERCENT : ACCEPT_LENGTH)
+                               : ACCEPT_NUMBER | ACCEPT_PERCENT;
+        if (!vc_dim(c, accept, true, false, &s->a, &v[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = translate ? GARB_V_LENGTH : GARB_V_NUMBER;
+    out->items = keep(s, v, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// `rotate` (Transforms 2 § 5): `none`, or an angle with an axis before or
+// after it — `x`, `y`, `z` or three numbers. About z it is the angle
+// alone; about any other axis, the axis's three numbers and the angle.
+static bool rotate(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAxes[] = {"x", "y", "z", NULL};
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t v[4];
+    bool angle = false, axis = false;
+    for (int k = 0; k < 2 && !vc_done(c); k++) {
+        const char *name;
+        if (!angle && vc_angle(c, false, &v[3])) {
+            angle = true;
+        } else if (!axis && (name = vc_keyword(c, kAxes)) != NULL) {
+            axis = true;
+            for (int i = 0; i < 3; i++) {
+                os64_memset(&v[i], 0, sizeof(v[i]));
+                v[i].kind = GARB_V_NUMBER;
+                v[i].number = name[0] == (char)('x' + i);
+            }
+        } else if (!axis) {
+            for (int i = 0; i < 3; i++)
+                if (!vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &v[i]))
+                    return false;
+            axis = true;
+        } else {
+            return false;
+        }
+    }
+    if (!angle)
+        return false;
+    bool about_z = !axis || (v[0].kind == GARB_V_NUMBER && v[0].number == 0 &&
+                             v[1].kind == GARB_V_NUMBER && v[1].number == 0 &&
+                             v[2].kind == GARB_V_NUMBER && v[2].number > 0);
+    if (about_z) {
+        *out = v[3];
+        return true;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_NUMBER;
+    out->items = keep(s, v, 4);
+    out->nitems = out->items != NULL ? 4 : 0;
+    return out->nitems == 4;
+}
+
+// The background longhands take a comma-separated list, one per layer
+// (Backgrounds 3 § 3.1), the top layer first.
+// ── Animations (Animations 1 § 4, Easing 1 § 2) ─────────────────────────
+
+// A <keyframes-name>, or `none`: an identifier but none and the CSS-wide
+// ones, or a string but the empty one — kept as written either way, since
+// a name is compared codepoint for codepoint and `"none"` is a name.
+static bool anim_name(VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_IDENT && ieq(t->text, t->len, "none")) {
+        c->i++;
+        *out = kw("none");
+        return true;
+    }
+    if (t->kind == GARB_IDENT) {
+        for (int k = 0; kNotCustom[k] != NULL; k++)
+            if (ieq(t->text, t->len, kNotCustom[k]))
+                return false;
+    } else if (t->kind != GARB_STRING || t->len == 0) {
+        return false;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->text = t->text;
+    out->len = t->len;
+    c->i++;
+    return true;
+}
+
+// One plain number of a function's arguments, alone in it: an easing's
+// numbers are written so (a calc() there is booked with calc angles).
+static bool lone_number(VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_NUMBER)
+        return false;
+    *out = number_val(t->number);
+    c->i++;
+    return vc_done(c);
+}
+
+// <easing-function> (Easing 1 § 2): a keyword; cubic-bezier(x1, y1, x2,
+// y2) with each x in [0, 1], each y held to the domain (values.h); or
+// steps(<integer>, <position>?), whose count
+// is at least 1, and at least 2 with jump-none, which takes no step at
+// either end. Easing 2's linear() is not read (PILE3.md § Animations,
+// Booked).
+static bool easing(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kEasings);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    const garb_value_t *t = vc_peek(c);
+    VCur args[4];
+    garb_val_t a[4];
+    if (is_fn(t, "cubic-bezier")) {
+        if (fn_args(t, args, 4) != 4)
+            return false;
+        for (int i = 0; i < 4; i++)
+            if (!lone_number(&args[i], &a[i]))
+                return false;
+        if (!(a[0].number >= 0 && a[0].number <= 1 && a[2].number >= 0 && a[2].number <= 1))
+            return false;
+        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);
+        a[3].number = garb_hold(a[3].number, GARB_EASING_Y_MAX);
+        *out = fn_val(s, "cubic-bezier", a, 4);
+    } else if (is_fn(t, "steps")) {
+        int32_t n = fn_args(t, args, 2);
+        const garb_value_t *count = n >= 1 ? vc_peek(&args[0]) : NULL;
+        if (count == NULL || count->kind != GARB_NUMBER || !count->integer || count->number < 1)
+            return false;
+        args[0].i++;
+        if (!vc_done(&args[0]))
+            return false;
+        a[0] = number_val(count->number);
+        if (n == 2) {
+            if ((k = vc_keyword(&args[1], kStepPositions)) == NULL || !vc_done(&args[1]) ||
+                (os64_streq(k, "jump-none") && count->number < 2))
+                return false;
+            a[1] = kw(k);
+        }
+        *out = fn_val(s, "steps", a, n);
+    } else {
+        return false;
+    }
+    if (out->items == NULL)
+        return false;
+    c->i++;
+    return true;
+}
+
+static bool iterations(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kInfinite);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    VCur look = *c;
+    if (!vc_dim(&look, ACCEPT_NUMBER, false, false, &s->a, out) || out->kind != GARB_V_NUMBER)
+        return false;
+    out->number = garb_hold(out->number, GARB_ITERATIONS_MAX);  // the domain (values.h)
+    *c = look;
+    return true;
+}
+
+// `will-change` (Will Change 1 § 2): auto, or a list of what will change —
+// scroll-position, contents, or a property's name, an identifier that is
+// none of the words the grammar excludes, kept as written.
+static bool will_change(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kExcluded[] = {"will-change", "none", "all", "auto", NULL};
+    if (vc_keyword(c, kAuto) != NULL) {
+        *out = kw("auto");
+        return vc_done(c);
+    }
+    Layers list = {0};
+    for (;;) {
+        const garb_value_t *t = vc_peek(c);
+        bool bad = t == NULL || t->kind != GARB_IDENT;
+        for (int k = 0; !bad && kExcluded[k] != NULL; k++)
+            bad = ieq(t->text, t->len, kExcluded[k]);
+        for (int k = 0; !bad && kNotCustom[k] != NULL; k++)
+            bad = ieq(t->text, t->len, kNotCustom[k]);
+        garb_val_t one = {0};
+        if (!bad) {
+            one.kind = GARB_V_STRING;
+            one.text = t->text;
+            one.len = t->len;
+            c->i++;
+        }
+        if (bad || !layers_add(s, &list, &one)) {
+            os64_free(list.v);
+            return false;
+        }
+        if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+            break;
+        c->i++;
+    }
+    return layers_done(s, &list, out);
+}
+
+// The most items one `content` value is read with; a value with more is
+// invalid.
+#define CONTENT_ITEMS_MAX 32
+
+// One item of a content list: a string, attr(<name>), counter() or
+// counters() (read, their arguments not kept: 8b's), a quote word, or a
+// picture. False when the next value is none of them.
+// A comma, taken: whether there was one.
+static bool vc_comma(VCur *c)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_COMMA)
+        return false;
+    c->i++;
+    return true;
+}
+
+// A counter's name (Lists 3 § 4.1): a <custom-ident> other than `none`, a
+// KEYWORD kept as written, since names match case for case, and written
+// as an identifier is.
+static bool counter_name(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_IDENT || ieq(t->text, t->len, "none") ||
+        vc_keyword(&(VCur){c->v, c->n, c->i}, kNotCustom) != NULL)
+        return false;
+    char *name = os64_arena_alloc(s->a.arena, t->len + 1);
+    if (name == NULL) {
+        s->a.short_of_memory = true;
+        return false;
+    }
+    os64_memcpy(name, t->text, t->len);
+    name[t->len] = '\0';
+    *out = kw(name);
+    out->text = name;
+    out->len = t->len;
+    c->i++;
+    return true;
+}
+
+static bool content_item(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kQuotes[] = {"open-quote", "close-quote", "no-open-quote", "no-close-quote", NULL};
+    const garb_value_t *t = vc_peek(c);
+    const char *k;
+    os64_memset(out, 0, sizeof(*out));
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_STRING) {
+        out->kind = GARB_V_STRING;
+        out->text = t->text;
+        out->len = t->len;
+        c->i++;
+        return true;
+    }
+    if ((k = vc_keyword(c, kQuotes)) != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    if (is_fn(t, "attr")) {
+        VCur args = {t->children, t->nchildren, 0};
+        const garb_value_t *name = vc_peek(&args);
+        if (name == NULL || name->kind != GARB_IDENT)
+            return false;
+        garb_val_t named = {0};
+        named.kind = GARB_V_STRING;
+        named.text = name->text;
+        named.len = name->len;
+        out->kind = GARB_V_FUNCTION;
+        out->keyword = "attr";
+        out->items = keep(s, &named, 1);
+        out->nitems = 1;
+        c->i++;
+        return out->items != NULL;
+    }
+    if (is_fn(t, "counter") || is_fn(t, "counters")) {
+        // Lists 3 § 4.7: counter(<counter-name>, <counter-style>?) and
+        // counters(<counter-name>, <string>, <counter-style>?).
+        bool all = is_fn(t, "counters");
+        VCur args = {t->children, t->nchildren, 0};
+        garb_val_t parts[3];
+        int32_t n = 0;
+        if (!counter_name(s, &args, &parts[n++]))
+            return false;
+        if (all) {
+            const garb_value_t *joiner = vc_comma(&args) ? vc_peek(&args) : NULL;
+            if (joiner == NULL || joiner->kind != GARB_STRING)
+                return false;
+            os64_memset(&parts[n], 0, sizeof(parts[n]));
+            parts[n].kind = GARB_V_STRING;
+            parts[n].text = joiner->text;
+            parts[n].len = joiner->len;
+            n++;
+            args.i++;
+        }
+        if (vc_peek(&args) != NULL) {
+            const garb_value_t *style = vc_comma(&args) ? vc_peek(&args) : NULL;
+            if (style == NULL || style->kind != GARB_IDENT ||
+                vc_keyword(&(VCur){args.v, args.n, args.i}, kNotCustom) != NULL)
+                return false;
+            if (!list_type(s, &args, &parts[n]))
+                return false;
+            // decimal is the style unwritten, and is kept as it.
+            if (!os64_streq(parts[n].keyword, "decimal"))
+                n++;
+        }
+        if (!vc_done(&args))
+            return false;
+        out->kind = GARB_V_FUNCTION;
+        out->keyword = all ? "counters" : "counter";
+        out->items = keep(s, parts, n);
+        out->nitems = n;
+        c->i++;
+        return out->items != NULL;
+    }
+    if (t->kind == GARB_URL || is_fn(t, "url"))
+        return vc_url(c, out);
+    return vc_image(c, out);
+}
+
+// counter-reset, counter-increment, counter-set (Lists 3 § 4.1-4.3): none,
+// or names each with an integer, `fallback` when one is not written.
+// `reversed()` is not read (GENERATED_CONTENT.md § 8.5).
+static bool counters(Sets *s, VCur *c, int32_t fallback, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return vc_done(c);
+    }
+    garb_val_t items[2 * CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    while (vc_peek(c) != NULL) {
+        if (n == 2 * CONTENT_ITEMS_MAX || !counter_name(s, c, &items[n]))
+            return false;
+        const garb_value_t *t = vc_peek(c);
+        os64_memset(&items[n + 1], 0, sizeof(items[n + 1]));
+        items[n + 1].kind = GARB_V_NUMBER;
+        items[n + 1].number = fallback;
+        if (t != NULL && t->kind == GARB_NUMBER && t->integer) {
+            items[n + 1].number = t->number;
+            c->i++;
+        }
+        n += 2;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
+// quotes (Content 3 § 4.1): auto, none, or pairs of strings.
+static bool quotes(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAlone[] = {"auto", "none", NULL};
+    const char *k = vc_keyword(c, kAlone);
+    if (k != NULL) {
+        *out = kw(k);
+        return vc_done(c);
+    }
+    garb_val_t items[2 * CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    for (const garb_value_t *t = vc_peek(c); t != NULL; t = vc_peek(c)) {
+        if (n == 2 * CONTENT_ITEMS_MAX || t->kind != GARB_STRING)
+            return false;
+        os64_memset(&items[n], 0, sizeof(items[n]));
+        items[n].kind = GARB_V_STRING;
+        items[n].text = t->text;
+        items[n].len = t->len;
+        n++;
+        c->i++;
+    }
+    if (n == 0 || n % 2 != 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
+// Generated Content 3 § 1.1: normal | none | [<content-item>]+ [/ [<string>
+// | attr()]+]?, the alternative text read and not kept.
+static bool content(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAlone[] = {"normal", "none", NULL};
+    const char *k = vc_keyword(c, kAlone);
+    if (k != NULL) {
+        *out = kw(k);
+        return vc_done(c);
+    }
+    garb_val_t items[CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    while (vc_peek(c) != NULL && !is_delim_v(vc_peek(c), '/')) {
+        if (n == CONTENT_ITEMS_MAX || !content_item(s, c, &items[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    if (vc_peek(c) != NULL) {
+        c->i++;                 // the slash
+        garb_val_t alt;
+        int32_t nalt = 0;
+        while (vc_peek(c) != NULL) {
+            const garb_value_t *t = vc_peek(c);
+            if (t->kind != GARB_STRING && !is_fn(t, "attr"))
+                return false;
+            if (!content_item(s, c, &alt))
+                return false;
+            nalt++;
+        }
+        if (nalt == 0)
+            return false;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
+static bool layered(const Longhand *l)
+{
+    return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
+           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX ||
+           l->g == G_ANIM_NAME || l->g == G_DURATION || l->g == G_DELAY ||
+           l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
+}
+
+// One number of a <ratio> (Values 4 § 5.7): <number [0,∞]>, a calc()
+// worked out as it is written, and held at 0 below.
+static bool ratio_number(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t v;
+    double n = 0;
+    bool number = true;
+    if (!vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &v))
+        return false;
+    if (v.kind == GARB_V_NUMBER)
+        n = v.number;
+    else if (!(v.kind == GARB_V_CALC && calc_settled(v.calc, &n, &number) && number))
+        return false;
+    *out = number_val(n > 0 ? n : 0);
+    return true;
+}
+
+// `aspect-ratio` (CSS Sizing 4 § 4.1): auto, a ratio — a width and an
+// optional `/ height`, which is 1 when it is left out — or both, either
+// order.
+static bool aspect_ratio(Sets *s, VCur *c, garb_val_t *out)
+{
+    bool have_auto = false, have_ratio = false;
+    garb_val_t two[2];
+    while (!vc_done(c)) {
+        if (!have_auto && vc_keyword(c, kAuto) != NULL) {
+            have_auto = true;
+            continue;
+        }
+        if (have_ratio || !ratio_number(s, c, &two[0]))
+            return false;
+        two[1] = number_val(1);
+        if (is_delim_v(vc_peek(c), '/')) {
+            c->i++;
+            if (!ratio_number(s, c, &two[1]))
+                return false;
+        }
+        have_ratio = true;
+    }
+    if (!have_ratio) {
+        *out = kw("auto");
+        return have_auto;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_RATIO;
+    out->keyword = have_auto ? "auto" : NULL;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
+// A cursor's image-set() (CSS UI 4 § 5.1.1's <url-set>, Images 4 § 2.2):
+// options split by commas, each a url or a string, then a resolution
+// (`2x`, `192dpi`, `2dppx`, `75dpcm`) and a type(<string>), each at most
+// once, in either order. Read and dropped, as the cursor's url is.
+static bool url_set(const garb_value_t *f)
+{
+    VCur args[64];
+    int32_t n = fn_args(f, args, 64);
+    if (n < 1)
+        return false;
+    static const char *const kRes[] = {"x", "dppx", "dpi", "dpcm", NULL};
+    for (int32_t i = 0; i < n; i++) {
+        VCur *a = &args[i];
+        garb_val_t u;
+        const garb_value_t *t = vc_peek(a);
+        if (t != NULL && t->kind == GARB_STRING)
+            a->i++;
+        else if (!vc_url(a, &u))
+            return false;
+        bool res = false, type = false;
+        while ((t = vc_peek(a)) != NULL) {
+            bool is_res = false;
+            for (int k = 0; t->kind == GARB_DIMENSION && kRes[k] != NULL; k++)
+                is_res |= ieq(t->unit, t->unit_len, kRes[k]);
+            if (!res && is_res && t->number > 0) {
+                res = true;
+            } else if (!type && is_fn(t, "type")) {
+                VCur in = {t->children, t->nchildren, 0};
+                const garb_value_t *s = vc_peek(&in);
+                if (s == NULL || s->kind != GARB_STRING)
+                    return false;
+                in.i++;
+                if (!vc_done(&in))
+                    return false;
+                type = true;
+            } else {
+                return false;
+            }
+            a->i++;
+        }
+    }
+    return true;
+}
+
+// `cursor` (CSS UI 4 § 5.1.1): pictures to try, each a url or an image-set()
+// (url_set) with an optional hotspot of two numbers and a comma after it,
+// then the keyword the pointer falls back to. The pictures are read and
+// dropped: what is kept is the keyword.
+static bool cursor(Sets *s, VCur *c, const char *const *words, garb_val_t *out)
+{
+    const char *k;
+    for (;;) {
+        if ((k = vc_keyword(c, words)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        garb_val_t picture, x, y;
+        const garb_value_t *t = vc_peek(c);
+        if ((is_fn(t, "image-set") || is_fn(t, "-webkit-image-set")) && url_set(t))
+            c->i++;
+        else if (!vc_url(c, &picture))
+            return false;
+        t = vc_peek(c);
+        if (t != NULL && t->kind != GARB_COMMA &&
+            (!vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &x) ||
+             !vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &y)))
+            return false;
+        t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_COMMA)
+            return false;
+        c->i++;
+    }
+}
+
+static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
+{
+    if (!layered(l))
+        return longhand_one(s, c, l, out);
+    Layers list = {0};
+    for (;;) {
+        garb_val_t one;
+        if (!longhand_one(s, c, l, &one) || !layers_add(s, &list, &one)) {
+            os64_free(list.v);
+            return false;
+        }
+        if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+            break;
+        c->i++;
+    }
+    return layers_done(s, &list, out);
+}
+
+static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
+{
+    const char *k;
+    switch (l->g) {
+    case G_KEYWORDS:
+    case G_BG_BOX:
+    case G_ANIM_KEYWORD:
+        if ((k = vc_keyword(c, l->words)) == NULL)
+            return false;
+        *out = kw(k);
+        return true;
+    case G_SVG_CLIP:
+        if (vc_url(c, out)) return true;
+        if (vc_keyword(c, kNone) == NULL) return false;
+        *out = kw("none");
+        return true;
+    case G_SVG_PAINT:
+        if (vc_url(c, out)) {
+            // A URL's optional fallback is retained as an item. Fetch policy
+            // belongs to the consumer, not to the cascade.
+            if (!vc_done(c)) {
+                garb_val_t fallback;
+                if ((k = vc_keyword(c, kNone)) != NULL)
+                    fallback = kw(k);
+                else if (!vc_color(c, &fallback))
+                    return false;
+                out->items = keep(s, &fallback, 1);
+                out->nitems = out->items != NULL ? 1 : 0;
+            }
+            return true;
+        }
+        if ((k = vc_keyword(c, kSvgPaint)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_color(c, out);
+    case G_SVG_POSITION:
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+    case G_SVG_RADIUS:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        /* fall through */
+    case G_SVG_LENGTH:
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_SVG_MITER:
+        return vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, out) &&
+               (out->kind == GARB_V_CALC || out->number >= 1);
+    case G_SVG_DASHES: {
+        if (vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
+        garb_val_t values[256];
+        int32_t n = 0;
+        while (!vc_done(c)) {
+            if (n == 256 || !vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, false, false,
+                                    &s->a, &values[n++]))
+                return false;
+            const garb_value_t *v = vc_peek(c);
+            if (v && v->kind == GARB_COMMA) {
+                c->i++;
+                if (vc_done(c))
+                    return false;
+            }
+        }
+        if (!n)
+            return false;
+        *out = (garb_val_t){.kind = GARB_V_LENGTH, .items = keep(s, values, n), .nitems = n};
+        return out->items != NULL;
+    }
+    case G_COLOR:
+    case G_BCOLOR: return vc_color(c, out);
+    case G_MARGIN: return margin_one(s, c, out);
+    case G_PADDING: return padding_one(s, c, out);
+    case G_BWIDTH: return bwidth_one(s, c, out);
+    case G_BSTYLE: return bstyle_one(s, c, out);
+    case G_SIZE:
+        if ((k = vc_keyword(c, kSizeWords)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, s->quirks, &s->a, out);
+    case G_MAX:
+        if ((k = vc_keyword(c, kMaxWords)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, s->quirks, &s->a, out);
+    case G_FAMILY: return families(s, c, out);
+    case G_FONT_SIZE: return font_size(s, c, out);
+    case G_FONT_WEIGHT: return font_weight(s, c, out);
+    case G_FONT_STYLE: return font_style(s, c, out);
+    case G_LINE_HEIGHT: return line_height(s, c, out);
+    case G_VALIGN:
+        return kw_or_dim(s, c, kVerticalAlign, ACCEPT_LENGTH | ACCEPT_PERCENT, true, true, out);
+    case G_DECORATION_LINE: return decoration_line(s, c, out);
+    case G_INDENT: {
+        // Text 3 § 8.1: a length-percentage && hanging? && each-line?, each
+        // keyword at most once.
+        bool got = false;
+        const char *said[2] = {NULL, NULL};
+        while (!vc_done(c)) {
+            if ((k = vc_keyword(c, kIndentWords)) != NULL) {
+                int slot = os64_streq(k, "hanging") ? 0 : 1;
+                if (said[slot] != NULL)
+                    return false;
+                said[slot] = k;
+                continue;
+            }
+            if (got || !vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out))
+                return false;
+            got = true;
+        }
+        return got;
+    }
+    case G_LIST_TYPE: return list_type(s, c, out);
+    case G_LIST_IMAGE:
+    case G_BG_IMAGE:
+        if (vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
+        return l->g == G_BG_IMAGE ? bg_image(s, c, out) : vc_url(c, out);
+    case G_BG_REPEAT: return repeat(c, out);
+    case G_BG_SIZE: return bg_size(s, c, out);
+    case G_BG_POS_X:
+        if ((k = vc_keyword(c, kPosX)) != NULL) {
+            garb_val_t off, *op = NULL;
+            if (!os64_streq(k, "center") && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &off))
+                op = &off;
+            return edge_offset(s, k, op, out);
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+    case G_BG_POS_Y:
+        if ((k = vc_keyword(c, kPosY)) != NULL) {
+            garb_val_t off, *op = NULL;
+            if (!os64_streq(k, "center") && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &off))
+                op = &off;
+            return edge_offset(s, k, op, out);
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+    case G_SPACING: {
+        garb_val_t two[2];
+        int n = 0;
+        while (n < 2 && vc_dim(c, ACCEPT_LENGTH, false, s->quirks, &s->a, &two[n]))
+            n++;
+        if (n == 0)
+            return false;
+        if (n == 1)
+            two[1] = two[0];
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->items = keep(s, two, 2);
+        out->nitems = 2;
+        return out->items != NULL;
+    }
+    case G_SHADOW: return shadow_list(s, c, l->prop == GARB_BOX_SHADOW, out);
+    case G_RADIUS: {
+        // Backgrounds 3 § 5.1: one radius is both; a second is the vertical.
+        garb_val_t two[2];
+        int n = 0;
+        while (n < 2 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &two[n]))
+            n++;
+        return n > 0 && radius_pair(s, two, n, out);
+    }
+    case G_CLIP: {
+        if (vc_keyword(c,kAuto) != NULL) { *out = kw("auto");return true; }
+        const garb_value_t *f = vc_peek(c);
+        if (!is_fn(f,"rect")) return false;
+        VCur inner = {f->children,f->nchildren,0};
+        garb_val_t sides[4];bool commas = false;
+        for (int i = 0; i < 4; i++) {
+            if (!kw_or_dim(s,&inner,kAuto,ACCEPT_LENGTH,true,false,&sides[i])) return false;
+            const garb_value_t *next = vc_peek(&inner);
+            if (i == 0) commas = next != NULL && next->kind == GARB_COMMA;
+            if (i < 3 && commas) {
+                if (next == NULL || next->kind != GARB_COMMA) return false;
+                inner.i++;
+            }
+        }
+        if (!vc_done(&inner)) return false;
+        *out = fn_val(s,"rect",sides,4);
+        c->i++;
+        return out->nitems == 4;
+    }
+    case G_Z_INDEX: {
+        // CSS 2.1 § 9.9.1. An integer as written: `1.0` and `1e3` are
+        // numbers, not integers. A calc() that works out to one is not read.
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_NUMBER || !t->integer)
+            return false;
+        c->i++;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_NUMBER;
+        out->number = t->number;
+        return true;
+    }
+    case G_ALPHA:
+        // Color 4 § 4.2: outside 0 to 1 (or 0% to 100%) is not invalid,
+        // it is clamped when the value is computed.
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_PERCENT, true, false, &s->a, out);
+    case G_ALIGN: {
+        // Box Alignment 3 § 4: `first baseline` is `baseline`, and
+        // `unsafe` is what a position means without it.
+        bool unsafe = vc_keyword(c, kUnsafe) != NULL;
+        bool first = !unsafe && vc_keyword(c, kFirst) != NULL;
+        if ((k = vc_keyword(c, l->words)) == NULL)
+            return false;
+        if (first && !os64_streq(k, "baseline"))
+            return false;
+        if (unsafe && (os64_streq(k, "normal") || os64_streq(k, "stretch") ||
+                       os64_streq(k, "baseline") || os64_streq(k, "auto") ||
+                       os64_streq(k, "space-between") || os64_streq(k, "space-around") ||
+                       os64_streq(k, "space-evenly")))
+            return false;
+        *out = kw(k);
+        return true;
+    }
+    case G_FACTOR:
+        return vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, out);
+    case G_BASIS:
+        if ((k = vc_keyword(c, l->words)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_INTEGER: {
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_NUMBER || !t->integer)
+            return false;
+        c->i++;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_NUMBER;
+        out->number = t->number;
+        return true;
+    }
+    case G_GAP:
+        if (vc_keyword(c, kNormal) != NULL) {
+            *out = kw("normal");
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_TEMPLATE: {
+        if (vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
+        int autos = 0;
+        bool fixed;
+        return track_list(s, c, true, &autos, &fixed, out);
+    }
+    case G_AUTO_TRACKS: {
+        // One or more track sizes, no repeat() and no line names (§ 7.6).
+        garb_val_t tracks[GARB_TRACKS_MAX];
+        int32_t n = 0;
+        while (!vc_done(c)) {
+            bool fixed;
+            if (n == GARB_TRACKS_MAX || !track_size(s, c, &tracks[n], &fixed))
+                return false;
+            n++;
+        }
+        if (n == 0)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_TRACKS;
+        out->items = keep(s, tracks, n);
+        out->nitems = out->items != NULL ? n : 0;
+        return out->nitems == n;
+    }
+    case G_AREAS: return areas(s, c, out);
+    case G_AUTO_FLOW: {
+        // [row | column] || dense, written as the four keywords it names.
+        const char *axis = NULL;
+        bool dense = false;
+        while (!vc_done(c)) {
+            if (axis == NULL && (k = vc_keyword(c, kFlowAxis)) != NULL)
+                axis = k;
+            else if (!dense && vc_keyword(c, kDense) != NULL)
+                dense = true;
+            else
+                return false;
+        }
+        if (axis == NULL && !dense)
+            return false;
+        bool column = axis != NULL && os64_streq(axis, "column");
+        *out = kw(column ? (dense ? "column dense" : "column") : (dense ? "row dense" : "row"));
+        return true;
+    }
+    case G_GRID_LINE: return grid_line(s, c, out);
+    case G_TRANSFORM: return transform_list(s, c, out);
+    case G_ORIGIN: return origin(s, c, out);
+    case G_TRANSLATE: return individual(s, c, true, out);
+    case G_SCALE: return individual(s, c, false, out);
+    case G_ROTATE: return rotate(s, c, out);
+    case G_ANIM_NAME: return anim_name(c, out);
+    case G_DURATION:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        return vc_time(c, false, out);
+    case G_DELAY: return vc_time(c, true, out);
+    case G_EASING: return easing(s, c, out);
+    case G_ITERATIONS: return iterations(s, c, out);
+    case G_WILL_CHANGE: return will_change(s, c, out);
+    case G_CONTENT: return content(s, c, out);
+    case G_COUNTERS: return counters(s, c, l->prop == GARB_COUNTER_INCREMENT ? 1 : 0, out);
+    case G_QUOTES: return quotes(s, c, out);
+    case G_FILTER: return filter_list(s, c, out);
+    case G_CURSOR: return cursor(s, c, l->words, out);
+    case G_SPACING_TEXT:
+        return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
+    case G_OUTLINE_WIDTH: return kw_or_dim(s, c, kBorderWidth, ACCEPT_LENGTH, false, false, out);
+    case G_OUTLINE_COLOR:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        return vc_color(c, out);
+    case G_LENGTH: return vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, out);
+    case G_RATIO: return aspect_ratio(s, c, out);
+    case G_POSITION: {
+        // Not quirky: the Quirks standard's unitless lengths are a
+        // background position's, not this one's.
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t xy[2];
+        bool ok = position(&strict, c, false, &xy[0], &xy[1]);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->items = keep(s, xy, 2);
+        out->nitems = 2;
+        return out->items != NULL;
+    }
+    }
+    return false;
+}
+
+// ── Shorthands ──────────────────────────────────────────────────────────
+
+typedef enum {
+    SH_MARGIN, SH_PADDING, SH_BORDER, SH_BORDER_TOP, SH_BORDER_RIGHT, SH_BORDER_BOTTOM,
+    SH_BORDER_LEFT, SH_BORDER_WIDTH, SH_BORDER_STYLE, SH_BORDER_COLOR, SH_BACKGROUND,
+    SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
+    SH_FLEX, SH_FLEX_FLOW, SH_GAP,
+    SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
+    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
+    // CSS Logical 1's flow-relative pairs, each a start and an end.
+    SH_MARGIN_INLINE, SH_MARGIN_BLOCK, SH_PADDING_INLINE, SH_PADDING_BLOCK, SH_INSET_INLINE,
+    SH_INSET_BLOCK, SH_BORDER_INLINE, SH_BORDER_BLOCK, SH_BORDER_INLINE_WIDTH,
+    SH_BORDER_BLOCK_WIDTH, SH_BORDER_INLINE_STYLE, SH_BORDER_BLOCK_STYLE,
+    SH_BORDER_INLINE_COLOR, SH_BORDER_BLOCK_COLOR,
+} Shorthand;
+
+// `modern` as Prop's.
+static const struct { const char *name; Shorthand sh; bool modern; } kShorthands[] = {
+    {"margin", SH_MARGIN, false}, {"padding", SH_PADDING, false}, {"border", SH_BORDER, false},
+    {"border-top", SH_BORDER_TOP, false}, {"border-right", SH_BORDER_RIGHT, false},
+    {"border-bottom", SH_BORDER_BOTTOM, false}, {"border-left", SH_BORDER_LEFT, false},
+    {"border-width", SH_BORDER_WIDTH, false}, {"border-style", SH_BORDER_STYLE, false},
+    {"border-color", SH_BORDER_COLOR, false}, {"background", SH_BACKGROUND, false},
+    {"background-position", SH_BACKGROUND_POSITION, false}, {"font", SH_FONT, false},
+    {"list-style", SH_LIST_STYLE, false}, {"text-decoration", SH_TEXT_DECORATION, false},
+    {"overflow", SH_OVERFLOW, false}, {"inset", SH_INSET, false},
+    {"flex", SH_FLEX, false}, {"flex-flow", SH_FLEX_FLOW, false}, {"gap", SH_GAP, false},
+    // Grid 1's first spelling of `gap`, still written by nearly every sheet
+    // that wants the gap in the browsers of 2018 (Box Alignment 3 § 8.4).
+    {"grid-gap", SH_GAP, false},
+    {"grid-column", SH_GRID_COLUMN, false}, {"grid-row", SH_GRID_ROW, false},
+    {"grid-area", SH_GRID_AREA, false},
+    {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
+    {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
+    {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
+    {"margin-inline", SH_MARGIN_INLINE, true}, {"margin-block", SH_MARGIN_BLOCK, true},
+    {"padding-inline", SH_PADDING_INLINE, true}, {"padding-block", SH_PADDING_BLOCK, true},
+    {"inset-inline", SH_INSET_INLINE, true}, {"inset-block", SH_INSET_BLOCK, true},
+    {"border-inline", SH_BORDER_INLINE, true}, {"border-block", SH_BORDER_BLOCK, true},
+    {"border-inline-width", SH_BORDER_INLINE_WIDTH, true},
+    {"border-block-width", SH_BORDER_BLOCK_WIDTH, true},
+    {"border-inline-style", SH_BORDER_INLINE_STYLE, true},
+    {"border-block-style", SH_BORDER_BLOCK_STYLE, true},
+    {"border-inline-color", SH_BORDER_INLINE_COLOR, true},
+    {"border-block-color", SH_BORDER_BLOCK_COLOR, true},
+};
+
+// A flow-relative pair's physical sides (CSS Logical 1 § 4): the first
+// longhand of the four it is two of, top-right-bottom-left, and whether
+// it is the inline axis — start and end left and right in a horizontal,
+// left-to-right writing mode, which is the only one libflow lays out
+// (`direction` and `writing-mode` are not read: DEBTS.md) — or the block
+// axis, top and bottom.
+static const struct { Shorthand sh; garb_prop_t first; bool inline_axis; } kPairs[] = {
+    {SH_MARGIN_INLINE, GARB_MARGIN_TOP, true}, {SH_MARGIN_BLOCK, GARB_MARGIN_TOP, false},
+    {SH_PADDING_INLINE, GARB_PADDING_TOP, true}, {SH_PADDING_BLOCK, GARB_PADDING_TOP, false},
+    {SH_INSET_INLINE, GARB_TOP, true}, {SH_INSET_BLOCK, GARB_TOP, false},
+    {SH_BORDER_INLINE_WIDTH, GARB_BORDER_TOP_WIDTH, true},
+    {SH_BORDER_BLOCK_WIDTH, GARB_BORDER_TOP_WIDTH, false},
+    {SH_BORDER_INLINE_STYLE, GARB_BORDER_TOP_STYLE, true},
+    {SH_BORDER_BLOCK_STYLE, GARB_BORDER_TOP_STYLE, false},
+    {SH_BORDER_INLINE_COLOR, GARB_BORDER_TOP_COLOR, true},
+    {SH_BORDER_BLOCK_COLOR, GARB_BORDER_TOP_COLOR, false},
+};
+
+static int pair_of(Shorthand sh)
+{
+    for (int k = 0; k < (int)(sizeof(kPairs) / sizeof(kPairs[0])); k++)
+        if (kPairs[k].sh == sh)
+            return k;
+    return -1;
+}
+
+// A pair's start and end longhands.
+static void pair_sides(int k, garb_prop_t *start, garb_prop_t *end)
+{
+    // Top, right, bottom, left: the inline pair is left and right.
+    *start = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 3 : 0));
+    *end = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 1 : 2));
+}
+
+// What `animation` sets, in the order libgarb lists the longhands.
+static const garb_prop_t kAnimationProps[] = {
+    GARB_ANIMATION_NAME, GARB_ANIMATION_DURATION, GARB_ANIMATION_TIMING_FUNCTION,
+    GARB_ANIMATION_ITERATION_COUNT, GARB_ANIMATION_DIRECTION, GARB_ANIMATION_PLAY_STATE,
+    GARB_ANIMATION_DELAY, GARB_ANIMATION_FILL_MODE,
+};
+enum { A_NAME, A_DURATION, A_EASING, A_COUNT, A_DIRECTION, A_PLAY, A_DELAY, A_FILL, A_N };
+
+// The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
+static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
+{
+    static const garb_prop_t kBg[] = {GARB_BACKGROUND_COLOR, GARB_BACKGROUND_IMAGE,
+                                      GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+                                      GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE,
+                                      GARB_BACKGROUND_ORIGIN, GARB_BACKGROUND_CLIP};
+    static const garb_prop_t kFont[] = {GARB_FONT_STYLE, GARB_FONT_VARIANT, GARB_FONT_WEIGHT,
+                                        GARB_FONT_SIZE, GARB_LINE_HEIGHT, GARB_FONT_FAMILY};
+    static const garb_prop_t kList[] = {GARB_LIST_STYLE_TYPE, GARB_LIST_STYLE_POSITION,
+                                        GARB_LIST_STYLE_IMAGE};
+    int n = 0;
+    switch (sh) {
+    case SH_MARGIN: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_MARGIN_TOP + k); break;
+    case SH_PADDING: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_PADDING_TOP + k); break;
+    case SH_BORDER:
+        for (int k = 0; k < 12; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + k);
+        break;
+    case SH_BORDER_TOP: case SH_BORDER_RIGHT: case SH_BORDER_BOTTOM: case SH_BORDER_LEFT: {
+        int side = sh - SH_BORDER_TOP;
+        out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + side);
+        out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + side);
+        out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + side);
+        break;
+    }
+    case SH_BORDER_WIDTH: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + k); break;
+    case SH_BORDER_STYLE: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + k); break;
+    case SH_BORDER_COLOR: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + k); break;
+    case SH_BACKGROUND: for (size_t k = 0; k < sizeof(kBg) / sizeof(kBg[0]); k++) out[n++] = kBg[k]; break;
+    case SH_BACKGROUND_POSITION: out[n++] = GARB_BACKGROUND_POSITION_X; out[n++] = GARB_BACKGROUND_POSITION_Y; break;
+    case SH_FONT: for (int k = 0; k < 6; k++) out[n++] = kFont[k]; break;
+    case SH_LIST_STYLE: for (int k = 0; k < 3; k++) out[n++] = kList[k]; break;
+    case SH_TEXT_DECORATION: out[n++] = GARB_TEXT_DECORATION_LINE; break;
+    case SH_OVERFLOW: out[n++] = GARB_OVERFLOW_X; out[n++] = GARB_OVERFLOW_Y; break;
+    case SH_INSET: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_TOP + k); break;
+    case SH_FLEX: out[n++] = GARB_FLEX_GROW; out[n++] = GARB_FLEX_SHRINK; out[n++] = GARB_FLEX_BASIS; break;
+    case SH_FLEX_FLOW: out[n++] = GARB_FLEX_DIRECTION; out[n++] = GARB_FLEX_WRAP; break;
+    case SH_GAP: out[n++] = GARB_ROW_GAP; out[n++] = GARB_COLUMN_GAP; break;
+    case SH_GRID_COLUMN: out[n++] = GARB_GRID_COLUMN_START; out[n++] = GARB_GRID_COLUMN_END; break;
+    case SH_GRID_ROW: out[n++] = GARB_GRID_ROW_START; out[n++] = GARB_GRID_ROW_END; break;
+    case SH_GRID_AREA:
+        out[n++] = GARB_GRID_ROW_START; out[n++] = GARB_GRID_COLUMN_START;
+        out[n++] = GARB_GRID_ROW_END; out[n++] = GARB_GRID_COLUMN_END;
+        break;
+    case SH_PLACE_ITEMS: out[n++] = GARB_ALIGN_ITEMS; out[n++] = GARB_JUSTIFY_ITEMS; break;
+    case SH_PLACE_SELF: out[n++] = GARB_ALIGN_SELF; out[n++] = GARB_JUSTIFY_SELF; break;
+    case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
+    case SH_BORDER_RADIUS: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + k); break;
+    case SH_ANIMATION: for (int k = 0; k < A_N; k++) out[n++] = kAnimationProps[k]; break;
+    case SH_OUTLINE:
+        out[n++] = GARB_OUTLINE_WIDTH; out[n++] = GARB_OUTLINE_STYLE; out[n++] = GARB_OUTLINE_COLOR;
+        break;
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK:
+        // The width, style and colour of the start side, then the end's.
+        for (int k = 0; k < 2; k++) {
+            garb_prop_t side = (garb_prop_t)(sh == SH_BORDER_INLINE ? (k == 0 ? 3 : 1) : 2 * k);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + side);
+        }
+        break;
+    default: {
+        int k = pair_of(sh);
+        if (k >= 0) {
+            pair_sides(k, &out[0], &out[1]);
+            n = 2;
+        }
+        break;
+    }
+    }
+    return n;
+}
+
+// One animation of `animation` (Animations 1 § 4.9), its parts in any
+// order: the first time is the duration and the second the delay (the
+// first is the delay when the reading does not know the duration), and a
+// keyword some other longhand takes is that longhand's until it has one —
+// so `ease ease` is eased `ease` and named `ease`, and the name is what no
+// other longhand would take. What it leaves out is the longhand's initial
+// value.
+static bool animation_one(Sets *s, VCur *c, garb_val_t v[A_N])
+{
+    bool have[A_N] = {false};
+    garb_val_t zero = {0};
+    zero.kind = GARB_V_TIME;
+    zero.unit = GARB_U_S;
+    v[A_NAME] = kw("none");
+    v[A_DURATION] = zero;
+    v[A_EASING] = kw("ease");
+    v[A_COUNT] = number_val(1);
+    v[A_DIRECTION] = kw("normal");
+    v[A_PLAY] = kw("running");
+    v[A_DELAY] = zero;
+    v[A_FILL] = kw("none");
+    while (vc_peek(c) != NULL && vc_peek(c)->kind != GARB_COMMA) {
+        garb_val_t one;
+        const char *k;
+        int got = -1;
+        // Each part is read only when the reading knows its longhand
+        // (knows), and a part already given is no candidate.
+        bool open[A_N];
+        for (int a = 0; a < A_N; a++)
+            open[a] = !have[a] && knows(s, kAnimationProps[a]);
+        if ((open[A_DURATION] || open[A_DELAY]) && vc_time(c, true, &one)) {
+            got = open[A_DURATION] ? A_DURATION : A_DELAY;
+            if (got == A_DURATION && one.number < 0)
+                return false;
+        } else if (open[A_DURATION] && vc_keyword(c, kAuto) != NULL) {
+            got = A_DURATION;           // Animations 2's duration keyword
+            one = kw("auto");
+        } else if (open[A_EASING] && easing(s, c, &one)) {
+            got = A_EASING;
+        } else if (open[A_COUNT] && iterations(s, c, &one)) {
+            got = A_COUNT;
+        } else if (open[A_DIRECTION] && (k = vc_keyword(c, kDirection)) != NULL) {
+            got = A_DIRECTION;
+            one = kw(k);
+        } else if (open[A_FILL] && (k = vc_keyword(c, kFillMode)) != NULL) {
+            got = A_FILL;
+            one = kw(k);
+        } else if (open[A_PLAY] && (k = vc_keyword(c, kPlayState)) != NULL) {
+            got = A_PLAY;
+            one = kw(k);
+        } else if (open[A_NAME] && anim_name(c, &one)) {
+            got = A_NAME;
+        }
+        if (got < 0 || have[got])
+            return false;
+        have[got] = true;
+        v[got] = one;
+    }
+    for (int k = 0; k < A_N; k++)
+        if (have[k])
+            return true;
+    return false;                       // an animation is at least one part
+}
+
+static bool animation(Sets *s, VCur *c)
+{
+    Layers lists[A_N];
+    os64_memset(lists, 0, sizeof(lists));
+    bool ok = true;
+    for (;;) {
+        garb_val_t v[A_N];
+        ok = animation_one(s, c, v);
+        for (int k = 0; ok && k < A_N; k++)
+            ok = layers_add(s, &lists[k], &v[k]);
+        if (!ok || vc_peek(c) == NULL)
+            break;
+        c->i++;                         // the comma
+        if (vc_peek(c) == NULL)
+            ok = false;                 // a list may not end in one
+    }
+    for (int k = 0; k < A_N; k++) {
+        garb_val_t list;
+        if (ok && layers_done(s, &lists[k], &list))
+            set(s, kAnimationProps[k], &list);
+        else
+            ok = false;
+        os64_free(lists[k].v);
+        lists[k] = (Layers){0};
+    }
+    return ok;
+}
+
+// Up to `max` grid lines split by slashes (Grid 2 § 8.4), the n-th for the
+// longhand `props[n]`, which the reading must know: what each one left out
+// is its partner's name where that one is a name, else auto.
+static bool grid_lines(Sets *s, VCur *c, const garb_prop_t *props, garb_val_t *lines, int32_t max)
+{
+    int32_t n = 0;
+    for (;;) {
+        if (n == max || !knows(s, props[n]) || !grid_line(s, c, &lines[n]))
+            return false;
+        n++;
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL)
+            break;
+        if (!is_delim_v(t, '/'))
+            return false;
+        c->i++;
+    }
+    // grid-area's four: row-start, column-start, row-end, column-end; each
+    // missing one copies the one across from it (index - 2) when that is
+    // a name, and the second copies the first when there is only one.
+    for (int32_t i = n; i < max; i++) {
+        const garb_val_t *from = &lines[i >= 2 ? i - 2 : 0];
+        lines[i] = from->kind == GARB_V_STRING ? *from : kw("auto");
+    }
+    return true;
+}
+
+// `flex` (Flexbox 1 § 7.1): `none`, or a grow factor with an optional
+// shrink factor and a basis, in either order. What is left out is not the
+// longhand's initial value: grow 1, shrink 1, basis 0% — `flex: 1` is
+// `1 1 0%`. A unitless zero is a factor unless two factors came before it.
+static bool flex_shorthand(Sets *s, VCur *c)
+{
+    garb_val_t grow = {0}, shrink = {0}, basis = percent(0);
+    grow.kind = shrink.kind = GARB_V_NUMBER;
+    grow.number = shrink.number = 1;
+    if (vc_keyword(c, kNone) != NULL) {
+        if (!vc_done(c))
+            return false;
+        grow.number = shrink.number = 0;
+        basis = kw("auto");
+    } else {
+        bool factors = false, have_basis = false;
+        while (!vc_done(c)) {
+            const garb_value_t *t = vc_peek(c);
+            if (!factors && t != NULL && t->kind == GARB_NUMBER) {
+                if (!knows(s, GARB_FLEX_GROW) || !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &grow))
+                    return false;
+                const garb_value_t *u = vc_peek(c);
+                if (u != NULL && u->kind == GARB_NUMBER &&
+                    (!knows(s, GARB_FLEX_SHRINK) ||
+                     !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &shrink)))
+                    return false;
+                factors = true;
+            } else if (!have_basis && knows(s, GARB_FLEX_BASIS)) {
+                const char *k = vc_keyword(c, kBasisWords);
+                if (k != NULL)
+                    basis = kw(k);
+                else if (!vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &basis))
+                    return false;
+                have_basis = true;
+            } else {
+                return false;
+            }
+        }
+        if (!factors && !have_basis)
+            return false;
+    }
+    set(s, GARB_FLEX_GROW, &grow);
+    set(s, GARB_FLEX_SHRINK, &shrink);
+    set(s, GARB_FLEX_BASIS, &basis);
+    return true;
+}
+
+// A flow-relative pair (CSS Logical 1 § 4): the start's value and the
+// end's, the end the start's when it is left out.
+static bool logical_pair(Sets *s, VCur *c, int k, bool (*one)(Sets *, VCur *, garb_val_t *))
+{
+    garb_prop_t start, end;
+    pair_sides(k, &start, &end);
+    garb_val_t a, b;
+    if (!one(s, c, &a))
+        return false;
+    b = a;
+    int given = 1;
+    if (!vc_done(c)) {
+        if (!one(s, c, &b))
+            return false;
+        given = 2;
+    }
+    if (!vc_done(c) || !pair_known(s, start, end, given))
+        return false;
+    set(s, start, &a);
+    set(s, end, &b);
+    return true;
+}
+
+// The rest of an outline from the cursor on: each part not yet had tried
+// in turn, and the next tried after it, back to the next part where the
+// rest cannot be read. `||` takes the parts in any order (Values 4 §
+// 2.2), and `auto` is both a style and a colour, so the first part that
+// reads a component is not always the one it is: `outline: auto solid` is
+// the colour auto and the style solid. Three parts, so six orders at
+// most.
+static bool outline_rest(Sets *s, VCur *c, const Longhand *parts, garb_val_t *v, bool *have)
+{
+    if (vc_done(c))
+        return true;
+    int32_t at = c->i;
+    for (int k = 0; k < 3; k++) {
+        // A reader that refuses may have written its answer: each tries
+        // into its own.
+        garb_val_t one;
+        if (have[k] || !knows(s, parts[k].prop) || !longhand_one(s, c, &parts[k], &one)) {
+            c->i = at;
+            continue;
+        }
+        garb_val_t was = v[k];
+        v[k] = one;
+        have[k] = true;
+        if (outline_rest(s, c, parts, v, have))
+            return true;
+        v[k] = was;
+        have[k] = false;
+        c->i = at;
+    }
+    return false;
+}
+
+// `outline` (CSS UI 4 § 3.1): a width, a style and a colour, any order,
+// each at most once (outline_rest); each left out is its initial value
+// (medium, none, auto).
+static bool outline_shorthand(Sets *s, VCur *c)
+{
+    static const Longhand kParts[3] = {
+        {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+        {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}};
+    garb_val_t v[3] = {kw("medium"), kw("none"), kw("auto")};
+    bool have[3] = {false, false, false};
+    if (vc_done(c) || !outline_rest(s, c, kParts, v, have))
+        return false;
+    for (int k = 0; k < 3; k++)
+        set(s, kParts[k].prop, &v[k]);
+    return true;
+}
+
+static bool shorthand(Sets *s, VCur *c, Shorthand sh)
+{
+    static const garb_prop_t kAll[4] = {0, 1, 2, 3};
+    garb_val_t x, y;
+    const char *k;
+    switch (sh) {
+    case SH_MARGIN: return box4(s, c, GARB_MARGIN_TOP, margin_one);
+    case SH_PADDING: return box4(s, c, GARB_PADDING_TOP, padding_one);
+    // Position 3 § 3.1.1: the margin's one-to-four, top right bottom left.
+    case SH_INSET: return box4(s, c, GARB_TOP, margin_one);
+    case SH_BORDER: return border_side(s, c, kAll, 4);
+    case SH_BORDER_TOP: case SH_BORDER_RIGHT: case SH_BORDER_BOTTOM: case SH_BORDER_LEFT: {
+        garb_prop_t side = (garb_prop_t)(sh - SH_BORDER_TOP);
+        return border_side(s, c, &side, 1);
+    }
+    case SH_BORDER_WIDTH: return box4(s, c, GARB_BORDER_TOP_WIDTH, bwidth_one);
+    case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
+    case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
+    case SH_BACKGROUND: return background(s, c);
+    case SH_ANIMATION: return animation(s, c);
+    case SH_OUTLINE: return outline_shorthand(s, c);
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK: {
+        const garb_prop_t sides[2] = {sh == SH_BORDER_INLINE ? 3 : 0,
+                                      sh == SH_BORDER_INLINE ? 1 : 2};
+        return border_side(s, c, sides, 2);
+    }
+    case SH_MARGIN_INLINE: case SH_MARGIN_BLOCK: case SH_INSET_INLINE: case SH_INSET_BLOCK:
+        return logical_pair(s, c, pair_of(sh), margin_one);
+    case SH_PADDING_INLINE: case SH_PADDING_BLOCK:
+        return logical_pair(s, c, pair_of(sh), padding_one);
+    case SH_BORDER_INLINE_WIDTH: case SH_BORDER_BLOCK_WIDTH:
+        return logical_pair(s, c, pair_of(sh), bwidth_one);
+    case SH_BORDER_INLINE_STYLE: case SH_BORDER_BLOCK_STYLE:
+        return logical_pair(s, c, pair_of(sh), bstyle_one);
+    case SH_BORDER_INLINE_COLOR: case SH_BORDER_BLOCK_COLOR:
+        return logical_pair(s, c, pair_of(sh), bcolor_one);
+    case SH_BACKGROUND_POSITION: {
+        // A position per layer, each split into its two longhands' lists.
+        Layers xs = {0}, ys = {0};
+        bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
+        while (ok) {
+            if (!position(s, c, true, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+                ok = false;
+                break;
+            }
+            if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+                break;
+            c->i++;
+        }
+        ok = ok && vc_done(c);
+        ok = layers_done(s, &xs, &x) && ok;     // each list freed, whatever
+        ok = layers_done(s, &ys, &y) && ok;
+        if (!ok)
+            return false;
+        set(s, GARB_BACKGROUND_POSITION_X, &x);
+        set(s, GARB_BACKGROUND_POSITION_Y, &y);
+        return true;
+    }
+    case SH_FONT: return font_shorthand(s, c);
+    case SH_BORDER_RADIUS: return radius_shorthand(s, c);
+    case SH_LIST_STYLE: return list_style(s, c);
+    case SH_TEXT_DECORATION: return text_decoration(s, c);
+    case SH_FLEX: return flex_shorthand(s, c);
+    case SH_FLEX_FLOW: {
+        // Flexbox 1 § 5.3: a direction and a wrap, either order, each at
+        // most once; the one left out is its initial value.
+        garb_val_t dir = kw("row"), wrap = kw("nowrap");
+        bool have_dir = false, have_wrap = false;
+        while (!vc_done(c)) {
+            if (!have_dir && knows(s, GARB_FLEX_DIRECTION) &&
+                (k = vc_keyword(c, kFlexDirection)) != NULL) {
+                dir = kw(k);
+                have_dir = true;
+            } else if (!have_wrap && knows(s, GARB_FLEX_WRAP) &&
+                       (k = vc_keyword(c, kFlexWrap)) != NULL) {
+                wrap = kw(k);
+                have_wrap = true;
+            } else {
+                return false;
+            }
+        }
+        if (!have_dir && !have_wrap)
+            return false;
+        set(s, GARB_FLEX_DIRECTION, &dir);
+        set(s, GARB_FLEX_WRAP, &wrap);
+        return true;
+    }
+    case SH_GAP: {
+        // Box Alignment 3 § 8.3: a row gap and a column gap, the second
+        // the first when it is left out.
+        const Longhand gap = {GARB_ROW_GAP, G_GAP, NULL};
+        if (!longhand_one(s, c, &gap, &x))
+            return false;
+        y = x;
+        int given = 1;
+        if (!vc_done(c)) {
+            if (!longhand_one(s, c, &gap, &y))
+                return false;
+            given = 2;
+        }
+        if (!vc_done(c) || !pair_known(s, GARB_ROW_GAP, GARB_COLUMN_GAP, given))
+            return false;
+        set(s, GARB_ROW_GAP, &x);
+        set(s, GARB_COLUMN_GAP, &y);
+        return true;
+    }
+    case SH_GRID_COLUMN: case SH_GRID_ROW: {
+        garb_val_t two[2];
+        garb_prop_t start = sh == SH_GRID_COLUMN ? GARB_GRID_COLUMN_START : GARB_GRID_ROW_START;
+        const garb_prop_t ends[2] = {start, (garb_prop_t)(start + 1)};
+        if (!grid_lines(s, c, ends, two, 2))
+            return false;
+        set(s, start, &two[0]);
+        set(s, (garb_prop_t)(start + 1), &two[1]);
+        return true;
+    }
+    case SH_GRID_AREA: {
+        garb_val_t four[4];
+        static const garb_prop_t kArea[4] = {GARB_GRID_ROW_START, GARB_GRID_COLUMN_START,
+                                             GARB_GRID_ROW_END, GARB_GRID_COLUMN_END};
+        if (!grid_lines(s, c, kArea, four, 4))
+            return false;
+        set(s, GARB_GRID_ROW_START, &four[0]);
+        set(s, GARB_GRID_COLUMN_START, &four[1]);
+        set(s, GARB_GRID_ROW_END, &four[2]);
+        set(s, GARB_GRID_COLUMN_END, &four[3]);
+        return true;
+    }
+    case SH_PLACE_ITEMS: case SH_PLACE_SELF: case SH_PLACE_CONTENT: {
+        // Box Alignment 3 § 5: the align value, then the justify value,
+        // which is the align value when it is left out.
+        static const Longhand kPlace[3][2] = {
+            {{GARB_ALIGN_ITEMS, G_ALIGN, kAlignItems}, {GARB_JUSTIFY_ITEMS, G_ALIGN, kJustifyItems}},
+            {{GARB_ALIGN_SELF, G_ALIGN, kAlignSelf}, {GARB_JUSTIFY_SELF, G_ALIGN, kJustifySelf}},
+            {{GARB_ALIGN_CONTENT, G_ALIGN, kAlignContent},
+             {GARB_JUSTIFY_CONTENT, G_ALIGN, kJustify}},
+        };
+        const Longhand *pair = kPlace[sh - SH_PLACE_ITEMS];
+        if (!longhand_one(s, c, &pair[0], &x))
+            return false;
+        if (!pair_known(s, pair[0].prop, pair[1].prop, vc_done(c) ? 1 : 2))
+            return false;
+        if (vc_done(c)) {
+            VCur again = {&(garb_value_t){.kind = GARB_IDENT, .text = x.keyword,
+                                           .len = (uint32_t)os64_strlen(x.keyword)}, 1, 0};
+            if (!longhand_one(s, &again, &pair[1], &y))
+                return false;
+        } else if (!longhand_one(s, c, &pair[1], &y) || !vc_done(c)) {
+            return false;
+        }
+        set(s, pair[0].prop, &x);
+        set(s, pair[1].prop, &y);
+        return true;
+    }
+    case SH_OVERFLOW:
+        if ((k = vc_keyword(c, kOverflow)) == NULL)
+            return false;
+        x = kw(k);
+        y = x;
+        if ((k = vc_keyword(c, kOverflow)) != NULL)
+            y = kw(k);
+        if (!vc_done(c) || !pair_known(s, GARB_OVERFLOW_X, GARB_OVERFLOW_Y, k != NULL ? 2 : 1))
+            return false;
+        set(s, GARB_OVERFLOW_X, &x);
+        set(s, GARB_OVERFLOW_Y, &y);
+        return true;
+    }
+    return false;
+}
+
+// The legacy name aliases that are read — the Compatibility Standard's (§
+// 3.4.1), and those a specification names itself: a prefixed name every
+// engine reads as its standard twin is no one engine's dialect, so it is
+// the twin — a longhand's or a shorthand's. `modern` as Prop's; an alias
+// of a marked twin is unknown with it anyway.
+static const struct {
+    const char *name, *twin;
+    bool modern;
+} kAliases[] = {
+    {"word-wrap", "overflow-wrap", true},       // Text 3 § 5.4
+    {"-webkit-background-clip", "background-clip", false},
+    {"-webkit-transform", "transform", false},
+    {"-webkit-transform-origin", "transform-origin", false},
+    {"-webkit-animation", "animation", false},
+    {"-webkit-animation-name", "animation-name", false},
+    {"-webkit-animation-duration", "animation-duration", false},
+    {"-webkit-animation-timing-function", "animation-timing-function", false},
+    {"-webkit-animation-iteration-count", "animation-iteration-count", false},
+    {"-webkit-animation-direction", "animation-direction", false},
+    {"-webkit-animation-play-state", "animation-play-state", false},
+    {"-webkit-animation-delay", "animation-delay", false},
+    {"-webkit-animation-fill-mode", "animation-fill-mode", false},
+};
+
+// CSS Logical 1's flow-relative longhands (§ 4) and the border sides'
+// shorthands, each the physical name it maps to in a horizontal,
+// left-to-right writing mode — the only one libflow lays out — so the
+// cascade orders a flow-relative declaration against its physical twin by
+// importance, specificity and order as one property, which is what the
+// standard's mapping comes to for one writing mode. All marked: the Modern
+// Web arc added them. `direction: rtl`, which flips inline start and end,
+// is not read (DEBTS.md).
+static const struct {
+    const char *name, *twin;
+} kLogical[] = {
+    {"inline-size", "width"}, {"block-size", "height"},
+    {"min-inline-size", "min-width"}, {"min-block-size", "min-height"},
+    {"max-inline-size", "max-width"}, {"max-block-size", "max-height"},
+    {"margin-inline-start", "margin-left"}, {"margin-inline-end", "margin-right"},
+    {"margin-block-start", "margin-top"}, {"margin-block-end", "margin-bottom"},
+    {"padding-inline-start", "padding-left"}, {"padding-inline-end", "padding-right"},
+    {"padding-block-start", "padding-top"}, {"padding-block-end", "padding-bottom"},
+    {"inset-inline-start", "left"}, {"inset-inline-end", "right"},
+    {"inset-block-start", "top"}, {"inset-block-end", "bottom"},
+    {"border-inline-start", "border-left"}, {"border-inline-end", "border-right"},
+    {"border-block-start", "border-top"}, {"border-block-end", "border-bottom"},
+    {"border-inline-start-width", "border-left-width"},
+    {"border-inline-end-width", "border-right-width"},
+    {"border-block-start-width", "border-top-width"},
+    {"border-block-end-width", "border-bottom-width"},
+    {"border-inline-start-style", "border-left-style"},
+    {"border-inline-end-style", "border-right-style"},
+    {"border-block-start-style", "border-top-style"},
+    {"border-block-end-style", "border-bottom-style"},
+    {"border-inline-start-color", "border-left-color"},
+    {"border-inline-end-color", "border-right-color"},
+    {"border-block-start-color", "border-top-color"},
+    {"border-block-end-color", "border-bottom-color"},
+};
+
+// Whether a name is a flow-relative one (kLogical's, or a pair's): the
+// Quirks standard's unitless lengths (§ 3.2) are the physical properties'
+// alone, so a declaration by one of these names is read without them.
+static bool logical_name(const char *name, size_t len)
+{
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(name, len, kLogical[k].name))
+            return true;
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return pair_of(kShorthands[k].sh) >= 0 || kShorthands[k].sh == SH_BORDER_INLINE ||
+                   kShorthands[k].sh == SH_BORDER_BLOCK;
+    return false;
+}
+
+// The name a declaration's name stands for: its twin's when it is an
+// alias or a flow-relative longhand, else itself. False for one marked
+// modern when those are not known, which names nothing.
+static bool unalias(const char **name, size_t *len, bool modern_off)
+{
+    for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
+        if (ieq(*name, *len, kAliases[k].name)) {
+            *name = kAliases[k].twin;
+            *len = os64_strlen(kAliases[k].twin);
+            return !(modern_off && marked(kAliases[k].name, kAliases[k].modern));
+        }
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(*name, *len, kLogical[k].name)) {
+            *name = kLogical[k].twin;
+            *len = os64_strlen(kLogical[k].twin);
+            return !(modern_off && marked(kLogical[k].name, true));
+        }
+    return true;
+}
+
+// The longhand a declaration's name names, by its own name or an alias;
+// NULL for none. These two are where a name is known or not, so they are
+// where `modern_off` takes the marked names away.
+static const Longhand *longhand_named(const char *name, size_t len, bool modern_off)
+{
+    if (!unalias(&name, &len, modern_off))
+        return NULL;
+    for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
+        if (ieq(name, len, kProps[kLonghands[k].prop].name))
+            return modern_off && garb_prop_modern(kLonghands[k].prop) ? NULL : &kLonghands[k];
+    return NULL;
+}
+
+// The shorthand a declaration's name names, by its own name or an alias;
+// -1 for none.
+static int shorthand_named(const char *name, size_t len, bool modern_off)
+{
+    if (!unalias(&name, &len, modern_off))
+        return -1;
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return modern_off && marked(kShorthands[k].name, kShorthands[k].modern)
+                       ? -1 : (int)kShorthands[k].sh;
+    return -1;
+}
+
+int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_t *out)
+{
+    const Longhand *l = longhand_named(name, len, modern_off);
+    if (l != NULL) {
+        out[0] = l->prop;
+        return 1;
+    }
+    int sh = shorthand_named(name, len, modern_off);
+    int32_t n = sh >= 0 ? shorthand_longhands((Shorthand)sh, out) : 0, kept = 0;
+    for (int32_t k = 0; k < n; k++)
+        if (!(modern_off && garb_prop_modern(out[k])))
+            out[kept++] = out[k];
+    return kept;
+}
+
+#define NSHORTHANDS ((int32_t)(sizeof(kShorthands) / sizeof(kShorthands[0])))
+#define NALIASES ((int32_t)(sizeof(kAliases) / sizeof(kAliases[0])))
+#define NLOGICAL ((int32_t)(sizeof(kLogical) / sizeof(kLogical[0])))
+
+const char *garb_prop_name_at(int32_t k)
+{
+    if (k < 0)
+        return NULL;
+    if (k < GARB_NPROPS)
+        return kProps[k].name;
+    k -= GARB_NPROPS;
+    if (k < NSHORTHANDS)
+        return kShorthands[k].name;
+    k -= NSHORTHANDS;
+    if (k < NALIASES)
+        return kAliases[k].name;
+    k -= NALIASES;
+    return k < NLOGICAL ? kLogical[k].name : NULL;
+}
+
+bool garb_prop_known(const char *name, size_t len, bool modern_off)
+{
+    garb_prop_t props[GARB_SETS_MAX];
+    return prop_longhands(name, len, modern_off, props) > 0;
+}
+
+// ── Declarations ────────────────────────────────────────────────────────
+
+// var() and env() alike: each is replaced before the value can be read
+// (Custom Properties 1 § 3, Environment Variables 1 § 3).
+static bool has_var(const garb_value_t *v, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_FUNCTION &&
+            (ieq(v[i].text, v[i].len, "var") || ieq(v[i].text, v[i].len, "env")))
+            return true;
+        if ((v[i].kind == GARB_FUNCTION || v[i].kind == GARB_BLOCK) &&
+            has_var(v[i].children, v[i].nchildren))
+            return true;
+    }
+    return false;
+}
+
+bool garb_decl_has_var(const garb_decl_t *decl)
+{
+    return has_var(decl->value, decl->nvalue);
+}
+
+bool garb_decl_is_custom(const garb_decl_t *decl)
+{
+    return decl->len >= 2 && decl->name[0] == '-' && decl->name[1] == '-';
+}
+
+int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, garb_reading_t how,
+                              garb_set_t *out)
+{
+    Sets s = {out, 0, {owner->arena, false}, how.quirks && !logical_name(decl->name, decl->len),
+              how.modern_off};
+    VCur c = {decl->value, decl->nvalue, 0};
+    const Longhand *l = longhand_named(decl->name, decl->len, how.modern_off);
+    int sh = l == NULL ? shorthand_named(decl->name, decl->len, how.modern_off) : -1;
+    if (l == NULL && sh < 0)
+        return 0;
+    if (garb_decl_has_var(decl))
+        return GARB_DECL_HELD;
+    // A CSS-wide keyword alone reaches every longhand the property sets.
+    const char *wide = vc_keyword(&c, kWide);
+    if (wide != NULL) {
+        if (!vc_done(&c))
+            return GARB_DECL_INVALID;
+        garb_val_t v = {0};
+        v.kind = GARB_V_WIDE;
+        v.keyword = wide;
+        if (l != NULL) {
+            set(&s, l->prop, &v);
+        } else {
+            garb_prop_t props[16];
+            int n = shorthand_longhands((Shorthand)sh, props);
+            for (int k = 0; k < n; k++)
+                set(&s, props[k], &v);
+        }
+        return s.n;
+    }
+    bool ok;
+    if (l != NULL) {
+        garb_val_t v;
+        ok = longhand(&s, &c, l, &v) && vc_done(&c);
+        if (ok)
+            set(&s, l->prop, &v);
+    } else {
+        ok = shorthand(&s, &c, (Shorthand)sh);
+    }
+    if (s.a.short_of_memory)
+        owner->incomplete = true;
+    return ok && !s.a.short_of_memory ? s.n : GARB_DECL_INVALID;
+}
+
+// ── Writing a value back ────────────────────────────────────────────────
+
+typedef struct {
+    char *out;
+    size_t cap, len;
+} Out;
+
+static void put(Out *o, const char *s)
+{
+    for (; *s != '\0'; s++, o->len++)
+        if (o->len + 1 < o->cap)
+            o->out[o->len] = *s;
+    if (o->cap > 0)
+        o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
+}
+
+static void put_n(Out *o, const char *s, size_t n)
+{
+    for (size_t k = 0; k < n; k++, o->len++)
+        if (o->len + 1 < o->cap)
+            o->out[o->len] = s[k];
+    if (o->cap > 0)
+        o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
+}
+
+// A number to six decimal places, the zeros after them trimmed — how
+// Color 4 serializes a channel, and plenty for a length. One past what an
+// int64_t holds (1e300px is a valid length), or not a number at all, is
+// written by the parser's own writer, which tests the range before any
+// cast.
+static void num(Out *o, double v)
+{
+    char b[64];
+    if (!(v < 1e15 && v > -1e15)) {
+        garb_format_double(b, sizeof(b), v);
+        put(o, b);
+        return;
+    }
+    bool neg = v < 0;
+    if (neg)
+        v = -v;
+    int64_t whole = (int64_t)v;
+    int64_t frac = (int64_t)((v - (double)whole) * 1e6 + 0.5);
+    if (frac >= 1000000) {
+        whole++;
+        frac -= 1000000;
+    }
+    if (frac == 0) {
+        os64_snprintf(b, sizeof(b), "%s%ld", neg && whole != 0 ? "-" : "", (long)whole);
+    } else {
+        char f[8];
+        os64_snprintf(f, sizeof(f), "%06ld", (long)frac);
+        int end = 6;
+        while (end > 0 && f[end - 1] == '0')
+            end--;
+        f[end] = '\0';
+        os64_snprintf(b, sizeof(b), "%s%ld.%s", neg ? "-" : "", (long)whole, f);
+    }
+    put(o, b);
+}
+
+static const char *const kUnitNames[] = {"px", "em", "rem", "ex", "ch", "vw", "vh", "vmin",
+                                         "vmax", "pt", "pc", "cm", "mm", "in", "q", "fr",
+                                         "deg", "grad", "rad", "turn", "s", "ms"};
+
+static void val(Out *o, const garb_val_t *v);
+
+// Where a node is written: at the top (it is the whole value, so `calc(`),
+// as an argument of a comparison (bare), or inside a sum or product
+// (parenthesized).
+typedef enum { AT_TOP, AT_ARG, AT_NESTED } At;
+
+static void calc(Out *o, const garb_calc_t *c, At at)
+{
+    switch (c->op) {
+    case GARB_CALC_LEAF:
+        val(o, &c->leaf);
+        return;
+    case GARB_CALC_SUM:
+    case GARB_CALC_PRODUCT:
+        put(o, at == AT_TOP ? "calc(" : at == AT_NESTED ? "(" : "");
+        for (int32_t k = 0; k < c->nargs; k++) {
+            if (k > 0)
+                put(o, c->op == GARB_CALC_SUM ? (c->invert[k] ? " - " : " + ")
+                                              : (c->invert[k] ? " / " : " * "));
+            calc(o, c->args[k], AT_NESTED);
+        }
+        put(o, at == AT_ARG ? "" : ")");
+        return;
+    default:
+        put(o, c->op == GARB_CALC_MIN ? "min(" : c->op == GARB_CALC_MAX ? "max(" : "clamp(");
+        for (int32_t k = 0; k < c->nargs; k++) {
+            if (k > 0)
+                put(o, ", ");
+            calc(o, c->args[k], AT_ARG);
+        }
+        put(o, ")");
+        return;
+    }
+}
+
+static void val(Out *o, const garb_val_t *v)
+{
+    // An image is written by its function's name alone, whatever a gradient
+    // carries of itself.
+    if (v->kind == GARB_V_IMAGE) {
+        put_n(o, v->text, v->len);
+        put(o, "(...)");
+        return;
+    }
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span")) {
+        put(o, "span ");            // a keyword and its argument, not a call
+        val(o, &v->items[0]);
+        return;
+    }
+    if (v->kind == GARB_V_FUNCTION) {
+        put(o, v->keyword);
+        put(o, "(");
+        // drop-shadow's colour and lengths are written apart, not listed.
+        const char *between = os64_streq(v->keyword, "drop-shadow") ? " " : ", ";
+        for (int32_t k = 0; k < v->nitems; k++) {
+            if (k > 0)
+                put(o, between);
+            val(o, &v->items[k]);
+        }
+        put(o, ")");
+        return;
+    }
+    if (v->kind == GARB_V_RATIO) {
+        put(o, v->keyword != NULL ? "auto " : "");
+        val(o, &v->items[0]);
+        put(o, " / ");
+        val(o, &v->items[1]);
+        return;
+    }
+    if (v->nitems > 0) {
+        for (int32_t k = 0; k < v->nitems; k++) {
+            if (k > 0)
+                put(o, v->comma ? ", " : " ");
+            val(o, &v->items[k]);
+        }
+        return;
+    }
+    switch (v->kind) {
+    case GARB_V_KEYWORD:
+    case GARB_V_WIDE: put(o, v->keyword); break;
+    case GARB_V_LENGTH:
+    case GARB_V_ANGLE:
+    case GARB_V_TIME: num(o, v->number); put(o, kUnitNames[v->unit]); break;
+    case GARB_V_PERCENTAGE: num(o, v->number); put(o, "%"); break;
+    case GARB_V_NUMBER: num(o, v->number); break;
+    case GARB_V_COLOR:
+        if (v->color.current) {
+            put(o, "currentcolor");
+            break;
+        }
+        put(o, v->color.a < 1 ? "rgba(" : "rgb(");
+        num(o, v->color.r);
+        put(o, ", ");
+        num(o, v->color.g);
+        put(o, ", ");
+        num(o, v->color.b);
+        if (v->color.a < 1) {
+            put(o, ", ");
+            num(o, v->color.a);
+        }
+        put(o, ")");
+        break;
+    case GARB_V_URL: put(o, "url("); put_n(o, v->text, v->len); put(o, ")"); break;
+    case GARB_V_STRING: put(o, "\""); put_n(o, v->text, v->len); put(o, "\""); break;
+    case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
+    case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
+    case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: case GARB_V_FUNCTIONS:
+    case GARB_V_RATIO:
+        break;                      // always with items, above
+    }
+}
+
+size_t garb_val_dump(const garb_val_t *v, char *out, size_t cap)
+{
+    Out o = {out, cap, 0};
+    if (cap > 0)
+        out[0] = '\0';
+    val(&o, v);
+    return o.len;
+}

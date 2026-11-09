@@ -1,0 +1,114 @@
+# libdom binds the script-visible document to libhtml and persistent libpage
+# control state. Consumers acquire these edges through this shared library.
+LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c \
+    libdom/event.c libdom/timer.c libdom/window.c libdom/geometry.c libdom/classic.c libdom/style.c \
+    libdom/mixin.c libdom/modern.c libdom/view.c
+# The Modern Web's slice 1a: storage, performance, URL, encoding, screen, base64.
+LIBDOM_SRCS += libdom/storage.c libdom/performance.c libdom/url.c libdom/encoding.c libdom/screen.c \
+    libdom/base64.c
+# Slice 0c: DOMImplementation and the documents it makes.
+LIBDOM_SRCS += libdom/implementation.c
+# Slice 0d: Element.attributes, NamedNodeMap and Attr.
+LIBDOM_SRCS += libdom/attr.c
+# The Modern Web's slice 2: fetch and its objects, XMLHttpRequest, DOMException.
+LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
+# P1-W: window as a browsing context, its BarProps and external; crypto.
+LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
+# crypto.subtle (WEB_CRYPTO.md): the binding and its pure core, over the
+# BearSSL objects it calls, linked privately (libtls.so exports none of them;
+# tools/subtle_bearssl.sh is the host harnesses' copy of this list, held equal
+# to it by tools/test_subtle_core_host.sh).
+LIBDOM_SRCS += libdom/subtle.c libdom/subtle_core.c
+LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 hash/sha2small hash/sha2big \
+    codec/dec32be codec/enc32be codec/dec64be codec/enc64be codec/dec32le codec/enc32le codec/dec64le codec/enc64le \
+    symcipher/aes_common symcipher/aes_ct64 symcipher/aes_ct64_enc symcipher/aes_ct64_dec symcipher/aes_ct64_cbcenc \
+    symcipher/aes_ct64_cbcdec symcipher/aes_ct64_ctr aead/gcm hash/ghash_ctmul64 mac/hmac kdf/hkdf \
+    ec/ec_p256_m31 ec/ec_prime_i31 ec/ec_secp256r1 ec/ec_secp384r1 ec/ec_secp521r1 ec/ec_keygen \
+    ec/ecdsa_i31_sign_raw ec/ecdsa_i31_vrfy_raw ec/ecdsa_i31_bits rand/hmac_drbg codec/ccopy \
+    int/i31_add int/i31_bitlen int/i31_decmod int/i31_decode int/i31_encode int/i31_fmont \
+    int/i31_iszero int/i31_modpow int/i31_montmul int/i31_muladd int/i31_ninv31 int/i31_rshift \
+    int/i31_sub int/i31_tmont int/i32_div32)
+# The frames row (IFRAME.md): HTMLIFrameElement.
+LIBDOM_SRCS += libdom/frames.c
+# P2a: a script's failures, as the window's error and rejection events.
+LIBDOM_SRCS += libdom/report.c
+# P1-Da: the document's state reads and document.body's setter.
+LIBDOM_SRCS += libdom/document.c
+# P2b: the structured clone, same-window postMessage, idle callbacks.
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/webanimation.c libdom/pointer.c
+# INTERSECTION_OBSERVER.md: DOMRect, IntersectionObserver and ResizeObserver.
+LIBDOM_SRCS += libdom/rect.c libdom/intersection.c libdom/resize.c libdom/kept.c libdom/css.c
+# DOM § 6: TreeWalker, NodeIterator and NodeFilter.
+LIBDOM_SRCS += libdom/walker.c
+# SHADOW_DOM.md § 7: shadow trees' script surface.
+LIBDOM_SRCS += libdom/shadow.c
+# RANGE.md § 5-§ 6: AbstractRange, Range, StaticRange.
+LIBDOM_SRCS += libdom/range.c
+# CDATASection and ProcessingInstruction, and Document's members that make them.
+LIBDOM_SRCS += libdom/data_nodes.c
+# RANGE.md § 8: elementFromPoint and elementsFromPoint.
+LIBDOM_SRCS += libdom/hit.c
+# 0f P1a: the select's options and the Option factory.
+LIBDOM_SRCS += libdom/options.c
+# 0f P2's core: the text controls' selection and the window's Selection.
+LIBDOM_SRCS += libdom/selection.c
+# 0f P3a: the controls' reflections, form owner and labels.
+LIBDOM_SRCS += libdom/controls.c
+# 0f P6a: the element kinds whose members are reflections.
+LIBDOM_SRCS += libdom/elements.c
+# 0f P6b: the tables' tree verbs and collections.
+LIBDOM_SRCS += libdom/tables.c
+# 0f P3b: the form's, label's, fieldset's, legend's and output's own members.
+LIBDOM_SRCS += libdom/forms.c
+# 0f P4: constraint validation.
+LIBDOM_SRCS += libdom/validity.c
+# Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
+LIBDOM_SRCS += libdom/compare.c
+LIBDOM_SRCS += libdom/sheets.c libdom/adopted.c libdom/point.c libdom/svg_geometry.c libdom/image_data.c libdom/canvas.c libdom/canvas_path.c libdom/canvas_path2d.c libdom/canvas_text.c libdom/canvas_image.c libdom/mutation.c
+# Import maps: the map's JSON and HTMLScriptElement.supports.
+LIBDOM_SRCS += libdom/importmap.c
+# Custom elements: the registry, upgrades and their reactions.
+LIBDOM_SRCS += libdom/custom.c
+# MutationObserver, fed by the same listener.
+LIBDOM_SRCS += libdom/observer.c
+# The Streams standard: streams.js, carried in streams.c's object.
+LIBDOM_SRCS += libdom/streams.c
+LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
+$(OBJ)/pic/libdom/subtle_core.c.o: LIBDOM_CFLAGS += -I$(CURDIR)/libtls/upstream/inc
+# The compiler's dependency list does not see an .incbin.
+$(OBJ)/pic/libdom/streams.c.o: libdom/streams.js
+LIBDOM_SO := $(BIN)/libdom.so
+LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
+LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/include -I$(CURDIR)/libdraw2d/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
+
+# libway for one copy of the origin and CORS rules (way/origin.h), which a
+# script's Headers and Request ask as the fetch job does.
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
+    link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
+	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
+	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
+	    -o $@ $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
+
+$(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
+	@mkdir -p "$(@D)"
+	$(CC) $(LIBDOM_CFLAGS) -c $< -o $@
+-include $(LIBDOM_OBJS:.o=.d)
+
+.PHONY: dom-library
+dom-library: $(LIBDOM_SO)
+
+# Optional geometry/stack consumer in the reserved JavaScript fixture slot.
+# It is installed into validation images, outside the standard app inventory.
+LIBDOM_GEOMETRY_TEST_OBJ := $(OBJ)/dom/geometry-test.o
+LIBDOM_GEOMETRY_TEST_ELF := $(OBJ)/dom/geometry-test
+$(LIBDOM_GEOMETRY_TEST_OBJ): libdom/tests/geometry.c libdom/include/dom/dom.h \
+    apps/yonder/geometry.h $(LIBJS_GENERATED)/.prepared libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBDOM_GEOMETRY_TEST_ELF): $(LIBDOM_GEOMETRY_TEST_OBJ) $(OBJ)/apps/yonder/geometry.c.o \
+    $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBFLOW_SO) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(BIN)/libfreetype.so $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+.PHONY: dom-geometry-test
+dom-geometry-test: $(LIBDOM_GEOMETRY_TEST_ELF)
+-include $(LIBDOM_GEOMETRY_TEST_OBJ:.o=.d)

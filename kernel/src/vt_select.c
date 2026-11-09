@@ -28,6 +28,7 @@
 
 #include "vt_select.h"
 #include "tty.h"
+#include "console.h"           // console_classify_tty — a pasted EOT is classified at the door
 #include "clipboard.h"
 #include "BasicRenderer.h"
 #include "driver/system/keyboard.h"
@@ -75,8 +76,8 @@ static bool cell_at(const tty_t *t, int32_t x, int32_t y,
 	if (t == NULL || t->rows == 0 || t->cols == 0)
 		return false;
 
-	int32_t r = (y < 0) ? 0 : y / (int32_t)FONT_HEIGHT;
-	int32_t c = (x < 0) ? 0 : x / (int32_t)FONT_WIDTH;
+	int32_t r = (y < 0) ? 0 : y / (int32_t)renderer_cell_h();
+	int32_t c = (x < 0) ? 0 : x / (int32_t)renderer_cell_w();
 	if (r >= (int32_t)t->rows) r = (int32_t)t->rows - 1;
 	if (c >= (int32_t)t->cols) c = (int32_t)t->cols - 1;
 
@@ -284,8 +285,16 @@ static void do_paste_step(tty_t *t)
 			continue;
 		}
 
+		// A pasted byte is a keystroke to the terminal: a 0x03 on a cooked
+		// terminal is the interrupt, consumed here as the keyboard path
+		// consumes it, and a 0x04 is end-of-input or the byte, decided now.
+		if (console_intr_intercept_tty(t, (char)byte)) {
+			s_paste_pos++;
+			continue;
+		}
 		keyboard_event_t ev = { .ascii = byte, .scancode = 0,
 		                        .shift = false, .ctrl = false, .alt = false };
+		console_classify_tty(t, &ev);
 		if (!tty_input_push_if_room(t, &ev))
 			return;      // ring full: the rest arrives next frame
 		s_paste_pos++;
@@ -313,7 +322,8 @@ static void paint_row_locked(tty_t *t, uint32_t r)
 
 	for (uint32_t c = 0; c < t->cols; c++) {
 		char ch = line[c].ch ? line[c].ch : ' ';
-		uint32_t color = line[c].ch ? line[c].color : t->color;
+		uint32_t fg, bg;
+		tty_cell_colors(t, &line[c], &fg, &bg);
 		bool inverse = (hl && c >= hf && c <= ht) ||
 		               (ptr_here && c == s_ptr_col);
 
@@ -322,9 +332,9 @@ static void paint_row_locked(tty_t *t, uint32_t r)
 		// gpm drew exactly this on the Linux console, and it works on any
 		// glass that can paint a character.
 		if (inverse)
-			renderer_glass_putc_bg_locked(ch, r, c, kFrameBufferBackgroundColor, color);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, bg, fg);
 		else
-			renderer_glass_putc_locked(ch, r, c, color);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, fg, bg);
 	}
 }
 

@@ -1,0 +1,130 @@
+{
+  "retrieved": "2026-10-29",
+  "method": "Static named-context member and API-name scan of six public scripts; not an execution trace or an exhaustive inventory.",
+  "scripts": [
+    {
+      "url": "https://danlegt.com/static/js/signature_wall.js",
+      "bytes": 65233,
+      "sha256": "2b6247abd711b1fd00bdf9eb813fa093bcc32aed6b98c1bf312da08b8e97a921",
+      "context_members": [
+        "clearRect",
+        "drawImage",
+        "fillRect",
+        "fillStyle",
+        "getImageData",
+        "globalAlpha",
+        "imageSmoothingEnabled",
+        "lineWidth",
+        "putImageData",
+        "restore",
+        "rotate",
+        "save",
+        "shadowBlur",
+        "shadowColor",
+        "shadowOffsetX",
+        "shadowOffsetY",
+        "strokeRect",
+        "strokeStyle",
+        "translate"
+      ],
+      "browser_dependencies": [
+        "requestAnimationFrame",
+        "setPointerCapture",
+        "ImageData",
+        "toDataURL"
+      ]
+    },
+    {
+      "url": "https://danlegt.com/static/js/scratch2000/floppy-scratch.js",
+      "bytes": 6347,
+      "sha256": "d50076be602232df2258da0deafed34219d9ca795e4d26ae7e6334affb5ec1e2",
+      "context_members": [
+        "clearRect",
+        "fillRect",
+        "globalAlpha",
+        "globalCompositeOperation"
+      ],
+      "browser_dependencies": [
+        "setPointerCapture"
+      ]
+    },
+    {
+      "url": "https://danlegt.com/static/js/scratch2000/scratch-pointer.js",
+      "bytes": 2306,
+      "sha256": "7e06c108a9bc25f9d1928ec10e013353970f04d4807632108b1183925ba62178",
+      "context_members": [],
+      "browser_dependencies": [
+        "setPointerCapture"
+      ]
+    },
+    {
+      "url": "https://danlegt.com/static/js/scratch2000/cdrom-scratch.js",
+      "bytes": 13715,
+      "sha256": "9a999584212854ee934f63ca12a318f2855c482c3f3acd055eecfd17b74b9623",
+      "context_members": [
+        "clearRect",
+        "clip",
+        "fillRect",
+        "fillStyle",
+        "getImageData",
+        "globalAlpha",
+        "globalCompositeOperation",
+        "lineWidth",
+        "restore",
+        "save",
+        "setLineDash",
+        "setTransform",
+        "stroke",
+        "strokeStyle"
+      ],
+      "browser_dependencies": [
+        "requestAnimationFrame",
+        "ImageData"
+      ]
+    },
+    {
+      "url": "https://danlegt.com/static/js/scratch2000/crt-scratch.js",
+      "bytes": 16427,
+      "sha256": "1c6b394f2f2ad481ec32fc9b23776a60114b2bd426829e66c9fbaf02562fcd7f",
+      "context_members": [
+        "clearRect",
+        "fillRect",
+        "fillStyle",
+        "getImageData",
+        "globalAlpha",
+        "globalCompositeOperation",
+        "lineWidth",
+        "restore",
+        "save",
+        "setLineDash",
+        "strokeRect",
+        "strokeStyle"
+      ],
+      "browser_dependencies": [
+        "ImageData"
+      ]
+    },
+    {
+      "url": "https://danlegt.com/static/js/scratch2000/ticket-modal.js",
+      "bytes": 27403,
+      "sha256": "3db20d6f4891968a642f1998c33fe35d967c5968c0040c1026cad7f3174b0def",
+      "context_members": [
+        "clearRect",
+        "fillRect",
+        "fillStyle",
+        "fillText",
+        "font",
+        "getImageData",
+        "globalAlpha",
+        "globalCompositeOperation",
+        "imageSmoothingEnabled",
+        "textAlign",
+        "textBaseline"
+      ],
+      "browser_dependencies": [
+        "requestAnimationFrame",
+        "ImageData"
+      ]
+    }
+  ]
+}

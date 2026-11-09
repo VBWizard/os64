@@ -1,0 +1,3 @@
+42ae856f2d8f0cdb95eb68b9803d3770e78299eec4ef8e5b82f934e94034b402  userland/bin/libimage.so
+64827342625b9dc8895bb2765adbe56f7d4be384c5ed7274a1df745f6d4f3542  userland/bin/gview
+e7d7f6ef4e2c0736668667669725711cf097f84b4e4a3c2d158fbfa7fa2cc5de  userland/bin/tests/giftest

@@ -1,0 +1,28 @@
+From 342e5809b1aa8aed02b9be1df0015fa7e1e0e244 Mon Sep 17 00:00:00 2001
+From: Werner Lemberg <wl@gnu.org>
+Date: Mon, 14 Sep 2026 12:27:09 +0200
+Subject: [PATCH] * src/cff/cffload.c (cff_index_get_name): Avoid non-null
+ `memcpy` argument.
+
+Fixes issue #1466.
+---
+ src/cff/cffload.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/cff/cffload.c b/src/cff/cffload.c
+index 9d067cfee..cfd5317ff 100644
+--- a/src/cff/cffload.c
++++ b/src/cff/cffload.c
+@@ -634,6 +634,12 @@
+     if ( error )
+       goto Exit;
+ 
++    if ( !bytes )
++    {
++      error = FT_THROW( Invalid_Table );
++      goto Exit;
++    }
++
+     if ( !FT_QALLOC( name, byte_len + 1 ) )
+     {
+       FT_MEM_COPY( name, bytes, byte_len );

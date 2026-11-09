@@ -32,8 +32,19 @@ struct tm {
 time_t mktime(struct tm *tmbuf);
 time_t mktime_simple(const struct tm *time);
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf);
+struct tm *localtime_r(const time_t *timer, struct tm *tmbuf);
+// Set the kernel's standard-time offset (kTimeZoneOffsetMinutes, minutes EAST
+// of UTC) from a classic TZ string — EST5EDT, IST-5:30 — or to GMT for
+// NULL/empty or an invalid offset. Only the standard offset is taken: DST is
+// legislation, and legislation lives in libos64's calendar. Called for the
+// cmdline's TZ= at init and again with whatever zone bootenv.conf settles
+// (bootenv.c).
+void time_set_zone(const char *tz);
 void kwait(uint64_t msToWait);
 void wait(uint64_t msToWait);
+// nap() SLEEPS (parks the thread); wait() SPINS. Prefer nap() anywhere a
+// scheduler exists and no spinlock is held — see its comment in time.c.
+void nap(uint64_t msToSleep);
 void __attribute__((noinline))waitTicks(int TicksToWait);
 
 #endif // TIME_H

@@ -1,0 +1,1517 @@
+# libgarb's property grammars (GARB.md, G2b), worked by hand from the
+# specifications: each IN is one declaration, each OUT the longhands it
+# sets, `invalid` when the value does not fit its property's grammar, or
+# `unknown` for a property libgarb does not read, `held` for a value the
+# cascade reads once its var() or env() is replaced. `quirks` before an IN
+# reads it as quirks mode does. Run by tools/test_garb_suite.py.
+
+# ── The box (CSS 2.1 § 8) ──
+IN: margin: 10px
+OUT: margin-top: 10px; margin-right: 10px; margin-bottom: 10px; margin-left: 10px
+IN: margin: 1px 2px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 1px; margin-left: 2px
+IN: margin: 1px 2px 3px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 2px
+IN: margin: 1px 2px 3px 4px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px
+IN: margin: 0 auto
+OUT: margin-top: 0px; margin-right: auto; margin-bottom: 0px; margin-left: auto
+IN: margin: -5px 10%
+OUT: margin-top: -5px; margin-right: 10%; margin-bottom: -5px; margin-left: 10%
+IN: margin: 0.5em 1e2px
+OUT: margin-top: 0.5em; margin-right: 100px; margin-bottom: 0.5em; margin-left: 100px
+IN: margin: 1px 2px 3px 4px 5px
+OUT: invalid
+IN: margin: red
+OUT: invalid
+IN: margin-top: 1.5EM
+OUT: margin-top: 1.5em
+IN: margin: inherit
+OUT: margin-top: inherit; margin-right: inherit; margin-bottom: inherit; margin-left: inherit
+IN: margin: inherit 1px
+OUT: invalid
+IN: padding: 0
+OUT: padding-top: 0px; padding-right: 0px; padding-bottom: 0px; padding-left: 0px
+IN: padding: -1px
+OUT: invalid
+IN: padding: 5
+OUT: invalid
+IN: quirks padding: 5
+OUT: padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px
+IN: quirks margin-top: 7
+OUT: margin-top: 7px
+IN: quirks color: 7
+OUT: invalid
+
+# ── Borders (Backgrounds 3 § 4) ──
+IN: border: 1px solid red
+OUT: border-top-width: 1px; border-top-style: solid; border-top-color: rgb(255, 0, 0); border-right-width: 1px; border-right-style: solid; border-right-color: rgb(255, 0, 0); border-bottom-width: 1px; border-bottom-style: solid; border-bottom-color: rgb(255, 0, 0); border-left-width: 1px; border-left-style: solid; border-left-color: rgb(255, 0, 0)
+IN: border: solid
+OUT: border-top-width: medium; border-top-style: solid; border-top-color: currentcolor; border-right-width: medium; border-right-style: solid; border-right-color: currentcolor; border-bottom-width: medium; border-bottom-style: solid; border-bottom-color: currentcolor; border-left-width: medium; border-left-style: solid; border-left-color: currentcolor
+IN: border: red red
+OUT: invalid
+IN: border-top: thick double #00f
+OUT: border-top-width: thick; border-top-style: double; border-top-color: rgb(0, 0, 255)
+IN: border-left: none
+OUT: border-left-width: medium; border-left-style: none; border-left-color: currentcolor
+IN: border-width: thin medium
+OUT: border-top-width: thin; border-right-width: medium; border-bottom-width: thin; border-left-width: medium
+IN: border-style: dotted
+OUT: border-top-style: dotted; border-right-style: dotted; border-bottom-style: dotted; border-left-style: dotted
+IN: border-color: red green blue yellow
+OUT: border-top-color: rgb(255, 0, 0); border-right-color: rgb(0, 128, 0); border-bottom-color: rgb(0, 0, 255); border-left-color: rgb(255, 255, 0)
+IN: border-left-width: -1px
+OUT: invalid
+IN: border-bottom-style: wavy
+OUT: invalid
+IN: border: initial
+OUT: border-top-width: initial; border-right-width: initial; border-bottom-width: initial; border-left-width: initial; border-top-style: initial; border-right-style: initial; border-bottom-style: initial; border-left-style: initial; border-top-color: initial; border-right-color: initial; border-bottom-color: initial; border-left-color: initial
+
+# ── Held for the cascade: a var() or env() anywhere, even in a value that
+# would not parse, is read only once it is replaced ──
+IN: width: var(--w)
+OUT: held
+IN: margin: 1px env(safe-area-inset-top)
+OUT: held
+IN: color: red var(--x) nonsense
+OUT: held
+IN: --custom-thing: var(--w)
+OUT: unknown
+
+# ── Numbers past what an int64_t holds: valid, and written without a cast
+# that cannot be made (a double past int64_t's range cannot be cast to one).
+# The digits are the tokenizer's, which does not round correctly, and a
+# literal past a double's range stays the infinity it made (BROWSER_DEBTS:
+# libgarb's numbers); a hue with no precision left reads as 0 ──
+IN: width: 1e300px
+OUT: width: 1.0000000000000006e300px
+IN: line-height: 1e300
+OUT: line-height: 1.0000000000000006e300
+IN: margin-top: 1e400px
+OUT: margin-top: Infinitypx
+IN: width: calc(1e300px * 10)
+OUT: width: calc(1.0000000000000006e300px * 10)
+IN: color: hsl(1e300 50% 50%)
+OUT: color: rgb(191.25, 63.75, 63.75)
+
+# ── Sizes and calc() (Sizing 3, Values 3 § 8, Values 4 § 10) ──
+IN: width: auto
+OUT: width: auto
+IN: width: 50%
+OUT: width: 50%
+IN: width: -10px
+OUT: invalid
+IN: width: -10%
+OUT: invalid
+IN: padding-left: -5%
+OUT: invalid
+IN: width: 10
+OUT: invalid
+IN: quirks width: 10
+OUT: width: 10px
+IN: width: fit-content
+OUT: width: fit-content
+IN: width: 10PX
+OUT: width: 10px
+IN: max-width: none
+OUT: max-width: none
+IN: min-height: auto
+OUT: min-height: auto
+IN: width: calc(100% - 20px)
+OUT: width: calc(100% - 20px)
+IN: width: calc(10px + 5)
+OUT: invalid
+IN: width: calc(10px+5px)
+OUT: invalid
+IN: width: calc(10px+ 5px)
+OUT: invalid
+IN: width: calc(1em - 5px)
+OUT: width: calc(1em - 5px)
+IN: width: calc(2 * 10px)
+OUT: width: calc(2 * 10px)
+IN: width: calc(10px / 2)
+OUT: width: calc(10px / 2)
+IN: width: calc(10px / 2px)
+OUT: invalid
+IN: width: calc(10px * 2px)
+OUT: invalid
+IN: width: calc((100% - 10px) / 3)
+OUT: width: calc((100% - 10px) / 3)
+IN: height: min(50vh, 300px)
+OUT: height: min(50vh, 300px)
+IN: height: clamp(10px, 5vw + 1em, 40px)
+OUT: height: clamp(10px, 5vw + 1em, 40px)
+IN: height: clamp(10px, 40px)
+OUT: invalid
+IN: height: 100dvh
+OUT: height: 100vh
+IN: font-size: clamp(12px, 2.3cqw, 14px)
+OUT: font-size: clamp(12px, 2.3vw, 14px)
+IN: width: calc(100vw - env(safe-area-inset-left, 0px))
+OUT: held
+IN: box-sizing: border-box
+OUT: box-sizing: border-box
+
+# ── Colours (Color 4) ──
+IN: color: red
+OUT: color: rgb(255, 0, 0)
+IN: color: RED
+OUT: color: rgb(255, 0, 0)
+IN: color: #abc
+OUT: color: rgb(170, 187, 204)
+IN: color: rgb(10 20 30 / 50%)
+OUT: color: rgba(10, 20, 30, 0.5)
+IN: color: rgb(255, 50%, 0)
+OUT: invalid
+IN: color: rgb(255 50% 0)
+OUT: color: rgb(255, 127.5, 0)
+IN: color: rgba(100%, 0%, 0%, .25)
+OUT: color: rgba(255, 0, 0, 0.25)
+IN: color: currentColor
+OUT: color: currentcolor
+IN: color: transparent
+OUT: color: rgba(0, 0, 0, 0)
+IN: color: lab(50 20 30)
+OUT: invalid
+IN: color: red blue
+OUT: invalid
+IN: color: inherit
+OUT: color: inherit
+IN: background-color: #fff8
+OUT: background-color: rgba(255, 255, 255, 0.533333)
+
+# ── Display and flow ──
+IN: display: block
+OUT: display: block
+IN: display: BLOCK
+OUT: display: block
+IN: display: inline-flex
+OUT: display: inline-flex
+IN: display: run-in
+OUT: invalid
+IN: float: left
+OUT: float: left
+IN: clear: both
+OUT: clear: both
+IN: overflow: hidden
+OUT: overflow-x: hidden; overflow-y: hidden
+IN: overflow: hidden auto
+OUT: overflow-x: hidden; overflow-y: auto
+IN: overflow: sideways
+OUT: invalid
+IN: visibility: hidden
+OUT: visibility: hidden
+
+# ── Fonts (Fonts 4 § 2-3) ──
+IN: font-family: Arial
+OUT: font-family: "Arial"
+IN: font-family: "Times New Roman", serif
+OUT: font-family: "Times New Roman", serif
+IN: font-family: Helvetica   Neue, sans-serif
+OUT: font-family: "Helvetica Neue", sans-serif
+IN: font-family: Noto Serif, serif
+OUT: font-family: "Noto Serif", serif
+IN: font-family: inherit
+OUT: font-family: inherit
+IN: font-family: Arial, inherit
+OUT: invalid
+IN: font-family: 10px
+OUT: invalid
+IN: font-family: Arial,
+OUT: invalid
+IN: font-size: 12px
+OUT: font-size: 12px
+IN: font-size: larger
+OUT: font-size: larger
+IN: font-size: 150%
+OUT: font-size: 150%
+IN: font-size: -1px
+OUT: invalid
+IN: quirks font-size: 12
+OUT: font-size: 12px
+IN: font-weight: bold
+OUT: font-weight: bold
+IN: font-weight: 700
+OUT: font-weight: 700
+IN: font-weight: 1001
+OUT: invalid
+IN: font-weight: 0
+OUT: invalid
+IN: font-style: oblique 10deg
+OUT: font-style: oblique
+IN: line-height: 1.5
+OUT: line-height: 1.5
+IN: line-height: 120%
+OUT: line-height: 120%
+IN: line-height: -1
+OUT: invalid
+IN: font: 12px Arial
+OUT: font-style: normal; font-variant: normal; font-weight: normal; font-size: 12px; line-height: normal; font-family: "Arial"
+IN: font: bold italic 13px/1.4 "MS Sans Serif", Tahoma, sans-serif
+OUT: font-style: italic; font-variant: normal; font-weight: bold; font-size: 13px; line-height: 1.4; font-family: "MS Sans Serif", "Tahoma", sans-serif
+IN: font: italic small-caps 700 condensed 16px serif
+OUT: font-style: italic; font-variant: small-caps; font-weight: 700; font-size: 16px; line-height: normal; font-family: serif
+IN: font: 12px
+OUT: invalid
+IN: font: Arial 12px
+OUT: invalid
+IN: font: bold bold 12px x
+OUT: invalid
+IN: font: menu
+OUT: font-family: system-ui; font-size: medium; font-weight: normal; font-style: normal; font-variant: normal; line-height: normal
+IN: font: inherit
+OUT: font-style: inherit; font-variant: inherit; font-weight: inherit; font-size: inherit; line-height: inherit; font-family: inherit
+
+# ── Text ──
+IN: text-align: center
+OUT: text-align: center
+IN: text-align: -webkit-center
+OUT: invalid
+IN: vertical-align: middle
+OUT: vertical-align: middle
+IN: vertical-align: -2px
+OUT: vertical-align: -2px
+IN: white-space: pre-line
+OUT: white-space: pre-line
+IN: text-decoration: underline
+OUT: text-decoration-line: underline
+IN: text-decoration: none
+OUT: text-decoration-line: none
+IN: text-decoration: underline overline
+OUT: text-decoration-line: underline overline
+IN: text-decoration: underline red wavy
+OUT: text-decoration-line: underline
+IN: text-decoration: underline underline
+OUT: invalid
+IN: text-indent: -10px
+OUT: text-indent: -10px
+IN: text-indent: 5% hanging
+OUT: text-indent: 5%
+IN: text-indent: each-line 1em hanging
+OUT: text-indent: 1em
+IN: text-indent: hanging 20% hanging
+OUT: invalid
+IN: text-indent: each-line each-line 1em
+OUT: invalid
+IN: text-transform: uppercase
+OUT: text-transform: uppercase
+
+# ── Lists and tables ──
+IN: list-style: none
+OUT: list-style-type: none; list-style-position: outside; list-style-image: none
+IN: list-style: square inside
+OUT: list-style-type: square; list-style-position: inside; list-style-image: none
+IN: list-style: url(dot.gif)
+OUT: list-style-type: disc; list-style-position: outside; list-style-image: url(dot.gif)
+IN: list-style: none url(x.png)
+OUT: list-style-type: none; list-style-position: outside; list-style-image: url(x.png)
+IN: list-style-type: Decimal
+OUT: list-style-type: decimal
+IN: list-style-type: "-"
+OUT: list-style-type: "-"
+IN: border-spacing: 2px
+OUT: border-spacing: 2px 2px
+IN: border-spacing: 1px 3px
+OUT: border-spacing: 1px 3px
+# ── Corners (Backgrounds 3 § 5.1) ──
+IN: border-top-left-radius: 4px
+OUT: border-top-left-radius: 4px 4px
+IN: border-bottom-right-radius: 10% 2em
+OUT: border-bottom-right-radius: 10% 2em
+IN: border-top-right-radius: -1px
+OUT: invalid
+IN: border-top-right-radius: 1px 2px 3px
+OUT: invalid
+IN: border-radius: 5px
+OUT: border-top-left-radius: 5px 5px; border-top-right-radius: 5px 5px; border-bottom-right-radius: 5px 5px; border-bottom-left-radius: 5px 5px
+IN: border-radius: 1px 2px 3px
+OUT: border-top-left-radius: 1px 1px; border-top-right-radius: 2px 2px; border-bottom-right-radius: 3px 3px; border-bottom-left-radius: 2px 2px
+IN: border-radius: 1px 2px 3px 4px / 5px 6px
+OUT: border-top-left-radius: 1px 5px; border-top-right-radius: 2px 6px; border-bottom-right-radius: 3px 5px; border-bottom-left-radius: 4px 6px
+IN: border-radius: 50%
+OUT: border-top-left-radius: 50% 50%; border-top-right-radius: 50% 50%; border-bottom-right-radius: 50% 50%; border-bottom-left-radius: 50% 50%
+IN: border-radius: 1px /
+OUT: invalid
+IN: border-radius: / 1px
+OUT: invalid
+IN: border-radius: inherit
+OUT: border-top-left-radius: inherit; border-top-right-radius: inherit; border-bottom-right-radius: inherit; border-bottom-left-radius: inherit
+# ── Shadows (Backgrounds 3 § 7.1; Text Decoration 3 § 4) ──
+IN: box-shadow: none
+OUT: box-shadow: none
+IN: box-shadow: 2px 3px
+OUT: box-shadow: 2px 3px 0px 0px currentcolor
+IN: box-shadow: red 2px 3px 4px
+OUT: box-shadow: 2px 3px 4px 0px rgb(255, 0, 0)
+IN: box-shadow: inset 0 0 5px 2px rgba(0, 0, 0, 0.5)
+OUT: box-shadow: inset 0px 0px 5px 2px rgba(0, 0, 0, 0.5)
+IN: box-shadow: 1px 1px blue inset, -2px 0 4px red
+OUT: box-shadow: inset 1px 1px 0px 0px rgb(0, 0, 255), -2px 0px 4px 0px rgb(255, 0, 0)
+IN: box-shadow: 1px 1px -3px
+OUT: invalid
+IN: box-shadow: 1px red 1px
+OUT: invalid
+IN: box-shadow: 1px
+OUT: invalid
+IN: box-shadow: 1px 1px,
+OUT: invalid
+IN: text-shadow: 1px 1px 2px black
+OUT: text-shadow: 1px 1px 2px 0px rgb(0, 0, 0)
+IN: text-shadow: 1px 1px 2px 3px
+OUT: invalid
+IN: text-shadow: inset 1px 1px
+OUT: invalid
+IN: border-spacing: -1px
+OUT: invalid
+IN: border-collapse: collapse
+OUT: border-collapse: collapse
+IN: caption-side: bottom
+OUT: caption-side: bottom
+
+# ── Backgrounds (Backgrounds 3 § 3) ──
+IN: background: red
+OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
+IN: background: url(bg.gif) no-repeat center
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
+IN: background: #008080 url(bg.gif) repeat
+OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
+IN: background: url(a.png) right 10px top / cover no-repeat, blue
+OUT: background-color: rgb(0, 0, 255); background-image: url(a.png), none; background-repeat: no-repeat, repeat; background-position-x: calc(100% - 10px), 0%; background-position-y: 0%, 0%; background-size: cover, auto auto; background-origin: padding-box, padding-box; background-clip: border-box, border-box
+IN: background: linear-gradient(red, blue)
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
+IN: background: red, blue
+OUT: invalid
+IN: background: url(a.png) center / 50% content-box
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 50%; background-position-y: 50%; background-size: 50% auto; background-origin: content-box; background-clip: content-box
+IN: background: border-box padding-box 0 0 / 10px 2em url(a.png)
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 0px; background-position-y: 0px; background-size: 10px 2em; background-origin: border-box; background-clip: padding-box
+IN: background: linear-gradient(red, blue) text
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: text
+IN: background: text border-box red
+OUT: invalid
+IN: background: url(a.png) / cover
+OUT: invalid
+IN: background: border-box padding-box content-box
+OUT: invalid
+IN: background-size: cover
+OUT: background-size: cover
+IN: background-size: 40px
+OUT: background-size: 40px auto
+IN: background-size: auto 25%
+OUT: background-size: auto 25%
+IN: background: url(a.png) no-repeat 0 0 / 10px border-box, linear-gradient(red, blue) content-box #fff
+OUT: background-color: rgb(255, 255, 255); background-image: url(a.png), linear-gradient(...); background-repeat: no-repeat, repeat; background-position-x: 0px, 0%; background-position-y: 0px, 0%; background-size: 10px auto, auto auto; background-origin: border-box, content-box; background-clip: border-box, content-box
+IN: background: url(a.png), , red
+OUT: invalid
+IN: background-position: left top, center, right 5px bottom
+OUT: background-position-x: 0%, 50%, calc(100% - 5px); background-position-y: 0%, 50%, 100%
+IN: background-position: left top,
+OUT: invalid
+IN: background-position-x: 0, 50%, right
+OUT: background-position-x: 0px, 50%, 100%
+IN: background-image: url(a.png),
+OUT: invalid
+IN: background-size: 10px, cover
+OUT: background-size: 10px auto, cover
+IN: background-size: -1px
+OUT: invalid
+IN: background-size: cover contain
+OUT: invalid
+IN: background-origin: content-box
+OUT: background-origin: content-box
+IN: background-origin: text
+OUT: invalid
+IN: background-clip: padding-box, text
+OUT: background-clip: padding-box, text
+IN: background-clip: text
+OUT: background-clip: text
+# The Compatibility Standard's names (§ 3.4.1, § 3.4.6.1): the prefixed
+# clip is the standard one, in any case and with the same list; no other
+# prefixed background name is read. The fill colour is a colour, inherited.
+IN: -webkit-background-clip: text
+OUT: background-clip: text
+IN: -WebKit-Background-Clip: padding-box, text
+OUT: background-clip: padding-box, text
+IN: -webkit-background-clip: border-area
+OUT: invalid
+IN: -webkit-background-size: cover
+OUT: unknown
+IN: -moz-background-clip: text
+OUT: unknown
+IN: -webkit-text-fill-color: transparent
+OUT: -webkit-text-fill-color: rgba(0, 0, 0, 0)
+IN: -webkit-text-fill-color: currentcolor
+OUT: -webkit-text-fill-color: currentcolor
+IN: -webkit-text-fill-color: inherit
+OUT: -webkit-text-fill-color: inherit
+IN: -webkit-text-fill-color: 3px
+OUT: invalid
+IN: background: none
+OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
+IN: background-position: right bottom
+OUT: background-position-x: 100%; background-position-y: 100%
+IN: background-position: top
+OUT: background-position-x: 50%; background-position-y: 0%
+IN: background-position: 10px 20px
+OUT: background-position-x: 10px; background-position-y: 20px
+IN: background-position: left 10px top 20px
+OUT: background-position-x: 10px; background-position-y: 20px
+IN: background-position: top left
+OUT: background-position-x: 0%; background-position-y: 0%
+IN: background-position: bottom 10px right
+OUT: background-position-x: 100%; background-position-y: calc(100% - 10px)
+IN: background-position: left right
+OUT: invalid
+IN: background-position: 10px top
+OUT: background-position-x: 10px; background-position-y: 0%
+IN: background-image: url("x.png")
+OUT: background-image: url(x.png)
+IN: background-repeat: no-repeat repeat
+OUT: background-repeat: repeat-y
+IN: background-image: url(a.png), linear-gradient(red, blue)
+OUT: background-image: url(a.png), linear-gradient(...)
+# Gradients by their grammar (Images 3 § 3): what the browsers refuse is
+# refused, so the colour set before it stands.
+IN: background-image: linear-gradient(to right, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(to top left, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(45deg, red 0%, blue 100%)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(0, red, 20%, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: repeating-linear-gradient(red 0 10px, blue 10px 20px)
+OUT: background-image: repeating-linear-gradient(...)
+IN: background-image: radial-gradient(red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(circle closest-side at 20% 30%, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(ellipse 10px 20px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: linear-gradient(top, #333, #000)
+OUT: invalid
+IN: background: linear-gradient(top, #333, #000)
+OUT: invalid
+IN: background-image: linear-gradient(garbage)
+OUT: invalid
+IN: background-image: linear-gradient(red)
+OUT: invalid
+IN: background-image: linear-gradient(10%, red, blue)
+OUT: invalid
+IN: background-image: linear-gradient(red, 10%, 20%, blue)
+OUT: invalid
+IN: background-image: linear-gradient(red, blue, 10%)
+OUT: invalid
+IN: background-image: linear-gradient(to, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at, red, blue)
+OUT: invalid
+# A gradient's centre is a <position> (Values 4 § 8.3), which has no
+# three-part form: that is a background's alone (Backgrounds 3 § 3.6).
+IN: background-image: radial-gradient(at right 3% center, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at left 4px top, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at right 30% top 60px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-position: right 3% center
+OUT: background-position-x: calc(100% - 3%); background-position-y: 50%
+IN: background-image: radial-gradient(circle 20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle 10px 20px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(ellipse 10px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(-10px, red, blue)
+OUT: invalid
+IN: background-image: linear-gradient(1e307rad, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: radial-gradient(circle calc(10% + 1px), red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle calc(1px - 2px), red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(calc(1px - 2px) 10px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(10px 20% at 0 0, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(10px circle, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(ellipse 0 20px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: linear-gradient(red,, blue)
+OUT: invalid
+IN: background-image: url(a.png), 10px
+OUT: invalid
+IN: background-position: 0 0, 17px 11px, 50% 50%
+OUT: background-position-x: 0px, 17px, 50%; background-position-y: 0px, 11px, 50%
+IN: background-position-x: right 5px
+OUT: background-position-x: calc(100% - 5px)
+
+# ── Positioning (Position 3 § 3, CSS 2.1 § 9.9.1, Color 4 § 4.2) ──
+IN: position: absolute
+OUT: position: absolute
+IN: position: STICKY
+OUT: position: sticky
+IN: position: absolute fixed
+OUT: invalid
+IN: position: -webkit-sticky
+OUT: invalid
+IN: top: -10px
+OUT: top: -10px
+IN: left: -9999px
+OUT: left: -9999px
+IN: right: 5%
+OUT: right: 5%
+IN: bottom: auto
+OUT: bottom: auto
+IN: top: calc(50% - 2em)
+OUT: top: calc(50% - 2em)
+IN: top: none
+OUT: invalid
+IN: top: 10
+OUT: invalid
+IN: quirks top: 10
+OUT: top: 10px
+IN: inset: 0
+OUT: top: 0px; right: 0px; bottom: 0px; left: 0px
+IN: inset: 1px 2px 3px
+OUT: top: 1px; right: 2px; bottom: 3px; left: 2px
+IN: inset: auto 0
+OUT: top: auto; right: 0px; bottom: auto; left: 0px
+IN: inset: 1px 2px 3px 4px 5px
+OUT: invalid
+IN: inset: inherit
+OUT: top: inherit; right: inherit; bottom: inherit; left: inherit
+IN: z-index: 10
+OUT: z-index: 10
+IN: z-index: -1
+OUT: z-index: -1
+IN: z-index: auto
+OUT: z-index: auto
+IN: z-index: 1.5
+OUT: invalid
+IN: z-index: 1e3
+OUT: invalid
+IN: z-index: 1px
+OUT: invalid
+IN: opacity: 0
+OUT: opacity: 0
+IN: opacity: 0.5
+OUT: opacity: 0.5
+IN: opacity: 50%
+OUT: opacity: 50%
+IN: opacity: 2
+OUT: opacity: 2
+IN: opacity: -1
+OUT: opacity: -1
+IN: opacity: none
+OUT: invalid
+IN: pointer-events: none
+OUT: pointer-events: none
+IN: pointer-events: visiblePainted
+OUT: pointer-events: visiblepainted
+IN: pointer-events: none auto
+OUT: invalid
+
+# ── Flexible boxes (Flexbox 1 § 5, § 7; Box Alignment 3 § 4, § 8) ──
+IN: display: flex
+OUT: display: flex
+IN: display: Inline-Flex
+OUT: display: inline-flex
+IN: flex-direction: column-reverse
+OUT: flex-direction: column-reverse
+IN: flex-direction: vertical
+OUT: invalid
+IN: flex-wrap: wrap
+OUT: flex-wrap: wrap
+IN: flex-flow: column wrap
+OUT: flex-direction: column; flex-wrap: wrap
+IN: flex-flow: wrap
+OUT: flex-direction: row; flex-wrap: wrap
+IN: flex-flow: row column
+OUT: invalid
+IN: justify-content: space-between
+OUT: justify-content: space-between
+IN: justify-content: unsafe center
+OUT: justify-content: center
+IN: justify-content: safe center
+OUT: invalid
+IN: justify-content: unsafe space-around
+OUT: invalid
+IN: align-items: first baseline
+OUT: align-items: baseline
+IN: align-items: last baseline
+OUT: invalid
+IN: align-items: first center
+OUT: invalid
+IN: align-self: auto
+OUT: align-self: auto
+IN: align-items: auto
+OUT: invalid
+IN: align-content: space-evenly
+OUT: align-content: space-evenly
+IN: flex-grow: 2
+OUT: flex-grow: 2
+IN: flex-grow: -1
+OUT: invalid
+IN: flex-shrink: 0.5
+OUT: flex-shrink: 0.5
+IN: flex-basis: 30%
+OUT: flex-basis: 30%
+IN: flex-basis: content
+OUT: flex-basis: content
+IN: flex-basis: -10px
+OUT: invalid
+IN: order: -2
+OUT: order: -2
+IN: order: 1.5
+OUT: invalid
+IN: flex: 1
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: 0%
+IN: flex: 2 3
+OUT: flex-grow: 2; flex-shrink: 3; flex-basis: 0%
+IN: flex: 1 1 0
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: 0px
+IN: flex: 1 0
+OUT: flex-grow: 1; flex-shrink: 0; flex-basis: 0%
+IN: flex: 0 0 200px
+OUT: flex-grow: 0; flex-shrink: 0; flex-basis: 200px
+IN: flex: 200px 3
+OUT: flex-grow: 3; flex-shrink: 1; flex-basis: 200px
+IN: flex: auto
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: auto
+IN: flex: none
+OUT: flex-grow: 0; flex-shrink: 0; flex-basis: auto
+IN: flex: none 1
+OUT: invalid
+IN: flex: 1 2 3
+OUT: invalid
+IN: flex: initial
+OUT: flex-grow: initial; flex-shrink: initial; flex-basis: initial
+IN: gap: 10px
+OUT: row-gap: 10px; column-gap: 10px
+IN: gap: 1em 5%
+OUT: row-gap: 1em; column-gap: 5%
+IN: gap: normal
+OUT: row-gap: normal; column-gap: normal
+IN: gap: -1px
+OUT: invalid
+IN: grid-gap: 4px 8px
+OUT: row-gap: 4px; column-gap: 8px
+
+# ── Grids (Grid 2 § 7, § 8; Box Alignment 3 § 5, § 6) ──
+IN: display: grid
+OUT: display: grid
+IN: grid-template-columns: repeat(6, 1fr)
+OUT: grid-template-columns: repeat(6, 1fr)
+IN: grid-template-columns: 92px 1fr
+OUT: grid-template-columns: 92px 1fr
+IN: grid-template-columns: minmax(140px, 42%) 1fr
+OUT: grid-template-columns: minmax(140px, 42%) 1fr
+IN: grid-template-columns: repeat(auto-fill, minmax(104px, 1fr))
+OUT: grid-template-columns: repeat(auto-fill, minmax(104px, 1fr))
+IN: grid-template-columns: repeat(auto-fit, 1fr)
+OUT: invalid
+IN: grid-template-columns: repeat(auto-fill, 10px) repeat(auto-fill, 10px)
+OUT: invalid
+IN: grid-template-columns: [full-start] minmax(0, 1fr) [main-start] 60ch [main-end] 1fr [full-end]
+OUT: grid-template-columns: minmax(0px, 1fr) 60ch 1fr
+IN: grid-template-columns: minmax(1fr, 2fr)
+OUT: invalid
+IN: grid-template-columns: fit-content(200px) auto max-content
+OUT: grid-template-columns: fit-content(200px) auto max-content
+IN: grid-template-columns: -1px
+OUT: invalid
+IN: grid-template-columns: repeat(0, 1fr)
+OUT: invalid
+IN: grid-template-rows: none
+OUT: grid-template-rows: none
+IN: width: 1fr
+OUT: invalid
+IN: grid-auto-rows: 150px
+OUT: grid-auto-rows: 150px
+IN: grid-auto-rows: minmax(100px, auto) 20px
+OUT: grid-auto-rows: minmax(100px, auto) 20px
+IN: grid-auto-rows: repeat(2, 1fr)
+OUT: invalid
+IN: grid-template-areas: "head head" "side main"
+OUT: grid-template-areas: "head head" "side main"
+IN: grid-template-areas: "a . ." "a ... b"
+OUT: grid-template-areas: "a . ." "a ... b"
+IN: grid-template-areas: "a b a"
+OUT: invalid
+IN: grid-template-areas: "a b" "c"
+OUT: invalid
+IN: grid-template-areas: "a$b"
+OUT: invalid
+IN: grid-auto-flow: dense
+OUT: grid-auto-flow: row dense
+IN: grid-auto-flow: dense column
+OUT: grid-auto-flow: column dense
+IN: grid-auto-flow: row column
+OUT: invalid
+IN: grid-column: span 2
+OUT: grid-column-start: span 2; grid-column-end: auto
+IN: grid-column: 1 / -1
+OUT: grid-column-start: 1; grid-column-end: -1
+IN: grid-column: 0
+OUT: invalid
+IN: grid-row: header
+OUT: grid-row-start: "header"; grid-row-end: "header"
+IN: grid-area: main
+OUT: grid-row-start: "main"; grid-column-start: "main"; grid-row-end: "main"; grid-column-end: "main"
+IN: grid-area: 1 / 2 / 3
+OUT: grid-row-start: 1; grid-column-start: 2; grid-row-end: 3; grid-column-end: auto
+IN: grid-row: 2 header
+OUT: invalid
+IN: place-items: center
+OUT: align-items: center; justify-items: center
+IN: place-items: start end
+OUT: align-items: start; justify-items: end
+IN: place-content: space-between center
+OUT: align-content: space-between; justify-content: center
+IN: place-self: auto stretch
+OUT: align-self: auto; justify-self: stretch
+IN: justify-items: legacy
+OUT: justify-items: legacy
+
+# ── Transforms (Transforms 1 § 4-5, § 9; Transforms 2 § 5-6, § 12) ──
+# A function's name is kept in lowercase. An angle takes a unitless 0 in a
+# function and nowhere a unitless anything else; it is never a calc().
+IN: transform: none
+OUT: transform: none
+IN: transform: translate(-50%, -50%)
+OUT: transform: translate(-50%, -50%)
+IN: transform: translateX(10px) rotate(45deg) scale(1.5)
+OUT: transform: translatex(10px) rotate(45deg) scale(1.5)
+IN: transform: ROTATE(1DEG)
+OUT: transform: rotate(1deg)
+IN: transform: rotate(0)
+OUT: transform: rotate(0deg)
+IN: transform: rotate(5)
+OUT: invalid
+IN: transform: rotate(0.25turn) skew(10grad, 1rad)
+OUT: transform: rotate(0.25turn) skew(10grad, 1rad)
+IN: transform: rotate(calc(10deg))
+OUT: invalid
+IN: transform: translateX(calc(100% - 10px))
+OUT: transform: translatex(calc(100% - 10px))
+IN: transform: matrix(1, 0, 0, 1, 10, 20)
+OUT: transform: matrix(1, 0, 0, 1, 10, 20)
+IN: transform: matrix(1, 0, 0, 1, 10)
+OUT: invalid
+IN: transform: translate3d(1px, 2px, 3px) translateZ(0)
+OUT: transform: translate3d(1px, 2px, 3px) translatez(0px)
+IN: transform: translate3d(1px, 2px, 3%)
+OUT: invalid
+IN: transform: scale(calc(50%))
+OUT: transform: scale(50%)
+IN: transform: scale(calc(0px))
+OUT: invalid
+IN: transform: scale(calc(10% + 1px - 1px))
+OUT: invalid
+IN: transform: perspective(calc(50%))
+OUT: invalid
+IN: scale: calc(5px)
+OUT: invalid
+IN: transform: scale(50%, -2) scaleZ(3)
+OUT: transform: scale(50%, -2) scalez(3)
+IN: transform: rotate3d(1, 0, 0, 45deg)
+OUT: transform: rotate3d(1, 0, 0, 45deg)
+IN: transform: perspective(none) perspective(100px)
+OUT: transform: perspective(none) perspective(100px)
+IN: transform: perspective(-1px)
+OUT: invalid
+IN: transform: translate(1px,)
+OUT: invalid
+IN: transform: translate(1px, 2px, 3px)
+OUT: invalid
+IN: transform: none rotate(1deg)
+OUT: invalid
+IN: transform: translate(1px), rotate(1deg)
+OUT: invalid
+IN: transform: frobnicate(1px)
+OUT: invalid
+IN: transform: inherit
+OUT: transform: inherit
+# transform-origin: x, y and z, the keywords as their percentages.
+IN: transform-origin: left
+OUT: transform-origin: 0% 50% 0px
+IN: transform-origin: top
+OUT: transform-origin: 50% 0% 0px
+IN: transform-origin: 10px
+OUT: transform-origin: 10px 50% 0px
+IN: transform-origin: bottom right
+OUT: transform-origin: 100% 100% 0px
+IN: transform-origin: center left
+OUT: transform-origin: 0% 50% 0px
+IN: transform-origin: right 20%
+OUT: transform-origin: 100% 20% 0px
+IN: transform-origin: 20% top 5px
+OUT: transform-origin: 20% 0% 5px
+IN: transform-origin: top 20%
+OUT: invalid
+IN: transform-origin: left right
+OUT: invalid
+IN: transform-origin: 1px 2px 3%
+OUT: invalid
+IN: transform-origin: left 1px
+OUT: transform-origin: 0% 1px 0px
+# The individual properties.
+IN: translate: none
+OUT: translate: none
+IN: translate: 10px
+OUT: translate: 10px
+IN: translate: 10% -20px 3px
+OUT: translate: 10% -20px 3px
+IN: translate: 1px 2px 3%
+OUT: invalid
+IN: rotate: 45deg
+OUT: rotate: 45deg
+IN: rotate: x 45deg
+OUT: rotate: 1 0 0 45deg
+IN: rotate: 45deg 0 1 0
+OUT: rotate: 0 1 0 45deg
+IN: rotate: z 1turn
+OUT: rotate: 1turn
+IN: rotate: 0
+OUT: invalid
+IN: rotate: x y 1deg
+OUT: invalid
+IN: scale: 2
+OUT: scale: 2
+IN: scale: 50% 2
+OUT: scale: 50% 2
+IN: scale: 1 2 3 4
+OUT: invalid
+
+# ── What libgarb does not read here ──
+IN: background-blend-mode: normal
+OUT: unknown
+IN: --panel: 10px
+OUT: unknown
+# A value holding var() is the cascade's to read, once the variable is known.
+IN: color: var(--x)
+OUT: held
+
+# ── image-rendering (Images 3 § 5.3) ──
+IN: image-rendering: pixelated
+OUT: image-rendering: pixelated
+IN: image-rendering: optimizeSpeed
+OUT: image-rendering: optimizespeed
+IN: image-rendering: -webkit-optimize-contrast
+OUT: image-rendering: -webkit-optimize-contrast
+IN: image-rendering: blurry
+OUT: invalid
+
+# Legacy rectangular clipping (CSS 2.1 § 11.1.2).
+IN: clip: auto
+OUT: clip: auto
+IN: clip: rect(1px, 20px, 30px, -4px)
+OUT: clip: rect(1px, 20px, 30px, -4px)
+IN: clip: rect(auto 20px auto 0)
+OUT: clip: rect(auto, 20px, auto, 0px)
+IN: clip: rect(1px, 20px 30px, 4px)
+OUT: invalid
+IN: clip: rect(1px 20px, 30px 4px)
+OUT: invalid
+IN: clip: rect(1px, 20px, 30px)
+OUT: invalid
+IN: clip: rect(1px, 20px, 30px, 4px, 5px)
+OUT: invalid
+IN: clip: rect(10%, 20px, 30px, 4px)
+OUT: invalid
+IN: quirks clip: rect(1, 20, 30, 4)
+OUT: invalid
+IN: clip: inherit
+OUT: clip: inherit
+
+# ── Animations (Animations 1 § 4, Easing 1 § 2, Will Change 1 § 2) ──
+# A name is kept as written, an identifier or a string alike — `"none"` is
+# a name and `none` is none — and none of the CSS-wide words or `default`
+# may be one; each longhand is a list, one item an animation.
+IN: animation-name: spin
+OUT: animation-name: "spin"
+IN: animation-name: Spin, none, "none"
+OUT: animation-name: "Spin", none, "none"
+IN: animation-name: none
+OUT: animation-name: none
+IN: animation-name: inherit
+OUT: animation-name: inherit
+IN: animation-name: x, initial
+OUT: invalid
+IN: animation-name: default
+OUT: invalid
+IN: animation-name: ""
+OUT: invalid
+IN: animation-name: x y
+OUT: invalid
+IN: animation-duration: 1s, 250ms, 0s
+OUT: animation-duration: 1s, 250ms, 0s
+IN: animation-duration: auto
+OUT: animation-duration: auto
+IN: animation-duration: -1s
+OUT: invalid
+IN: animation-duration: 0
+OUT: invalid
+IN: animation-duration: 1px
+OUT: invalid
+IN: animation-delay: -0.5s, 2S
+OUT: animation-delay: -0.5s, 2s
+# A time past the domain is held at its limit, 1e12 ms, in its own unit
+# (values.h): never refused, which would change which declaration wins.
+IN: animation-duration: 1e9s, 1e12ms, 1.0000001e9s, 1e300ms
+OUT: animation-duration: 1000000000s, 1000000000000ms, 1000000000s, 1000000000000ms
+IN: animation-delay: -1e300s, 1.0000001e12ms, -1e12ms
+OUT: animation-delay: -1000000000s, 1000000000000ms, -1000000000000ms
+IN: animation: k 1e308s -5e307s
+OUT: animation-name: "k"; animation-duration: 1000000000s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: -1000000000s; animation-fill-mode: none
+IN: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
+OUT: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
+IN: animation-timing-function: cubic-bezier(0, -2, 1, 3)
+OUT: animation-timing-function: cubic-bezier(0, -2, 1, 3)
+# A y control past the domain is held at its limit, 1e6 (values.h).
+IN: animation-timing-function: cubic-bezier(0, 1e6, 1, -1e6), cubic-bezier(0.5, 1000000.1, 0.5, -1e308)
+OUT: animation-timing-function: cubic-bezier(0, 1000000, 1, -1000000), cubic-bezier(0.5, 1000000, 0.5, -1000000)
+IN: animation-timing-function: cubic-bezier(1.1, 0, 0, 1)
+OUT: invalid
+IN: animation-timing-function: cubic-bezier(0, 0, -0.1, 1)
+OUT: invalid
+IN: animation-timing-function: cubic-bezier(0, 0, 1)
+OUT: invalid
+IN: animation-timing-function: steps(0)
+OUT: invalid
+IN: animation-timing-function: steps(1.5)
+OUT: invalid
+IN: animation-timing-function: steps(1, jump-none)
+OUT: invalid
+IN: animation-timing-function: steps(2, jump-none)
+OUT: animation-timing-function: steps(2, jump-none)
+IN: animation-timing-function: steps(3, start)
+OUT: animation-timing-function: steps(3, start)
+IN: animation-timing-function: steps(3, middle)
+OUT: invalid
+IN: animation-timing-function: linear(0, 1)
+OUT: invalid
+IN: animation-iteration-count: infinite, 2.5, 0
+OUT: animation-iteration-count: infinite, 2.5, 0
+# A count past the domain is held at its limit, 1e15 (values.h): finite
+# still, never read as infinite.
+IN: animation-iteration-count: 1e308, 999999999999999
+OUT: animation-iteration-count: 1.0000000000000000e15, 999999999999999
+IN: animation: k 1s 1e300
+OUT: animation-name: "k"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1.0000000000000000e15; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation-iteration-count: -1
+OUT: invalid
+IN: animation-direction: alternate-reverse, normal
+OUT: animation-direction: alternate-reverse, normal
+IN: animation-play-state: paused
+OUT: animation-play-state: paused
+IN: animation-fill-mode: both, forwards, none
+OUT: animation-fill-mode: both, forwards, none
+IN: animation-fill-mode: sideways
+OUT: invalid
+# The shorthand: the first time is the duration, the second the delay; a
+# keyword another longhand takes is that longhand's until it has one, so
+# the name is what is left (Animations 1 § 4.9).
+IN: animation: spin 1s linear infinite
+OUT: animation-name: "spin"; animation-duration: 1s; animation-timing-function: linear; animation-iteration-count: infinite; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: ease ease 1s
+OUT: animation-name: "ease"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: 1s 2s mv
+OUT: animation-name: "mv"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 2s; animation-fill-mode: none
+IN: animation: auto spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto
+OUT: animation-name: none; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: 1s auto
+OUT: animation-name: "auto"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto 1s spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 1s; animation-fill-mode: none
+IN: animation: x 1s, y 2s steps(2, end) 3 alternate both paused 500ms
+OUT: animation-name: "x", "y"; animation-duration: 1s, 2s; animation-timing-function: ease, steps(2, end); animation-iteration-count: 1, 3; animation-direction: normal, alternate; animation-play-state: running, paused; animation-delay: 0s, 500ms; animation-fill-mode: none, both
+IN: animation: none
+OUT: animation-name: none; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: none none
+OUT: animation-name: none; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: forwards forwards
+OUT: animation-name: "forwards"; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: forwards
+IN: animation: x 1s 2s 3s
+OUT: invalid
+IN: animation: x y
+OUT: invalid
+IN: animation: x,
+OUT: invalid
+IN: animation: , x
+OUT: invalid
+IN: animation: -1s x
+OUT: invalid
+IN: animation: inherit
+OUT: animation-name: inherit; animation-duration: inherit; animation-timing-function: inherit; animation-iteration-count: inherit; animation-direction: inherit; animation-play-state: inherit; animation-delay: inherit; animation-fill-mode: inherit
+# The Compatibility Standard's names (§ 3.4.1): the prefixed animation
+# properties and the prefixed transform are the standard ones.
+IN: -webkit-animation: spin 1s
+OUT: animation-name: "spin"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: -webkit-animation-name: spin
+OUT: animation-name: "spin"
+IN: -webkit-animation-timing-function: steps(2, end)
+OUT: animation-timing-function: steps(2, end)
+IN: -webkit-transform: rotate(10deg)
+OUT: transform: rotate(10deg)
+IN: -webkit-transform-origin: left
+OUT: transform-origin: 0% 50% 0px
+IN: -moz-animation: spin 1s
+OUT: unknown
+# will-change: auto alone, or what will change, each kept as written.
+IN: will-change: transform, opacity
+OUT: will-change: "transform", "opacity"
+IN: will-change: auto
+OUT: will-change: auto
+IN: will-change: scroll-position
+OUT: will-change: "scroll-position"
+IN: will-change: auto, transform
+OUT: invalid
+IN: will-change: none
+OUT: invalid
+IN: will-change: transform, all
+OUT: invalid
+IN: will-change: 3px
+OUT: invalid
+
+# ── cursor (CSS UI 4 § 5.1.1): the keyword a pointer falls back to, the
+# pictures before it read and not kept ──
+IN: cursor: pointer
+OUT: cursor: pointer
+IN: cursor: NWSE-Resize
+OUT: cursor: nwse-resize
+IN: cursor: url(hand.cur), pointer
+OUT: cursor: pointer
+IN: cursor: url("a.svg") 1 calc(2 + 0), url(b.png), copy
+OUT: cursor: copy
+IN: cursor: url(a.png) 3 -4, move
+OUT: cursor: move
+IN: cursor: image-set("a.png" 1x, "b.png" 2x) 5 6, grab
+OUT: cursor: grab
+IN: cursor: image-set(url(a.png) 1x type("image/png"), "b.png") 5 6, grab
+OUT: cursor: grab
+IN: cursor: -webkit-image-set("a.png" 192dpi), pointer
+OUT: cursor: pointer
+IN: cursor: image-set(garbage!!), pointer
+OUT: invalid
+IN: cursor: image-set(), pointer
+OUT: invalid
+IN: cursor: image-set("a.png" 1x 2x), pointer
+OUT: invalid
+IN: cursor: image-set(linear-gradient(red, blue) 1x), pointer
+OUT: invalid
+IN: cursor: inherit
+OUT: cursor: inherit
+IN: cursor: url(a.png)
+OUT: invalid
+IN: cursor: url(a.png) alias
+OUT: invalid
+IN: cursor: url(a.png) 1px 2px, copy
+OUT: invalid
+IN: cursor: url(a.png) 3, move
+OUT: invalid
+IN: cursor: linear-gradient(red, blue), pointer
+OUT: invalid
+IN: cursor: pointer, auto
+OUT: invalid
+IN: cursor: en-resize
+OUT: invalid
+IN: cursor: hand
+OUT: invalid
+
+# ── user-select (CSS UI 4 § 6.1) ──
+IN: user-select: none
+OUT: user-select: none
+IN: user-select: contain
+OUT: user-select: contain
+IN: user-select: text contain
+OUT: invalid
+IN: user-select: visible
+OUT: invalid
+
+# ── word-break and overflow-wrap (Text 3 § 5.1, § 5.4) ──
+IN: word-break: break-all
+OUT: word-break: break-all
+IN: word-break: Keep-All
+OUT: word-break: keep-all
+IN: word-break: break-word
+OUT: word-break: break-word
+IN: word-break: manual
+OUT: invalid
+IN: word-break: normal keep-all
+OUT: invalid
+IN: overflow-wrap: anywhere
+OUT: overflow-wrap: anywhere
+IN: overflow-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: overflow-wrap: break-all
+OUT: invalid
+# word-wrap is overflow-wrap's legacy name (Text 3 § 5.4).
+IN: word-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: word-wrap: anywhere anywhere
+OUT: invalid
+
+# ── letter-spacing (Text 3 § 7.2: Text 4's percentage is not read) ──
+IN: letter-spacing: normal
+OUT: letter-spacing: normal
+IN: letter-spacing: 0
+OUT: letter-spacing: 0px
+IN: letter-spacing: -0.05em
+OUT: letter-spacing: -0.05em
+IN: letter-spacing: 10%
+OUT: invalid
+IN: letter-spacing: calc(2px + 1em)
+OUT: letter-spacing: calc(2px + 1em)
+IN: letter-spacing: 2
+OUT: invalid
+IN: quirks letter-spacing: 2
+OUT: letter-spacing: 2px
+IN: letter-spacing: normal 10px
+OUT: invalid
+IN: letter-spacing: auto
+OUT: invalid
+
+# ── text-overflow (Overflow 4 § 4.1, one value: clip or ellipsis) ──
+IN: text-overflow: ellipsis
+OUT: text-overflow: ellipsis
+IN: text-overflow: CLIP
+OUT: text-overflow: clip
+IN: text-overflow: "-"
+OUT: invalid
+IN: text-overflow: clip ellipsis
+OUT: invalid
+IN: text-overflow: fade
+OUT: invalid
+
+# ── outline (CSS UI 4 § 3) ──
+IN: outline: 2px dashed red
+OUT: outline-width: 2px; outline-style: dashed; outline-color: rgb(255, 0, 0)
+IN: outline: red solid
+OUT: outline-width: medium; outline-style: solid; outline-color: rgb(255, 0, 0)
+IN: outline: auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto solid
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: solid auto
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: auto 2px solid
+OUT: outline-width: 2px; outline-style: solid; outline-color: auto
+IN: outline: auto auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto red
+OUT: outline-width: medium; outline-style: auto; outline-color: rgb(255, 0, 0)
+IN: outline: auto auto auto
+OUT: invalid
+IN: outline: none
+OUT: outline-width: medium; outline-style: none; outline-color: auto
+IN: outline: thick
+OUT: outline-width: thick; outline-style: none; outline-color: auto
+IN: outline: inherit
+OUT: outline-width: inherit; outline-style: inherit; outline-color: inherit
+IN: outline: thin outset thick
+OUT: invalid
+IN: outline: invert solid
+OUT: invalid
+IN: outline: hidden
+OUT: invalid
+IN: outline-width: 0
+OUT: outline-width: 0px
+IN: outline-width: 1%
+OUT: invalid
+IN: outline-width: -1px
+OUT: invalid
+IN: quirks outline-width: 3
+OUT: invalid
+IN: outline-style: auto
+OUT: outline-style: auto
+IN: outline-style: hidden
+OUT: invalid
+IN: outline-color: auto
+OUT: outline-color: auto
+IN: outline-color: currentColor
+OUT: outline-color: currentcolor
+IN: outline-color: invert
+OUT: invalid
+IN: outline-offset: -2px
+OUT: outline-offset: -2px
+IN: outline-offset: calc(3rem + 4vw)
+OUT: outline-offset: calc(3rem + 4vw)
+IN: outline-offset: 1%
+OUT: invalid
+IN: outline-offset: auto
+OUT: invalid
+
+# ── object-fit and object-position (Images 3 § 4.5, § 4.6) ──
+IN: object-fit: cover
+OUT: object-fit: cover
+IN: object-fit: Scale-Down
+OUT: object-fit: scale-down
+IN: object-fit: cover scale-down
+OUT: invalid
+IN: object-fit: auto
+OUT: invalid
+IN: object-position: center
+OUT: object-position: 50% 50%
+IN: object-position: left bottom
+OUT: object-position: 0% 100%
+IN: object-position: top
+OUT: object-position: 50% 0%
+IN: object-position: 10px 20%
+OUT: object-position: 10px 20%
+IN: object-position: right 30% top 60px
+OUT: object-position: calc(100% - 30%) 60px
+IN: object-position: bottom 10% right 20%
+OUT: object-position: calc(100% - 20%) calc(100% - 10%)
+IN: object-position: right 3% center
+OUT: invalid
+IN: object-position: 1px 2px 3px
+OUT: invalid
+IN: object-position: left right
+OUT: invalid
+IN: quirks object-position: 10 20
+OUT: invalid
+IN: object-position: inherit
+OUT: object-position: inherit
+
+# ── aspect-ratio (Sizing 4 § 4.1): auto || <ratio>, a height left out 1 ──
+IN: aspect-ratio: auto
+OUT: aspect-ratio: auto
+IN: aspect-ratio: 16 / 9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 16/9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 1.5
+OUT: aspect-ratio: 1.5 / 1
+IN: aspect-ratio: auto 4 / 3
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 4 / 3 auto
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 0 / 0
+OUT: aspect-ratio: 0 / 0
+IN: aspect-ratio: calc(2 + 1) / calc(4 - 3)
+OUT: aspect-ratio: 3 / 1
+IN: aspect-ratio: 16 / -9
+OUT: invalid
+IN: aspect-ratio: 16 9
+OUT: invalid
+IN: aspect-ratio: 16px / 9px
+OUT: invalid
+IN: aspect-ratio: auto / 16
+OUT: invalid
+IN: aspect-ratio: 16 /
+OUT: invalid
+IN: aspect-ratio: auto auto
+OUT: invalid
+IN: aspect-ratio: auto 1 / 1 auto
+OUT: invalid
+
+# ── CSS Logical 1: each flow-relative name sets the physical longhand it
+# maps to in a horizontal, left-to-right writing mode ──
+IN: inline-size: 50%
+OUT: width: 50%
+IN: max-block-size: 10em
+OUT: max-height: 10em
+IN: margin-inline-start: auto
+OUT: margin-left: auto
+IN: padding-block-end: 3px
+OUT: padding-bottom: 3px
+IN: inset-inline-end: -2px
+OUT: right: -2px
+IN: border-block-start-color: red
+OUT: border-top-color: rgb(255, 0, 0)
+IN: border-inline-end: 1px solid
+OUT: border-right-width: 1px; border-right-style: solid; border-right-color: currentcolor
+IN: margin-inline: 1px 2px
+OUT: margin-left: 1px; margin-right: 2px
+IN: margin-block: auto
+OUT: margin-top: auto; margin-bottom: auto
+IN: padding-inline: 5%
+OUT: padding-left: 5%; padding-right: 5%
+IN: inset-block: 0 auto
+OUT: top: 0px; bottom: auto
+IN: border-inline-width: thin thick
+OUT: border-left-width: thin; border-right-width: thick
+IN: border-block-style: dotted
+OUT: border-top-style: dotted; border-bottom-style: dotted
+IN: border-inline-color: red blue
+OUT: border-left-color: rgb(255, 0, 0); border-right-color: rgb(0, 0, 255)
+IN: border-block: 2px dashed
+OUT: border-top-width: 2px; border-top-style: dashed; border-top-color: currentcolor; border-bottom-width: 2px; border-bottom-style: dashed; border-bottom-color: currentcolor
+IN: margin-inline: inherit
+OUT: margin-left: inherit; margin-right: inherit
+IN: margin-inline: 1px 2px 3px
+OUT: invalid
+IN: padding-block: -1px
+OUT: invalid
+IN: inline-size: auto auto
+OUT: invalid
+# The Quirks standard's unitless lengths are the physical properties' only.
+IN: quirks margin-left: 7
+OUT: margin-left: 7px
+IN: quirks margin-inline-start: 7
+OUT: invalid
+IN: quirks margin-inline: 7
+OUT: invalid
+IN: quirks inline-size: 7
+OUT: invalid
+
+# ── Generated content (Generated Content 3 § 1.1; GENERATED_CONTENT.md) ──
+IN: content: normal
+OUT: content: normal
+IN: content: none
+OUT: content: none
+IN: content: ""
+OUT: content: ""
+IN: content: "\f101"
+OUT: content: ""
+IN: content: "(" attr(title) ")"
+OUT: content: "(" attr("title") ")"
+IN: content: open-quote "x" close-quote no-open-quote no-close-quote
+OUT: content: open-quote "x" close-quote no-open-quote no-close-quote
+IN: content: counter(item) ". "
+OUT: content: counter(item) ". "
+IN: content: counters(item, ".")
+OUT: content: counters(item, ".")
+IN: content: counter(Item, Lower-Roman) counters(x, "-", disc) counter(y, decimal)
+OUT: content: counter(Item, lower-roman) counters(x, "-", disc) counter(y)
+IN: content: counter(none)
+OUT: invalid
+IN: content: counter(item,)
+OUT: invalid
+IN: content: counter(item, "x")
+OUT: invalid
+IN: content: counter(item, decimal, decimal)
+OUT: invalid
+IN: content: counters(item)
+OUT: invalid
+IN: content: counters(item, x)
+OUT: invalid
+IN: content: counter(item, inherit)
+OUT: invalid
+IN: content: url(icon.png)
+OUT: content: url(icon.png)
+IN: content: linear-gradient(red, blue)
+OUT: content: linear-gradient(...)
+IN: content: "★" / "star"
+OUT: content: "★"
+IN: content: none "x"
+OUT: invalid
+IN: content: normal none
+OUT: invalid
+IN: content: attr()
+OUT: invalid
+IN: content: 12px
+OUT: invalid
+IN: content: "x" /
+OUT: invalid
+IN: content: / "alt"
+OUT: invalid
+
+# ── Counters and quotes (Lists 3 § 4, Content 3 § 4.1; GENERATED_CONTENT.md § 8) ──
+IN: counter-reset: none
+OUT: counter-reset: none
+IN: counter-reset: item
+OUT: counter-reset: item 0
+IN: counter-increment: item
+OUT: counter-increment: item 1
+IN: counter-set: item
+OUT: counter-set: item 0
+IN: counter-reset: a 3 b c -2
+OUT: counter-reset: a 3 b 0 c -2
+IN: counter-increment: list-item 2
+OUT: counter-increment: list-item 2
+IN: counter-reset: none a
+OUT: invalid
+IN: counter-reset: a none
+OUT: invalid
+IN: counter-reset: a 1.5
+OUT: invalid
+IN: counter-reset: 3
+OUT: invalid
+IN: counter-reset: reversed(a)
+OUT: invalid
+IN: counter-reset: a default
+OUT: invalid
+IN: quotes: auto
+OUT: quotes: auto
+IN: quotes: none
+OUT: quotes: none
+IN: quotes: "<" ">" "(" ")"
+OUT: quotes: "<" ">" "(" ")"
+IN: quotes: "<"
+OUT: invalid
+IN: quotes: "<" ">" "("
+OUT: invalid
+IN: quotes: none "<" ">"
+OUT: invalid
+IN: quotes: a b
+OUT: invalid
+
+# ── Filters (Filter Effects 1 § 5, 13; FILTER.md) ──
+IN: filter: none
+OUT: filter: none
+IN: filter: blur(4px)
+OUT: filter: blur(4px)
+IN: filter: grayscale(100%) brightness(0.5) invert()
+OUT: filter: grayscale(100%) brightness(0.5) invert()
+IN: filter: hue-rotate(90deg) hue-rotate(0)
+OUT: filter: hue-rotate(90deg) hue-rotate(0deg)
+IN: filter: hue-rotate(-0.25turn)
+OUT: filter: hue-rotate(-0.25turn)
+IN: filter: drop-shadow(2px 3px 4px red)
+OUT: filter: drop-shadow(rgb(255, 0, 0) 2px 3px 4px)
+IN: filter: drop-shadow(blue -1px 2px)
+OUT: filter: drop-shadow(rgb(0, 0, 255) -1px 2px)
+IN: filter: drop-shadow(1px 1px)
+OUT: filter: drop-shadow(currentcolor 1px 1px)
+IN: filter: url(#f) blur(1px)
+OUT: filter: url(#f) blur(1px)
+IN: backdrop-filter: blur(10px) saturate(180%)
+OUT: backdrop-filter: blur(10px) saturate(180%)
+IN: filter: blur(-1px)
+OUT: invalid
+IN: filter: brightness(-1)
+OUT: invalid
+IN: filter: drop-shadow(red)
+OUT: invalid
+IN: filter: drop-shadow()
+OUT: invalid
+IN: filter: drop-shadow(1px 1px -2px)
+OUT: invalid
+IN: filter: blur(1px, 2px)
+OUT: invalid
+IN: filter: none blur(1px)
+OUT: invalid
+IN: filter: frobnicate(1)
+OUT: invalid
+IN: filter: blur(1px) 3px
+OUT: invalid
+
+# ── Blending (Compositing and Blending 1 § 3; MIX_BLEND.md) ──
+IN: mix-blend-mode: multiply
+OUT: mix-blend-mode: multiply
+IN: mix-blend-mode: Difference
+OUT: mix-blend-mode: difference
+IN: mix-blend-mode: plus-lighter
+OUT: mix-blend-mode: plus-lighter
+IN: mix-blend-mode: plus-darker
+OUT: mix-blend-mode: plus-darker
+IN: mix-blend-mode: color-dodge
+OUT: mix-blend-mode: color-dodge
+IN: mix-blend-mode: multiply screen
+OUT: invalid
+IN: mix-blend-mode: add
+OUT: invalid
+IN: isolation: isolate
+OUT: isolation: isolate
+IN: isolation: auto
+OUT: isolation: auto
+IN: isolation: none
+OUT: invalid

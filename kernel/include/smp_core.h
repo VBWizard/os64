@@ -1,6 +1,7 @@
 #ifndef SMP_CORE_H
 #define SMP_CORE_H
 #include "smp.h"
+#include "msr.h"
 
 #define TIMER_SYNC_ITERATIONS 3
 #define IA32_GS_BASE 0xC0000101 
@@ -44,6 +45,10 @@
 // often the ONLY record (no serial capture), which makes this the difference
 // between a diagnosis and a photograph of a screen that already moved on.
 #define IPI_FREEZE_VECTOR 0x84
+// Apply the speculation policy (/etc/os64.conf `speculation =`) on the
+// receiving thread: SPEC_CTRL is per hardware thread and can only be written
+// standing on it (smp_core.c, spec_ctrl_set_policy).
+#define IPI_SPEC_CTRL_VECTOR 0x85
 
 // IRQ0's vector, and the headstone of an attempt to move it (2026-08-10).
 //
@@ -96,9 +101,9 @@
 void mpAcctSettleAll(void);
 // The hlt-wait accounting bookends (smp.h's acctCurrentHalted doctrine):
 // Begin under cli right before sti;hlt — settles the caller's real work,
-// then routes the coming nap to this core's idle thread; End after the hlt
-// returns — settles the nap, drops the flag. For the compositor's idle
-// idiom, the one thread that halts outside the scheduler's view.
+// then routes the coming nap to this core's idle thread. Interrupt entry
+// closes the nap and drops the redirect so the waking handler counts as
+// work. End settles the post-wake tail and clears any remaining redirect.
 void mpAcctHaltBegin(void);
 void mpAcctHaltEnd(void);
 // Permanently stop every other core — the full stop that precedes a fatal
@@ -111,16 +116,26 @@ int kernel_scratch_stack_owner(uintptr_t rsp);
 #define ENABLE_TIMER(val) (val & ~(1U << APIC_LVT_MASK_BIT))
 #define DISABLE_TIMER(val) (val | (1U << APIC_LVT_MASK_BIT))
 
-#define BOOTSTRAP_PROCESSOR_ID 0
+// The bootstrap processor's CPU number: 0, by the roster's construction
+// (cpu_roster.h), whatever APIC ID the firmware gave it.
+#define BSP_CPU 0
 
 extern bool kCLSInitialized;
 extern bool kSMPInitDone;
 
 void ap_initialization_handler();
-void mp_enable_scheduling_vector(int apic_id);
+// The boot line for the speculation controls every thread was brought up
+// with (smp_core.c); meaningful only once every thread has run its init.
+void spec_ctrl_report(void);
+// `speculation = <fast|guarded|0x..>` from /etc/os64.conf: parse, write this
+// thread, IPI the rest. Refuses loudly and keeps the policy in force on a
+// value it cannot honour. The ISR is the IPI's receiving half.
+bool spec_ctrl_set_policy(const char *value);
+void spec_ctrl_apply_ISR(void);
+void mp_enable_scheduling_vector(uint32_t cpu);
 void mp_restart_apic_timer_count();
-void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode);
-void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode, bool CLISTI);
+// Interrupt CPU `cpu` (a CPU number; the ICR is given its APIC ID here).
+void send_ipi(uint32_t cpu, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode);
 void ap_wake_up_aps();
 void ap_enable_schedulers();
 
@@ -141,9 +156,30 @@ static inline core_local_storage_t* get_core_local_storage(void)
     return cls;
 }
 
-static inline core_local_storage_t* get_core_local_storage_for_core(uint64_t coreNum)
+// Exception paths can run on an AP before it installs GS, while the BSP's
+// global kCLSInitialized flag is already set. Check this CPU's base before
+// dereferencing it, including the window before the self pointer is stored.
+static inline core_local_storage_t *try_get_core_local_storage(void)
 {
-	return (core_local_storage_t*)kCoreLocalStorage +
-                        coreNum;
+    uintptr_t base = rdmsr64(IA32_GS_BASE);
+    uintptr_t first = (uintptr_t)&kCoreLocalStorage[0];
+    uintptr_t limit = (uintptr_t)&kCoreLocalStorage[MAX_CPUS];
+    if (base < first || base >= limit ||
+        (base - first) % sizeof(core_local_storage_t) != 0)
+        return NULL;
+
+    core_local_storage_t *cls = (core_local_storage_t *)base;
+    return cls->self == cls ? cls : NULL;
+}
+
+// Which CPU is running this, for code that may run before this CPU's CLS
+// exists — printd and the exception reports. Everything else reads
+// cls->cpu. Returns CPU_ROSTER_NO_CPU for a CPU the roster never numbered.
+// A function, not an inline: the host logging harness stubs it.
+uint32_t cpu_self(void);
+
+static inline core_local_storage_t* get_core_local_storage_for_core(uint32_t cpu)
+{
+	return (core_local_storage_t*)kCoreLocalStorage + cpu;
 }
 #endif // SMP_CORE_H

@@ -1,0 +1,23 @@
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Copying of file objects from ISO image to disk filesystem is: Enabled
+xorriso : NOTE : Loading ISO image tree from LBA 0
+xorriso : UPDATE :      22 nodes read in 1 seconds
+xorriso : NOTE : Detected El-Torito boot information which currently is set to be discarded
+Drive current: -indev '/tmp/quinn-font-review-iso/os64_kernel.iso'
+Media current: stdio file, overwriteable
+Media status : is written , is appendable
+Boot record  : El Torito , MBR protective-msdos-label cyl-align-off GPT
+Media summary: 1 session, 170356 data blocks,  333m data,  861g free
+Volume id    : 'ISOIMAGE'
+xorriso : UPDATE :       1 files restored (2187.0k) in 1 seconds = 1.6xD
+Extracted from ISO image: file '/boot/os64_kernel'='/tmp/quinn-font-review-after/verify/kernel'
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+/lib/libos64.so: FAT and ext2 bytes match tested build
+/bin/appearance: FAT and ext2 bytes match tested build
+/bin/controlcenter: FAT and ext2 bytes match tested build
+/bin/gterm: FAT and ext2 bytes match tested build
+Booted ISO kernel matches kernel/bin/os64_kernel

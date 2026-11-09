@@ -1,0 +1,183 @@
+# WPT's css/geometry in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/geometry --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+DOMMatrix-001.html	new DOMMatrix(sequence) 0 elements
+DOMMatrix-001.html	new DOMMatrix(sequence) 15 elements
+DOMMatrix-001.html	new DOMMatrix(sequence) 17 elements
+DOMMatrix-001.html	new DOMMatrix(sequence) 5 elements
+DOMMatrix-001.html	new DOMMatrixReadOnly(sequence) 0 elements
+DOMMatrix-001.html	new DOMMatrixReadOnly(sequence) 15 elements
+DOMMatrix-001.html	new DOMMatrixReadOnly(sequence) 17 elements
+DOMMatrix-001.html	new DOMMatrixReadOnly(sequence) 5 elements
+DOMMatrix2DInit-validate-fixup.html	addPath({a: 1, m11: 2}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	addPath({b: 0, m12: -1}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	addPath({c: Infinity, m21: -Infinity}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	addPath({d: 0, m22: NaN}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	addPath({e: 1, m41: 1.00000001}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	addPath({f: 0, m42: 5e-324}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({a: 1, m11: 2}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({b: 0, m12: -1}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({c: Infinity, m21: -Infinity}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({d: 0, m22: NaN}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({e: 1, m41: 1.00000001}) (invalid)
+DOMMatrix2DInit-validate-fixup.html	setTransform({f: 0, m42: 5e-324}) (invalid)
+DOMPoint-001.html	DOMPointReadOnly constructor with 4 values
+DOMPoint-001.html	DOMPointReadOnly constructor with no values
+DOMPoint-001.html	testAttributesNaNInfinity
+DOMPoint-001.html	testAttributesUndefined
+DOMPoint-001.html	testConstructor0
+DOMPoint-001.html	testConstructor1
+DOMPoint-001.html	testConstructor2
+DOMPoint-001.html	testConstructor2undefined
+DOMPoint-001.html	testConstructor3
+DOMPoint-001.html	testConstructor4
+DOMPoint-001.html	testConstructor5
+DOMPoint-001.html	testConstructorDictionary0
+DOMPoint-001.html	testConstructorDictionary1
+DOMPoint-001.html	testConstructorDictionary2
+DOMPoint-001.html	testConstructorUndefined1
+DOMPoint-001.html	testConstructorUndefined2
+DOMPoint-002.html	test DOMPoint Attributes NaN Infinity
+DOMPoint-002.html	test DOMPoint Attributes undefined
+DOMPoint-002.html	test DOMPoint Constructor four args
+DOMPoint-002.html	test DOMPoint Constructor more then four args
+DOMPoint-002.html	test DOMPoint Constructor no args
+DOMPoint-002.html	test DOMPoint Constructor one args
+DOMPoint-002.html	test DOMPoint Constructor three args
+DOMPoint-002.html	test DOMPoint Constructor two args
+DOMPoint-002.html	test DOMPoint Constructor with empty object
+DOMPoint-002.html	test DOMPoint Constructor with string
+DOMPoint-002.html	test DOMPoint Constructor with undefined
+DOMPoint-002.html	test DOMPoint fromPoint with empty object
+DOMPoint-002.html	test DOMPoint fromPoint with undefined value
+DOMPoint-002.html	test DOMPoint fromPoint with x
+DOMPoint-002.html	test DOMPoint fromPoint with x, y
+DOMPoint-002.html	test DOMPoint fromPoint with x, y, z
+DOMPoint-002.html	test DOMPoint fromPoint with x, y, z, w
+DOMPoint-002.html	test DOMPoint fromPoint with x, y, z, w, v
+DOMPoint-002.html	test DOMPoint fromPoint with x, z
+DOMPoint-002.html	test DOMPoint matrixTransform with inconsistent input
+DOMPoint-002.html	test DOMPointReadOnly Attributes undefined
+DOMPoint-002.html	test DOMPointReadOnly Constructor four args
+DOMPoint-002.html	test DOMPointReadOnly Constructor more then four args
+DOMPoint-002.html	test DOMPointReadOnly Constructor no args
+DOMPoint-002.html	test DOMPointReadOnly Constructor one args
+DOMPoint-002.html	test DOMPointReadOnly Constructor three args
+DOMPoint-002.html	test DOMPointReadOnly Constructor two args
+DOMPoint-002.html	test DOMPointReadOnly Constructor with object
+DOMPoint-002.html	test DOMPointReadOnly Constructor with string
+DOMPoint-002.html	test DOMPointReadOnly Constructor with undefined
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with empty object
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with undefined value
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x, y
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x, y, z
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x, y, z, w
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x, y, z, w, v
+DOMPoint-002.html	test DOMPointReadOnly fromPoint with x, z
+DOMRect-001.html	testConstructor0
+DOMRect-001.html	testConstructor1
+DOMRect-001.html	testConstructor2
+DOMRect-001.html	testConstructor3
+DOMRect-001.html	testConstructor4
+DOMRect-001.html	testConstructor5
+DOMRect-001.html	testConstructorNegativeHeight
+DOMRect-001.html	testConstructorNegativeWidth
+DOMRect-001.html	testConstructorNegativeWidthHeight
+DOMRect-001.html	testConstructorString1
+DOMRect-001.html	testConstructorString2
+DOMRect-001.html	testConstructorUndefined1
+DOMRect-001.html	testConstructorUndefined2
+DOMRect-001.html	testReadOnlyConstructor0
+DOMRect-001.html	testReadOnlyConstructor1
+DOMRect-001.html	testReadOnlyConstructor2
+DOMRect-001.html	testReadOnlyConstructor3
+DOMRect-001.html	testReadOnlyConstructor4
+DOMRect-001.html	testReadOnlyConstructor5
+DOMRect-001.html	testReadOnlyConstructorNegativeHeight
+DOMRect-001.html	testReadOnlyConstructorNegativeWidth
+DOMRect-001.html	testReadOnlyConstructorNegativeWidthHeight
+DOMRect-001.html	testReadOnlyConstructorString1
+DOMRect-001.html	testReadOnlyConstructorString2
+DOMRect-001.html	testReadOnlyConstructorUndefined1
+DOMRect-001.html	testReadOnlyConstructorUndefined2
+DOMRect-001.html	testReadOnlySetAttributes
+DOMRect-001.html	testReadOnlySetReadOnlyAttributes
+DOMRect-001.html	testSetAttributes
+DOMRect-001.html	testSetReadOnlyAttributes
+DOMRect-002.html	DOMRect constructor with NaN and infinity and null
+DOMRect-002.html	DOMRect constructor with character string
+DOMRect-002.html	DOMRect constructor with five parameters
+DOMRect-002.html	DOMRect constructor with four parameters
+DOMRect-002.html	DOMRect constructor with negative height
+DOMRect-002.html	DOMRect constructor with negative width
+DOMRect-002.html	DOMRect constructor with negative width and height
+DOMRect-002.html	DOMRect constructor with number string
+DOMRect-002.html	DOMRect constructor with one parameter
+DOMRect-002.html	DOMRect constructor with three parameters
+DOMRect-002.html	DOMRect constructor with two parameters
+DOMRect-002.html	DOMRect constructor with undefined
+DOMRect-002.html	DOMRect constructor without parameter
+DOMRect-002.html	DOMRect.fromRect
+DOMRect-002.html	DOMRect: set top/right/bottom/left
+DOMRect-002.html	DOMRect: set x/y/width/height
+DOMRect-002.html	DOMRectReadOnly constructor with NaN and infinity and null
+DOMRect-002.html	DOMRectReadOnly constructor with character string
+DOMRect-002.html	DOMRectReadOnly constructor with five parameters
+DOMRect-002.html	DOMRectReadOnly constructor with four parameters
+DOMRect-002.html	DOMRectReadOnly constructor with negative height
+DOMRect-002.html	DOMRectReadOnly constructor with negative width
+DOMRect-002.html	DOMRectReadOnly constructor with negative width and height
+DOMRect-002.html	DOMRectReadOnly constructor with number string
+DOMRect-002.html	DOMRectReadOnly constructor with one parameter
+DOMRect-002.html	DOMRectReadOnly constructor with three parameters
+DOMRect-002.html	DOMRectReadOnly constructor with two parameters
+DOMRect-002.html	DOMRectReadOnly constructor with undefined
+DOMRect-002.html	DOMRectReadOnly constructor without parameter
+DOMRect-002.html	DOMRectReadOnly.fromRect
+DOMRect-002.html	DOMRectReadOnly: set top/right/bottom/left
+DOMRect-002.html	DOMRectReadOnly: set x/y/width/height
+DOMRect-nan.html	DOMRect's height is NaN
+DOMRect-nan.html	DOMRect's width is NaN
+DOMRect-nan.html	DOMRect's x coordinate is NaN
+DOMRect-nan.html	DOMRect's y coordinate is NaN
+DOMRect-nan.html	DOMRectReadOnly's height is NaN
+DOMRect-nan.html	DOMRectReadOnly's width is NaN
+DOMRect-nan.html	DOMRectReadOnly's x coordinate is NaN
+DOMRect-nan.html	DOMRectReadOnly's y coordinate is NaN
+historical.html	CSSMatrix must be nuked
+historical.html	ClientRect must be nuked
+historical.html	ClientRectList must be nuked
+historical.html	DOMMatrixImmutable must be nuked
+historical.html	DOMPointReadOnly matrixTransform number of required arguments
+historical.html	MSCSSMatrix must be nuked
+historical.html	WebKitPoint must be nuked
+idlharness.any.html	DOMPoint interface object length
+idlharness.any.html	DOMPoint interface object name
+idlharness.any.html	DOMPoint interface: existence and properties of interface object
+idlharness.any.html	DOMPoint interface: existence and properties of interface prototype object
+idlharness.any.html	DOMPoint interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	DOMPoint interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	DOMPointReadOnly interface object length
+idlharness.any.html	DOMPointReadOnly interface object name
+idlharness.any.html	DOMPointReadOnly interface: existence and properties of interface object
+idlharness.any.html	DOMPointReadOnly interface: existence and properties of interface prototype object
+idlharness.any.html	DOMPointReadOnly interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	DOMPointReadOnly interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	DOMRect interface object length
+idlharness.any.html	DOMRect interface object name
+idlharness.any.html	DOMRect interface: existence and properties of interface object
+idlharness.any.html	DOMRect interface: existence and properties of interface prototype object
+idlharness.any.html	DOMRect interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	DOMRect interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	DOMRectReadOnly interface object length
+idlharness.any.html	DOMRectReadOnly interface object name
+idlharness.any.html	DOMRectReadOnly interface: existence and properties of interface object
+idlharness.any.html	DOMRectReadOnly interface: existence and properties of interface prototype object
+idlharness.any.html	DOMRectReadOnly interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	DOMRectReadOnly interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	idl_test validation

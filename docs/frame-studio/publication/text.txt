@@ -1,0 +1,2 @@
+PASS: 7161 checks, F2 vectors, ownership, failure, drawing and profile
+Artifacts: /tmp/os64-text-vdj629_h

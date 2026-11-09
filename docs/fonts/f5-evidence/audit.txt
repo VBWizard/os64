@@ -1,0 +1,49 @@
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+
+debugfs 1.47.0 (5-Feb-2023)
+Allocated inode: 65
+debugfs 1.47.0 (5-Feb-2023)
+e2fsck 1.47.0 (5-Feb-2023)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64HOME: 22/65536 files (0.0% non-contiguous), 168414/1048576 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64EXT2: 218/65536 files (3.2% non-contiguous), 33319/262144 blocks
+fsck.fat 4.2 (2021-01-31)
+Free cluster summary wrong (92099 vs. really 92095)
+  Auto-correcting.
+
+Leaving filesystem unchanged.
+/tmp/quinn-f5-guest/final/fat-audit.img: 203 files, 36927/129022 clusters
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+debugfs 1.47.0 (5-Feb-2023)
+e2fsck 1.47.0 (5-Feb-2023)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64HOME: 22/65536 files (0.0% non-contiguous), 168414/1048576 blocks
+e2fsck 1.47.0 (5-Feb-2023)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64EXT2: 218/65536 files (3.2% non-contiguous), 33319/262144 blocks

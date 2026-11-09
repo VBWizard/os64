@@ -1,0 +1,32 @@
+<!doctype html><html><head><title>pile3 text clip</title>
+<!-- S7c (PILE3.md § The text clip): the two probes Chrome was asked, 2026-10-12. --><style>
+body{margin:0;font:bold 34px/44px sans-serif;background:#fff}
+.g{background:linear-gradient(90deg,#f00,#00f);-webkit-background-clip:text;background-clip:text;color:transparent}
+.row{height:48px;margin:0 0 6px 0;position:relative;white-space:nowrap}
+.lab{font:12px sans-serif;color:#000;position:absolute;left:560px;top:14px}
+</style></head><body>
+<div class="row"><div class=g style="width:520px">1 basic gradient</div><span class=lab>1 basic</span></div>
+<div class="row"><div class=g style="width:520px;text-decoration:underline;text-decoration-thickness:6px">2 underline</div><span class=lab>2 underline</span></div>
+<div class="row"><div class=g style="width:520px;text-shadow:4px 4px 0 #0c0">3 text shadow</div><span class=lab>3 shadow</span></div>
+<div class="row"><div class=g style="width:520px">4 a <span style="position:relative;top:0">positioned</span> child</div><span class=lab>4 positioned child</span></div>
+<div class="row"><div class=g style="width:520px">5 a <span style="display:inline-block;transform:rotate(10deg)">turned</span> child</div><span class=lab>5 transformed child</span></div>
+<div class="row"><div class=g style="width:520px">6 an <span style="opacity:.5">opacity</span> child</div><span class=lab>6 opacity child</span></div>
+<div class="row"><div class=g style="width:520px;color:#0a0">7 green colour</div><span class=lab>7 color not transparent</span></div>
+<div class="row"><div class=g style="width:520px;color:#0a0;-webkit-text-fill-color:transparent">8 fill transparent</div><span class=lab>8 fill transparent, color green</span></div>
+<div class="row"><div style="width:520px">9 a <span class=g>gradient span</span> in it</div><span class=lab>9 span</span></div>
+<div style="width:300px;white-space:normal;margin-bottom:6px">10 <span class=g>a gradient span that wraps onto lines</span></div>
+<ul class=g style="width:480px;margin:0 0 6px 0;padding-left:60px"><li>11 marker</li></ul>
+<div class="row"><div class=g style="width:520px;background-color:#0c0">12 colour too</div><span class=lab>12 bg-color + gradient</span></div>
+<div class="row"><div class=g style="width:520px;text-decoration:line-through;text-decoration-thickness:6px;text-decoration-color:#000">13 line-through</div><span class=lab>13 line-through black</span></div>
+<div class="row"><div class=g style="width:520px">14 <span style="float:left">float</span> after</div><span class=lab>14 float</span></div>
+
+<div class="row"><div class=g style="width:520px">15 a <span style="display:inline-block">plain ib</span> x</div><span class=lab>15 inline-block, no transform</span></div>
+<div class="row"><div class=g style="width:520px;position:relative">16 a <span style="position:absolute;left:330px">abs</span></div><span class=lab>16 absolute child</span></div>
+<div class="row"><div class=g style="width:520px">17 a <span style="position:relative;z-index:1">z-indexed</span> x</div><span class=lab>17 relative z-index 1</span></div>
+<div class=g style="width:520px;margin-bottom:6px">18 outer<div>18 block child</div></div>
+<div class="row"><div class=g style="width:520px">19 a <span style="background:#ff0">yellow</span> x</div><span class=lab>19 child with own bg</span></div>
+<div class="row"><div class=g style="width:520px">20 a <span style="opacity:.2">faint</span> x</div><span class=lab>20 opacity .2 child</span></div>
+<div class="row"><div class=g style="width:520px;text-decoration:underline wavy;text-decoration-thickness:3px">21 wavy</div><span class=lab>21 wavy underline</span></div>
+<div class="row"><div class=g style="width:520px;padding-left:40px;border:6px solid rgba(0,0,0,.2)">22 border box</div><span class=lab>22 padding+border</span></div>
+<div class="row"><div class=g style="width:200px;overflow:visible">23 overflowing past the box</div><span class=lab>23 text past border box</span></div>
+</body></html>

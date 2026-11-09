@@ -1,0 +1,212 @@
+# WPT's intersection-observer in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh intersection-observer --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+animating.html	IntersectionObserver generates notifications when a transform animation changes intersection state
+bounding-box.html	First rAF.
+bounding-box.html	Test that the target's border bounding box is used to calculate intersection.
+bounding-box.html	target.style.transform = 'translateY(195px)'
+bounding-box.html	target.style.transform = 'translateY(300px)'
+containing-block.html	In containing block and intersecting.
+containing-block.html	In containing block and not intersecting.
+containing-block.html	IntersectionObserver should only report intersections if root is a containing block ancestor of target.
+containing-block.html	Not in containing block and intersecting.
+containing-block.html	Not in containing block and not intersecting.
+disconnect.html	First rAF.
+disconnect.html	IntersectionObserver should not deliver pending notifications after disconnect().
+disconnect.html	observer.disconnect()
+display-contents.html	A target is observed through an ancestor with display: contents
+display-none.html	display-none
+edge-inclusive-intersection.html	IntersectionObserver should detect and report edge-adjacent and zero-area intersections.
+empty-root-margin.html	An empty rootMargin string is interpreted as a margin of size zero
+explicit-root-different-document.html	IntersectionObserver reports a (non-intersecting) entry if different-document from the doc
+idlharness.window.html	Element includes ChildNode: member names are unique
+idlharness.window.html	Element includes NonDocumentTypeChildNode: member names are unique
+idlharness.window.html	Element includes ParentNode: member names are unique
+idlharness.window.html	Element includes Slottable: member names are unique
+idlharness.window.html	IntersectionObserver interface object length
+idlharness.window.html	IntersectionObserver interface object name
+idlharness.window.html	IntersectionObserver interface: calling observe(Element) on observer with too few arguments must throw TypeError
+idlharness.window.html	IntersectionObserver interface: calling unobserve(Element) on observer with too few arguments must throw TypeError
+idlharness.window.html	IntersectionObserver interface: existence and properties of interface object
+idlharness.window.html	IntersectionObserver interface: existence and properties of interface prototype object
+idlharness.window.html	IntersectionObserver interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	IntersectionObserver interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "delay" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "disconnect()" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "observe(Element)" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "root" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "rootMargin" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "scrollMargin" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "takeRecords()" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "thresholds" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "trackVisibility" with the proper type
+idlharness.window.html	IntersectionObserver interface: observer must inherit property "unobserve(Element)" with the proper type
+idlharness.window.html	IntersectionObserver must be primary interface of observer
+idlharness.window.html	IntersectionObserverEntry interface object length
+idlharness.window.html	IntersectionObserverEntry interface object name
+idlharness.window.html	IntersectionObserverEntry interface: existence and properties of interface object
+idlharness.window.html	IntersectionObserverEntry interface: existence and properties of interface prototype object
+idlharness.window.html	IntersectionObserverEntry interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	IntersectionObserverEntry interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	Stringification of observer
+idlharness.window.html	idl_test setup
+idlharness.window.html	idl_test validation
+initial-observation-with-threshold.html	First observation with a threshold.
+initial-observation-with-threshold.html	First rAF
+initial-observation-with-threshold.html	root.scrollTop = 20
+inline-client-rect.html	Inline target
+inline-with-block-child-client-rect.html	First rAF
+inline-with-block-child-client-rect.html	Inline target containing a block child
+intersection-ratio-ib-split.html	IntersectionObserver on an IB split gets the right intersection ratio - BLOCK
+intersection-ratio-with-fractional-bounds-2.html	IntersectionObserver ratio with fractional bounds
+intersection-ratio-with-fractional-bounds.html	IntersectionObserver ratio with fractional bounds
+isIntersecting-change-events.html	isIntersecting changes should trigger notifications.
+multiple-targets.html	First rAF.
+multiple-targets.html	One observer with multiple targets.
+multiple-targets.html	document.scrollingElement.scrollTop = 0
+multiple-targets.html	document.scrollingElement.scrollTop = 10000
+multiple-targets.html	document.scrollingElement.scrollTop = 150
+multiple-thresholds.html	First rAF.
+multiple-thresholds.html	Observer with multiple thresholds.
+multiple-thresholds.html	document.scrollingElement.scrollTop = 120
+multiple-thresholds.html	document.scrollingElement.scrollTop = 160
+multiple-thresholds.html	document.scrollingElement.scrollTop = 200
+multiple-thresholds.html	document.scrollingElement.scrollTop = 240
+multiple-thresholds.html	document.scrollingElement.scrollTop = window.innerHeight + 140
+multiple-thresholds.html	document.scrollingElement.scrollTop = window.innerHeight + 160
+multiple-thresholds.html	document.scrollingElement.scrollTop = window.innerHeight + 200
+multiple-thresholds.html	document.scrollingElement.scrollTop = window.innerHeight + 220
+not-in-containing-block-chain.html	IntersectionObserver reports a (non-intersecting) entry even if not in the containing block chain
+observe-after-unobserve.html	Re-observing a target after unobserve() delivers a new initial notification.
+observer-attributes.html	Observer attribute getters.
+observer-attributes.html	empty observer.thresholds
+observer-attributes.html	observer.root
+observer-attributes.html	observer.rootMargin
+observer-attributes.html	observer.thresholds
+observer-attributes.html	set observer.root
+observer-attributes.html	set observer.rootMargin
+observer-attributes.html	set observer.thresholds
+observer-attributes.html	whitespace observer.rootMargin
+observer-callback-arguments.html	Callback is invoked with |this| value of IntersectionObserver and two arguments
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "1" }
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "1px !important" }
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "1px 1px 1px 1px 1px" }
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "2em" }
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "auto" }
+observer-exceptions.html	IntersectionObserver constructor with { rootMargin: "calc(1px + 2px)" }
+observer-exceptions.html	IntersectionObserver constructor with { threshold: ["foo"] }
+observer-exceptions.html	IntersectionObserver constructor with { threshold: [1.1] }
+observer-exceptions.html	IntersectionObserver.observe("foo")
+observer-without-js-reference.html	First rAF
+observer-without-js-reference.html	IntersectionObserver that is unreachable in js should still generate notifications.
+observer-without-js-reference.html	document.scrollingElement.scrollTop = 300
+padding-clip.html	Scrollport is used rather than content rect to compute intersection ratio
+reinsert-element.html	An element that is removed and reinserted without an intervening rendering update doesn't generate a 'not-intersecting' notification.
+remove-element.html	First rAF
+remove-element.html	Verify that not-intersecting notifications are sent when a target is removed from the DOM tree.
+remove-element.html	root.insertBefore(target, trailingSpace).
+remove-element.html	root.removeChild(target).
+remove-element.html	root.scrollTop = 150
+remove-element.html	root.scrollTop = 150 after reinserting target.
+root-margin-root-element.html	First rAF
+root-margin-root-element.html	Root margin with explicit root.
+root-margin-root-element.html	document.scrollingElement.scrollTop = 0.
+root-margin-root-element.html	document.scrollingElement.scrollTop = window.innerHeight.
+root-margin-root-element.html	root.scrollTop = 0
+root-margin-root-element.html	root.scrollTop = 50 with root scrolled out of view.
+root-margin-root-element.html	root.scrollTop = 50, putting target into root margin
+root-margin-rounding.html	IntersectionObserver root margin cannot end up with negative rect (and thus non-intersecting) due to rounding
+root-margin-scroll-margin-units.html	observer.rootMargin using 'cm'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'in'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'mm'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'pc'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'pt'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'px'
+root-margin-scroll-margin-units.html	observer.rootMargin using 'q'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'cm'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'in'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'mm'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'pc'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'pt'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'px'
+root-margin-scroll-margin-units.html	observer.scrollMargin using 'q'
+root-margin.html	First rAF.
+root-margin.html	Root margin tests
+root-margin.html	document.scrollingElement.scrollLeft = 100
+root-margin.html	document.scrollingElement.scrollTop = document.documentElement.clientHeight + 200
+root-margin.html	document.scrollingElement.scrollTop = document.documentElement.clientHeight + 300
+root-vertical-rl.html	IntersectionObserver vertical-rl root.
+rtl-clipped-root.html	Explicit rtl root with overflow clipping
+rtl-clipped-root.html	First rAF
+same-document-no-root.html	First rAF.
+same-document-no-root.html	IntersectionObserver in a single document using the implicit root.
+same-document-no-root.html	document.scrollingElement.scrollTop = 100
+same-document-no-root.html	document.scrollingElement.scrollTop = 300
+same-document-root.html	First rAF
+same-document-root.html	IntersectionObserver in a single document with explicit root.
+same-document-root.html	document.scrollingElement.scrollTop = 0.
+same-document-root.html	document.scrollingElement.scrollTop = window.innerHeight.
+same-document-root.html	root.scrollTop = 0
+same-document-root.html	root.scrollTop = 150 with root scrolled into view.
+same-document-root.html	root.scrollTop = 150 with root scrolled out of view.
+same-document-with-document-root.html	First rAF.
+same-document-with-document-root.html	IntersectionObserver in a single document using document as root.
+same-document-with-document-root.html	document.scrollingElement.scrollTop = 300
+same-document-zero-size-target.html	First rAF
+same-document-zero-size-target.html	Observing a zero-area target.
+same-document-zero-size-target.html	document.scrollingElement.scrollTop = 100
+same-document-zero-size-target.html	document.scrollingElement.scrollTop = 300
+svg-clipped-rect-target.html	IntersectionObserver observing a clipped SVG <rect> element
+svg-container-element.html	IntersectionObserver observing an SVG container element changing position
+svg-group-target.html	IntersectionObserver observing an SVG <g> element
+svg-image.html	IntersectionObserver observing an SVG image element changing position
+svg-intersection-with-fractional-bounds.html	IntersectionObserver observing an SVG <rect> with fractional bounds element
+svg-rect-target.html	IntersectionObserver observing an SVG <rect> element
+svg-stroke-change.html	IntersectionObserver observing an SVG element while its stroke is changed
+svg-target-changes-position.html	IntersectionObserver observing an SVG element changing position
+svg-transformed-rect-target.html	IntersectionObserver observing an SVG <rect> element with changing 'transform'
+target-in-detached-document.html	IntersectionObserver in a single document using the implicit root.
+target-is-root.html	IntersectionObserver when root == target doesn't compute an intersection
+text-target.html	IntersectionObserver observing a br element.
+thresholds-frozen-array.html	Check thresholds is FrozenArray.
+unclipped-root.html	First rAF.
+unclipped-root.html	Test that border bounding box is used to calculate intersection with a non-scrolling root.
+unclipped-root.html	target.style.transform = 'translateY(195px)'
+v2/3d-transform-flattened-preserve-3d-occlusion.html	3d-transform-flattened-preserve-3d-occlusion
+v2/3d-transform-occlusion-2.html	3d-transform-occlusion-2
+v2/3d-transform-overflow-control-occlusion.html	3d-transform-overflow-control-occlusion
+v2/3d-transform-z-order-occlusion.html	3d-transform-z-order-occlusion
+v2/animated-occlusion.html	First rAF.
+v2/animated-occlusion.html	IntersectionObserverV2 in a single document using the implicit root, with an animated occluding element.
+v2/animated-opacity.html	IntersectionObserver generates notifications when an opacity animation changes occlusion state.
+v2/blur-filter.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/border-radius-shadow-occlusion-replaced.html	border-radius-shadow-occlusion-replaced
+v2/border-radius-shadow-occlusion.html	border-radius-shadow-occlusion
+v2/border-shape-occlusion.html	border-shape-occlusion
+v2/border-shape-overflow-occlusion.html	border-shape-overflow-occlusion
+v2/box-shadow.html	First rAF.
+v2/box-shadow.html	IntersectionObserverV2 observing an iframe element.
+v2/drop-shadow-filter-vertical-rl.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/iframe-target.html	IntersectionObserverV2 observing an iframe element.
+v2/inline-occlusion.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/position-absolute-overflow-visible-and-not-visible.html	ParentWithOverflowVisibleAndNotVisible
+v2/position-relative.html	IntersectionObserverV2 observing a position:relative div containing a position:relative child
+v2/simple-effects.html	IntersectionObserverV2 in a single document using the implicit root, with a non-zero opacity ancestor.
+v2/simple-occlusion-svg-foreign-object.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/simple-occlusion.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/svg-drop-shadow-occlusion.html	svg-drop-shadow-occlusion
+v2/text-editor-occlusion.html	IntersectionObserverV2 in a single document using the implicit root, with an occluding element.
+v2/text-shadow.html	First rAF.
+v2/text-shadow.html	IntersectionObserverV2 observing an iframe element.
+visibility-hidden.html	First rAF.
+visibility-hidden.html	IntersectionObserver observing a visibility:hidden element.
+visibility-hidden.html	document.scrollingElement.scrollTop = 300
+zero-area-element-hidden.html	A zero-area hidden target should not be intersecting.
+zero-area-element-hidden.html	First rAF.
+zero-area-element-visible.html	Ensure that a zero-area target intersecting root generates a notification with intersectionRatio == 1
+zero-area-element-visible.html	First rAF should generate a notification.
+zoom-scaled-target.html	IntersectionObserver observing elements with css zoom

@@ -1,0 +1,6 @@
+12906 (0x002e) AP1: [user] husk: task 58 (scribe) started
+36435 (0x002f) AP0: [user] husk: task 59 (fontsettingstest) started
+36444 (0x002f) AP1: [user] husk: task 59 (fontsettingstest) exited code 0
+57660 (0x002f) AP2: [user] husk: task 63 (grootmenu) started
+57660 (0x003f) AP3: [user] grootmenu: /etc/menu.conf defines no menu named "missing"
+57660 (0x002f) AP2: [user] husk: task 63 (grootmenu) exited code 1

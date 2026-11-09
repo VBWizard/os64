@@ -1,0 +1,5 @@
+Transient binding refusal: retained run=1 run caret x=32 painted caret x=42 selected rightmost x=41 (origin=2)
+Next paint, unchanged bytes: caret x=34 selected rightmost x=33
+teardown=0
+Field transient binding refusal: bitmap text ends at x=44, painted caret x=36 retained run=1
+field teardown=0

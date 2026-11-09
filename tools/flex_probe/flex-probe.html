@@ -1,0 +1,30 @@
+<!doctype html>
+<title>Flex probe</title>
+<style>
+  body { font: 16px sans-serif; margin: 20px }
+  .c { display: flex; width: 300px; border: 0; padding: 0; margin-bottom: 10px }
+  .i { width: 200px; height: 20px; flex-shrink: 0; background: #cce }
+  .x { display: inline-flex; border: 0; padding: 0 }
+</style>
+
+<h3>1. Items that overflow: where each justify-content puts the first item</h3>
+<p>Two items of 200px, not shrinking, in a 300px row (100px of overflow).</p>
+<div class=c id=between style="justify-content: space-between"><div class=i id=b1></div><div class=i></div></div>
+<div class=c id=around style="justify-content: space-around"><div class=i id=a1></div><div class=i></div></div>
+<div class=c id=evenly style="justify-content: space-evenly"><div class=i id=e1></div><div class=i></div></div>
+<div class=c id=center style="justify-content: center"><div class=i id=c1></div><div class=i></div></div>
+
+<h3>2. An inline-flex's width with unequal flex factors</h3>
+<p>Two items holding "aaaa" and "bb bb bb bb", flex-grow 1 and 3.</p>
+<div><span class=x id=x><span id=x1 style="flex: 1 1 auto">aaaa</span><span style="flex: 3 1 auto">bb bb bb bb</span></span></div>
+
+<pre id="out">(needs script)</pre>
+<script>
+  function r(id) { return document.getElementById(id).getBoundingClientRect(); }
+  const o = [];
+  for (const [box, first] of [['between','b1'],['around','a1'],['evenly','e1'],['center','c1']])
+    o.push(box + ': first item left - container left = ' + (r(first).left - r(box).left));
+  o.push('inline-flex width = ' + r('x').width + ', first item width = ' + r('x1').width);
+  o.push(navigator.userAgent);
+  document.getElementById('out').textContent = o.join('\n');
+</script>

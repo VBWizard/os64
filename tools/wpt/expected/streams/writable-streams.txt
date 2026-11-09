@@ -1,0 +1,204 @@
+# WPT's streams/writable-streams in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh streams/writable-streams --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+aborting.any.html	.closed should not resolve before fulfilled write()
+aborting.any.html	.closed should not resolve before rejected write(); write() error should not overwrite abort() error
+aborting.any.html	Aborting a WritableStream after it is closed is a no-op
+aborting.any.html	Aborting a WritableStream before it starts should cause the writer's unsettled ready promise to reject
+aborting.any.html	Aborting a WritableStream causes any outstanding write() promises to be rejected with the reason supplied
+aborting.any.html	Aborting a WritableStream immediately prevents future writes
+aborting.any.html	Aborting a WritableStream passes through the given reason
+aborting.any.html	Aborting a WritableStream prevents further writes after any that are in progress
+aborting.any.html	Aborting a WritableStream puts it in an errored state with the error passed to abort()
+aborting.any.html	Aborting a WritableStream should cause the writer's fulfilled ready promise to reset to a rejected one
+aborting.any.html	Closing a WritableStream and aborting it while it closes causes the stream to ignore the abort attempt
+aborting.any.html	Closing but then immediately aborting a WritableStream causes the stream to error
+aborting.any.html	Fulfillment value of writer.abort() call must be undefined even if the underlying sink returns a non-undefined value
+aborting.any.html	WritableStream if sink's abort throws, for an abort performed during a write, the promise returned by ws.abort() rejects
+aborting.any.html	WritableStream if sink's abort throws, the promise returned by multiple writer.abort()s is the same and rejects
+aborting.any.html	WritableStream if sink's abort throws, the promise returned by writer.abort() rejects
+aborting.any.html	WritableStream if sink's abort throws, the promise returned by ws.abort() rejects
+aborting.any.html	WritableStream should NOT call underlying sink's close if no abort is supplied (historical)
+aborting.any.html	WritableStreamDefaultController.signal
+aborting.any.html	a rejecting sink.write() should not prevent sink.abort() from being called
+aborting.any.html	abort on a locked stream should reject
+aborting.any.html	abort with a string argument should set the stored error to that argument
+aborting.any.html	abort with an undefined argument should set the stored error to undefined
+aborting.any.html	abort with no arguments should set the stored error to undefined
+aborting.any.html	abort() on a released writer rejects
+aborting.any.html	abort() should be rejected with the rejection returned from close()
+aborting.any.html	abort() should succeed despite rejection from write
+aborting.any.html	an abort() that happens during a write() should trigger the underlying abort() even with a close() queued
+aborting.any.html	calling abort() on an errored stream should fulfill with undefined
+aborting.any.html	close() should reject with abort reason why abort() is first error
+aborting.any.html	controller.error(), writer.abort() while there is an in-flight close, and then finish the close
+aborting.any.html	controller.error(), writer.abort() while there is an in-flight write, and then finish the write
+aborting.any.html	if a writer is created for a stream with a pending abort, its ready should be rejected with the abort error
+aborting.any.html	if start attempts to error the controller after abort() has been called, then it should lose
+aborting.any.html	if underlying close() has started and then rejects, the abort() and close() promises should reject with the underlying close rejection reason
+aborting.any.html	promises returned from other writer methods should be rejected when writer abort() happens during sink start()
+aborting.any.html	recursive abort() call from abort() aborting signal
+aborting.any.html	recursive abort() call from abort() aborting signal (not started)
+aborting.any.html	recursive close() call from abort() aborting signal
+aborting.any.html	recursive close() call from abort() aborting signal (not started)
+aborting.any.html	releaseLock() during delayed async abort() should reject the writer.closed promise
+aborting.any.html	releaseLock() while aborting should reject the original closed promise
+aborting.any.html	returning a thenable from abort() should work
+aborting.any.html	sink abort() should not be called if stream was erroring due to bad strategy before abort() was called
+aborting.any.html	sink abort() should not be called if stream was erroring due to controller.error() before abort() was called
+aborting.any.html	sink abort() should not be called until sink start() is done
+aborting.any.html	stream abort() promise should still resolve if sink start() rejects
+aborting.any.html	the abort signal is not signalled on close failure
+aborting.any.html	the abort signal is not signalled on error
+aborting.any.html	the abort signal is not signalled on write failure
+aborting.any.html	the abort signal is signalled synchronously - close
+aborting.any.html	the abort signal is signalled synchronously - write
+aborting.any.html	underlying abort() should not be called if underlying close() has started
+aborting.any.html	underlying abort() should not be called until underlying write() completes
+aborting.any.html	when calling abort() twice on the same stream, both should give the same promise that fulfills with undefined
+aborting.any.html	when calling abort() twice on the same stream, but sequentially so so there's no pending abort the second time, both should fulfill with undefined
+aborting.any.html	when start errors after stream abort(), underlying sink abort() should be called anyway
+aborting.any.html	writer abort() during sink start() should replace the writer.ready promise synchronously
+aborting.any.html	writer close() promise should resolve before abort() promise
+aborting.any.html	writer.abort() while there is an in-flight write, and then finish the write with rejection
+aborting.any.html	writer.abort(), controller.error() while there is an in-flight close, and then finish the close
+aborting.any.html	writer.abort(), controller.error() while there is an in-flight write, and then finish the write
+aborting.any.html	writer.ready should reject on controller error without waiting for underlying write
+aborting.any.html	writes should be satisfied in order after rejected write when aborting
+aborting.any.html	writes should be satisfied in order when aborting
+bad-strategies.any.html	Writable stream: invalid size beats invalid highWaterMark
+bad-strategies.any.html	Writable stream: invalid strategy.highWaterMark
+bad-strategies.any.html	Writable stream: invalid strategy.size return value
+bad-strategies.any.html	Writable stream: throwing strategy.highWaterMark getter
+bad-strategies.any.html	Writable stream: throwing strategy.size getter
+bad-strategies.any.html	Writable stream: throwing strategy.size method
+bad-strategies.any.html	reject any non-function value for strategy.size
+bad-underlying-sinks.any.html	abort: non-function abort method with .apply
+bad-underlying-sinks.any.html	abort: throwing getter should cause abort() and closed to reject
+bad-underlying-sinks.any.html	abort: throwing method should cause abort() and closed to reject
+bad-underlying-sinks.any.html	close: non-function close method
+bad-underlying-sinks.any.html	close: returning a rejected promise should cause writer close() and ready to reject
+bad-underlying-sinks.any.html	close: throwing getter should cause constructor to throw
+bad-underlying-sinks.any.html	close: throwing method should cause writer close() and ready to reject
+bad-underlying-sinks.any.html	start: errors in start cause WritableStream constructor to throw
+bad-underlying-sinks.any.html	start: non-function start method
+bad-underlying-sinks.any.html	write: non-function write method
+bad-underlying-sinks.any.html	write: returning a promise that becomes rejected after the writer write() should cause writer write() and ready to reject
+bad-underlying-sinks.any.html	write: returning a rejected promise (second write) should cause writer write() and ready to reject
+bad-underlying-sinks.any.html	write: throwing getter should cause write() and closed to reject
+bad-underlying-sinks.any.html	write: throwing method should cause write() and closed to reject
+byte-length-queuing-strategy.any.html	Closing a writable stream with in-flight writes below the high water mark delays the close call properly
+close.any.html	close() on a locked stream should reject
+close.any.html	close() on a stream with a pending close should reject
+close.any.html	close() on a writable stream should work
+close.any.html	close() on an closed stream should reject
+close.any.html	close() on an errored stream should reject
+close.any.html	close() on an erroring stream should reject
+close.any.html	close() should not reject until no sink methods are in flight
+close.any.html	close() should set state to CLOSED even if writer has detached
+close.any.html	fulfillment value of writer.close() call must be undefined even if the underlying sink returns a non-undefined value
+close.any.html	promises must fulfill/reject in the expected order on aborted and errored closure
+close.any.html	promises must fulfill/reject in the expected order on aborted closure
+close.any.html	promises must fulfill/reject in the expected order on closure
+close.any.html	ready promise should be initialised as fulfilled for a writer on a closed stream
+close.any.html	releaseLock on a stream with a pending close in which controller.error() was called
+close.any.html	releaseLock on a stream with a pending write in which the stream has been errored
+close.any.html	releaseLock() should not change the result of async close()
+close.any.html	releaseLock() should not change the result of sync close()
+close.any.html	returning a thenable from close() should work
+close.any.html	the promise returned by async abort during close should resolve
+close.any.html	when close is called on a WritableStream in waiting state, ready promise should be fulfilled
+close.any.html	when close is called on a WritableStream in waiting state, ready should be fulfilled immediately even if close takes a long time
+close.any.html	when close is called on a WritableStream in writable state, ready should return a fulfilled promise
+close.any.html	when sink calls error asynchronously while sink close is in-flight, the stream should not become errored
+close.any.html	when sink calls error synchronously while closing, the stream should not become errored
+close.any.html	when the sink throws during close, and the close is requested while a write is still in-flight, the stream should become errored during the close
+close.any.html	write() on a closed stream should reject
+constructor.any.html	WritableStream can't be constructed with a defined type
+constructor.any.html	WritableStream instances should have standard methods and properties
+constructor.any.html	WritableStream should be constructible with no arguments
+constructor.any.html	WritableStream should be writable and ready should fulfill immediately if the strategy does not apply backpressure
+constructor.any.html	WritableStreamDefaultController constructor should throw
+constructor.any.html	WritableStreamDefaultController constructor should throw when passed an initialised WritableStream
+constructor.any.html	WritableStreamDefaultWriter constructor should throw when stream argument is locked
+constructor.any.html	WritableStreamDefaultWriter should throw unless passed a WritableStream
+constructor.any.html	controller argument should be passed to start method
+constructor.any.html	controller argument should be passed to write method
+constructor.any.html	controller argument should not be passed to close method
+constructor.any.html	highWaterMark should be reflected to desiredSize
+constructor.any.html	underlyingSink argument should be converted after queuingStrategy argument
+count-queuing-strategy.any.html	Can construct a writable stream with a valid CountQueuingStrategy
+count-queuing-strategy.any.html	Correctly governs the value of a WritableStream's state property (HWM = 0)
+count-queuing-strategy.any.html	Correctly governs the value of a WritableStream's state property (HWM = 4)
+crashtests/garbage-collection.any.html	Garbage-collecting a stream writer should not crash when backpressure is being applied
+crashtests/garbage-collection.any.html	Garbage-collecting a stream writer should not crash with abort promise pending
+crashtests/garbage-collection.any.html	Garbage-collecting a stream writer should not crash with close promise pending
+crashtests/garbage-collection.any.html	Garbage-collecting a stream writer should not crash with closed promise is retained
+crashtests/garbage-collection.any.html	Garbage-collecting a stream writer with a pending write should not crash
+crashtests/garbage-collection.any.html	WritableStream should not crash when garbage collected with backpressure
+error.any.html	controller.error() on closed stream should not throw
+error.any.html	controller.error() on errored stream should not throw
+error.any.html	controller.error() on erroring stream should not throw
+error.any.html	controller.error() should error the stream
+error.any.html	surplus calls to controller.error() should be a no-op
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up positive, and not clamped)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up positive, but clamped)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up zero)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near NUMBER.MAX_SAFE_INTEGER (total ends up positive)
+garbage-collection.any.html	A WritableStream and its writer should not be garbage collected while there is a write promise pending
+general.any.html	Subclassing WritableStream should work
+general.any.html	WritableStream should call underlying sink methods as methods
+general.any.html	WritableStream's strategy.size should not be called as a method
+general.any.html	closed and ready on a released writer
+general.any.html	desiredSize initial value
+general.any.html	desiredSize on a released writer
+general.any.html	desiredSize on a writer for a closed stream
+general.any.html	desiredSize on a writer for an errored stream
+general.any.html	methods should not not have .apply() or .call() called
+general.any.html	ready promise should fire before closed on releaseLock
+general.any.html	redundant releaseLock() is no-op
+general.any.html	the locked getter should return true if the stream has a writer
+general.any.html	ws.getWriter() on a closed WritableStream
+general.any.html	ws.getWriter() on a closing WritableStream
+general.any.html	ws.getWriter() on an aborted WritableStream
+general.any.html	ws.getWriter() on an errored WritableStream
+properties.any.html	sink method abort should be called even when it's located on the prototype chain
+properties.any.html	sink method abort should be called with the right number of arguments
+properties.any.html	sink method close should be called even when it's located on the prototype chain
+properties.any.html	sink method close should be called with the right number of arguments
+properties.any.html	sink method start should be called even when it's located on the prototype chain
+properties.any.html	sink method start should be called with the right number of arguments
+properties.any.html	sink method write should be called even when it's located on the prototype chain
+properties.any.html	sink method write should be called with the right number of arguments
+reentrant-strategy.any.html	abort() should work when called from within strategy.size()
+reentrant-strategy.any.html	close() should work when called from within strategy.size()
+reentrant-strategy.any.html	controller.error() should work when called from within strategy.size()
+reentrant-strategy.any.html	original reader should error when new reader is created within strategy.size()
+reentrant-strategy.any.html	releaseLock() should abort the write() when called within strategy.size()
+reentrant-strategy.any.html	writer.write() promises should resolve in the standard order
+reentrant-strategy.any.html	writes should be written in the standard order
+start.any.html	controller.error() during async start should cause existing writes to fail
+start.any.html	controller.error() during start should cause writes to fail
+start.any.html	returning a thenable from start() should work
+start.any.html	underlying sink's close should not be called until start finishes
+start.any.html	underlying sink's write or close should not be called if start throws
+start.any.html	underlying sink's write or close should not be invoked if the promise returned by start is rejected
+start.any.html	underlying sink's write should not be called until start finishes
+start.any.html	when start() rejects, writer promises should reject in standard order
+write.any.html	WritableStream should complete asynchronous writes before close resolves
+write.any.html	WritableStream should complete synchronous writes before close resolves
+write.any.html	WritableStream should transition to waiting until write is acknowledged
+write.any.html	WritableStreamDefaultWriter should work when manually constructed
+write.any.html	a large queue of writes should be processed completely
+write.any.html	failing DefaultWriter constructor should not release an existing writer
+write.any.html	fulfillment value of ws.write() call should be undefined even if the underlying sink returns a non-undefined value
+write.any.html	returning a thenable from write() should work
+write.any.html	when sink's write throws an error, the stream should become errored and the promise should reject
+write.any.html	when write returns a rejected promise, queued writes and close should be cleared
+write.any.html	write() on a stream with HWM 0 should not cause the ready Promise to resolve
+write.any.html	writer.write(), ready and closed reject with the error passed to controller.error() made before sink.write rejection
+write.any.html	writing to a released writer should reject the returned promise

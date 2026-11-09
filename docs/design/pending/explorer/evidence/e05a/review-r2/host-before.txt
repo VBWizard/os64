@@ -1,0 +1,6 @@
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:512 [review: oversized startup font and manual resize from maximized] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:512 [review: oversized startup font and manual resize from maximized] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:528 [review: oversized startup font and manual resize from maximized] size_writes==before+1 && !strcmp(saved_size,"1200,850")
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:533 [review: oversized startup font and manual resize from maximized] d->draw.surf.width==1200 && d->draw.surf.height==850
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:536 [review: oversized startup font and manual resize from maximized] size_writes==before+1
+file dialogs: 4665 checks, 5 failures

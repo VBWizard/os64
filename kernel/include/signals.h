@@ -86,8 +86,10 @@ typedef enum esignals
 		// Parent death has never killed anything in Unix (orphans are
 		// reparented and run on; that is what makes a daemon possible). THIS
 		// is what ends a shell's leftovers, and `nohup` (PWB, 1979) exists
-		// solely to opt out of it. Raised by tty_task_departed on every task
-		// still seated on the departing shell's terminal. (SIGHUP = 1, above.)
+		// solely to opt out of it. Raised on every task still seated when
+		// the line goes away — the seated shell dying (tty_task_departed)
+		// or a pty's master closing (pty_master_close), which are the same
+		// carrier drop heard from opposite ends. (SIGHUP = 1, above.)
 
 		// SIGTERM: the machine is going down; finish up. Raised by the
 		// shutdown descent's termination ladder on every user task, with a
@@ -205,6 +207,12 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	#define SIGNALS_EXIT_SIGHUP   129   // 128 + 1
 	#define SIGNALS_EXIT_SIGINT   130   // 128 + 2
 	#define SIGNALS_EXIT_SIGKILL  137   // 128 + 9
+	// SIGSEGV is not raised through this file's delivery path — the page-fault
+	// handler kills the task where the fault happened — but the STATUS it
+	// leaves is the same encoding, so it belongs with its siblings rather than
+	// as a literal at the exception. A number that lives alone is a number the
+	// assertions below cannot reach.
+	#define SIGNALS_EXIT_SIGSEGV  139   // 128 + 11
 	#define SIGNALS_EXIT_SIGPIPE  141   // 128 + 13
 	#define SIGNALS_EXIT_SIGTERM  143   // 128 + 15
 

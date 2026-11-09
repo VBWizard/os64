@@ -53,12 +53,16 @@
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
+#include "knet.h"                  // the network drainer, minted beside kworker
+#include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
 #include "driver/filesystem/sys/sysfs.h"
 #include "driver/filesystem/dev/devfs.h"
 #include "conf.h"                        // the config search path — settled once the mounts exist
+#include "bootenv.h"   // bootenv_apply — the first reader on the ladder
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -72,7 +76,11 @@ extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
-extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
+extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
+extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
+extern bool kRunSshd;
+extern bool kRunVncd;
+extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
@@ -144,6 +152,9 @@ bool kEnableNet = true;
 // here that has one, so this flag exists for the day that machine needs to
 // boot WITHOUT its NIC in order to diagnose something else.
 bool kEnableR8125 = true;
+// Set by NETPOLL — every NIC stays tick-driven: no INTx probe, no MSI, and
+// knet wakes only when processSignals rings it (DOORBELL.md's flashlight).
+bool kNetPoll = false;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.
@@ -152,7 +163,7 @@ volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
-int kTimeZone;
+int kTimeZoneOffsetMinutes;
 volatile bool kInitDone;
 volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
@@ -163,8 +174,10 @@ char kKernelCommandline[512];
 bool kOverrideFileLogging;
 char kRootPartUUID[37] = {0};
 // The TZ= kernel cmdline string, verbatim (classic V7/POSIX format, e.g.
-// EST5EDT). Two consumers: init.c derives kTimeZone's standard offset from
-// it, and kernel_init seeds it into the first task's environment — where
+// EST5EDT). Two consumers: init.c derives the kernel's standard offset from
+// it, and create_kernel_task seeds it into the first task's environment (and
+// bootenv_apply re-applies it over bootenv.conf: typed for this boot, it
+// outranks the file) — where
 // libos64's calendar applies the full policy (DST included). The kernel
 // itself never learns DST; it just delivers the string.
 char kTZString[64] = {0};
@@ -173,18 +186,23 @@ char startTime[100] = {0};
 uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
+uint64_t kBootTSC;   // stamped first thing in kernel_main (kernel.h)
 // Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
 //
-// Default 5 (was 15 until 2026-08-01). The accuracy argument for 15 was
-// real but small: ±1 tick of boundary slop across 1500 ticks is ±0.07%,
-// versus ±0.2% across 500. What tipped it is that the continuous
-// recalibrator erases that gap within seconds of boot, while the 15
-// seconds are paid IN FULL on every single boot, by a human, watching a
-// progress line — and this OS gets booted dozens of times an evening.
-// Ten seconds of somebody's life beats 0.13% of initial timer accuracy
-// that a background task is about to fix anyway. Raise it for a session
-// that genuinely needs a tight cold start: TSCCAL=15.
-int kTSCCalibrationSeconds = 5;
+// The rate measured here is FIXED for the life of the boot. Every CPU-time
+// figure the kernel reports is cycles divided by this number, so moving it
+// later re-prices the whole history at once: a monotonic counter can step
+// backward, and top sees the step as a one-round blip in every column. A
+// converging recalibrator was tried and retired for exactly that (the
+// commit that removed it has the numbers). A percentage that divides one
+// ledger delta by another converts both at this same rate, so a fixed scale
+// error cancels out of it; only absolute CPU time carries the error.
+//
+// Precision is ±1 tick of boundary slop over the window: 3 seconds is 300
+// ticks, ±0.33%. That is the whole cost of a short window, and every second
+// here is paid IN FULL on every boot by a human watching a counter. Use
+// TSCCAL=15 (±0.07%) when absolute CPU-time units justify the wait.
+int kTSCCalibrationSeconds = 3;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
@@ -203,15 +221,29 @@ void create_kernel_task()
 	// Where husk (and anything else consulting the environment) looks for
 	// programs — colon-separated, walked by userland PATH search. Every task
 	// inherits this block, so one seed here reaches the whole tree.
-	env_set(parentTask.env, "PATH",     "/bin");
+	//
+	// /tests comes SECOND, and the order is what lets it be on the path at
+	// all: /bin is the programs and tools, /tests is the proof harness, and a
+	// fixture must never be able to shadow a command that shares its name.
+	// Putting it on the path at all is a convenience ruling — `testrun`,
+	// `fputest` and the probes stay typeable without a path, which is what the
+	// split would otherwise have cost.
+	//
+	// THIS IS THE FLOOR, NOT THE CONFIGURATION. bootenv.conf (bootenv.h) is
+	// applied over this block in kernel_init once the search path exists, and
+	// is where PATH, HOSTNAME and TZ are actually decided; these two lines are
+	// what a boot with no bootenv.conf anywhere — the lifeboat's, or a broken
+	// root's — still gets, so that husk can find its programs.
+	env_set(parentTask.env, "PATH",     "/bin:/tests");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
 	// TZ, if the boot cmdline provided one — the kernel is just the courier
 	// here: the string rides into the first task's environment, inheritance
-	// carries it to everything husk ever spawns, and libos64's calendar is
-	// what actually reads it (offset AND daylight-saving policy). No TZ on
-	// the cmdline = no TZ in the env = the library falls back to the
-	// kernel's standard offset via the time() syscall. Three tiers, each
-	// dumber than the one above it.
+	// carries it to everything ever spawned, and libos64's calendar is what
+	// actually reads it (offset AND daylight-saving policy). It is seeded
+	// here so it exists before a filesystem does; bootenv_apply re-applies
+	// it on top of the file, because a zone typed for THIS boot outranks one
+	// written down for every boot. No TZ from either = the library falls
+	// back to the kernel's standard offset via the time() syscall.
 	if (kTZString[0])
 		env_set(parentTask.env, "TZ", kTZString);
 	// Deliberately NO "CWD" here: the kernel owns the real cwd (task->cwd,
@@ -243,16 +275,7 @@ void kernel_init()
 	// not a report.)
 	watchpoint_init();
 
-	printf("Initializing ACPI\n");
-	acpiFindTables();
-	// Read \_S5 out of the DSDT NOW, while the tables are mapped and the
-	// machine is healthy — the shutdown descent is the worst possible moment
-	// to be walking firmware tables for the first time (acpi.h).
-	acpi_prepare_s5();
-	if (kPCIBaseAddress)
-	{
-		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
-	}
+	acpi_init();
 
 	init_GDT();
 
@@ -306,7 +329,7 @@ void kernel_init()
 	block_cache_attach_all();
 
 	detect_cpu();
-	// The pause has a NAME on the glass: a silent 15-second stare at a
+	// The pause has a NAME on the glass: a silent multi-second stare at a
 	// counter reads as a hang to anyone watching a boot.
 	printf("Calibrating TSC (%d second window) ... ", kTSCCalibrationSeconds);
 	kCPUCyclesPerSecond = tscGetCyclesPerSecond((uint32_t)kTSCCalibrationSeconds);
@@ -333,9 +356,18 @@ void kernel_init()
 	// there is no boot window where a frame can arrive unclaimed — the
 	// rx_dropped_no_handler counter should only ever move in a build
 	// where someone unhooked the stack on purpose.
+	// The entropy pool before anything dials or leases: the TCP initial
+	// sequence number, the ephemeral port and DHCP's transaction id all
+	// draw from it, and the boot line says what seeded it (RANDOM.md).
+	random_init();
+
 	if (kEnableNet)
 	{
 		init_net_stack();
+		// Loopback exists whenever networking does, card or no card: it is
+		// how two programs on this machine talk, and it is what a service
+		// announced for this machine alone listens on (REMOTE.md § 1).
+		init_loopback();
 		init_virtio_net();
 		// The e1000 AFTER virtio, deliberately: registration order is
 		// device order, and kNetDevices[0] is the NIC the stack dials
@@ -365,8 +397,11 @@ void kernel_init()
 	}
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
+    // The probe's MSR table is CPUID's answer, the same on every core; built
+    // here, single-threaded, so no two probes ever build it at once.
+    nmi_probe_init();
     init_SMP(kEnableSMP);
-    printf("(%u core(s) initialized)\n", kMPCoreCount);
+    cpu_roster_print();
     // Say which scheduler this boot got — the mode is a cmdline decision now
     // (tickless default, SCHED=periodic opt-out), and a decision that changes
     // how every core behaves should be readable on the glass, not inferred.
@@ -408,19 +443,14 @@ void kernel_init()
 	// pacing). Text-mode boots keep them on the BSP.
 	// Vectors 0x41/0x4C, not the legacy 0x21/0x2C: AP LAPICs run with
 	// TPR = 0x30, which masks all vectors below 0x40 (see idt.c).
-	uint8_t inputIrqDest = kCPUInfo[0].apicID;
+	uint32_t inputIrqDest = BSP_CPU;
 	if (kEnableGUI && gui_compositor_affinity() != THREAD_NO_AFFINITY)
-		inputIrqDest = (uint8_t)gui_compositor_affinity();
+		inputIrqDest = (uint32_t)gui_compositor_affinity();
 	ioapic_adopt_isa_irq(1, 0x41, inputIrqDest, &kIRQ1UsesLapic);
 
-	// The mouse only matters to the GUI; a text-mode boot skips the whole
-	// AUX-port bring-up (and IRQ12 stays dormant — its IDT entry exists but
-	// nothing routes to it).
-	if (kEnableGUI)
-	{
-		mouse_init();
-		ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
-	}
+	// The wheel scrolls text VTs on text-only boots as well as GUI boots.
+	mouse_init();
+	ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
 
 	// The e1000's INTx doorbell rides the same platform moment: the rings
 	// came up back in init_e1000 (long before APIC mode existed), but a PCI
@@ -430,7 +460,13 @@ void kernel_init()
 	// own bell — see e1000_enable_intx), so this works on q35, PIIX3, or
 	// bare metal without an AML interpreter. No NIC, no IOAPIC, or a silent
 	// probe all degrade to the polled path — never a dead network.
-	e1000_enable_intx();
+	if (!kNetPoll)
+		e1000_enable_intx();
+	// The RTL8125's MSI, same moment, same flashlight (DOORBELL.md): the
+	// LAPIC is the interrupt controller from here on, which is what a message-
+	// signalled interrupt needs. Nothing to route and nothing to probe.
+	if (!kNetPoll)
+		r8125_enable_msi();
 
     // We need the cls->task to be populated for running tests, so ...
     // put the kernel task in the cls because it'll be the first task to start running
@@ -452,11 +488,11 @@ void kernel_init()
 	// boot time go" in one run.
 	BOOTMARK("preboot-done");
 
-        for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+        for (uint32_t cnt = 0; cnt < kCPUCount; cnt++)
 	    {
 			char idleTaskName[10];
 			sprintf(idleTaskName, "/idle%u",cnt);
-			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, kCPUInfo[cnt].apicID);
+			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
 			scheduler_submit_new_task(kIdleTasks[cnt]);
 			// Hand each core's CLS its idle THREAD — the target the
 			// accounting charge sites redirect to while acctCurrentHalted
@@ -477,7 +513,7 @@ void kernel_init()
 	BOOTMARK("logd+kworker-created");
 
 	// THE UNDERTAKER RUNS ANYWHERE (2026-08-09, Chris's ruling: "no reason for
-	// it to be pinned at all"). It used to be nailed to kCPUInfo[1], and that
+	// it to be pinned at all"). It used to be nailed to the second CPU, and that
 	// pin turned a runaway user program into an OS-WIDE outage: under tickless
 	// an AP does not preempt, so any syscall-free task landing on core 1 owned
 	// that core forever, kworker went RUNNABLE-and-never-running, and since it
@@ -489,7 +525,7 @@ void kernel_init()
 	// cure is an AP preemption backstop so no core can be owned forever —
 	// see the tickless note in scheduler.c's nudge loop.)
 	//
-	// The kMPCoreCount > 1 guard went with it, and it was load-bearing in the
+	// The more-than-one-CPU guard went with it, and it was load-bearing in the
 	// worst way: it existed ONLY because core 1 had to exist to be pinned to,
 	// which meant a `nosmp` or single-core boot got NO kworker — and therefore
 	// no burial at all, permanently, on exactly the machines least able to
@@ -506,7 +542,24 @@ void kernel_init()
 	    	kKWorkerTask->threads->threadID);
 	    scheduler_submit_new_task(kKWorkerTask);
 	}
-	   
+
+	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted
+	// whenever networking is enabled — even with no NIC, because loopback's
+	// frames and TCP's timers are its work too (a NONET boot gets none). PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
+	// complexity down"): the NIC interrupts are routed there, so a ring is a
+	// self-IPI and the tick that preempts a busy drainer is the one the BSP
+	// already has. The bell it parks on is rung by every NIC interrupt
+	// handler and by processSignals once per tick.
+	if (kEnableNet)
+	{
+		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BSP_CPU);
+		kKnetTask->autoReap = true;
+		printd(DEBUG_TASK | DEBUG_DETAILED,
+		       "kernel_init: enabling /knet (pinned to the BSP; task=0x%08x, thread=0x%08x)\n",
+		       kKnetTask->taskID, kKnetTask->threads->threadID);
+		scheduler_submit_new_task(kKnetTask);
+	}
+
 	    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
@@ -521,6 +574,10 @@ void kernel_init()
 
 	ap_wake_up_aps();
 	BOOTMARK("aps-awake");
+	// Every thread has now run its init and written its speculation controls
+	// (the APs just did, in ap_wake_up_aps's handshake): the first moment the
+	// report can say what the whole machine runs under.
+	spec_ctrl_report();
 
 	kProcessSignals = true;
 	BOOTMARK("signals-on");
@@ -561,6 +618,14 @@ void kernel_init()
 	// the expensive part of the boot, and it should be logging by then.
 	conf_init();
 
+	// ── The boot environment ─────────────────────────────────────────────────
+	// The first reader on the ladder, and it has to be: everything spawned
+	// from here down — logd, the shells, the desktop, cron — inherits the
+	// kernel task's block, so bootenv.conf is applied to it before any of
+	// them exist (bootenv.h has the design).
+	bootenv_apply(kKernelTask);
+	xhci_bluetooth_start_manager();
+
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
 	// expensive part of a DEBUG_DETAILED boot is everything BELOW this line —
@@ -593,6 +658,39 @@ void kernel_init()
 			// own deadline is the only thing that will notice. Better to name
 			// it here than to leave a silent 30 seconds.
 			printf("  /bin/logd launch failed (not on the image?) — serial logging resumes shortly\n");
+		}
+	}
+
+	// THE CONSOLE'S CONFIGURED FACE (CONSOLE_FONTS.md § Persistence), as
+	// early as it can go: the root and /home are mounted, the ladder is
+	// settled, kworker exists to do the swap, and the terminals are up — so
+	// from here on the boot prints in the face the person chose, which at
+	// 1920x1080 is the difference between reading the post-boot lines and
+	// watching them scroll past at 8x16. Later, beside cron, it would buy
+	// nothing a crontab @reboot line does not; here it buys the boot.
+	//
+	// The FILE is the switch, not a boot token: a token does not travel to a
+	// machine that boots from its own disk, and every machine this is for
+	// does. The kernel asks the ladder only whether console.conf exists —
+	// reading it is /bin/vtfont's, because applying it may mean rendering
+	// an outline face, and FreeType lives in ring 3. Absent file, absent
+	// launch, and the boot face stays. Not waited for: the reflow carries
+	// whatever the tests print meanwhile across the change.
+	if (kRootFilesystem != NULL)
+	{
+		char consoleConf[256];
+		if (conf_find("console.conf", consoleConf, sizeof(consoleConf)))
+		{
+			printf("Launching /bin/vtfont --startup (%s) ...\n", consoleConf);
+			char *vtfontArgv[] = { "/bin/vtfont", "--startup" };
+			task_t *vtfontTask = task_create("/bin/vtfont", 2, vtfontArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+			if (vtfontTask)
+			{
+				vtfontTask->autoReap = true;
+				scheduler_submit_new_task(vtfontTask);
+			}
+			else
+				printf("  /bin/vtfont launch failed (not on the image?)\n");
 		}
 	}
 
@@ -678,6 +776,37 @@ void kernel_init()
 	// slot, the report naming the watchpoint, and — the part that is easy to
 	// get wrong and impossible to notice — TRACE mode actually RESUMING. Two
 	// hits are expected: one trace (the machine keeps going) and then a halt.
+	// SAY SO WHEN THE LATE PHASE WILL NOT RUN. Everything from here down can
+	// end the boot — TESTWATCH halts, TESTPF/TESTGP/TESTPANIC fault on
+	// purpose, SHUTDOWNTEST and REBOOTTEST take the machine away — and the
+	// late phase starts below all of them, after the shells. So a diagnostic
+	// boot runs pre-boot and post-boot and nothing else, which was true the
+	// moment two tests moved LATE and was true SILENTLY, since those entries
+	// are documented as running after the full suite. (Codex, PR #42.)
+	//
+	// Not reordered, deliberately: the late phase exists to run beside a live
+	// machine with a prompt on it, and these boots are the ones with no
+	// machine afterwards. Making them wait ~11 seconds to run two tests
+	// before deliberately panicking would serve nobody. The honest fix for
+	// "silently" is to stop being silent — and if you want those two tests,
+	// the entry to boot is the one without a terminal diagnostic on it.
+	// ON THE WIRE DIRECTLY, by the same reasoning that put "boot complete"
+	// there: this note exists for boots that END ABRUPTLY, and a queued
+	// printd on such a boot is never drained — verified, 2026-08-29, on a
+	// TESTWATCH boot whose log stopped mid-post-boot. printf is
+	// framebuffer-only AND every diagnostic below fills the glass with a
+	// register dump the moment it fires, so the screen copy is gone too. A
+	// message about what a boot did not do has to survive the boot not
+	// finishing.
+	if (kRunTests && (kTestWatchpoint || kTestPageFault || kTestGPFault ||
+	                  kTestPanic || kTestShutdown || kTestReboot))
+	{
+		printf("Note: this boot ends in a diagnostic, so the LATE test phase will not run.\n");
+		serial_print_string("BUILT-IN TESTS: late phase SKIPPED - this boot ends in a terminal "
+		                    "diagnostic, which halts before the phase would start. Pre-boot and "
+		                    "post-boot ran; the two late tests did not.\n");
+	}
+
 	if (kTestWatchpoint)
 	{
 		static volatile uint64_t watchBait = 0;
@@ -820,15 +949,151 @@ void kernel_init()
     // leave a permanent zombie that `ps` would report forever.
     if (kRunTestrun && kRootFilesystem != NULL)
     {
-        printf("Launching /bin/testrun (ring-3 test suite) ...\n");
-        task_t *testrunTask = task_create("/bin/testrun", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        printf("Launching /tests/testrun (ring-3 test suite) ...\n");
+        task_t *testrunTask = task_create("/tests/testrun", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (testrunTask)
         {
             testrunTask->autoReap = true;
             scheduler_submit_new_task(testrunTask);
         }
         else
-            printf("  /bin/testrun launch failed (not on the image?)\n");
+            printf("  /tests/testrun launch failed (not on the image?)\n");
+    }
+
+    // cron (2026-08-29). The KERNEL starts it, and not husk.rc, for the same
+    // reason the desktop's startup list left husk.rc: an rc runs in EVERY
+    // shell — VT1 and VT2 both — so anything launched there is launched
+    // twice, and a second cron would run every job twice with nothing to
+    // notice it. A system service belongs to the system.
+    //
+    // It goes after the shells because @reboot jobs are things the system
+    // wanted done ONCE IT WAS UP, and a job that writes to a terminal should
+    // find one seated. What cron actually runs is the crontab's business
+    // entirely — /etc/crontab ships with every line commented out, so this
+    // flag alone changes nothing but the presence of a sleeping daemon.
+    //
+    // autoReap, like every other ktask child: ktask never waits, so an
+    // uncollected corpse would be an immortal zombie (the 2026-08-15 P5
+    // finding). cron normally outlives the boot, so this matters only when it
+    // exits early — a crontab it cannot read, say.
+    if (kRunCron && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/cron (the scheduler) ...\n");
+        // NOT seated on a terminal: tty_seat_shell would make cron VT1's
+        // shell and displace the husk sitting there, taking Ctrl+C and the
+        // foreground job with it. cron inherits ktask's 0/1/2 like any other
+        // child, so a job's output lands on the console — which is os64's
+        // answer to the mail Vixie's cron sends, there being no mail.
+        task_t *cronTask = task_create("/bin/cron", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (cronTask)
+        {
+            cronTask->autoReap = true;
+            scheduler_submit_new_task(cronTask);
+        }
+        else
+            printf("  /bin/cron launch failed (not on the image?)\n");
+    }
+
+    // telnetd (2026-09-12, SERVERS.md § 3): the same arrangement as cron —
+    // the kernel starts it because the boot entry asked, not seated on any
+    // terminal (it hands out terminals of its own: a STREAM pty per
+    // session). Its own 0/1/2 are ktask's, so its diagnostics land on the
+    // console; each session's shell is seated on that session's slave.
+    if (kRunTelnetd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/telnetd (the inbound shell) ...\n");
+        task_t *telnetdTask = task_create("/bin/telnetd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (telnetdTask)
+        {
+            telnetdTask->autoReap = true;
+            scheduler_submit_new_task(telnetdTask);
+        }
+        else
+            printf("  /bin/telnetd launch failed (not on the image?)\n");
+    }
+
+    // The boot token selects the service; authentication and transport stay
+    // inside /bin/sshd, whose children own individual connections.
+    if (kRunSshd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/sshd ...\n");
+        task_t *sshdTask = task_create("/bin/sshd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (sshdTask)
+        {
+            sshdTask->autoReap = true;
+            scheduler_submit_new_task(sshdTask);
+        }
+        else
+            printf("  /bin/sshd launch failed (not on the image?)\n");
+    }
+
+    // The remote desktop's listener, the same way (REMOTE.md). It serves
+    // viewers only while a desktop runs, and says so to each one otherwise.
+    if (kRunVncd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/vncd ...\n");
+        task_t *vncdTask = task_create("/bin/vncd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (vncdTask)
+        {
+            vncdTask->autoReap = true;
+            scheduler_submit_new_task(vncdTask);
+        }
+        else
+            printf("  /bin/vncd launch failed (not on the image?)\n");
+    }
+
+    // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the
+    // critical path onto a kernel thread that starts AFTER the shells are
+    // seated — so the prompt is on the glass while they run, instead of
+    // twenty seconds after they finish. What may live here and why is
+    // test_framework.h's TEST_PHASE_LATE comment; the short version is that a
+    // late test must survive a live machine, because it now runs on one.
+    //
+    // It goes after the husk block for the same reason testrun does: its
+    // output goes to the console, and the terminals are seated up there.
+    //
+    // autoReap for the reason every ktask child needs it — ktask never waits,
+    // so an uncollected corpse is an immortal zombie (the 2026-08-15 P5
+    // finding, written up at the husk launch above). This task genuinely
+    // ends, unlike kworker and the idle tasks, so it is the one kernel task
+    // that would actually accumulate one.
+    // NO kRootFilesystem CONDITION. This task carries no ELF — its code is
+    // compiled in — so a root filesystem is nothing it needs, and requiring
+    // one silently deleted a test that used to run: net_tcp_refused depends
+    // on a NIC and a gateway, not a disk, and it ran in POSTBOOT on rootless
+    // boots before this. Each late test already states its own prerequisites
+    // (teardown_leak skips without a root, and says so), which is where a
+    // prerequisite belongs. (Codex, PR #42 rd2.)
+    //
+    // AN UNDERTAKER IS A REAL PRECONDITION, though, and the only one here.
+    // This is the one kernel task that genuinely EXITS — kworker and the idle
+    // tasks loop forever — so its corpse needs collecting, and `autoReap`
+    // only makes it ELIGIBLE. kworker is what actually calls
+    // task_reap_eligible_zombies, so on a boot without KWORKER (the /VBox
+    // Boot entry, and kRunTests defaults TRUE so it would have launched this)
+    // the task would sit as an immortal zombie holding its stack and page
+    // tables for the rest of the boot. Refusing to start, loudly, beats
+    // leaking quietly.
+    if (kRunTests && !kEnableKWorker)
+        serial_print_string("BUILT-IN TESTS: late phase SKIPPED - no KWORKER on this boot, so "
+                            "nothing would collect the task when it exits. Add KWORKER to run it.\n");
+
+    if (kRunTests && kEnableKWorker)
+    {
+        // `true` = a KERNEL task, and it is not optional: createThread hands a
+        // ring-3 task ring-3 segment selectors, and the builtin block in
+        // task_create then overwrites CS with the kernel's. The result is an
+        // iret frame carrying kernel CS with user SS, which is a #GP naming
+        // SS's selector the first time the scheduler tries to dispatch it —
+        // as it did here, on the first boot with this task in it.
+        task_t *lateTask = task_create("/latetests", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+        if (lateTask)
+        {
+            lateTask->autoReap = true;
+            scheduler_submit_new_task(lateTask);
+        }
+        else
+            printf("  late test phase failed to start\n");
     }
 
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI
@@ -876,6 +1141,7 @@ void log_debug_level(__uint128_t value) {
 //		Make changes in kernel_init() instead if you need variables.
 void kernel_main()
 {
+	kBootTSC = rdtsc();   // micros()'s zero: before anything else counts
 	kDebugLevel = DEBUG_OPTIONS;
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
@@ -905,7 +1171,8 @@ void kernel_main()
 	// to report it to.
 	kLogFormatBad = (kLogFormatName[0] != '\0' && !log_set_format_by_name(kLogFormatName));
 	hardware_init();
-	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S",
+	               kSystemCurrentTime + ((long)kTimeZoneOffsetMinutes * 60));
 	// A SERIAL= value that is neither 'on' nor 'off' (values are
 	// case-sensitive, like every token this cmdline parses) must not be
 	// swallowed: this is the one flag whose silent failure costs the wire
@@ -1001,8 +1268,9 @@ void kernel_main()
 
 	// The log rings, as early as they can possibly exist (moved here from
 	// kernel_init 2026-08-18). They need exactly two things — kmalloc, which
-	// the line above just proved, and kLimineSMPInfo->cpu_count, which
-	// main.c set before kernel_main was ever called — and every printd
+	// the line above just proved, and the CPU roster, built from Limine's
+	// list (which main.c set before kernel_main was ever called) by the
+	// cpu_roster_init call just above them — and every printd
 	// BEFORE this point takes printd's `else` branch: formatted straight
 	// onto COM1 and stored nowhere, so it can never reach logd's file.
 	//
@@ -1018,6 +1286,9 @@ void kernel_main()
 	// Everything above this line is still serial-only, and that residue is
 	// now four lines — the banner, the commandline, and the debug level —
 	// because they print before the allocator exists.
+	//
+	// The CPU roster first: there is one ring per numbered CPU.
+	cpu_roster_init();
 	logging_queueing_init();
 
 	// kmalloc works now — give the console its RAM shadow so scrolling stops

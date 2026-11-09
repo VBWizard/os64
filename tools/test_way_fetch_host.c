@@ -1,0 +1,1364 @@
+// test_way_fetch_host.c — way_fetch_whole end to end on the host: the real
+// libfetch and the real cache (CACHE.md) against scripted peers and a real
+// temporary directory, under the sanitizers. Where test_way_cache.inc proves
+// the rules and the store one at a time, this proves how load.c wires them
+// to the wire: a 304 through a redirect, a 304 that ends an entry, what a
+// redirect says about keeping it, a field too long to read, the caller's
+// options left as they were, and the lines that say who is asking, hop by
+// hop.
+//
+// The seam is libos64's calls, as in test_fetch_host.c: a dial reaches a
+// peer by host, and each dial of a host takes its next scripted reply; a
+// handle below FILE_BASE is a connection, at or above it a file.
+
+#define _DEFAULT_SOURCE
+
+#include <assert.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "fetch/fetch.h"
+#include "fetch/transport.h"
+#include "internal.h"
+#include "pool.h"
+#include "os64/date.h"
+#include "os64/io.h"
+#include "os64/os64.h"
+#include "way/cache.h"
+#include "way/way.h"
+
+// ── The heap ────────────────────────────────────────────────────────────
+
+// libhtml ends the program when a pinned document is freed. A harness that
+// reached this has found that, so it fails.
+void os64_exit(int32_t code)
+{
+    (void)code;
+    exit(3);
+}
+static size_t s_fail_malloc_of;        // an allocation of exactly this size fails; 0 for none
+void *os64_malloc(size_t size) { return size != 0 && size == s_fail_malloc_of ? NULL : malloc(size != 0 ? size : 1); }
+void *os64_calloc(size_t n, size_t size) { return calloc(n != 0 ? n : 1, size != 0 ? size : 1); }
+void *os64_realloc(void *p, size_t size) { return realloc(p, size != 0 ? size : 1); }
+void os64_free(void *p) { free(p); }
+void os64_yield(void) {}
+uint64_t os64_taskid(void) { return (uint64_t)getpid(); }
+const char *os64_getenv(const char *key) { (void)key; return NULL; }
+
+// ── The clocks ──────────────────────────────────────────────────────────
+
+#define D 1790758509                     // Wed, 30 Sep 2026 08:55:09 GMT
+static int64_t s_clock = D;
+static uint64_t s_ms;
+int64_t os64_time(os64_time_t *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->epoch = s_clock;
+    return 0;
+}
+int64_t os64_ticks(os64_ticks_t *t)
+{
+    *t = (os64_ticks_t){.ticks = s_ms, .per_second = 1000};
+    return 0;
+}
+
+// ── The peers ───────────────────────────────────────────────────────────
+
+#define REPLIES_MAX 8
+typedef struct {
+    const char *host;
+    const char *replies[REPLIES_MAX];   // NULL: the dial is refused
+    int64_t waits[REPLIES_MAX];         // seconds the clock moves when it is dialed
+    int n, next;
+} peer_t;
+static peer_t s_peers[8];
+static int s_npeers, s_dials;
+
+static peer_t *peer(const char *host)
+{
+    for (int i = 0; i < s_npeers; i++)
+        if (strcmp(s_peers[i].host, host) == 0)
+            return &s_peers[i];
+    peer_t *p = &s_peers[s_npeers++];
+    memset(p, 0, sizeof(*p));
+    p->host = host;
+    return p;
+}
+
+// The next dial of `host` gets `reply`, `wait` seconds later on the
+// clock; NULL refuses it.
+static void script_wait(const char *host, const char *reply, int64_t wait)
+{
+    peer_t *p = peer(host);
+    assert(p->n < REPLIES_MAX);
+    p->waits[p->n] = wait;
+    p->replies[p->n++] = reply;
+}
+static void script(const char *host, const char *reply)
+{
+    script_wait(host, reply, 0);
+}
+
+typedef struct {
+    bool open;
+    const char *reply;
+    size_t len;                 // the reply's length, read at the dial
+    size_t served;
+    char request[32768];        // a request with an 8 KB Cookie line fits
+    size_t reqlen;
+} conn_t;
+static conn_t s_conns[8];
+static char s_last_request[8][32768];  // per host index: what it was last asked
+static int s_conn_peer[8];
+
+int64_t os64_dial(const char *dialstring)
+{
+    char host[256];
+    unsigned port;
+    if (sscanf(dialstring, "tcp!%255[^!]!%u", host, &port) != 2)
+        return -1;
+    s_dials++;
+    for (int i = 0; i < s_npeers; i++) {
+        peer_t *p = &s_peers[i];
+        if (strcmp(p->host, host) != 0)
+            continue;
+        if (p->next >= p->n || p->replies[p->next] == NULL) {
+            p->next++;
+            return -3;                  // refused
+        }
+        s_clock += p->waits[p->next];
+        for (int h = 0; h < 8; h++)
+            if (!s_conns[h].open) {
+                memset(&s_conns[h], 0, sizeof(s_conns[h]));
+                s_conns[h].open = true;
+                s_conns[h].reply = p->replies[p->next++];
+                s_conns[h].len = strlen(s_conns[h].reply);
+                s_conn_peer[h] = i;
+                return 100 + h;
+            }
+        abort();
+    }
+    return -2;
+}
+const char *os64_dial_reason(int64_t err) { return err == -3 ? "connection refused" : "no such host"; }
+
+int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
+{
+    // A look that does not wait finds nothing while the peer has its reply
+    // to give: it answers a request once it has been sent, as
+    // test_fetch_host.c's peers do. Once the reply is given, a peer here
+    // has closed (one reply a dial), and the look finds the close: a
+    // connection libfetch kept is found closed when it is next taken.
+    conn_t *c = &s_conns[h - 100];
+    if (ms == 0)
+        return c->served == c->len && c->len > 0 ? 0 : OS64_ERR_TIMEOUT;
+    size_t left = c->len - c->served;
+    size_t n = cap < left ? cap : left;
+    memcpy(buf, c->reply + c->served, n);
+    c->served += n;
+    return (int64_t)n;
+}
+int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
+{
+    (void)ms;
+    conn_t *c = &s_conns[h - 100];
+    assert(c->reqlen + n < sizeof(c->request));
+    memcpy(c->request + c->reqlen, buf, n);
+    c->reqlen += n;
+    c->request[c->reqlen] = '\0';
+    // What the host was last asked, as it is asked: a connection libfetch
+    // keeps is not closed when its fetch is.
+    memcpy(s_last_request[s_conn_peer[h - 100]], c->request, sizeof(c->request));
+    return (int64_t)n;
+}
+
+// TLS is never reached: every address here is http.
+os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
+                                            const os64_tls_transport_limits_t *l,
+                                            os64_tls_transport **out)
+{ (void)c; (void)h; (void)l; (void)out; abort(); }
+os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t) { (void)t; abort(); }
+os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms) { (void)t; (void)ms; abort(); }
+os64_tls_transfer_t os64_tls_transport_write(os64_tls_transport *t, const void *p, size_t n) { (void)t; (void)p; (void)n; abort(); }
+os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size_t n) { (void)t; (void)p; (void)n; abort(); }
+os64_tls_status_t os64_tls_transport_flush(os64_tls_transport *t) { (void)t; abort(); }
+os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *t) { (void)t; abort(); }
+os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *t, os64_tls_status_t s) { (void)t; (void)s; abort(); }
+void os64_tls_transport_free(os64_tls_transport *t) { (void)t; abort(); }
+os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **c, os64_tls_store_report_t *r) { (void)c; (void)r; abort(); }
+void os64_tls_trust_free(os64_tls_trust *s) { (void)s; }
+const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "tls"; }
+const char *os64_tls_error_description(os64_tls_status_t s, os64_tls_policy_reason_t p, int e) { (void)s; (void)p; (void)e; return "tls"; }
+const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; return "store"; }
+
+// ── The files ───────────────────────────────────────────────────────────
+
+#define FILE_BASE 1000
+static DIR *s_dirs[4];
+static char s_dir_paths[4][512];
+
+int64_t os64_open(const char *path, const char *mode)
+{
+    int flags = mode == NULL || mode[0] == 'r' ? O_RDONLY
+              : mode[0] == 'x'                 ? O_WRONLY | O_CREAT | O_EXCL
+                                               : O_WRONLY | O_CREAT | O_TRUNC;
+    int fd = open(path, flags, 0644);
+    return fd < 0 ? -1 : fd + FILE_BASE;
+}
+int64_t os64_read(int32_t h, void *buf, size_t len)
+{
+    return h >= FILE_BASE ? read(h - FILE_BASE, buf, len) : -1;
+}
+int64_t os64_write(int32_t h, const void *buf, size_t len)
+{
+    return h >= FILE_BASE ? write(h - FILE_BASE, buf, len) : (int64_t)len;
+}
+int64_t os64_close(int32_t h)
+{
+    if (h >= 100 && h < 108) {
+        s_conns[h - 100].open = false;
+        return 0;
+    }
+    if (h >= FILE_BASE + 4096) {
+        closedir(s_dirs[h - FILE_BASE - 4096]);
+        s_dirs[h - FILE_BASE - 4096] = NULL;
+        return 0;
+    }
+    return close(h - FILE_BASE);
+}
+int64_t os64_unlink(const char *path) { return unlink(path) == 0 ? 0 : -1; }
+int64_t os64_rename(const char *from, const char *to) { return rename(from, to) == 0 ? 0 : -1; }
+int64_t os64_mkdir(const char *path) { return mkdir(path, 0755) == 0 ? 0 : -1; }
+
+static void dirent_of(const struct stat *st, const char *name, os64_dirent_t *e)
+{
+    memset(e, 0, sizeof(*e));
+    e->size = S_ISDIR(st->st_mode) ? 0 : (uint64_t)st->st_size;
+    e->flags = S_ISDIR(st->st_mode) ? OS64_DE_DIR : 0;
+    e->mtime = (uint64_t)st->st_mtime;
+    snprintf(e->name, sizeof(e->name), "%s", name);
+}
+int64_t os64_stat(const char *path, os64_dirent_t *e)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return -1;
+    const char *slash = strrchr(path, '/');
+    dirent_of(&st, slash != NULL ? slash + 1 : path, e);
+    return 0;
+}
+int64_t os64_opendir(const char *path)
+{
+    for (int i = 0; i < 4; i++)
+        if (s_dirs[i] == NULL) {
+            if ((s_dirs[i] = opendir(path)) == NULL)
+                return -1;
+            snprintf(s_dir_paths[i], sizeof(s_dir_paths[i]), "%s", path);
+            return FILE_BASE + 4096 + i;
+        }
+    return -1;
+}
+int64_t os64_readdir(int32_t h, os64_dirent_t *e)
+{
+    int i = h - FILE_BASE - 4096;
+    struct dirent *d;
+    while ((d = readdir(s_dirs[i])) != NULL) {
+        if (d->d_name[0] == '.')
+            continue;
+        char path[1024];
+        struct stat st;
+        snprintf(path, sizeof(path), "%s/%s", s_dir_paths[i], d->d_name);
+        if (stat(path, &st) == 0) {
+            dirent_of(&st, d->d_name, e);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// ── The cases ───────────────────────────────────────────────────────────
+
+static int checks, failures;
+static void expect(const char *name, bool ok, const char *detail)
+{
+    checks++;
+    if (!ok) {
+        failures++;
+        printf("FAIL %s%s%s\n", name, detail ? ": " : "", detail ? detail : "");
+    }
+}
+
+static char s_dir[600];
+static way_cache_t *s_cache;
+static way_jar_t *s_jar;
+
+/* Every recursive remove in this file goes through here. The path must be
+ * the mkdtemp root (or something beneath it) and nothing else: on 2026-10-04
+ * an edit left s_dir empty, fresh() ran rm -rf on the root with a glob, and it took the home
+ * directory and three mounted drives with it before an I/O error stopped it. */
+static const char SCRATCH_PREFIX[] = "/tmp/way_fetch";
+
+static void remove_tree(const char *path, int contents_only)
+{
+    if (path == NULL || strncmp(path, SCRATCH_PREFIX, sizeof(SCRATCH_PREFIX) - 1) != 0 ||
+        strstr(path, "..") != NULL || strchr(path, '\'') != NULL ||
+        strlen(path) <= sizeof(SCRATCH_PREFIX) - 1) {
+        fprintf(stderr, "refusing to remove '%s': not under %s\n", path ? path : "(null)", SCRATCH_PREFIX);
+        abort();
+    }
+    char cmd[800];
+    snprintf(cmd, sizeof(cmd), "rm -rf -- '%s'%s", path, contents_only ? "/*" : "");
+    if (system(cmd) != 0)
+        abort();
+}
+
+static void fresh(void)
+{
+    // An earlier case's kept connections close before its peers are gone.
+    fetch_pool_drain();
+    remove_tree(s_dir, 1);
+    s_npeers = 0;
+    s_dials = 0;
+    memset(s_last_request, 0, sizeof(s_last_request));
+    s_clock = D;
+}
+
+// A GET of `url` through the cache, with options a caller would make.
+static bool whole(const char *url, way_whole_t *out, os64_fetch_options_t *opt)
+{
+    os64_fetch_options_t local;
+    if (opt == NULL) {
+        memset(&local, 0, sizeof(local));
+        local.method = OS64_FETCH_METHOD_GET;
+        opt = &local;
+    }
+    way_hooks_t hooks;
+    memset(&hooks, 0, sizeof(hooks));
+    hooks.jar = s_jar;
+    hooks.cache = s_cache;
+    // Fetched for one page throughout, as the cache keeps a reply under the
+    // page's site (SCRIPT_CACHE.md § 3).
+    way_origin_t page;
+    way_origin_of("https://page.test/", 0, &page);
+    way_metadata_request(&hooks.metadata, &page, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    return way_fetch_whole(&hooks, url, opt, 1 << 20, out);
+}
+
+static bool body_is(const way_whole_t *w, const char *text)
+{
+    return w->len == strlen(text) && memcmp(w->bytes, text, w->len) == 0;
+}
+
+static const char *kOld = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=0\r\n"
+                          "ETag: \"v1\"\r\n\r\nOLD";
+
+// A body whose buffer cannot be had did not arrive for want of memory,
+// whatever the fetch, which went fine, says of itself.
+static void whole_without_memory(void)
+{
+    fresh();
+    script("mem.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc");
+    way_whole_t w;
+    memset(&w, 0, sizeof(w));
+    s_fail_malloc_of = 16u * 1024u;     // read_whole's first buffer
+    bool got = whole("http://mem.test/", &w, NULL);
+    s_fail_malloc_of = 0;
+    expect("whole: no buffer is no memory, never OK", !got && w.fetch == OS64_FETCH_NO_MEMORY, NULL);
+    free(w.bytes);
+}
+
+static void options_left_alone(void)
+{
+    fresh();
+    script("a.test", kOld);
+    script("a.test", "HTTP/1.1 304 Not Modified\r\nCache-Control: max-age=0\r\n\r\n");
+    os64_fetch_options_t opt;
+    memset(&opt, 0, sizeof(opt));
+    opt.method = OS64_FETCH_METHOD_GET;
+    way_whole_t w;
+    expect("options: a first load", whole("http://a.test/x", &w, &opt) && body_is(&w, "OLD"), NULL);
+    free(w.bytes);
+    expect("options: a conditional load", whole("http://a.test/x", &w, &opt) &&
+           w.served == WAY_SERVED_CONFIRMED, NULL);
+    free(w.bytes);
+    // The question that asked whether it changed was the fetch's, not the
+    // caller's: its options do not point into a frame that has returned.
+    expect("options: the caller's extra headers are as they were", opt.extra_headers == NULL,
+           NULL);
+}
+
+// A validator is the kept resource's: asked only of the address the
+// entry came from, and a 304 from anywhere else validates nothing (RFC 9110
+// § 8.8.1: two resources may share one).
+static void validator_identity(void)
+{
+    // Reached through a redirect: stale, it is fetched whole, and the
+    // validator of the end of the chain goes nowhere.
+    fresh();
+    const char *moved = "HTTP/1.1 301 Moved Permanently\r\nLocation: http://b.test/y\r\n"
+                        "Content-Length: 0\r\n\r\n";
+    script("a.test", moved);
+    script("b.test", kOld);
+    script("a.test", moved);
+    script("b.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nNEW");
+    way_whole_t w;
+    expect("validator: a first load through a redirect",
+           whole("http://a.test/x", &w, NULL) && body_is(&w, "OLD"), NULL);
+    free(w.bytes);
+    expect("validator: stale through a redirect, fetched whole",
+           whole("http://a.test/x", &w, NULL) && w.served == WAY_SERVED_NETWORK &&
+           body_is(&w, "NEW"), NULL);
+    free(w.bytes);
+    expect("validator: the end of the chain was not asked with it",
+           strstr(s_last_request[1], "If-None-Match") == NULL, s_last_request[1]);
+    expect("validator: nor the address that redirected",
+           strstr(s_last_request[0], "If-None-Match") == NULL, s_last_request[0]);
+
+    // The address that redirected stops redirecting: its own answer, never
+    // the end of the old chain's body.
+    fresh();
+    script("a.test", moved);
+    script("b.test", kOld);
+    script("a.test", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"v1\"\r\n\r\nMINE");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    expect("validator: a former redirect's own answer",
+           whole("http://a.test/x", &w, NULL) && body_is(&w, "MINE") &&
+           strstr(s_last_request[0], "If-None-Match") == NULL, s_last_request[0]);
+    free(w.bytes);
+
+    // Kept directly, then the address redirects: the other resource's 304
+    // validates nothing, and the question is asked again without it.
+    fresh();
+    script("a.test", kOld);
+    script("a.test", moved);
+    script("b.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("a.test", moved);
+    script("b.test", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nTHEM");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    bool ok = whole("http://a.test/x", &w, NULL);
+    expect("validator: another resource's 304 is asked again, whole",
+           ok && w.status == 200 && body_is(&w, "THEM") && w.served == WAY_SERVED_NETWORK, NULL);
+    free(w.bytes);
+
+    // Kept directly and still there: its 304 is its own.
+    fresh();
+    script("a.test", kOld);
+    script("a.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    ok = whole("http://a.test/x", &w, NULL);
+    expect("validator: its own 304 confirms it",
+           ok && w.served == WAY_SERVED_CONFIRMED && body_is(&w, "OLD") &&
+           strstr(s_last_request[0], "If-None-Match: \"v1\"") != NULL, s_last_request[0]);
+    free(w.bytes);
+}
+
+static void restrictive_304(void)
+{
+    fresh();
+    script("c.test", kOld);
+    script("c.test", "HTTP/1.1 304 Not Modified\r\nCache-Control: no-store\r\n\r\n");
+    script("c.test", NULL);
+    way_whole_t w;
+    (void)whole("http://c.test/x", &w, NULL);
+    free(w.bytes);
+    expect("304 no-store: this once, the kept body",
+           whole("http://c.test/x", &w, NULL) && w.served == WAY_SERVED_CONFIRMED &&
+           body_is(&w, "OLD"), NULL);
+    free(w.bytes);
+    bool ok = whole("http://c.test/x", &w, NULL);
+    expect("304 no-store: after it, nothing to serve stale", !ok && w.bytes == NULL, NULL);
+    free(w.bytes);
+}
+
+// Whether the cache holds the body it answered with, which is what a face
+// asks before it reads a companion (BYTECODE_CACHE.md § 5).
+static void kept_bodies(void)
+{
+    const char *fresh600 = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n\r\nNEW";
+    fresh();
+    script("q.test", fresh600);
+    way_whole_t w;
+    expect("kept: a body stored by its fetch is held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_NETWORK && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: and served from the cache, still held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_KEPT && w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("r.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: no-store\r\n\r\nNOT");
+    expect("kept: a no-store body is not held", whole("http://r.test/", &w, NULL) && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("s.test", kOld);
+    script("s.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("s.test", "HTTP/1.1 304 Not Modified\r\nCache-Control: no-store\r\n\r\n");
+    (void)whole("http://s.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a body its 304 confirms is held",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: one a 304 forbids keeping is not",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("t.test", kOld);
+    script("t.test", NULL);
+    (void)whole("http://t.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a stale body served for want of the server is held",
+           whole("http://t.test/", &w, NULL) && w.served == WAY_SERVED_STALE && w.kept, NULL);
+    free(w.bytes);
+}
+
+static bool whole_picture(const char *page, const char *url, way_whole_t *out);
+
+// The cache is partitioned by the page's site (SCRIPT_CACHE.md § 3): one
+// site's page is served what it caused to be kept, another's asks the
+// network for the same address.
+static void partitioned(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", year);
+    way_whole_t w;
+    expect("partition: one site's page keeps the picture",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.kept, NULL);
+    free(w.bytes);
+    int before = s_dials;
+    expect("partition: and is served it again without asking",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_KEPT &&
+               s_dials == before, NULL);
+    free(w.bytes);
+    expect("partition: another site's page asks the network for it",
+           whole_picture("https://two.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before, NULL);
+    free(w.bytes);
+}
+
+// An entry a script's request kept, varying on what that request sent,
+// is not this path's to serve: these requests do not say what they sent
+// (Codex #425 rd1).
+static void varied_entries(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nNEW");
+    way_whole_t w;
+    expect("varied: a picture is kept", whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.kept,
+           NULL);
+    free(w.bytes);
+    // Kept again as a script's request would keep it: with its head and
+    // the Accept it varied on.
+    const way_cache_key_t key = {"https one.test", true, "http://u.test/v.png"};
+    way_entry_t e;
+    uint8_t *body = NULL;
+    size_t len = 0;
+    bool found = way_cache_find(s_cache, &key, &e, &body, &len, NULL, 1 << 20);
+    const char head[] = "Content-Type: application/json\r\n", vary[] = "accept: application/json\r\n";
+    const way_blocks_t blocks = {head, sizeof(head) - 1, "", 0, vary, sizeof(vary) - 1};
+    expect("varied: kept again with the Accept a script's request varied on",
+           found && way_cache_put(s_cache, &e, &blocks, body, len), NULL);
+    free(body);
+    int before = s_dials;
+    expect("varied: a picture's request is not served it, and asks the network",
+           whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before && w.len == 3 && memcmp(w.bytes, "NEW", 3) == 0, NULL);
+    free(w.bytes);
+}
+
+static void redirect_restrictions(void)
+{
+    fresh();
+    const char *fresh600 = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n\r\nOLD";
+    // A redirect that asks to be checked every time: the chain is.
+    script("d.test", "HTTP/1.1 301 Moved\r\nLocation: http://e.test/\r\nCache-Control: no-cache\r\n"
+                     "Content-Length: 0\r\n\r\n");
+    script("e.test", fresh600);
+    script("d.test", "HTTP/1.1 301 Moved\r\nLocation: http://f.test/\r\nContent-Length: 0\r\n\r\n");
+    script("f.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nNEW");
+    way_whole_t w;
+    (void)whole("http://d.test/", &w, NULL);
+    free(w.bytes);
+    int before = s_dials;
+    expect("redirect no-cache: asked again, and the new answer taken",
+           whole("http://d.test/", &w, NULL) && body_is(&w, "NEW") && s_dials > before, NULL);
+    free(w.bytes);
+
+    // A redirect that forbids keeping: nothing is.
+    fresh();
+    script("g.test", "HTTP/1.1 301 Moved\r\nLocation: http://h.test/\r\nCache-Control: no-store\r\n"
+                     "Content-Length: 0\r\n\r\n");
+    script("h.test", fresh600);
+    script("g.test", NULL);
+    (void)whole("http://g.test/", &w, NULL);
+    free(w.bytes);
+    expect("redirect no-store: nothing kept", !whole("http://g.test/", &w, NULL), NULL);
+    free(w.bytes);
+
+    // A redirect fresh for a minute: the chain is, though its end says ten.
+    fresh();
+    script("i.test", "HTTP/1.1 301 Moved\r\nLocation: http://j.test/\r\nCache-Control: max-age=60\r\n"
+                     "Content-Length: 0\r\n\r\n");
+    script("j.test", fresh600);
+    script("i.test", "HTTP/1.1 301 Moved\r\nLocation: http://j.test/\r\nContent-Length: 0\r\n\r\n");
+    script("j.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n\r\nNEW");
+    (void)whole("http://i.test/", &w, NULL);
+    free(w.bytes);
+    s_clock = D + 30;
+    before = s_dials;
+    expect("redirect max-age: fresh within the redirect's minute",
+           whole("http://i.test/", &w, NULL) && w.served == WAY_SERVED_KEPT && s_dials == before,
+           NULL);
+    free(w.bytes);
+    s_clock = D + 90;
+    expect("redirect max-age: asked again past it",
+           whole("http://i.test/", &w, NULL) && body_is(&w, "NEW") && s_dials > before, NULL);
+    free(w.bytes);
+
+    // The redirect's minute counts from when it came, not from when the
+    // body did: a second-long redirect, then two seconds for the body, and
+    // the entry is stale when stored.
+    fresh();
+    script("n.test", "HTTP/1.1 301 Moved\r\nLocation: http://o.test/\r\nCache-Control: max-age=1\r\n"
+                     "Date: Wed, 30 Sep 2026 08:55:09 GMT\r\nContent-Length: 0\r\n\r\n");
+    script_wait("o.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n"
+                          "Date: Wed, 30 Sep 2026 08:55:09 GMT\r\n\r\nOLD", 2);
+    script("n.test", "HTTP/1.1 301 Moved\r\nLocation: http://p.test/\r\nContent-Length: 0\r\n\r\n");
+    script("p.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nNEW");
+    (void)whole("http://n.test/", &w, NULL);
+    free(w.bytes);
+    before = s_dials;
+    expect("redirect max-age: its time counts from its own arrival",
+           whole("http://n.test/", &w, NULL) && body_is(&w, "NEW") && s_dials > before, NULL);
+    free(w.bytes);
+
+    // A permanent redirect that says nothing is kept by heuristic, as before.
+    fresh();
+    script("k.test", "HTTP/1.1 308 Permanent\r\nLocation: http://l.test/\r\nContent-Length: 0\r\n\r\n");
+    script("l.test", fresh600);
+    (void)whole("http://k.test/", &w, NULL);
+    free(w.bytes);
+    before = s_dials;
+    expect("redirect silent: the chain kept for its end's ten minutes",
+           whole("http://k.test/", &w, NULL) && w.served == WAY_SERVED_KEPT && s_dials == before,
+           NULL);
+    free(w.bytes);
+}
+
+static void field_too_long(void)
+{
+    fresh();
+    static char reply[4096];
+    char pad[2600];
+    memset(pad, 'p', sizeof(pad) - 1);
+    pad[sizeof(pad) - 1] = '\0';
+    snprintf(reply, sizeof(reply),
+             "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nCache-Control: no-store, x=\"%s\"\r\n"
+             "Last-Modified: Wed, 23 Sep 2026 20:36:58 GMT\r\nDate: Wed, 30 Sep 2026 08:55:09 GMT\r\n"
+             "\r\nSECRET",
+             pad);
+    script("m.test", reply);
+    script("m.test", NULL);
+    way_whole_t w;
+    expect("long field: read", whole("http://m.test/", &w, NULL) && body_is(&w, "SECRET"), NULL);
+    free(w.bytes);
+    expect("long field: a Cache-Control too long to read is no permission to keep",
+           !whole("http://m.test/", &w, NULL), NULL);
+    free(w.bytes);
+
+    // An escaped quote in an extension's value does not hide a no-store.
+    fresh();
+    script("q.test", "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nCache-Control: x=\"a\\\"b\", no-store\r\n"
+                     "Last-Modified: Wed, 23 Sep 2026 20:36:58 GMT\r\nDate: Wed, 30 Sep 2026 08:55:09 GMT\r\n"
+                     "\r\nSECRET");
+    script("q.test", NULL);
+    (void)whole("http://q.test/", &w, NULL);
+    free(w.bytes);
+    expect("escaped quote: the no-store after it is read", !whole("http://q.test/", &w, NULL),
+           NULL);
+    free(w.bytes);
+}
+
+// The finished-document loader must resume script stops before reading the
+// next wire chunk. Neither parser mode grants execution in libway.
+static void scripted_document_load(void)
+{
+    for (int enabled = 0; enabled < 2; enabled++) {
+        fresh();
+        char *reply = malloc(24000);
+        char *body = reply + 512;
+        const char *first = "<!doctype html><noscript><input id=fallback></noscript>"
+                            "<script>var first=1;</script><p>";
+        size_t length = strlen(first);
+        memcpy(body, first, length);
+        memset(body + length, 'x', 18000);
+        length += 18000;
+        const char *last = "</p><script>var second=2;</script><a href=/tail id=tail>tail</a>";
+        memcpy(body + length, last, strlen(last) + 1);
+        length += strlen(last);
+        int header = snprintf(reply, 512, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                              "Content-Length: %zu\r\n\r\n", length);
+        memmove(reply + header, body, length + 1);
+        script("script.test", reply);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        expect("load scripting: leg defaults off", !leg.scripting, NULL);
+        leg.scripting = enabled != 0;
+        way_page_t page = {0};
+        os64_fetch_status_t why;
+        bool loaded = way_load(&leg, "http://script.test/page", NULL, &page, &why);
+        expect("load scripting: entire multi-chunk document arrives", loaded && page.model &&
+               os64_page_nlinks(page.model) == 1 && why == OS64_FETCH_OK, NULL);
+        expect("load scripting: noscript follows captured parser mode", loaded &&
+               os64_page_ncontrols(page.model) == (enabled ? 0 : 1), NULL);
+        way_page_clear(&page);
+        free(reply);
+    }
+}
+
+// The pieces way_load is made of, driven by hand the way yonder's worker
+// and window drive them (DOM_D4.md), must make the page way_load makes
+// from the same bytes: the same tree, the same note, the same text, the
+// same sentence when there is no page. The body is read in 1,000-byte
+// pieces here where way_load reads 8 KiB, since the parser's contract is
+// that the cut does not show.
+static size_t spelled(const os64_html_document_t *doc, char *out, size_t cap)
+{
+    return doc != NULL ? os64_html_serialize(doc->document, true, false, out, cap) : 0;
+}
+
+static bool by_hand(const char *url, bool scripting, way_page_t *page, os64_fetch_status_t *why,
+                    char *status, size_t status_cap)
+{
+    way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    leg.scripting = scripting;
+    way_opening_t o;
+    bool opened = way_open(&leg, url, NULL, &o, why);
+    snprintf(status, status_cap, "%s", leg.status);
+    if (!opened)
+        return false;
+    char buf[1000];
+    if (o.head.body == WAY_BODY_HTML) {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = o.head.charset[0] ? o.head.charset : NULL;
+        opt.scripting = scripting;
+        os64_html_parser_t *parser = os64_html_parser_new(&opt);
+        for (;;) {
+            int64_t n = way_read(&leg, &o, buf, sizeof(buf));
+            if (n <= 0)
+                break;
+            int64_t r = os64_html_parser_feed(parser, buf, (size_t)n);
+            while (r == OS64_HTML_SCRIPT)
+                r = os64_html_parser_resume(parser);
+            if (r != OS64_HTML_OK)
+                break;
+        }
+        page->doc = os64_html_parser_finish(parser);
+        page->model = os64_page_build(page->doc, o.head.url, NULL, NULL);
+    } else {
+        size_t cap = 1 << 20;
+        page->text = malloc(cap);
+        for (;;) {
+            int64_t n = way_read(&leg, &o, page->text + page->textlen, cap - page->textlen);
+            if (n <= 0)
+                break;
+            page->textlen += (size_t)n;
+        }
+        page->text_utf8 = way_text_utf8(&o.head, page->text, page->textlen);
+    }
+    *why = os64_fetch_status(o.fetch);
+    way_note(page, &o.head, false, *why, os64_fetch_reason(o.fetch));
+    os64_fetch_close(o.fetch);
+    snprintf(status, status_cap, "%s", leg.status);
+    return true;
+}
+
+// A picture asked for by itself is a page for a face that shows pictures,
+// its body left unread for the face; for one that does not, it is not a
+// page and the sentence says how to keep it.
+static void pictures_are_pages_for_a_face_that_shows_them(void)
+{
+    static const char kPng[] = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG";
+    for (int pictures = 0; pictures < 2; pictures++) {
+        fresh();
+        script("pic.test", kPng);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = pictures != 0 ? "image/png, image/gif" : NULL;
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://pic.test/dwm.png", NULL, &o, &why);
+        if (pictures) {
+            expect("pictures: a picture is a page for a face that shows them",
+                   opened && o.head.body == WAY_BODY_IMAGE, leg.status);
+            if (opened)
+                os64_fetch_close(o.fetch);
+        } else {
+            expect("pictures: a picture is not a page for a face that shows none",
+                   !opened && strstr(leg.status, "that is image/png, not a page") != NULL, leg.status);
+        }
+    }
+    // A kind the face does not name is a file to save even for a face that
+    // shows pictures: a page of it would be a broken picture.
+    fresh();
+    script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 3\r\n\r\nWEB");
+    static way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    leg.pictures = "image/png, image/gif";
+    way_opening_t o;
+    os64_fetch_status_t why;
+    bool opened = way_open(&leg, "http://pic.test/a.webp", NULL, &o, &why);
+    static const char kList[] = "image/png, image/x-portable-pixmap;q=0.5,image/gif";
+    expect("pictures: a type is the face's when its list names it whole, parameters aside",
+           way_accept_names(kList, "image/png") && way_accept_names(kList, "image/x-portable-pixmap") &&
+               way_accept_names(kList, "image/gif") && !way_accept_names(kList, "image/webp") &&
+               !way_accept_names(kList, "image/pn") && !way_accept_names(kList, "q=0.5") &&
+               !way_accept_names(kList, "") && !way_accept_names(NULL, "image/png"),
+           NULL);
+    // A GET asks for the leg's pictures after its pages, at half the weight;
+    // a POST does not, since its reply is never shown as a picture.
+    for (int post = 0; post < 2; post++) {
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t ask_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t ask_leg = way_leg(&ask_session);
+        ask_leg.pictures = "image/png, image/gif";
+        os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                       .content_type = "application/x-www-form-urlencoded"};
+        way_opening_t ao;
+        os64_fetch_status_t awhy;
+        bool aopened = way_open(&ask_leg, "http://pic.test/form", post ? &request : NULL, &ao, &awhy);
+        if (aopened) {
+            expect("head: a page over plain http did not arrive encrypted", !ao.head.encrypted, NULL);
+            os64_fetch_close(ao.fetch);
+        }
+        bool asked = false, pages_only = false;
+        for (int k = 0; k < 8; k++) {
+            asked |= strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
+            pages_only |= strstr(s_last_request[k], "Accept: text/html\r\n") != NULL;
+        }
+        expect(post ? "pictures: a POST asks for pages only" : "pictures: a GET asks for the pictures after the pages",
+               aopened && (post ? pages_only && !asked : asked && !pages_only), ask_leg.status);
+    }
+    {
+        // A page's script reads and sets Secure cookies only when its page
+        // ARRIVED encrypted: an https address through a plain proxy did not.
+        fresh();
+        way_jar_t *jar = way_jar_new();
+        os64_url_t site;
+        os64_url_parse("https://s.test/", &site);
+        way_jar_hear(jar, &site, true, "token=secret; Secure", 20, 100);
+        char got[64];
+        bool whole;
+        way_script_cookies(jar, "https://s.test/", false, got, sizeof(got), &whole);
+        bool hidden = strcmp(got, "") == 0;
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        bool seen = strcmp(got, "token=secret") == 0;
+        way_script_cookie(jar, "https://s.test/", false, "forged=1; Secure", 16);
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        expect("cookies: a page's script sees and sets Secure cookies only over its own encrypted arrival",
+               hidden && seen && strcmp(got, "token=secret") == 0, got);
+        way_jar_free(jar);
+    }
+    {
+        // A POST a 303 turns into a GET asks for the pictures from there on.
+        fresh();
+        script("pic.test", "HTTP/1.1 303 See Other\r\nLocation: /done\r\nContent-Length: 0\r\n\r\n");
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t hop_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t hop_leg = way_leg(&hop_session);
+        hop_leg.pictures = "image/png, image/gif";
+        os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                       .content_type = "application/x-www-form-urlencoded"};
+        way_opening_t ho;
+        os64_fetch_status_t hwhy;
+        bool hopened = way_open(&hop_leg, "http://pic.test/form", &request, &ho, &hwhy);
+        if (hopened)
+            os64_fetch_close(ho.fetch);
+        bool asked = false;
+        for (int k = 0; k < 8; k++)
+            asked |= strstr(s_last_request[k], "GET /done") != NULL &&
+                     strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
+        expect("pictures: a POST redirected to a GET asks for them on the GET", hopened && asked, hop_leg.status);
+    }
+    {
+        // Navigation Timing's redirectCount: the redirects followed while
+        // every one stayed on the asked origin; 0 when none, or one left it.
+        static way_session_t r_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        static const char kOk[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok";
+        uint32_t counts[4];
+        for (int c = 0; c < 4; c++) {
+            fresh();
+            if (c == 0) {
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", "HTTP/1.1 301 Moved\r\nLocation: http://r.test:80/three\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", kOk);
+            } else if (c == 1) {
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: http://other.test/x\r\nContent-Length: 0\r\n\r\n");
+                script("other.test", "HTTP/1.1 302 Found\r\nLocation: http://r.test/back\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", kOk);
+            } else if (c == 2) {
+                script("r.test", kOk);
+            } else {
+                // The last 302 names nowhere, so it is not followed: it is
+                // the page, and the one redirect before it still counts.
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", "HTTP/1.1 302 Found\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nno");
+            }
+            way_leg_t r_leg = way_leg(&r_session);
+            way_opening_t ro;
+            os64_fetch_status_t rwhy;
+            bool ropened = way_open(&r_leg, "http://r.test/one", NULL, &ro, &rwhy);
+            counts[c] = ropened ? ro.head.redirects : 99;
+            if (ropened)
+                os64_fetch_close(ro.fetch);
+        }
+        expect("redirectCount: two redirects on the asked origin, a port spelled out included, count",
+               counts[0] == 2, NULL);
+        expect("redirectCount: a chain that left the origin, even to come back, counts 0", counts[1] == 0, NULL);
+        expect("redirectCount: no redirect counts 0", counts[2] == 0, NULL);
+        expect("redirectCount: a last redirect that was not followed leaves the count of those that were",
+               counts[3] == 1, NULL);
+    }
+    {
+        char out[40];
+        expect("accept: a picture type that would not fit is left off whole",
+               strcmp(way_accept_compose("text/html", "image/png, image/x-portable-pixmap", out, sizeof(out)),
+                      "text/html, image/png;q=0.5") == 0, out);
+        static char long_pages[600];
+        memset(long_pages, 'a', sizeof(long_pages) - 1);
+        expect("accept: a page list that does not fit is never cut",
+               way_accept_compose(long_pages, "image/png", out, sizeof(out)) == NULL, NULL);
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t long_session = {.name="fixture", .agent="fixture"};
+        long_session.accept = long_pages;
+        way_leg_t long_leg = way_leg(&long_session);
+        long_leg.pictures = "image/png";
+        way_opening_t lo;
+        os64_fetch_status_t lwhy;
+        bool lopened = way_open(&long_leg, "http://pic.test/", NULL, &lo, &lwhy);
+        if (lopened)
+            os64_fetch_close(lo.fetch);
+        expect("accept: a page list longer than libfetch sends is refused, not cut",
+               !lopened && strstr(long_leg.status, "longer than this will send") != NULL, long_leg.status);
+        expect("accept: a picture's own parameters give way to the half weight",
+               strcmp(way_accept_compose(NULL, "image/png;q=0.9", out, sizeof(out)), "image/png;q=0.5") == 0, out);
+    }
+    {
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG");
+        static way_session_t whole_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t whole_leg = way_leg(&whole_session);
+        whole_leg.pictures = "image/png";
+        way_page_t page = {0};
+        os64_fetch_status_t whole_why;
+        bool loaded = way_load(&whole_leg, "http://pic.test/dwm.png", NULL, &page, &whole_why);
+        expect("pictures: the whole-page load never reads a picture as a page",
+               !loaded && page.text == NULL && strstr(whole_leg.status, "that is image/png, not a page") != NULL &&
+                   whole_leg.pictures != NULL,
+               whole_leg.status);
+        if (loaded)
+            way_page_clear(&page);
+    }
+    expect("pictures: one the face does not name is still a file to save",
+           !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
+    if (opened)
+        os64_fetch_close(o.fetch);
+}
+
+static void pieces_make_the_same_page(void)
+{
+    static const char *const replies[] = {
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 114\r\n\r\n"
+        "<!doctype html><title>t</title><noscript><input id=f></noscript>"
+        "<script>var a=1;</script><p>one<a href=/x>x</a> two</p>",
+        "HTTP/1.1 404 Nope\r\nContent-Type: text/plain\r\nContent-Length: 11\r\n\r\n"
+        "\xEF\xBB\xBF" "found not",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n"
+        "{\"a\":1}",
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 500\r\n\r\n<p>cut",
+        NULL,                           // a body past 64 KB, made below
+    };
+    static char big[70000 + 128];
+    {
+        int header = snprintf(big, sizeof(big), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                              "Content-Length: 70000\r\n\r\n<p>");
+        memset(big + header, 'y', 70000 - 3);
+        big[header + 70000 - 3] = '\0';
+    }
+    for (size_t r = 0; r < sizeof(replies) / sizeof(replies[0]); r++) {
+        const char *reply = replies[r] != NULL ? replies[r] : big;
+        for (int scripting = 0; scripting < 2; scripting++) {
+            fresh();
+            script("pieces.test", reply);
+            script("pieces.test", reply);
+            way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+            way_leg_t leg = way_leg(&session);
+            leg.scripting = scripting != 0;
+            way_page_t whole = {0}, hand = {0};
+            os64_fetch_status_t why_whole, why_hand;
+            char status[WAY_SENTENCE_MAX];
+            bool loaded = way_load(&leg, "http://pieces.test/p", NULL, &whole, &why_whole);
+            bool loaded_hand = by_hand("http://pieces.test/p", scripting != 0, &hand, &why_hand,
+                                       status, sizeof(status));
+            char name[96];
+            snprintf(name, sizeof(name), "pieces: reply %zu, scripting %d", r, scripting);
+            expect(name, loaded == loaded_hand && why_whole == why_hand, "loaded or why differ");
+            // Both paths share the judgement, so the harness also says what
+            // the judgement must be: text and JSON are pages, a PNG is not,
+            // and a page's address is the one the head named.
+            expect(name, loaded == (r != 3), "page or not a page");
+            if (loaded)
+                expect(name, strcmp(hand.url, "http://pieces.test/p") == 0, hand.url);
+            if (replies[r] != NULL) {
+                expect(name, strcmp(leg.status, status) == 0, status);
+            } else {
+                // Past 64 KB both say how far they have got; the count is the
+                // fetch's at the read that crossed, which depends on how the
+                // transport cut the body, so only the sentence is held.
+                expect(name, strncmp(leg.status, " reading 6", 10) == 0 &&
+                       strstr(leg.status, " KB of http://pieces.test/p") != NULL, leg.status);
+                expect(name, strncmp(status, " reading 6", 10) == 0, status);
+            }
+            if (loaded && loaded_hand) {
+                char a[4096], b[4096];
+                size_t na = spelled(whole.doc, a, sizeof(a)), nb = spelled(hand.doc, b, sizeof(b));
+                expect(name, na == nb && (na == 0 || strcmp(a, b) == 0), "trees differ");
+                expect(name, strcmp(whole.note, hand.note) == 0, hand.note);
+                expect(name, strcmp(whole.url, hand.url) == 0 && whole.posted == hand.posted,
+                       "address or method differ");
+                expect(name, whole.textlen == hand.textlen && whole.text_utf8 == hand.text_utf8 &&
+                       (whole.textlen == 0 || memcmp(whole.text, hand.text, whole.textlen) == 0),
+                       "text differs");
+                expect(name, (whole.model == NULL) == (hand.model == NULL) &&
+                       (whole.model == NULL || os64_page_nlinks(whole.model) == os64_page_nlinks(hand.model)),
+                       "models differ");
+            }
+            way_page_clear(&whole);
+            way_page_clear(&hand);
+        }
+    }
+    // A head that never comes: the same why and the same sentence.
+    fresh();
+    script("pieces.test", NULL);
+    script("pieces.test", NULL);
+    way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    way_page_t whole = {0}, hand = {0};
+    os64_fetch_status_t why_whole, why_hand;
+    char status[WAY_SENTENCE_MAX];
+    bool loaded = way_load(&leg, "http://pieces.test/p", NULL, &whole, &why_whole);
+    bool loaded_hand = by_hand("http://pieces.test/p", false, &hand, &why_hand, status, sizeof(status));
+    expect("pieces: a refused dial", !loaded && !loaded_hand && why_whole == why_hand &&
+           why_whole == OS64_FETCH_DIAL_FAILED && strcmp(leg.status, status) == 0, status);
+}
+
+// ── Who is asking, on the wire ──────────────────────────────────────────
+
+static const way_identity_t kWho = {.hints = "sec-ch-ua: \"Fixture\";v=\"1\"\r\n", .language = "en-US,en;q=0.9"};
+
+// A whole body through hooks that describe a picture asked for by the page
+// at `page`.
+static bool whole_picture(const char *page, const char *url, way_whole_t *out)
+{
+    way_hooks_t hooks;
+    memset(&hooks, 0, sizeof(hooks));
+    hooks.jar = s_jar;
+    hooks.cache = s_cache;
+    hooks.identity = &kWho;
+    way_origin_t o;
+    way_origin_of(page, 0, &o);
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    os64_fetch_options_t opt;
+    memset(&opt, 0, sizeof(opt));
+    return way_fetch_whole(&hooks, url, &opt, 1 << 20, out);
+}
+
+static bool has(const char *request, const char *line)
+{
+    return strstr(request, line) != NULL;
+}
+
+static void who_is_asking(void)
+{
+    // An address given to the browser, http and then https by redirect:
+    // the plain-http hop hears only what goes anywhere, the trustworthy hop
+    // all of it, still the browser's own (none) and a person's.
+    fresh();
+    script("a.test", "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.1/\r\nContent-Length: 0\r\n\r\n");
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    way_session_t session = {.name = "fixture", .agent = "fixture", .identity = &kWho, .accept = "text/html"};
+    way_leg_t leg = way_leg(&session);
+    way_page_t page = {0};
+    os64_fetch_status_t why;
+    expect("who: the load", way_load(&leg, "http://a.test/", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    const char *plain = s_last_request[0], *trusted = s_last_request[1];
+    expect("who: plain http hears the navigation's upgrade and the language",
+           has(plain, "Upgrade-Insecure-Requests: 1\r\n") && has(plain, "Accept-Language: en-US,en;q=0.9\r\n"), plain);
+    expect("who: plain http hears no Fetch Metadata and no hints",
+           !has(plain, "Sec-Fetch-") && !has(plain, "sec-ch-ua"), plain);
+    expect("who: the trustworthy hop hears all of it",
+           has(trusted, "sec-ch-ua: \"Fixture\";v=\"1\"\r\nUpgrade-Insecure-Requests: 1\r\nSec-Fetch-Site: none\r\n"
+                        "Sec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\nSec-Fetch-Dest: document\r\n"
+                        "Accept-Language: en-US,en;q=0.9\r\n"), trusted);
+
+    // A page's own navigation: its site, and nobody's.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    leg = way_leg(&session);
+    way_origin_t from;
+    way_origin_of("http://127.0.0.1/page", 0, &from);
+    way_metadata_navigation(&leg.metadata, WAY_BY_PAGE, &from);
+    expect("who: a page's load", way_load(&leg, "http://127.0.0.1/next", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    expect("who: a page's navigation is same-origin and nobody's",
+           has(s_last_request[0], "Sec-Fetch-Site: same-origin\r\n") && !has(s_last_request[0], "Sec-Fetch-User"),
+           s_last_request[0]);
+
+    // A face's own fetch: what the hooks describe, no upgrade.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+    way_whole_t w;
+    expect("who: a picture", whole_picture("http://127.0.0.1/page", "http://127.0.0.1/i.png", &w), NULL);
+    free(w.bytes);
+    expect("who: a picture's lines",
+           has(s_last_request[0], "sec-ch-ua: \"Fixture\";v=\"1\"\r\nSec-Fetch-Site: same-origin\r\n"
+                                  "Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nAccept-Language: en-US,en;q=0.9\r\n") &&
+           !has(s_last_request[0], "Upgrade-Insecure-Requests"), s_last_request[0]);
+
+    // THE COOKIES KEEP THEIR ROOM. A cookie of most of a kilobyte goes
+    // whole beside the identity lines, and an identity past
+    // WAY_IDENTITY_MAX goes without its lines rather than crowd the
+    // cookies out or refuse the hop.
+    {
+        char cookie[1001];
+        memset(cookie, 'c', sizeof(cookie) - 1);
+        memcpy(cookie, "big=", 4);
+        cookie[sizeof(cookie) - 1] = '\0';
+        os64_url_t site;
+        os64_url_parse("http://127.0.0.1/", &site);
+        way_jar_hear(s_jar, &site, false, cookie, strlen(cookie), s_clock);
+        static char huge_hints[WAY_IDENTITY_MAX + 64];
+        memset(huge_hints, 0, sizeof(huge_hints));
+        strcpy(huge_hints, "sec-ch-ua: \"");
+        memset(huge_hints + strlen(huge_hints), 'x', WAY_IDENTITY_MAX);
+        strcat(huge_hints, "\"\r\n");
+        const way_identity_t huge = {.hints = huge_hints, .language = "en"};
+        for (int i = 0; i < 2; i++) {
+            fresh();
+            script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+            way_hooks_t hooks;
+            memset(&hooks, 0, sizeof(hooks));
+            hooks.jar = s_jar;
+            hooks.identity = i == 0 ? &kWho : &huge;
+            way_origin_t o;
+            way_origin_of("http://127.0.0.1/page", 0, &o);
+            way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+            os64_fetch_options_t opt;
+            memset(&opt, 0, sizeof(opt));
+            way_whole_t got;
+            bool ok = way_fetch_whole(&hooks, "http://127.0.0.1/i.png", &opt, 1 << 20, &got);
+            free(got.bytes);
+            expect(i == 0 ? "who: a kilobyte's cookie goes whole beside the identity lines"
+                          : "who: an identity past its room goes without its lines, the cookie whole",
+                   ok && has(s_last_request[0], cookie) &&
+                       (i == 0 ? has(s_last_request[0], "Sec-Fetch-Dest: image\r\n")
+                               : !has(s_last_request[0], "sec-ch-ua") && !has(s_last_request[0], "Sec-Fetch-")),
+                   s_last_request[0]);
+        }
+        way_jar_free(s_jar);
+        s_jar = way_jar_new();
+    }
+
+    // Asked again after another resource's 304: the URL list starts again,
+    // so the hop that went elsewhere does not make the new ask cross-site.
+    fresh();
+    script("127.0.0.1", kOld);
+    script("127.0.0.1", "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.2/y\r\nContent-Length: 0\r\n\r\n");
+    script("127.0.0.2", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nTHEM");
+    (void)whole_picture("http://127.0.0.1/page", "http://127.0.0.1/x", &w);
+    free(w.bytes);
+    expect("who: the other resource's 304 asked again",
+           whole_picture("http://127.0.0.1/page", "http://127.0.0.1/x", &w) && body_is(&w, "THEM"), NULL);
+    free(w.bytes);
+    expect("who: the redirect's hop was cross-site", has(s_last_request[1], "Sec-Fetch-Site: cross-site\r\n"),
+           s_last_request[1]);
+    expect("who: asked again, same-origin again", has(s_last_request[0], "Sec-Fetch-Site: same-origin\r\n"),
+           s_last_request[0]);
+}
+
+// ── How it asks: the preset's Accept, order and Connection line ─────────
+
+static const way_identity_t kAsks = {
+    .language = "en", .keep_alive = true,
+    .accept = {[WAY_DEST_DOCUMENT] = "text/html,*/*;q=0.8", [WAY_DEST_IMAGE] = "image/png,*/*;q=0.5"},
+    .order = {[WAY_ORDER_NAVIGATE] = "Connection, Accept, User-Agent",
+              [WAY_ORDER_NO_CORS] = "Accept-Language, Accept, Connection"},
+};
+
+static void how_it_asks(void)
+{
+    // A navigation: the preset's list in place of the face's, its pictures
+    // included, on a GET and on a form's POST; its order; its Connection.
+    for (int post = 0; post < 2; post++) {
+        fresh();
+        script("a.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+        way_session_t session = {.name = "fixture", .agent = "fixture", .identity = &kAsks, .accept = "text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = "image/png, image/gif";
+        os64_page_request_t form = {.method = OS64_PAGE_METHOD_POST, .body = "a=1",
+                                    .body_len = 3, .content_type = "application/x-www-form-urlencoded"};
+        way_page_t page = {0};
+        os64_fetch_status_t why;
+        expect("asks: the load", way_load(&leg, "http://a.test/", post ? &form : NULL, &page, &why), leg.status);
+        way_page_clear(&page);
+        const char *r = s_last_request[0];
+        expect(post ? "asks: a form's POST, in the preset's order and with its list"
+                    : "asks: a navigation, in the preset's order and with its list",
+               strstr(r, post ? "POST / HTTP/1.1\r\nHost: a.test\r\n" : "GET / HTTP/1.1\r\nHost: a.test\r\n") == r &&
+                   has(r, "\r\nHost: a.test\r\nConnection: keep-alive\r\nAccept: text/html,*/*;q=0.8\r\n"
+                          "User-Agent: fixture\r\nAccept-Encoding: gzip, identity\r\n") &&
+                   !has(r, "image/png"), r);
+    }
+    // A face's own fetch: the preset's list for its destination, over the
+    // caller's, and the order for a no-cors request.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+    way_hooks_t hooks;
+    memset(&hooks, 0, sizeof(hooks));
+    hooks.identity = &kAsks;
+    way_origin_t o;
+    way_origin_of("http://127.0.0.1/page", 0, &o);
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    os64_fetch_options_t opt;
+    memset(&opt, 0, sizeof(opt));
+    opt.accept = "image/gif";
+    way_whole_t w;
+    expect("asks: a picture", way_fetch_whole(&hooks, "http://127.0.0.1/i.png", &opt, 1 << 20, &w), NULL);
+    free(w.bytes);
+    expect("asks: a picture, in the preset's order and with its list",
+           has(s_last_request[0], "\r\nHost: 127.0.0.1\r\nAccept-Language: en\r\nAccept: image/png,*/*;q=0.5\r\n"
+                                  "Connection: keep-alive\r\nAccept-Encoding: gzip, identity\r\n"), s_last_request[0]);
+    // ...and one the preset names no list for keeps the caller's.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nCSS");
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_STYLE, WAY_MODE_NO_CORS);
+    memset(&opt, 0, sizeof(opt));
+    opt.accept = "text/css";
+    expect("asks: a sheet", way_fetch_whole(&hooks, "http://127.0.0.1/s.css", &opt, 1 << 20, &w), NULL);
+    free(w.bytes);
+    expect("asks: a sheet with no preset list keeps the caller's", has(s_last_request[0], "Accept: text/css\r\n"),
+           s_last_request[0]);
+    // No preset: the face's list, libfetch's order, no Connection line.
+    fresh();
+    script("a.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    way_session_t plain = {.name = "fixture", .agent = "fixture", .accept = "text/html"};
+    way_leg_t leg = way_leg(&plain);
+    way_page_t page = {0};
+    os64_fetch_status_t why;
+    expect("asks: a costume's load", way_load(&leg, "http://a.test/", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    expect("asks: a costume says what libfetch says, in its order",
+           has(s_last_request[0], "\r\nHost: a.test\r\nUser-Agent: fixture\r\nAccept: text/html\r\n") &&
+               !has(s_last_request[0], "Connection"), s_last_request[0]);
+}
+
+// THE COOKIES A LOAD LEFT OUT, noted where a face reads them: a page's
+// leg (way_open) and a fetch's hooks (way_fetch_whole). A jar of a site's
+// 3 KB sends it whole and notes nothing; one of 10 KB sends the newest
+// that fit WAY_COOKIE_LINE_MAX, the login among them, and notes how many
+// went without, and to which host.
+static void cookies_left_out(void)
+{
+    char value[241], cookie[300];
+    memset(value, 'v', sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
+    os64_url_t site;
+    os64_url_parse("http://crumbs.test/", &site);
+    for (int many = 0; many < 2; many++) {
+        way_jar_t *jar = way_jar_new();
+        for (int i = 0; i < (many ? 40 : 12); i++) {
+            snprintf(cookie, sizeof(cookie), "pre%02d=%s; Path=/", i, value);
+            way_jar_hear(jar, &site, false, cookie, strlen(cookie), s_clock);
+        }
+        way_jar_hear(jar, &site, false, "user_session=S; Path=/", 22, s_clock);
+        fresh();
+        script("crumbs.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 4\r\n\r\n<p>x");
+        way_session_t session = {.name = "fixture", .agent = "fixture", .accept = "text/html", .jar = jar};
+        way_leg_t leg = way_leg(&session);
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://crumbs.test/", NULL, &o, &why);
+        if (opened)
+            os64_fetch_close(o.fetch);
+        expect(many ? "left out: a page's leg notes what its hop left out, and for whom"
+                    : "left out: a page's 3 KB go whole, and its leg notes nothing",
+               opened && has(s_last_request[0], "user_session=S") &&
+                   leg.cookies_short.left == (many ? 8 : 0) &&
+                   strcmp(leg.cookies_short.host, many ? "crumbs.test" : "") == 0,
+               leg.cookies_short.host);
+        fresh();
+        script("crumbs.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+        way_hooks_t hooks;
+        memset(&hooks, 0, sizeof(hooks));
+        hooks.jar = jar;
+        os64_fetch_options_t opt;
+        memset(&opt, 0, sizeof(opt));
+        way_whole_t got;
+        bool ok = way_fetch_whole(&hooks, "http://crumbs.test/i.png", &opt, 1 << 20, &got);
+        free(got.bytes);
+        expect(many ? "left out: a fetch's hooks note it the same" : "left out: and its hooks nothing",
+               ok && hooks.cookies_short.left == (many ? 8 : 0), NULL);
+        way_jar_free(jar);
+    }
+}
+
+int main(void)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    char root[] = "/tmp/way_fetchXXXXXX";
+    if (mkdtemp(root) == NULL)
+        return 1;
+    snprintf(s_dir, sizeof(s_dir), "%s/cache", root);
+    s_cache = way_cache_open(s_dir, 1 << 24);
+    s_jar = way_jar_new();
+    scripted_document_load();
+    pieces_make_the_same_page();
+    pictures_are_pages_for_a_face_that_shows_them();
+    whole_without_memory();
+    options_left_alone();
+    validator_identity();
+    restrictive_304();
+    kept_bodies();
+    partitioned();
+    varied_entries();
+    redirect_restrictions();
+    field_too_long();
+    who_is_asking();
+    how_it_asks();
+    cookies_left_out();
+    fetch_pool_drain();
+    way_cache_close(s_cache);
+    way_jar_free(s_jar);
+    remove_tree(root, 0);
+    printf("way_fetch_whole: %d checks, %d failed\n", checks, failures);
+    return failures != 0;
+}

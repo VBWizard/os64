@@ -1,0 +1,23 @@
+# JS_SetPrototypeInternal takes a reference on the new prototype before it
+# makes the object's shape its own (js_shape_prepare_update), and a shape
+# copy refused for memory returned -1 with that reference still held: the
+# prototype could never be freed, and the runtime's teardown found it on
+# its object list (libdom's DOM host found it, its installer allocation
+# sweep cutting the shape copy of a prototype libdom reparents). The
+# reference now goes back on that path.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -8048,8 +8048,12 @@
+         JS_DupValue(ctx, proto_val);
+     }
+ 
+-    if (js_shape_prepare_update(ctx, p, NULL))
++    if (js_shape_prepare_update(ctx, p, NULL)) {
++        /* os64: the reference taken on the new prototype goes back. */
++        if (proto)
++            JS_FreeValue(ctx, proto_val);
+         return -1;
++    }
+     sh = p->shape;
+     if (sh->proto)
+         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, sh->proto));

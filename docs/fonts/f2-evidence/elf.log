@@ -1,0 +1,314 @@
+x86_64-elf-readelf -d libos64.so
+
+Dynamic section at offset 0x31000 contains 12 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libfreetype.so]
+ 0x000000000000000e (SONAME)             Library soname: [libos64.so]
+ 0x0000000000000004 (HASH)               0x7f0050000158
+ 0x0000000000000005 (STRTAB)             0x7f0050002400
+ 0x0000000000000006 (SYMTAB)             0x7f00500009d8
+ 0x000000000000000a (STRSZ)              4872 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000007 (RELA)               0x7f0050003708
+ 0x0000000000000008 (RELASZ)             5088 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffff9 (RELACOUNT)          204
+ 0x0000000000000000 (NULL)               0x0
+x86_64-elf-nm -D --defined-only libos64.so
+00007f0050000000 A LIB_BASE
+0000000004000000 A LIB_SLOT_SIZE
+00007f0050016e49 T memcmp
+00007f0050016def T memcpy
+00007f0050016e1c T memmove
+00007f0050016dc5 T memset
+00007f005001a167 T os64_accept
+00007f005001a57d T os64_announce
+00007f00500142b1 T os64_args_help
+00007f00500139db T os64_args_init
+00007f0050013d9f T os64_args_next
+00007f005001413c T os64_args_parse
+00007f0050016f25 T os64_atoi
+00007f0050016fd5 T os64_atou
+00007f005001611f T os64_calloc
+00007f00500111ac T os64_chdir
+00007f00500276c2 T os64_clip_copy
+00007f00500278cc T os64_clip_length
+00007f00500277a2 T os64_clip_paste
+00007f0050010b97 T os64_close
+00007f0050010951 T os64_complain
+00007f0050028099 T os64_conf_find
+00007f005002805c T os64_conf_find_from
+00007f00500280db T os64_conf_find_read
+00007f00500282bc T os64_conf_get
+00007f005002840c T os64_conf_get_bool
+00007f0050027ed5 T os64_conf_parse
+00007f0050027d55 T os64_conf_read
+00007f005002819e T os64_conf_read_first
+00007f005002928c T os64_conf_set
+00007f00500289ea T os64_conf_target
+00007f005002920c T os64_conf_write
+00007f0050029247 T os64_conf_write_checked
+00007f005001a85b T os64_crc32
+00007f005001a7c5 T os64_crc32_begin
+00007f005001a849 T os64_crc32_end
+00007f005001a7d0 T os64_crc32_update
+00007f0050018180 T os64_date_from_epoch
+00007f00500191b7 T os64_date_from_epoch_tz
+00007f0050019250 T os64_date_now
+00007f0050018731 T os64_date_to_epoch
+00007f005001092c T os64_debug_log
+00007f005001a250 T os64_dial
+00007f005001a712 T os64_dial_reason
+00007f005001af07 T os64_draw_blit
+00007f005001ba2a T os64_draw_ctx_init
+00007f005001ba9d T os64_draw_ctx_refresh
+00007f005001bac2 T os64_draw_ctx_text
+00007f005001adb5 T os64_draw_fill_rect
+00007f005001b35f T os64_draw_fill_round_rect
+00007f005001ae78 T os64_draw_hline
+00007f005001b117 T os64_draw_rect
+00007f005001b4e1 T os64_draw_round_rect
+00007f005001b700 T os64_draw_text
+00007f005001b955 T os64_draw_text_charset
+00007f005001b9c8 T os64_draw_text_clipped
+00007f005001b08d T os64_draw_vline
+00007f005001695c T os64_env_next
+00007f005001686d T os64_env_publish
+00007f0050011168 T os64_exit
+00007f00500135eb T os64_format_binary_size
+00007f00500293de T os64_format_ipv4
+00007f005001bbae T os64_frame_clock_bind
+00007f005001bb7c T os64_frame_clock_init
+00007f005001bc1f T os64_frame_wait
+00007f00500160fa T os64_free
+00007f0050011185 T os64_getcwd
+00007f0050016887 T os64_getenv
+00007f005001773a T os64_glob_match
+00007f0050015248 T os64_heap_init
+00007f005001458f T os64_heap_publish
+00007f0050015659 T os64_heap_verify
+00007f0050013773 T os64_hprintf
+00007f0050019fad T os64_klog_read
+00007f005001101a T os64_linereader_close
+00007f0050010db2 T os64_linereader_line
+00007f0050010ce5 T os64_linereader_open
+00007f0050019348 T os64_localtime
+00007f0050015add T os64_malloc
+00007f005001451a T os64_map
+00007f0050016cba T os64_memcpy
+00007f0050016d18 T os64_memmove
+00007f0050014570 T os64_memory
+00007f0050016edb T os64_memset
+00007f005002ba3e T os64_menu_argv
+00007f005002b7e5 T os64_menu_find
+00007f005002b87f T os64_menu_load
+00007f005002b76a T os64_menu_named_exists
+00007f005002b9b9 T os64_menu_status_name
+00007f0050010cc6 T os64_mkdir
+00007f00500194b6 T os64_mktime
+00007f0050010c78 T os64_mount
+00007f005001a148 T os64_net_announce
+00007f005001a129 T os64_net_dial
+00007f0050010a9d T os64_open
+00007f0050010af4 T os64_opendir
+00007f00500292ca T os64_parse_ipv4
+00007f00500173ae T os64_parse_range
+00007f0050017045 T os64_parse_u64
+00007f0050010b68 T os64_pipe
+00007f0050013869 T os64_printf
+00007f0050011daa T os64_proc_read
+00007f0050012266 T os64_proc_read_thread
+00007f0050011f6f T os64_proc_snapshot
+00007f00500117e2 T os64_proc_state_letter
+00007f00500117b0 T os64_proc_state_name
+00007f00500122d0 T os64_proc_threads
+00007f005001067e T os64_puts
+00007f00500102ca T os64_read
+00007f0050010300 T os64_read_for
+00007f0050010b41 T os64_readdir
+00007f005001060d T os64_readline
+00007f0050016277 T os64_realloc
+00007f0050011530 T os64_reap
+00007f005001ac84 T os64_rect_intersect
+00007f005001ab4f T os64_rect_union
+00007f0050010c22 T os64_rename
+00007f0050010c49 T os64_rename_with_flags
+00007f005002a006 T os64_resolve
+00007f00500112a1 T os64_resolve_command
+00007f005000f000 T os64_runtime_init
+00007f0050010901 T os64_screen_printat
+00007f0050010ac4 T os64_seek
+00007f0050010a78 T os64_serial_log
+00007f0050018161 T os64_set_time
+00007f005001159d T os64_setenv
+00007f0050010be5 T os64_shutdown
+00007f005001155f T os64_sleep
+00007f005002a1bf T os64_slurp
+00007f005002a155 T os64_slurp_status_name
+00007f0050013533 T os64_snprintf
+00007f00500111cb T os64_spawn
+00007f0050011203 T os64_spawn_redirected
+00007f0050011257 T os64_spawn_seated
+00007f0050010b1a T os64_stat
+00007f0050016afc T os64_strcopy
+00007f0050016b93 T os64_streq
+00007f0050016c22 T os64_streq_nocase
+00007f0050019ec8 T os64_strftime
+00007f0050016abd T os64_strlen
+00007f0050010bb6 T os64_sync
+00007f0050010bd5 T os64_sync_all
+00007f005001154f T os64_taskid
+00007f005002d255 T os64_text_caret
+00007f005002d995 T os64_text_create
+00007f005002dc2f T os64_text_destroy
+00007f00500301ed T os64_text_draw
+00007f005002d458 T os64_text_fit
+00007f005002e07c T os64_text_font_bitmap
+00007f005002ddac T os64_text_font_open
+00007f005002e163 T os64_text_font_release
+00007f005002d31f T os64_text_hit
+00007f005002c6d7 T os64_text_layout
+00007f005002d0a0 T os64_text_run_release
+00007f005002cff6 T os64_text_run_view
+00007f005002d531 T os64_text_selection
+00007f005001a043 T os64_thread
+00007f005001a0de T os64_thread_exit
+00007f005001a084 T os64_thread_join
+00007f005002bbb9 T os64_thread_trampoline
+00007f005001157e T os64_ticks
+00007f0050018142 T os64_time
+00007f0050010b87 T os64_tty_handle
+00007f0050012699 T os64_tty_mode
+00007f0050012442 T os64_tty_read
+00007f005001284d T os64_tty_set_raw
+00007f005001909a T os64_tz_dst_at
+00007f005001917e T os64_tz_offset_at
+00007f0050018cc6 T os64_tz_parse
+00007f005001be92 T os64_ui_add_child
+00007f005001de81 T os64_ui_button
+00007f0050031360 D os64_ui_button_class
+00007f005001c3b9 T os64_ui_cancel_gestures
+00007f005001c43d T os64_ui_cancel_interaction
+00007f00500235f6 T os64_ui_checkbox
+00007f0050031c00 D os64_ui_checkbox_class
+00007f0050023692 T os64_ui_checkbox_set
+00007f005001c362 T os64_ui_clear_hover
+00007f0050022242 T os64_ui_color_from_hsv
+00007f0050023099 T os64_ui_colorpicker
+00007f005002243e T os64_ui_colorpicker_set
+00007f005002407f T os64_ui_decode_key
+00007f005001ca16 T os64_ui_dispatch
+00007f005001c6b9 T os64_ui_focus_next
+00007f005001bfa0 T os64_ui_init
+00007f005002403e T os64_ui_key_is_esc
+00007f005001de48 T os64_ui_label
+00007f0050031340 D os64_ui_label_class
+00007f0050021c39 T os64_ui_listbox
+00007f00500213d2 T os64_ui_listbox_rows
+00007f0050021416 T os64_ui_listbox_scroll_to
+00007f0050021499 T os64_ui_listbox_set
+00007f005001bf0a T os64_ui_mark_dirty
+00007f005001d407 T os64_ui_paint
+00007f005002212a T os64_ui_palette_color_follow
+00007f0050021fd6 T os64_ui_palette_role_get
+00007f0050021f98 T os64_ui_palette_role_name
+00007f0050022030 T os64_ui_palette_role_set
+00007f005001de1f T os64_ui_panel
+00007f0050031320 D os64_ui_panel_class
+00007f005001d332 T os64_ui_render
+00007f005001d443 T os64_ui_run
+00007f00500248b7 T os64_ui_scrollbar
+00007f0050031c40 D os64_ui_scrollbar_class
+00007f005002493d T os64_ui_scrollbar_set
+00007f005001c5b5 T os64_ui_set_enabled
+00007f005001c21d T os64_ui_set_focus
+00007f005001c605 T os64_ui_set_hidden
+00007f005001c0d9 T os64_ui_set_root
+00007f0050023f34 T os64_ui_slider
+00007f0050031c20 D os64_ui_slider_class
+00007f0050023a12 T os64_ui_slider_set
+00007f005001d4fe T os64_ui_stack_vertical
+00007f0050026e9e T os64_ui_text_vcols
+00007f0050025227 T os64_ui_textfield
+00007f0050031c60 D os64_ui_textfield_class
+00007f0050025441 T os64_ui_textfield_paste
+00007f005002530f T os64_ui_textfield_set
+00007f0050026db0 T os64_ui_textview
+00007f0050031c80 D os64_ui_textview_class
+00007f00500256fc T os64_ui_textview_cols
+00007f005002717d T os64_ui_textview_copy
+00007f0050027312 T os64_ui_textview_cut
+00007f0050026fd9 T os64_ui_textview_goto
+00007f00500273ba T os64_ui_textview_paste
+00007f00500256c1 T os64_ui_textview_rows
+00007f0050026ec7 T os64_ui_textview_scroll_left
+00007f0050026f28 T os64_ui_textview_scroll_to
+00007f00500270f5 T os64_ui_textview_select
+00007f005002077b T os64_ui_theme_apply
+00007f005001f9af T os64_ui_theme_color_count
+00007f005001fa6e T os64_ui_theme_color_get
+00007f005001fa38 T os64_ui_theme_color_label
+00007f005001fa03 T os64_ui_theme_color_name
+00007f005001faaf T os64_ui_theme_color_set
+00007f005002027a T os64_ui_theme_current
+00007f005001e4cd T os64_ui_theme_decode_session
+00007f005001dee2 T os64_ui_theme_defaults
+00007f005001f03b T os64_ui_theme_encode
+00007f005001f005 T os64_ui_theme_encode_session
+00007f005001f8fe T os64_ui_theme_init
+00007f0050020b70 T os64_ui_theme_list
+00007f0050020f0c T os64_ui_theme_load
+00007f005001f445 T os64_ui_theme_merge
+00007f005001f1c6 T os64_ui_theme_merge_fields
+00007f005002094a T os64_ui_theme_name_valid
+00007f0050021d13 T os64_ui_theme_palette
+00007f005001eb45 T os64_ui_theme_parse
+00007f005001ee2c T os64_ui_theme_parse_saved
+00007f005001eb7e T os64_ui_theme_parse_saved_status
+00007f005001e8b9 T os64_ui_theme_parse_status
+00007f005002069a T os64_ui_theme_preserve_session
+00007f005001f50d T os64_ui_theme_read_startup
+00007f0050021153 T os64_ui_theme_save
+00007f0050020202 T os64_ui_theme_session
+00007f005001f2bf T os64_ui_theme_set_startup
+00007f005001f071 T os64_ui_theme_snapshot_startup
+00007f005001f8d7 T os64_ui_theme_startup
+00007f005001e27b T os64_ui_theme_valid
+00007f005001c11a T os64_ui_widget_enabled
+00007f005001717a T os64_unescape_field
+00007f0050010c03 T os64_unlink
+00007f0050014551 T os64_unmap
+00007f0050010ca7 T os64_unmount
+00007f00500115d4 T os64_unsetenv
+00007f005000fbdc T os64_url_absolute
+00007f005000f23e T os64_url_parse
+00007f005000f6a8 T os64_url_reason
+00007f0050017475 T os64_utf8_decode
+00007f0050017602 T os64_utf8_encode
+00007f0050012b59 T os64_vsnprintf
+00007f0050011509 T os64_wait
+00007f0050017f6b T os64_walk
+00007f005001025a T os64_write
+00007f00500106ac T os64_write_escaped
+00007f0050010290 T os64_write_for
+00007f00500172ab T os64_xtou
+00007f0050011157 T os64_yield
+x86_64-elf-nm -D --undefined-only libos64.so
+x86_64-elf-readelf -d libfreetype.so
+
+Dynamic section at offset 0x66000 contains 11 entries:
+  Tag        Type                         Name/Value
+ 0x000000000000000e (SONAME)             Library soname: [libfreetype.so]
+ 0x0000000000000004 (HASH)               0x7f0044000158
+ 0x0000000000000005 (STRTAB)             0x7f00440001a0
+ 0x0000000000000006 (SYMTAB)             0x7f0044000170
+ 0x000000000000000a (STRSZ)              41 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000007 (RELA)               0x7f00440001d0
+ 0x0000000000000008 (RELASZ)             18240 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffff9 (RELACOUNT)          760
+ 0x0000000000000000 (NULL)               0x0
+x86_64-elf-nm -D --defined-only libfreetype.so
+00007f0044064c20 T os64_freetype_backend_v1
+x86_64-elf-nm -D --undefined-only libfreetype.so

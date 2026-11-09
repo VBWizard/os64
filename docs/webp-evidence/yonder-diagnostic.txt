@@ -1,0 +1,11 @@
+address: file:///tests/pages/webp-stills.html
+verdict: 1 MISSING
+MISSING image webp (1)
+bytes: 985
+final address: file:///tests/pages/webp-stills.html
+arrived after: 122 ms
+laid out at: 828 px in 70 ms
+written: when its pictures were in
+pictures: 6, 5 shown, 1 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
+sheets: 1, 1 ready
+picture file:///tests/pages/webp-animated.webp: webp, animated

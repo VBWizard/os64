@@ -1,0 +1,2 @@
+controls: PASS group geometry, minimum width, empty/spacer hits, capture re-entry and cancellation
+decoration: PASS lifetime, refusal, F2 parity, two-color endpoints and strength, finishes, restyle, split damage, translation, presets, bounded format

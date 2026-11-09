@@ -1,0 +1,3 @@
+adoption=0 parent=(40,20,160,220) child=(46,26,148,29)
+expected child x=46 y=26 width=148 from committed parent + padding
+teardown=0

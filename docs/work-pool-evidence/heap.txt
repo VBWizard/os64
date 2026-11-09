@@ -1,0 +1,12 @@
+libos64 heap — host tests
+  soak: 10139 mallocs, 10138 frees, 104 regions taken, 103 given back
+heap: free of a block that is already free (double free) (ptr=0x7ea8ea2ff050 detail=0xab0dc23b2f62418d)
+heap: free of a pointer this heap never handed out (ptr=0x7ffc03865c5c detail=0x0)
+heap: free of a misaligned pointer (ptr=0x7ea8ea2ff051 detail=0x1)
+heap: the block above this one has a bad canary (ptr=0x7ea8ea2ff050 detail=0xcccccccccccccccc)
+heap: block header canary is wrong — the heap has been stomped (ptr=0x7ea8ea2ff0f0 detail=0x749ced4d86a4d971)
+heap: the block above this one has a bad canary (ptr=0x7ea8ea2ff140 detail=0xcccccccccccccccc)
+heap: footer disagrees with header (ptr=0x7ea8ea2ff040 detail=0xcccccccccccccccc)
+heap: block size implausible (ptr=0x7ea8ea2ff090 detail=0xccccccccccccccc0)
+heap: the books do not balance (live+free+overhead+virgin != mapped) (ptr=0x61a9a3d420c0 detail=0xfffb0)
+147 checks, 0 failures

@@ -38,12 +38,24 @@ bool os64_rect_intersect(os64_gui_rect_t a, os64_gui_rect_t b,
 
 void os64_draw_fill_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                          uint32_t color);
+// The same rect laid OVER the canvas at `alpha` of 255: each RGB channel
+// becomes (c * alpha + d * (255 - alpha) + 127) / 255, os64_draw_blend's
+// mix, and the reserved byte 0xFF. 0 leaves the canvas untouched; 255 is
+// os64_draw_fill_rect.
+void os64_draw_fill_rect_alpha(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               uint32_t color, uint8_t alpha);
 void os64_draw_hline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color);
 void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color);
 void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                     uint32_t color);   // outline
+// Pixel-aligned rounded rectangles. Radius clamps to half the smaller side;
+// nonpositive radius is square. The outline is one pixel with optional relief.
+void os64_draw_fill_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               int32_t radius, uint32_t color);
+void os64_draw_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                          int32_t radius, uint32_t top_left, uint32_t bottom_right);
 
 // Blit a block of pixels onto the surface with its top-left at (x, y).
 //
@@ -64,21 +76,46 @@ void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
 // is what makes "center an image larger than the window" work with no
 // arithmetic at the call site.
 //
-// OPAQUE COPY — the source's alpha byte is not consulted. Every image os64
-// draws today is a background or a picture, both of which want every pixel.
-// Source-over blending is booked (DEBTS) against its first real customer,
-// which will be launcher icons drawn over a wallpaper; adding it before
-// then would be a blend nothing asked for and nobody had tested.
+// OPAQUE COPY — the source's alpha byte is not consulted. Pixels are copied
+// verbatim; use os64_draw_blend to composite straight-alpha image pixels.
 void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
                     const uint32_t *src, uint32_t w, uint32_t h,
                     uint32_t src_pitch_px);
 
+// Source-over from straight-alpha 0xAARRGGBB onto an opaque RGB canvas.
+// Placement, clipping and source pitch have the same meaning as blit.
+// Source and destination storage must not overlap. Both buffers must cover
+// their declared dimensions/strides; dst is a valid GUI surface.
+// RGB mixes in encoded byte space, with nearest-integer rounding:
+// (src_channel * alpha + dst_channel * (255-alpha) + 127) / 255.
+// Alpha 0 leaves the entire destination word untouched; alpha 255 copies
+// the source word. Intermediate alpha writes 0xFF in the reserved high byte.
+// Destination alpha is not interpreted; this is not RGBA-to-RGBA blending.
+// NULL dst/src, zero size, pitch < w, or axes above INT32_MAX are no-ops.
+void os64_draw_blend(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                     const uint32_t *src, uint32_t w, uint32_t h,
+                     uint32_t src_pitch_px);
+
 // Text: the embedded PSF1 face (os64/font_psf1.h — the console's own,
 // 8x16, opaque fg-on-bg cells). Pen-advance only; wrapping and flow are
 // higher layers' business. Returns the x the pen ended at.
+// The same, told which character set the bytes are in (os64/charset.h) —
+// what a terminal emulator needs, because the cells it is drawing each
+// remember the set they were written under. os64_draw_text is this with
+// Latin-1, which is what the console has always drawn.
+int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset);
+
 int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg);
+
+// The same Latin-1 glyph run, additionally clipped to a caller's rectangle.
+// Useful for controls whose bounds are smaller than their caption or glyphs.
+int32_t os64_draw_text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                              int32_t x, int32_t y, const char *str, size_t len,
+                              uint32_t fg, uint32_t bg);
 
 // ── The draw context ────────────────────────────────────────────────────────
 
