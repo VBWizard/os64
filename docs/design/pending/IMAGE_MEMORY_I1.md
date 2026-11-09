@@ -1,8 +1,9 @@
 # Image memory I1: native image HTTP cache
 
 2026-11-08. Implementation evidence for I1 in
-[IMAGE_MEMORY.md](IMAGE_MEMORY.md). Host validation is complete; P5 acceptance
-and live-site transfer measurements remain pending.
+[IMAGE_MEMORY.md](IMAGE_MEMORY.md). Host validation and P5 regression acceptance
+are complete. Three live-site visits demonstrate repeat-visit cache reuse;
+they do not isolate I1's causal transfer savings.
 
 ## Behavior
 
@@ -79,3 +80,39 @@ The original `/tests/pages/image-memory-canvas.html` remains a local regression
 check for one draw in onload and immediate readback. Local file pages do not
 exercise HTTP caching. A controlled network fixture must be served over HTTP
 to measure its transfers; the binary delivery service is not an HTTP server.
+
+### Hardware result, 2026-11-08
+
+The user confirmed metadata and Canvas PASS results and three settled Microsoft
+visits with requested diagnostics. The installed executable was read back and
+matches the frozen `d8cf6fa1` cohort byte-for-byte. Shared libraries were not
+read back. The records use a 2522×1257 content viewport, 100% zoom, Modern Web
+and scripting enabled; Microsoft has seven of seven sheets ready in each.
+
+| Microsoft record | Network picture replies | Network entity bytes | Fresh-cache replies | Entries refused by retained budget |
+|---|---:|---:|---:|---:|
+| 1737 | 64 | 246,369,129 | 42 | 23 |
+| 1739 | 23 | 154,357,435 | 79 | 22 |
+| 1753 | 22 | 148,747,732 | 76 | 24 |
+
+No validated or stale replies were recorded. These counters cover display and
+native picture jobs, including resampling, rather than unique HTML images.
+The first visit has 84 picture entries and the later visits have 76; the first
+URL lacks a trailing slash. Existing cache contents and live page behavior are
+not controlled. Thus the records establish successful cache reuse and fewer
+network transfers on later visits, but do not quantify savings attributable
+solely to I1. Records 1737 and 1739 were saved on leaving the page and include
+manual paint readings; 1753 was saved when asked.
+
+The warning about pictures past the memory kept remains expected: native
+rasters used solely for metadata occupy 280,804,704 B, 311,143,904 B and
+244,188,704 B respectively. No submission, decoder-allocation or decoder-limit
+refusals were recorded. This is the retained-picture budget, not evidence of
+system memory exhaustion. I2/I3 remain responsible for source selection and
+metadata ownership improvements.
+
+Local fixture records 1740–1752 contain six Canvas, four metadata and three
+untouched visits. Each reproduces M0's retained pixel totals, with no picture
+refusals. Canvas has one pixel acquisition per visit and no metadata-only native
+bytes; metadata retains 8,294,400 B attributed solely to metadata; untouched
+retains no native bitmap. All are local file reads with zero network transfers.
