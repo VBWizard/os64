@@ -966,9 +966,9 @@ static Cached *cache_open(const yonder_fetch_job_t *job, const way_request_t *r,
     os64_strcopy(c->accept, sizeof(c->accept), accept != NULL ? accept : "");
     os64_strcopy(c->extra, sizeof(c->extra), fields->extra);
     os64_strcopy(c->representation, sizeof(c->representation), fields->body);
-    // An entry way_fetch_whole kept (a picture's, a sheet's, a classic
-    // script's) has no head, which a script's request reads: it is a miss,
-    // and the answer kept now replaces it.
+    // An entry way_fetch_whole kept has no response headers for the live
+    // CORS check. Native and script consumers treat it as a miss; a complete
+    // cacheable response replaces it.
     if (job->cache_mode != WAY_CACHE_RELOAD &&
         way_cache_find(job->cache, &c->key, &c->e, &c->body, &c->len, &c->blocks, (size_t)max_body)) {
         c->have = c->blocks.headers_len > 0 && way_vary_matches(c->blocks.vary, c->blocks.vary_len, request_value, c);
@@ -1352,10 +1352,9 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         opt_base(&opt, &h, job, job->pipe != NULL && destination == WAY_DEST_EMPTY ? 0 : max_body);
         opt.method_name = r->method;
         opt.accept = fields->accept;
-        // Use the stylesheet Accept profile for native style requests. The
-        // script-fetch profile supplies the default for other callers.
-        const char *preset = way_identity_accept(job->identity,
-                                                   destination == WAY_DEST_STYLE ? WAY_DEST_STYLE : WAY_DEST_EMPTY);
+        const char *preset = way_identity_accept(job->identity, destination);
+        if (preset == NULL)
+            preset = job->default_accept;
         if (preset == NULL && destination == WAY_DEST_STYLE)
             preset = "text/css,*/*;q=0.1";
         if (fields->accepts == 0 && preset != NULL)

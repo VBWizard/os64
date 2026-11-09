@@ -4,8 +4,9 @@ Quinn, 2026-11-08. Reviewed implementation plan; round 2 decisions incorporated.
 Source baseline: `c21b57b370f1068f79d8867a5588ef24b999e064` (`origin/userland`).
 Branch: `codex/yonder-image-memory-design`.
 
-Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md) and
-[I0 stylesheet preload](IMAGE_MEMORY_I0.md). The M0 hardware baseline is captured;
+Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md),
+[I0 stylesheet preload](IMAGE_MEMORY_I0.md) and [I1 native image cache](IMAGE_MEMORY_I1.md).
+I1 passes host validation; its hardware comparison is pending. The M0 hardware baseline is captured;
 I0's hardware layout gate and gallery have passed; controlled memory comparison
 remains pending. The user confirmed testing the frozen I0 build before switching
 to another branch.

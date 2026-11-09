@@ -52,6 +52,9 @@ typedef struct {
     uint32_t token;                 // which of that page's requests
     const char *agent;              // the browser's, read-only for the run
     const way_identity_t *identity; // the agent's preset lines, NULL for none
+    // Borrowed for the run: the consumer's Accept fallback when neither
+    // author headers nor the identity's destination profile names one.
+    const char *default_accept;
     char *url;                      // os64_malloc'd: the request's address, fragment and all
     // The request's facts (way/origin.h): the page's origin, mode,
     // credentials, redirect mode, referrer policy, the use-CORS-preflight

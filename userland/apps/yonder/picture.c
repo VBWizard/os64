@@ -212,7 +212,8 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     }
     if(j->canvas_request) {
         yonder_fetch_job_t request={.agent=j->agent,.identity=j->hooks.identity,.url=j->url,
-            .jar=j->hooks.jar,.max_body=OS64_IMAGE_CAP_DEFAULT};
+            .jar=j->hooks.jar,.cache=j->hooks.cache,.max_body=OS64_IMAGE_CAP_DEFAULT,
+            .default_accept=j->svg_enabled?PICTURE_ACCEPT:OS64_IMAGE_ACCEPT ", */*;q=0.5"};
         request.request.mode=j->canvas_request==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
         request.request.credentials=j->canvas_request==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
         request.request.redirect=WAY_REDIRECT_FOLLOW;
