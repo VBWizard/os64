@@ -1,8 +1,8 @@
 id,task,depends_on,status,done_in,notes
-Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed os64_bell_t in libos64 alone",,open,,"HTTP2.md § 2.4 and § 7; decides whether H2.0 is a kernel slice"
-Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,open,,"HTTP2.md § 2.6 and § 7; applied in H2.5"
+Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed os64_bell_t in libos64 alone",,ruled,,"RULED 2026-11-09 by Chris: the kernel bell. H2.0 is a kernel slice with a Codex round (HTTP2.md § 2.4, § 4 H2.0)"
+Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,ruled,,"RULED 2026-11-09 by Chris: match the preset's window; max_body stays the real bound (HTTP2.md § 2.6). Applied in H2.5"
 
-H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,design-review,,"HTTP2.md § 2.4 and § 4 H2.0; kernel slice if Q1 rules the kernel bell, libos64-only otherwise"
+H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,design-review,,"HTTP2.md § 2.4 and § 4 H2.0; a kernel slice (Q1 ruled)"
 H2.0.1,"Kernel bell_t: spinlock, rung flag, one parked waiter, pipe.c's park discipline",H2.0,todo,,"read pipe.c's read path first; the first review question is where it differs"
 H2.0.2,"read with patience (1 rung / OS64_ERR_TIMEOUT / OS64_INTERRUPTED / closed), second reader refused",H2.0.1,todo,,
 H2.0.3,"write rings from any thread, never blocks; close wakes a parked waiter",H2.0.1,todo,,
