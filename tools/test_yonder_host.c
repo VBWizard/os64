@@ -3065,6 +3065,25 @@ static void scratch_paint_cases(void)
     yonder_scratch_free(sc);
 }
 
+// A button the page draws is painted as the page's boxes (STYLED_BUTTONS.md):
+// its background and its words, and never the face's control, whose
+// stand-in for a hidden widget would cover them. A button of text alone
+// the page left alone is still the face's control.
+static void styled_button_paint_cases(void)
+{
+    static const char kButtons[] =
+        "<!doctype html><style>body{margin:0} #s{background:#ff0000;border:0;padding:0}</style>"
+        "<button>Save</button><button id=s>Go</button>";
+    bool escaped = false;
+    char *got = paint_of(kButtons, strlen(kButtons), 400, (os64_gui_rect_t){0, 0, 400, 100}, &escaped, true);
+    const char *control = got != NULL ? strstr(got, "control ") : NULL;
+    expect("styled button: the plain one is the face's control, painted once",
+           control != NULL && strstr(control + 1, "control ") == NULL, got);
+    expect("styled button: the styled one paints its background and its words",
+           got != NULL && strstr(got, "#ff0000") != NULL && strstr(got, "text \"Go\"") != NULL, got);
+    free(got);
+}
+
 int main(int argc, char **argv)
 {
     os64_text_options_t o = {
@@ -3095,6 +3114,7 @@ int main(int argc, char **argv)
         scratch_cases();
         scratch_paint_cases();
         paint_cases();
+        styled_button_paint_cases();
         batch_a_paint_cases();
         shadow_blur_cases();
         huge_corner_case();

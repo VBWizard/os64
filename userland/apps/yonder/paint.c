@@ -2209,7 +2209,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
     case FLOW_BOX_REPLACED:
         if (b->style->visibility == FLOW_VISIBLE)
             frame(p, b);
-        if (b->control >= 0)
+        if (b->control >= 0 && b->replaced)
             p->v->control(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
         else if (is_picture(b) || (b->replaced && flow_svg_root(b->node)))
             p->v->image(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));

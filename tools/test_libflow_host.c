@@ -368,6 +368,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_attrs.inc"
 #include "test_libflow_style.inc"
 #include "test_libflow_boxes.inc"
+#include "test_libflow_buttons.inc"
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
@@ -1547,6 +1548,7 @@ int main(int argc, char **argv)
     batch_a_cases();
     pseudo_cases();
     boxes_cases();
+    button_cases();
     layout_cases();
     table_cases();
     table_bounds();

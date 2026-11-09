@@ -11273,6 +11273,98 @@ static void diag_cases(void) {
     fake_reset();
 }
 
+/* A button the page draws (STYLED_BUTTONS.md): laid out, so its words and
+ * its elements are the page's to paint, and its widget rides over it
+ * unpainted, taking the click, the focus and the keys as the face's own
+ * button does. A button of text alone that the page left alone keeps the
+ * face's button. */
+static void styled_button_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} #styled{background:white;border:0}</style>"
+        "<button id=plain>Save</button><button id=styled>Go</button>"
+        "<button id=icon><b>B</b></button><button id=empty style='width:20px;height:20px'></button>"
+        "<p id=out>-</p><script>var o=document.getElementById('out'),n=0;"
+        "document.getElementById('icon').onclick=function(){n++;o.textContent=this.id+n;};"
+        "</script>",true);
+    script_turn();
+    forms_place();
+    const FormWidget *plain=probe_field("plain"),*styled=probe_field("styled");
+    const FormWidget *icon=probe_field("icon"),*empty=probe_field("empty");
+    check(plain!=NULL && !plain->w->hidden && plain->w->cls->paint!=NULL,
+        "styled button: one of text alone the page left alone is the face's, painted");
+    check(styled!=NULL && !styled->w->hidden && styled->w->cls->paint==NULL && styled->w->cls->event!=NULL &&
+          icon!=NULL && !icon->w->hidden && icon->w->cls->paint==NULL && icon->w->cls->event!=NULL &&
+          empty!=NULL && !empty->w->hidden && empty->w->cls->paint==NULL,
+        "styled button: a styled one, one holding an element and an empty one ride unpainted");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("icon"));
+    check(box!=NULL && !box->replaced && box->control>=0 && box->first!=NULL,
+        "styled button: one holding an element is laid out, its content boxed, still a control");
+    ui_click_on("icon");
+    check(probe_text_is("out","icon1") && icon->w->focused,
+        "styled button: a click on it is the button's click, and takes the focus");
+    ui_key_space();
+    check(probe_text_is("out","icon2"),
+        "styled button: Space presses it, as the face's button");
+    probe_drop();
+    /* The click is at what is under the pointer, inside the button, and
+     * bubbles: a page that delegates by its target reads the icon. */
+    static const char kTarget[]="<!doctype html><style>body{margin:0} button{padding:0;border:0;background:none}"
+        " #inner{display:block;width:40px;height:20px}</style>"
+        "<form id=f action=/sent><button id=go><span id=inner>B</span></button></form><p id=out>-</p>"
+        "<script>var o=document.getElementById('out');document.addEventListener('click',function(e){"
+        "o.textContent=e.target.id+'>'+e.currentTarget.nodeName;e.preventDefault();});</script>";
+    for(int classic=0;classic<2;classic++){
+        probe_modern_off=classic!=0;
+        probe_page(kTarget,true);
+        script_turn();
+        forms_place();
+        /* The pointer is where a person's click is: over the icon. Without
+         * modern pointers the press and release reach the widget through
+         * yonder's own dispatch, which says the click is the pointer's. */
+        os64_ui_widget_t *gw=probe_field("go")->w;
+        g.pointer_x=gw->bounds.x+2; g.pointer_y=gw->bounds.y+2;
+        if(classic){
+            g.root.bounds=g.view.bounds;
+            os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+            ev.mouse.x=g.pointer_x; ev.mouse.y=g.pointer_y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+            ui_dispatch(&ev); inputs_run();
+            ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+            ui_dispatch(&ev); inputs_run();
+        } else ui_click_on("go");
+        check(probe_text_is("out","inner>#document"),
+            classic ? "styled button: without modern pointers too, a click on its icon is targeted at the icon"
+                    : "styled button: a click on its icon is targeted at the icon, and bubbles");
+        /* Space on the focused button is the button's, though the pointer
+         * still rests on the icon. */
+        os64_ui_set_focus(&g.ui,gw);
+        ui_key_space();
+        check(probe_text_is("out","go>#document"),
+            classic ? "styled button: without modern pointers, Space is the button's, wherever the pointer rests"
+                    : "styled button: Space is the button's, wherever the pointer rests");
+        probe_drop();
+    }
+    probe_modern_off=false;
+    /* An inline button the page draws is an atom (HTML's button layout),
+     * so its widget rides at it like any other's. */
+    probe_page("<!doctype html><style>body{margin:0} .l{display:inline;background:none;border:0;padding:0}"
+        "</style><p>x <button class=l id=inl>more</button> y</p>",false);
+    forms_place();
+    check(probe_field("inl")!=NULL && !probe_field("inl")->w->hidden &&
+          probe_field("inl")->w->cls->paint==NULL,
+        "styled button: an inline one keeps its widget, unpainted");
+    probe_drop();
+    /* A transparent button laid over a field draws nothing at its centre,
+     * so the field stays drawn (flow_box_covered: a box covers only where
+     * it draws). */
+    probe_page("<!doctype html><style>body{margin:0} div{position:relative;width:200px;height:30px}"
+        " input{width:200px;height:30px;margin:0;padding:0;border:0} #over{position:absolute;left:0;top:0;"
+        "width:200px;height:30px;background:none;border:0;padding:0}</style>"
+        "<div><input id=q name=q><button id=over></button></div>",false);
+    forms_place();
+    check(probe_field("q")!=NULL && !probe_field("q")->w->hidden,
+        "styled button: a transparent one laid over a field does not hide it");
+    probe_drop();
+}
+
 /* A menu's invisible checkbox (MediaWiki Vector: absolute, width and
  * height 100%, opacity 0) covers its menu and nothing below it, so a link
  * under the menu is still the link under the pointer. */
@@ -11820,6 +11912,7 @@ int main(void)
     data_picture_cases();
     picture_sizes_cases();
     covered_link_cases();
+    styled_button_cases();
     clipped_control_cases();
     classic_downloaded_cases();
     downloads_list_cases();

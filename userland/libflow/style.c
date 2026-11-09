@@ -860,11 +860,16 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
 
     // §15.3.10 Form controls: laid out as boxes the face's widgets fill.
-    // The chapter's `text-align` for controls and `white-space` for a
-    // textarea place the text INSIDE the widget, which the face draws.
+    // The chapter's `text-align` for an input and `white-space` for a
+    // textarea place the text INSIDE the widget, which the face draws. A
+    // button's centring is declared, because a button the page draws is
+    // laid out (f_button_faced) and its content centred the chapter's way;
+    // the face's own button centres its caption either way.
     case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
         s->display = FLOW_DISPLAY_INLINE_BLOCK;
+        if (n->tag == OS64_HTML_TAG_BUTTON)
+            s->text_align = FLOW_ALIGN_CENTER;
         break;
     // §15.5.13: a marquee that does not move (booked) is the box it moves in.
     case OS64_HTML_TAG_MARQUEE:
@@ -3809,6 +3814,7 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
 }
 
 static void medium_widths(Ctx *c, Spec *sp, garb_style_t st);
+static bool author_draws_box(garb_style_t st);
 
 static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                    const flow_style_t *parent)
@@ -3821,7 +3827,24 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
         return false;
     medium_widths(c, sp, st);
+    sp->s.author_box = author_draws_box(st);
     return true;
+}
+
+// Whether the author's winners give what a box is drawn with a value of
+// their own: its background's colour or image, a border's style, width or
+// colour, a corner's radius (flow_style_t.author_box). A `revert` does
+// not: it hands the property back to the user agent, whose button it is.
+static bool author_draws_box(garb_style_t st)
+{
+    if (author_declares(st, GARB_BACKGROUND_COLOR) || author_declares(st, GARB_BACKGROUND_IMAGE))
+        return true;
+    for (int i = 0; i < 4; i++)
+        if (author_declares(st, GARB_BORDER_TOP_WIDTH + i) || author_declares(st, GARB_BORDER_TOP_STYLE + i) ||
+            author_declares(st, GARB_BORDER_TOP_COLOR + i) ||
+            author_declares(st, GARB_BORDER_TOP_LEFT_RADIUS + i))
+            return true;
+    return false;
 }
 
 // A border style the author drew with no width from any origin has the
@@ -4583,7 +4606,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // picture, a frame, a canvas, a form control) computes to `none`,
         // so a canvas's fallback is not shown that way either. A button's
         // `contents` works as any element's there, so it is left alone.
-        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n) &&
+        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n, &sp.s) &&
             !is(n, OS64_HTML_TAG_BUTTON))
             sp.s.display = FLOW_DISPLAY_NONE;
         // `display: none` ends its animations (Animations 1 § 2): the
@@ -5044,11 +5067,11 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     return true;
 }
 
-// Whether `el`, whose display is `display`, has pseudo-elements: only when
-// pass 2 draws what is inside it (f_draws_inside), and not outside HTML.
-static bool generates(const Ctx *c, const os64_html_node_t *el, flow_display_t display)
+// Whether `el`, styled `s`, has pseudo-elements: only when pass 2 draws
+// what is inside it (f_draws_inside), and not outside HTML.
+static bool generates(const Ctx *c, const os64_html_node_t *el, const flow_style_t *s)
 {
-    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, display);
+    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, s);
 }
 
 // Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
@@ -5071,9 +5094,9 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
         const os64_html_node_t *up = parent != NULL && parent->kind == OS64_HTML_ELEMENT ? parent : NULL;
         count_on(c, garb_style_for(c->env->cascade, el), up, parent);
     }
-    if (!f_draws_inside(c->env, el, of->style.display))
+    if (!f_draws_inside(c->env, el, &of->style))
         c->inert = el;
-    else if (generates(c, el, of->style.display) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+    else if (generates(c, el, &of->style) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
         return false;
     return !c->counters_failed;
 }
@@ -5085,7 +5108,7 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     if (c->inert != NULL && c->inert != el)
         return true;
     c->inert = NULL;
-    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, of->style.display) &&
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, &of->style) &&
         !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
         return false;
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)
