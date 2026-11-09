@@ -1119,7 +1119,8 @@ static int process_keyframes(os64_dom_t *dom, JSContext *ctx, JSValueConst arg, 
 
 /* The frames read into the data libflow takes: each keyframe's
  * declarations, each read on its own as a declaration block into
- * longhands, so one that does not parse drops itself alone. A value
+ * longhands, so one that does not parse drops itself alone, and each
+ * longhand once, from the declaration that set the fewest. A value
  * holding var() is held by libgarb (GARB_DECL_HELD) and dropped
  * (WEB_ANIMATIONS.md § 2, DEBTS). */
 static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
@@ -1139,6 +1140,7 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
     }
     if (pieces > 0) os64_memset(d->parsed, 0, pieces * sizeof(*d->parsed));
     size_t nsets = 0, capsets = 0;
+    int32_t *ranks = NULL;     /* each set's declaration's longhand count */
     size_t *firsts = n > 0 ? js_malloc(ctx, (size_t)n * 2 * sizeof(size_t)) : NULL;
     if (n > 0 && firsts == NULL) {
         data_free(dom, d);
@@ -1162,10 +1164,29 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
                 garb_set_t sets[64];
                 int32_t k = garb_read_declaration(p, &p->items[j].decl, (garb_reading_t){0}, sets);
                 for (int32_t s = 0; s < k; s++) {
+                    /* A longhand two declarations of this keyframe set
+                     * (§ 5.3.3): the one that set fewer longhands wins — a
+                     * longhand given itself over any shorthand, a narrower
+                     * shorthand over a wider — and of two alike, the first
+                     * by name, which is the order they are read in. `k`
+                     * is how many this declaration set. */
+                    size_t had = firsts[2 * i];
+                    while (had < nsets && d->sets[had].prop != sets[s].prop) had++;
+                    if (had < nsets) {
+                        if (k < ranks[had]) {
+                            d->sets[had] = sets[s];
+                            ranks[had] = k;
+                        }
+                        continue;
+                    }
                     if (nsets == capsets) {
                         size_t cap = capsets ? capsets * 2 : 16;
                         garb_set_t *grown = d_alloc(dom, cap * sizeof(*grown));
-                        if (grown == NULL) {
+                        int32_t *ranked = js_realloc(ctx, ranks, cap * sizeof(*ranks));
+                        if (ranked != NULL) ranks = ranked;
+                        if (grown == NULL || ranked == NULL) {
+                            d_free(dom, grown);
+                            js_free(ctx, ranks);
                             js_free(ctx, firsts);
                             data_free(dom, d);
                             return NULL;
@@ -1175,6 +1196,7 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
                         d->sets = grown;
                         capsets = cap;
                     }
+                    ranks[nsets] = k;
                     d->sets[nsets++] = sets[s];
                 }
             }
@@ -1189,6 +1211,7 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
         k->sets = d->sets != NULL ? d->sets + firsts[2 * i] : NULL;
         k->nsets = (int32_t)(firsts[2 * i + 1] - firsts[2 * i]);
     }
+    js_free(ctx, ranks);
     js_free(ctx, firsts);
     d->fx.frames = d->frames;
     d->fx.nframes = n;

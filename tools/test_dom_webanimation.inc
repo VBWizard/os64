@@ -77,29 +77,38 @@ static void wa_x_key(void)
         "one.animate({opacity:[0,0.5,1],easing:['ease-in','steps(2)']},10);one.animate({opacity:'0.5'},10);"
         "one.animate([{opacity:'calc(1',transform:'scale(2)'}],10);"
         "one.animate({opacity:[0,1,0,1],offset:[null,null,0.2]},10);one.animate([null,{opacity:1}],10);"
-        "one.animate({opacity:[0,1,0,1,0],offset:[0,0.05]},10);one.animate([{opacity:'0\\u0000color:red'}],10);",
+        "one.animate({opacity:[0,1,0,1,0],offset:[0,0.05]},10);one.animate([{opacity:'0\\u0000color:red'}],10);"
+        "one.animate([{borderTop:'10px solid red',borderWidth:'1px',borderRightWidth:'5px'}],10);",
         "web animations: an easing list and a lone value");
     n = os64_dom_script_effects(f.binding, one, &fx);
-    check(n == 7 && fx[0]->nframes == 3 && fx[0]->frames[0].easing.kind == GARB_EASE_CUBIC &&
+    check(n == 8 && fx[0]->nframes == 3 && fx[0]->frames[0].easing.kind == GARB_EASE_CUBIC &&
           fx[0]->frames[1].easing.kind == GARB_EASE_STEPS && fx[0]->frames[2].easing.kind == GARB_EASE_CUBIC &&
           fx[0]->frames[1].offset == 0.5,
           "web animations: an easing list repeats over the keyframes, spaced evenly");
-    check(n == 7 && fx[1]->nframes == 1 && fx[1]->frames[0].offset == 1,
+    check(n == 8 && fx[1]->nframes == 1 && fx[1]->frames[0].offset == 1,
           "web animations: a lone value is the keyframe at 1");
     /* Joined to its neighbour, `calc(1` would hold the `;` after it and
      * swallow the transform; read alone it closes at its end, as CSS does. */
-    check(n == 7 && fx[2]->nframes == 1 && fx[2]->frames[0].nsets == 2,
+    check(n == 8 && fx[2]->nframes == 1 && fx[2]->frames[0].nsets == 2,
           "web animations: an unclosed value takes no other with it");
-    check(n == 7 && fx[3]->nframes == 4 && fx[3]->frames[1].offset == 0.1 && fx[3]->frames[2].offset == 0.2 &&
+    check(n == 8 && fx[3]->nframes == 4 && fx[3]->frames[1].offset == 0.1 && fx[3]->frames[2].offset == 0.2 &&
           fx[3]->frames[3].offset == 1,
           "web animations: an even placing is no offset: the missing ones are spaced round the given");
-    check(n == 7 && fx[4]->nframes == 2 && fx[4]->frames[0].nsets == 0 && fx[4]->frames[0].offset == 0,
+    check(n == 8 && fx[4]->nframes == 2 && fx[4]->frames[0].nsets == 0 && fx[4]->frames[0].offset == 0,
           "web animations: a null keyframe is an empty one");
-    check(n == 7 && fx[5]->nframes == 5 && fabs(fx[5]->frames[2].offset - (0.05 + 0.95 / 3)) < 1e-9 &&
+    check(n == 8 && fx[5]->nframes == 5 && fabs(fx[5]->frames[2].offset - (0.05 + 0.95 / 3)) < 1e-9 &&
           fx[5]->frames[4].offset == 1,
           "web animations: the offsets left out are spaced from the given, not placed evenly");
-    check(n == 7 && fx[6]->nframes == 1 && fx[6]->frames[0].nsets == 0,
+    check(n == 8 && fx[6]->nframes == 1 && fx[6]->frames[0].nsets == 0,
           "web animations: a value holding a NUL is dropped whole, and declares nothing after it");
+    double widths[4] = {-1, -1, -1, -1};
+    for (int32_t i = 0; n == 8 && i < fx[7]->frames[0].nsets; i++) {
+        const garb_set_t *set = &fx[7]->frames[0].sets[i];
+        if (set->prop >= GARB_BORDER_TOP_WIDTH && set->prop <= GARB_BORDER_LEFT_WIDTH)
+            widths[set->prop - GARB_BORDER_TOP_WIDTH] = set->value.number;
+    }
+    check(n == 8 && widths[0] == 10 && widths[1] == 5 && widths[2] == 1 && widths[3] == 1,
+          "web animations: of a keyframe's declarations, the one setting fewer longhands wins each");
     fixture_free(&f);
 }
 

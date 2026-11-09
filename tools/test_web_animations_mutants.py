@@ -145,6 +145,8 @@ mutants = [
      '    JS_FreeValue(ctx, then);', [DOM]),
     ('below-zero-first-frame', 'userland/libflow/motion.c', '    if (progress < 0 && zeros > 1) {',
      '    if (progress < 0 && zeros > 1 && false) {', [FLOW]),
+    ('narrower-declaration-wins', WA_C, '                        if (k < ranks[had]) {',
+     '                        if (k >= ranks[had]) {', [DOM]),
     # ── yonder ──────────────────────────────────────────────────────────
     ('orphan-waits-for-trees', SCRIPTS_C, '    if (!standing) {\n        os64_dom_free(s->retired_dom);',
      '    if (true) {\n        os64_dom_free(s->retired_dom);', [YON]),
