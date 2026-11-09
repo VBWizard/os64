@@ -74,13 +74,18 @@ bool os64_ui_settings_open(os64_ui_settings_t *d,int64_t parent,const char *titl
     os64_memset(d,0,sizeof(*d));
     os64_gui_window_state_t state;
     int32_t x=180,y=160;
-    if(!os64_gui_window_get_state(parent,&state)){x=state.x+40;y=state.y+50;}
+    uint64_t flags=OS64_GUI_CREATE_FIT_SCREEN;
+    if(!os64_gui_window_get_state(parent,&state)){
+        x=state.x+40;y=state.y+50;
+        // A pinned application must not cover its own settings dialog.
+        flags|=state.flags & OS64_GUI_WINDOW_PINNED;
+    }
     // A first guess at the body's rows, the status and the actions, at a
     // row of 30 px and never shorter than 420; ready() grows it to the row
     // the theme and the font make.
     int32_t height=(int32_t)(rows+2)*30+90;
     if(height<420)height=420;
-    d->window=os64_gui_window_create_content(title,x,y,760,height,OS64_GUI_CREATE_FIT_SCREEN);
+    d->window=os64_gui_window_create_content(title,x,y,760,height,flags);
     if(d->window<=0)return false;
     if(os64_draw_ctx_init(&d->ctx,d->window)){os64_ui_settings_close(d);return false;}
     d->body_rows=rows;d->arrange=layout;d->apply=apply;d->user=user;

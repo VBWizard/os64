@@ -312,6 +312,9 @@ typedef struct os64_gui_surface
 // Frame x/y and content width/height; use only fields named by changed.
 // Automatic fitting, maximize/restore and layout changes do not originate it.
 #define OS64_GUI_EVENT_WINDOW_PLACEMENT 17
+// Pin state changed through the frame, keyboard or client API. No payload;
+// query get_state. This hint can be dropped on overflow; reconcile on input loss.
+#define OS64_GUI_EVENT_WINDOW_PIN_CHANGED 18
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
 #define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
@@ -495,6 +498,12 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
 // Restore and focus an owned ordinary window, within its stacking band.
 static inline int64_t os64_gui_window_focus(int64_t handle)
 { return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
+
+// Change the stacking band of an owned ordinary window without taking focus.
+// Uses the same state as the frame pin and Ctrl+Alt+P. Desktop and popup
+// windows are refused. Returns 0, or a negative OS64_GUI_ERR_* without change.
+static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
+{ return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_PINNED,(uint64_t)handle,pinned?1:0); }
 
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
 // value below the WM floor uses that floor (64x32, capped per dimension by a

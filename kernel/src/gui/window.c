@@ -544,6 +544,8 @@ void wm_set_pinned(window_t *w, bool pinned)
 	unlink_window(w);
 	link_on_top(w);
 	gui_damage_add_locked(w->frame);
+    input_event_t changed={.type=INPUT_EVENT_WINDOW_PIN_CHANGED,.tick=kTicksSinceStart};
+    wm_deliver_event(w,&changed);
 }
 
 void wm_set_decorated(window_t *w, bool decorated)

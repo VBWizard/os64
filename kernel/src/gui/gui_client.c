@@ -541,6 +541,20 @@ int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags)
 	return 0;
 }
 
+int64_t gui_window_set_pinned(int64_t handle,uint64_t pinned)
+{
+    if(pinned>1)return GUI_ERR_BAD_ARGS;
+    int64_t err;
+    uint64_t flags=gui_lock(GUI_LOCK_WINDOW);
+    window_t *win=handle_lookup_owned(handle,&err);
+    if(win && (win->flags & (GUI_WINDOW_DESKTOP|GUI_WINDOW_POPUP))){
+        win=NULL;err=GUI_ERR_BAD_ARGS;
+    }
+    if(win)wm_set_pinned(win,pinned!=0);
+    gui_unlock(flags);
+    return win?0:err;
+}
+
 int64_t gui_window_focus(int64_t handle)
 {
     int64_t err;

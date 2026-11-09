@@ -47,6 +47,7 @@ int64_t gui_window_destroy(int64_t handle);
 // Rename an owned window. `title` is a KERNEL string (the syscall copies it
 // in first); `flags` is GUI_WINDOW_TITLE_UTF8 or 0. os64/gui.h carries the
 // contract.
+int64_t gui_window_set_pinned(int64_t handle,uint64_t pinned);
 int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags);
 
 // Owner-only content floors; os64/gui.h defines normalization and growth.

@@ -94,6 +94,13 @@ void os64_monitor_destroy(os64_monitor_t *monitor);
 int32_t os64_monitor_sample(os64_monitor_t *monitor, bool threads,
                             const os64_monitor_snapshot_t **out);
 
+// CPU ledgers and physical memory, without enumerating /proc or reading
+// task/thread reports. Useful for a small system meter. Task/thread arrays
+// are empty; returning to full sampling starts fresh task/thread baselines.
+// Core/memory validity and snapshot lifetime follow os64_monitor_sample.
+int32_t os64_monitor_sample_system(os64_monitor_t *monitor,
+                                   const os64_monitor_snapshot_t **out);
+
 // Values from the latest sample. A missing identity returns false; usage.valid
 // (or core valid) reports an unavailable first or incomplete interval.
 bool os64_monitor_task_split(const os64_monitor_t *monitor, uint64_t pid,
