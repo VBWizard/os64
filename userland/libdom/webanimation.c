@@ -1663,13 +1663,17 @@ static void effect_finalizer(JSRuntime *rt, JSValue value)
     js_free_rt(rt, e);
 }
 
-/* A new effect, its target held and its data taken; NULL on a throw, the
- * data freed. */
+/* A new effect, its target held and its data taken, on `prototype` (a
+ * subclass's, from a constructor's new.target) or the class's; an
+ * exception on a throw, the data freed. */
 static JSValue effect_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, DWaData *data,
-                          const WaSpec *spec)
+                          const WaSpec *spec, JSValueConst prototype)
 {
     DWaEffect *e = js_mallocz(ctx, sizeof(*e));
-    JSValue object = e != NULL ? JS_NewObjectClass(ctx, (int)os64_js_class_id(&effect_slot)) : JS_EXCEPTION;
+    JSClassID id = os64_js_class_id(&effect_slot);
+    JSValue object = e == NULL ? JS_EXCEPTION
+                   : JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id)
+                                            : JS_NewObjectClass(ctx, (int)id);
     if (JS_IsException(object)) {
         js_free(ctx, e);
         data_free(dom, data);
@@ -1773,11 +1777,14 @@ static void set_effect(JSContext *ctx, DWaAnimation *a, JSValueConst effect)
     wa_restyle(a);
 }
 
-/* A new animation of `effect` (null for none), idle: the caller plays it. */
-static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effect, char *id)
+/* A new animation of `effect` (null for none), idle, on `prototype` or
+ * the class's: the caller plays it. */
+static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effect, char *id,
+                             JSValueConst prototype)
 {
     JSClassID cid = os64_js_class_id(&animation_slot);
-    JSValue object = JS_NewObjectClass(ctx, (int)cid);
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, cid)
+                                            : JS_NewObjectClass(ctx, (int)cid);
     DWaAnimation *a = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*a));
     if (a == NULL) {
         JS_FreeValue(ctx, object);
@@ -1820,8 +1827,9 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
  * delay), or relevant. */
 static bool wa_live(DWaAnimation *a)
 {
-    /* With no timeline nothing moves it but a script, which holds it. */
-    if (a->no_timeline) return false;
+    /* With no timeline nothing moves it but a script: it is kept while it
+     * shows (relevant), and never for a task it cannot run. */
+    if (a->no_timeline) return a->replace != WA_REMOVED && wa_relevant(a);
     if (a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING) return true;
     return a->replace != WA_REMOVED && wa_relevant(a);
 }
@@ -1862,10 +1870,30 @@ static int time_arg(JSContext *ctx, JSValueConst v, double *out)
 
 /* Each property the effect animates written into its target's style
  * attribute as its value now: NoModificationAllowedError with no target,
- * InvalidStateError for a target that is not rendered (not connected, or
- * `display: none`). The value is the target's computed one, which is the
+ * InvalidStateError for a target that is not rendered (target_rendered).
+ * The value is the target's computed one, which is the
  * effect stack's result with every animation in it: the spec's is the
  * stack up to and including this one (DEBTS). */
+/* Whether `target` has a box (HTML's "being rendered"): in the document,
+ * neither it nor an ancestor `display: none`, and not itself `display:
+ * contents`, which makes its children's boxes and none of its own. -1 on
+ * a throw. */
+static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)
+{
+    if (!d_in_window_tree(dom, target)) return 0;
+    for (const os64_html_node_t *n = target; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
+        JSValue display = d_computed_property(dom, ctx, n, GARB_DISPLAY, "none");
+        if (JS_IsException(display)) return -1;
+        const char *word = JS_ToCString(ctx, display);
+        JS_FreeValue(ctx, display);
+        if (word == NULL) return -1;
+        bool boxless = os64_streq(word, "none") || (n == target && os64_streq(word, "contents"));
+        JS_FreeCString(ctx, word);
+        if (boxless) return 0;
+    }
+    return 1;
+}
+
 static int commit_styles(JSContext *ctx, DWaAnimation *a)
 {
     os64_dom_t *dom = a->dom;
@@ -1875,14 +1903,8 @@ static int commit_styles(JSContext *ctx, DWaAnimation *a)
         d_error(ctx, "NoModificationAllowedError", "An animation with no target has nothing to commit");
         return -1;
     }
-    JSValue display = d_in_window_tree(dom, target) ? d_computed_property(dom, ctx, target, GARB_DISPLAY, "none")
-                                          : JS_NewString(ctx, "none");
-    if (JS_IsException(display)) return -1;
-    const char *shown = JS_ToCString(ctx, display);
-    JS_FreeValue(ctx, display);
-    if (shown == NULL) return -1;
-    bool rendered = !os64_streq(shown, "none");
-    JS_FreeCString(ctx, shown);
+    int rendered = target_rendered(dom, ctx, target);
+    if (rendered < 0) return -1;
     if (!rendered) {
         d_error(ctx, "InvalidStateError", "The animation's target is not rendered");
         return -1;
@@ -2172,14 +2194,24 @@ static JSValue effect_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     return JS_UNDEFINED;
 }
 
+static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, JSValueConst prototype);
+
 /* `new KeyframeEffect(target, keyframes, options)`, or `new
  * KeyframeEffect(source)`, a copy of another (§ 6.6): the options before
  * the keyframes, as WebIDL converts them first. */
 static JSValue effect_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    (void)new_target;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue made = effect_make(dom, ctx, argc, argv, prototype);
+    JS_FreeValue(ctx, prototype);
+    return made;
+}
+
+static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, JSValueConst prototype)
+{
     /* WebIDL's overloads: one argument is the copy, more the target's. */
     DWaEffect *source = argc == 1 ? fx_state(argv[0]) : NULL;
     if (argc == 1 && source == NULL) return JS_ThrowTypeError(ctx, "KeyframeEffect copies a KeyframeEffect");
@@ -2189,7 +2221,7 @@ static JSValue effect_construct(JSContext *ctx, JSValueConst new_target, int arg
         if (d == NULL) return JS_EXCEPTION;
         WaSpec spec = {.fill_auto = source->fill_auto, .duration_auto = source->duration_auto,
                        .composite = source->composite, .iteration_composite = source->iteration_composite};
-        return effect_new(dom, ctx, source->element, d, &spec);
+        return effect_new(dom, ctx, source->element, d, &spec, prototype);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "KeyframeEffect needs a target and keyframes");
     const os64_html_node_t *element = NULL;
@@ -2206,7 +2238,7 @@ static JSValue effect_construct(JSContext *ctx, JSValueConst new_target, int arg
     DWaData *d = keyframes_data(dom, ctx, argv[1]);
     if (d == NULL) return JS_EXCEPTION;
     d->fx.timing = timing;
-    return effect_new(dom, ctx, element, d, &spec);
+    return effect_new(dom, ctx, element, d, &spec, prototype);
 }
 
 /* `new Animation(effect, timeline)` (§ 6.4, Animation): idle, of `effect` (null or
@@ -2214,7 +2246,6 @@ static JSValue effect_construct(JSContext *ctx, JSValueConst new_target, int arg
  * null; any other timeline is not one this binding has. */
 static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    (void)new_target;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
     JSValueConst effect = argc > 0 ? argv[0] : JS_UNDEFINED;
@@ -2224,7 +2255,10 @@ static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int 
     bool none = JS_IsNull(timeline);
     if (!none && !JS_IsUndefined(timeline) && !JS_StrictEq(ctx, timeline, dom->wa_timeline->value))
         return JS_ThrowTypeError(ctx, "An animation's timeline is the document's or null");
-    JSValue animation = animation_new(dom, ctx, effect, NULL);
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue animation = animation_new(dom, ctx, effect, NULL, prototype);
+    JS_FreeValue(ctx, prototype);
     if (JS_IsException(animation)) return animation;
     wa_state(animation)->no_timeline = none;
     return animation;
@@ -2359,12 +2393,12 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
         return JS_EXCEPTION;
     }
     d->fx.timing = timing;
-    JSValue effect = effect_new(dom, ctx, element, d, &spec);
+    JSValue effect = effect_new(dom, ctx, element, d, &spec, JS_UNDEFINED);
     if (JS_IsException(effect)) {
         js_free(ctx, spec.id);
         return effect;
     }
-    JSValue animation = animation_new(dom, ctx, effect, spec.id);
+    JSValue animation = animation_new(dom, ctx, effect, spec.id, JS_UNDEFINED);
     JS_FreeValue(ctx, effect);
     if (JS_IsException(animation)) return animation;
     DWaAnimation *a = wa_state(animation);
@@ -2476,18 +2510,19 @@ static bool wa_busy(os64_dom_t *dom)
 {
     if (dom->wa_events != NULL || dom->wa_wanted || dom->wa_replace_check) return true;
     for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
+        if (!JS_IsUndefined(a->hold) && !wa_live(a)) return true;
         if (a->no_timeline) continue;
         if (a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING) return true;
-        if (!JS_IsUndefined(a->hold) && !wa_live(a)) return true;
     }
     return false;
 }
 
 /* § 5.5, Replacing animations: replaceable is finished, filling, of a
- * target, on the document's timeline, and not removed. */
+ * target in the document, on the document's timeline, and not removed. */
 static bool wa_replaceable(DWaAnimation *a)
 {
-    return a->replace != WA_REMOVED && !a->no_timeline && wa_target(a) != NULL && wa_data(a) != NULL &&
+    return a->replace != WA_REMOVED && !a->no_timeline && wa_target(a) != NULL &&
+           d_in_window_tree(a->dom, wa_target(a)) && wa_data(a) != NULL &&
            play_state(a) == WA_FINISHED && wa_clock(a).in_effect;
 }
 

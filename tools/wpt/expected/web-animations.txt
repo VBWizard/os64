@@ -667,6 +667,8 @@ interfaces/KeyframeEffect/target.html	Test setting target before constructing th
 interfaces/KeyframeEffect/target.html	Test setting target from a valid target to another target
 interfaces/KeyframeEffect/target.html	Test setting target from a valid target to null
 interfaces/KeyframeEffect/target.html	Test setting target from null to a valid target
+interfaces/Animation/commitStyles.html	Throws if the target effect's ancestor is display:none
+interfaces/Animation/commitStyles.html	Treats display:contents in a display:none subtree as not rendered
 [excluded]
 interfaces/Animatable/getAnimations.html	its "Triggers a style change event" test waits for a CSS transition's transitionrun, and CSS transitions are not built (PILE3.md § Transitions): since slice B's constructors let that test reach the wait, the page times out whole. getAnimations is held by tools/test_dom_webanimation.inc meanwhile
 [passing]
@@ -1705,7 +1707,9 @@ interfaces/Animation/commitStyles.html	Commits values calculated mid-interval
 interfaces/Animation/commitStyles.html	Commits values during the start delay
 interfaces/Animation/commitStyles.html	Throws if the target effect is disconnected
 interfaces/Animation/commitStyles.html	Throws if the target effect is display:none
+interfaces/Animation/commitStyles.html	Throws if the target effect's ancestor is display:none
 interfaces/Animation/commitStyles.html	Treats display:contents as rendered
+interfaces/Animation/commitStyles.html	Treats display:contents in a display:none subtree as not rendered
 interfaces/Animation/effect.html	Clearing and setting Animation.effect should update the computed style of the target element
 interfaces/Animation/effect.html	effect is set correctly.
 interfaces/Animation/finished.html	Finished promise does not report an unhandledrejection when rejected

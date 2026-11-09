@@ -450,6 +450,10 @@ static void wa_effects(void)
         "assert(e.getTiming().fill==='auto'&&e.getTiming().duration==='auto'&&e.getComputedTiming().duration===0);"
         "e.updateTiming({fill:'forwards',duration:1000});"
         "throws('TypeError',()=>new KeyframeEffect(e,{opacity:[0,1]}));"
+        "class Fade extends Animation{stop(){this.cancel();return 'ok'}}"
+        "class Kf extends KeyframeEffect{}"
+        "assert(new Fade().stop()==='ok'&&new Kf(null,null) instanceof Kf&&new Kf(new Kf(null,null)) instanceof Kf,"
+        "'subclasses keep their prototypes');"
         "const copy=new KeyframeEffect(e);"
         "assert(copy!==e&&copy.target===d&&copy.getKeyframes().length===3&&copy.getTiming().delay===100&&"
         "copy.getKeyframes()[0].composite==='add');"
@@ -555,8 +559,31 @@ static void wa_replace(void)
         "globalThis.nt=new Animation(new KeyframeEffect(d,{opacity:[0,1]},100),null);nt.play();"
         "assert(nt.timeline===null&&nt.pending);",
         "web animations: commitStyles writes the computed value");
+    c.body_display = "none";
+    p2b_script(&f, "throws('InvalidStateError',()=>a3.commitStyles())",
+               "web animations: commitStyles refuses a target under display: none");
+    c.body_display = "contents";
+    p2b_script(&f, "throws('InvalidStateError',()=>document.body.animate({color:['red','blue']},10).commitStyles())",
+               "web animations: and a target that is display: contents");
+    c.body_display = NULL;
+    p2b_script(&f,
+        "(function(){const n=new Animation(new KeyframeEffect(document.getElementById('box'),{opacity:[0,1]},1000),null);"
+        "n.currentTime=500;n.id='kept'})();"
+        "const loose=document.createElement('div');globalThis.loose=loose;"
+        "globalThis.l1=loose.animate({opacity:[0,1]},{duration:10,fill:'forwards'});"
+        "globalThis.l2=loose.animate({opacity:[1,0]},{duration:10,fill:'forwards'});",
+        "web animations: a positioned timeline-less one nobody keeps, and two on a detached element");
     p2b_advance(20);
     wa_step(&f, "web animations: a step with an animation that has no timeline");
+    p2b_advance(50);
+    wa_step(&f, "web animations: the detached ones finished");
+    os64_js_outcome_t gc2;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc2)));
+    p2b_script(&f,
+        "assert(document.getAnimations().some(x=>x.id==='kept'),'a timeline-less one that shows is kept');"
+        "assert(l1.replaceState==='active'&&l2.replaceState==='active','nothing detached is replaced');"
+        "l1.cancel();l2.cancel();",
+        "web animations: kept while it shows, and detached ones left alone");
     p2b_script(&f, "assert(nt.pending&&nt.startTime===null&&nt.currentTime===0,nt.pending+' '+nt.startTime);"
                    "for(const x of document.getAnimations())if(x!==nt)x.cancel();det.cancel()",
                "web animations: one with no timeline never starts");
