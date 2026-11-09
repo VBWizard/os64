@@ -894,6 +894,10 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    // The def_h they were measured against (-2 before it was found): an
+    // inline picture's percentage height is of it, so a layout reusing an
+    // earlier one's widths must have measured with the same.
+    int64_t intrinsic_def;
     // The same two from its content alone, before a width or limit the page
     // gave overrides them (a picture's, its own width: replaced_own),
     // border box: what a row flex item's automatic minimum and content

@@ -111,9 +111,25 @@ mutants = [
     ('an-inline-block-ratio-reads-lengths-alone', LAYOUT,
      '                int64_t own_h = own_height(it->content, cbh, fh);',
      '                int64_t own_h = own_height(it->content, -1, fh);'),
+    # A column item's flex base is its height before its limits.
+    ('a-column-base-is-held-to-its-limits', LAYOUT,
+     '            it->base = own_height(c, c->cb_h, it->frame) + it->frame;',
+     '            it->base = c->def_h + it->frame;'),
+    # A cell its table lays out keeps a length for its percentage offsets.
+    ('a-cell-has-no-offset-height', LAYOUT,
+     '    if (s->height.kind != FLOW_LENGTH_PX)\n        return -1;\n    int64_t frame',
+     '    if (s->height.kind != FLOW_LENGTH_PX || true)\n        return -1;\n    int64_t frame'),
+    # A border box's height takes off the frame it is laid out with.
+    ('def-h-keeps-the-offered-frame', LAYOUT,
+     '    if (b->def_h >= 0 && !b->abs_h_set)\n        b->def_h = clamp_height(s, own_height(b, b->cb_h, vframe_px), vframe_px, b->cb_h);\n',
+     ''),
+    # Reused widths were measured against the same height.
+    ('reused-widths-ignore-the-height-they-were-measured-with', LAYOUT,
+     '    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known &&\n        pair->old->intrinsic_def == (b->def_known ? b->def_h : -2)) {',
+     '    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known) {'),
     # A copy is keyed on the height it was placed in.
     ('a-copy-ignores-the-containing-height', PROBE,
-     '.cbh = definite_height(l, b->parent),',
+     '.cbh = offset_height(l, b->parent),',
      '.cbh = -1,'),
 ]
 

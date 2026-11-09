@@ -244,4 +244,37 @@ static void percent_height_cases(void)
         "      line 0 0 400 56 base 50\n"
         "        atomic span 0 0 50 50\n"
         "          block span 0 0 50 50\n");
+    cascade_layout_case("percent height: a column item's base is its height before its limits",
+        "<!doctype html><style>body{margin:0}.c{display:flex;flex-direction:column;height:200px}"
+        ".i{height:200px;min-height:0}.m{max-height:100px}</style>"
+        "<div class=c><div class='i m'></div><div class=i></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 400 100\n"
+        "      block div 0 100 400 100\n");
+    cascade_layout_case("percent height: a percentage top in a cell of a set height still moves",
+        "<!doctype html><style>body{margin:0}table{border-spacing:0}"
+        "td{height:100px;vertical-align:top;padding:0}span{position:relative;top:50%}</style>"
+        "<table><tr><td><span>y</span></td></tr></table>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    table table 0 0 8 100\n"
+        "      row-group tbody 0 0 8 100\n"
+        "        row tr 0 0 8 100\n"
+        "          cell td 0 0 8 100\n"
+        "            line 0 0 8 20 base 14\n"
+        "              span span 0 52 8 16\n"
+        "              text \"y\" 0 52 8 16 serif 16\n");
+    cascade_layout_case("percent height: a border box beside a float keeps its height, its padding of the narrowed width",
+        "<!doctype html><style>body{margin:0}.f{float:left;width:100px;height:10px}"
+        ".b{height:100px;box-sizing:border-box;padding:10%;overflow:hidden}</style>"
+        "<div class=f></div><div class=b></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 100 10 float-left\n"
+        "    block div 100 0 300 100 scroller 0 range 0 0\n");
 }

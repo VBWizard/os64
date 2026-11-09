@@ -789,8 +789,9 @@ static int64_t replaced_for(L *l, const FBox *b, int axis, int64_t size, int64_t
 // content, or -1: the nearest box with an element's own (def_h; an
 // anonymous box is passed over, CSS 2.1 § 9.2.1.1), and above the root
 // the initial containing block's, the viewport (§ 10.1). What a
-// percentage top or bottom is of (§ 9.3.2, where the other case computes
-// it to auto), and a percentage height (§ 10.5, the same).
+// percentage height is of (§ 10.5, where the other case computes it to
+// auto), and through offset_height a percentage top or bottom (§ 9.3.2,
+// the same).
 static int64_t definite_height(const L *l, const FBox *b)
 {
     while (b != NULL && b->node == NULL)
@@ -798,6 +799,23 @@ static int64_t definite_height(const L *l, const FBox *b)
     if (b == NULL)
         return l->icb_h;
     return b->def_known ? b->def_h : -1;
+}
+
+// What a percentage top or bottom is of (§ 9.3.2): definite_height — but a
+// box block_at never seeded, a table cell its table lays out, counts a
+// length it was given, held to nothing.
+static int64_t offset_height(const L *l, const FBox *b)
+{
+    while (b != NULL && b->node == NULL)
+        b = b->parent;
+    if (b == NULL || b->def_known)
+        return definite_height(l, b);
+    const flow_style_t *s = b->style;
+    if (s->height.kind != FLOW_LENGTH_PX)
+        return -1;
+    int64_t frame = s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
+                    len(s->padding[FLOW_TOP], 0) + len(s->padding[FLOW_BOTTOM], 0);
+    return content_of(s, s->height, 0, frame);
 }
 
 // What a box's percentage heights resolve against (cb_h): its parent's
@@ -1865,7 +1883,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     // The relative inlines open here move what is inside them: the sum of
     // their offsets, carried across lines as the open inlines are (their
     // containing block is this context's, whose width is `cw`).
-    int64_t rel_x = 0, rel_y = 0, cbh = definite_height(l, ifc);
+    int64_t rel_x = 0, rel_y = 0, cbh = offset_height(l, ifc);
 
     flow_text_align_t align = ifc->style->text_align;
     bool justify = align == FLOW_ALIGN_JUSTIFY || align == FLOW_ALIGN_HTML_JUSTIFY;
@@ -3105,7 +3123,7 @@ static void float_place(L *l, Space *sp, FBox *f, int64_t y_min, int64_t cx, int
     space_record(l, sp, side, x, y, w, h);
     int64_t dx = 0, dy = 0;
     if (f->positioned && !f->out_of_flow)
-        rel_offset(f->style, cw, definite_height(l, f->parent), &dx, &dy);
+        rel_offset(f->style, cw, offset_height(l, f->parent), &dx, &dy);
     // Laid out with its margin box's top at 0 (float_lay).
     translate(f, x + ml + rel_x + dx - f->x, y + rel_y + dy);
 }
@@ -3696,7 +3714,7 @@ static void laid_offset(const L *l, const FBox *c, int64_t cbw, int64_t *dx, int
 {
     *dx = *dy = 0;
     if (c->positioned && !c->out_of_flow)
-        rel_offset(c->style, cbw, definite_height(l, c->parent), dx, dy);
+        rel_offset(c->style, cbw, offset_height(l, c->parent), dx, dy);
 }
 
 static int64_t natural_w(const FBox *c);
@@ -4003,7 +4021,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
         else if (fb.kind == FLOW_LENGTH_AUTO && fixed_height(c))
-            it->base = c->def_h + it->frame;
+            it->base = own_height(c, c->cb_h, it->frame) + it->frame;
         else
             it->base = moved >= 0 ? moved : content;
         int64_t cbh = box_cb_h(c);
@@ -5524,7 +5542,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         return;
     int64_t dx = 0, dy = 0;
     if (b->positioned && !b->out_of_flow)
-        rel_offset(b->style, cbw, definite_height(l, b->parent), &dx, &dy);
+        rel_offset(b->style, cbw, offset_height(l, b->parent), &dx, &dy);
     if (dx == 0 && dy == 0) {
         block_at(l, styles, b, cbx, cbw, cur);
         return;
@@ -5660,6 +5678,11 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
                        b->border[FLOW_BOTTOM] == 0 && b->padding[FLOW_BOTTOM] == 0;
     int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
                         b->border[FLOW_BOTTOM];
+    // block_at seeded def_h with the padding the width it offered gives;
+    // floats may have narrowed that width (avoid_floats), and a border box
+    // takes off the frame it is laid out with.
+    if (b->def_h >= 0 && !b->abs_h_set)
+        b->def_h = clamp_height(s, own_height(b, b->cb_h, vframe_px), vframe_px, b->cb_h);
 
     b->x = cbx + ml;
     b->w = b->border[FLOW_LEFT] + b->padding[FLOW_LEFT] + cw + b->padding[FLOW_RIGHT] +
@@ -6120,7 +6143,7 @@ static void positioned_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
         absolutes(l, styles, b->pos->abs_first, padding_rect(b), b);
     if (b->kind == FB_CELL && b->positioned && !l->failed) {
         int64_t dx, dy;
-        rel_offset(b->style, cbw, definite_height(l, b->parent), &dx, &dy);
+        rel_offset(b->style, cbw, offset_height(l, b->parent), &dx, &dy);
         translate(b, dx, dy);
     }
 }
@@ -6252,9 +6275,11 @@ static Intr intrinsic(L *l, FBox *b)
     if (b->intrinsic_known)
         return (Intr){b->intrinsic_min, b->intrinsic_max};
     FReusePair *pair = f_reuse_pair(l->reuse, b);
-    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known) {
+    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known &&
+        pair->old->intrinsic_def == (b->def_known ? b->def_h : -2)) {
         b->intrinsic_min = pair->old->intrinsic_min; b->intrinsic_max = pair->old->intrinsic_max;
         b->content_min = pair->old->content_min; b->content_max = pair->old->content_max;
+        b->intrinsic_def = pair->old->intrinsic_def;
         b->intrinsic_known = true;
         l->reuse_stats->intrinsic_hits++;
         return (Intr){b->intrinsic_min, b->intrinsic_max};
@@ -6378,6 +6403,7 @@ static Intr intrinsic(L *l, FBox *b)
     b->intrinsic_known = true;
     b->intrinsic_min = r.min;
     b->intrinsic_max = r.max;
+    b->intrinsic_def = b->def_known ? b->def_h : -2;
     return r;
 }
 

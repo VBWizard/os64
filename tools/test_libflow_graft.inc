@@ -161,7 +161,11 @@ static void graft_cases(void)
         "<!doctype html><div id=grow style='height:20px'></div><p>before <img src=missing.png alt=' repeated  alt '> after</p><p>end</p>",
         // A percentage height is of the height it is placed in: a copy
         // keyed without it would keep the old one.
-        "<!doctype html><div id=grow style='height:20px'><p style='height:50%;margin:0'>half</p></div><p>end</p>"
+        "<!doctype html><div id=grow style='height:20px'><p style='height:50%;margin:0'>half</p></div><p>end</p>",
+        // An inline picture's percentage height is of its block's: widths
+        // measured against the old height are not this layout's.
+        "<!doctype html><style>#grow{display:flex}</style><div id=grow style='height:20px'>"
+        "<div style='height:100%'><img src=known.png style='height:100%'></div></div><p>end</p>"
     };
     for(size_t i=0;i<sizeof(fixtures)/sizeof(fixtures[0]);++i) {
         sheeted_open(&p,fixtures[i],800,600);old=graft_layout(&p,NULL,NULL,NULL);
