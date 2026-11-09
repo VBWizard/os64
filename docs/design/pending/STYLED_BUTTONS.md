@@ -61,10 +61,8 @@ icon fonts draw with.
 - Its content is centred in the block axis when the box is taller than
   the content, whether the page gave it the height or a flex or grid
   container stretched it after: every fixed-height icon button needs it. The auxclick
-  demo's full-window button needs it too, and also a `height: 100%`
-  that resolves, which waits on DEBTS's "A percentage height in normal
-  flow is read as `auto`": until then that button is a full-width bar,
-  its words centred and its click recolouring it.
+  demo's full-window button needs it too, with its `height: 100%` of a
+  body whose own `height: inherit` is the root's `100%` of the viewport.
 - The Rendering chapter centres a button's text: `button { text-align:
   center }`, added to libflow's chapter. A toolkit-faced button already
   draws its caption centred, so nothing changes for one.

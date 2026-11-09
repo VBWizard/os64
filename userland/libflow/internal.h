@@ -894,6 +894,10 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    // The def_h they were measured against (-2 before it was found): an
+    // inline picture's percentage height is of it, so a layout reusing an
+    // earlier one's widths must have measured with the same.
+    int64_t intrinsic_def;
     // The same two from its content alone, before a width or limit the page
     // gave overrides them (a picture's, its own width: replaced_own),
     // border box: what a row flex item's automatic minimum and content
@@ -916,6 +920,16 @@ struct FBox {
     FFrag *place;
     bool abs_sized, abs_h_set;
     int64_t abs_w, abs_ml, abs_h;
+    // Its heights where they do not wait on its content (CSS 2.1 § 10.5),
+    // as seed_heights found them — block_at on its way in, a flex container
+    // for its items before it measures them — each -1 where there is none:
+    // `cb_h`, the containing block's content height its own percentage
+    // heights resolve against (an absolute box's, absolute() sets from the
+    // block it is placed in); `def_h`, its own content height — a length,
+    // a percentage of `cb_h`, or its absolute equations' — which its
+    // children's resolve against. Neither holds until `def_known`.
+    bool def_known;
+    int64_t cb_h, def_h;
     // A flex item's width and left margin, as its container decided them
     // before laying it out (FLEX.md), which block() takes as given; its
     // line, counted from the first — a row's placing it again reads that,

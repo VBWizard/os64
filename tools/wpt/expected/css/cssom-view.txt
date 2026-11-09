@@ -524,6 +524,7 @@ idlharness.html	Window interface: window must inherit property "scrollX" with th
 idlharness.html	Window interface: window must inherit property "scrollY" with the proper type
 idlharness.html	idl_test setup
 idlharness.html	idl_test validation
+interrupt-hidden-smooth-scroll.html	Make sure the page is ready for animation.
 mouseEvent.html	MouseEvent's x and y must be equal to clientX and clientY.
 negativeMargins.html	cssom-view - elementFromPoint and elementsFromPoint dealing with negative margins
 offsetParent-body-and-html.html	The offsetParent of 'the body element' is null
@@ -578,11 +579,20 @@ parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "normal" shoul
 range-bounding-client-rect-with-nested-text.html	getClientRects should return non-empty rectangles for nested text nodes
 resize-event-on-initial-layout-001.html	resize events are not fired on the initial layout
 resize-event-on-initial-layout-002.html	resize events are not fired on the initial layout
+scroll-behavior-scrollintoview-nested.html	Make sure the page is ready for animation.
+scroll-behavior-smooth-navigation.html	Make sure the page is ready for animation.
+scroll-behavior-smooth-positions.html	Make sure the page is ready for animation.
+scroll-behavior-smooth.html	BODY element scroll-behavior should not propagate to viewport
 scroll-no-layout-box.html	scrolling an element with no CSS layout box should have no effect
 scroll-overflow-clip-quirks-001.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
 scroll-overflow-clip-quirks-002.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
 scroll-position-root-child-ib-split-insertion.html	Root scroll position is preserved when repeatedly inserting and removing an ib-split on the root element
 scroll-zoom.html	scroll properties for elements with css zoom
+scrollWidthHeight-child-border-within-padding.tentative.html	Container with overflow:both — child border crossing content edge extends scrollable area by inline/block padding
+scrollWidthHeight-child-border-within-padding.tentative.html	Container with overflow:clip-x — child border crossing content edge extends scrollable area by inline/block padding
+scrollWidthHeight-child-border-within-padding.tentative.html	Container with overflow:clip-y — child border crossing content edge extends scrollable area by inline/block padding
+scrollWidthHeight-child-border-within-padding.tentative.html	Container with overflow:x-only — child border crossing content edge extends scrollable area by inline/block padding
+scrollWidthHeight-child-border-within-padding.tentative.html	Container with overflow:y-only — child border crossing content edge extends scrollable area by inline/block padding
 scrollWidthHeight-contain-layout.html	scroll{Width,Height} should match with contain: layout for display: block, overflow: auto, padding: 0, border: 0
 scrollWidthHeight-contain-layout.html	scroll{Width,Height} should match with contain: layout for display: block, overflow: auto, padding: 0, border: 3px solid
 scrollWidthHeight-contain-layout.html	scroll{Width,Height} should match with contain: layout for display: block, overflow: auto, padding: 2px, border: 0

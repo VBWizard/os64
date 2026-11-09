@@ -370,6 +370,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_style.inc"
 #include "test_libflow_boxes.inc"
 #include "test_libflow_buttons.inc"
+#include "test_libflow_percent_height.inc"
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
@@ -1508,15 +1509,25 @@ int main(int argc, char **argv)
     bool floats = argc == 2 && strcmp(argv[1], "--floats") == 0;
     bool cliptext = argc == 2 && strcmp(argv[1], "--cliptext") == 0;
     bool motion = argc == 2 && strcmp(argv[1], "--motion") == 0;
-    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds; and
+    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds;
     // `--origin`, test_libflow_origin.inc's cases alone, for
-    // test_libflow_origin_mutants.py.
+    // test_libflow_origin_mutants.py; and `--percent-height`,
+    // test_libflow_percent_height.inc's with the flex, grid, positioned and
+    // grafted layouts whose heights it reaches, for
+    // test_libflow_percent_height_mutants.py.
     bool origin = argc == 2 && strcmp(argv[1], "--origin") == 0;
-    if (origin || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
+    bool percent = argc == 2 && strcmp(argv[1], "--percent-height") == 0;
+    if (origin || percent || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
         text_setup();
         if (origin) {
             origin_cases();
             nowrap_atom_cases();
+        } else if (percent) {
+            percent_height_cases();
+            flex_cases();
+            grid_cases();
+            position_cases();
+            graft_cases();
         } else {
             batch_a_cases();
         }
@@ -1551,6 +1562,7 @@ int main(int argc, char **argv)
     pseudo_cases();
     boxes_cases();
     button_cases();
+    percent_height_cases();
     script_effect_cases();
     layout_cases();
     table_cases();

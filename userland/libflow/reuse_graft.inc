@@ -2,9 +2,9 @@
 // succeeds. A failed copy consumes budget and follows the normal refusal path.
 typedef struct {
     FBox *box;
-    int64_t x, y, w, h, baseline, content_h, clearance, origin_x, origin_y;
+    int64_t x, y, w, h, baseline, content_h, clearance, origin_x, origin_y, cb_h, def_h;
     int64_t border[4], padding[4];
-    bool has_baseline;
+    bool has_baseline, def_known;
     FLine *lines, *last_line;
     FFrag *marker;
     os64_text_run_t *ellipsis;
@@ -59,6 +59,7 @@ static void graft_box(L *l, const FStyles *styles, FBox *box, FGraftBox *staged,
     FGraftBox *s = &staged[(*count)++];
     *s = (FGraftBox){.box = box, .w = old->w, .h = old->h,
         .content_h = old->content_h, .clearance = old->clearance,
+        .def_known = old->def_known, .cb_h = old->cb_h, .def_h = old->def_h,
         .has_baseline = old->has_baseline, .ellipsis = old->ellipsis, .call = *old->reuse_call};
     s->call.box = box;
     s->x = graft_add(l, old->x, dx); s->y = graft_add(l, old->y, dy);
@@ -141,6 +142,7 @@ static bool graft_try(L *l, const FStyles *styles, FBox *b, int64_t cbx,
             d->x = s->x; d->y = s->y; d->w = s->w; d->h = s->h;
             d->baseline = s->baseline; d->has_baseline = s->has_baseline;
             d->content_h = s->content_h; d->clearance = s->clearance;
+            d->def_known = s->def_known; d->cb_h = s->cb_h; d->def_h = s->def_h;
             d->origin_x = s->origin_x; d->origin_y = s->origin_y;
             os64_memcpy(d->border, s->border, sizeof(d->border));
             os64_memcpy(d->padding, s->padding, sizeof(d->padding));
