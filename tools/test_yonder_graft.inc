@@ -76,7 +76,9 @@ static void graft_browser_cases(void)
     s_layout_resources.pictures=revision;s_layout_resources.exhausted=false;
     probe_drop();
 
-    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}</style>"
+    /* A bare anchored :has() keeps the cascade from tracking changes
+     * (garb_anchor_t.bare), so these layouts have no snapshot to graft. */
+    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}:has(.never) i{color:red}</style>"
                "<div id=box><p id=child>text</p></div>",true);
     doc=g.page.way.doc;
     state=os64_page_shared_state(page_model(&g.page));
@@ -98,6 +100,21 @@ static void graft_browser_cases(void)
     broad=flow_box_for(g.page.tree,probe_id("box"));
     check(broad && broad->rect.w==90 && !flow_reuse_stats(g.page.tree).metadata_peak,
           "graft fallback: fresh displayed geometry reflects changed descendant");
+    probe_drop();
+
+    /* The same page with :has() in a subject alone tracks changes: its
+     * layouts keep a snapshot, and the geometry still follows the turn. */
+    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}</style>"
+               "<div id=box><p id=child>text</p></div>",true);
+    doc=g.page.way.doc;
+    state=os64_page_shared_state(page_model(&g.page));
+    check(garb_cascade_tracks_changes(g.page.cascade) && flow_reuse_stats(g.page.tree).metadata_peak,
+          "graft :has(): a subject :has() cascade tracks changes and keeps a geometry snapshot");
+    check(!os64_html_set_attr(doc,probe_id("child"),"class","on",2) && script_rebuild(),
+          "graft :has(): the argument arriving publishes");
+    broad=flow_box_for(g.page.tree,probe_id("box"));
+    check(broad && broad->rect.w==90 && garb_cascade_tracks_changes(g.page.cascade),
+          "graft :has(): the geometry follows the turn, and the cascade still tracks changes");
     probe_drop();
 }
 

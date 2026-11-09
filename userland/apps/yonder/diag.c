@@ -1352,6 +1352,10 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     if (sample->metadata_peak > total->metadata_peak) total->metadata_peak = sample->metadata_peak;
     for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
         total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
+    bool cascade_sampled = sample->cascade_reason_names != NULL;
+    for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
+        total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
+    if (cascade_sampled) total->cascade_reason_names = sample->cascade_reason_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
 #undef ADD
     const yonder_layout_stats_t *s = total;
@@ -1382,6 +1386,27 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         (unsigned long)s->reuse_refused[12], (unsigned long)s->reuse_refused[13],
         (unsigned long)s->reuse_refused[14], (unsigned long)s->reuse_refused[15]);
     yonder_diag_fact(d, graft_key, line);
+    // `<key> cascade`: how many cascades were updated and how many built
+    // fresh, by reason, the reasons that never happened left out.
+    if (!cascade_sampled) return;
+    char cascade_key[64];
+    os64_snprintf(cascade_key, sizeof(cascade_key), "%s cascade", key);
+    uint64_t fresh = 0;
+    for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i) fresh = layout_sum(fresh, s->cascade_refused[i]);
+    int n = os64_snprintf(line, sizeof(line), "updated %lu, built fresh %lu", (unsigned long)s->cascade_updates,
+                          (unsigned long)fresh);
+    size_t at = n > 0 && (size_t)n < sizeof(line) ? (size_t)n : 0;
+    for (size_t i = 0, first = 1; i < YONDER_LAYOUT_CASCADE_REASONS; ++i) {
+        if (s->cascade_refused[i] == 0) continue;
+        char part[96];
+        n = os64_snprintf(part, sizeof(part), "%s%s %lu", first ? ": " : ", ", s->cascade_reason_names[i],
+                          (unsigned long)s->cascade_refused[i]);
+        if (n < 0 || (size_t)n >= sizeof(part) || at + (size_t)n >= sizeof(line)) break;
+        os64_memcpy(line + at, part, (size_t)n + 1);
+        at += (size_t)n;
+        first = 0;
+    }
+    yonder_diag_fact(d, cascade_key, line);
 }
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
 {

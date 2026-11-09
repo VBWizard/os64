@@ -126,7 +126,9 @@ not in this bounded, lossy history.
 **The restyle set depends on the kind of mutation.** Parsed selectors record
 following-sibling combinators, front/back positional pseudo-classes,
 `:empty`, filtered `:nth-child(... of S)` / `:nth-last-child(... of S)`,
-and whole-tree dependencies. Discovery recurses through functional selector
+and `:has()` in a subject, with `+`/`~` arguments, inside an nth-child's
+`of S`, or anchored left of a combinator (§ Selector invalidation for
+`:has()` and `:dir()`). Discovery recurses through functional selector
 lists, including `:is()`, `:not()` and `:where()`.
 
 Attribute/state changes restyle the target's subtree; text changes use the
@@ -145,8 +147,9 @@ propagation, since its changed winners can affect inheritance and matches
 outside the parent. The UA first-summary/first-legend behavior likewise
 marks a changed `details`/`fieldset` subtree.
 
-`:has()` and `:dir()` request a full cascade: their ancestor matches can
-depend on descendants beyond these local sets. Changes to the body's
+`:has()` widens the set to the elements a change can turn it on, and
+`:dir()` needs nothing beyond the subtree mark (§ Selector invalidation for
+`:has()` and `:dir()`). Changes to the body's
 `link`, `vlink`, `alink`, `text` or `bgcolor` attributes also request a full
 cascade. Appending children to `body` does not trigger that hint rule.
 
@@ -164,7 +167,7 @@ bool garb_style_updated_since(const garb_cascade_t *, const os64_html_node_t *,
 ```
 
 The cascade owns an optional native reader. Incomplete cascades and cascades
-with whole-tree selector dependencies do not register one: they must rebuild
+whose `:has()` change tracking cannot follow do not register one: they must rebuild
 after mutation, so retaining mutation history cannot help them. Other native
 readers retain their independent subscriptions. Updating consumes its linked
 change records and keeps its node slot table, erasing removed subtrees and
@@ -345,32 +348,40 @@ With one builder the cuts run in order. The Canvas integration branch
 carries this sequence before C6; PRs state their actual base. Hardware
 baseline measurements precede optimization claims.
 
-## Booked selector invalidation follow-up
+## Selector invalidation for `:has()` and `:dir()`
 
-Fable proposes a separate slice to avoid full cascade replacement after every
-mutation on sheets with `:has()` or `:dir()`. These dependencies are currently
-classified as `whole_tree`; replacement also defeats the generation gate for
-style and geometry reuse. This is a limitation of the mutation optimization,
-not a reason to weaken 5c's correctness or lifetime guards.
+A cascade whose sheets use `:has()` or `:dir()` tracks changes like any
+other, so their pages keep style and geometry reuse across a mutation.
 
-The proposed approach recomputes affected ancestor/sibling matches separately
-and expands invalidation into descendants when changed winners require it.
-Its detailed dependency, inheritance and failure rules need their own design
-and oracle. Fable has offered to design it; the implementation is not assigned
-by that offer. The real captured article is its intended positive-reuse gate.
+- **`:dir()`** reads the `dir` attribute of the element and the ancestors
+  it inherits from; what a change can turn is in the changed element's
+  subtree, which every change marks. `dir=auto` is not implemented (DEBTS).
+- **A `:has()` in a rule's subject** can turn on an ancestor of the change,
+  or for `+`/`~` arguments on a preceding sibling of the change or of an
+  ancestor. Those elements are marked alone (`mark_element`) and
+  recomputed; one the same rules match as before (a digest of them is kept
+  in its record) and whose winners compare the same by value keeps its old
+  record, so `garb_style_updated_since` reports no change, and any other
+  marks its descendants for their inherited values.
+- **An anchored `:has()`**, left of a combinator (`.group:has(.x) .y`,
+  `body:has(...) .panel`), changes its descendants' or following siblings'
+  winners rather than its own. Each such compound (`garb_anchor_t`, at
+  most `GARB_ANCHORS_MAX`) is a bit in every element's record: what it
+  answered there when last asked. An update asks again on the same
+  elements and marks the subtree, or the following siblings', where the
+  answer turned.
+- A cascade with more anchors than that, an anchor with no type, id,
+  class or attribute to test before its `:has()` (a subtree walk on every
+  element), or a `:has()` inside `:nth-child(… of S)` (whose turn moves
+  which sibling the count picks) is built without a change reader, as
+  every `:has()` cascade was before; `garb_cascade_update_refusal` names it, and so does the
+  profile's `layout cascade` line. A turn that marks more than half the
+  elements asks for a fresh cascade (`broad`), which is right when it
+  really restyles most of the page.
 
-**Before scheduling that separate slice**, perform a host-side corpus census:
-count captured pages whose available CSS contains `:has(` or `:dir(`. Report
-the denominator and missing stylesheet coverage, and distinguish repeated
-captures from distinct pages/sites so one heavily captured site cannot silently
-determine the priority. A text-occurrence census estimates prevalence; it does
-not establish that a selector was parsed, active or expensive on each page.
-
-If these dependencies dominate the captured workloads, Fable recommends
-placing that slice before 5d, because more pages would then benefit from
-mutation-driven reuse. The census has not been run and no reordering has been
-decided. It does not block the approved 5c implementation. 5d still follows
-5c; inserting additional work ahead of it is a separate scheduling decision.
+The marking is an over-approximation by ancestor chain, not the
+per-selector invalidation sets other browsers keep; the 64-update cap and
+the retained budget still force a periodic fresh cascade.
 
 ## Acceptance
 
@@ -389,9 +400,12 @@ decided. It does not block the approved 5c implementation. 5d still follows
 
 ## What this does not do, and the risks named
 
-- A document whose sheets use `:has()` restyles whole. The implemented
-  graft keeps the cascade-generation gate, so that full cascade replacement
-  also disables geometry reuse. The stream profiler records its full work.
+- A document whose sheets use `:has()` beyond what change tracking follows
+  (§ Selector invalidation for `:has()` and `:dir()`) restyles whole. The
+  implemented graft keeps the cascade-generation gate, so that full cascade
+  replacement also disables geometry reuse. The stream profiler records its
+  full work, and the `layout cascade` line says why each cascade was built
+  fresh.
 - Resize, zoom, a web font's arrival, a sheet added or removed, an
   appearance or motion setting change: whole, as today. Those are the
   inputs the memo compares, and they changed.
@@ -467,7 +481,9 @@ Validation and remaining hardware evidence are recorded in
 successful DOM-version advances within an existing cascade. The existing
 `reused` field counts copied layout boxes; 5c populates it independently of
 style reuse. Intrinsic hits, marker measurements, peak new metadata and the
-refusal histogram are reported on the separate `layout graft` line.
+refusal histogram are reported on the separate `layout graft` line, and
+how many cascades were updated and how many built fresh, by reason (yonder's
+own, then `garb_update_refusal_t`), on the `layout cascade` line.
 Measured and displayed layouts both use the incremental door. Validation
 and the history of the P5/design gates are recorded in
 [5b-validation.md](../../relayout-evidence/5b-validation.md).
