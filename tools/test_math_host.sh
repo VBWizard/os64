@@ -41,7 +41,9 @@ cleanup() {
 trap cleanup EXIT
 
 make -s -C userland --no-print-directory "$PWD/userland/bin/libmath.so" >/dev/null
-eval "$(make -s -C userland --no-print-directory math-host-flags)"
+# The makefile says which compiler it chose on its first line (CLAUDE.md,
+# ccache); only the MATH_ assignments are for the shell to eval.
+eval "$(make -s -C userland --no-print-directory math-host-flags | grep '^MATH_')"
 
 # The host build, source by source, with each file's own flags.
 mkdir -p "$work/host"

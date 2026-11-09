@@ -45,6 +45,7 @@ sources = ['tools/test_gclock_host.c'] + ['userland/libos64/'+n+'.c' for n in
     ['ui', 'ui_font', 'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt',
      'font_config', 'conf', 'slurp', 'str', 'fmt', 'text', 'text_cache', 'text_decode',
      'text_bitmap', 'text_draw', 'draw']]
+sources.append('shared/damage.c')   # ui.c keeps its dirty list by the shared rule
 binary = out/'test_gclock'
 subprocess.run(['cc', *flags, *[str(root/s) for s in sources], *map(str, objects), '-o', str(binary)], check=True)
 native = Path(tempfile.mkdtemp(prefix='native-', dir=out))

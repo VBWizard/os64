@@ -27,6 +27,7 @@ uint64_t os64_syscall6(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t 
 #define main os64get_entry
 #include "../userland/apps/os64get/os64get.c"
 #include "fetch/transport.h"
+#include "pool.h"
 #undef main
 #include "os64/slurp.h"
 
@@ -87,6 +88,7 @@ uint64_t os64_syscall2(uint64_t n, uint64_t a, uint64_t b)
 }
 void *os64_malloc(size_t n) { return malloc(n); }
 void os64_free(void *p) { free(p); }
+void os64_yield(void) {}   // the pool's lock never waits here: one thread
 uint64_t os64_taskid(void) { return 42; }
 int64_t os64_getcwd(char *out, size_t cap) { return snprintf(out, cap, "/bin"); }
 const char *os64_getenv(const char *key)
@@ -547,8 +549,11 @@ static void whole_lot_routing(void)
         ++routed;
     }
     closedir(assets_dir);
-    assert(routed == 133);
-    puts("PASS routing-whole-lot (133 shipped icon files routed)");
+    // At least the 133 the set shipped with (2026-10-13); icons are added
+    // and never removed, so a floor stays true while an exact count broke
+    // the day five more arrived (#415).
+    assert(routed >= 133);
+    printf("PASS routing-whole-lot (%u shipped icon files routed)\n", routed);
 }
 
 int main(int argc, char **argv)
@@ -625,6 +630,10 @@ int main(int argc, char **argv)
     bool cancel = !strncmp(scenario, "cancel-", 7) || is("url-cancel");
     bool success = is("success") || is("absent") || is("unchanged") || is("force-identical") || is("no-archive") || is("url") || is("url-https") || is("url-archive-blocked") || is("single") || is("url-tls-good") || is("url-tls-close") || is("url-tls-framed-cut") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-bypass");
     assert(success ? rc == 0 : rc != 0);
+    // Connections a fetch leaves open are the pool's now (WIRE.md § 2), and
+    // a kept TLS connection keeps its client: let them all go before the
+    // leak checks, as test_fetch_host does.
+    fetch_pool_drain();
     assert(tls_created == tls_freed);
     for (unsigned i = 0; i < connections; i++) assert(network_closed[i]);
     if (!strncmp(scenario, "url-tls-", 8) || is("url-upgrade")) assert(trust_loads == 1);
