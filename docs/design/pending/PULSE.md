@@ -102,8 +102,20 @@ root-partition space were confirmed. The independent text-size revision was
 also confirmed readable on hardware.
 The network-bar/pin update passed the native pin ABI probe in QEMU; live
 checkbox unpinning and keyboard repinning synchronized the Settings state.
-Remaining checks include RAM, Apply/Save/restart,
-show/hide/resize, topmost behavior and closing with the Settings popup open.
+On 2026-11-09, hardware acceptance of the revision rebased onto `userland`
+`2218cc25` confirmed Stay on top and all four indicators. The reported workload
+included compressing files, deleting their originals, a network speed test,
+and loading a heavy webpage in Yonder. The matching kernel was installed and
+the Stay on top control worked after reboot.
+
+The startup regression after a stock-library refresh was reproduced in QEMU
+at RIP `0x6a4033e0`: the installed `libos64.so` lacked Pulse's
+`os64_monitor_sample_system` export. Deliver Pulse with a library containing
+that entry point. The rebuilt pair passed QEMU startup on the unchanged kernel
+and was confirmed working on hardware before the separate pin-kernel update.
+
+Remaining hardware checks include Apply/Save/restart, show/hide/resize,
+and closing with the Settings popup open.
 Host tests do not establish native window stacking or timer behavior.
 
 ## Next disk-activity slice
