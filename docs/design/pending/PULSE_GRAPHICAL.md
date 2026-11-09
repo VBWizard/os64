@@ -1,23 +1,28 @@
 # Pulse graphical views
 
-Design proposal for adding Instruments and Compact to Pulse. Classic remains
-available and is the default for existing configurations. The purpose is to
-make activity easy to recognize at a glance while keeping Pulse small enough
-to sit beside another application.
+Design proposal for adding an Instruments view with an optional Compact mode to
+Pulse. Classic remains available and is the default for existing
+configurations. The purpose is to make activity easy to recognize at a glance
+while keeping Pulse small enough to sit beside another application.
 
-The graphical views use the same measurements, refresh interval, meter
-visibility, network units, and Stay on top state as Classic. Switching views
-does not restart sampling or erase the recent network peak.
+Both views use the same measurements, refresh interval, meter visibility,
+network units, and Stay on top state. Switching views or toggling Compact does
+not restart sampling or erase recent peaks.
 
-## What the three views show
+## Two views and a compact option
 
-| View | Appearance | Information visible without hovering |
+A **view** chooses how measurements are presented. **Compact** is an option
+that a view may support. The initial choices are Classic and Instruments;
+Instruments supports normal and compact layouts. A compact Classic layout is a
+follow-up, as are other views and their compact options.
+
+| View | Mode | Appearance and information visible without hovering |
 | --- | --- | --- |
-| Classic | Existing text and bars | Existing labels, values, capacity details, and network scale |
-| Instruments | Dark instrument faces, colored arcs, needles, and large numbers | Meter names, values, RAM/disk used and available, network directions, units, and scale |
-| Compact | Five small dials with minimal surrounding decoration | Short meter labels, current values, network directions, units, and scale; fuller explanations on hover |
+| Classic | Normal | Existing text and bars, labels, capacity details, and network scale |
+| Instruments | Normal | Dark instrument faces, colored arcs, needles, large values, full labels, RAM/disk used and available, and network directions, units, and scale |
+| Instruments | Compact | Five small dials, short labels, current values, network directions, units, and scale; fuller explanations on hover |
 
-Instruments starts with four cards:
+Instruments in normal mode starts with four cards:
 
 ```text
 +-----------------------+-----------------------+
@@ -60,21 +65,28 @@ and decoration still come from the selected frame composition. Pulse draws its
 instrument faces inside the window; it does not replace the window frame.
 Static highlights can suggest a metal rim without animated glow or blur.
 
-A small toolbar remains in each graphical view, with a View selector and
-Settings. The selector offers Classic, Instruments, and Compact directly.
-Settings also exposes the selected view. Classic keeps its existing Settings
-button. There is a usable Settings control even when the frame has none or all
-meters are hidden.
+Instruments has a small toolbar with a View selector, a Compact toggle, and
+Settings. The View selector offers Classic and Instruments. Settings exposes
+both choices separately; Compact is disabled with an explanation for a view
+that does not support it. Switching to Classic does not erase Instruments'
+compact preference, and returning to Instruments restores that preference.
+Classic keeps its existing Settings button. There is a usable Settings control
+even when the frame has none or all meters are hidden.
+
+View metadata declares whether Compact is supported. Keep stable view IDs and a
+separate per-view compact preference; do not encode Compact as a third view or
+as a skin. This permits adding a Classic compact layout or another view without
+changing the meaning of existing preferences.
 
 ## Resizing that earns its place
 
 The window is freely resizable above a measured readability minimum. The
 following are fitting targets, in **content pixels**, excluding the frame:
 
-| View | First fitting with all meters | Smaller fitting to prove |
+| Presentation | First fitting with all meters | Smaller fitting to prove |
 | --- | --- | --- |
-| Instruments | About 560–600 square | About 440 square, or a narrow column with more height |
-| Compact | About 350 square | Around 320–360 square |
+| Instruments, normal | About 560–600 square | About 440 square, or a narrow column with more height |
+| Instruments, compact | About 350 square | Around 320–360 square |
 | Classic | Existing saved preference | Existing font and content rules |
 
 These are prototype targets at approximately 24-pixel primary text, not hard
@@ -82,11 +94,11 @@ minimums. The first rendering slice must demonstrate Compact in the smaller
 range before its layout is accepted. Increasing text size may require a larger
 window. A 600-by-600 minimum is not the design.
 
-Dials stay circular. Extra space enlarges the faces and improves spacing;
-it does not stretch circles into ovals. Instruments can arrange cards in one
-or two columns. Compact packs the visible dials into rows, keeping download
-and upload adjacent and their shared scale with them. Hiding Network removes
-both network dials. Other hidden meters leave no empty placeholder cards.
+Dials stay circular. Extra space enlarges the faces and improves spacing; it
+does not stretch circles into ovals. Instruments can arrange cards in one or
+two columns. Compact packs the visible dials into rows, keeping download and
+upload adjacent and their shared scale with them. Hiding Network removes both
+network dials. Other hidden meters leave no empty placeholder cards.
 
 Layout selection uses available width and measured text. A shorter height
 cannot be obtained by silently clipping a row: the native minimum is updated
@@ -94,9 +106,9 @@ for the chosen layout. Breakpoints need a small stable margin so dragging near
 one does not continually alternate layouts. Changing the layout during a drag
 must account for the existing minimum-size call cancelling an active gesture.
 
-Compact is an explicit choice. Shrinking Instruments does not quietly change
-it to Compact or hide its details. A user can enlarge Compact while retaining
-its minimal presentation.
+Compact is an explicit option. Shrinking Instruments does not quietly enable
+Compact or hide its details. A user can enlarge the compact layout while
+retaining its minimal presentation.
 
 The existing text-size setting controls primary readouts. Secondary labels use
 a derived size with a 16-pixel floor. Resizing does not shrink primary numbers
@@ -115,36 +127,36 @@ card. Examples:
 - **Download or upload:** current rate, selected interface or aggregation, and
   the shared recent-peak scale.
 
-Details use the latest displayed sample and configured units. They refresh
-when that sample changes. Waiting and unavailable states are explained here
-as well as represented on the dial.
+Details use the latest displayed sample and configured units. They refresh when
+that sample changes. Waiting and unavailable states are explained here as well
+as represented on the dial.
 
 The detail card is drawn inside Pulse's surface and clamped to its edges. It
-can temporarily overlap a neighboring dial at small sizes. It does not create
-a focus-taking popup, move the window, or grab input. Hit testing continues
+can temporarily overlap a neighboring dial at small sizes. It does not create a
+focus-taking popup, move the window, or grab input. Hit testing continues
 against the underlying dial; the overlay must not trigger its own hover cycle.
 Moving to another dial restarts the delay. Leaving the window, clicking,
-pressing Escape, resizing, switching views, opening Settings, or losing input
-cancels the card. Covering the window also cancels it. Hover must work while
-Pulse is pinned but another app has keyboard focus.
+pressing Escape, resizing, changing view or mode, opening Settings, or losing
+input cancels the card. Covering the window also cancels it. Hover must work
+while Pulse is pinned but another app has keyboard focus.
 
 When Pulse has keyboard focus, Tab can reach each visible dial; keyboard focus
 shows the same details immediately. Controls retain normal keyboard operation.
 This keeps useful information accessible without requiring precise mouse work.
 
 There is no shared tooltip widget in the inspected toolkit headers. Start with
-a small reusable userland overlay helper, exercised by Pulse, rather than a
-new native window type. It can become the toolkit tooltip building block once
-this behavior is proven.
+a small reusable userland overlay helper, exercised by Pulse, rather than a new
+native window type. It can become the toolkit tooltip building block once this
+behavior is proven.
 
 ## Honest meters
 
 CPU, RAM, and disk use a fixed zero-to-100-percent sweep. Disk remains
-**filesystem capacity**, not disk activity. The proposed `/sys/disk/stats`
-work is a separate feature.
+**filesystem capacity**, not disk activity. The proposed `/sys/disk/stats` work
+is a separate feature.
 
 Download and upload share the existing trailing-minute, power-of-two ceiling.
-The scale is shown in both graphical views. A full needle means the displayed
+The scale is shown in both Instruments modes. A full needle means the displayed
 rate reaches that scale; it does not mean the link is saturated. If the peak
 expires, the scale and both needle positions change together from one snapshot.
 A unit change does not reset the byte-based peak history.
@@ -154,79 +166,138 @@ a needle that could be mistaken for a valid zero. The initial CPU/network
 sampling interval shows a waiting state. Dial geometry clamps safely to its
 range; labels retain the sampler's meaning.
 
-The first version updates needles when samples arrive. Smooth interpolation
-is optional later, after measuring the cost. No permanent animation loop is
-needed to make the proposed layout useful.
+The first version updates needles when samples arrive. Smooth interpolation is
+optional later, after measuring the cost. No permanent animation loop is needed
+to make the proposed layout useful.
+
+## Recent peak markers
+
+CPU, memory, download, and upload each gain a small contrasting radial line on
+the dial rim showing their highest valid sampled value over the preceding **60
+seconds**. The marker is visually distinct from the current needle or filled
+arc and appears in both Instruments modes. Disk capacity has no peak marker in
+this slice.
+
+For example, CPU may read 23% while a small line remains at 91%, showing that
+it was recently busy. Once the 91% reading leaves the window, the line moves to
+the highest sample still inside it. This is a rolling peak, not a session
+maximum or a marker that decays at an arbitrary speed. Each detail card names
+the period and value: **Current: 23% · Peak, last 60 seconds: 91%**.
+
+Use the same 60-second history interval as the network scale for the first
+version. A configurable period is a follow-up; keep the interval named in the
+history model and UI so it can be extended coherently. Peaks describe sampled
+values, not unobserved spikes between refreshes.
+
+CPU and memory peaks are percentages on their fixed scale. Network keeps
+separate raw byte-per-second peaks for download and upload, even though their
+dials share a ceiling. Project each marker onto the current shared scale; do
+not retain an angle from an earlier scale. The ceiling, current readings, and
+peak markers come from the same displayed snapshot. Changing display units
+changes formatting, not the recorded byte rates.
+
+Keep history with the sampler, using bounded timestamped per-second buckets
+rather than a sample-count window. For multiple samples in a second, retain the
+maximum for each metric. Expire buckets by elapsed time using the existing
+network history's second-boundary convention. The existing network history
+stores the maximum across both directions; extend it or share its timing with
+separate direction histories so one direction's peak is not attributed to the
+other. CPU and memory have their own validity and maxima.
+
+Missing samples do not contribute zeroes or erase valid earlier peaks. If the
+current value is unavailable, keep the neutral current-state display; a
+remaining historical mark must be distinguishable and explained in details.
+When no valid sample remains, remove that metric's marker. A valid zero peak
+can appear at the zero endpoint. History starts empty on launch and resets on a
+backward clock discontinuity. An interface change clears network peaks and
+scale together, preserving CPU and memory history. View/mode, unit, refresh
+interval, and visibility changes do not clear history; sampling and aging
+continue while a meter is hidden or Classic is selected.
 
 ## Remembering the user's arrangement
 
-Keep a size for each view and one shared window position. Switching from a
-large Instruments panel to Compact restores Compact's preferred size; returning
-to Classic restores Classic's preferred size. Fitting a window onto a smaller
-screen does not overwrite a larger saved preference.
+Keep a size for each supported **view and mode pair**, plus one shared window
+position. Enabling Compact restores Instruments' compact size; disabling it
+restores Instruments' normal size. Returning to Classic restores Classic's
+preferred size. Fitting a window onto a smaller screen does not overwrite a
+larger saved preference.
 
 Proposed `pulse.conf` additions:
 
 | Key | Purpose |
 | --- | --- |
-| `view` | `classic`, `instruments`, or `compact`; absent/invalid means Classic |
-| `instruments_size` | Preferred content width,height for Instruments |
-| `compact_size` | Preferred content width,height for Compact |
+| `view` | `classic` or `instruments`; absent/invalid means Classic |
+| `instruments_compact` | `on` or `off`; absent/invalid means off, retained when another view is selected |
+| `instruments_size` | Preferred content width,height for Instruments in normal mode |
+| `instruments_compact_size` | Preferred content width,height for Instruments in compact mode |
 
 The existing `geometry` key retains its format: version, frame x, frame y,
 Classic content width, Classic content height. User moves update the shared
-position; user resizes update the current view's size. A graphical resize must
-not overwrite Classic's width and height. Old configurations need no migration
-write just to launch.
+position; user resizes update the current view and mode's size. A graphical
+resize must not overwrite Classic's width and height. Old configurations need
+no migration write just to launch.
 
-View changes apply to the current window immediately. **Save as default**
-persists the selected view along with other settings. Moving and resizing keep
-the existing automatic geometry-saving behavior. Writes re-read the file and
-merge their own keys, preserving unrelated settings and avoiding stale dialog
-copies overwriting newer placement.
+View and Compact changes apply to the current window immediately. **Save as
+default** persists the selected view and per-view compact preference along with
+other settings. Moving and resizing keep the existing automatic geometry-saving
+behavior. Writes re-read the file and merge their own keys, preserving
+unrelated settings and avoiding stale dialog copies overwriting newer
+placement.
 
 The current generic placement helper assumes a single size per configuration.
-Pulse needs an explicit routing layer for per-view sizes; simply attaching
-three ordinary instances to the same `geometry` key is incorrect. Programmatic
-size changes must not be mistaken for a user resize of the outgoing view.
+Pulse needs an explicit routing layer for sizes indexed by view and mode;
+attaching ordinary placement instances to the same `geometry` key is incorrect.
+Programmatic size changes must not be mistaken for a user resize of the
+outgoing presentation.
 
-Preparing a view change includes its font, layout, and drawing resources.
-Failure leaves the previous view usable and reports the reason. A failed
-configuration save leaves the applied view visible and reports that it was not
-saved. When no view can fit the screen at the requested text size, report the
-constraint instead of silently switching views or reducing readability.
+Preparing a view or mode change includes its font, layout, and drawing
+resources. Failure leaves the previous view usable and reports the reason. A
+failed configuration save leaves the applied view visible and reports that it
+was not saved. When no view can fit the screen at the requested text size,
+report the constraint instead of silently switching views or reducing
+readability.
 
 ## Small supporting changes
 
-The accepted Pulse source already has the important separation:
-`pulse_data.c` collects measurements, while `pulse.c` owns widgets and windows.
-Retain one sampler and one displayed snapshot. Add view/layout and dial drawing
-code that consumes the snapshot; renderers do not read system reports.
+The accepted Pulse source already has the important separation: `pulse_data.c`
+collects measurements, while `pulse.c` owns widgets and windows. Retain one
+sampler and one displayed snapshot. Add view/layout and dial drawing code that
+consumes the snapshot; renderers do not read system reports.
 
 Use the existing userland geometry backend for antialiased curves and strokes,
 plus the existing text/font and surface drawing APIs. Fixed dial faces and tick
 marks can be cached by dimensions, palette, and font. Dynamic numbers, needles,
-and arcs redraw their affected areas. Bound the combined drawing-cache budget
-(initial target: 8 MiB), release superseded resources after resize, and provide
-a correct uncached drawing path when a cache cannot be retained. Report actual
-memory and CPU costs against Classic rather than relying on a rounded 0% label.
-There is no browser, SVG document engine, or JavaScript runtime inside Pulse.
+peak markers, and arcs redraw their affected areas. Bound the combined
+drawing-cache budget (initial target: 8 MiB), release superseded resources
+after resize, and provide a correct uncached drawing path when a cache cannot
+be retained. Report actual memory and CPU costs against Classic rather than
+relying on a rounded 0% label. There is no browser, SVG document engine, or
+JavaScript runtime inside Pulse.
 
 The timer worker remains separate from widget ownership. It can check a
 published hover deadline alongside the sampling deadline and ring a distinct
 notification bit when details become due. Its existing sleep steps are at most
 250 ms, so a nominal 500 ms hover can take about 500–750 ms plus scheduling
-latency. A hover notification must not trigger an extra system sample.
-Cancel pending hover state at teardown and join the worker before releasing
-window or drawing resources.
+latency. A hover notification must not trigger an extra system sample. Cancel
+pending hover state at teardown and join the worker before releasing window or
+drawing resources.
 
 ### Restoring a size needs a kernel entry point
 
-Manual window resizing already works. Automatic per-view size restoration has
-one missing operation: applications cannot request an exact content size.
-`os64_gui_window_set_min_size()` can grow a window, but lowering its limit does
-not shrink it. Recreating Pulse's window on every view change would complicate
-focus, its timer handle, and the open Settings dialog.
+The kernel already resizes windows through `wm_resize()`: a frame gesture or
+maximize/restore action reaches the window manager directly inside the kernel.
+An application can choose an initial size at creation and can call
+`os64_gui_window_set_min_size()` afterward. That setter grows an undersized
+window, which is how Pulse makes room for larger text, but lowering the limit
+does not shrink the window.
+
+The missing operation is a userland request to make an **existing** window a
+specific content size, such as changing from 580 by 580 to a remembered 340 by
+340. The proposed syscall exposes the existing resizing machinery with owner
+and bounds checks; it does not invent a second resizing engine. It is needed
+for automatic view/mode size restoration, not for manual dragging or drawing
+dials. Recreating Pulse's window on each change would instead complicate focus,
+its timer handle, and the open Settings dialog.
 
 Propose a small `os64_gui_window_set_content_size()` syscall, with its number
 assigned after checking the then-current syscall table. It should:
@@ -243,33 +314,38 @@ assigned after checking the then-current syscall table. It should:
   as the minimum-size setter, with coverage for its remaining button releases.
 - Return an error without a partial geometry change on invalid requests.
 
-The view transition must stage resources before changing native geometry and
-restore the previous minimum if the requested size fails. On a kernel without
-the new operation, allow switching views and manual resizing using the existing
-minimum-size rules, but explain that automatic size restoration is unavailable.
-This preserves a usable graphical view while making the kernel requirement
-specific. The dials and hover details themselves require no new syscall.
+The view/mode transition must stage resources before changing native geometry
+and restore the previous minimum if the requested size fails. On a kernel
+without the new operation, allow view/mode changes and manual resizing using
+the existing minimum-size rules, but explain that automatic size restoration is
+unavailable. This preserves a usable graphical view while making the kernel
+requirement specific. The dials and hover details themselves require no new
+syscall.
 
 ## Implementation slices and acceptance
 
 | Slice | Deliverable | Acceptance gate |
 | --- | --- | --- |
-| 1 — Draw and fit | Deterministic rendered Instruments and Compact previews using production drawing code, with example readings | Compact demonstrated around 320–360 pixels with readable values; inspect 24- and 26-pixel text, long rates, missing data, and hidden meters |
-| 2 — Switch and resize | Both live views, Settings selection, per-view preferences, and the size-request syscall | Switch repeatedly among all views without losing position, sampling history, focus, pin state, or Classic size; verify older-kernel fallback |
+| 1 — Draw and fit | Deterministic normal/compact Instruments previews using production drawing code, including recent-peak markers | Compact demonstrated around 320–360 pixels with readable values; inspect 24- and 26-pixel text, long rates, missing data, and hidden meters |
+| 2 — Switch and resize | Classic/Instruments selection, Compact toggle, per-view/mode preferences, live peak histories, and the size-request syscall | Switch views and toggle Compact without losing position, peaks, focus, pin state, or saved sizes; Classic ignores but retains the Instruments compact preference; verify older-kernel fallback |
 | 3 — Details and finish | Mouse/keyboard detail cards, bounded caches, and lifecycle cleanup | Hover while Yonder has focus; resize with details visible; close with Settings open; compare CPU and memory against Classic |
 
 Host tests should cover layout bounds at breakpoints, allocation/failure paths,
-configuration preservation, scale/needle agreement, independent hover/sample
+configuration preservation, scale/needle/peak agreement, peak expiry and
+per-metric validity and distinct direction peaks, multiple samples per second,
+long gaps, backward clocks, interface changes, independent hover/sample
 deadlines, and window ownership/resize behavior. Run meaningful regressions
 under ASan, UBSan, and LeakSanitizer. Native QEMU tests cover the actual resize
 syscall, focus, frame composition, pinning, and pointer delivery.
 
-Hardware acceptance repeats the successful real workloads: compression and
-file deletion, a network speed test, and a heavy Yonder page. Check both views
-at the intended desktop resolution and confirm that Compact is comfortably
-readable at its small fitting. Reopen Pulse after saving each view; verify the
-saved choice, size, units, and meter selection. Exercise the existing
-Apply/Save/restart, hide/show/resize, and close-with-Settings checks too.
+Hardware acceptance repeats the successful real workloads: compression and file
+deletion, a network speed test, and a heavy Yonder page. Check both Instruments
+modes at the intended desktop resolution and confirm that Compact is
+comfortably readable at its small fitting. Create a short CPU/network burst and
+verify that its peak mark remains after the current value falls, then expires.
+Reopen Pulse after saving each view/mode; verify the saved choice, size, units,
+and meter selection. Exercise the existing Apply/Save/restart,
+hide/show/resize, and close-with-Settings checks too.
 
 Deliver each hardware slice as a small frozen cohort with matching libraries
 and checksums. Include a kernel only for the slice that adds native size
@@ -277,18 +353,18 @@ restoration, with its requirement called out. Keep accepted cohorts intact.
 
 ## Follow-up for a floating instrument cluster
 
-Keep the five-dial Compact layout in the current scope. A later presentation
-can visually join the instrument rims while removing the rectangular panel,
-so the desktop and other applications show through the spaces between them.
-The instruments remain visible; the containing window still exists to own
-their pixels, input, position, and lifetime.
+Keep the five-dial Instruments compact layout in the current scope. A later
+presentation can visually join the instrument rims while removing the
+rectangular panel, so the desktop and other applications show through the
+spaces between them. The instruments remain visible; the containing window
+still exists to own their pixels, input, position, and lifetime.
 
 Prefer **click-through gaps with interactive instruments**. Hovering over a
 dial should still show its details, and an instrument rim or small handle can
 provide a place to drag the cluster. A settings/context action must remain
 reachable without a titlebar. Fully passing mouse input through the entire
-cluster would prevent its ordinary hover and click interactions; that would
-be a distinct locked-overlay mode with an external way to unlock it.
+cluster would prevent its ordinary hover and click interactions; that would be
+a distinct locked-overlay mode with an external way to unlock it.
 
 The inspected window system needs additional support for this presentation:
 
@@ -304,22 +380,22 @@ classifies a window as a popup. A persistent instrument cluster must not
 accidentally inherit menu lifecycle or owner-focus restrictions from that
 combination. Give the window type and decoration policy an explicit contract.
 
-Drawing a translucent color inside Pulse does not make the desktop visible:
-the current compositor still copies the window surface opaquely. Likewise,
-merely skipping a pixel would leave stale backbuffer content because the
-opaque window has already prevented painting underneath it. Visual shape,
-occlusion, damage, and input routing must agree.
+Drawing a translucent color inside Pulse does not make the desktop visible: the
+current compositor still copies the window surface opaquely. Likewise, merely
+skipping a pixel would leave stale backbuffer content because the opaque window
+has already prevented painting underneath it. Visual shape, occlusion, damage,
+and input routing must agree.
 
-A binary cutout shape could establish the first version: solid instruments
-and transparent gaps. Antialiased outer edges and translucent shadows require
+A binary cutout shape could establish the first version: solid instruments and
+transparent gaps. Antialiased outer edges and translucent shadows require
 partial-alpha composition. Keep the input region independent of decorative
 shadows, and publish validated shape/input state consistently with the drawn
-content. The follow-up should cover movement, resizing, shape changes,
-partial overlap, pointer capture, and hover transitions over the gaps.
+content. The follow-up should cover movement, resizing, shape changes, partial
+overlap, pointer capture, and hover transitions over the gaps.
 
 This is window-system work with Pulse as its first consumer, rather than an
-extra dial-rendering option. It does not block Instruments, resizable Compact,
-or their hover details in a normal window.
+extra dial-rendering option. It does not block Instruments, its resizable
+Compact mode, or hover details in a normal window.
 
 Skins, graphs, per-core dials, disk activity, and animated needle interpolation
 also remain separate follow-ups. This design establishes the renderer
