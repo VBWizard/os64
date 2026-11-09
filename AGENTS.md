@@ -61,6 +61,12 @@ For low-level code such as scheduler, interrupt, SMP, paging, and context-switch
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+### Working an HTTP/2 slice
+`docs/design/pending/HTTP2.md` § 0 says how `HTTP2_TRACKER.csv` beside it is
+kept: a branch adds and flips only its own slice's rows, the `done` flip
+lands in the PR that did the work, and `tools/http2_tracker.py` passes
+before a push. That arc's rule alone; no other arc has a tracker.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.

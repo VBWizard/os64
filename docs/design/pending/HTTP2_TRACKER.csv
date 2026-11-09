@@ -1,0 +1,62 @@
+id,task,depends_on,status,done_in,notes
+Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed os64_bell_t in libos64 alone",,ruled,,"RULED 2026-11-09 by Chris: the kernel bell. H2.0 is a kernel slice with a Codex round (HTTP2.md § 2.4, § 4 H2.0)"
+Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,ruled,,"RULED 2026-11-09 by Chris: match the preset's window; max_body stays the real bound (HTTP2.md § 2.6). Applied in H2.5"
+
+H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,design-review,,"HTTP2.md § 2.4 and § 4 H2.0; a kernel slice (Q1 ruled)"
+H2.0.1,"Kernel bell_t: spinlock, rung flag, one parked waiter, pipe.c's park discipline",H2.0,todo,,"read pipe.c's read path first; the first review question is where it differs"
+H2.0.2,"read with patience (1 rung / OS64_ERR_TIMEOUT / OS64_INTERRUPTED / closed), second reader refused",H2.0.1,todo,,
+H2.0.3,"write rings from any thread, never blocks; close wakes a parked waiter",H2.0.1,todo,,
+H2.0.4,"SYSCALL_BELL and its comment; the dispatcher accepts finite patience on a bell",H2.0.1,todo,,
+H2.0.5,"Not inherited across spawn; /proc/<pid>/handles names it bell",H2.0.1,todo,,
+H2.0.6,"libos64 os64/bell.h: os64_bell_t, make / wait / ring / close",H2.0,todo,,"same header under either Q1 answer"
+H2.0.7,"/tests/belltest: ring-before-wait kept, cross-thread wake, timeout, two rings one wait, close wakes, SIGWINCH interrupts, child sees no bell, occupied bell refused",H2.0.6,todo,,
+H2.0.8,"Kernel case for the park/ring race",H2.0.1,todo,,
+H2.0.9,"Codex round",H2.0.7,todo,,
+
+H2.1,"Session resumption: TLS 1.3 tickets kept and offered, a resumed handshake skips the chain",,design-review,,"HTTP2.md § 4 H2.1; reverses TLS13.md ruling 6 by Chris's 2026-11-09 ruling"
+H2.1.1,"Keep NewSessionTicket's fields in ticket_byte (lifetime, age_add, nonce, ticket up to TLS13_TICKET_MAX); derive the PSK",H2.1,todo,,
+H2.1.2,"Derive resumption_master_secret at client Finished; wipe with the rest",H2.1,todo,,"TLS13.md § The key schedule's 'not derived' line changes"
+H2.1.3,"Session cache in libtls: key (host, port, trust), 32 entries, two tickets per key, use-once, expiry, os64_tls_sessions_drop",H2.1.1,todo,,
+H2.1.4,"os64_tls_config_t gains port (0 = do not resume); os64_tls_state_t gains resumed",H2.1.3,todo,,
+H2.1.5,"ClientHello offers psk_key_exchange_modes (psk_dhe_ke) and pre_shared_key last, with the binder over the partial hello",H2.1.3,todo,,
+H2.1.6,"ServerHello handling: resumed path (no Certificate / CertificateVerify), declined path (zero PSK early secret), hash-mismatch error, HRR recomputes age and binder",H2.1.5,todo,,
+H2.1.7,"libfetch: dial passes the port; detail.tls_resumed; yonder's record and os64get -v say resumed",H2.1.4,todo,,
+H2.1.8,"Host cases against OpenSSL s_server: tickets kept, resumed, declined, num_tickets 0, expired, oversize ticket, HRR with PSK, wrong binder refused, trust-key separation, use-once",H2.1.6,todo,,
+H2.1.9,"Fuzz loop gains the PSK server extension shapes; mutants once at the end",H2.1.8,todo,,
+H2.1.10,"Measurement in the PR body: cold vs resumed handshake time in the guest; WIRE.md blog page connections and arrival",H2.1.7,todo,,
+H2.1.11,"TLS13.md § The profile and DEBTS § TLS 1.3 engine boundaries updated; as-built section",H2.1.8,todo,,
+H2.1.12,"Codex round",H2.1.9,todo,,
+
+H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,design-review,,"HTTP2.md § 2.2 and § 4 H2.2; h1-only, behaviour-neutral under six connections"
+H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,todo,,
+H2.2.2,"fetch_pool_take: idle of the key, else a dial slot under both caps, else wait on the bell in the key's queue",H2.2.1,todo,,
+H2.2.3,"The waiter list: node added under the lock, removed under the lock before any return; put / death / failed dial ring the oldest matching waiter",H2.2.2,todo,,
+H2.2.4,"A wait that outlives its patience answers DIAL_FAILED with NO_RESOURCES and the sentence; a cancelled wait INTERRUPTED",H2.2.2,todo,,
+H2.2.5,"fetch_pool_put / evict_one / drain / idle over the new table; fetch_pool_live for the harness",H2.2.1,todo,,
+H2.2.6,"fetch.c speaks to connections; the fetch's bell made on first wait, closed with the fetch; retry / 408 / probe / ONCE_MS untouched",H2.2.1,todo,,
+H2.2.7,"FETCH_POOL_TOTAL's reasoning in pool.h rewritten for a table that counts live connections; distinct hosts at once measured on a corpus page",H2.2.1,todo,,
+H2.2.8,"Host cases: seventh waits and proceeds on put / on death; cancelled wait removes its node; patience expiry; seventeenth key waits on the total; failed dial releases its slot; every existing pool case unchanged",H2.2.6,todo,,
+H2.2.9,"Mutants once at the end",H2.2.8,todo,,
+H2.2.10,"QEMU make run-net on the W2 page: at most six SYNs to the host at once, arrival within W2's figures",H2.2.8,todo,,
+H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md § 2 pointer; as-built section",H2.2.10,todo,,
+H2.2.12,"Codex round",H2.2.9,todo,,
+H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,todo,,
+
+H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,design-review,,"HTTP2.md § 4 H2.3; unreachable until H2.4"
+H2.3.1,"h2_frame: header parse, per-type length and stream-id rules, padding, PRIORITY fields, unknown types ignored",H2.3,todo,,
+H2.3.2,"h2_frame writers: SETTINGS in the order given, ack, WINDOW_UPDATE, PING ack, RST_STREAM, GOAWAY, HEADERS with CONTINUATION split, DATA cut to size, PRIORITY",H2.3,todo,,
+H2.3.3,"CONTINUATION reassembly state with the hard cap; the preface; error-code and setting name tables",H2.3.1,todo,,
+H2.3.4,"HPACK decoder: static table, dynamic table bounded by our advertised size, integers with a width cap, Huffman with padding rules, size updates, never-indexed carried, whole block always decoded",H2.3,todo,,
+H2.3.5,"HPACK encoder: dynamic table bounded by the peer's size, indexing policy, never-indexed for authorization and marked fields, Huffman when shorter, size update on a shrink",H2.3,todo,,
+H2.3.6,"h2_head_check: RFC 9113 § 8.2's rules on a decoded field list, the rule broken returned",H2.3.4,todo,,
+H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table state checked; every frame rule; reassembly; byte-at-a-time; head-check rules; encoder shrink; fuzz loop",H2.3.6,todo,,
+H2.3.8,"Mutants once at the end",H2.3.7,todo,,
+H2.3.9,"In-house review and as-built section",H2.3.8,todo,,
+
+H2.4,"The connection: state machine, streams, flow control, the reader thread, against a scripted peer",H2.0 H2.2 H2.3,todo,,"HTTP2.md § 2.2 § 2.3 § 2.5 § 2.6; brief written by Fable after H2.2's round"
+H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,todo,,"adds this slice's rows"
+
+H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.4 C1 C2,todo,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
+H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.4 C1 C2,todo,,"adds this slice's rows"
+C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,todo,,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
+C2,"Capture Firefox on Windows the same way",,todo,,"Chris's; Firefox builds a priority tree and Chrome does not"
