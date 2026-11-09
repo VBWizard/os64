@@ -945,6 +945,42 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 uint64_t os64_dom_animation_next(const os64_dom_t *dom);
 bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
+/* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md). The update step is
+ * HTML's "update animations and send events": it samples the document
+ * timeline's time, runs each animation's pending play and pause tasks,
+ * updates their finished states, dispatches the playback events queued
+ * since the last step in the order they happened, as one task, and lets go
+ * of the animations that can change nothing more. next answers when a step
+ * is due on the host's clock — at once for the first, then a frame after
+ * the last — or UINT64_MAX while no step has work (no pending task, no
+ * running animation, no event, no script that read the timeline, nothing
+ * to let go of). The
+ * host runs it on its rendering step, before the frame callbacks; update
+ * answers whether it ran (outcome filled). Owner thread, between tasks. */
+uint64_t os64_dom_web_animations_next(os64_dom_t *dom);
+bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+
+/* What libflow reads (its env's script_effects, flow.h): the effects whose
+ * target is `node` in composite order, `*out` pointing at their count of
+ * them, 0 with `*out` NULL for none. The array is the binding's, good
+ * until the next call; each effect (garb/timing.h) until the host
+ * releases its generation. A layout tree keeps effects past the call, so
+ * a host MARKS each tree it builds with the generation current then
+ * (effects_mark answers it) and RELEASES, whenever trees go, everything
+ * buried before the oldest generation still held: an effect whose
+ * animation was collected is freed by release, never sooner, and every
+ * one by os64_dom_free. */
+struct garb_effect;
+int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node,
+                                const struct garb_effect *const **out);
+uint64_t os64_dom_effects_mark(os64_dom_t *dom);
+void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest);
+/* Whether the binding holds any effect a tree may still read — after
+ * os64_dom_drain, every one is buried: a host that frees the binding while
+ * such a tree stands must keep it (drained, its engine gone) until the
+ * tree goes. */
+bool os64_dom_effects_held(const os64_dom_t *dom);
+
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
  * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the
  * observers and does the standard's arithmetic; the host answers the

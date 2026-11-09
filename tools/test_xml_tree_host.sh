@@ -17,8 +17,8 @@ host_sources=(tools/test_xml_tree_host.c userland/libxml/xml.c userland/libhtml/
     userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c userland/libhtml/range.c
     userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
     userland/libgarb/dump.c userland/libgarb/select.c userland/libgarb/values.c
-    userland/libgarb/props.c userland/libgarb/media.c userland/libgarb/cascade.c
+    userland/libgarb/props.c userland/libgarb/media.c userland/libgarb/cascade.c userland/libgarb/timing.c
     userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c)
 host_objects "$work"
-cc -fsanitize=address,undefined "${host_objs[@]}" -o "$work/xml_tree"
+cc -fsanitize=address,undefined "${host_objs[@]}" -lm -o "$work/xml_tree"
 timeout 90s "$work/xml_tree"

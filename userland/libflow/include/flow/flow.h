@@ -19,6 +19,7 @@
 // A layout retains its model and pins the document's borrowed strings until
 // flow_free; the document itself still belongs to its caller.
 
+#include "garb/timing.h"
 #include "html/html.h"
 #include "page/page.h"
 #include "os64/font_backend.h"
@@ -553,30 +554,9 @@ struct flow_transform {
 
 // ── Animations (CSS Animations 1, Easing 1; PILE3.md § Animations) ──────
 
-// An easing (Easing 1 § 2): linear; a cubic Bézier through (0, 0),
-// (p[0], p[1]), (p[2], p[3]) and (1, 1), which the keywords ease, ease-in,
-// ease-out and ease-in-out are — `named` when one of them is how it was
-// written, which is another easing than the same curve written as
-// cubic-bezier() where keyframes are grouped by easing (Chrome's answer);
-// or `steps` steps jumping as `jump` says, which step-start and step-end
-// are, and are the same easing as.
-typedef enum { FLOW_EASE_LINEAR = 0, FLOW_EASE_CUBIC, FLOW_EASE_STEPS } flow_ease_kind_t;
-typedef enum { FLOW_JUMP_END = 0, FLOW_JUMP_START, FLOW_JUMP_NONE, FLOW_JUMP_BOTH } flow_jump_t;
-typedef struct {
-    flow_ease_kind_t kind;
-    double p[4];
-    int32_t steps;
-    flow_jump_t jump;
-    bool named;
-} flow_easing_t;
-
-typedef enum {
-    FLOW_DIRECTION_NORMAL = 0,
-    FLOW_DIRECTION_REVERSE,
-    FLOW_DIRECTION_ALTERNATE,
-    FLOW_DIRECTION_ALTERNATE_REVERSE,
-} flow_direction_t;
-typedef enum { FLOW_FILL_NONE = 0, FLOW_FILL_FORWARDS, FLOW_FILL_BACKWARDS, FLOW_FILL_BOTH } flow_fill_t;
+// The easings, the directions and the fill modes are libgarb's
+// (garb/timing.h), where the timing arithmetic both libflow and libdom
+// use lives.
 
 // A name as the page wrote it, its bytes not terminated; `text` NULL for
 // `none`.
@@ -593,10 +573,10 @@ typedef struct {
 typedef struct {
     const flow_name_t *name;
     const double *duration, *delay;
-    const flow_easing_t *easing;
+    const garb_easing_t *easing;
     const double *iterations;
-    const flow_direction_t *direction;
-    const flow_fill_t *fill;
+    const garb_direction_t *direction;
+    const garb_fill_t *fill;
     const bool *paused;
     int32_t nname, nduration, ndelay, neasing, niterations, ndirection, nfill, npaused;
 } flow_animations_t;
@@ -606,12 +586,13 @@ typedef struct {
 typedef struct {
     flow_name_t name;
     double duration_ms, delay_ms;
-    flow_easing_t easing;
+    garb_easing_t easing;
     double iterations;
-    flow_direction_t direction;
-    flow_fill_t fill;
+    garb_direction_t direction;
+    garb_fill_t fill;
     bool paused;
 } flow_animation_t;
+
 
 // What `will-change` names that yonder gives an effect (Will Change 1 § 2):
 // a value other than the initial one of these makes a stacking context —
@@ -997,6 +978,16 @@ typedef struct {
     // layout is the page at, on the face's clock in milliseconds.
     const struct flow_timeline *timeline;
     uint64_t now_ms;
+    // The page's script effects on `node` (garb_effect_t), in composite
+    // order (the order their animations were made), as `*out` and how
+    // many; NULL, or 0, for none. They are laid over its CSS animations whether or not a
+    // `timeline` is given: a script reads its animations' values
+    // (getComputedStyle) whatever the face draws. What they point at must
+    // outlive every tree laid out with them, which keeps them for its ticks
+    // and its paints: the face holds a cancelled effect's keyframes until
+    // no such tree is left.
+    int32_t (*script_effects)(void *ctx, const os64_html_node_t *node,
+                              const garb_effect_t *const **out);
     // The face ticks (flow_motion_tick): an element whose animations change
     // only what is painted moves between layouts, and its values are due
     // for ticks, not layouts. Without it every animation moves by layouts.

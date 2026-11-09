@@ -295,6 +295,27 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_
 // pacing and the rendering step after it (os64_dom_animation_fire).
 uint64_t yonder_scripts_animation_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// Web Animations' update step (os64_dom_web_animations_update), run on the
+// rendering step before the frame callbacks, as HTML orders them.
+uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_web_animations_update(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// The page's script effects on `node` for a layout (os64_dom_script_effects;
+// none once the scripts are dead), and how long they live. A tree keeps the
+// effects it was laid out with for its ticks, its paints and its computed
+// styles (WEB_ANIMATIONS.md § 2), so the host tells the page's scripts of
+// each tree laid out with them (tree_made, with the generation it is laid
+// out at) and of each tree that goes, whichever page's it was (tree_gone):
+// what the binding buried before the oldest generation of the page's trees
+// still standing is freed then. A dead page's trees keep reading what they
+// were laid out with: the drained binding stays until the last of them
+// goes, past yonder_scripts_free when a tree outlives the scripts. The
+// scripts follow a few trees; past that nothing buried is freed, nor the
+// binding.
+struct garb_effect;
+int32_t yonder_scripts_effects(yonder_scripts_t *scripts, const os64_html_node_t *node,
+                               const struct garb_effect *const **out);
+void yonder_scripts_tree_made(yonder_scripts_t *scripts, const void *tree);
+void yonder_scripts_tree_gone(const void *tree);
 // Custom element reactions the parser's insertions left owed
 // (os64_dom_reactions_run): whether any are, and running them as one task,
 // true when it ran. The first failure of the constructor `name` defines,

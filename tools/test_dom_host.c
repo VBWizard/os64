@@ -8,6 +8,7 @@
 #include <html/html.h>
 #include <page/page.h>
 #include <math.h>
+#include <garb/timing.h>
 
 int64_t os64_open(const char *path, const char *mode)
 { (void)path; (void)mode; return -1; }
@@ -269,6 +270,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
 #include "test_dom_animation.inc"
+#include "test_dom_webanimation.inc"
 #include "test_dom_intersection.inc"
 #include "test_dom_resize.inc"
 #include "test_dom_walker.inc"
@@ -618,6 +620,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--ranges")){dom_range_cases();printf("DOM ranges probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--shadow")){dom_shadow_cases();printf("DOM shadow probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--web-animations")){dom_webanimation_cases();printf("DOM web animations probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -651,6 +654,7 @@ int main(int argc, char **argv)
     dom_document_cases();
     dom_p2b_cases();
     dom_animation_cases();
+    dom_webanimation_cases();
     dom_intersection_cases();
     dom_resize_cases();
     dom_walker_cases();

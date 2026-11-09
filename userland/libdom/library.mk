@@ -35,7 +35,7 @@ LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
 LIBDOM_SRCS += libdom/document.c
 # P2b: the structured clone, same-window postMessage, idle callbacks.
-LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/pointer.c
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/webanimation.c libdom/pointer.c
 # INTERSECTION_OBSERVER.md: DOMRect, IntersectionObserver and ResizeObserver.
 LIBDOM_SRCS += libdom/rect.c libdom/intersection.c libdom/resize.c libdom/kept.c libdom/css.c
 # DOM § 6: TreeWalker, NodeIterator and NodeFilter.

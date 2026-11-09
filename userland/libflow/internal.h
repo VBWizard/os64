@@ -315,15 +315,19 @@ typedef struct FRecord FRecord;
 typedef struct {
     double offset;
     bool has_easing;
-    flow_easing_t easing;
+    garb_easing_t easing;
     const garb_set_t *decls;
     int32_t ndecls;
     int32_t sheet;
     FProps sets;
 } FKeyframe;
 
-// One animation whose @keyframes exist: its timing, its record, its
-// keyframes in their used order, and every longhand any of them sets.
+// One animation: a CSS one whose @keyframes exist, with its record on the
+// timeline, or a script's effect (`script`, garb_effect_t), whose
+// clock is its own and which has no record; its timing (a script's: its
+// duration, delay and iteration count, and the linear easing a keyframe
+// without its own takes), its keyframes in their used order, and every
+// longhand any of them sets.
 // `dropped`: those whose lists found no room in this layout's style
 // (f_motion_style), each left as it was — the base's, or an earlier
 // animation's, which the tree shows — so nothing is due for this one's
@@ -335,6 +339,7 @@ typedef struct {
 typedef struct {
     flow_animation_t timing;
     FRecord *record;
+    const garb_effect_t *script;
     FKeyframe *frames;
     int32_t nframes;
     FProps props;
@@ -351,7 +356,9 @@ typedef struct {
 
 // An element's animations: its style with none of them (each property's
 // underlying value, the implicit keyframes'), and those that run, in
-// `animation-name` order — a later one's value replacing an earlier's.
+// composite order — its CSS animations in `animation-name` order, the
+// first `ncss`, then its script effects in the order they were made — a
+// later one's value replacing an earlier's.
 // `in_place` when every property they set only repaints where the element
 // already draws (f_motion_in_place) — the view's question, not `ticks`.
 // `ticks` when the element's values move between layouts (PILE3.md §
@@ -372,7 +379,7 @@ typedef struct {
 typedef struct {
     flow_style_t base;
     FAnimation *anims;
-    int32_t nanims;
+    int32_t nanims, ncss;
     int32_t text_reach;
     bool in_place;
     bool ticks;
@@ -396,7 +403,7 @@ typedef const FResolved *(*FResolve)(void *ctx, int32_t a, int32_t frame, const 
 int32_t f_animations(const flow_style_t *s);
 flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
 // Easing 1 § 2's output for the input `x`, the before flag `before`.
-double f_ease(const flow_easing_t *e, double x, bool before);
+double garb_ease(const garb_easing_t *e, double x, bool before);
 // The element's style at time `now` (ms): `out`, which holds the base,
 // with each animated property's value — and, when `record`, which of its
 // intervals hold one value (FAnimation.holds) — its keyframes resolved by
@@ -423,7 +430,7 @@ bool f_motion_in_place(const FMotion *m);
 // control points' reach for a Bézier, whose curve lies inside their hull —
 // at least the overshoot, which is all a bound needs — and 0 for the
 // others.
-double f_easing_overshoot(const flow_easing_t *e);
+double f_easing_overshoot(const garb_easing_t *e);
 // Whether every property `m`'s animations set is of the TICK SET, which
 // nothing but painting reads and nothing inherits: the transform's four
 // properties and its origin, opacity, the background's colour and
@@ -466,8 +473,9 @@ typedef enum { F_NEXT_ALL, F_NEXT_EDGES, F_NEXT_VALUES } FNext;
 double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext half);
 // A layout's dealings with the timeline: it begins a timeline of its own
 // beside the one the page shows (`from`, read and never changed; NULL on
-// no memory), each animated element is matched to its records there
-// (Animations 1 § 2) and given records of the new one's — false on no
+// no memory), each animated element's CSS animations (its first `ncss`;
+// a script's effects keep their own clocks) are matched to its records
+// there (Animations 1 § 2) and given records of the new one's — false on no
 // memory — and it ends: a complete layout keeps only what it matched, an
 // incomplete one carries every record it did not match on as it was. The
 // new timeline is the tree's (FStyles.timeline) until the face shows the

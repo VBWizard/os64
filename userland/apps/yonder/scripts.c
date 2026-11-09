@@ -77,6 +77,15 @@ typedef struct {
     void *ctx;
 } Owed;
 
+// The trees standing that may read a binding's script effects, each with
+// the generation it was laid out at (os64_dom_effects_mark); `pinned` when
+// one could not be kept here, and then nothing buried is freed while the
+// binding lives, nor the binding itself once its page goes.
+typedef struct {
+    struct { const void *tree; uint64_t mark; } trees[16];
+    bool pinned;
+} TreeMarks;
+
 struct yonder_scripts {
     os64_html_document_t *doc;
     os64_page_state_t *state;
@@ -154,7 +163,55 @@ struct yonder_scripts {
     // The page's module map, made with its runtime when the Modern Web
     // surface is on: one per document, which is one per realm (IFRAME.md).
     yonder_modules_t *modules;
+    // A binding retired while the page's trees may still read its script
+    // effects (os64_dom_effects_held): drained, its engine gone, and kept
+    // until the scripts go and, past them, until the last of those trees
+    // goes (Orphan).
+    os64_dom_t *retired_dom;
+    // The page's trees standing that were laid out with its effects, with
+    // the generation each was laid out at (yonder_scripts_tree_made).
+    // On s_living while the scripts are, so a tree that goes finds its page.
+    TreeMarks marks;
+    yonder_scripts_t *living_next;
 };
+
+static yonder_scripts_t *s_living;
+
+// A page's binding its scripts outlived: freed when the last tree that
+// may read its effects goes (yonder_scripts_tree_gone).
+typedef struct Orphan Orphan;
+struct Orphan {
+    Orphan *next;
+    os64_dom_t *dom;
+    TreeMarks marks;
+};
+static Orphan *s_orphans;
+
+// What `marks_drop` returns: whether a row was the tree's, and whether any
+// tree is left.
+typedef enum { MARKS_NOT_MINE, MARKS_LEFT, MARKS_EMPTY } MarksDropped;
+
+// Struck the tree's row, released what was buried before the oldest left.
+static MarksDropped marks_drop(TreeMarks *m, os64_dom_t *dom, const void *tree)
+{
+    size_t n = sizeof(m->trees) / sizeof(m->trees[0]), i = 0;
+    while (i < n && m->trees[i].tree != tree)
+        i++;
+    if (i == n)
+        return MARKS_NOT_MINE;
+    m->trees[i].tree = NULL;
+    bool left = m->pinned;
+    uint64_t oldest = UINT64_MAX;
+    for (size_t k = 0; k < n; k++)
+        if (m->trees[k].tree != NULL) {
+            left = true;
+            if (m->trees[k].mark < oldest)
+                oldest = m->trees[k].mark;
+        }
+    if (!m->pinned)
+        os64_dom_effects_release(dom, oldest == UINT64_MAX ? os64_dom_effects_mark(dom) : oldest);
+    return left ? MARKS_LEFT : MARKS_EMPTY;
+}
 
 static void release_item(yonder_scripts_t *s, Item *it)
 {
@@ -199,7 +256,10 @@ static void retire(yonder_scripts_t *s)
                       s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
         os64_debug_log(line);
     }
-    os64_dom_free(s->dom);
+    if (os64_dom_effects_held(s->dom) && s->retired_dom == NULL)
+        s->retired_dom = s->dom;
+    else
+        os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
 }
@@ -627,6 +687,8 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
         return NULL;
     s->doc = doc;
     s->state = state;
+    s->living_next = s_living;
+    s_living = s;
     s->options = *options;
     s->options.url = NULL;
     s->options.timing = NULL;
@@ -669,7 +731,30 @@ void yonder_scripts_free(yonder_scripts_t *s)
 {
     if (s == NULL)
         return;
+    for (yonder_scripts_t **at = &s_living; *at != NULL; at = &(*at)->living_next)
+        if (*at == s) {
+            *at = s->living_next;
+            break;
+        }
     retire(s);
+    // Trees laid out with its effects may still stand (a page's tree goes
+    // after its scripts): the drained binding waits for the last of them.
+    bool standing = s->marks.pinned;
+    for (size_t i = 0; i < sizeof(s->marks.trees) / sizeof(s->marks.trees[0]); i++)
+        standing = standing || s->marks.trees[i].tree != NULL;
+    // A binding no tree could be followed for (pinned), or with no room
+    // to wait, is kept: no moment is known to be safe to free it.
+    if (!standing) {
+        os64_dom_free(s->retired_dom);
+    } else if (s->retired_dom != NULL && !s->marks.pinned) {
+        Orphan *o = os64_calloc(1, sizeof(*o));
+        if (o != NULL) {
+            o->dom = s->retired_dom;
+            o->marks = s->marks;
+            o->next = s_orphans;
+            s_orphans = o;
+        }
+    }
     for (uint32_t i = 0; i < s->count; i++) {
         release_item(s, &s->items[i]);
         os64_free(s->items[i].address);
@@ -1801,6 +1886,69 @@ bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_ou
         return false;
     judged(s, out);
     return true;
+}
+
+uint64_t yonder_scripts_web_animations_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_web_animations_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_web_animations_update(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s != NULL) {
+        s->written = 0;
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead || !os64_dom_web_animations_update(s->dom, now, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+int32_t yonder_scripts_effects(yonder_scripts_t *s, const os64_html_node_t *node,
+                               const struct garb_effect *const **out)
+{
+    *out = NULL;
+    return s != NULL && !s->dead ? os64_dom_script_effects(s->dom, node, out) : 0;
+}
+
+void yonder_scripts_tree_made(yonder_scripts_t *s, const void *tree)
+{
+    if (s == NULL || tree == NULL || s->dead)
+        return;
+    uint64_t mark = os64_dom_effects_mark(s->dom);
+    for (size_t i = 0; i < sizeof(s->marks.trees) / sizeof(s->marks.trees[0]); i++)
+        if (s->marks.trees[i].tree == NULL) {
+            s->marks.trees[i].tree = tree;
+            s->marks.trees[i].mark = mark;
+            return;
+        }
+    s->marks.pinned = true;
+}
+
+void yonder_scripts_tree_gone(const void *tree)
+{
+    if (tree == NULL)
+        return;
+    for (yonder_scripts_t *s = s_living; s != NULL; s = s->living_next) {
+        os64_dom_t *dom = s->dom != NULL ? s->dom : s->retired_dom;
+        if (marks_drop(&s->marks, dom, tree) != MARKS_NOT_MINE)
+            return;
+    }
+    for (Orphan **at = &s_orphans; *at != NULL; at = &(*at)->next) {
+        Orphan *o = *at;
+        MarksDropped d = marks_drop(&o->marks, o->dom, tree);
+        if (d == MARKS_NOT_MINE)
+            continue;
+        if (d == MARKS_EMPTY) {
+            *at = o->next;
+            os64_dom_free(o->dom);
+            os64_free(o);
+        }
+        return;
+    }
 }
 
 bool yonder_scripts_reactions_owed(const yonder_scripts_t *s)

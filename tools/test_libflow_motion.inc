@@ -178,15 +178,15 @@ static double reference_cubic(const double p[4], double x)
 
 static void motion_easing_cases(void)
 {
-    static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
-    static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
+    static const garb_easing_t kEase = {GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
+    static const garb_easing_t kOver = {GARB_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
     // On [0, 1], y at the parameter whose x is the input, found to the
     // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
         double x = i / 100.0;
-        const flow_easing_t *e[2] = {&kEase, &kOver};
+        const garb_easing_t *e[2] = {&kEase, &kOver};
         for (int k = 0; k < 2; k++) {
-            double got = f_ease(e[k], x, false), want = reference_cubic(e[k]->p, x);
+            double got = garb_ease(e[k], x, false), want = reference_cubic(e[k]->p, x);
             if (fabs(got - want) > 1e-6) {
                 char d[96];
                 snprintf(d, sizeof(d), "x %g got %.9f want %.9f", x, got, want);
@@ -203,55 +203,55 @@ static void motion_easing_cases(void)
     };
     bool ends = true;
     for (size_t i = 0; i < sizeof(kFar) / sizeof(kFar[0]) && ends; i++) {
-        flow_easing_t e = {FLOW_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0, false};
-        ends = f_ease(&e, 0, false) == 0 && f_ease(&e, 1, false) == 1;
+        garb_easing_t e = {GARB_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0, false};
+        ends = garb_ease(&e, 0, false) == 0 && garb_ease(&e, 1, false) == 1;
     }
     expect("easing: a cubic's ends are 0 and 1, whatever its controls", ends, NULL);
     // A curve flat in x near an end is solved, not stopped at the first t
     // whose x is near: cubic-bezier(0, 100, 0, 100) at 9.26e-8, about the
     // first 16 ms of two days, is y 1.35, where t = x would say 0.000028.
-    flow_easing_t flat = {FLOW_EASE_CUBIC, {0, 100, 0, 100}, 0, 0, false};
-    double fy = f_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
+    garb_easing_t flat = {GARB_EASE_CUBIC, {0, 100, 0, 100}, 0, 0, false};
+    double fy = garb_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
     char fd[64];
     snprintf(fd, sizeof(fd), "got %.6g want %.6g", fy, fw);
     expect("easing: a curve flat in x near its start is solved", fabs(fy - fw) < 1e-6 && fy > 1, fd);
     // Outside [0, 1], the tangent at the nearer end (§ 2.2.1): through
     // P0 and P1 below, P2 and P3 above.
     expect("easing: below 0, the line through P0 and P1",
-           fabs(f_ease(&kOver, -0.5, false) - 0.86 / 0.2 * -0.5) < 1e-12, NULL);
+           fabs(garb_ease(&kOver, -0.5, false) - 0.86 / 0.2 * -0.5) < 1e-12, NULL);
     expect("easing: above 1, the line through P2 and P3",
-           fabs(f_ease(&kOver, 1.5, false) - (1 + (1.22 - 1) / (0.32 - 1) * 0.5)) < 1e-12, NULL);
+           fabs(garb_ease(&kOver, 1.5, false) - (1 + (1.22 - 1) / (0.32 - 1) * 0.5)) < 1e-12, NULL);
     // With x1 at 0, below 0 the line through P0 and P2; with both at 0,
     // and above 1 with both at 1, no line: the end's own value.
-    static const flow_easing_t kX2 = {FLOW_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0, false};
-    static const flow_easing_t kLow = {FLOW_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0, false};
-    static const flow_easing_t kHigh = {FLOW_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0, false};
+    static const garb_easing_t kX2 = {GARB_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0, false};
+    static const garb_easing_t kLow = {GARB_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0, false};
+    static const garb_easing_t kHigh = {GARB_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0, false};
     expect("easing: below 0 with x1 at 0, the line through P0 and P2",
-           f_ease(&kX2, -1, false) == -0.5, NULL);
+           garb_ease(&kX2, -1, false) == -0.5, NULL);
     expect("easing: with both x at an end, past it the end's value",
-           f_ease(&kLow, -1, false) == 0 && f_ease(&kHigh, 2, false) == 1, NULL);
+           garb_ease(&kLow, -1, false) == 0 && garb_ease(&kHigh, 2, false) == 1, NULL);
     // Steps (§ 2.3.1): the examples' table.
-    static const flow_easing_t kEnd = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_END, false};
-    static const flow_easing_t kStart = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_START, false};
-    static const flow_easing_t kNone = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_NONE, false};
-    static const flow_easing_t kBoth = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_BOTH, false};
+    static const garb_easing_t kEnd = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_END, false};
+    static const garb_easing_t kStart = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_START, false};
+    static const garb_easing_t kNone = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_NONE, false};
+    static const garb_easing_t kBoth = {GARB_EASE_STEPS, {0}, 4, GARB_JUMP_BOTH, false};
     expect("easing: jump-end steps at each quarter, from 0",
-           f_ease(&kEnd, 0, false) == 0 && f_ease(&kEnd, 0.24, false) == 0 &&
-           f_ease(&kEnd, 0.25, false) == 0.25 && f_ease(&kEnd, 0.99, false) == 0.75 &&
-           f_ease(&kEnd, 1, false) == 1, NULL);
+           garb_ease(&kEnd, 0, false) == 0 && garb_ease(&kEnd, 0.24, false) == 0 &&
+           garb_ease(&kEnd, 0.25, false) == 0.25 && garb_ease(&kEnd, 0.99, false) == 0.75 &&
+           garb_ease(&kEnd, 1, false) == 1, NULL);
     expect("easing: jump-start steps first, and holds at 1",
-           f_ease(&kStart, 0, false) == 0.25 && f_ease(&kStart, 0.5, false) == 0.75 &&
-           f_ease(&kStart, 1, false) == 1, NULL);
+           garb_ease(&kStart, 0, false) == 0.25 && garb_ease(&kStart, 0.5, false) == 0.75 &&
+           garb_ease(&kStart, 1, false) == 1, NULL);
     expect("easing: jump-none takes no step at either end",
-           f_ease(&kNone, 0, false) == 0 && f_ease(&kNone, 0.25, false) == 1.0 / 3 &&
-           f_ease(&kNone, 1, false) == 1, NULL);
+           garb_ease(&kNone, 0, false) == 0 && garb_ease(&kNone, 0.25, false) == 1.0 / 3 &&
+           garb_ease(&kNone, 1, false) == 1, NULL);
     expect("easing: jump-both steps at both ends",
-           f_ease(&kBoth, 0, false) == 0.2 && f_ease(&kBoth, 0.99, false) == 0.8 &&
-           f_ease(&kBoth, 1, false) == 1, NULL);
+           garb_ease(&kBoth, 0, false) == 0.2 && garb_ease(&kBoth, 0.99, false) == 0.8 &&
+           garb_ease(&kBoth, 1, false) == 1, NULL);
     // The before flag holds the bottom of a step at its own edge.
     expect("easing: the before flag holds the bottom of the step",
-           f_ease(&kStart, 0, true) == 0 && f_ease(&kEnd, 0.5, true) == 0.25 &&
-           f_ease(&kEnd, 0.5, false) == 0.5, NULL);
+           garb_ease(&kStart, 0, true) == 0 && garb_ease(&kEnd, 0.5, true) == 0.25 &&
+           garb_ease(&kEnd, 0.5, false) == 0.5, NULL);
 }
 
 // ── Chrome's answers (PILE3.md § Animations, What Chrome draws) ─────────
@@ -1457,7 +1457,7 @@ static void timed(FAnimation *an, const char *name, double ms)
 // When an animation that holds still ends: its start, told by its record.
 static double motion_end(FAnimation *an, double now)
 {
-    FMotion alone = {.anims = an, .nanims = 1};
+    FMotion alone = {.anims = an, .nanims = 1, .ncss = 1};
     return layout_next(&alone, now, NULL);
 }
 
@@ -1538,8 +1538,8 @@ static void motion_timeline_cases(void)
     memset(an, 0, sizeof(an));
     for (int i = 0; i < 2; i++)
         timed(&an[i], "a", 10000);
-    FMotion one = {.anims = an, .nanims = 1};
-    FMotion two = {.anims = an, .nanims = 2};
+    FMotion one = {.anims = an, .nanims = 1, .ncss = 1};
+    FMotion two = {.anims = an, .nanims = 2, .ncss = 2};
     bool ok = timeline_layout(&tl, 1000, true, 1, (Meet[]){{x, &one}}) &&
               timeline_layout(&tl, 2000, true, 1, (Meet[]){{x, &two}});
     expect("motion: a to a, a keeps a as the second",
@@ -1557,7 +1557,7 @@ static void motion_timeline_cases(void)
     FAnimation g;
     memset(&g, 0, sizeof(g));
     timed(&g, "g", 10000);
-    FMotion gm = {.anims = &g, .nanims = 1};
+    FMotion gm = {.anims = &g, .nanims = 1, .ncss = 1};
     flow_timeline_t *gt = flow_timeline_new(doc);
     ok = timeline_layout(&gt, 20000, true, 1, (Meet[]){{z, &gm}});
     flow_timeline_t *short_of = f_timeline_begin(gt);
@@ -1580,7 +1580,7 @@ static void motion_timeline_cases(void)
     memset(ua, 0, sizeof(ua));
     timed(&ua[0], "r", 1000);
     timed(&ua[1], "s", 1000);
-    FMotion uone = {.anims = ua, .nanims = 1}, utwo = {.anims = ua, .nanims = 2};
+    FMotion uone = {.anims = ua, .nanims = 1, .ncss = 1}, utwo = {.anims = ua, .nanims = 2, .ncss = 2};
     flow_timeline_t *ut = flow_timeline_new(doc);
     ok = timeline_layout(&ut, 40000, true, 1, (Meet[]){{z, &uone}});
     ua[0].timing.paused = true;
@@ -1601,7 +1601,7 @@ static void motion_timeline_cases(void)
     memset(&p, 0, sizeof(p));
     timed(&p, "p", 1000);
     p.timing.paused = true;
-    FMotion paused = {.anims = &p, .nanims = 1};
+    FMotion paused = {.anims = &p, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 5000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: paused, nothing is due", ok && isinf(layout_next(&paused, 5000, NULL)), NULL);
     p.timing.paused = false;
@@ -1614,7 +1614,7 @@ static void motion_timeline_cases(void)
     FAnimation r;
     memset(&r, 0, sizeof(r));
     timed(&r, "r", 1000);
-    FMotion running = {.anims = &r, .nanims = 1};
+    FMotion running = {.anims = &r, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 11000, true, 1, (Meet[]){{y, &running}});
     r.timing.paused = true;
     ok = ok && timeline_layout(&tl, 11300, true, 1, (Meet[]){{y, &running}});
@@ -1633,8 +1633,8 @@ static void motion_timeline_cases(void)
     memset(two_names, 0, sizeof(two_names));
     timed(&two_names[0], "a", 10000);
     timed(&two_names[1], "b", 10000);
-    FMotion just_a = {.anims = two_names, .nanims = 1};
-    FMotion a_and_b = {.anims = two_names, .nanims = 2};
+    FMotion just_a = {.anims = two_names, .nanims = 1, .ncss = 1};
+    FMotion a_and_b = {.anims = two_names, .nanims = 2, .ncss = 2};
     ok = timeline_layout(&tl, 15000, true, 1, (Meet[]){{x, &just_a}}) &&
          timeline_layout(&tl, 16000, false, 1, (Meet[]){{x, &a_and_b}});
     int32_t carried_on = f_timeline_records(tl);
@@ -1649,7 +1649,7 @@ static void motion_timeline_cases(void)
     FAnimation u;
     memset(&u, 0, sizeof(u));
     timed(&u, "u", 1000);
-    FMotion pausing = {.anims = &u, .nanims = 1};
+    FMotion pausing = {.anims = &u, .nanims = 1, .ncss = 1};
     ok = timeline_layout(&tl, 18000, true, 2, (Meet[]){{y, &pausing}, {x, &just_a}});
     int32_t kept_records = f_timeline_records(tl), kept_elements = f_timeline_elements(tl);
     u.timing.paused = true;
@@ -1678,15 +1678,15 @@ static void motion_timeline_cases(void)
     FAnimation *many = calloc(kMany, sizeof(*many));
     for (int i = 0; i < kMany; i++)
         timed(&many[i], i % 2 ? "b" : "a", 100000);
-    FMotion first = {.anims = many, .nanims = kMany / 2};
-    FMotion lots = {.anims = many, .nanims = kMany};
+    FMotion first = {.anims = many, .nanims = kMany / 2, .ncss = kMany / 2};
+    FMotion lots = {.anims = many, .nanims = kMany, .ncss = kMany};
     flow_timeline_t *mt = flow_timeline_new(doc);
     ok = timeline_layout(&mt, 20000, true, 1, (Meet[]){{x, &first}}) &&
          timeline_layout(&mt, 21000, true, 1, (Meet[]){{x, &lots}});
     bool kept = ok && f_timeline_records(mt) == kMany;
     for (int i = 0; kept && i < kMany; i++)
         kept = motion_end(&many[i], 21000) == (i < kMany / 2 ? 121000 : 120000);
-    FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2};
+    FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2, .ncss = kMany / 2};
     ok = ok && timeline_layout(&mt, 22000, true, 1, (Meet[]){{x, &half}});
     for (int i = 0; kept && i < kMany / 2; i++)
         kept = motion_end(&many[kMany / 2 + i], 22000) == 120000;
@@ -2075,15 +2075,15 @@ static void motion_due_cases(void)
     }
     static const struct {
         const char *name;
-        flow_easing_t e;
+        garb_easing_t e;
         double over;
     } kOvershoot[] = {
-        {"overshoot: none for linear", {FLOW_EASE_LINEAR, {0}, 0, FLOW_JUMP_END, false}, 0},
-        {"overshoot: none for steps", {FLOW_EASE_STEPS, {0.5, 3, 0.5, -2}, 2, FLOW_JUMP_END, false}, 0},
-        {"overshoot: none for a curve that stays inside", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}, 0},
-        {"overshoot: past 1 by the higher control point", {FLOW_EASE_CUBIC, {0.1, 1.2, 0.2, 1.6}, 0, FLOW_JUMP_END, false}, 0.6},
-        {"overshoot: below 0 by the lower control point", {FLOW_EASE_CUBIC, {0.1, -0.7, 0.2, -0.2}, 0, FLOW_JUMP_END, false}, 0.7},
-        {"overshoot: the farther of the two sides", {FLOW_EASE_CUBIC, {0.1, -0.3, 0.2, 1.2}, 0, FLOW_JUMP_END, false}, 0.3},
+        {"overshoot: none for linear", {GARB_EASE_LINEAR, {0}, 0, GARB_JUMP_END, false}, 0},
+        {"overshoot: none for steps", {GARB_EASE_STEPS, {0.5, 3, 0.5, -2}, 2, GARB_JUMP_END, false}, 0},
+        {"overshoot: none for a curve that stays inside", {GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, GARB_JUMP_END, true}, 0},
+        {"overshoot: past 1 by the higher control point", {GARB_EASE_CUBIC, {0.1, 1.2, 0.2, 1.6}, 0, GARB_JUMP_END, false}, 0.6},
+        {"overshoot: below 0 by the lower control point", {GARB_EASE_CUBIC, {0.1, -0.7, 0.2, -0.2}, 0, GARB_JUMP_END, false}, 0.7},
+        {"overshoot: the farther of the two sides", {GARB_EASE_CUBIC, {0.1, -0.3, 0.2, 1.2}, 0, GARB_JUMP_END, false}, 0.3},
     };
     for (size_t i = 0; i < sizeof(kOvershoot) / sizeof(*kOvershoot); i++) {
         double got = f_easing_overshoot(&kOvershoot[i].e);
@@ -2567,27 +2567,27 @@ static int fuzz_below(FuzzRng *r, int n)
     return k < n ? k : n - 1;
 }
 
-static flow_easing_t fuzz_easing(FuzzRng *r)
+static garb_easing_t fuzz_easing(FuzzRng *r)
 {
     // Ten, the last two the domain's limit, which a page's 1e308 is held
     // at: kFuzzRegressions' seeds were found against a table this long.
     static const double kY[] = {-1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, GARB_EASING_Y_MAX,
                                 -GARB_EASING_Y_MAX};
-    flow_easing_t e;
+    garb_easing_t e;
     memset(&e, 0, sizeof(e));
     switch (fuzz_below(r, 4)) {
     case 0:
-        e.kind = FLOW_EASE_LINEAR;
+        e.kind = GARB_EASE_LINEAR;
         break;
     case 1:
-        e.kind = FLOW_EASE_STEPS;
-        e.jump = (flow_jump_t)fuzz_below(r, 4);
+        e.kind = GARB_EASE_STEPS;
+        e.jump = (garb_jump_t)fuzz_below(r, 4);
         e.steps = 1 + fuzz_below(r, 5);
-        if (e.jump == FLOW_JUMP_NONE && e.steps < 2)
+        if (e.jump == GARB_JUMP_NONE && e.steps < 2)
             e.steps = 2;
         break;
     default:
-        e.kind = FLOW_EASE_CUBIC;
+        e.kind = GARB_EASE_CUBIC;
         e.p[0] = fuzz_unit(r);
         e.p[2] = fuzz_unit(r);
         e.p[1] = kY[fuzz_below(r, 10)];
@@ -2642,8 +2642,8 @@ static bool fuzz_animation(FuzzRng *r, int kind, const flow_style_t *base, const
     an->timing.duration_ms = fuzz_below(r, 20) == 0 ? 0 : 100 + fuzz_below(r, 900);
     an->timing.delay_ms = (fuzz_below(r, 1600) - 800) + (fuzz_below(r, 2) ? 0.5 : 0);
     an->timing.iterations = kIterations[fuzz_below(r, 7)];
-    an->timing.direction = (flow_direction_t)fuzz_below(r, 4);
-    an->timing.fill = (flow_fill_t)fuzz_below(r, 4);
+    an->timing.direction = (garb_direction_t)fuzz_below(r, 4);
+    an->timing.fill = (garb_fill_t)fuzz_below(r, 4);
     an->timing.easing = fuzz_easing(r);
     int nk = 1 + fuzz_below(r, FUZZ_FRAMES);
     double offsets[FUZZ_FRAMES];
@@ -2766,6 +2766,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     int horizon = 200;
@@ -2815,14 +2816,14 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
         fprintf(stderr, "  base %u\n", fuzz_get(&base, kind));
         for (int a = 0; a < nanims; a++) {
             const flow_animation_t *tm = &an[a].timing;
-            const flow_easing_t *ae = &tm->easing;
+            const garb_easing_t *ae = &tm->easing;
             fprintf(stderr, "  %s: dur %g delay %g iter %g dir %d fill %d easing %d [%g %g %g %g] "
                     "steps %d jump %d\n", tm->name.text, tm->duration_ms, tm->delay_ms, tm->iterations,
                     tm->direction, tm->fill, ae->kind, ae->p[0], ae->p[1], ae->p[2], ae->p[3], ae->steps,
                     ae->jump);
             for (int j = 0; j < an[a].nframes; j++) {
                 const FKeyframe *f = &an[a].frames[j];
-                const flow_easing_t *fe = &f->easing;
+                const garb_easing_t *fe = &f->easing;
                 fprintf(stderr, "    frame %g: %u", f->offset, fuzz_get(&hands[a][j].r.style, kind));
                 if (f->has_easing)
                     fprintf(stderr, " easing %d [%g %g %g %g] steps %d jump %d", fe->kind, fe->p[0],
@@ -2935,6 +2936,7 @@ static void motion_list_case_cases(void)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(lm.p.doc, motion_find(lm.p.doc->document, "v0"), &m, 0, &ok);
     Hand *const by[2] = {hands[0], hands[1]};
@@ -3135,6 +3137,7 @@ static void motion_dropped_cases(void)
     m.base = base;
     m.anims = &an;
     m.nanims = 1;
+    m.ncss = m.nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     Hand *const by[1] = {hands};
@@ -4398,6 +4401,7 @@ static void motion_entries_cases(void)
         {"one in view", "<span class=s></span>", 1, true, true, true},
         {"one below the view", "<div style='height:2000px'></div><span class=s></span>", 1, true, true, false},
         {"one display:none ends", "<div style='display:none'><span class=s></span></div>", 0, false, false, false},
+        {"one display:none itself ends", "<span class=s style='display:none'></span>", 0, false, false, false},
         {"one that is contents and holds nothing", "<span class=s style='display:contents'></span>", 1, false,
          false, false},
         {"one that is contents around a box", "<span class=s style='display:contents'><b>x</b></span>", 1, false,

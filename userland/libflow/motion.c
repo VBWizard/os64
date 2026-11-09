@@ -1,7 +1,8 @@
 // motion.c — animations (PILE3.md § Animations): the timeline that keeps
-// them across layouts, Web Animations 1's clock, Easing 1's curves, a
-// keyframe effect's value property by property by its animation type, and
-// the matrices Transforms 1 and 2 interpolate.
+// them across layouts, a keyframe effect's value property by property by
+// its animation type, and the matrices Transforms 1 and 2 interpolate.
+// Web Animations 1's clock and Easing 1's curves are libgarb's
+// (garb/timing.h), shared with libdom's animations.
 //
 // Nothing here is built from a frame before: a value is worked from its
 // keyframes and the time, every time (the contracts, PILE3.md § Animations,
@@ -33,166 +34,31 @@ flow_animation_t f_animation_at(const flow_style_t *s, int32_t i)
     r.delay_ms = a->ndelay > 0 ? a->delay[i % a->ndelay] : 0;
     // `ease`, the initial easing.
     r.easing = a->neasing > 0 ? a->easing[i % a->neasing]
-                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
+                              : (garb_easing_t){GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
     r.iterations = a->niterations > 0 ? a->iterations[i % a->niterations] : 1;
-    r.direction = a->ndirection > 0 ? a->direction[i % a->ndirection] : FLOW_DIRECTION_NORMAL;
-    r.fill = a->nfill > 0 ? a->fill[i % a->nfill] : FLOW_FILL_NONE;
+    r.direction = a->ndirection > 0 ? a->direction[i % a->ndirection] : GARB_DIRECTION_NORMAL;
+    r.fill = a->nfill > 0 ? a->fill[i % a->nfill] : GARB_FILL_NONE;
     r.paused = a->npaused > 0 && a->paused[i % a->npaused];
     return r;
 }
 
-// ── Easing (Easing 1 § 2) ───────────────────────────────────────────────
+// ── The clock (garb/timing.h) ──────────────────────────────────────────
 
-// A cubic Bézier's x or y at t, the curve from 0 to 1 through p1 and p2.
-static double bezier(double p1, double p2, double t)
+// A CSS animation at local time `local`: Web Animations 1's clock, which
+// libgarb keeps for libdom's animations too, with what CSS has none of —
+// no end delay, no iteration start, an effect easing that is linear (the
+// animation-timing-function eases each keyframe interval, eased()), and a
+// clock that only runs forwards.
+static garb_clock_t clock_at(const flow_animation_t *a, double local)
 {
-    double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;
-    return ((a * t + b) * t + c) * t;
-}
-
-// The curve's y at t, in Bernstein form, each control weighted by its own
-// polynomial: the power form's coefficients are millions when the controls
-// are, and their rounding moves the curve's ends off 0 and 1, where these
-// weights are 0 at t = 0 and 1 at t = 1 exactly. The controls are held to
-// the domain (values.h), so no product leaves a double.
-static double bezier_y(double p1, double p2, double t)
-{
-    double u = 1 - t, v = t;
-    return 3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v;
-}
-
-// The curve's y at the parameter whose x is `x`: the least t with x(t) at
-// or past it, found by halving [0, 1] until no double lies between the
-// halves (x(t) never falls, since x1 and x2 are in [0, 1]). Never stopped
-// at the first t whose x is near: a curve flat in x near an end is solved
-// — cubic-bezier(0, 100, 0, 100) at 9.26e-8 is y 1.35, where t = x would
-// say 0.000028.
-static double cubic(const double p[4], double x)
-{
-    // The ends are the curve's ends: no halving finds t = 0 for x = 0, nor
-    // keeps t = 1 for x = 1 where x(t) rounds to 1 a hair before it.
-    if (x <= 0)
-        return 0;
-    if (x >= 1)
-        return 1;
-    double lo = 0, hi = 1;
-    for (int i = 0; i < 1100; i++) {
-        double mid = lo + (hi - lo) / 2;
-        if (!(mid > lo && mid < hi))
-            break;
-        if (bezier(p[0], p[2], mid) < x)
-            lo = mid;
-        else
-            hi = mid;
-    }
-    return bezier_y(p[1], p[3], hi);
-}
-
-double f_ease(const flow_easing_t *e, double x, bool before)
-{
-    if (e == NULL || e->kind == FLOW_EASE_LINEAR)
-        return x;
-    if (e->kind == FLOW_EASE_CUBIC) {
-        const double *p = e->p;
-        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1). A CSS
-        // animation never asks there: its x is a fraction of the interval
-        // it is in (eased()).
-        if (x < 0) {
-            if (p[0] > 0)
-                return p[1] / p[0] * x;
-            if (p[2] > 0)
-                return p[3] / p[2] * x;
-            return 0;
-        }
-        if (x > 1) {
-            if (p[2] < 1)
-                return 1 + (p[3] - 1) / (p[2] - 1) * (x - 1);
-            if (p[0] < 1)
-                return 1 + (p[1] - 1) / (p[0] - 1) * (x - 1);
-            return 1;
-        }
-        return cubic(p, x);
-    }
-    // Steps (§ 2.3.1).
-    double n = e->steps > 0 ? e->steps : 1;
-    double step = floor(x * n);
-    if (e->jump == FLOW_JUMP_START || e->jump == FLOW_JUMP_BOTH)
-        step += 1;
-    if (before && fmod(x * n, 1.0) == 0)
-        step -= 1;
-    if (x >= 0 && step < 0)
-        step = 0;
-    double jumps = e->jump == FLOW_JUMP_NONE ? n - 1 : e->jump == FLOW_JUMP_BOTH ? n + 1 : n;
-    if (x <= 1 && step > jumps)
-        step = jumps;
-    return step / jumps;
-}
-
-// ── The clock (Web Animations 1 § 4.6, § 4.7) ───────────────────────────
-
-typedef enum { PHASE_BEFORE, PHASE_ACTIVE, PHASE_AFTER } Phase;
-
-typedef struct {
-    Phase phase;
-    double before_end, active_end;  // the boundaries, in local time
-    bool in_effect;                 // it has an active time: it shows a value
-    double progress;                // the iteration progress, directed
-    double iteration;               // the current iteration's index
-    double iteration_start;         // where that iteration starts, in local time
-    bool forwards;                  // the current direction
-    bool before;                    // the easing's before flag (§ 4.7.7)
-} Clock;
-
-static bool current_forwards(const flow_animation_t *a, double iteration)
-{
-    switch (a->direction) {
-    case FLOW_DIRECTION_NORMAL: return true;
-    case FLOW_DIRECTION_REVERSE: return false;
-    default: {
-        double d = iteration + (a->direction == FLOW_DIRECTION_ALTERNATE_REVERSE);
-        return isinf(d) || fmod(d, 2) == 0;
-    }
-    }
-}
-
-static Clock clock_at(const flow_animation_t *a, double local)
-{
-    Clock k;
-    os64_memset(&k, 0, sizeof(k));
-    double dur = a->duration_ms > 0 ? a->duration_ms : 0;
-    double count = a->iterations > 0 ? a->iterations : 0;
-    double active = dur == 0 || count == 0 ? 0 : dur * count;
-    double delay = a->delay_ms;
-    double end = fmax(delay + active, 0);
-    k.before_end = fmax(fmin(delay, end), 0);
-    k.active_end = fmax(fmin(delay + active, end), 0);
-    // Forwards, and the active interval's end not in it.
-    k.phase = local < k.before_end ? PHASE_BEFORE
-            : local >= k.active_end ? PHASE_AFTER : PHASE_ACTIVE;
-    double at;
-    if (k.phase == PHASE_BEFORE) {
-        if (a->fill != FLOW_FILL_BACKWARDS && a->fill != FLOW_FILL_BOTH)
-            return k;
-        at = fmax(local - delay, 0);
-    } else if (k.phase == PHASE_ACTIVE) {
-        at = local - delay;
-    } else {
-        if (a->fill != FLOW_FILL_FORWARDS && a->fill != FLOW_FILL_BOTH)
-            return k;
-        at = fmax(fmin(local - delay, active), 0);
-    }
-    k.in_effect = true;
-    double overall = dur == 0 ? (k.phase == PHASE_BEFORE ? 0 : count) : at / dur;
-    double simple = isinf(overall) ? 0 : fmod(overall, 1.0);
-    if (simple == 0 && k.phase != PHASE_BEFORE && at == active && count != 0)
-        simple = 1;
-    k.iteration = k.phase == PHASE_AFTER && isinf(count) ? INFINITY
-                : simple == 1 ? floor(overall) - 1 : floor(overall);
-    k.iteration_start = isinf(k.iteration) ? INFINITY : delay + k.iteration * dur;
-    k.forwards = current_forwards(a, k.iteration);
-    k.progress = k.forwards ? simple : 1 - simple;
-    k.before = (k.phase == PHASE_BEFORE && k.forwards) || (k.phase == PHASE_AFTER && !k.forwards);
-    return k;
+    garb_timing_t t;
+    os64_memset(&t, 0, sizeof(t));
+    t.duration_ms = a->duration_ms;
+    t.delay_ms = a->delay_ms;
+    t.iterations = a->iterations;
+    t.direction = a->direction;
+    t.fill = a->fill;
+    return garb_clock_at(&t, local, false);
 }
 
 // ── The timeline ────────────────────────────────────────────────────────
@@ -305,6 +171,46 @@ static double local_time(const FRecord *r, double now)
     return r->paused ? r->hold : now - r->start;
 }
 
+// ── An animation's clock, CSS or script ─────────────────────────────────
+
+// Whether it has a clock: a CSS animation once the timeline gave it a
+// record, a script's effect always.
+static bool anim_live(const FAnimation *an)
+{
+    return an->record != NULL || an->script != NULL;
+}
+
+// Whether its clock stands still: a paused CSS animation, a held script
+// one, or one whose rate is 0.
+static bool anim_paused(const FAnimation *an)
+{
+    if (an->script != NULL)
+        return an->script->held || an->script->rate == 0;
+    return an->record->paused;
+}
+
+// Where it is at `now`. A script effect's clock may run at any rate and
+// either way, and its timing is Web Animations 1's whole (garb_timing_t).
+static garb_clock_t anim_clock(const FAnimation *an, double now)
+{
+    if (an->script != NULL) {
+        const garb_effect_t *x = an->script;
+        double local = x->held ? x->hold_ms : (now - x->start_ms) * x->rate;
+        return garb_clock_at(&x->timing, local, !x->held && x->rate < 0);
+    }
+    return clock_at(&an->timing, local_time(an->record, now));
+}
+
+// The time on the face's clock its local time 0 is at, for a clock that
+// runs forwards at rate 1, whose edges are then that time plus their local
+// times; NAN for any other, whose changes are due at once while it runs.
+static double anim_base(const FAnimation *an)
+{
+    if (an->script != NULL)
+        return an->script->rate == 1 ? an->script->start_ms : NAN;
+    return an->record->start;
+}
+
 // A name with its order in its list — a record's place, or a name's index
 // — and the record it is or is matched to.
 typedef struct {
@@ -350,7 +256,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     int32_t nold = 0;
     for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
         nold++;
-    int32_t total = nold + m->nanims;
+    int32_t total = nold + m->ncss;
     Named few[32], *buf = few;
     if (2 * total > F_ARRAY(few) &&
         (buf = os64_malloc((size_t)2 * (size_t)total * sizeof(*buf))) == NULL)
@@ -359,11 +265,11 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     int32_t k = 0;
     for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
         old[k++] = (Named){r->name, r->len, r->place, r};
-    for (int32_t i = 0; i < m->nanims; i++)
+    for (int32_t i = 0; i < m->ncss; i++)
         names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
     sort_named(old, tmp, nold);
-    sort_named(names, tmp, m->nanims);
-    for (int32_t a = nold - 1, b = m->nanims - 1; a >= 0 && b >= 0;) {
+    sort_named(names, tmp, m->ncss);
+    for (int32_t a = nold - 1, b = m->ncss - 1; a >= 0 && b >= 0;) {
         int32_t c = name_cmp(&old[a], &names[b]);
         if (c > 0) {
             a--;                // a record whose name is gone
@@ -378,7 +284,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     // Each name gets a record of this layout's: a matched one carries its
     // record's times on, and one matched to nothing starts now.
     bool ok = true;
-    for (int32_t b = 0; ok && b < m->nanims; b++) {
+    for (int32_t b = 0; ok && b < m->ncss; b++) {
         FAnimation *an = &m->anims[names[b].order];
         const FRecord *was = names[b].record;
         FRecord *r = record_add(t, n, an->timing.name.text, an->timing.name.len, was);
@@ -407,7 +313,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     if (!ok)
         return false;
     FRecord *head = NULL;
-    for (int32_t i = m->nanims - 1; i >= 0; i--) {
+    for (int32_t i = m->ncss - 1; i >= 0; i--) {
         m->anims[i].record->next = head;
         head = m->anims[i].record;
     }
@@ -2027,7 +1933,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
 typedef struct {
     const flow_style_t *style;
     double offset;
-    const flow_easing_t *easing;
+    const garb_easing_t *easing;
     bool implicit;
     int32_t frame;
 } Frame;
@@ -2051,7 +1957,7 @@ typedef struct {
 // allocation a value could fail on.
 static Frame line_frame(const Line *l, int32_t i)
 {
-    const flow_easing_t *own = &l->an->timing.easing;
+    const garb_easing_t *own = &l->an->timing.easing;
     if (!l->at0) {
         if (i == 0)
             return (Frame){l->under, 0, own, true, -1};
@@ -2118,7 +2024,7 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
 {
     double span = end->offset - start->offset;
     double x = span != 0 ? (progress - start->offset) / span : 1;
-    return f_ease(start->easing, x, before);
+    return garb_ease(start->easing, x, before);
 }
 
 // The look a walk (motion_walk) makes: its time, the style the values are
@@ -2181,9 +2087,9 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
             follow_colour(look->out);
         for (int32_t a = 0; a < m->nanims; a++) {
             const FAnimation *an = &m->anims[a];
-            if (an->record == NULL)
+            if (!anim_live(an))
                 continue;
-            Clock k = clock_at(&an->timing, local_time(an->record, look->now));
+            garb_clock_t k = anim_clock(an, look->now);
             if (!k.in_effect)
                 continue;
             bool held = false;
@@ -2265,11 +2171,11 @@ uint8_t f_motion_effects(const FMotion *m, double now)
     uint8_t bits = 0;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL)
+        if (!anim_live(an))
             continue;
-        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        garb_clock_t k = anim_clock(an, now);
         // Current — before or in its active phase — or in effect.
-        if (k.phase == PHASE_AFTER && !k.in_effect)
+        if (k.phase == GARB_PHASE_AFTER && !k.in_effect)
             continue;
         for (int p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&an->props, (garb_prop_t)p))
@@ -2289,7 +2195,7 @@ uint8_t f_motion_effects(const FMotion *m, double now)
 
 // The earliest local time after `local` at which progress `p` of the
 // current iteration comes round, the iteration running as `k` says.
-static double at_progress(const Clock *k, const flow_animation_t *a, double p)
+static double at_progress(const garb_clock_t *k, const flow_animation_t *a, double p)
 {
     double dur = a->duration_ms;
     return k->iteration_start + (k->forwards ? p : 1 - p) * dur;
@@ -2314,9 +2220,9 @@ static bool repaints_in_place(garb_prop_t p)
     }
 }
 
-double f_easing_overshoot(const flow_easing_t *e)
+double f_easing_overshoot(const garb_easing_t *e)
 {
-    if (e->kind != FLOW_EASE_CUBIC)
+    if (e->kind != GARB_EASE_CUBIC)
         return 0;
     double lo = fmin(e->p[1], e->p[3]), hi = fmax(e->p[1], e->p[3]);
     return fmax(0, fmax(-lo, hi - 1));
@@ -2410,7 +2316,7 @@ void f_motion_take(const FMotion *m, flow_style_t *live, const flow_style_t *wor
 // When a change at time `at` first shows, after `now`: the millisecond it
 // falls in — or, for one at `now` itself, the next, since a value falling
 // through an edge (running backwards, the before flag is clear in the
-// active phase, Web Animations 1 § 4.7.7) changes just past it. INFINITY
+// active phase, Web Animations 1 § 4.10.1) changes just past it. INFINITY
 // for a change already shown. Inside the domain (values.h) the clock's
 // arithmetic places an edge on the millisecond its value changes in; the
 // fuzzer at the domain's edge is the referee.
@@ -2422,7 +2328,7 @@ static double change_due(double at, double now)
 
 // When a change at progress `p` of the current iteration shows
 // (change_due).
-static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
+static double edge_due(const garb_clock_t *k, const flow_animation_t *a, double base, double p, double now)
 {
     return change_due(base + at_progress(k, a, p), now);
 }
@@ -2465,9 +2371,9 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
         last[p] = -1;
     for (int32_t a = m->nanims - 1; a >= 0; a--) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL)
+        if (!anim_live(an))
             continue;
-        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        garb_clock_t k = anim_clock(an, now);
         if (!k.in_effect)
             continue;
         for (int p = 0; p < GARB_NPROPS; p++) {
@@ -2485,16 +2391,24 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last, only))
+        if (!anim_live(an) || anim_paused(an) || !anim_shows(an, a, last, only))
             continue;
-        double base = an->record->start;
-        Clock k = clock_at(&an->timing, local_time(an->record, now));
-        if (k.phase == PHASE_BEFORE) {
+        double base = anim_base(an);
+        garb_clock_t k = anim_clock(an, now);
+        // A clock at another rate, or running backwards, is due at once
+        // until it is past its active phase the way it runs.
+        if (isnan(base)) {
+            if (!(k.phase == GARB_PHASE_AFTER && an->script->rate > 0) &&
+                !(k.phase == GARB_PHASE_BEFORE && an->script->rate < 0))
+                next = now;
+            continue;
+        }
+        if (k.phase == GARB_PHASE_BEFORE) {
             if (half != F_NEXT_VALUES)
                 next = fmin(next, change_due(base + k.before_end, now));
             continue;
         }
-        if (k.phase == PHASE_AFTER)
+        if (k.phase == GARB_PHASE_AFTER)
             continue;
         if (half != F_NEXT_VALUES)
             next = fmin(next, change_due(base + k.active_end, now));
@@ -2507,11 +2421,12 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
     // anything else now.
     for (int32_t a = 0; half != F_NEXT_EDGES && a < m->nanims && next > now; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->paused)
+        if (!anim_live(an) || anim_paused(an))
             continue;
-        Clock k = clock_at(&an->timing, local_time(an->record, now));
-        if (k.phase != PHASE_ACTIVE)
+        garb_clock_t k = anim_clock(an, now);
+        if (k.phase != GARB_PHASE_ACTIVE)
             continue;
+        double base = anim_base(an);
         for (int p = 0; p < GARB_NPROPS && next > now; p++) {
             if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
                 f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a ||
@@ -2520,8 +2435,9 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
             Frame s, e;
             interval(an, NULL, (garb_prop_t)p, k.progress, &s, &e);
             next = f_props_has(&an->holds, (garb_prop_t)p)
-                       ? fmin(next, edge_due(&k, &an->timing, an->record->start,
-                                             k.forwards ? e.offset : s.offset, now))
+                       ? (isnan(base) ? now
+                                      : fmin(next, edge_due(&k, &an->timing, base,
+                                                            k.forwards ? e.offset : s.offset, now)))
                        : now;
         }
     }

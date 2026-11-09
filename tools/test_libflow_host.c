@@ -268,6 +268,7 @@ typedef struct {
     int32_t n;
     garb_cascade_t *cascade;
     flow_env_t env;
+    const void *script;     // the script effects a case hands its layouts (test_libflow_script.inc)
 } Sheeted;
 
 static void sheeted_open(Sheeted *p, const char *html, double width, double height)
@@ -1409,6 +1410,7 @@ static void layout_sweep(void)
 #include "test_libflow_cliptext.inc"
 #include "test_libflow_motion.inc"
 #include "test_libflow_computed.inc"
+#include "test_libflow_script.inc"
 #include "test_libflow_restyle.inc"
 #include "test_libflow_snapshot.inc"
 #include "test_libflow_shadow.inc"
@@ -1549,6 +1551,7 @@ int main(int argc, char **argv)
     pseudo_cases();
     boxes_cases();
     button_cases();
+    script_effect_cases();
     layout_cases();
     table_cases();
     table_bounds();

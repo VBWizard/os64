@@ -249,9 +249,9 @@ _Static_assert(F_ARRAY(kPlace) == FLOW_PLACE_SPACE_EVENLY + 1, "kPlace");
 _Static_assert(F_ARRAY(kRepeat) == FLOW_NO_REPEAT + 1, "kRepeat");
 _Static_assert(F_ARRAY(kEdge) == FLOW_EDGE_TEXT + 1, "kEdge");
 _Static_assert(F_ARRAY(kGeneric) == FLOW_GENERIC_MONO + 1, "kGeneric");
-_Static_assert(F_ARRAY(kAnimDirection) == FLOW_DIRECTION_ALTERNATE_REVERSE + 1, "kAnimDirection");
-_Static_assert(F_ARRAY(kFill) == FLOW_FILL_BOTH + 1, "kFill");
-_Static_assert(F_ARRAY(kJump) == FLOW_JUMP_BOTH + 1, "kJump");
+_Static_assert(F_ARRAY(kAnimDirection) == GARB_DIRECTION_ALTERNATE_REVERSE + 1, "kAnimDirection");
+_Static_assert(F_ARRAY(kFill) == GARB_FILL_BOTH + 1, "kFill");
+_Static_assert(F_ARRAY(kJump) == GARB_JUMP_BOTH + 1, "kJump");
 _Static_assert(F_ARRAY(kCursor) == FLOW_CURSOR_ZOOM_OUT + 1, "kCursor");
 _Static_assert(F_ARRAY(kUserSelect) == FLOW_USER_SELECT_ALL + 1, "kUserSelect");
 _Static_assert(F_ARRAY(kWordBreak) == FLOW_WORD_BREAK_BREAK_WORD + 1, "kWordBreak");
@@ -795,13 +795,13 @@ static void image(const flow_computed_t *c, Out *o, const flow_bg_image_t *im)
 
 // An easing as Chrome writes one: a keyword when it was one, else the
 // function.
-static void easing(Out *o, const flow_easing_t *e)
+static void easing(Out *o, const garb_easing_t *e)
 {
-    if (e->kind == FLOW_EASE_LINEAR) {
+    if (e->kind == GARB_EASE_LINEAR) {
         puts_(o, "linear");
         return;
     }
-    if (e->kind == FLOW_EASE_CUBIC) {
+    if (e->kind == GARB_EASE_CUBIC) {
         static const struct { double p[4]; const char *name; } kNamed[] = {
             {{0.25, 0.1, 0.25, 1}, "ease"}, {{0.42, 0, 1, 1}, "ease-in"},
             {{0, 0, 0.58, 1}, "ease-out"}, {{0.42, 0, 0.58, 1}, "ease-in-out"},
@@ -822,7 +822,7 @@ static void easing(Out *o, const flow_easing_t *e)
     }
     puts_(o, "steps(");
     integer(o, e->steps);
-    if (e->jump != FLOW_JUMP_END) {
+    if (e->jump != GARB_JUMP_END) {
         puts_(o, ", ");
         WORD(o, kJump, e->jump);
     }

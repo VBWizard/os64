@@ -38,7 +38,7 @@ host_sources=(
    tools/test_libflow_fonts.c userland/libgarb/tokenize.c userland/libgarb/parse.c
    userland/libgarb/decode.c userland/libgarb/dump.c userland/libgarb/select.c
    userland/libgarb/values.c userland/libgarb/props.c userland/libgarb/media.c
-   userland/libgarb/cascade.c userland/libos64/arena.c userland/libos64/text.c
+   userland/libgarb/cascade.c userland/libgarb/timing.c userland/libos64/arena.c userland/libos64/text.c
    userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c
    userland/libpage/core.c userland/libpage/state.c userland/libpage/resolve.c
    userland/libpage/value.c userland/libpage/number.c userland/libpage/range.c

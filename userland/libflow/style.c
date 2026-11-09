@@ -3066,51 +3066,6 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     }
 }
 
-// An easing, as libgarb read it (values.h); false for none it read.
-static bool easing_of(const garb_val_t *v, flow_easing_t *out)
-{
-    // Easing 1 § 2.2's keywords as their curves, § 2.3's as their steps.
-    static const struct { const char *word; flow_easing_t e; } kWords[] = {
-        {"linear", {FLOW_EASE_LINEAR, {0, 0, 0, 0}, 0, FLOW_JUMP_END, false}},
-        {"ease", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-in", {FLOW_EASE_CUBIC, {0.42, 0, 1, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-out", {FLOW_EASE_CUBIC, {0, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
-        {"ease-in-out", {FLOW_EASE_CUBIC, {0.42, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
-        {"step-start", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_START, false}},
-        {"step-end", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_END, false}},
-    };
-    if (v->kind == GARB_V_KEYWORD) {
-        for (int32_t k = 0; k < F_ARRAY(kWords); k++)
-            if (os64_streq(v->keyword, kWords[k].word)) {
-                *out = kWords[k].e;
-                return true;
-            }
-        return false;
-    }
-    if (v->kind != GARB_V_FUNCTION)
-        return false;
-    os64_memset(out, 0, sizeof(*out));
-    if (os64_streq(v->keyword, "cubic-bezier") && v->nitems == 4) {
-        out->kind = FLOW_EASE_CUBIC;
-        for (int k = 0; k < 4; k++)
-            out->p[k] = v->items[k].number;
-        return true;
-    }
-    if (os64_streq(v->keyword, "steps") && v->nitems >= 1) {
-        static const char *const kJumps[] = {"jump-end", "jump-start", "jump-none", "jump-both"};
-        out->kind = FLOW_EASE_STEPS;
-        out->steps = v->items[0].number < INT32_MAX ? (int32_t)v->items[0].number : INT32_MAX;
-        out->jump = FLOW_JUMP_END;
-        if (v->nitems == 2) {
-            int32_t w = pick(&v->items[1], kJumps, F_ARRAY(kJumps));
-            out->jump = w >= 0 ? (flow_jump_t)w
-                      : is_word(&v->items[1], "start") ? FLOW_JUMP_START : FLOW_JUMP_END;
-        }
-        return true;
-    }
-    return false;
-}
-
 // A time, in milliseconds (libgarb held it to the domain, values.h).
 static double ms_of(const garb_val_t *v)
 {
@@ -3129,9 +3084,9 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
     flow_animations_t *an = &s->animations;
     bool spent;
     size_t each = p == GARB_ANIMATION_NAME ? sizeof(flow_name_t)
-                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(flow_easing_t)
-                : p == GARB_ANIMATION_DIRECTION ? sizeof(flow_direction_t)
-                : p == GARB_ANIMATION_FILL_MODE ? sizeof(flow_fill_t)
+                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(garb_easing_t)
+                : p == GARB_ANIMATION_DIRECTION ? sizeof(garb_direction_t)
+                : p == GARB_ANIMATION_FILL_MODE ? sizeof(garb_fill_t)
                 : p == GARB_ANIMATION_PLAY_STATE ? sizeof(bool) : sizeof(double);
     void *list = n > 0 ? list_alloc(a->c, (size_t)n * each, &spent) : NULL;
     if (list == NULL)
@@ -3149,9 +3104,9 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
             ((double *)list)[k] = ms_of(one);
             break;
         case GARB_ANIMATION_TIMING_FUNCTION:
-            if (!easing_of(one, &((flow_easing_t *)list)[k]))
-                (void)easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
-                                &((flow_easing_t *)list)[k]);
+            if (!garb_easing_of(one, &((garb_easing_t *)list)[k]))
+                (void)garb_easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
+                                &((garb_easing_t *)list)[k]);
             break;
         case GARB_ANIMATION_ITERATION_COUNT:
             ((double *)list)[k] = is_word(one, "infinite") ? INFINITY
@@ -3160,14 +3115,14 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
         case GARB_ANIMATION_DIRECTION: {
             static const char *const words[] = {"normal", "reverse", "alternate",
                                                 "alternate-reverse"};
-            ((flow_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
-                                                ? (flow_direction_t)w : FLOW_DIRECTION_NORMAL;
+            ((garb_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                                ? (garb_direction_t)w : GARB_DIRECTION_NORMAL;
             break;
         }
         case GARB_ANIMATION_FILL_MODE: {
             static const char *const words[] = {"none", "forwards", "backwards", "both"};
-            ((flow_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
-                                           ? (flow_fill_t)w : FLOW_FILL_NONE;
+            ((garb_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                           ? (garb_fill_t)w : GARB_FILL_NONE;
             break;
         }
         case GARB_ANIMATION_PLAY_STATE:
@@ -4096,24 +4051,24 @@ static flow_unit_t own_outline_width(const Ctx *c, const Spec *sp, garb_style_t 
 // is itself and not the same curve written as cubic-bezier(), and steps
 // are their count and where they jump however written (Chrome's answer,
 // as libgarb groups the blocks).
-static bool easing_same(const flow_easing_t *a, const flow_easing_t *b)
+static bool easing_same(const garb_easing_t *a, const garb_easing_t *b)
 {
     if (a->kind != b->kind)
         return false;
-    if (a->kind == FLOW_EASE_CUBIC)
+    if (a->kind == GARB_EASE_CUBIC)
         return a->named == b->named && a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] &&
                a->p[3] == b->p[3];
-    if (a->kind == FLOW_EASE_STEPS)
+    if (a->kind == GARB_EASE_STEPS)
         return a->steps == b->steps && a->jump == b->jump;
     return true;
 }
 
 // Whether keyframe `f` eases as the element's own easing `own` does: it
 // names none (or one libflow cannot read, which is none), or names `own`.
-static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
+static bool eases_own(const garb_keyframe_t *f, const garb_easing_t *own)
 {
-    flow_easing_t e;
-    return f->easing == NULL || !easing_of(f->easing, &e) || easing_same(&e, own);
+    garb_easing_t e;
+    return f->easing == NULL || !garb_easing_of(f->easing, &e) || easing_same(&e, own);
 }
 
 // Keyframes at one offset that ease as the element's own easing — one
@@ -4123,7 +4078,7 @@ static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
 // (garb_keyframe_t.order), at the place of the first. One pass, each
 // longhand found by its number, however many blocks a page repeats. `*kf`
 // is replaced when any are joined; false on no memory.
-static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const flow_easing_t *own)
+static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const garb_easing_t *own)
 {
     const garb_keyframe_t *in = *kf;
     int32_t n = *nk, joins = 0;
@@ -4372,10 +4327,24 @@ static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
     return true;
 }
 
-// An element's animations at the layout's time: for each name whose
-// @keyframes exist, every keyframe's declarations and the longhands they
+// The page's script effects on `n` (flow_env_t.script_effects): how many,
+// `*out` pointing at them.
+static int32_t script_effects_of(const Ctx *c, const os64_html_node_t *n,
+                                 const garb_effect_t *const **out)
+{
+    *out = NULL;
+    if (c->env->script_effects == NULL)
+        return 0;
+    int32_t k = c->env->script_effects(c->env->ctx, n, out);
+    return k > 0 && *out != NULL ? k : 0;
+}
+
+// An element's animations at the layout's time: unless its display is
+// none, for each name whose @keyframes exist, every keyframe's declarations and the longhands they
 // set but where an `!important` winner holds, and the name's record on the
-// timeline; then the element's style at `now`, each keyframe resolved
+// timeline; after them each of a script's effects on it, read the same
+// way and on its own clock; then the element's style at `now`, each
+// keyframe resolved
 // where it is mixed (keyframe_resolved), and what its animations make it
 // (flow_style_t.animating). `sp` is the element's Spec before `finish`.
 // With animations, `*out` is the element's FMotion and `sp`'s style is
@@ -4387,17 +4356,23 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
 {
     *out = NULL;
     flow_timeline_t *tl = c->out->timeline;
-    int32_t count = f_animations(&sp->s);
-    if (tl == NULL || c->env->cascade == NULL || count == 0)
+    // CSS animations run on the timeline; a script's effects on clocks of
+    // their own, so they are laid whether the face gave a timeline or not.
+    int32_t count = tl != NULL && c->env->cascade != NULL && sp->s.display != FLOW_DISPLAY_NONE
+                  ? f_animations(&sp->s) : 0;
+    const garb_effect_t *const *fx = NULL;
+    int32_t nfx = script_effects_of(c, n, &fx);
+    if (count == 0 && nfx == 0)
         return true;
     FProps important;
     os64_memset(&important, 0, sizeof(important));
-    garb_style_t st = garb_style_for(c->env->cascade, n);
+    const garb_style_t none_st = {NULL, NULL, NULL, 0};
+    garb_style_t st = c->env->cascade != NULL ? garb_style_for(c->env->cascade, n) : none_st;
     for (int32_t i = 0; st.important != NULL && i < st.n; i++)
         if (st.important[i])
             f_props_add(&important, st.sets[i].prop);
     FMotion *m = f_arena_alloc(&c->out->arena, sizeof(*m));
-    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*anims))
+    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*anims))
                                   : NULL;
     if (anims == NULL)
         return false;
@@ -4412,7 +4387,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     for (int side = 0; side < 4; side++)
         m->base.border_width[side] = own_width(c, &base, st, none, side);
     m->base.outline_width = own_outline_width(c, &base, st, none);
-    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*first));
+    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)(count + nfx) * sizeof(*first));
     if (first == NULL)
         return false;
     int32_t nframes = 0;
@@ -4434,7 +4409,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         for (int32_t j = 0; j < nk; j++) {
             FKeyframe *f = &an->frames[j];
             f->offset = kf[j].offset;
-            f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
+            f->has_easing = kf[j].easing != NULL && garb_easing_of(kf[j].easing, &f->easing);
             f->decls = kf[j].sets;
             f->ndecls = kf[j].nsets;
             f->sheet = kf[j].sheet;
@@ -4452,11 +4427,50 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         first[m->nanims++] = nframes;
         nframes += nk;
     }
+    m->ncss = m->nanims;
+    // A script's effects after them, in the order they were made (Web
+    // Animations 1 § 5.4's composite order): each keyframe as a @keyframes
+    // block is, read against the document as the `style` attribute is.
+    for (int32_t i = 0; i < nfx; i++) {
+        const garb_effect_t *x = fx[i];
+        FAnimation *an = &anims[m->nanims];
+        os64_memset(an, 0, sizeof(*an));
+        an->script = x;
+        an->timing.duration_ms = x->timing.duration_ms;
+        an->timing.delay_ms = x->timing.delay_ms;
+        an->timing.iterations = x->timing.iterations;
+        an->timing.direction = x->timing.direction;
+        an->timing.fill = x->timing.fill;
+        an->timing.paused = x->held;
+        an->frames = x->nframes > 0 ? f_arena_alloc(&c->out->arena, (size_t)x->nframes * sizeof(FKeyframe))
+                                    : NULL;
+        if (x->nframes > 0 && an->frames == NULL)
+            return false;
+        for (int32_t j = 0; j < x->nframes; j++) {
+            FKeyframe *f = &an->frames[j];
+            f->offset = x->frames[j].offset;
+            f->has_easing = x->frames[j].has_easing;
+            f->easing = x->frames[j].easing;
+            f->decls = x->frames[j].sets;
+            f->ndecls = x->frames[j].nsets;
+            f->sheet = -1;
+            for (int32_t k = 0; k < x->frames[j].nsets; k++)
+                if (!f_props_has(&important, x->frames[j].sets[k].prop)) {
+                    f_props_add(&f->sets, x->frames[j].sets[k].prop);
+                    f_props_add(&an->props, x->frames[j].sets[k].prop);
+                    if (takes_parent(&x->frames[j].sets[k]))
+                        f_props_add(&sp->taken, x->frames[j].sets[k].prop);
+                }
+        }
+        an->nframes = x->nframes;
+        first[m->nanims++] = nframes;
+        nframes += x->nframes;
+    }
     if (m->nanims == 0)
         return true;
     m->in_place = f_motion_in_place(m);
     double now = (double)c->env->now_ms;
-    if (!f_timeline_element(tl, n, m, now))
+    if (m->ncss > 0 && !f_timeline_element(tl, n, m, now))
         return false;
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
@@ -4540,8 +4554,12 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     const FStyled *old = c->previous ? f_style_of(c->previous, n) : NULL;
     bool untouched = old && !garb_style_updated_since(c->env->cascade, n, c->previous->cascade_updates);
     bool ancestry = !up || up->reuse_safe;
+    // A script's effect on it moves it whatever the cascade did, and so may
+    // one made since the old style was computed, which that style knew
+    // nothing of.
+    const garb_effect_t *const *effects;
     bool copied = untouched && ancestry && !old->motion && !old->style.animations.nname &&
-                  !c->out->lists_refused &&
+                  script_effects_of(c, n, &effects) == 0 && !c->out->lists_refused &&
                   old->list_cost <= c->out->lists_left && n != c->doc->html && !is(n, OS64_HTML_TAG_BODY);
     Spec sp;
     os64_memset(&sp, 0, sizeof(sp));
@@ -4609,10 +4627,11 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n, &sp.s) &&
             !is(n, OS64_HTML_TAG_BUTTON))
             sp.s.display = FLOW_DISPLAY_NONE;
-        // `display: none` ends its animations (Animations 1 § 2): the
-        // timeline drops what no layout styles.
-        if (sp.s.display != FLOW_DISPLAY_NONE &&
-            !animate(c, n, &sp, &ua, parent, item, root, &motion))
+        // `display: none` ends its CSS animations (Animations 1 § 2): the
+        // timeline drops what no layout styles. A script's effects go on
+        // (Web Animations 1 applies an effect to its target's computed
+        // style whatever is rendered), so animate lays them alone.
+        if (!animate(c, n, &sp, &ua, parent, item, root, &motion))
             return NULL;
     }
     if (motion == NULL && !copied)

@@ -23,6 +23,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <malloc.h>
+#include <math.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -33,6 +34,7 @@
 #include <unistd.h>
 
 #include "os64/arena.h"
+#include "garb/timing.h"
 
 #include "garb/garb.h"
 #include "garb/select.h"
@@ -1244,6 +1246,119 @@ static int deep(void)
 
 // Numbers between int64_t's reach and a double's: the dump must test the
 // range before it casts (float-cast-overflow is on in this harness).
+// Web Animations 1 § 4.5-4.10's clock (garb/timing.h): what CSS never asks
+// of it — an end delay either way, an iteration start, a clock running
+// backwards, an effect easing, alternate-reverse — and the easings read
+// from values. Each want is worked from the spec's steps by hand.
+static int timing_failed;
+static void timing_expect(const char *what, bool ok)
+{
+    if (!ok) {
+        timing_failed++;
+        printf("FAIL timing: %s\n", what);
+    }
+}
+static bool near_d(double a, double b)
+{
+    return (isinf(a) && isinf(b)) || fabs(a - b) <= 1e-12;
+}
+
+static int timing(void)
+{
+    garb_timing_t t;
+    garb_clock_t k;
+    memset(&t, 0, sizeof(t));
+    t.duration_ms = 1000;
+    t.iterations = 1;
+    k = garb_clock_at(&t, 250, false);
+    timing_expect("a plain run is active a quarter through",
+                  k.phase == GARB_PHASE_ACTIVE && k.in_effect && near_d(k.progress, 0.25) && k.iteration == 0);
+    t.delay_ms = 100;
+    k = garb_clock_at(&t, 50, false);
+    timing_expect("before its delay, unfilled, it shows nothing", k.phase == GARB_PHASE_BEFORE && !k.in_effect);
+    t.fill = GARB_FILL_BACKWARDS;
+    k = garb_clock_at(&t, 50, false);
+    timing_expect("filled backwards it shows its start", k.in_effect && near_d(k.progress, 0));
+    // An end delay moves the end, not the active interval.
+    memset(&t, 0, sizeof(t));
+    t.duration_ms = 1000;
+    t.iterations = 1;
+    t.end_delay_ms = 500;
+    t.fill = GARB_FILL_FORWARDS;
+    k = garb_clock_at(&t, 1200, false);
+    timing_expect("an end delay: after at 1200, its end at 1500, its value its last",
+                  k.phase == GARB_PHASE_AFTER && near_d(k.end_time, 1500) && near_d(k.active_end, 1000) &&
+                  near_d(k.progress, 1) && k.iteration == 0);
+    // A negative one cuts the active interval short where it ends.
+    t.end_delay_ms = -400;
+    k = garb_clock_at(&t, 700, false);
+    timing_expect("a negative end delay: after at 700, its end at 600, its active time still its local (0.7, § 4.8.3)",
+                  k.phase == GARB_PHASE_AFTER && near_d(k.end_time, 600) && near_d(k.active_end, 600) &&
+                  near_d(k.active_time, 700) && near_d(k.progress, 0.7));
+    // An iteration start shifts where each iteration begins.
+    memset(&t, 0, sizeof(t));
+    t.duration_ms = 1000;
+    t.iterations = 2;
+    t.iteration_start = 0.5;
+    t.fill = GARB_FILL_FORWARDS;
+    k = garb_clock_at(&t, 0, false);
+    timing_expect("iteration start 0.5: it begins half way", near_d(k.progress, 0.5) && k.iteration == 0);
+    k = garb_clock_at(&t, 600, false);
+    timing_expect("and is in its second iteration at 600, a tenth through",
+                  near_d(k.progress, 0.1) && k.iteration == 1 && near_d(k.iteration_start, 500));
+    k = garb_clock_at(&t, 2000, false);
+    timing_expect("and ends half way through its third", k.phase == GARB_PHASE_AFTER && near_d(k.progress, 0.5) &&
+                  k.iteration == 2);
+    // The boundary a clock runs away from is the active interval's.
+    memset(&t, 0, sizeof(t));
+    t.duration_ms = 1000;
+    t.iterations = 1;
+    k = garb_clock_at(&t, 1000, false);
+    timing_expect("forwards, its end is after", k.phase == GARB_PHASE_AFTER && !k.in_effect);
+    k = garb_clock_at(&t, 1000, true);
+    timing_expect("backwards, its end is active, at its last", k.phase == GARB_PHASE_ACTIVE && k.in_effect &&
+                  near_d(k.progress, 1));
+    k = garb_clock_at(&t, 0, true);
+    timing_expect("backwards, its start is before", k.phase == GARB_PHASE_BEFORE && !k.in_effect);
+    k = garb_clock_at(&t, 0, false);
+    timing_expect("forwards, its start is active", k.phase == GARB_PHASE_ACTIVE && near_d(k.progress, 0));
+    // The effect's own easing is applied to the directed progress.
+    t.easing = (garb_easing_t){GARB_EASE_STEPS, {0, 0, 0, 0}, 2, GARB_JUMP_END, false};
+    k = garb_clock_at(&t, 300, false);
+    timing_expect("an effect easing of two steps holds 0.3 at 0", near_d(k.directed, 0.3) && near_d(k.progress, 0));
+    k = garb_clock_at(&t, 600, false);
+    timing_expect("and 0.6 at a half", near_d(k.progress, 0.5));
+    // alternate-reverse runs its first iteration backwards.
+    memset(&t, 0, sizeof(t));
+    t.duration_ms = 1000;
+    t.iterations = 2;
+    t.direction = GARB_DIRECTION_ALTERNATE_REVERSE;
+    k = garb_clock_at(&t, 250, false);
+    timing_expect("alternate-reverse: the first iteration backwards", !k.forwards && near_d(k.progress, 0.75));
+    k = garb_clock_at(&t, 1250, false);
+    timing_expect("and the second forwards", k.forwards && near_d(k.progress, 0.25));
+    // The easings as libgarb reads them.
+    garb_easing_t e;
+    garb_val_t kw = {.kind = GARB_V_KEYWORD, .keyword = "ease"};
+    timing_expect("ease is its curve, named", garb_easing_of(&kw, &e) && e.kind == GARB_EASE_CUBIC && e.named &&
+                  e.p[0] == 0.25 && e.p[1] == 0.1);
+    garb_val_t steps_items[2] = {{.kind = GARB_V_NUMBER, .number = 3}, {.kind = GARB_V_KEYWORD, .keyword = "jump-none"}};
+    garb_val_t steps = {.kind = GARB_V_FUNCTION, .keyword = "steps", .items = steps_items, .nitems = 2};
+    timing_expect("steps(3, jump-none) is three steps jumping neither end",
+                  garb_easing_of(&steps, &e) && e.kind == GARB_EASE_STEPS && e.steps == 3 && e.jump == GARB_JUMP_NONE);
+    garb_val_t start_items[2] = {{.kind = GARB_V_NUMBER, .number = 4}, {.kind = GARB_V_KEYWORD, .keyword = "start"}};
+    garb_val_t start = {.kind = GARB_V_FUNCTION, .keyword = "steps", .items = start_items, .nitems = 2};
+    timing_expect("steps(4, start) jumps at its start", garb_easing_of(&start, &e) && e.jump == GARB_JUMP_START);
+    garb_val_t bad = {.kind = GARB_V_KEYWORD, .keyword = "bounce"};
+    timing_expect("an unknown keyword is no easing", !garb_easing_of(&bad, &e));
+    // A cubic past [0, 1] follows the tangent at the nearer end.
+    garb_easing_t x = {GARB_EASE_CUBIC, {0.23, -0.07, 0.53, 0.55}, 0, GARB_JUMP_END, false};
+    timing_expect("below 0, the tangent at the start", near_d(garb_ease(&x, -0.5, false), -0.07 / 0.23 * -0.5));
+    timing_expect("at its ends, its ends", garb_ease(&x, 0, false) == 0 && garb_ease(&x, 1, false) == 1);
+    printf("libgarb timing: %d failed\n", timing_failed);
+    return timing_failed != 0;
+}
+
 static int numbers(void)
 {
     const char *text = "1e19 -1e19 99999999999999999999 1e300 -1e300 1e999 5e-324 1.71e308";
@@ -2186,6 +2301,8 @@ int main(int argc, char **argv)
         return deep();
     if (argc == 2 && strcmp(argv[1], "--numbers") == 0)
         return numbers();
+    if (argc == 2 && strcmp(argv[1], "--timing") == 0)
+        return timing();
     if (argc == 3 && strcmp(argv[1], "--sweep") == 0)
         return sweep(argv[2]);
     if (argc != 2) {

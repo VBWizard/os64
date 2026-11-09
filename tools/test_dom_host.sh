@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto subtle subtle_core report document frames clone message idle animation pointer options selection importmap controls elements tables \
+    browsing crypto subtle subtle_core report document frames clone message idle animation webanimation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
     sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
@@ -44,7 +44,7 @@ for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userla
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,serialize_xml,shadow,range}.c userland/libxml/xml.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
-    userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
+    userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade,timing}.c \
     userland/libsvg/{core,path,geometry,bounds,hit,stroke,scene,paint,gradient,cache}.c \
     userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libos64/crc32.c; do
     object="$work/${source//\//_}.o"
@@ -61,7 +61,7 @@ done
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto subtle subtle_core report document frames clone message idle animation pointer options selection importmap controls elements tables \
+    browsing crypto subtle subtle_core report document frames clone message idle animation webanimation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
     sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit; do
     object="$work/dom-$name.o"

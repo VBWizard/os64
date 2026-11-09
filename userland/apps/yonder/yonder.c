@@ -416,8 +416,13 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
                                      bool italic, uint32_t px, os64_text_font_t *const **list,
                                      size_t *count, os64_font_face_info_t *primary);
 
+// A script's effects on `node` (Web Animations; flow_env_t.script_effects):
+// the page's binding answers, through the Page the layout is of.
+static int32_t page_script_effects(void *ctx, const os64_html_node_t *node, const garb_effect_t *const **out);
+
 static flow_env_t s_env = {
     .fonts = page_fonts,
+    .script_effects = page_script_effects,
     .viewport_font_px = 16,
     .default_generic = FLOW_GENERIC_SERIF,
     .ink = PAGE_INK,
@@ -908,6 +913,24 @@ typedef struct Page {
     yonder_census_timeline_t census;
 } Page;
 
+static yonder_scripts_t *page_scripts(const Page *p);
+
+static int32_t page_script_effects(void *ctx, const os64_html_node_t *node, const garb_effect_t *const **out)
+{
+    const Page *p = ctx;
+    return yonder_scripts_effects(p != NULL ? page_scripts(p) : NULL, node, out);
+}
+
+// A tree's going, told to the page whose script effects it may read
+// (yonder_scripts_tree_gone). A tree freed without it costs no safety,
+// only memory: its row stays, so its page's buried effects are never freed
+// and the drained binding outlives the page.
+static void tree_free(flow_tree_t *tree)
+{
+    yonder_scripts_tree_gone(tree);
+    flow_free(tree);
+}
+
 static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
 static int32_t picture_find(const Page *p, const char *url);
@@ -1125,7 +1148,7 @@ static void page_clear(Page *p)
     os64_free(p->bg_of);
     for (int32_t i = 0; i < p->nbox_scrolls; i++)
         os64_html_release(page_doc(p), p->box_scrolls[i].node);
-    flow_free(p->tree);
+    tree_free(p->tree);
     flow_timeline_free(p->timeline);
     garb_cascade_free(p->cascade);
     sheets_free(p);
@@ -1304,7 +1327,7 @@ static uint64_t s_trees_given, s_ticks_moved;
 // into the timeline they replace.
 static void page_show(Page *p, flow_tree_t *tree)
 {
-    flow_free(p->tree);
+    tree_free(p->tree);
     p->tree = tree;
     s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
@@ -1463,6 +1486,7 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
     flow_tree_t *tree = flow_layout_incremental(page_doc(p), page_model(p), width, &s_env,
         p->restyle_from ? p->restyle_from : p->tree, track_geometry ? &inputs : NULL, &profile,
         enabled ? layout_clock : NULL, NULL);
+    yonder_scripts_tree_made(page_scripts(p), tree);
     flow_reuse_stats_t reuse = flow_reuse_stats(tree);
     if (profile.reused || reuse.intrinsic_hits) {
         int64_t began = enabled ? os64_micros() : -1;
@@ -1752,9 +1776,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // shown: the retry reads the timeline the page shows, as the first
     // attempt did.
     if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
-        flow_free(fresh);
+        tree_free(fresh);
         if (p->restyle_from == reclaim->tree) p->restyle_from = NULL;
-        flow_free(reclaim->tree);
+        tree_free(reclaim->tree);
         reclaim->tree = NULL;
         if (reclaim != p) {
             garb_cascade_free(reclaim->cascade);
@@ -1814,7 +1838,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             parts_what(page_doc(p), s_parts.what, sizeof(s_parts.what), &said);
     }
     if (reclaim != NULL && reclaim != p) {
-        flow_free(p->tree);
+        tree_free(p->tree);
         p->tree = fresh;
         s_trees_given++;
     } else {
@@ -2359,7 +2383,7 @@ static void measured_forget(const os64_html_document_t *doc)
 {
     if (doc == NULL || s_measured.doc != doc)
         return;
-    flow_free(s_measured.tree);
+    tree_free(s_measured.tree);
     garb_cascade_free(s_measured.cascade);
     sheet_table_free(s_measured.doc, s_measured.sheets, s_measured.nsheets);
     os64_page_free(s_measured.model);
@@ -2426,6 +2450,9 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
         source.sheets_ready = s_measured.ready;
     }
     s_measuring = *p;
+    // Not the copy's to free (a page's are freed with it): the scripts
+    // whose effects it is laid out with, the stream's while it arrives.
+    s_measuring.scripts = page_scripts(p);
     s_measuring.way.model = model;
     s_measuring.plain_model = NULL;
     s_measuring.restyle_from = source.tree;
@@ -2451,7 +2478,7 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     if (laid && flow_incomplete(s_measuring.tree)) laid = false;
     measured_forget(s_measured.doc);
     if (!laid) {
-        flow_free(s_measuring.tree);
+        tree_free(s_measuring.tree);
         garb_cascade_free(s_measuring.cascade);
         sheet_table_free(doc, s_measuring.sheets, s_measuring.nsheets);
         os64_page_free(model);
@@ -8519,12 +8546,17 @@ static uint64_t tick_next(void)
 // Script frames use the rendering loop even when CSS animations are disabled:
 // pages also use them to deliver state. Covered windows retain requests but
 // spend no frames. Rebuild retries and unfinished paints precede another batch.
+// Web Animations' update step is on the same rendering step, before the
+// frame callbacks (script_turn).
 static uint64_t animation_next(void)
 {
     if (!g.scripts_on || g.covered || g.page.tree == NULL ||
         page_rebuild_owed(&g.page) || g.raf_painting)
         return YONDER_NEVER;
     uint64_t due = yonder_scripts_animation_next(g.page.scripts);
+    uint64_t step = yonder_scripts_web_animations_next(g.page.scripts);
+    if (step < due)
+        due = step;
     return due < g.raf_resume_at ? g.raf_resume_at : due;
 }
 
@@ -10087,7 +10119,7 @@ static bool script_rebuild(void)
         if (!lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
                                  g.view.bounds.h > 0 ? g.view.bounds.h : 1, p)) {
             sheets_leave(&next);
-            flow_free(next.tree);
+            tree_free(next.tree);
             garb_cascade_free(next.cascade);
             sheets_free(&next);
             webfonts_feed(false);       // the files its layout wanted are still asked for
@@ -12478,6 +12510,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
             ready = relayout(true);
         if (ready && g.page.tree != NULL) {
             tree = g.page.tree;
+            env->ctx = &g.page;
             env->cascade = g.page.cascade;
             env->zoom = g.page.laid_zoom;
             env->viewport_height = (int32_t)css_view(1, g.page.laid_height, g.page.laid_zoom).height;
@@ -12485,6 +12518,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
         }
     } else if (p != NULL && measured_for(doc, width, height)) {
         tree = s_measured.tree;
+        env->ctx = (Page *)p;
         env->cascade = s_measured.cascade;
         env->zoom = s_measured.zoom;
         env->viewport_height = (int32_t)css_view(1, s_measured.height, s_measured.zoom).height;
@@ -12708,6 +12742,15 @@ static bool script_turn(void)
     // the rebuild below. Only a failed rebuild from an earlier turn blocks
     // callbacks (the entry guard), not the task's fresh mutations.
     uint64_t now = yonder_now_ms();
+    // HTML's "update animations and send events", then the frame callbacks.
+    if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
+        yonder_scripts_web_animations_next(g.page.scripts) <= now) {
+        int64_t step_began = task_begin(g.page.scripts);
+        if (yonder_scripts_web_animations_update(g.page.scripts, now, &out)) {
+            ran = true;
+            task_said(g.page.scripts, true, "web-animations", &out, step_began);
+        }
+    }
     if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
         yonder_scripts_animation_next(g.page.scripts) <= now) {
         int64_t frame_began = task_begin(g.page.scripts);
