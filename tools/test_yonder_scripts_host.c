@@ -19,6 +19,11 @@ static int64_t pointer_host_rect(int64_t handle, os64_gui_rect_t *rect)
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+extern os64_image_status_t image_decode_gif(const uint8_t *,size_t,os64_image_t *);
+extern os64_image_status_t fixture_gif_sequence_decode(const uint8_t *,size_t,os64_image_sequence_t **);
+extern void fixture_gif_sequence_free(os64_image_sequence_t *);
+extern const os64_image_frame_t *fixture_gif_sequence_frame(const os64_image_sequence_t *);
+extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
 /* libjs's round-trip build counts the scripts it ran from their bytecode. */
 extern size_t os64_js_round_trips, os64_js_round_trips_skipped;
@@ -576,11 +581,23 @@ static bool script_land_from(const char *tail, const char *source, const char *f
     }
     return false;
 }
-/* Picture transport/codec fixtures. The SVG worker and owner are production
- * code; these stand in for the network and already-tested raster codecs. */
+struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; os64_image_sequence_t *real; };
+/* Picture transport/codec fixtures. PNG, GIF and SVG use production decoders;
+ * synthetic rasters isolate sizing and allocation-failure cases. */
 static const char *picture_http_bytes, *picture_http_type;
 static int picture_http_status, picture_fetches, picture_raster_decodes;
 static bool picture_http_failure;
+static bool picture_resolve(const char *method,const char *url,fake_answer_t *out,char **scratch)
+{
+    (void)method;(void)url;
+    if(!picture_http_bytes || picture_http_failure)return false;
+    ++picture_fetches;
+    *scratch=malloc(256);if(!*scratch)return false;
+    snprintf(*scratch,256,"Content-Type: %s\r\n",picture_http_type?picture_http_type:"image/png");
+    *out=(fake_answer_t){.status=picture_http_status,.reason="fixture",.headers=*scratch,
+        .body=picture_http_bytes,.body_len=strlen(picture_http_bytes)};
+    return true;
+}
 bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *options,
                        size_t cap, way_whole_t *out) {
     (void)url; (void)options; ++picture_fetches; memset(out,0,sizeof(*out));
@@ -598,6 +615,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
+    if(len>=6 && !memcmp(bytes,"GIF8",4))return image_decode_gif(bytes,len,out);
     if(len>=8&&bytes[0]==137&&!memcmp(bytes+1,"PNG",3)) {
         os64_png_image_t png;
         os64_png_status_t status=os64_png_decode(bytes,len,0,&png);
@@ -624,7 +642,13 @@ os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image
 }
 os64_image_status_t os64_image_sequence_decode(const uint8_t *bytes,size_t len,
                                                os64_image_sequence_t **out) {
-    (void)bytes;(void)len;*out=NULL;return OS64_IMAGE_UNSUPPORTED;
+    *out=NULL;
+    os64_image_sequence_t *real=NULL;
+    os64_image_status_t status=fixture_gif_sequence_decode(bytes,len,&real);
+    if(status!=OS64_IMAGE_OK)return status;
+    os64_image_sequence_t *wrapper=os64_calloc(1,sizeof(*wrapper));
+    if(!wrapper){fixture_gif_sequence_free(real);return OS64_IMAGE_NO_MEMORY;}
+    wrapper->real=real;*out=wrapper;return OS64_IMAGE_OK;
 }
 const char *os64_fetch_status_name(os64_fetch_status_t status) {
     (void)status; return "fixture fetch status";
@@ -632,16 +656,20 @@ const char *os64_fetch_status_name(os64_fetch_status_t status) {
 const char *os64_image_status_name(os64_image_status_t status) {
     (void)status; return "fixture status";
 }
-/* A moving picture a case plays (picture_tick_cases): its frame, and how
- * many times it was advanced. No other case has one. */
-struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
+/* Synthetic picture_tick_cases count advances; real GIF ownership fixtures
+ * delegate playback to the production sequence behind their wrapper. */
 os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
     if(seq==NULL) { check(false,"no moving picture"); return OS64_IMAGE_OK; }
+    if(seq->real)return fixture_gif_sequence_next(seq->real);
     seq->nexts++; return OS64_IMAGE_OK;
 }
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
-void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence==NULL,"no unexpected moving image"); }
+void os64_image_sequence_free(os64_image_sequence_t *sequence) {
+    if(sequence && sequence->real){fixture_gif_sequence_free(sequence->real);os64_free(sequence);return;}
+    check(sequence==NULL,"no unexpected moving image");
+}
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
+    if(sequence && sequence->real)return fixture_gif_sequence_frame(sequence->real);
     if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
     return &sequence->frame;
 }
@@ -6168,6 +6196,7 @@ static uint32_t *stand_in_shot(void) {
 #include "test_yonder_picture_sizes.inc"
 #include "test_yonder_image_cache.inc"
 #include "test_yonder_responsive_images.inc"
+#include "test_yonder_image_ownership.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -12006,7 +12035,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_IMAGES_ONLY")) {
-        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages(); image_cache_cases(); responsive_image_cases();
+        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages(); image_cache_cases(); responsive_image_cases(); image_ownership_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"images: text released");
         check(live==0,"images: heap empty");
@@ -12102,7 +12131,7 @@ int main(void)
     data_picture_cases();
     picture_sizes_cases();
     image_cache_cases();
-    responsive_image_cases();
+    responsive_image_cases(); image_ownership_cases();
     picture_memory_baseline();
     picture_memory_pages();
     local_link_cases();

@@ -131,7 +131,8 @@ static yonder_cookies_mode_t s_cookies_asked;
 // The budget counts those declarations, not memory held: what yonder uses
 // is what its jobs allocate. Twelve workers each running the largest job
 // (a picture, 512 MiB) declare 6 GiB, so 8 GiB admits any twelve at once
-// with room for answers not yet reaped, and a page waits on its workers,
+// with room for answers not yet reaped and one serialized window decode.
+// PICTURE_RESERVE is withheld from the pool for that decode; a page waits on its workers,
 // never on worst cases that do not happen.
 #define POOL_WORKERS 12
 #define TRIP_RESERVE (4u << 20)
@@ -146,8 +147,8 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
-// Display rasters can be reduced to cover their drawn size; native Canvas
-// sources keep full-resolution pixels. Worker scratch has separate admission.
+// Display rasters can be reduced; immutable encoded/full reconstruction and
+// promoted Canvas pixels share this account. Worker scratch has separate admission.
 #define PICTURES_KEPT_MAX ((size_t)1u << 30)
 
 // A page's pictures in the pool at once: half its workers. The pool admits
@@ -580,6 +581,7 @@ typedef struct ImageSource ImageSource;
 
 typedef struct {
     const char *url;
+    yonder_picture_backing_t *address; // holds the URL through outstanding pixel loans
     size_t url_len;                 // a data: address may be kilobytes: kept, not measured per probe
     PictureState state;
     yonder_picture_kind_t kind;
@@ -590,11 +592,12 @@ typedef struct {
     // Source dimensions, any kind, once it has arrived (also when NOT_KEPT).
     // An element's selected density converts these to natural CSS dimensions.
     uint32_t width, height;
-    // Display raster pixels may be smaller than the natural size
-    // (PICTURE_SIZES.md); Canvas sources retain full-resolution pixels.
+    // Display pixels may be smaller than the source. A full raster can also
+    // be the reconstruction owner; in that case image borrows full->image.
     os64_image_t image;
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
-    size_t cost;                    // what it is charged to kept_bytes while SHOWN
+    yonder_picture_backing_t *encoded, *full; // immutable reconstruction owners
+    size_t cost;                    // rasters, encoded backing, sequence or SVG charged to kept_bytes
     uint64_t due;                   // when its next frame is, while it plays
     bool playing;                   // false once it stops: its loops done, or a frame failed
     os64_work_id_t id;              // while WAITING
@@ -816,6 +819,7 @@ typedef struct Page {
     size_t kept_bytes, picture_url_bytes;
     size_t picture_kept_peak;       // retained products only; excludes worker scratch
     uint64_t image_metadata_reads, image_pixel_reads;
+    uint64_t image_promotions, image_promotion_us, image_promotion_refusals;
     uint64_t picture_jobs, picture_resamples, picture_decodes, picture_reductions;
     uint64_t picture_decode_us, picture_decode_max_us, picture_decode_untimed;
     uint64_t picture_network, picture_fresh, picture_validated, picture_stale, picture_network_bytes;
@@ -1080,9 +1084,13 @@ static void page_clear(Page *p)
     p->svg_cache = NULL;
     for (int32_t i = 0; i < p->npics; i++) {
         yonder_svg_document_free(p->pics[i].svg);
-        os64_image_free(&p->pics[i].image);
+        if(!p->pics[i].full || p->pics[i].image.pixels!=p->pics[i].full->image.pixels)
+            os64_image_free(&p->pics[i].image);
+        yonder_picture_backing_free(p->pics[i].full);
+        yonder_picture_backing_free(p->pics[i].encoded);
         os64_image_sequence_free(p->pics[i].moving);
-        os64_free((char *)p->pics[i].url);
+        if(p->pics[i].address)yonder_picture_backing_free(p->pics[i].address);
+        else os64_free((char *)p->pics[i].url);
     }
     os64_free(p->pics);
     os64_free(p->pic_slot);
@@ -3145,10 +3153,12 @@ static void diag_motion(Page *p);
 // ── The memory census (MEMORY_CENSUS.md) ──────────────────────────────
 
 // These are subdivisions of the census's pictures owner, not additional
-// owners. Sequence cost includes encoded input and GIF working canvases;
-// raster cost is the retained grid. Codec scratch is outside this account.
+// owners. Sequence cost includes its private encoded input and GIF canvases.
+// Encoded backing and full reconstruction grids are counted separately from
+// the display grid, without counting a shared full raster twice. Codec scratch
+// is outside this account.
 typedef struct {
-    uint64_t display, native, sequence, svg, metadata_only;
+    uint64_t display, native, reconstruction, encoded, sequence, svg, metadata_only;
     uint32_t display_entries, native_entries, native_with_display_url;
 } PictureMemory;
 
@@ -3162,13 +3172,23 @@ static PictureMemory picture_memory(const Page *p)
             m.native_with_display_url += picture_find(p, pic->url) >= 0 ||
                 picture_find_mode(p,pic->url,4)>=0 || picture_find_mode(p,pic->url,5)>=0;
         } else m.display_entries++;
+        if(pic->encoded)m.encoded+=pic->encoded->length;
+        bool shared=pic->full && pic->image.pixels==pic->full->image.pixels;
+        if(pic->full && !shared) {
+            m.native+=(size_t)pic->full->image.width*pic->full->image.height*4;
+            m.native_entries++;
+            if(!pic->pixels_seen)m.reconstruction+=(size_t)pic->full->image.width*pic->full->image.height*4;
+            m.native_with_display_url+=pic->state==PIC_SHOWN;
+        }
         if (pic->state != PIC_SHOWN) continue;
-        if (pic->kind == YONDER_PICTURE_SEQUENCE) m.sequence += pic->cost;
+        size_t encoded=pic->encoded?pic->encoded->length:0;
+        size_t full=pic->full&&!shared?(size_t)pic->full->image.width*pic->full->image.height*4:0;
+        if (pic->kind == YONDER_PICTURE_SEQUENCE) m.sequence += pic->cost-encoded-full;
         else if (pic->kind == YONDER_PICTURE_SVG) m.svg += pic->cost;
         else if (pic->request_key && pic->request_key<4) {
-            m.native += pic->cost;
-            if (pic->metadata_seen && !pic->pixels_seen) m.metadata_only += pic->cost;
-        } else m.display += pic->cost;
+            m.native += pic->cost-encoded;
+            if (pic->metadata_seen && !pic->pixels_seen) m.metadata_only += pic->cost-encoded;
+        } else m.display += (size_t)pic->image.width*pic->image.height*4;
     }
     return m;
 }
@@ -3178,10 +3198,14 @@ static void diag_picture_memory(Page *p)
     PictureMemory m = picture_memory(p);
     char line[256];
     os64_snprintf(line, sizeof(line),
-        "display %lu B; native %lu B; sequence %lu B; SVG %lu B; retained peak %lu B",
-        (unsigned long)m.display, (unsigned long)m.native, (unsigned long)m.sequence,
+        "display %lu B; native %lu B (%lu B reconstruction); encoded %lu B; sequence %lu B; SVG %lu B; retained peak %lu B",
+        (unsigned long)m.display, (unsigned long)m.native, (unsigned long)m.reconstruction, (unsigned long)m.encoded, (unsigned long)m.sequence,
         (unsigned long)m.svg, (unsigned long)p->picture_kept_peak);
     yonder_diag_fact(p->diag, "picture memory", line);
+    os64_snprintf(line,sizeof(line),"%lu synchronous promotions; %lu us decode; %lu refusals",
+        (unsigned long)p->image_promotions,(unsigned long)p->image_promotion_us,
+        (unsigned long)p->image_promotion_refusals);
+    yonder_diag_fact(p->diag,"image promotion",line);
     os64_snprintf(line, sizeof(line),
         "%u display entries; %u native entries (%u share a display URL); "
         "%lu metadata acquisitions; %lu pixel acquisitions; "
@@ -3256,6 +3280,10 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
                             t.boxes, "boxes");
     }
     yonder_census_owner(sheet, "pictures", p->kept_bytes, (uint64_t)p->npics, "pictures");
+    size_t catalog=(size_t)p->cap_pics*sizeof(Picture)+p->pic_slot_cap*sizeof(int32_t)+p->picture_url_bytes;
+    for(int32_t i=0;i<p->npics;i++)
+        catalog+=((p->pics[i].encoded!=NULL)+(p->pics[i].full!=NULL)+(p->pics[i].address!=NULL))*sizeof(yonder_picture_backing_t);
+    yonder_census_owner(sheet,"picture catalog",catalog,(uint64_t)p->npics,"entries");
     yonder_census_owner(sheet, "image sources", image_sources_cost(p), p->image_source_count, "elements");
     yonder_scripts_census(p->scripts, sheet, detail);
 }
@@ -3409,7 +3437,8 @@ static void diag_observe(Page *p, const char *when)
             (pic->image.width >= pic->width && pic->image.height >= pic->height))
             continue;
         smaller++;
-        spared += (uint64_t)pic->width * pic->height * 4u - pic->cost;
+        uint64_t whole=(uint64_t)pic->width * pic->height * 4u;
+        if(pic->cost<whole)spared += whole-pic->cost;
     }
     if (smaller > 0 || p->sizes_said) {
         os64_snprintf(v, sizeof(v), "%d kept at the size they are drawn, %lu KiB less than whole",
@@ -5005,7 +5034,7 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 // Who asks for a page's picture, sheet, script or font, and what for: the
 // agent's preset lines, read with the agent, and the request's metadata
 // from the page at `page_url`. This display-resource path uses no-cors;
-// Canvas image requests use fetch_job's hop and CORS checks separately.
+// Modern image requests use fetch_job's hop and CORS checks separately.
 static void hooks_ask(way_hooks_t *hooks, const char *page_url, way_dest_t dest)
 {
     hooks->identity = g.way.identity;
@@ -5044,9 +5073,20 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
     job->cover_w = cover_w;
     job->cover_h = cover_h;
     job->resample = resample;
+    job->recoverable = p->modern;
+    if(resample && p->modern) {
+        job->source=yonder_picture_backing_hold(pic->encoded?pic->encoded:pic->full);
+        job->source_clean=pic->origin_clean;
+        if(!job->source) {
+            yonder_picture_release(job,NULL);
+            *why="no retained source for image resampling";
+            p->picture_submit_refusals++;
+            return 0;
+        }
+    }
     // A data: address is the picture itself, which job->url may not
     // hold, and the catalog's copy dies with the page: the job keeps its own.
-    if (data_address(pic->url, pic->url_len)) {
+    if (!job->source && data_address(pic->url, pic->url_len)) {
         job->data_url = copy_text(pic->url);
         if (job->data_url == NULL) {
             yonder_picture_release(job, NULL);
@@ -5213,12 +5253,14 @@ static int32_t picture_for_mode(Page *p, const char *url, unsigned mode)
         p->pics = grown;
         p->cap_pics = cap;
     }
-    const char *kept = copy_text(url);
-    if (kept == NULL)
-        return -1;
+    yonder_picture_backing_t *address=yonder_picture_backing_new();
+    if(!address)return -1;
+    address->bytes=(uint8_t *)copy_text(url);address->length=bytes;
+    if(!address->bytes){yonder_picture_backing_free(address);return -1;}
+    const char *kept=(const char *)address->bytes;
     p->pic_slot[picture_slot(p, kept, len, mode)] = p->npics;
     Picture *pic = &p->pics[p->npics];
-    pic->url = kept;
+    pic->url = kept;pic->address=address;
     pic->url_len = len;
     pic->request_key = mode;
     p->picture_url_bytes += bytes;
@@ -5991,7 +6033,8 @@ static void pictures_judge(Page *p)
                 uint64_t have = (uint64_t)pic->image.width * pic->image.height;
                 bool grow = pic->need_w > pic->image.width || pic->need_h > pic->image.height;
                 owed = have >= 2 * need ||
-                       (grow && bytes <= PICTURES_KEPT_MAX - p->kept_bytes + pic->cost);
+                       (grow && bytes <= PICTURES_KEPT_MAX - p->kept_bytes +
+                        ((!pic->full || pic->image.pixels!=pic->full->image.pixels)?(size_t)have*4:0));
             } else if (pic->state == PIC_NOT_KEPT) {
                 owed = bytes <= PICTURES_KEPT_MAX - p->kept_bytes;
             }
@@ -6301,45 +6344,54 @@ static void picture_fact(const Picture *pic, const char *what)
 // while this one was out.
 static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *product)
 {
-    Picture *pic = &g.page.pics[job->index];
-    if (!pic->resampling)
-        return;
-    pic->resampling = false;
-    g.page.in_flight--;
-    bool shown = pic->state == PIC_SHOWN;
-    size_t old = shown ? pic->cost : 0;
-    if (product == NULL || product->status != OS64_IMAGE_OK || product->kind != YONDER_PICTURE_RASTER ||
-        (!shown && pic->state != PIC_NOT_KEPT)) {
-        picture_fact(pic, "could not be had again at the size it is drawn");
-        pic->refused_w = job->cover_w;
-        pic->refused_h = job->cover_h;
-    } else if (product->cost > PICTURES_KEPT_MAX - (g.page.kept_bytes - old)) {
-        g.page.picture_budget_refusals++;
-        if (shown)
-            picture_fact(pic, "past the memory kept at the size it is drawn; kept at the size it was");
-        pic->refused_w = job->cover_w;
-        pic->refused_h = job->cover_h;
-    } else if (shown && product->image.width == pic->image.width &&
-               product->image.height == pic->image.height) {
-        pic->refused_w = job->cover_w;
-        pic->refused_h = job->cover_h;
-    } else {
-        layout_revision(&s_layout_resources.pictures);
-        pic->origin_clean = product->origin_clean;
-        os64_image_free(&pic->image);
-        pic->image = product->image;
-        os64_memset(&product->image, 0, sizeof(product->image));
-        g.page.kept_bytes = g.page.kept_bytes - old + product->cost;
-        if (g.page.kept_bytes > g.page.picture_kept_peak)
-            g.page.picture_kept_peak = g.page.kept_bytes;
-        pic->cost = product->cost;
-        if (!shown) {
-            pic->state = PIC_SHOWN;
-            g.page.not_kept--;
-            picture_fact(pic, "kept at the size it is drawn: whole, it was past the memory kept");
-        }
-        mark_whole(WHOLE_PICTURE, false);
+    Picture *pic=&g.page.pics[job->index];
+    if(!pic->resampling)return;
+    pic->resampling=false;g.page.in_flight--;
+    bool shown=pic->state==PIC_SHOWN;
+    size_t old=shown && (!pic->full || pic->image.pixels!=pic->full->image.pixels)
+        ? (size_t)pic->image.width*pic->image.height*4 : 0;
+    if(!product || product->status!=OS64_IMAGE_OK || product->kind!=YONDER_PICTURE_RASTER ||
+       (!shown && pic->state!=PIC_NOT_KEPT)) {
+        picture_fact(pic,"could not be had again at the size it is drawn");
+        goto refused;
     }
+    if(shown && product->image.width==pic->image.width && product->image.height==pic->image.height)
+        goto refused;
+    bool whole=product->image.width==pic->width && product->image.height==pic->height;
+    size_t encoded=whole && pic->encoded?pic->encoded->length:0;
+    size_t added=whole && pic->full?0:product->cost;
+    if(added>PICTURES_KEPT_MAX-(g.page.kept_bytes-old-encoded)) {
+        g.page.picture_budget_refusals++;
+        if(shown)picture_fact(pic,"past the memory kept at the size it is drawn; kept at the size it was");
+        goto refused;
+    }
+    yonder_picture_backing_t *full=NULL;
+    if(whole && !pic->full && job->recoverable) {
+        full=yonder_picture_backing_new();
+        if(!full)goto refused;
+        full->image=product->image;
+    }
+    layout_revision(&s_layout_resources.pictures);
+    if(!pic->full || pic->image.pixels!=pic->full->image.pixels)os64_image_free(&pic->image);
+    if(full)pic->full=full;
+    if(whole && pic->full) {
+        pic->image=pic->full->image;
+        if(full)os64_memset(&product->image,0,sizeof(product->image));
+    } else {
+        pic->image=product->image;os64_memset(&product->image,0,sizeof(product->image));
+    }
+    if(encoded){yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;}
+    g.page.kept_bytes=g.page.kept_bytes-old-encoded+added;
+    pic->cost=pic->cost-old-encoded+added;
+    if(g.page.kept_bytes>g.page.picture_kept_peak)g.page.picture_kept_peak=g.page.kept_bytes;
+    if(!shown) {
+        pic->state=PIC_SHOWN;g.page.not_kept--;
+        picture_fact(pic,"kept at the size it is drawn: whole, it was past the memory kept");
+    }
+    mark_whole(WHOLE_PICTURE,false);
+    pictures_judge(&g.page);return;
+refused:
+    pic->refused_w=job->cover_w;pic->refused_h=job->cover_h;
     pictures_judge(&g.page);
 }
 
@@ -6358,7 +6410,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         g.page.picture_decode_us += product->decode_us;
         if (product->decode_us > g.page.picture_decode_max_us)
             g.page.picture_decode_max_us = product->decode_us;
-        g.page.picture_decode_untimed += product->decoded && !product->decode_timed;
+        g.page.picture_decode_untimed += (product->decoded || product->reduced) && !product->decode_timed;
         g.page.picture_decode_nomem += product->decoded && product->status == OS64_IMAGE_NO_MEMORY;
         g.page.picture_decode_limit += product->decoded && product->status == OS64_IMAGE_LIMIT;
         if (product->fetched) {
@@ -6388,20 +6440,38 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     pic->width = product->width;
     pic->height = product->height;
     size_t bytes = product->cost;
-    if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes) {
+    bool full=pic->kind==YONDER_PICTURE_RASTER && product->image.width==pic->width &&
+              product->image.height==pic->height;
+    size_t encoded=product->encoded?product->encoded->length:0;
+    size_t backing=full?0:encoded;
+    if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes ||
+        backing > PICTURES_KEPT_MAX - g.page.kept_bytes - bytes) {
         g.page.picture_budget_refusals++;
-        // Not a failure: what the page's pictures may cost is spent. Named
-        // all the same, so every picture not shown is on the record. Its
-        // size is kept: its frame is laid out at it, and a still raster is
-        // asked for again at the size that frame draws it (pictures_judge).
+        // Metadata remains successful. Reconstruction fits independently of
+        // a raster; a refused promotion must not discard that last source.
         pic->state = PIC_NOT_KEPT;
+        if(encoded && encoded<=PICTURES_KEPT_MAX-g.page.kept_bytes) {
+            pic->encoded=product->encoded;product->encoded=NULL;
+            pic->cost=encoded;g.page.kept_bytes+=encoded;
+            if(g.page.kept_bytes>g.page.picture_kept_peak)g.page.picture_kept_peak=g.page.kept_bytes;
+        }
         g.page.not_kept++;
         picture_fact(pic, "past the memory kept for the page's pictures");
-        if (picture_moves_page(&g.page, job->index))
-            g.pictures_moved = true;
-        if (pic->kind == YONDER_PICTURE_RASTER)
-            g.pictures_judge_owed = true;
+        if (picture_moves_page(&g.page, job->index))g.pictures_moved = true;
+        if (pic->kind == YONDER_PICTURE_RASTER)g.pictures_judge_owed = true;
         return;
+    }
+    if(full && job->recoverable) {
+        pic->full=yonder_picture_backing_new();
+        if(!pic->full) {
+            pic->state=PIC_FAILED;
+            picture_failed(&g.page,pic->url,NULL,"no memory for image pixel owner");
+            return;
+        }
+        pic->full->image=product->image;
+    } else if(backing) {
+        pic->encoded=product->encoded;product->encoded=NULL;
+        bytes+=backing;
     }
     pic->svg = product->svg;
     product->svg = NULL;
@@ -14212,17 +14282,53 @@ static void svg_partial_diagnostic(const yonder_svg_pixels_t *pixels, bool image
         yonder_diag_missing_seen(g.page.diag, image ? "svg image" : "svg",
             "unsupported drawing subtrees omitted (maximum per render)", pixels->omitted_subtrees);
 }
-/* Canvas sources use the same decoded products and bounded picture catalog.
- * Their request-mode key prevents a display-only or differently credentialed
- * fetch from being reused as proof that script may read the image. */
+// One window-side decode fits beside the pool's reduced reservation cap.
+// Acquisition does not enter script or reap workers. Immutable backing also
+// remains alive when a resample worker or Canvas loan outlives the catalog.
+static bool s_image_decoding;
+typedef struct {
+    yonder_picture_backing_t *full, *address;
+    yonder_svg_pixels_t svg;
+    Page *page;
+    const os64_html_document_t *document;
+    uint64_t serial;
+} ImageLoan;
+
+static bool image_promote(Page *p,Picture *pic)
+{
+    if(pic->full)return true;
+    if(!pic->encoded || s_image_decoding)goto refused;
+    size_t bytes=(size_t)pic->width*pic->height*4;
+    if(bytes>PICTURES_KEPT_MAX-p->kept_bytes+pic->encoded->length)goto refused;
+    yonder_picture_backing_t *full=yonder_picture_backing_new();
+    if(!full)goto refused;
+    s_image_decoding=true;
+    int64_t began=os64_micros();
+    os64_image_status_t status=os64_image_decode(pic->encoded->bytes,pic->encoded->length,&full->image);
+    int64_t ended=os64_micros();
+    s_image_decoding=false;
+    if(status!=OS64_IMAGE_OK || full->image.width!=pic->width || full->image.height!=pic->height) {
+        yonder_picture_backing_free(full);goto refused;
+    }
+    size_t old=pic->encoded->length;
+    pic->full=full;
+    yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;
+    p->kept_bytes=p->kept_bytes-old+bytes;pic->cost=pic->cost-old+bytes;
+    if(p->kept_bytes>p->picture_kept_peak)p->picture_kept_peak=p->kept_bytes;
+    p->image_promotions++;
+    if(began>=0 && ended>=began)p->image_promotion_us+=(uint64_t)(ended-began);
+    return true;
+refused:
+    p->image_promotion_refusals++;
+    return false;
+}
+
 static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t *node,
     bool pixels,os64_dom_image_view_t *out)
 {
     *out=(os64_dom_image_view_t){0};
     Page *p=page_of_doc(opaque);
     if(!p||!p->modern||!os64_html_owns_node(opaque,node))return OS64_DOM_IMAGE_BROKEN;
-    /* The picture catalog and worker generation belong to the shown page.
-     * Streaming/coming pages acquire images once they become that owner. */
     if(p!=&g.page)return OS64_DOM_IMAGE_PENDING;
     if (pixels) p->image_pixel_reads++;
     else p->image_metadata_reads++;
@@ -14232,40 +14338,56 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     out->generation=source->current_generation;
     out->pending=source->generation!=source->current_generation;
     out->density=source->current_density;out->density_set=true;
-    int32_t index=source->current_native;
-    int32_t current=index>=0?index:source->current_display;
-    out->current_src=current>=0?p->pics[current].url:source->url?source->url:"";
+    int32_t index=source->current_display;
+    out->current_src=index>=0?p->pics[index].url:source->url?source->url:"";
     if(source->refused)return OS64_DOM_IMAGE_REFUSED;
     if(source->broken)return OS64_DOM_IMAGE_BROKEN;
     if(source->empty)return OS64_DOM_IMAGE_PENDING;
     bool local=source->url && os64_strlen(source->url)>=7 && !os64_memcmp(source->url,"file://",7);
     if(local && (os64_strlen(p->way.url)<7 || os64_memcmp(p->way.url,"file://",7)))return OS64_DOM_IMAGE_BROKEN;
-    source->wants_native=true;
+    source->wants_display=true;
     if(index<0){out->pending=true;return OS64_DOM_IMAGE_PENDING;}
     Picture *pic=&p->pics[index];
     if (pixels) pic->pixels_seen = true;
     else pic->metadata_seen = true;
     if(pic->state==PIC_QUEUED||pic->state==PIC_WAITING)return OS64_DOM_IMAGE_PENDING;
-    if(pic->state!=PIC_SHOWN)return OS64_DOM_IMAGE_BROKEN;
-    uint32_t w,h;const uint32_t *plane=picture_pixels(pic,&w,&h);
+    if(pic->state!=PIC_SHOWN && pic->state!=PIC_NOT_KEPT)return OS64_DOM_IMAGE_BROKEN;
+    uint32_t w=pic->width,h=pic->height;
     out->origin_clean=pic->origin_clean;
-    out->surface=(draw2d_surface_t){(void *)plane,w,h,(size_t)w*4,(size_t)w*h*4,DRAW2D_ARGB8_STRAIGHT};
-    if(!pixels||pic->kind!=YONDER_PICTURE_SVG)return OS64_DOM_IMAGE_READY;
-    yonder_svg_pixels_t *rendered=os64_calloc(1,sizeof(*rendered));
-    if(!rendered)return OS64_DOM_IMAGE_REFUSED;
-    yonder_svg_image_view_t view={.width=w,.height=h,.pixel_width=w,.pixel_height=h,
-        .dark=s_dark,.reduced_motion=s_reduce_motion};
-    os64_geometry_memory_t memory={p,svg_allocate,svg_free};
-    svg_status_t status=yonder_svg_document_render(pic->svg,&view,&memory,os64_freetype_geometry_v1(),rendered);
-    if(status!=SVG_OK){os64_free(rendered);return OS64_DOM_IMAGE_REFUSED;}
-    out->surface=(draw2d_surface_t){rendered->pixels,w,h,(size_t)w*4,rendered->bytes,DRAW2D_ARGB8_STRAIGHT};
-    out->token=rendered;return OS64_DOM_IMAGE_READY;
+    out->surface=(draw2d_surface_t){NULL,w,h,(size_t)w*4,(size_t)w*h*4,DRAW2D_ARGB8_STRAIGHT};
+    if(!pixels)return OS64_DOM_IMAGE_READY;
+    ImageLoan *loan=os64_calloc(1,sizeof(*loan));
+    if(!loan)return OS64_DOM_IMAGE_REFUSED;
+    if(pic->kind!=YONDER_PICTURE_SVG) {
+        if(!image_promote(p,pic)){os64_free(loan);return OS64_DOM_IMAGE_REFUSED;}
+        loan->full=yonder_picture_backing_hold(pic->full);
+        out->surface.pixels=loan->full->image.pixels;
+    } else {
+        if(!pic->svg){os64_free(loan);return OS64_DOM_IMAGE_REFUSED;}
+        loan->page=p;loan->document=page_doc(p);loan->serial=p->serial;
+        yonder_svg_image_view_t view={.width=w,.height=h,.pixel_width=w,.pixel_height=h,
+            .dark=s_dark,.reduced_motion=s_reduce_motion};
+        os64_geometry_memory_t memory={p,svg_allocate,svg_free};
+        svg_status_t status=yonder_svg_document_render(pic->svg,&view,&memory,os64_freetype_geometry_v1(),&loan->svg);
+        if(status!=SVG_OK){os64_free(loan);return OS64_DOM_IMAGE_REFUSED;}
+        out->surface.pixels=loan->svg.pixels;out->surface.capacity=loan->svg.bytes;
+    }
+    loan->address=yonder_picture_backing_hold(pic->address);
+    out->token=loan;return OS64_DOM_IMAGE_READY;
 }
 static void canvas_source_release(void *opaque,os64_dom_image_view_t *view)
 {
-    if(!view->token)return;
-    Page *p=page_of_doc(opaque);os64_geometry_memory_t memory={p,svg_allocate,svg_free};
-    yonder_svg_pixels_free(&memory,view->token);os64_free(view->token);view->token=NULL;
+    (void)opaque;
+    ImageLoan *loan=view->token;if(!loan)return;
+    yonder_picture_backing_free(loan->full);
+    yonder_picture_backing_free(loan->address);
+    if(loan->svg.pixels) {
+        if(loan->page->serial==loan->serial && page_doc(loan->page)==loan->document) {
+            os64_geometry_memory_t memory={loan->page,svg_allocate,svg_free};
+            yonder_svg_pixels_free(&memory,&loan->svg);
+        } else os64_free(loan->svg.pixels);
+    }
+    os64_free(loan);view->token=NULL;
 }
 
 static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_svg_pixels_t *out)
@@ -17523,7 +17645,7 @@ int main(int argc, char **argv)
     interface_font_finish();
     downloads_follow();
 
-    g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
+    g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK);
     g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);
     window_seen();                      // a window born covered learns it now, not at a nudge

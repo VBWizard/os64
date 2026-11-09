@@ -5,25 +5,24 @@ the size it is drawn" (Browser layout). Userland only (yonder), no kernel.
 
 ## The problem
 
-A raster picture is decoded once, at its own size, and kept that way for the
-life of the page. A 3840x2160 wallpaper drawn as a 400x225 thumbnail keeps
+Before display reduction, a raster picture was decoded at its own size and
+kept that way for the life of the page. A 3840x2160 wallpaper drawn as a 400x225 thumbnail keeps
 33 MB of pixels to draw 360 KB of them, and every page's pictures share
 `PICTURES_KEPT_MAX`. On a photo site's search page 13 of 42 pictures were
 empty frames under the old 256 MiB cap; the cap was raised, the waste stayed.
 
 ## Two sizes, named apart
 
-Today `picture_pixels()` returns the grid's dimensions and every caller reads
-them as the picture's NATURAL size: libflow's `replaced_size`, `object-fit`
-(`yonder_object_rect`), background tiles (`yonder_background_tile`), the
-attribute tiler. Once the grid can be smaller than the picture, those are two
-facts:
+`picture_pixels()` returns the stored grid's dimensions for painting. Layout,
+object-fit and background tiling use the separately retained source dimensions.
+The relevant sizes are:
 
-- **natural size**: the picture's own, in CSS pixels. Layout reads only this.
-  `Picture` and the worker's product carry it as their own fields.
-- **kept size**: the pixel grid yonder holds. The painters read only this;
-  `yonder_draw_picture` and `yonder_tile_picture` already scale any grid into
-  any rectangle, so a smaller grid needs no change there.
+- **source size**: decoded raster dimensions, or an SVG's default object size,
+  carried by `Picture` and the worker product;
+- **natural CSS size**: source dimensions corrected for the element's selected
+  density ([responsive selection](IMAGE_MEMORY_I2.md));
+- **kept size**: the display grid. The painters scale that grid into the
+  destination rectangle.
 
 Shrinking a picture therefore never moves the page. Nothing that lays out
 reads the grid.
@@ -61,15 +60,14 @@ and averaging would already have mixed them.
 
 ## How: one job, a target size
 
-There is no separate shrink. The picture job gets an optional target (a
-device-pixel width and height). The worker decodes as today, and when a target
-is set and the picture is bigger, it reduces the grid to the target by
-averaging every source pixel under each output pixel (alpha-weighted, as
-`smooth_at` weighs), then frees the full one before returning. The full grid
-lives only inside the worker, under `PICTURE_RESERVE`, which already admits
-libimage's largest decode. Averaging is also better looking than what the
-painter does now: `smooth_at` mixes four neighbours, which at a tenth of the
-size reads four pixels of every hundred and shimmers.
+The picture job accepts a device-pixel target. A fetch or encoded-source
+resample decodes, then reduces an oversized grid by averaging the source pixels
+under each output pixel, weighted by alpha. When that worker reduces a fresh
+decode, it releases the full grid before returning. A resample from an immutable
+full raster reads its existing owner and allocates a separate display grid;
+the owner remains available for later Canvas acquisition or growth. Worker
+scratch is admitted under `PICTURE_RESERVE`. Area reduction avoids the aliasing
+that sampling only four neighbours would produce at small scales.
 
 - **First request:** a box that layout has already fixed
   (`flow_replaced_fixed`, so it does not wait on the picture) with
@@ -80,9 +78,13 @@ size reads four pixels of every hundred and shimmers.
   size as the target, which the worker takes exactly: it is a kept size
   already, and worked out a second time its rounding up can answer a size
   still twice the need, asked for again forever (7x3 drawn 2x1: need 3x1,
-  worked out again 3x2). The bytes come from where they came the first time:
-  yonder's cache for `http:`/`https:` (a miss fetches again), the file for
-  `file:`, the job's own copy for `data:`.
+  worked out again 3x2). In Modern Web mode, the worker uses an immutable
+  reconstruction owner: the retained encoded response, or a retained full
+  raster. It does not fetch a completed request's URL again. When a picture
+  arrived whole and later needs reduction, its full raster remains the
+  reconstruction source; the smaller display grid is an additional charge.
+  Growing back to that full raster shares it. Outside Modern Web mode, the
+  job uses the original cache/file/data route. See [I3 ownership](IMAGE_MEMORY_I3.md).
 - **Arrival** of a resample swaps the grid and corrects `kept_bytes` by the
   difference. A resample that fails leaves the picture as it was: a worse
   copy is never traded for none. One that fails, does not fit, or comes back

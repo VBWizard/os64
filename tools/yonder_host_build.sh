@@ -48,7 +48,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     print("userland/" + name)
 ')
     local objects=() source object private
-    for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
+    for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_yonder_gif_host.c tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit}.c \

@@ -2,8 +2,9 @@
 
 // Desired selection and completed selection are separate: a getter may see a
 // mutation before the task boundary submits it, and an obsolete job can finish
-// afterward. Catalog indices own immutable products for the page's lifetime;
-// only promotion changes the product and density exposed by an element.
+// afterward. Catalog indices remain valid for the page's lifetime. A desired
+// selection becomes current when its request completes; display grids can be
+// resampled from that request's immutable reconstruction source.
 struct ImageSource {
     ImageSource *next;
     const os64_html_node_t *node;
@@ -12,8 +13,8 @@ struct ImageSource {
     double density, current_density;
     garb_env_t environment;
     unsigned mode;                 // 1 no-CORS; 2 anonymous; 3 use-credentials
-    int32_t display, native, current_display, current_native;
-    bool wants_display, wants_native, empty, broken, refused;
+    int32_t display, current_display;
+    bool wants_display, empty, broken, refused;
 };
 
 static const char *image_attr(const os64_html_node_t *n, const char *name)
@@ -122,9 +123,9 @@ static void image_source_read(Page *p, ImageSource *s)
     os64_free(s->url);s->url=url;
     if(url)p->image_source_bytes+=os64_strlen(url)+1;
     s->density=chosen.density;s->mode=mode;s->generation++;
-    s->display=s->native=-1;s->empty=empty;s->broken=status==OS64_PAGE_SOURCE_EMPTY && authored;
+    s->display=-1;s->empty=empty;s->broken=status==OS64_PAGE_SOURCE_EMPTY && authored;
     s->refused=status==OS64_PAGE_SOURCE_LIMIT;
-    if(!url) {s->current_display=s->current_native=-1;s->current_generation=s->generation;}
+    if(!url) {s->current_display=-1;s->current_generation=s->generation;}
     if(s->refused)yonder_diag_failed_seen(p->diag,"image source","source selection exceeded its limits or has no memory");
 }
 
@@ -138,7 +139,7 @@ static ImageSource *image_source(Page *p, const os64_html_node_t *node)
     ImageSource *s=os64_calloc(1,sizeof(*s));
     if(!s){yonder_diag_failed_seen(p->diag,"image source","no memory for selected image state");return NULL;}
     os64_html_hold(page_doc(p),node);
-    s->node=node;s->version=UINT64_MAX;s->display=s->native=s->current_display=s->current_native=-1;
+    s->node=node;s->version=UINT64_MAX;s->display=s->current_display=-1;
     s->density=s->current_density=1;s->next=p->image_sources;p->image_sources=s;p->image_source_count++;
     image_source_read(p,s);return s;
 }
@@ -193,16 +194,14 @@ static void image_sources_flush(Page *p)
             s->display=picture_for_mode(p,s->url,s->mode==1?0:s->mode+2);
             if(s->display>=0 && !picture_sized(p,s->node))p->pics[s->display].moves=true;
         }
-        if(s->wants_native && s->native<0)s->native=picture_for_mode(p,s->url,s->mode);
-        bool refused=(s->wants_display && s->display<0)||(s->wants_native && s->native<0);
+        bool refused=s->wants_display && s->display<0;
         if(refused) {
             s->refused=true;
             yonder_diag_failed_seen(p->diag,"image source","selected image cannot be requested: catalog limit, unsupported URL, or no memory");
         }
-        // A wrapped image's completion event waits for the native product too,
-        // so its load callback can synchronously draw and read back pixels.
-        bool done=refused || ((!s->wants_display || image_finished(p,s->display)) &&
-                             (!s->wants_native || image_finished(p,s->native)));
+        // Completion belongs to the selected request. Pixel acquisition can
+        // synchronously use its retained raster or exact encoded response.
+        bool done=refused || (s->wants_display && image_finished(p,s->display));
         if(done) {
             bool changed=s->current_display!=s->display || s->current_density!=s->density;
             bool had=s->current_display>=0 && (p->pics[s->current_display].state==PIC_SHOWN ||
@@ -212,7 +211,7 @@ static void image_sources_flush(Page *p)
             // Failed initial requests do not change geometry. Initial sized
             // arrivals are painted by the arrival path without a new layout.
             moved |= changed && (had || (has && p->pics[s->display].moves));
-            s->current_display=s->display;s->current_native=s->native;s->current_density=s->density;
+            s->current_display=s->display;s->current_density=s->density;
             s->current_generation=s->generation;
         }
     }

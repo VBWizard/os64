@@ -6,7 +6,7 @@ Branch: `codex/yonder-image-memory-design`.
 
 Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md),
 [I0 stylesheet preload](IMAGE_MEMORY_I0.md), [I1 native image cache](IMAGE_MEMORY_I1.md)
-and [I2 responsive images](IMAGE_MEMORY_I2.md).
+[I2 responsive images](IMAGE_MEMORY_I2.md), and [I3 shared ownership](IMAGE_MEMORY_I3.md).
 I1 passes host validation and P5 regression checks; three Microsoft visits show
 repeat-visit cache reuse, with controlled causal savings still unmeasured.
 The M0 hardware baseline is captured;
@@ -16,7 +16,8 @@ to another branch.
 I2's implementation, host evidence, accepted P5 gallery/local regressions and
 Microsoft comparison are recorded separately. The live visits show fewer
 transferred bytes and refusals, but higher settled retained pixels; controlled
-causal savings remain unmeasured. I3 is not implemented.
+causal savings remain unmeasured. I3 is implemented with host validation; its
+P5 gate and live-page measurement remain pending.
 
 ## 1. Decision and scope
 

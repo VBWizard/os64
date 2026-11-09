@@ -7,6 +7,7 @@ static yonder_picture_t *image_cache_run(way_cache_t *cache, const char *url,
     os64_strcopy(job->url, sizeof(job->url), url);
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), "https://a.test/page");
     job->canvas_request = mode;
+    if(!mode){job->recoverable=true;job->cover_w=job->cover_h=0;}
     job->svg_enabled = true;
     job->hooks.cache = cache;
     job->hooks.identity = identity;
@@ -60,6 +61,7 @@ static void image_cache_cases(void)
           "image cache: no-cors mode and strict cross-origin referrer");
     check(strstr(fake_requests[0].accept, "image/png") && strstr(fake_requests[0].accept, "image/svg+xml"),
           "image cache: built-in Accept names supported image types");
+    image_cache_expect(cache, url, 0, NULL, WAY_SERVED_KEPT, false, 0);
     image_cache_expect(cache, url, 1, NULL, WAY_SERVED_KEPT, false, 0);
     js_test_clock.epoch += 120;
     answer->status = 304; answer->headers = "Cache-Control: max-age=600\r\n";
@@ -79,14 +81,14 @@ static void image_cache_cases(void)
     way_cache_drop(cache, &key);
     image_cache_expect(cache, url, 1, NULL, WAY_SERVED_NETWORK, false, 1);
 
-    /* Reproduce the headerless entry written by the display fetch path,
+    /* Reproduce the headerless entry written by the legacy display fetch path,
      * including a later overwrite after native fetching populated it. */
     for (int repeat = 0; repeat < 2; repeat++) {
         way_entry_t entry; way_blocks_t blocks; uint8_t *bytes = NULL; size_t len = 0;
         bool found = way_cache_find(cache, &key, &entry, &bytes, &len, &blocks, OS64_IMAGE_CAP_DEFAULT);
         check(found && blocks.headers_len > 0, "image cache: native entry carries response headers");
         check(found && way_cache_put(cache, &entry, NULL, bytes, len),
-              "image cache: seed display-format headerless overwrite");
+              "image cache: seed legacy display-format headerless overwrite");
         os64_free(bytes);
         image_cache_expect(cache, url, 1, NULL, WAY_SERVED_NETWORK, false, 1);
         image_cache_expect(cache, url, 1, NULL, WAY_SERVED_KEPT, false, 0);

@@ -10,6 +10,37 @@
 #include "os64/slurp.h"
 #include "os64/str.h"
 
+yonder_picture_backing_t *yonder_picture_backing_new(void)
+{
+    yonder_picture_backing_t *b=os64_calloc(1,sizeof(*b));
+    if(b)b->refs=1;
+    return b;
+}
+yonder_picture_backing_t *yonder_picture_backing_hold(yonder_picture_backing_t *b)
+{
+    if(b)__atomic_add_fetch(&b->refs,1,__ATOMIC_RELAXED);
+    return b;
+}
+void yonder_picture_backing_free(yonder_picture_backing_t *b)
+{
+    if(!b || __atomic_sub_fetch(&b->refs,1,__ATOMIC_ACQ_REL))return;
+    os64_free(b->bytes);os64_image_free(&b->image);os64_free(b);
+}
+
+// The page decides whether the raster or its encoded form fits. Keep the
+// response through that decision, including full rasters that may be refused.
+static void preserve_body(const yonder_picture_job_t *j,yonder_picture_t *p,uint8_t **bytes,size_t len)
+{
+    if(!j->recoverable || p->status!=OS64_IMAGE_OK || p->kind==YONDER_PICTURE_SVG)return;
+    p->encoded=yonder_picture_backing_new();
+    if(!p->encoded) {
+        p->status=OS64_IMAGE_NO_MEMORY;
+        os64_strcopy(p->why,sizeof(p->why),"no memory for image reconstruction owner");
+        return;
+    }
+    p->encoded->bytes=*bytes;p->encoded->length=len;*bytes=NULL;
+}
+
 // Negotiated image types, then anything: a server that labels a GIF
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
 // label. An SVG MIME type selects XML validation. A browser preset asks
@@ -30,6 +61,12 @@ static bool xml_candidate(const uint8_t *bytes, size_t len)
     while (at < len && (bytes[at] == ' ' || bytes[at] == '\t' || bytes[at] == '\r' || bytes[at] == '\n'))
         ++at;
     return at < len && bytes[at] == '<';
+}
+static bool header_content_type(const char *name)
+{
+    const char *expected="content-type";
+    for(size_t i=0;i<12;i++)if((name[i]|32)!=expected[i])return false;
+    return true;
 }
 static bool svg_type(const char *s)
 {
@@ -174,6 +211,32 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         p->status = svg_failure(SVG_CANCELLED, p);
         return 0;
     }
+    if(j->source) {
+        p->origin_clean=j->source_clean;
+        if(j->source->bytes) {
+            p->status=decode_observed(j->source->bytes,j->source->length,NULL,j,cancelled,ctx,p);
+        } else {
+            // The full raster is immutable. Reduction allocates its own result;
+            // the job never frees or lends the catalog's source allocation.
+            int64_t began=os64_micros();
+            const os64_image_t *src=&j->source->image;
+            p->width=src->width;p->height=src->height;
+            uint32_t w=j->cover_w<src->width?j->cover_w:src->width;
+            uint32_t h=j->cover_h<src->height?j->cover_h:src->height;
+            p->status=OS64_IMAGE_NO_MEMORY;
+            if(w && h && !(cancelled && cancelled(ctx))) {
+                p->image.pixels=os64_malloc((size_t)w*h*4);
+                if(p->image.pixels && yonder_reduce_picture(src->pixels,src->width,src->height,p->image.pixels,w,h)) {
+                    p->image.width=w;p->image.height=h;p->cost=(size_t)w*h*4;
+                    p->status=OS64_IMAGE_OK;p->reduced=w<src->width || h<src->height;
+                }
+            }
+            int64_t ended=os64_micros();
+            p->decode_timed=began>=0 && ended>=began;
+            if(p->decode_timed)p->decode_us=(uint64_t)(ended-began);
+        }
+        return p->status==OS64_IMAGE_OK?1:0;
+    }
     // A data: picture is its own address, decoded here as Fetch decodes
     // one (fetch_job.h): nothing is fetched or read. Its type is what the
     // address says, which picks SVG as a server's Content-Type would.
@@ -191,6 +254,7 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
             p->status = decode_observed(bytes, len, type, j, cancelled, ctx, p);
             p->origin_clean = true;
         }
+        preserve_body(j,p,&bytes,len);
         os64_free(bytes);
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
@@ -204,17 +268,18 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
             /* Local pages may sample local fixtures; a network page may not
              * acquire file pixels through this worker's Canvas request. */
             p->origin_clean=(os64_strlen(j->hooks.referrer)>=7&&!os64_memcmp(j->hooks.referrer,"file://",7));
+            preserve_body(j,p,&bytes,len);
             os64_free(bytes);
         } else {
             os64_strcopy(p->why, sizeof(p->why), "could not be read");
         }
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
-    if(j->canvas_request || j->display_cors) {
+    if(j->recoverable || j->canvas_request || j->display_cors) {
         yonder_fetch_job_t request={.agent=j->agent,.identity=j->hooks.identity,.url=j->url,
             .jar=j->hooks.jar,.cache=j->hooks.cache,.max_body=OS64_IMAGE_CAP_DEFAULT,
             .default_accept=j->svg_enabled?PICTURE_ACCEPT:OS64_IMAGE_ACCEPT ", */*;q=0.5"};
-        unsigned mode=j->canvas_request?j->canvas_request:j->display_cors;
+        unsigned mode=j->canvas_request?j->canvas_request:j->display_cors?j->display_cors:1;
         request.request.mode=mode==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
         request.request.credentials=mode==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
         request.request.redirect=WAY_REDIRECT_FOLLOW;
@@ -231,9 +296,18 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         }
         p->status=OS64_IMAGE_IO_ERROR;
         if(got&&got->ok&&got->status>=200&&got->status<300&&got->has_body) {
-            p->status=decode_observed(got->body,got->body_len,NULL,j,cancelled,ctx,p);
+            char type[WAY_MIME_SERIALIZED_MAX]={0};
+            size_t at=0;way_header_t header;
+            while(way_header_next(got->headers,got->headers_len,&at,&header))
+                if(header.name_len==12 && header_content_type(header.name)) {
+                    size_t n=header.value_len<sizeof(type)-1?header.value_len:sizeof(type)-1;
+                    os64_memcpy(type,header.value,n);type[n]=0;break;
+                }
+            p->status=decode_observed(got->body,got->body_len,type,j,cancelled,ctx,p);
+            preserve_body(j,p,&got->body,got->body_len);
             p->origin_clean=got->type!=WAY_TYPE_OPAQUE;
         } else os64_strcopy(p->why,sizeof(p->why),got&&got->why[0]?got->why:"image fetch failed");
+        if(got)j->hooks.cookies_short=got->cookies_short;
         yonder_fetched_free(got);return p->status==OS64_IMAGE_OK?1:0;
     }
     os64_fetch_options_t opt = {0};
@@ -275,12 +349,15 @@ void yonder_picture_release(void *job, void *product)
 {
     yonder_picture_t *p = product;
     if (p != NULL) {
+        yonder_picture_backing_free(p->encoded);
         yonder_svg_document_free(p->svg);
         os64_image_free(&p->image);
         os64_image_sequence_free(p->sequence);
         os64_free(p);
     }
-    if (job != NULL)
+    if (job != NULL) {
+        yonder_picture_backing_free(((yonder_picture_job_t *)job)->source);
         os64_free(((yonder_picture_job_t *)job)->data_url);
+    }
     os64_free(job);
 }

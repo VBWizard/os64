@@ -81,8 +81,8 @@ static void responsive_window_cases(void)
     check(replaced_size(&g.page,node,&w,&h) && w==200 && h==100,
           "responsive layout: 2x natural size is density corrected");
     os64_dom_image_view_t view;
-    check(canvas_source(g.page.way.doc,node,false,&view)==OS64_DOM_IMAGE_PENDING,
-          "responsive: metadata requests the shared selection");
+    check(canvas_source(g.page.way.doc,node,false,&view)==OS64_DOM_IMAGE_READY,
+          "responsive: metadata shares the completed display selection");
     responsive_drain();
     check(canvas_source(g.page.way.doc,node,true,&view)==OS64_DOM_IMAGE_READY &&
           view.surface.width==400 && view.density==2 && strstr(view.current_src,"400x200"),
@@ -136,7 +136,7 @@ static void responsive_mutation_cases(void)
     canvas_source(g.page.way.doc,node,false,&view);
     check(g.page.npics==count && !pool_work.job,"responsive mutation: related changes coalesce before submission");
     pictures_feed(&g.page);
-    check(g.page.npics==count+2 && picture_find(&g.page,"data:image/png,SIZED%20120x60")<0,
+    check(g.page.npics==count+1 && picture_find(&g.page,"data:image/png,SIZED%20120x60")<0,
           "responsive mutation: skipped intermediate source never enters fetch catalog");
     responsive_set(node,"srcset","data:image/png,SIZED%20200x100 1x");
     responsive_drain();

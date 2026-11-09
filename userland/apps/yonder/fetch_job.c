@@ -745,9 +745,9 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
 // The final response, filtered for the page: from the network (`f`, whose
 // body is read here, whole for native consumers, or streamed for scripts when
 // `s` is not NULL) or from the cache (`kept`, `kept_len`, `f` NULL) — the same
-// filtering either way. Native styles retain their MIME headers and final
-// URL for parsing and relative imports; that product must not enter script
-// response delivery. False, with the reason in `got`, when it could not be had.
+// filtering either way. Native images/styles retain MIME headers for parsing;
+// styles also retain the final URL for relative imports. These products must
+// not enter script response delivery. False, with the reason in `got`, when it could not be had.
 static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current, int32_t status,
                    const char *reason, const way_response_t *resp, os64_fetch_t *f, const uint8_t *kept,
                    size_t kept_len, uint64_t max_body, way_dest_t destination, const Streaming *s)
@@ -763,7 +763,7 @@ static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current,
     got->headers = os64_malloc(resp->headers_len + 1);
     if (got->url == NULL || got->headers == NULL)
         return network_error(got, "out of memory"), false;
-    got->headers_len = way_response_headers(r, destination == WAY_DEST_STYLE ? WAY_TYPE_BASIC : type,
+    got->headers_len = way_response_headers(r, destination != WAY_DEST_EMPTY ? WAY_TYPE_BASIC : type,
                                                resp, got->headers, resp->headers_len + 1);
     if (got->headers_len == SIZE_MAX)
         return network_error(got, "the answer's headers did not fit"), false;

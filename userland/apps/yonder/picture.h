@@ -25,6 +25,19 @@ _Static_assert(PICTURE_RESERVE >= (size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEM
                "picture admission must cover the raster codec budget");
 typedef enum { YONDER_PICTURE_RASTER, YONDER_PICTURE_SEQUENCE, YONDER_PICTURE_SVG } yonder_picture_kind_t;
 
+// Immutable reconstruction storage shared by the catalog, resample jobs and
+// Canvas loans. An owner holds response/URL bytes or a full raster. Reference
+// changes may cross worker/window threads; contents do not change after publish.
+typedef struct yonder_picture_backing {
+    unsigned refs;
+    uint8_t *bytes;
+    size_t length;
+    os64_image_t image;
+} yonder_picture_backing_t;
+yonder_picture_backing_t *yonder_picture_backing_new(void);
+yonder_picture_backing_t *yonder_picture_backing_hold(yonder_picture_backing_t *);
+void yonder_picture_backing_free(yonder_picture_backing_t *);
+
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_PICTURE
     int32_t index;                  // which of the page's pictures
@@ -55,6 +68,9 @@ typedef struct {
     // of arriving as new.
     uint32_t cover_w, cover_h;
     bool resample;
+    bool recoverable;              // preserve reconstruction before the body is freed
+    yonder_picture_backing_t *source; // owned immutable input for a resample
+    bool source_clean;
 } yonder_picture_job_t;
 
 // A tagged product: raster pixels, a moving GIF sequence, or an independently
@@ -62,15 +78,16 @@ typedef struct {
 // temporary SVG rasterization has a separate serialized working allowance.
 typedef struct {
     yonder_picture_kind_t kind;
-    bool origin_clean;             // native Canvas request passed its origin/CORS checks
+    bool origin_clean;             // recorded response taint, including redirect hops
     yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
-    // Its own size in CSS pixels, any kind (an SVG's default object size),
+    // Source raster dimensions, or an SVG's default object size,
     // which layout reads; a raster's `image` may be smaller (cover_w/h).
     uint32_t width, height;
     os64_image_status_t status;     // OK, or why there is no picture
     os64_image_t image;             // when kind is YONDER_PICTURE_RASTER: the pixels kept
     os64_image_sequence_t *sequence;
-    size_t cost;
+    size_t cost;                    // decoded product, excluding encoded backing below
+    yonder_picture_backing_t *encoded; // worker retains bytes until catalog admission
     // Observations of this worker, not retained allocation charges. Body
     // bytes are the fetched entity length, not compressed wire traffic.
     size_t body_bytes;

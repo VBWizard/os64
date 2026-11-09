@@ -132,7 +132,7 @@ typedef struct {
 } yonder_fetched_t;
 
 /* Native image consumer: applies the same hop/CORS checks but retains an
- * opaque body's bytes for decoding. Its product must not enter script-response
+ * opaque body's bytes and MIME headers for decoding. Its product must not enter script-response
  * delivery. type still carries the origin-clean verdict (opaque taints). */
 int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,void **out);
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);
