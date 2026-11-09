@@ -196,7 +196,10 @@ static garb_clock_t anim_clock(const FAnimation *an, double now)
     if (an->script != NULL) {
         const garb_effect_t *x = an->script;
         double local = x->held ? x->hold_ms : (now - x->start_ms) * x->rate;
-        return garb_clock_at(&x->timing, local, !x->held && x->rate < 0);
+        /* Its direction whether or not it is held: a reversed one paused or
+         * finished at a boundary is on the boundary's far side, as libdom's
+         * Animation reads it (garb_clock_at, § 4.5.5). */
+        return garb_clock_at(&x->timing, local, x->rate < 0);
     }
     return clock_at(&an->timing, local_time(an->record, now));
 }
@@ -2418,7 +2421,9 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
     }
     // And what each shows in its active phase: an interval that holds one
     // value (FAnimation.holds) at its far end, whatever its easing;
-    // anything else now.
+    // anything else now. The far end is found by time, linearly, which a
+    // script effect's own easing bends (its progress is the eased one), so
+    // such an effect is due now throughout.
     for (int32_t a = 0; half != F_NEXT_EDGES && a < m->nanims && next > now; a++) {
         const FAnimation *an = &m->anims[a];
         if (!anim_live(an) || anim_paused(an))
@@ -2434,8 +2439,9 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
                 continue;
             Frame s, e;
             interval(an, NULL, (garb_prop_t)p, k.progress, &s, &e);
+            bool bent = an->script != NULL && an->script->timing.easing.kind != GARB_EASE_LINEAR;
             next = f_props_has(&an->holds, (garb_prop_t)p)
-                       ? (isnan(base) ? now
+                       ? (isnan(base) || bent ? now
                                       : fmin(next, edge_due(&k, &an->timing, base,
                                                             k.forwards ? e.offset : s.offset, now)))
                        : now;

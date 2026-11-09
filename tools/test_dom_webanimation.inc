@@ -304,6 +304,9 @@ static void wa_procedures(void)
         "get easing(){seen.push('easing')},get composite(){seen.push('composite')}}],1);"
         "box.animate({get width(){seen.push('w')},get offset(){seen.push('o')},get color(){seen.push('c')}},1);"
         "assert(seen.join()==='composite,easing,offset,color,width,o,c,w',seen.join());seen.length=0;"
+        "box.animate([{get marginTop(){seen.push('marginTop')},get opacity(){seen.push('opacity')},"
+        "get margin(){seen.push('margin')}}],1);"
+        "assert(seen.join()==='margin,marginTop,opacity',seen.join());seen.length=0;"
         "box.animate(null,o);assert(seen.join()==='delay,direction,duration,easing,endDelay,fill,iterationStart,"
         "iterations,pseudoElement,id',seen.join());",
         "web animations: refused arguments");
@@ -361,10 +364,32 @@ static void wa_collection(void)
     fixture_free(&f);
 }
 
+/* A frame callback reads the timeline at its own timestamp, nothing
+ * stepping meanwhile (HTML gives both one time). */
+static void wa_frame_time(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    p2b_script(&f,
+        "const a=document.getElementById('box').animate(null,10);a.pause();a.currentTime=5;"
+        "globalThis.early=document.timeline.currentTime;globalThis.tl='none';"
+        "requestAnimationFrame(t=>{tl=document.timeline.currentTime===t&&t>early?'same':t+' '+document.timeline.currentTime})",
+        "web animations: a frame callback asked for");
+    p2b_advance(50);
+    os64_js_outcome_t out;
+    check(os64_dom_animation_fire(f.binding, p2b_ms, &out) && out.status == OS64_JS_OK,
+          "web animations: the frame callback runs");
+    p2b_script(&f, "assert(tl==='same',String(tl))", "web animations: the timeline's time is the frame's");
+    fixture_free(&f);
+}
+
 static void dom_webanimation_cases(void)
 {
     wa_x_key();
     wa_running();
     wa_procedures();
     wa_collection();
+    wa_frame_time();
 }

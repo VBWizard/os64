@@ -78,6 +78,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     uint64_t next=frame_after(now);
     uint32_t last=dom->animation_handle;
     double timestamp=d_performance_now(dom);
+    d_web_animations_sample(dom,timestamp);
     dom->animation_running=true;
     if(os64_js_task_begin(dom->runtime,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {
         os64_js_outcome_t access;

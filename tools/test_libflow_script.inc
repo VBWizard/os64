@@ -120,21 +120,26 @@ static void script_effect_cases(void)
         const char *what, *css, *want;
         double now, rate, start;
         garb_fill_t fill;
+        bool held;
     } kRuns[] = {
-        {"script effects: a running clock is (now - start) at rate 1", "", "0.5", 5000, 1, 4000, GARB_FILL_NONE},
-        {"script effects: at rate 2, 500 ms in is half way", "", "0.5", 4500, 2, 4000, GARB_FILL_NONE},
+        {"script effects: a running clock is (now - start) at rate 1", "", "0.5", 5000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: at rate 2, 500 ms in is half way", "", "0.5", 4500, 2, 4000, GARB_FILL_NONE, false},
         {"script effects: and 1000 ms in is its end, filled forwards its last", "", "1", 5000, 2, 4000,
-         GARB_FILL_FORWARDS},
-        {"script effects: past its end, unfilled, it shows nothing", "", "1", 7000, 1, 4000, GARB_FILL_NONE},
+         GARB_FILL_FORWARDS, false},
+        {"script effects: past its end, unfilled, it shows nothing", "", "1", 7000, 1, 4000, GARB_FILL_NONE, false},
         {"script effects: past its end, filled forwards, its last", "#k{opacity:.3}", "1", 7000, 1, 4000,
-         GARB_FILL_FORWARDS},
+         GARB_FILL_FORWARDS, false},
         {"script effects: before its start it shows nothing, the rule's value",
-         "#k{opacity:.3}", "0.3", 3000, 1, 4000, GARB_FILL_NONE},
-        {"script effects: backwards from its end, a quarter run", "", "0.75", 4500, -1, 6000, GARB_FILL_NONE},
+         "#k{opacity:.3}", "0.3", 3000, 1, 4000, GARB_FILL_NONE, false},
+        {"script effects: backwards from its end, a quarter run", "", "0.75", 4500, -1, 6000, GARB_FILL_NONE, false},
         {"script effects: laid after a CSS animation of the same property, it wins",
-         "@keyframes a{from{opacity:.1}to{opacity:.1}}#k{animation:a 10s}", "0.5", 5000, 1, 4000, GARB_FILL_NONE},
+         "@keyframes a{from{opacity:.1}to{opacity:.1}}#k{animation:a 10s}", "0.5", 5000, 1, 4000, GARB_FILL_NONE, false},
         {"script effects: an !important rule beats it, as it beats a CSS animation",
-         "#k{opacity:.2 !important}", "0.2", 5000, 1, 4000, GARB_FILL_NONE},
+         "#k{opacity:.2 !important}", "0.2", 5000, 1, 4000, GARB_FILL_NONE, false},
+        /* Held at 0 going backwards (paused or finished there): the far
+         * side of its start, so unfilled it shows nothing. */
+        {"script effects: a reversed one held at its start shows the rule's value", "#k{opacity:.3}", "0.3", 5000,
+         -1, 4000, GARB_FILL_NONE, true},
     };
     for (size_t i = 0; i < sizeof(kRuns) / sizeof(kRuns[0]); i++) {
         char html[256];
@@ -142,6 +147,8 @@ static void script_effect_cases(void)
         run.rate = kRuns[i].rate;
         run.start_ms = kRuns[i].start;
         run.timing.fill = kRuns[i].fill;
+        run.held = kRuns[i].held;
+        run.hold_ms = 0;
         sheeted_open(&p, html, 800, 600);
         ScriptEffects re = {computed_find(p.doc->document, "k"), one, 1};
         p.script = &re;
@@ -155,6 +162,61 @@ static void script_effect_cases(void)
         flow_free(tree);
         sheeted_close(&p);
     }
+    run.held = false;
+
+    // An effect easing bends progress, so an interval whose ends hold one
+    // value is left early: 0 at 0 and 0.5, 1 at 1, eased out over 1000 ms,
+    // leaves 0.5 at about 349 ms, where its linear far end is 500; asked at
+    // 300 it is due at once.
+    garb_effect_keyframe_t flat[3] = {{0, false, {0}, s0, n0}, {0.5, false, {0}, s0, n0}, {1, false, {0}, s1, n1}};
+    garb_effect_t bent = run;
+    bent.frames = flat;
+    bent.nframes = 3;
+    bent.timing.duration_ms = 1000;
+    bent.timing.fill = GARB_FILL_NONE;
+    bent.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, 0, 0.58, 1}, 0, GARB_JUMP_END, true};
+    bent.start_ms = 4000;
+    bent.rate = 1;
+    const garb_effect_t *bentl[1] = {&bent};
+    sheeted_open(&p, "<!doctype html><div id=k>x</div>", 800, 600);
+    ScriptEffects be = {computed_find(p.doc->document, "k"), bentl, 1};
+    p.script = &be;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4300;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    uint64_t due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("script effects: an eased effect's held interval is due at once, not at its linear end", due == 4300,
+           NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+
+    // An overshooting effect easing carries a shadow past its keyframes'
+    // span: from below the view, into it. Asked 1 ms in, while it has not
+    // yet moved, so only the bound on where it can go puts it in view.
+    garb_parsed_t t0 = {0}, t1 = {0};
+    garb_set_t ts0[2], ts1[2];
+    int32_t nt0 = script_sets(&t0, "text-shadow: 0 0 black", ts0, 2);
+    int32_t nt1 = script_sets(&t1, "text-shadow: 0 -100px black", ts1, 2);
+    garb_effect_keyframe_t lift[2] = {{0, false, {0}, ts0, nt0}, {1, false, {0}, ts1, nt1}};
+    garb_effect_t over = bent;
+    over.frames = lift;
+    over.nframes = 2;
+    over.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, 3, 1, 3}, 0, GARB_JUMP_END, false};
+    const garb_effect_t *overl[1] = {&over};
+    sheeted_open(&p, "<!doctype html><div id=k style='position:absolute;top:760px'>x</div>", 800, 600);
+    ScriptEffects oe = {computed_find(p.doc->document, "k"), overl, 1};
+    p.script = &oe;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4001;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("script effects: a shadow an effect easing overshoots into view is asked for", due == 4001, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&t0);
+    garb_free(&t1);
     garb_free(&o0);
     garb_free(&o1);
     garb_free(&from_p);

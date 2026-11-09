@@ -89,16 +89,27 @@ static DWaAnimation *wa_state(JSValueConst value)
 
 /* ── The timeline ────────────────────────────────────────────────────── */
 
-/* The document timeline's time (§ 4.3.1, Document timelines): performance.now() as the last
- * update step sampled it, and the face's clock at the same moment, so an
- * effect's start can be told on the face's clock (wa_publish). The first
- * read samples it. */
-static void wa_sample(os64_dom_t *dom)
+/* The document timeline's time (§ 4.3.1, Document timelines):
+ * performance.now() as the last update step or frame-callback batch
+ * sampled it (HTML gives both one time), and the face's clock at the same
+ * moment, so an effect's start can be told on the face's clock
+ * (wa_publish). The first read samples it. */
+static void wa_sample_at(os64_dom_t *dom, double now)
 {
-    dom->wa_time = d_performance_now(dom);
+    dom->wa_time = now;
     uint64_t face = dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
     dom->wa_face = (double)face - dom->wa_time;
     dom->wa_sampled = true;
+}
+
+static void wa_sample(os64_dom_t *dom)
+{
+    wa_sample_at(dom, d_performance_now(dom));
+}
+
+void d_web_animations_sample(os64_dom_t *dom, double now)
+{
+    wa_sample_at(dom, now);
 }
 
 static double wa_now(os64_dom_t *dom)
@@ -881,7 +892,7 @@ static int animation_props(JSContext *ctx, JSValueConst obj, WaProp **out, uint3
             css_name(name, p->css, sizeof(p->css))) {
             p->atom = JS_DupAtom(ctx, props[i].atom);
             /* By name, as they come. */
-            for (uint32_t j = n; j > 0 && os64_strcmp(v[j - 1].idl, p->idl) > 0; j--) {
+            for (uint32_t j = n; j > 0 && os64_strcmp(v[j - 1].idl, v[j].idl) > 0; j--) {
                 WaProp t = v[j];
                 v[j] = v[j - 1];
                 v[j - 1] = t;

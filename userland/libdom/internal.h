@@ -1786,6 +1786,10 @@ void d_animation_drain(os64_dom_t *dom);
 int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_web_animations_drain(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);
+/* The document timeline sampled at `now` (performance.now()'s clock): a
+ * frame-callback batch's timestamp is the timeline's time in its
+ * callbacks (animation.c). */
+void d_web_animations_sample(os64_dom_t *dom, double now);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */

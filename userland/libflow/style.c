@@ -4300,6 +4300,10 @@ static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
             continue;
         sets = true;
         double over = f_easing_overshoot(&an->timing.easing);
+        /* A script effect's own easing overshoots the progress itself,
+         * which an interval then carries past its ends as far as its
+         * width is narrow: no span bounds that. */
+        unbounded |= an->script != NULL && f_easing_overshoot(&an->script->timing.easing) > 0;
         double alo[2] = {lo[0], lo[1]}, ahi[2] = {hi[0], hi[1]};
         for (int32_t j = 0; j < an->nframes; j++) {
             if (an->frames[j].has_easing)
