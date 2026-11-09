@@ -9,6 +9,10 @@ Both views use the same measurements, refresh interval, meter visibility,
 network units, and Stay on top state. Switching views or toggling Compact does
 not restart sampling or erase recent peaks.
 
+Implementation status: the render-only fixture is available; see the
+[slice 1 checkpoint](#slice-1-checkpoint--production-renderer). Live view
+selection and the window-size API are not implemented by this checkpoint.
+
 ## Two views and a compact option
 
 A **view** chooses how measurements are presented. **Compact** is an option
@@ -490,3 +494,65 @@ Compact mode, or hover details in a normal window.
 Skins, graphs, per-core dials, disk activity, and animated needle interpolation
 also remain separate follow-ups. This design establishes the renderer
 separation that can support them without committing to a skin file format.
+
+
+## Slice 1 checkpoint — production renderer
+
+The renderer and `pulsedialtest` fixture implement the draw-and-fit slice.
+Pulse's live view selection, sampling history, hover details, and exact-size
+syscall remain in the subsequent slices above. Fixture readings and peak
+markers are deterministic examples, not live measurements.
+
+Measured content sizes with DejaVu Sans:
+
+| Presentation | Primary size | Content size demonstrated |
+| --- | --- | --- |
+| Normal, two columns | 24 and 26 px | 600 × 560 |
+| Normal, one column | 24 and 26 px | 300 × 1120 |
+| Compact | 24 px | 320 × 320 |
+| Compact | 26 px | 360 × 360 |
+
+Primary numbers retain the selected font size. Captions use a separate
+DOCUMENT role at `max(16, floor(primary_size * 2 / 3))`. Large network numbers
+use two significant digits in scientific notation while retaining the chosen
+unit. Network scale captions use the same bounded formatting; tiny scales use
+a smaller unit so the scale is not labelled zero. Disk depicts filesystem
+capacity. All-hidden configurations produce an empty canvas for the owner to
+combine with its controls.
+
+The geometry backend draws antialiased arcs, ticks, needles, and peak marks.
+Optional face caches share an 8 MiB allocation limit with the geometry context
+and raster scratch. Denied cache allocations fall back to uncached drawing;
+geometry or text failures are reported to the owner rather than claiming a
+complete paint. The drawing ledger excludes the UI font provider's separately
+managed font/text storage. Largest observed drawing allocation in the host
+matrix was 1,843,852 bytes; this is allocation evidence, not a live-app CPU
+benchmark. Performance comparison with Classic remains a slice 3 gate.
+
+Verification:
+
+- `python3 tools/test_pulse_ui_host.py --instruments` exercises the production
+  geometry, fonts, blending, and renderer under ASan/UBSan/LeakSanitizer:
+  465 checks passed. Coverage includes both font sizes, all 16 meter-visibility
+  combinations, every network unit, zero and extreme rates, unavailable data,
+  peaks, allocation refusal/recovery, clipping guards, and refusal without
+  changing the prior layout. Cached and uncached renders match pixel-for-pixel.
+- The existing Classic UI suite also passes: 219 checks with ASan, UBSan,
+  and LeakSanitizer enabled.
+- `pulsedialtest` and Pulse cross-build with strict warnings enabled.
+- In QEMU, the native fixture opens, switches to Compact, resizes through the
+  existing Ctrl+Alt+right-drag gesture to 320 × 320, displays missing data and
+  hidden-meter layouts, and closes with exit status zero. The compact content
+  capture matches the host renderer pixel-for-pixel.
+
+Run `/tests/pulsedialtest` for normal, or
+`/tests/pulsedialtest --compact --26` for the 360-pixel compact preview.
+`--compact` without `--26` opens at 320 pixels with 24-pixel numbers.
+Click the window to focus it. Keys: `c` toggles Compact at the current size,
+`1`–`4` toggle CPU/RAM/Disk/Network, `u` toggles unavailable samples, `n` cycles
+network units, and `q` closes. Ctrl+Alt+right-drag resizes it. An undersized
+preview reports that it cannot fit; the fixture deliberately permits that
+case for inspection. It does not save preferences or use a new kernel API.
+
+The next gate is readability inspection on the target display, especially
+Compact at 26 pixels, before implementing the live application transitions.
