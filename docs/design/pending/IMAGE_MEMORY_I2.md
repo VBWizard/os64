@@ -1,9 +1,11 @@
 # Image memory I2: responsive selection
 
 2026-11-08. Implementation evidence for I2 in
-[IMAGE_MEMORY.md](IMAGE_MEMORY.md). The P5 gallery's 100%/200% zoom check is
-accepted. The live-site comparison and separate replacement-button assertion
-remain pending. I3's metadata ownership change is not part of this slice.
+[IMAGE_MEMORY.md](IMAGE_MEMORY.md). The P5 gallery zoom checks, original
+metadata/Canvas regressions and Microsoft live-page check are accepted; the
+live-site comparison is recorded below. The separate replacement-button
+currentSrc assertion remains unconfirmed. I3's metadata ownership change is
+not part of this slice.
 
 ## Behavior
 
@@ -164,8 +166,58 @@ HTML is original markup and does not preserve the live PASS text.
 
 The replacement button was reported to leave all results at PASS, but its
 specific currentSrc transition was not independently confirmed. It changes a
-detached Image, so no displayed rectangle changes. The original metadata/Canvas
-regression pages and Microsoft comparison remain outside this gallery result.
+detached Image, so no displayed rectangle changes.
+
+### Original regressions and Microsoft hardware result
+
+The user confirmed PASS on the original metadata and Canvas pages and that
+Microsoft wallpapers still works. Records 1878/1879 are clean metadata visits:
+57,600 B display, 8,294,400 B native pixels, all native bytes attributed to
+metadata only, and no refusals. Record 1880 is the clean Canvas visit with
+the same retained totals, one pixel acquisition and no metadata-only native
+bytes. These preserve the M0 ownership baseline and immediate readback check.
+
+The Microsoft comparison uses 2522×1257 content pixels, 100% zoom, Modern Web
+and scripts enabled, seven ready sheets and no pictures still coming. Readback
+of Yonder and the three changed libraries matches the frozen `fa56bf22` cohort.
+
+| Metric | I1 return visit, 1753 | I2 first visit, 1882 | I2 return visit, 1884 |
+|---|---:|---:|---:|
+| Picture entries / shown | 76 / 52 | 124 / 122 | 76 / 74 |
+| Retained-budget refusals | 24 | 2 | 2 |
+| Network replies / fresh-cache replies | 22 / 76 | 94 / 32 | 14 / 64 |
+| Network entity bytes | 148,747,732 | 48,399,832 | 27,287,019 |
+| Display raster bytes | 428,715,748 | 518,184,996 | 517,148,196 |
+| Native raster bytes, all metadata-only | 244,188,704 | 518,741,984 | 513,685,984 |
+| Retained peak bytes | 1,070,431,488 | 1,069,764,288 | 1,063,671,488 |
+| Decode/reduction time, aggregate worker µs | 26,522,019 | 6,613,220 | 6,355,938 |
+| Resamples / reductions | 22 / 22 | 2 / 2 | 2 / 2 |
+
+I2 has fewer observed transferred bytes, less aggregate decode/reduction work
+and fewer refusals. It does **not** have lower settled retained memory: more
+products fit, and display grids can remain larger under the existing reduction
+threshold. The captured markup's 33 `sizes="100vw"` photos select 2880w
+candidates at a 2522px CSS viewport. A 2880px source covering 2522px is below
+the two-times-area reduction threshold; this is consistent with fewer
+resamples, not evidence that the reduction policy was removed.
+
+All three records have zero pixel acquisitions. Metadata attribution includes
+host image-event polling, so acquisition counts are not counts of authored
+JavaScript getter calls. The roughly 514 MB of native pixels in the I2 return
+visit are still retained without a Canvas draw: I3 remains necessary.
+
+The I2 visits have no submission, decode-allocation or decode-limit refusals,
+and no validated/stale HTTP replies. The 96 MISSING diagnostics name existing
+unsupported page features; the single FAILED entry is the Clarity script fetch,
+also present in I1. The user reported two `d` presses on the first visit and
+one after revisiting. Record 1882 is the final departure snapshot and retains
+one numbered paint reading; 1884 is saved when asked. No intermediate memory
+snapshot is reconstructed from the extra keypress.
+
+These live visits retain their caches and have different request histories and
+entry populations, especially during the first I2 load. They demonstrate
+working responsive selection/cache reuse and improved observed coverage, but
+do not isolate a causal percentage saving. No picture-budget increase was made.
 
 The implementation follows the HTML algorithms for
 [srcset parsing](https://html.spec.whatwg.org/multipage/images.html#parsing-a-srcset-attribute),
