@@ -147,7 +147,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
-// Display rasters can be reduced; immutable encoded/full reconstruction and
+// Display rasters can be reduced; immutable encoded reconstruction and
 // promoted Canvas pixels share this account. Worker scratch has separate admission.
 #define PICTURES_KEPT_MAX ((size_t)1u << 30)
 
@@ -608,14 +608,14 @@ typedef struct {
     PictureState state;
     yonder_picture_kind_t kind;
     unsigned request_key;           // catalog key: 0 display; 1..3 native; 4/5 CORS display
-    bool metadata_seen, pixels_seen; // provider uses, independent of display painting
+    bool metadata_seen, pixels_seen; // metadata probes and successful pixel loans
     bool origin_clean;
     yonder_svg_document_t *svg;
     // Source dimensions, any kind, once it has arrived (also when NOT_KEPT).
     // An element's selected density converts these to natural CSS dimensions.
     uint32_t width, height;
-    // Display pixels may be smaller than the source. A full raster can also
-    // be the reconstruction owner; in that case image borrows full->image.
+    // Display pixels may be smaller than the source. A whole display borrows
+    // full->image; after reduction a full owner survives only for Canvas.
     os64_image_t image;
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
     yonder_picture_backing_t *encoded, *full; // immutable reconstruction owners
@@ -682,7 +682,7 @@ typedef struct {
     StyleRequest request;
     uint64_t version, consumer_version;
     os64_work_id_t id;
-    bool active, consumer_active, settled, told, consumed;
+    bool active, consumer_active, settled, told, consumed, body_dropped, fetched;
     yonder_sheet_t *response;
 } StylePreload;
 struct Preloads {
@@ -796,6 +796,10 @@ typedef struct Page {
     // (Sheet.holds), not every sheet out.
     Preloads *preloads;             // document-owned; staged tables borrow it
     ImageSource *image_sources;     // held elements and their selected/current requests
+    ImageSource **image_source_slots;
+    size_t image_source_slot_cap;
+    os64_html_reader_t *image_source_reader;
+    uint64_t image_source_version;
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
     Sheet *sheets;
@@ -5149,14 +5153,11 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
     job->resample = resample;
     job->recoverable = p->modern;
     if(resample && p->modern) {
-        job->source=yonder_picture_backing_hold(pic->encoded?pic->encoded:pic->full);
+        job->source=yonder_picture_backing_hold(pic->encoded?pic->encoded:
+            pic->pixels_seen?pic->full:NULL);
         job->source_clean=pic->origin_clean;
-        if(!job->source) {
-            yonder_picture_release(job,NULL);
-            *why="no retained source for image resampling";
-            p->picture_submit_refusals++;
-            return 0;
-        }
+        // Without retained bytes, use the ordinary request/cache route. A
+        // full display unneeded by Canvas can then be retired after reduction.
     }
     // A data: address is the picture itself, which job->url may not
     // hold, and the catalog's copy dies with the page: the job keeps its own.
@@ -5192,7 +5193,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
 // then, as a worker's last arrival writes it (reaped). Then, with the first
 // asks all handed over, the resamples owed (pictures_judge), in table
 // order, in the same PICTURES_AT_ONCE. One the pool will not take is a
-// fact; the next layout judges it again.
+// fact; that size is not retried until the need changes.
 static void pictures_feed(Page *p)
 {
     image_sources_flush(p);
@@ -5225,6 +5226,7 @@ static void pictures_feed(Page *p)
         const char *why = NULL;
         pic->resample_id = picture_submit(p, k, pic->want_w, pic->want_h, true, &why);
         if (pic->resample_id == 0) {
+            pic->refused_w=pic->want_w;pic->refused_h=pic->want_h;
             picture_fact(pic, "could not be asked for again at the size it is drawn");
             continue;
         }
@@ -6098,6 +6100,13 @@ static void pictures_judge(Page *p)
             continue;
         if (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)
             pic->refused_w = pic->refused_h = 0;
+        if(pic->full && pic->state==PIC_SHOWN && pic->image.pixels!=pic->full->image.pixels &&
+           pic->need_w==pic->width && pic->need_h==pic->height) {
+            size_t small=(size_t)pic->image.width*pic->image.height*4;
+            os64_image_free(&pic->image);pic->image=pic->full->image;
+            pic->cost-=small;p->kept_bytes-=small;
+            layout_revision(&s_layout_resources.pictures);mark_whole(WHOLE_PICTURE,false);
+        }
         bool owed = false;
         if (pic->kind == YONDER_PICTURE_RASTER && pic->need_w > 0 && pic->need_h > 0 &&
             (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)) {
@@ -6112,6 +6121,12 @@ static void pictures_judge(Page *p)
             } else if (pic->state == PIC_NOT_KEPT) {
                 owed = bytes <= PICTURES_KEPT_MAX - p->kept_bytes;
             }
+        }
+        if(!owed && pic->full && pic->encoded && pic->need_w && pic->need_h &&
+           (pic->pixels_seen || pic->image.pixels==pic->full->image.pixels)) {
+            size_t bytes=pic->encoded->length;
+            yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;
+            pic->cost-=bytes;p->kept_bytes-=bytes;
         }
         if (owed) {
             pic->want_w = pic->need_w;
@@ -6431,10 +6446,23 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
     }
     if(shown && product->image.width==pic->image.width && product->image.height==pic->image.height)
         goto refused;
+    // A refetch must still describe the selected image's dimensions. Keep the
+    // old representation on a changed response, and retain its recorded taint.
+    if(product->width!=pic->width || product->height!=pic->height)goto refused;
     bool whole=product->image.width==pic->width && product->image.height==pic->height;
-    size_t encoded=whole && pic->encoded?pic->encoded->length:0;
+    bool drop_full=!whole && pic->full && !pic->pixels_seen;
+    bool keep_full=pic->full && !drop_full;
+    size_t retired_full=drop_full?(size_t)pic->full->image.width*pic->full->image.height*4:0;
+    size_t retired_encoded=(whole || keep_full) && pic->encoded?pic->encoded->length:0;
+    size_t incoming_encoded=!whole && !keep_full && !pic->encoded && product->encoded?product->encoded->length:0;
+    size_t retired=old+retired_full+retired_encoded;
     size_t added=whole && pic->full?0:product->cost;
-    if(added>PICTURES_KEPT_MAX-(g.page.kept_bytes-old-encoded)) {
+    // A small display may fit even when reconstruction does not. Preserve
+    // that display; a later pixel acquisition reports its own refusal.
+    if(added<=PICTURES_KEPT_MAX-(g.page.kept_bytes-retired) &&
+       incoming_encoded>PICTURES_KEPT_MAX-(g.page.kept_bytes-retired)-added)incoming_encoded=0;
+    added+=incoming_encoded;
+    if(added>PICTURES_KEPT_MAX-(g.page.kept_bytes-retired)) {
         g.page.picture_budget_refusals++;
         if(shown)picture_fact(pic,"past the memory kept at the size it is drawn; kept at the size it was");
         goto refused;
@@ -6447,6 +6475,7 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
     }
     layout_revision(&s_layout_resources.pictures);
     if(!pic->full || pic->image.pixels!=pic->full->image.pixels)os64_image_free(&pic->image);
+    if(drop_full){yonder_picture_backing_free(pic->full);pic->full=NULL;}
     if(full)pic->full=full;
     if(whole && pic->full) {
         pic->image=pic->full->image;
@@ -6454,9 +6483,11 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
     } else {
         pic->image=product->image;os64_memset(&product->image,0,sizeof(product->image));
     }
-    if(encoded){yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;}
-    g.page.kept_bytes=g.page.kept_bytes-old-encoded+added;
-    pic->cost=pic->cost-old-encoded+added;
+    if(retired_encoded){yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;}
+    if(incoming_encoded){pic->encoded=product->encoded;product->encoded=NULL;}
+    if(!job->source)pic->origin_clean=product->origin_clean;
+    g.page.kept_bytes=g.page.kept_bytes-retired+added;
+    pic->cost=pic->cost-retired+added;
     if(g.page.kept_bytes>g.page.picture_kept_peak)g.page.picture_kept_peak=g.page.kept_bytes;
     if(!shown) {
         pic->state=PIC_SHOWN;g.page.not_kept--;
@@ -6517,7 +6548,11 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     bool full=pic->kind==YONDER_PICTURE_RASTER && product->image.width==pic->width &&
               product->image.height==pic->height;
     size_t encoded=product->encoded?product->encoded->length:0;
-    size_t backing=full?0:encoded;
+    size_t backing=pic->kind==YONDER_PICTURE_SEQUENCE?0:encoded;
+    // Admit display pixels even if their reconstruction does not fit. Whole
+    // rasters keep bytes for the first layout decision when there is room.
+    if(bytes<=PICTURES_KEPT_MAX-g.page.kept_bytes &&
+       backing>PICTURES_KEPT_MAX-g.page.kept_bytes-bytes)backing=0;
     if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes ||
         backing > PICTURES_KEPT_MAX - g.page.kept_bytes - bytes) {
         g.page.picture_budget_refusals++;
@@ -6543,7 +6578,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
             return;
         }
         pic->full->image=product->image;
-    } else if(backing) {
+    }
+    if(backing) {
         pic->encoded=product->encoded;product->encoded=NULL;
         bytes+=backing;
     }
@@ -14401,20 +14437,29 @@ typedef struct {
 static bool image_promote(Page *p,Picture *pic)
 {
     if(pic->full)return true;
-    if(!pic->encoded || s_image_decoding)goto refused;
+    bool data=data_address(pic->url,pic->url_len);
+    if((!pic->encoded && !pic->moving && !data) || s_image_decoding)goto refused;
+    size_t old=pic->encoded?pic->encoded->length:0;
     size_t bytes=(size_t)pic->width*pic->height*4;
-    if(bytes>PICTURES_KEPT_MAX-p->kept_bytes+pic->encoded->length)goto refused;
+    if(bytes>PICTURES_KEPT_MAX-p->kept_bytes+old)goto refused;
     yonder_picture_backing_t *full=yonder_picture_backing_new();
     if(!full)goto refused;
     s_image_decoding=true;
     int64_t began=os64_micros();
-    os64_image_status_t status=os64_image_decode(pic->encoded->bytes,pic->encoded->length,&full->image);
+    os64_image_status_t status=OS64_IMAGE_MALFORMED;
+    if(pic->moving)status=os64_image_sequence_default(pic->moving,&full->image);
+    else if(pic->encoded)status=os64_image_decode(pic->encoded->bytes,pic->encoded->length,&full->image);
+    else {
+        uint8_t *body=NULL;size_t len=0;char type[WAY_MIME_SERIALIZED_MAX];
+        if(yonder_fetch_data_url(pic->url,OS64_IMAGE_CAP_DEFAULT,&body,&len,type,sizeof(type)))
+            status=os64_image_decode(body,len,&full->image);
+        os64_free(body);
+    }
     int64_t ended=os64_micros();
     s_image_decoding=false;
     if(status!=OS64_IMAGE_OK || full->image.width!=pic->width || full->image.height!=pic->height) {
         yonder_picture_backing_free(full);goto refused;
     }
-    size_t old=pic->encoded->length;
     pic->full=full;
     yonder_picture_backing_free(pic->encoded);pic->encoded=NULL;
     p->kept_bytes=p->kept_bytes-old+bytes;pic->cost=pic->cost-old+bytes;
@@ -14452,8 +14497,7 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     source->wants_display=true;
     if(index<0){out->pending=true;return OS64_DOM_IMAGE_PENDING;}
     Picture *pic=&p->pics[index];
-    if (pixels) pic->pixels_seen = true;
-    else pic->metadata_seen = true;
+    if (!pixels) pic->metadata_seen = true;
     if(pic->state==PIC_QUEUED||pic->state==PIC_WAITING)return OS64_DOM_IMAGE_PENDING;
     if(pic->state!=PIC_SHOWN && pic->state!=PIC_NOT_KEPT)return OS64_DOM_IMAGE_BROKEN;
     uint32_t w=pic->width,h=pic->height;
@@ -14476,6 +14520,7 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
         if(status!=SVG_OK){os64_free(loan);return OS64_DOM_IMAGE_REFUSED;}
         out->surface.pixels=loan->svg.pixels;out->surface.capacity=loan->svg.bytes;
     }
+    pic->pixels_seen=true;
     loan->address=yonder_picture_backing_hold(pic->address);
     out->token=loan;return OS64_DOM_IMAGE_READY;
 }

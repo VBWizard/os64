@@ -79,7 +79,7 @@ static void image_ownership_shared(void)
           original[101]==0xff650040,"image ownership: a live loan and immutable source survive display resampling");
     canvas_source_release(g.page.way.doc,&view);
     pic->need_w=400;pic->need_h=200;pictures_judge(&g.page);pictures_feed(&g.page);
-    check(sizes_run() && pic->image.pixels==original && pic->cost==320000,
+    check(!sizes_run() && pic->image.pixels==original && pic->cost==320000,
           "image ownership: growth reuses the retained full source without a duplicate grid");
     sizes_close();check(live==baseline,"image ownership: shared full source released once");
 }
@@ -93,7 +93,7 @@ static void image_ownership_failure(void)
         Picture *pic=&g.page.pics[0];size_t kept=g.page.kept_bytes;
         fail_at=attempts+cut;os64_dom_image_view_t view;
         os64_dom_image_status_t status=canvas_source(g.page.way.doc,probe_id("i"),true,&view);fail_at=0;
-        check(status==OS64_DOM_IMAGE_REFUSED && pic->encoded && !pic->full && g.page.kept_bytes==kept,
+        check(status==OS64_DOM_IMAGE_REFUSED && !pic->encoded && !pic->full && g.page.kept_bytes==kept,
               "image ownership: loan, owner and decode allocation failures preserve backing and metadata");
         canvas_source_release(g.page.way.doc,&view);
         check(canvas_source(g.page.way.doc,probe_id("i"),true,&view)==OS64_DOM_IMAGE_READY,
@@ -103,7 +103,7 @@ static void image_ownership_failure(void)
     }
 }
 
-static void image_ownership_gif(void)
+static void image_ownership_gif(bool http,bool crowded)
 {
     size_t baseline=live;
     // Two 1x1 frames: red, then green, with independent LZW streams.
@@ -113,10 +113,26 @@ static void image_ownership_gif(void)
         0x2c,0,0,0,0,1,0,1,0,0,2,2,0x4c,1,0,0x3b};
     char *base=data_b64((const char *)gif,sizeof(gif));char html[512];
     snprintf(html,sizeof(html),"<!doctype html><img id=i src='data:image/gif;base64,%s'>",base);
-    os64_free(base);sizes_open(html,"RASTER");pictures_start(&g.page);responsive_drain();
+    os64_free(base);
+    if(http) {
+        fake_fetch_reset();fake_answer_t *answer=fake_answer("GET","https://fixture.test/moving.gif",200,"Content-Type: image/gif\r\n",(const char *)gif);
+        answer->body_len=sizeof(gif);
+        probe_page("<!doctype html><img id=i src='moving.gif'>",false);data_pool_open();
+    } else sizes_open(html,"RASTER");
+    pictures_start(&g.page);
+    if(crowded)g.page.kept_bytes=PICTURES_KEPT_MAX-sizeof(gif)-4;
+    responsive_drain();
     Picture *pic=&g.page.pics[0];
-    check(pic->kind==YONDER_PICTURE_SEQUENCE && pic->encoded && !pic->full,
-          "image ownership: animated GIF retains reconstruction without native pixels");
+    check(pic->kind==YONDER_PICTURE_SEQUENCE && !pic->full &&
+          (crowded?(pic->state==PIC_NOT_KEPT && pic->encoded && !pic->moving):!pic->encoded),
+          "image ownership: admitted GIF uses sequence input; refused GIF can retain encoded input alone");
+    if(crowded) {
+        os64_dom_image_view_t view;
+        check(canvas_source(g.page.way.doc,probe_id("i"),true,&view)==OS64_DOM_IMAGE_READY &&
+              ((uint32_t *)view.surface.pixels)[0]==0xffff0000,
+              "image ownership: a budget-refused animation still supplies its retained default frame");
+        canvas_source_release(g.page.way.doc,&view);g.page.kept_bytes=pic->cost;
+    }
     if(pic->moving) {
         check(os64_image_sequence_next(pic->moving)==OS64_IMAGE_OK &&
               os64_image_sequence_frame(pic->moving)->pixels[0]==0xff00ff00,
@@ -128,7 +144,8 @@ static void image_ownership_gif(void)
               "image ownership: Canvas synchronously reads the default red GIF frame without rewinding display");
         canvas_source_release(g.page.way.doc,&view);
     }
-    sizes_close();check(live==baseline,"image ownership: GIF sequence and default-frame promotion release");
+    if(http){data_pool_close();probe_drop();fake_fetch_reset();}else sizes_close();
+    check(live==baseline,"image ownership: GIF sequence and default-frame promotion release");
 }
 
 static void image_ownership_taint(void)
@@ -180,8 +197,56 @@ static void image_ownership_svg(void)
     check(g.page.svg_bytes==0 && live==baseline,"image ownership: retired SVG loan cannot debit the next page's ledger");
 }
 
+static void image_ownership_late_layout(bool crowded)
+{
+    size_t baseline=live,len=0;char *png=memory_fixture_read("image-memory.png",&len);
+    if(!png)return;
+    fake_reset();fake_fetch_reset();
+    fake_answer_t *answer=fake_answer("GET","https://fixture.test/late.png",200,
+        "Content-Type: image/png\r\nCache-Control: max-age=600\r\n",png);
+    answer->body_len=len;
+    probe_page("<!doctype html><style>body{margin:0}img{display:block;width:160px}</style>"
+        "<img id=i src='late.png'>",false);
+    way_cache_t *cache=way_cache_open("/tmp/late-image-cache",16u<<20);g.cache=cache;
+    data_pool_open();pictures_start(&g.page);
+    if(crowded)g.page.kept_bytes=PICTURES_KEPT_MAX-1000;
+    check(sizes_run(),"image review: image arrives before intrinsic-dependent layout");
+    Picture *pic=&g.page.pics[0];
+    if(crowded) {
+        check(pic->state==PIC_NOT_KEPT && !pic->encoded && !pic->full,
+              "image review: competing owners refuse both full raster and encoded body");
+        g.page.kept_bytes=PICTURES_KEPT_MAX-60000;
+    } else {
+        check(pic->full && pic->encoded && pic->image.width==1920,
+              "image review: early whole arrival retains bytes until layout decides");
+        way_cache_key_t key={"https fixture.test",true,"https://fixture.test/late.png"};
+        way_cache_drop(cache,&key);way_cache_enable(cache,false);
+        answer->body="changed response";answer->body_len=strlen(answer->body);
+    }
+    sizes_layout(1000);
+    const yonder_picture_job_t *job=sizes_held();
+    check(job && job->resample && (crowded?!job->source:job->source==pic->encoded),
+          "image review: resample uses retained bytes or falls through to the request cache");
+    check(sizes_run() && pic->state==PIC_SHOWN && pic->image.width==160 && !pic->full,
+          "image review: late-layout thumbnail releases the unborrowed full raster");
+    check(nfake_requests==1 && pic->cost==57600+(crowded?0:len) &&
+          (crowded?!pic->encoded:pic->encoded!=NULL),
+          "image review: thumbnail fits without unavailable reconstruction and does not refetch the network");
+    os64_dom_image_view_t view;
+    check(canvas_source(g.page.way.doc,probe_id("i"),true,&view)==
+          (crowded?OS64_DOM_IMAGE_REFUSED:OS64_DOM_IMAGE_READY),
+          "image review: tight-budget pixel refusal or synchronous original-response promotion");
+    if(!crowded)check(((uint32_t *)view.surface.pixels)[0]==0xff2060c0,
+          "image review: cache eviction and changed server cannot alter retained-response pixels");
+    canvas_source_release(g.page.way.doc,&view);
+    g.page.kept_bytes=pic->cost;
+    data_pool_close();g.cache=NULL;way_cache_close(cache);probe_drop();fake_fetch_reset();fake_reset();free(png);
+    check(live==baseline,"image review: late layout and refused-source fallback release their owners");
+}
+
 static void image_ownership_cases(void)
 {
+    image_ownership_late_layout(false);image_ownership_late_layout(true);
     image_ownership_http(false,false);image_ownership_http(true,false);
-    image_ownership_http(true,true);image_ownership_shared();image_ownership_failure();image_ownership_gif();image_ownership_taint();image_ownership_svg();
+    image_ownership_http(true,true);image_ownership_shared();image_ownership_failure();image_ownership_gif(false,false);image_ownership_gif(true,false);image_ownership_gif(true,true);image_ownership_taint();image_ownership_svg();
 }

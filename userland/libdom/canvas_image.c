@@ -79,6 +79,8 @@ bool os64_dom_image_event(os64_dom_t *dom,const os64_html_node_t **node,bool *fa
         if(failed)*failed=status!=OS64_DOM_IMAGE_READY;
         return true;
     }
+    // The probes above can discover a detached new Image whose source was
+    // never read by script or layout. Submit it before an idle host sleeps.
     if(dom->image_provider.update)dom->image_provider.update(dom->image_provider.opaque);
     return false;
 }

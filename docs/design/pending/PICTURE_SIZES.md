@@ -65,8 +65,8 @@ resample decodes, then reduces an oversized grid by averaging the source pixels
 under each output pixel, weighted by alpha. When that worker reduces a fresh
 decode, it releases the full grid before returning. A resample from an immutable
 full raster reads its existing owner and allocates a separate display grid;
-the owner remains available for later Canvas acquisition or growth. Worker
-scratch is admitted under `PICTURE_RESERVE`. Area reduction avoids the aliasing
+a Canvas-acquired owner remains available for repeated draws or direct growth.
+Worker scratch is admitted under `PICTURE_RESERVE`. Area reduction avoids the aliasing
 that sampling only four neighbours would produce at small scales.
 
 - **First request:** a box that layout has already fixed
@@ -79,15 +79,16 @@ that sampling only four neighbours would produce at small scales.
   already, and worked out a second time its rounding up can answer a size
   still twice the need, asked for again forever (7x3 drawn 2x1: need 3x1,
   worked out again 3x2). In Modern Web mode, the worker uses an immutable
-  reconstruction owner: the retained encoded response, or a retained full
-  raster. It does not fetch a completed request's URL again. When a picture
-  arrived whole and later needs reduction, its full raster remains the
-  reconstruction source; the smaller display grid is an additional charge.
-  Growing back to that full raster shares it. Outside Modern Web mode, the
-  job uses the original cache/file/data route. See [I3 ownership](IMAGE_MEMORY_I3.md).
+  reconstruction owner: the retained encoded response, or a Canvas-acquired
+  full raster. A whole arrival can retain encoded bytes until layout decides
+  whether to keep it whole or reduce it. Reduction releases an unborrowed full
+  owner instead of charging both grids. Without backing, the worker uses the
+  request/cache/file/data route; a thumbnail can fit even when neither its
+  original raster nor its body fitted. Growing back to an existing full owner
+  reattaches it directly. See [I3 ownership](IMAGE_MEMORY_I3.md).
 - **Arrival** of a resample swaps the grid and corrects `kept_bytes` by the
   difference. A resample that fails leaves the picture as it was: a worse
-  copy is never traded for none. One that fails, does not fit, or comes back
+  copy is never traded for none. One whose submission fails, does not fit, or comes back
   no different from what is kept is not asked for again until the need
   changes. An `--exit-when-loaded` run waits for resamples too.
 

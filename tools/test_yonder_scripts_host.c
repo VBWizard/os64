@@ -23,6 +23,7 @@ extern os64_image_status_t image_decode_gif(const uint8_t *,size_t,os64_image_t 
 extern os64_image_status_t fixture_gif_sequence_decode(const uint8_t *,size_t,os64_image_sequence_t **);
 extern void fixture_gif_sequence_free(os64_image_sequence_t *);
 extern const os64_image_frame_t *fixture_gif_sequence_frame(const os64_image_sequence_t *);
+extern os64_image_status_t fixture_gif_sequence_default(const os64_image_sequence_t *,os64_image_t *);
 extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
 /* libjs's round-trip build counts the scripts it ran from their bytecode. */
@@ -662,6 +663,9 @@ os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
     if(seq==NULL) { check(false,"no moving picture"); return OS64_IMAGE_OK; }
     if(seq->real)return fixture_gif_sequence_next(seq->real);
     seq->nexts++; return OS64_IMAGE_OK;
+}
+os64_image_status_t os64_image_sequence_default(const os64_image_sequence_t *seq,os64_image_t *out) {
+    return seq && seq->real?fixture_gif_sequence_default(seq->real,out):OS64_IMAGE_MALFORMED;
 }
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
 void os64_image_sequence_free(os64_image_sequence_t *sequence) {
@@ -12070,10 +12074,36 @@ static void style_preload_limits(void)
         reaped(id, job, got);
     }
     check(g.page.preloads && g.page.preloads->bytes == 9 * 1024 * 1024 &&
-          g.page.preloads->entries[0].response != NULL && g.page.preloads->entries[1].response == NULL &&
-          g.page.preloads->entries[1].settled,
-          "style preload: aggregate retained bodies stay below 16 MiB and excess completion fails");
+          g.page.preloads->entries[0].response != NULL && g.page.preloads->entries[1].response != NULL &&
+          g.page.preloads->entries[1].response->fetched && g.page.preloads->entries[1].body_dropped &&
+          !g.page.preloads->entries[1].response->kept && g.page.preloads->entries[1].settled,
+          "style preload: aggregate retention stays bounded while excess completion keeps its successful verdict");
     loop_drop();
+    fake_reset();fake_fetch_reset();
+    way_cache_t *cache=way_cache_open("/tmp/preload-overflow-cache",16u<<20);
+    check(cache!=NULL,"style preload: overflow cache opens");
+    fake_answer(NULL,"http://fixture.test/overflow.css",200,
+        "Content-Type: text/css\r\nCache-Control: max-age=600\r\n","#box{width:160px;height:90px}");
+    loop_page("<link id=pre rel=preload as=style href=overflow.css "
+        "onload=\"this.onload=null;this.rel='stylesheet';document.getElementById('out').textContent='loaded'\" "
+        "onerror=\"document.getElementById('out').textContent='error'\">"
+        "<img id=box width=1920 height=1080><p id=out>waiting</p><script>0</script>");
+    g.cache=cache;
+    check(loop_settle() && nsheet_jobs==1,"style preload: overflow request queued");
+    if(nsheet_jobs==1)((yonder_sheet_job_t *)sheet_jobs[0].job)->hooks.cache=cache;
+    g.page.preloads->bytes=STYLE_PRELOAD_BYTES; // Simulated competing retained bodies.
+    check(style_worker_land("/overflow.css",true),"style preload: overflow fetch arrives successfully");
+    g.page.preloads->bytes=0;
+    script_turn();
+    check(probe_text_is("out","loaded") && nsheet_jobs==1 && !((yonder_sheet_job_t *)sheet_jobs[0].job)->input_present,
+          "style preload: dropped body still delivers load and activation requests cache bytes");
+    check(style_worker_land("/overflow.css",false),"style preload: overflow activation completes");
+    script_turn();
+    const flow_box_t *box=g.page.tree?flow_box_for(g.page.tree,probe_id("box")):NULL;
+    check(box && box->rect.w==160 && nfake_requests==1,
+          "style preload: activation after retention refusal applies cached CSS without another network fetch");
+    g.cache=NULL;loop_drop();way_cache_close(cache);fake_fetch_reset();fake_reset();
+
 }
 
 static void style_preload_pages(void)

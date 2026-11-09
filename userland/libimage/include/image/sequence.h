@@ -25,6 +25,10 @@ os64_image_status_t os64_image_sequence_load(const char *path, size_t cap,
 // and OS64_IMAGE_END preserve the displayed frame. Separate handles may run
 // concurrently; callers serialize operations on the same handle.
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *seq);
+// Decode an owned default-frame raster from the retained sequence input,
+// without advancing/rewinding playback or invalidating its borrowed frame.
+// The caller frees a successful result with os64_image_free.
+os64_image_status_t os64_image_sequence_default(const os64_image_sequence_t *seq, os64_image_t *out);
 // Advance, applying disposal and loop rules. END holds the final picture.
 // Later malformed raster data is reported when that frame is reached.
 os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq);

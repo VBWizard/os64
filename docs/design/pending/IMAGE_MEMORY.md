@@ -294,11 +294,13 @@ The pixel contract is synchronous for a completely available selected request:
    and decode from it synchronously on the first pixel acquisition. Charge
    encoded backing beside the rasters in `PICTURES_KEPT_MAX`. Retain promoted
    pixels for repeat draws; measure the first decode separately.
-3. Release redundant backing only when a retained representation can fulfill
-   the same contract. Do not evict an active request's sole reconstruction
-   source in this first slice. HTTP cache fallback after pressure eviction is
-   conditional follow-up work, not permission to return PENDING from a loaded
-   image's one-shot draw.
+3. A full display may retain encoded bytes through its first known layout
+   decision. Reduction releases that full owner unless Canvas has acquired it;
+   keeping the whole display releases the redundant bytes. Display resampling
+   with no retained source uses the existing request/cache/file/data worker
+   path. A loaded image's one-shot draw still uses synchronous acquisition or
+   explicit refusal, never PENDING. General pressure eviction and synchronous
+   HTTP-cache lookup after eviction remain separate follow-up work.
 
 Encoded retention is needed for the reduced/refused subset, not as a second
 compressed copy for every metadata accessor. Preserve bytes before freeing the

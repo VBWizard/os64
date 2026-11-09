@@ -4,6 +4,7 @@
 #define os64_image_sequence_load fixture_gif_sequence_load
 #define os64_image_sequence_free fixture_gif_sequence_free
 #define os64_image_sequence_frame fixture_gif_sequence_frame
+#define os64_image_sequence_default fixture_gif_sequence_default
 #define os64_image_sequence_next fixture_gif_sequence_next
 #define os64_image_sequence_rewind fixture_gif_sequence_rewind
 #include "../userland/libimage/gif.c"

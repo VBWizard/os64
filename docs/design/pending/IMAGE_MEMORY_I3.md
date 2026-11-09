@@ -2,6 +2,8 @@
 
 Quinn, 2026-11-08. Implementation on `codex/yonder-image-memory-design`;
 P5 local validation and the 100% live-page comparison are recorded below.
+Those captures validate the frozen `a131eece` cohort, before the PR review
+corrections described in [the review response](IMAGE_MEMORY_PR513_REVIEW.md).
 
 ## Behavior
 
@@ -19,13 +21,15 @@ enter script-response delivery. The legacy non-Modern display path is separate.
 Canvas acquires pixels synchronously:
 
 - A retained full display raster is lent directly, without another decode.
-- Reduced or budget-refused rasters retain their original encoded response.
+- Reduced or budget-refused rasters retain their original encoded response
+  when it fits. Data URLs reconstruct from their retained address.
   The first draw decodes those bytes synchronously, charges the full raster,
   and drops the catalog's redundant encoded reference. Subsequent draws lend
   that raster. An in-flight resample can retain its own encoded reference.
 - GIF display animation and Canvas's default frame remain independent. The
-  sequence keeps its own input/canvases; the reconstruction copy and any
-  promoted default-frame raster are separately charged.
+  admitted sequence keeps its own input/canvases, without a second retained
+  body. Default-frame acquisition decodes that input without changing playback.
+  A sequence refused by the retained budget can keep the encoded body alone.
 - SVG keeps its secure-static document and synchronous rendering contract.
   A refused SVG document can still report successful dimensions; pixel
   acquisition explicitly refuses when no document was admitted.
@@ -44,7 +48,7 @@ page teardown can release its ownership while a worker or loan still holds its
 input. Display rasters that borrow a full owner are not freed or counted twice.
 
 The 1 GiB retained-picture account includes encoded backing, display grids,
-full reconstruction/promoted grids, sequences and SVG documents. Catalog and
+full display/promoted grids, sequences and SVG documents. Catalog and
 owner structures, URL strings (including data URLs), and per-element selection
 state are separate census owners. The existing 4096-entry/4 MiB URL limits
 remain. The worker pool's 8 GiB reservation cap withholds 512 MiB for a
@@ -52,17 +56,22 @@ serialized window-side image decode; the codec limits still bound actual work.
 These reservations are conservative admission allowances, not measured memory
 allocations or a unified process heap limit.
 
-Resampling a completed Modern image uses its immutable source, rather than
-re-fetching its URL. This exposes an important conservative case: if an image
-arrived whole, its encoded body was released because that raster could fulfill
-the pixel contract. If layout or zoom later reduces it, the full raster remains
-its reconstruction source beside the reduced display grid. Growing back to the
-full size shares the existing raster. This slice does not sacrifice the only
-reconstruction source to reclaim memory. The diagnostic labels full grids
-retained without Canvas use as reconstruction bytes; they are not attributed
-to metadata-created native copies. Whether to retain compressed input longer,
-create another recoverable representation, or reclaim inactive owners is
-measurement-led follow-up work.
+A whole raster keeps encoded input through its first known layout decision
+when that input fits. Keeping the whole display drops the redundant input;
+reducing it keeps the encoded response and releases the unborrowed full raster.
+A full owner survives reduction after Canvas has acquired it. Growing back to
+that retained full raster reattaches it directly without submitting a copy job.
+
+A display resample uses retained encoded bytes or an immutable Canvas owner
+when available. Without either, it uses the ordinary request/cache/file/data
+route on a worker. A changed response with different natural dimensions is
+refused, preserving the old representation; an accepted response supplies its
+own taint. A thumbnail can be admitted even if its reconstruction does not fit;
+a subsequent pixel request can explicitly refuse. Submit failures remember
+the attempted size and do not repeat until the need changes. These display
+retries do not introduce network fetches into synchronous Canvas acquisition.
+The reconstruction subdivision remains available for diagnosing retained full
+owners without Canvas use; it is not a policy to keep such owners after reduction.
 
 The reduced-grid diagnostic subtracts the complete retained cost and clamps
 savings at zero. Retaining reconstruction storage cannot wrap the savings
@@ -197,10 +206,13 @@ fetch failure match I2; no new image-fetch failure appears. All image responses
 in these visits were fresh cache hits. This does not establish cold-cache
 transfer savings.
 
-The local and live I3 hardware gates are complete. Retain the frozen cohort for
-review. The evidence supports removing metadata-created copies; further
-reconstruction/eviction or decoder policy changes remain separate measured
-follow-ups. The local first-draw promotion's 58.2 ms cost is explicit evidence
+The original local and live I3 hardware gates are complete for `a131eece`.
+Retain that frozen cohort. The evidence supports removing metadata-created
+copies; PR review additionally identified the unnecessary post-reduction full
+owners above, now corrected in the review branch. The corrected build needs
+the separate hardware gate in the review response. Inactive-owner eviction and
+decoder policy changes remain measured follow-ups. The local first-draw
+promotion's 58.2 ms cost is explicit evidence
 of the synchronous latency tradeoff, rather than a claim that promotion is free.
 
 ## PR integration

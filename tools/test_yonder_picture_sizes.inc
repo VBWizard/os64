@@ -267,9 +267,9 @@ static void sizes_page_cases(void)
           "sizes: drawn at a quarter, it is asked for again at the size drawn");
     size_t held = live;
     check(sizes_run() && g.page.pics[0].image.width == 100 && g.page.pics[0].image.height == 50 &&
-          g.page.pics[0].width == 400 && g.page.kept_bytes == 340000 && g.page.pics[0].cost == 340000,
-          "sizes: a reduced display and its immutable full reconstruction are both charged");
-    check(g.page.pics[0].full && !g.page.pics[0].encoded, "sizes: sole full reconstruction survives reduction without refetch");
+          g.page.pics[0].width == 400 && g.page.kept_bytes == 20013 && g.page.pics[0].cost == 20013,
+          "sizes: early full arrival reduces to the display raster plus encoded reconstruction");
+    check(!g.page.pics[0].full && g.page.pics[0].encoded, "sizes: reduction releases the unborrowed full raster and retains exact bytes");
     sizes_layout(1000);
     os64_gui_rect_t now = sizes_box("pic");
     check(now.x == was.x && now.y == was.y && now.w == was.w && now.h == was.h && g.page.resample_owed == 0,
@@ -281,7 +281,7 @@ static void sizes_page_cases(void)
     diag_observe(&g.page, "when the page was left");
     char text[4096];
     yonder_diag_render(g.page.diag, text, sizeof(text));
-    check(strstr(text, "picture sizes: 1 kept at the size they are drawn, 0 KiB less than whole") != NULL,
+    check(strstr(text, "picture sizes: 1 kept at the size they are drawn, 292 KiB less than whole") != NULL,
           "sizes: the record says what was kept smaller and what it spared");
     /* Zoomed in: asked for again bigger; out again: smaller. */
     sizes_layout(2000);
@@ -399,7 +399,7 @@ static void sizes_page_cases(void)
     sizes_close();
 
     /* No memory to ask for a resample: a fact, the picture as it was, and
-     * the next layout asks again. */
+     * the same need is not retried. */
     sizes_open("<!doctype html><style>body{margin:0}img{display:block;width:100px}</style>"
                "<img id=pic src='https://t.test/a.png'>", "SIZED 400x200");
     pictures_start(&g.page);
@@ -412,7 +412,9 @@ static void sizes_page_cases(void)
     check(g.page.pics[0].image.width == 400 && !g.page.pics[0].resampling && g.page.resample_owed == 0 &&
           sizes_held() == NULL && live == at, "sizes: a resample with no memory to ask is not asked, nothing held");
     sizes_layout(1000);
-    check(sizes_held() != NULL, "sizes: the next layout asks again");
+    check(sizes_held() == NULL && g.page.resample_owed == 0, "sizes: repeated judgement does not retry a refused submission");
+    sizes_layout(2000);
+    check(sizes_held() != NULL, "sizes: a different need permits resample submission again");
     sizes_close();
 
     /* Codex #444 rd1: a picture behind a box arrives moving nothing, and
@@ -533,8 +535,8 @@ static void picture_memory_pages(void)
     free(png);
     check(base64 != NULL, "image fixture: data transport allocated");
     if (!base64) return;
-    const char *modes[] = {"untouched", "metadata", "canvas"};
-    for (unsigned m = 0; m < 3; m++) {
+    const char *modes[] = {"untouched", "metadata", "canvas", "late-layout"};
+    for (unsigned m = 0; m < 4; m++) {
         char name[128];
         snprintf(name, sizeof(name), "image-memory-%s.html", modes[m]);
         char *source = memory_fixture_read(name, &length);
@@ -560,12 +562,13 @@ static void picture_memory_pages(void)
         }
         check(m == 0 ? probe_text_is("result", "The image is displayed; no script accesses it.") :
               m == 1 ? probe_text_is("result", "PASS: natural size 1920 x 1080") :
-                       probe_text_is("result", "PASS: one draw in onload, immediate blue readback."),
+              m == 2 ? probe_text_is("result", "PASS: one draw in onload, immediate blue readback.") :
+                       probe_text_is("result", "PASS: late layout is 160 x 90; natural size is 1920 x 1080."),
               "image fixture: delivered page completes its real script and one-shot readback");
         PictureMemory memory = picture_memory(&g.page);
         check(memory.display == 57600 && memory.native == (m == 2 ? 8294400u : 0u) &&
-              memory.metadata_only == 0 && memory.encoded == (m == 2 ? 0u : 9780u),
-              "image fixture: metadata keeps encoded backing, only a draw promotes full pixels");
+              memory.metadata_only == 0 && memory.encoded == 0,
+              "image fixture: data URL supplies reconstruction without a body copy; only a draw promotes full pixels");
         printf("image fixture %s: display=%lu native=%lu metadata_only=%lu bytes\n", modes[m],
                (unsigned long)memory.display, (unsigned long)memory.native,
                (unsigned long)memory.metadata_only);
@@ -594,7 +597,7 @@ static void picture_memory_baseline(void)
           "image baseline: metadata reports natural dimensions");
     canvas_source_release(g.page.way.doc, &view);
     PictureMemory after = picture_memory(&g.page);
-    check(after.display == 20000 && after.native == 0 && after.metadata_only == 0 && after.encoded == 13 &&
+    check(after.display == 20000 && after.native == 0 && after.metadata_only == 0 && after.encoded == 0 &&
           after.native_with_display_url == 0 &&
           after.display + after.native + after.encoded + after.sequence + after.svg == g.page.kept_bytes &&
           g.page.picture_kept_peak == g.page.kept_bytes,

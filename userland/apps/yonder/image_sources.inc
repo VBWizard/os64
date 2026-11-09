@@ -9,13 +9,98 @@ struct ImageSource {
     ImageSource *next;
     const os64_html_node_t *node;
     char *url;
-    uint64_t version, base_hash, generation, current_generation;
+    uint64_t base_hash, generation, current_generation;
     double density, current_density;
     garb_env_t environment;
     unsigned mode;                 // 1 no-CORS; 2 anonymous; 3 use-credentials
     int32_t display, current_display;
-    bool wants_display, empty, broken, refused;
+    bool wants_display, empty, broken, refused, dirty;
 };
+
+// The list owns entries; the open-addressed index makes node lookups independent
+// of how many other images the page has selected. Staged pages borrow both.
+static size_t image_source_slot(const Page *p, const os64_html_node_t *node)
+{
+    uintptr_t key=(uintptr_t)node;
+    key^=key>>17;key*=0xed5ad4bbU;key^=key>>11;
+    size_t at=(size_t)key&(p->image_source_slot_cap-1);
+    while(p->image_source_slots[at] && p->image_source_slots[at]->node!=node)
+        at=(at+1)&(p->image_source_slot_cap-1);
+    return at;
+}
+
+static ImageSource *image_source_find(const Page *p,const os64_html_node_t *node)
+{
+    return p->image_source_slot_cap?p->image_source_slots[image_source_slot(p,node)]:NULL;
+}
+
+static void image_source_dirty(Page *p,const os64_html_node_t *node)
+{
+    ImageSource *s=image_source_find(p,node);
+    if(s)s->dirty=true;
+}
+
+static bool image_picture_dirty(Page *p,const os64_html_node_t *node,unsigned *left)
+{
+    if(!node || node->ns!=OS64_HTML_NS_HTML || node->tag!=OS64_HTML_TAG_PICTURE)return false;
+    for(const os64_html_node_t *n=node->first_child;n;n=n->next) {
+        if(!*left)return true;
+        --*left;
+        if(n->tag==OS64_HTML_TAG_IMG)image_source_dirty(p,n);
+    }
+    return false;
+}
+
+// A moved subtree may carry an image into/out of a picture, or change the
+// document's first base. Bound inspection; incomplete history invalidates all.
+static bool image_source_subtree(Page *p,const os64_html_node_t *root,unsigned *left)
+{
+    if(!root)return false;
+    for(const os64_html_node_t *n=root;n;) {
+        if(!*left)return true;
+        --*left;
+        if(n->ns==OS64_HTML_NS_HTML && n->tag==OS64_HTML_TAG_BASE)return true;
+        image_source_dirty(p,n);
+        if(n->first_child){n=n->first_child;continue;}
+        while(n!=root && !n->next)n=n->parent;
+        if(n==root)break;
+        n=n->next;
+    }
+    return false;
+}
+
+static void image_sources_sync(Page *p)
+{
+    const os64_html_document_t *doc=page_doc(p);
+    uint64_t version=os64_html_version(doc);
+    if(p->image_source_version==version)return;
+    const os64_html_change_entry_t *changes=NULL;
+    bool all=!p->image_source_reader || os64_html_changes(p->image_source_reader,&changes)<0;
+    unsigned left=4096;
+    for(const os64_html_change_entry_t *c=changes;c && !all;c=c->next) {
+        if(!left){all=true;break;}
+        --left;
+        if(c->kind==OS64_HTML_CHANGE_ATTR && !c->attr_ns) {
+            const os64_html_node_t *n=c->target;
+            const char *a=c->attr_local;
+            if(!a)continue;
+            if(n->ns==OS64_HTML_NS_HTML && n->tag==OS64_HTML_TAG_BASE && os64_streq(a,"href"))all=true;
+            else if(os64_streq(a,"src") || os64_streq(a,"srcset") || os64_streq(a,"sizes") || os64_streq(a,"crossorigin"))
+                image_source_dirty(p,n);
+            if(n->ns==OS64_HTML_NS_HTML && n->tag==OS64_HTML_TAG_SOURCE &&
+               (os64_streq(a,"srcset") || os64_streq(a,"sizes") || os64_streq(a,"media") || os64_streq(a,"type")))
+                all=image_picture_dirty(p,n->parent,&left);
+        } else if(c->kind==OS64_HTML_CHANGE_CHILDREN) {
+            all=image_picture_dirty(p,c->target,&left);
+            for(size_t i=0;i<c->nadded && !all;i++)all=image_source_subtree(p,c->added[i],&left);
+            for(size_t i=0;i<c->nremoved && !all;i++)all=image_source_subtree(p,c->removed[i],&left);
+        }
+    }
+    if(all)for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
+    if(!p->image_source_reader)
+        p->image_source_reader=os64_html_reader_new((os64_html_document_t *)doc,version);
+    p->image_source_version=version;
+}
 
 static const char *image_attr(const os64_html_node_t *n, const char *name)
 {
@@ -74,14 +159,15 @@ static os64_page_source_status_t image_choose(const Page *p, const os64_html_nod
 static void image_source_read(Page *p, ImageSource *s)
 {
     const os64_html_document_t *doc=page_doc(p);
-    uint64_t version=os64_html_version(doc),hash=1469598103934665603ull;
+    image_sources_sync(p);
+    uint64_t hash=1469598103934665603ull;
     const char *base=p->way.url;
     for(const char *c=base;*c;c++){hash^=(unsigned char)*c;hash*=1099511628211ull;}
     garb_env_t env=p->image_environment;
     if(env.width<=0)env=css_view(g.view.bounds.w,g.view.bounds.h,g.zoom?g.zoom:1000);
     env.scripting=p->scripting;
-    if(s->version==version && s->base_hash==hash && image_same_environment(s->environment,env))return;
-    s->version=version;s->base_hash=hash;s->environment=env;
+    if(!s->dirty && s->base_hash==hash && image_same_environment(s->environment,env))return;
+    s->dirty=false;s->base_hash=hash;s->environment=env;
     os64_page_source_t chosen={0};
     os64_page_source_status_t status=image_choose(p,s->node,&chosen);
     char *url=NULL;bool invalid_url=false;
@@ -131,16 +217,26 @@ static void image_source_read(Page *p, ImageSource *s)
 
 static ImageSource *image_source(Page *p, const os64_html_node_t *node)
 {
-    for(ImageSource *s=p->image_sources;s;s=s->next)if(s->node==node) {image_source_read(p,s);return s;}
+    ImageSource *found=image_source_find(p,node);
+    if(found){image_source_read(p,found);return found;}
     if(p!=&g.page)return NULL;
     if(p->image_source_count>=4096) {
         yonder_diag_failed_seen(p->diag,"image source","past the selected image element limit");return NULL;
     }
+    if((p->image_source_count+1)*2>p->image_source_slot_cap) {
+        size_t cap=p->image_source_slot_cap?p->image_source_slot_cap*2:16;
+        ImageSource **slots=os64_calloc(cap,sizeof(*slots));
+        if(!slots)return NULL;
+        os64_free(p->image_source_slots);p->image_source_slots=slots;p->image_source_slot_cap=cap;
+        for(ImageSource *at=p->image_sources;at;at=at->next)
+            slots[image_source_slot(p,at->node)]=at;
+    }
     ImageSource *s=os64_calloc(1,sizeof(*s));
     if(!s){yonder_diag_failed_seen(p->diag,"image source","no memory for selected image state");return NULL;}
     os64_html_hold(page_doc(p),node);
-    s->node=node;s->version=UINT64_MAX;s->display=s->current_display=-1;
+    s->node=node;s->dirty=true;s->display=s->current_display=-1;
     s->density=s->current_density=1;s->next=p->image_sources;p->image_sources=s;p->image_source_count++;
+    p->image_source_slots[image_source_slot(p,node)]=s;
     image_source_read(p,s);return s;
 }
 
@@ -174,7 +270,8 @@ static int32_t image_display(const Page *p, const os64_html_node_t *node, double
             }
         }
     }
-    for(const ImageSource *s=p->image_sources;s;s=s->next)if(s->node==node) {
+    const ImageSource *s=image_source_find(p,node);
+    if(s) {
         *density=s->current_density;return s->current_display;
     }
     return -1;
@@ -220,8 +317,8 @@ static void image_sources_flush(Page *p)
         const os64_page_image_t *img=os64_page_image(model,i);if(!img)continue;
         double density;
         int32_t index=image_display(p,img->node,&density);
-        if(index<0)for(const ImageSource *s=p->image_sources;s;s=s->next)
-            if(s->node==img->node){index=s->display;break;}
+        const ImageSource *s=image_source_find(p,img->node);
+        if(index<0 && s)index=s->display;
         p->pic_of[i]=index;
     }
     if(moved){g.pictures_moved=true;layout_revision(&s_layout_resources.pictures);}
@@ -236,13 +333,17 @@ static void image_sources_environment(Page *p,int32_t width,int32_t height,uint3
 
 static void image_sources_free(Page *p)
 {
+    os64_html_reader_free(p->image_source_reader);p->image_source_reader=NULL;
+    os64_free(p->image_source_slots);p->image_source_slots=NULL;p->image_source_slot_cap=0;
+    p->image_source_version=0;
     ImageSource *s=p->image_sources;
     while(s){ImageSource *next=s->next;os64_html_release(page_doc(p),s->node);os64_free(s->url);os64_free(s);s=next;}
     p->image_sources=NULL;p->image_source_count=p->image_source_bytes=0;
 }
 
 static size_t image_sources_cost(const Page *p)
-{ return p->image_source_count*sizeof(ImageSource)+p->image_source_bytes; }
+{ return p->image_source_count*sizeof(ImageSource)+p->image_source_bytes+
+         p->image_source_slot_cap*sizeof(*p->image_source_slots); }
 
 static void image_sources_update(void *doc)
 {

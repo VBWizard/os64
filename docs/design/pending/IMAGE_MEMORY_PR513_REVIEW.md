@@ -1,0 +1,88 @@
+# PR #513 review response
+
+2026-11-09. Disposition of Fable's implementation review of `81c25438`.
+The original P5 evidence remains attached to its frozen `a131eece` cohort;
+these corrections require the hardware checks below.
+
+## Findings
+
+| Finding | Disposition | Change and regression evidence |
+|---|---|---|
+| 1, P1: resample without backing is refused and repeatedly retried | Fixed | Missing backing falls through to the worker's request/cache/file/data path. Submit refusal records the requested dimensions. A test refuses both the original raster and its encoded body, then displays a 57,600-byte thumbnail from the HTTP cache without a second network transfer. Its body still does not fit; that does not prevent display admission. Repeated judgement at a refused size submits nothing; changing the need permits another attempt. |
+| 2, P1: early whole arrival retains full plus reduced grids | Fixed | A whole arrival keeps its encoded response through the first known layout decision when it fits. Reduction retires the unborrowed full owner; keeping the whole display drops redundant bytes. Canvas-acquired full owners remain available to their loans and subsequent draws. A late-layout test clears/disables the cache and changes the server response before reduction: the retained original bytes supply the thumbnail and immediate Canvas readback, with no refetch. |
+| 3, P2: GIF input retained twice | Fixed | An admitted sequence owns the retained input; the catalog drops the second body. `os64_image_sequence_default` decodes that owned input without advancing or rewinding playback. Tests cover HTTP and data GIFs after advancing to a different displayed frame. See the admission detail below. |
+| 4, P2: data body retained beside its address | Fixed | Data jobs do not preserve a separate encoded body. Resampling and synchronous pixel promotion decode the retained data URL. The delivered page scripts also run with data transport in the host harness and retain zero encoded-body bytes. |
+| 5, P2: preload body limit changes successful load into error | Fixed | Fetch success survives independently of retained-body admission, including failure to allocate the response record. An activation whose body was dropped requests the original URL through the normal cache path. A regression fills the preload account, observes `load`, activates the stylesheet, and applies its CSS with one network request in total. |
+| 6, P2: repeated linear image-source lookups | Fixed; one suggested call removal rejected | A growing node hash index replaces list scans in source lookup, display lookup and map refresh. The ownership list remains for iteration/cleanup. A 256-image test checks identity through index growth. The end-of-poll update is necessary, as demonstrated below. |
+| 7, P2: unrelated mutations reselect every image | Fixed | A bounded independent HTML change-log reader invalidates selected attributes, picture structure/source attributes, moved image subtrees and base changes. Environment changes still reselect. Lost history or inspection-budget exhaustion conservatively invalidates all entries. Tests verify no selection allocation after unrelated class/alt mutations, and correct reselection for source, base, parent and lost-history changes. |
+| 8, P3: grow-to-whole allocates a disposable copy | Fixed | Judgement reattaches an existing full owner directly. The outstanding-loan regression grows back to the same pixel pointer without a submitted worker job or duplicate grid. |
+| 9, P3: local-file navigation omitted from summary | Documented | `docs/yonder.md` explicitly describes clicking a local-file link from an open local page. The PR description identifies this navigation change separately. |
+
+## Two implementation details
+
+**The final image-provider update must remain.** The first update publishes
+completed requests before the poll reads their metadata. Those metadata probes
+can themselves discover a detached `new Image()` that has never been queried
+by script or encountered by layout. The final update submits that newly
+discovered request before the host sleeps. It does not replay a Canvas draw.
+
+`responsive_first_poll` runs the standalone image-creation script directly,
+then makes one pending-image probe. The request must already be submitted when
+that probe returns. With the final update present, the test passes. A temporary
+build deleting that call fails specifically:
+
+> responsive poll: the first pending probe submits the discovered image without another task or poll
+
+The normal focused suite passed 4,092 checks; the temporary removal produced
+one failure. Subsequent full-suite validation, including additional GIF and
+late-layout fixture cases, passed 24,560 checks. The call is retained and its
+purpose is documented beside it. The node index and selective invalidation
+remove the quadratic lookup and redundant selection costs motivating finding 6.
+
+**The GIF worker keeps its response through admission.** Excluding sequences
+from body preservation before the admission decision would lose the useful
+NOT_KEPT case: the sequence may exceed the remaining budget while its encoded
+input fits. The worker therefore retains the response until admission. An
+admitted sequence drops that extra body; a refused sequence can retain the body
+alone after the sequence is freed. A tight-budget HTTP GIF regression verifies
+that the latter can still supply its default frame synchronously. There is no
+second encoded copy retained beside an admitted sequence.
+
+## Validation and limits
+
+- Complete Yonder host suite: **24,560 checks, zero failures**, with ASan,
+  UBSan and LeakSanitizer enabled outside the sandbox.
+- GIF sequence oracle: passed, including default-frame output, unchanged
+  animated frames, allocation failures, loops, disposal and budgets; ASan,
+  UBSan and LeakSanitizer enabled.
+- Target Yonder and matching shared libraries build successfully.
+- The callback-removal experiment is a negative test, not a production change.
+- The existing retained-picture budget is unchanged. A request/cache retry is
+  not guaranteed to be a cache hit. No synchronous network fetch was added to
+  Canvas. Pixel acquisition may refuse because backing, admission or allocation
+  is unavailable; it does not turn a completed image into PENDING.
+- General inactive-owner eviction, broader document-load lifecycle and SRI
+  remain outside these corrections. The existing WPT qualification stands.
+
+## Hardware gate for the corrected cohort
+
+With Modern Web and scripts enabled, use the new frozen cohort:
+
+1. At 100%, open `/tests/pages/image-memory-metadata.html` and
+   `/tests/pages/image-memory-canvas.html`. Confirm PASS and press `d` once each
+   after settling. Metadata should retain no native raster; Canvas must still
+   supply the immediate one-shot readback.
+2. Open `/tests/pages/image-memory-late-layout.html` at 100%, confirm PASS,
+   settle and press `d`. Its image has neither width nor height attributes.
+   Expected settled picture ownership: 57,600 display bytes, 9,780 encoded
+   bytes, zero native/reconstruction-raster bytes. The retained peak includes
+   the early full-size arrival and is not expected to equal the settled total.
+3. Check `/tests/pages/image-responsive.html` at 100% and 200%, including the
+   replacement button; capture `d` after settling at each zoom.
+4. Return to 100%, visit `https://microsoft.design/wallpapers/`, settle and
+   press `d`; leave, return, settle and press `d`. Check horizontal fit and
+   compare native/reconstruction, retained total/peak, source counts and
+   refusals with the original I3 captures. Account for live-page/cache changes.
+
+These hardware checks are pending. The original P5 numbers must not be relabeled
+as measurements of the corrected build.

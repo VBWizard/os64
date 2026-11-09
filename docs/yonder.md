@@ -24,6 +24,7 @@ follows it: to the next page, and when the page's `<title>` changes, by
 its scripts or otherwise. A page with no title leaves it "yonder". Pictures, style
 sheets and links beside a file are read from beside it, and `file:///path`
 works in the address field too.
+Clicking a local-file link from an already open local page opens that file.
 
 ## The window
 

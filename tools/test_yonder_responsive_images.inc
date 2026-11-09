@@ -271,8 +271,64 @@ static void responsive_cors_case(void)
     fake_fetch_reset();fake_reset();free(png);
 }
 
+static void responsive_first_poll(void)
+{
+    size_t baseline=live;
+    probe_page("<!doctype html><p>detached image</p><script>var i=new Image();"
+               "i.onload=function(){};i.src='data:image/png,SIZED%2080x40';</script>",true);
+    data_pool_open();responsive_serial_pool();
+    os64_js_outcome_t outcome;
+    check(yonder_scripts_step_connected(g.page.scripts,&outcome),"responsive poll: standalone new Image script runs");
+    check(g.page.image_source_count==0,"responsive poll: no metadata getter or layout has discovered the detached image");
+    check(!yonder_scripts_images_pending(g.page.scripts) && sizes_held()!=NULL,
+          "responsive poll: the first pending probe submits the discovered image without another task or poll");
+    data_pool_close();probe_drop();check(live==baseline,"responsive poll: pending detached request releases");
+}
+
+static void responsive_invalidation_cases(void)
+{
+    size_t baseline=live;
+    sizes_open("<!doctype html><base id=base href='https://t.test/one/'><div id=other></div>"
+        "<picture id=picture><source id=source srcset='a.png 1x'><img id=i src='fallback.png'></picture>","SIZED 80x40");
+    const os64_html_node_t *node=probe_id("i");
+    ImageSource *source=image_source(&g.page,node);
+    check(source && !strcmp(source->url,"https://t.test/one/a.png"),"responsive invalidation: initial picture/base selection");
+    responsive_set(probe_id("other"),"class","changed");
+    size_t before=attempts;
+    check(image_source(&g.page,node)==source && attempts==before,
+          "responsive invalidation: unrelated attribute does not allocate, parse sizes or resolve a URL");
+    responsive_set(node,"alt","description");before=attempts;
+    image_sources_flush(&g.page);
+    check(attempts==before,"responsive invalidation: alt text does not reselect the image");
+    responsive_set(probe_id("source"),"srcset","b.png 1x");
+    check(image_source(&g.page,node)==source && !strcmp(source->url,"https://t.test/one/b.png"),
+          "responsive invalidation: preceding source attribute reselects its image");
+    responsive_set(probe_id("base"),"href","https://t.test/two/");
+    check(image_source(&g.page,node)==source && !strcmp(source->url,"https://t.test/two/b.png"),
+          "responsive invalidation: base href re-resolves the image");
+    check(os64_html_insert(g.page.way.doc,(os64_html_node_t *)probe_id("other"),(os64_html_node_t *)node,NULL)==OS64_HTML_OK,
+          "responsive invalidation: image moves out of picture");
+    check(image_source(&g.page,node)==source && !strcmp(source->url,"https://t.test/two/fallback.png"),
+          "responsive invalidation: moving out of picture selects the fallback");
+    os64_html_changes_limit(g.page.way.doc,0);
+    responsive_set(node,"src","lost.png");
+    check(image_source(&g.page,node)==source && !strcmp(source->url,"https://t.test/two/lost.png"),
+          "responsive invalidation: lost mutation history conservatively reselects");
+    sizes_close();check(live==baseline,"responsive invalidation: reader and node index release");
+
+    char html[24000];size_t used=0;
+    for(int i=0;i<256;i++)used+=(size_t)snprintf(html+used,sizeof(html)-used,
+        "<img id=i%d src='data:image/png,SIZED%%2080x40'>",i);
+    sizes_open(html,"RASTER");
+    ImageSource *sources[256];
+    for(int i=0;i<256;i++){char id[16];snprintf(id,sizeof(id),"i%d",i);sources[i]=image_source(&g.page,probe_id(id));}
+    for(int i=255;i>=0;i--){char id[16];snprintf(id,sizeof(id),"i%d",i);
+        check(sources[i] && image_source(&g.page,probe_id(id))==sources[i],"responsive index: growth preserves independent image identities");}
+    sizes_close();check(live==baseline,"responsive index: grown table releases with its page");
+}
+
 static void responsive_image_cases(void)
 {
     responsive_parser_cases();responsive_window_cases();responsive_mutation_cases();responsive_script_cases();
-    responsive_gallery_case();responsive_cors_case();
+    responsive_gallery_case();responsive_cors_case();responsive_invalidation_cases();responsive_first_poll();
 }

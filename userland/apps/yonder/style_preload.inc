@@ -139,7 +139,7 @@ static void preloads_tell(Page *p)
         StylePreload *entry = &p->preloads->entries[i];
         if (entry->active && entry->settled && !entry->told)
             entry->told = yonder_scripts_owe_guarded(host, entry->node,
-                           entry->response == NULL || !entry->response->fetched, preload_event_valid, entry);
+                           !entry->fetched, preload_event_valid, entry);
     }
 }
 
@@ -256,11 +256,12 @@ static void preload_parse(Page *p, Sheet *sh, StylePreload *entry)
     yonder_sheet_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
     if (job == NULL) goto refused;
     const yonder_sheet_t *response = entry->response;
-    style_job_request(p, &sh->request, response != NULL ? response->url : entry->url, job);
+    style_job_request(p, &sh->request,
+                      response != NULL && !entry->body_dropped ? response->url : entry->url, job);
     job->page = p->serial;
     job->index = (int32_t)(sh - p->sheets);
-    job->input_present = true;
-    if (response != NULL) {
+    job->input_present = !entry->body_dropped;
+    if (response != NULL && job->input_present) {
         job->input_fetched = response->fetched;
         job->input_usable = response->usable;
         job->input_len = response->kept_len;
@@ -323,17 +324,29 @@ static void preload_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     if (entry->settled) return;
     entry->id = 0;
     entry->settled = true;
-    if (got != NULL && got->kept_len <= STYLE_PRELOAD_BYTES - map->bytes) {
+    entry->fetched = got != NULL && got->fetched;
+    if (got != NULL) {
         entry->response = os64_malloc(sizeof(*entry->response));
         if (entry->response != NULL) {
             *entry->response = *got;
-            map->bytes += got->kept_len;
-            got->kept = NULL;
-            got->kept_len = 0;
-            os64_memset(&got->parsed, 0, sizeof(got->parsed));
+            if (got->kept_len <= STYLE_PRELOAD_BYTES - map->bytes) {
+                map->bytes += got->kept_len;
+                got->kept = NULL;
+                got->kept_len = 0;
+                os64_memset(&got->parsed, 0, sizeof(got->parsed));
+            } else {
+                // Acquisition succeeded independently of retention. Keep its
+                // verdict for load/error; activation uses the normal cache path.
+                entry->body_dropped = true;
+                entry->response->kept = NULL;
+                entry->response->kept_len = 0;
+                os64_memset(&entry->response->parsed, 0, sizeof(entry->response->parsed));
+            }
         }
     }
-    if (entry->response == NULL) preload_refused(p, "style preload: response retention failed or exceeded document limit");
+    if (entry->response == NULL && entry->fetched) entry->body_dropped = true;
+    if (entry->response == NULL || entry->body_dropped)
+        preload_refused(p, "style preload: response retention failed or exceeded document limit");
     preloads_tell(p);
     for (int32_t i = 0; i < p->nsheets; i++)
         if (p->sheets[i].preload == job->index + 1 && p->sheets[i].waiting)
