@@ -1,7 +1,7 @@
 # I3: shared image requests and synchronous pixel acquisition
 
 Quinn, 2026-11-08. Implementation on `codex/yonder-image-memory-design`;
-P5 acceptance and the live-page comparison remain pending.
+P5 local validation and the 100% live-page comparison are recorded below.
 
 ## Behavior
 
@@ -124,3 +124,81 @@ wallpapers on first visit and return with Modern Web/scripts enabled. Compare
 retained subdivisions, promotion cost, source counts and refusals with the
 accepted I2 captures; account for cache and live-page variation. Do not change
 the retained budget or reduction threshold to improve the comparison.
+
+## P5 local validation and supplemental live capture
+
+Chris reported completing the requested hardware checks. All 22 installed
+runtime files and the six installed gallery assets read back byte-for-byte
+against the frozen I3 cohort. The records have Modern Web and scripts enabled
+and a 2522×1257 content viewport.
+
+| Record | Result | Display bytes | Native bytes | Encoded bytes | Synchronous promotions |
+|---|---|---:|---:|---:|---:|
+| 1915, metadata | clean | 57,600 | 0 | 9,780 | 0 |
+| 1916, one-shot Canvas | clean | 57,600 | 8,294,400 | 0 | 1, taking 58,208 µs |
+| 1917, responsive | clean | 288,000 | 0 | 0 | 0 |
+
+All three have zero image refusals. The responsive record contains three
+numbered paint readings and two pixel acquisitions; its two image catalog
+entries are shared across display and Canvas. The final retained peak was
+465,592 bytes. The capture header gives initial zoom, not each reading's zoom,
+and repeated diagnostic requests overwrite memory facts. These are not
+independent per-zoom memory snapshots. Original saved markup does not itself
+record the live PASS text.
+
+Microsoft record 1918 is the singular `/wallpaper` URL and returns HTTP 404;
+it is excluded from the wallpapers comparison. Record 1919 is the correct
+`/wallpapers/` page but began at 200% zoom. It is supplemental evidence:
+42 of 42 catalog entries shown, no image refusals, 520,023,992 display bytes,
+57,768,960 native bytes entirely attributed to reconstruction, and **zero
+metadata-only native bytes**. All 42 image responses came from fresh cache;
+there were no image network transfers or Canvas promotions. Its 96 MISSING
+features and Clarity script fetch failure match the existing limitations.
+
+The subsequent 100% pair is recorded below. The 200%-initial capture is
+supplemental and is not used for the before/after percentage.
+
+## Matched 100% Microsoft visits
+
+Chris repeated the two visits at 100%. Records 1921 and 1923 both have a
+2522×1257 content viewport, Modern Web/scripts enabled, seven ready stylesheets,
+one settled diagnostic reading and no outstanding image jobs. The first visit
+was entered as `http://microsoft.design/wallpapers/`; the return record names
+`https://microsoft.design/wallpapers/`, matching the I2 return URL. Yonder's
+installed hash was rechecked after these captures and still matches I3.
+
+| Metric | I2 return, 1884 | I3 first, 1921 | I3 return, 1923 |
+|---|---:|---:|---:|
+| Catalog entries / shown | 76 / 74 | 82 / 82 | 42 / 42 |
+| Display raster bytes | 517,148,196 | 523,240,996 | 518,184,996 |
+| Native raster bytes | 513,685,984 | 57,768,960 | 57,768,960 |
+| Native solely for metadata | 513,685,984 | 0 | 0 |
+| Native reconstruction bytes without Canvas use | not separately reported | 57,768,960 | 57,768,960 |
+| Encoded backing bytes | not retained by I2 | 0 | 0 |
+| Settled retained picture bytes | 1,030,834,180 | 581,009,956 | 575,953,956 |
+| Retained picture peak bytes | 1,063,671,488 | 581,009,956 | 575,953,956 |
+| Retained-budget refusals | 2 | 0 | 0 |
+| Network / fresh-cache image replies | 14 / 64 | 0 / 82 | 0 / 42 |
+| Network image entity bytes | 27,287,019 | 0 | 0 |
+| Worker decode/reduction total, µs | 6,355,938 | 3,217,332 | 2,924,950 |
+| Canvas pixel acquisitions / promotions | 0 / not applicable | 0 / 0 | 0 / 0 |
+
+The recorded return-visit picture account is **454,880,224 bytes lower
+(44.1%)**. This is an observed comparison, not a controlled claim about total
+process memory or network savings: the live page, cache history and catalog
+populations differ. The per-request metadata-only raster cost is gone, consistent
+with the controlled local fixture. The remaining 57.8 MB native subdivision is
+two full reconstruction owners retained after display reduction, not a second
+raster created by metadata polling. Display rasters account for about 518 MB.
+
+Both I3 visits have zero image submission, allocation, decode-limit and
+retained-budget refusals. Their 96 MISSING features and single Clarity script
+fetch failure match I2; no new image-fetch failure appears. All image responses
+in these visits were fresh cache hits. This does not establish cold-cache
+transfer savings.
+
+The local and live I3 hardware gates are complete. Retain the frozen cohort for
+review. The evidence supports removing metadata-created copies; further
+reconstruction/eviction or decoder policy changes remain separate measured
+follow-ups. The local first-draw promotion's 58.2 ms cost is explicit evidence
+of the synchronous latency tradeoff, rather than a claim that promotion is free.

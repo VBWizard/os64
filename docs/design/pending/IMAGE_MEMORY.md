@@ -16,8 +16,12 @@ to another branch.
 I2's implementation, host evidence, accepted P5 gallery/local regressions and
 Microsoft comparison are recorded separately. The live visits show fewer
 transferred bytes and refusals, but higher settled retained pixels; controlled
-causal savings remain unmeasured. I3 is implemented with host validation; its
-P5 gate and live-page measurement remain pending.
+causal savings remain unmeasured. I3 passes host and P5 local/live gates. The controlled metadata fixture retains
+67,380 picture bytes with no native copy; the 100% Microsoft return record has
+zero metadata-only native raster bytes, zero image-budget refusals and about
+455 MB less retained picture storage than I2. That live difference is observed,
+not a controlled whole-process or network-saving claim. Further memory policy
+changes remain measurement-led follow-ups.
 
 ## 1. Decision and scope
 
