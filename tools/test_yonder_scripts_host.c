@@ -11317,12 +11317,29 @@ static void styled_button_cases(void) {
         probe_page(kTarget,true);
         script_turn();
         forms_place();
-        /* The pointer is where a person's click is: over the icon. */
-        g.pointer_x=probe_field("go")->w->bounds.x+2; g.pointer_y=probe_field("go")->w->bounds.y+2;
-        ui_click_on("go");
+        /* The pointer is where a person's click is: over the icon. Without
+         * modern pointers the press and release reach the widget through
+         * yonder's own dispatch, which says the click is the pointer's. */
+        os64_ui_widget_t *gw=probe_field("go")->w;
+        g.pointer_x=gw->bounds.x+2; g.pointer_y=gw->bounds.y+2;
+        if(classic){
+            g.root.bounds=g.view.bounds;
+            os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+            ev.mouse.x=g.pointer_x; ev.mouse.y=g.pointer_y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+            ui_dispatch(&ev); inputs_run();
+            ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+            ui_dispatch(&ev); inputs_run();
+        } else ui_click_on("go");
         check(probe_text_is("out","inner>#document"),
             classic ? "styled button: without modern pointers too, a click on its icon is targeted at the icon"
                     : "styled button: a click on its icon is targeted at the icon, and bubbles");
+        /* Space on the focused button is the button's, though the pointer
+         * still rests on the icon. */
+        os64_ui_set_focus(&g.ui,gw);
+        ui_key_space();
+        check(probe_text_is("out","go>#document"),
+            classic ? "styled button: without modern pointers, Space is the button's, wherever the pointer rests"
+                    : "styled button: Space is the button's, wherever the pointer rests");
         probe_drop();
     }
     probe_modern_off=false;

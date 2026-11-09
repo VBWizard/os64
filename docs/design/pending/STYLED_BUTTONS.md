@@ -59,7 +59,8 @@ icon fonts draw with.
 - A block-level one whose `width` is `auto` is as wide as its content
   (fit-content), not as wide as its containing block.
 - Its content is centred in the block axis when the box is taller than
-  the content: every fixed-height icon button needs it. The auxclick
+  the content, whether the page gave it the height or a flex or grid
+  container stretched it after: every fixed-height icon button needs it. The auxclick
   demo's full-window button needs it too, and also a `height: 100%`
   that resolves, which waits on DEBTS's "A percentage height in normal
   flow is read as `auto`": until then that button is a full-width bar,

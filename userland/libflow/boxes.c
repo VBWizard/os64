@@ -174,16 +174,22 @@ bool flow_svg_root(const os64_html_node_t *n)
 
 // Whether the author's rules give `n`'s ::before or ::after content that
 // draws, as style.c's style_pseudo reads it: a value of its own that is no
-// keyword (`none`, `normal`) and not CSS-wide.
+// keyword (`none`, `normal`) and not CSS-wide, on a pseudo-element whose
+// `display` is not `none`.
 static bool pseudo_draws(const flow_env_t *env, const os64_html_node_t *n, garb_pseudo_t which)
 {
     if (env->cascade == NULL)
         return false;
     garb_style_t st = garb_style_for_pseudo(env->cascade, n, which);
-    for (int32_t i = 0; i < st.n; i++)
+    bool content = false;
+    for (int32_t i = 0; i < st.n; i++) {
+        const garb_val_t *v = &st.sets[i].value;
         if (st.sets[i].prop == GARB_CONTENT)
-            return st.sets[i].value.kind != GARB_V_WIDE && st.sets[i].value.kind != GARB_V_KEYWORD;
-    return false;
+            content = v->kind != GARB_V_WIDE && v->kind != GARB_V_KEYWORD;
+        else if (st.sets[i].prop == GARB_DISPLAY && v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, "none"))
+            return false;
+    }
+    return content;
 }
 
 // A button keeps the face's widget, which draws its own caption, only

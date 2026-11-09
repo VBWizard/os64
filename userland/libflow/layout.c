@@ -2541,6 +2541,8 @@ static bool drawn_button(const FBox *b)
            n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_BUTTON;
 }
 
+static void translate_content(FBox *b, int64_t dy);
+
 // A box whose margins never collapse with its content's: the root, a
 // table and its cells and captions, a replaced block, an atom's content,
 // an out-of-flow box, a float, a block whose overflow scrolls or hides
@@ -3737,12 +3739,21 @@ typedef struct {
 static void refit(L *l, const FStyles *styles, FBox *c);
 
 // An item's height set by its container: an item that is itself a flex
-// container places its own items again, against it (refit).
+// container places its own items again, against it (refit), and a button
+// the page draws centres its content in the height it now has, by the
+// difference between the centring it had and the centring it needs; its
+// natural height is its content_h.
 static void set_item_h(L *l, const FStyles *styles, FBox *c, int64_t h)
 {
     if (c->h == h)
         return;
+    int64_t was = c->h;
     c->h = h;
+    if (drawn_button(c) && !c->flex && !c->grid) {
+        int64_t shift = max64(0, h - c->content_h) / 2 - max64(0, was - c->content_h) / 2;
+        if (shift != 0)
+            translate_content(c, shift);
+    }
     refit(l, styles, c);
 }
 
@@ -5468,7 +5479,6 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
 
 static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw,
                             Cursor *cur, Replaced rep, int64_t forced_w, int64_t mt, int64_t mb);
-static void translate_content(FBox *b, int64_t dy);
 
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
 {

@@ -3065,6 +3065,9 @@ static void cost_reset(void)
 // Pointer hit testing follows published geometry, not every drawing operation.
 static bool s_pointer_replay, s_pointer_ignore_cancel, s_pointer_cancel_owed;
 static bool s_pointer_known, s_pointer_rehit, s_pointer_draining;
+// libui is dispatching a mouse button's release (ui_dispatch): a button's
+// click comes from the pointer, not from Space or Enter (button_target).
+static bool s_pointer_activation;
 static uint16_t s_pointer_buttons;
 static unsigned s_pointer_modifiers;
 static os64_ui_menu_model_t *s_pointer_menu;
@@ -8817,11 +8820,14 @@ static void form_reset(int32_t form)
 static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link);
 
 // What a button's click is dispatched at: the element under the pointer
-// when it is inside the button, as other browsers target a click on a
-// button's icon at the icon and let it bubble; else the button itself (a
-// face's button holds no element, and a key's press has no place).
+// when the pointer pressed it and is inside it, as other browsers target a
+// click on a button's icon at the icon and let it bubble; else the button
+// itself (a face's button holds no element, and a key's press is the
+// focused button's, wherever the pointer rests).
 static const os64_html_node_t *button_target(const FormWidget *fw)
 {
+    if (!s_pointer_activation)
+        return fw->node;
     os64_gui_rect_t r = fw->w->bounds;
     if (g.pointer_x < r.x || g.pointer_y < r.y || g.pointer_x >= r.x + r.w || g.pointer_y >= r.y + r.h)
         return fw->node;
@@ -17136,7 +17142,10 @@ static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
 static void ui_dispatch(const os64_gui_event_t *ev)
 {
     os64_ui_widget_t *had = g.ui.focus;
+    bool was = s_pointer_activation;
+    s_pointer_activation = ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP;
     os64_ui_dispatch(&g.ui, ev);
+    s_pointer_activation = was;
     if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || g.ui.focus != had)
         field_selection_chosen(g.ui.focus);
 }

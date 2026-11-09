@@ -191,4 +191,34 @@ static void button_cases(void)
         "        block button 0 0 16 60\n"
         "          line 0 20 16 20 base 14\n"
         "            text \"Go\" 0 22 16 16 serif 16\n");
+    cascade_layout_case("buttons: one a flex container stretches is centred in its new height",
+        "<!doctype html><style>body{margin:0}div{display:flex;width:200px;height:100px}"
+        "button{flex:1;background:none;border:0;padding:0;font:16px serif}</style>"
+        "<div><button>Go</button></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 200 100\n"
+        "      block button 0 0 200 100 control 0\n"
+        "        line 0 40 200 20 base 14\n"
+        "          text \"Go\" 92 42 16 16 serif 16\n");
+    cascade_layout_case("buttons: and one a grid stretches",
+        "<!doctype html><style>body{margin:0}div{display:grid;width:200px;height:100px}"
+        "button{background:none;border:0;padding:0;font:16px serif}</style>"
+        "<div><button>Go</button></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 200 100\n"
+        "      block button 0 0 200 100 control 0\n"
+        "        line 0 40 200 20 base 14\n"
+        "          text \"Go\" 92 42 16 16 serif 16\n");
+    cascade_layout_case("buttons: a ::before that displays nothing keeps the face",
+        "<!doctype html><style>button::before{content:'icon';display:none}</style><button>Go</button>",
+        400,
+        "page 400 42\n"
+        "block html 0 0 400 42\n"
+        "  block body 8 8 384 26\n"
+        "    line 8 8 384 26 base 20\n"
+        "      atomic button 8 8 160 20 control 0\n");
 }
