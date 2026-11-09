@@ -1,9 +1,9 @@
 # Image memory I2: responsive selection
 
 2026-11-08. Implementation evidence for I2 in
-[IMAGE_MEMORY.md](IMAGE_MEMORY.md). Hardware acceptance and a comparable
-Microsoft wallpapers measurement remain pending. I3's metadata ownership
-change is not part of this slice.
+[IMAGE_MEMORY.md](IMAGE_MEMORY.md). The P5 gallery's 100%/200% zoom check is
+accepted. The live-site comparison and separate replacement-button assertion
+remain pending. I3's metadata ownership change is not part of this slice.
 
 ## Behavior
 
@@ -137,6 +137,35 @@ selected source sizes, retained display/native bytes, transfer counters and
 budget refusals to I1. Live page contents and cache state remain confounders;
 do not attribute their variation solely to responsive selection. I3 remains
 the next separate ownership change after this gate.
+
+### Gallery hardware result
+
+The user confirmed all four PASS results at both 100% and 200%, including the
+intended blue/orange to green/yellow width-candidate switch. An initial fixture
+installation error placed the 160×90 PNG under the 2x filename; the correct
+320×180 file was restored and verified against the frozen bundle before these
+accepted checks. No implementation change was needed for that incident.
+
+Record 1859 is a clean, manually requested gallery record with two numbered
+paint readings. Four catalog entries are shown, with no fetch failures or
+retained-budget, submission, decode-allocation or decode-limit refusals. Its
+latest memory snapshot has 288,000 B display and 288,000 B native pixels,
+576,000 B retained peak, and 57,600 B of native pixels used only for metadata.
+Two pixel acquisitions match the fixture's default draw and immediate crop.
+The earlier corrected run, record 1849, has the same retained totals and zero
+refusals. Prior readback of Yonder and all three changed libraries matches the
+frozen `fa56bf22` cohort byte-for-byte; saved gallery HTML also matches it.
+
+Both `d` presses append paint readings to one page record. Memory facts are
+overwritten by the latest capture, and the zoom header retains the load-time
+setting. Thus these are user-confirmed zoom checks with two paint readings,
+not two independently preserved per-zoom memory/source snapshots. The saved
+HTML is original markup and does not preserve the live PASS text.
+
+The replacement button was reported to leave all results at PASS, but its
+specific currentSrc transition was not independently confirmed. It changes a
+detached Image, so no displayed rectangle changes. The original metadata/Canvas
+regression pages and Microsoft comparison remain outside this gallery result.
 
 The implementation follows the HTML algorithms for
 [srcset parsing](https://html.spec.whatwg.org/multipage/images.html#parsing-a-srcset-attribute),

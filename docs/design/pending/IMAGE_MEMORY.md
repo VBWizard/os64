@@ -13,8 +13,9 @@ The M0 hardware baseline is captured;
 I0's hardware layout gate and gallery have passed; controlled memory comparison
 remains pending. The user confirmed testing the frozen I0 build before switching
 to another branch.
-I2's implementation and host evidence are recorded separately; its hardware
-acceptance and memory comparison remain pending. I3 is not implemented.
+I2's implementation, host evidence and accepted P5 gallery zoom check are
+recorded separately; its live-site comparison and remaining hardware checks
+are pending. I3 is not implemented.
 
 ## 1. Decision and scope
 
