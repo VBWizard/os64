@@ -683,9 +683,11 @@ struct os64_dom {
      * by target libflow reads (os64_dom_script_effects). */
     struct DWaAnimation *wa_first, *wa_last;
     size_t wa_count;
+    struct DWaEffect *wa_fx_first;      /* every KeyframeEffect, for the drain */
     uint64_t wa_serial, wa_generation, wa_last_step;
     double wa_time, wa_face;
     bool wa_sampled, wa_wanted, wa_stepped, wa_running, wa_index_stale;
+    bool wa_replace_check;              /* one finished or an effect moved: the next step looks for replaced ones */
     struct DWaEvent *wa_events, *wa_events_last;
     struct DWaData *wa_dead;
     const os64_html_node_t **wa_index_nodes;
@@ -1893,6 +1895,10 @@ uint64_t d_attr_steps(void);
 bool d_prefix_valid(const char *text, size_t length);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
+/* Sets `name: value` in the element's style attribute, as
+ * style.setProperty(name, value) does; an empty value removes it. */
+JSValue d_style_write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *name,
+                      const char *value);
 extern JSClassExoticMethods d_node_exotic;
 /* ── Custom elements (custom.c; docs/design/pending/CUSTOM_ELEMENTS.md) ──
  * The row: CustomElementRegistry, window.customElements and the document's

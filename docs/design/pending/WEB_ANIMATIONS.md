@@ -220,15 +220,20 @@ libflow's script effects in the effect stack; yonder's version bump
 and frame step. Proof: the sign-in page's generator hashes a real key in the replay;
 the validation page's freeze-and-read values match Chrome's (§ 6).
 
-**B: the rest of the API.** `KeyframeEffect` and the `Animation`
-constructor; the effect's `getKeyframes`, `setKeyframes`, `getTiming`,
-`updateTiming`, `getComputedTiming`, `target`, `pseudoElement`;
-`commitStyles()` (the animated value written to the `style`
-attribute); `persist()`, `replaceState` and the automatic removal of
-replaced, filling animations (§ 5.5, which is why `remove` exists);
-`composite: 'add'` and `'accumulate'` per effect and per keyframe;
-`CSSAnimation` objects in `getAnimations()`, and the CSS animation
-events.
+**B: the rest of the API**, built as two PRs, B2 stacked on B1.
+
+- **B1:** `KeyframeEffect` and the `Animation` constructor; the effect's
+  `getKeyframes`, `setKeyframes`, `getTiming`, `updateTiming`,
+  `getComputedTiming`, `target`, `pseudoElement`, `composite` and
+  `iterationComposite` (kept and given back); setting an animation's
+  `effect`; `commitStyles()` (the animated value written to the `style`
+  attribute); `persist()`, `replaceState` and the automatic removal of
+  replaced, filling animations (§ 5.5, which is why `remove` exists). An
+  effect is an object of its own: it owns its target and keyframes, and
+  an animation has one or none.
+- **B2:** `composite: 'add'` and `'accumulate'` per effect and per
+  keyframe, applied in libflow's effect stack; `CSSAnimation` objects in
+  `getAnimations()`, and the CSS animation events.
 
 **Out of both:** scroll-driven timelines (`ScrollTimeline`,
 `ViewTimeline`, `animation-timeline`; 12 hosts), a DEBTS row of their
@@ -258,9 +263,10 @@ spec has it and the `remove` event.
   per page, as WebCryptoAPI's were. A takes `timing-model/animations/*`,
   `timing-model/timelines/*`, `animation-model/keyframe-processing/*`,
   the pages of `interfaces/Animation/*` for the surface A builds, and
-  `interfaces/Animatable/animate.html`. B takes
-  `interfaces/KeyframeEffect/*`, `animation-model/animation-types/*`,
-  and `interfaces/Animation/commitStyles.html` and `persist.html`.
+  `interfaces/Animatable/animate.html`. B1 takes
+  `interfaces/KeyframeEffect/*`, `interfaces/AnimationEffect/*`, and
+  `interfaces/Animation/commitStyles.html` and `persist.html`; B2
+  `animation-model/animation-types/*` and the composite pages.
 - **The sign-in page:** the replay of the 2026-11-08 record, logged as in § 1, shows
   the generator's hash input ending in a real key instead of `000`;
   then the P5 shows the dialog's form.
