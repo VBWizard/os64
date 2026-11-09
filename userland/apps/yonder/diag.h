@@ -106,6 +106,25 @@ typedef struct {
     const char *const *cascade_reason_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+/* ONE LAYOUT, whole: its wall time (`total_us`, everything
+ * page_lay_out_run did) and what it went on: the cascade and what became
+ * of it (its time includes gathering the page's sheets for it), then the
+ * layout's phases summed over its attempts (a layout retried for room
+ * counts both). The record keeps the slowest (`<key> slowest`) and what
+ * layouts cost by what became of their cascade (`<key> by cascade`). */
+enum { YONDER_LAYOUT_CASCADE_KEPT = -2, YONDER_LAYOUT_CASCADE_UPDATED = -1 };
+typedef struct {
+    uint64_t total_us, cascade_us, style_us, boxes_us, layout_us, public_us;
+    uint64_t elements, boxes, reused, attempts;
+    uint64_t at_us;             // when it ended (os64_micros), placed against the record's start
+    // YONDER_LAYOUT_CASCADE_KEPT (nothing to update), _UPDATED, or why it
+    // was built fresh: an index into `cascade_reason_names`.
+    int32_t cascade_why;
+    const char *const *cascade_reason_names;
+    uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
+} yonder_layout_one_t;
+void yonder_diag_layout_one(yonder_diag_t *d, const yonder_layout_one_t *one);
+void yonder_diag_layout_stream_one(yonder_diag_t *d, const yonder_layout_one_t *one);
 /* Geometry reads while the parser is active, kept separately from layouts
  * after parsing. These do not imply that a stream chunk was painted. */
 void yonder_diag_layout_stream_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
