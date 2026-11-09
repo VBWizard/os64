@@ -1,8 +1,6 @@
 # os64
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/VBWizard/os64/refs/heads/userland/assets/images/os64_Overview_20261018.PNG" alt="os64" width="2560">
-</p>
+![Logo](assets/images/os64_Overview_20261018.PNG)
 
 A 64-bit x86 operating system built for educational purposes: a Limine-booted
 higher-half kernel, a ring-3 userland dynamically linked against its own
