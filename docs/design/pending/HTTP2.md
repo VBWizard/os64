@@ -949,7 +949,7 @@ BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
 one-line pointer here. Each slice's "as built" lands under its brief
 above, by its builder, in its PR.
 
-## 7. Open questions (each is a `Q` row in the tracker)
+## 7. Questions (each is a `Q` row in the tracker; both ruled by Chris on 2026-11-09, for the leans)
 
 - **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
   handle per bell, a small kernel slice with a Codex round; Fable's lean),
