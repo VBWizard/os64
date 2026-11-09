@@ -2177,8 +2177,14 @@ uint8_t f_motion_effects(const FMotion *m, double now)
         if (!anim_live(an))
             continue;
         garb_clock_t k = anim_clock(an, now);
-        // Current — before or in its active phase — or in effect.
-        if (k.phase == GARB_PHASE_AFTER && !k.in_effect)
+        // Current (Web Animations 1 § 4.5.5) — in its active phase, or
+        // before it on the way to it: before it going forwards, after it
+        // going backwards, neither at a rate of 0 — or in effect. A CSS
+        // animation always plays forwards.
+        double rate = an->script != NULL ? an->script->rate : 1;
+        bool current = k.phase == GARB_PHASE_ACTIVE || (rate > 0 && k.phase == GARB_PHASE_BEFORE) ||
+                       (rate < 0 && k.phase == GARB_PHASE_AFTER);
+        if (!current && !k.in_effect)
             continue;
         for (int p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&an->props, (garb_prop_t)p))

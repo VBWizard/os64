@@ -272,17 +272,16 @@ static JSValue swallow(JSContext *ctx, JSValueConst self, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
-static void mark_handled(JSContext *ctx, JSValueConst promise)
+static void mark_handled(os64_dom_t *dom, JSContext *ctx, JSValueConst promise)
 {
+    /* Through the then the binding kept at install, not the promise's own
+     * property: a page that replaced it can neither stop the marking nor
+     * run code of its own inside cancel. */
     JSValue noop = JS_NewCFunction(ctx, swallow, "", 1);
     if (JS_IsException(noop)) return;
-    JSValue then = JS_GetPropertyStr(ctx, promise, "then");
-    if (JS_IsFunction(ctx, then)) {
-        JSValue args[2] = {JS_UNDEFINED, noop};
-        JSValue r = JS_Call(ctx, then, promise, 2, args);
-        JS_FreeValue(ctx, r);
-    }
-    JS_FreeValue(ctx, then);
+    JSValue args[2] = {JS_UNDEFINED, noop};
+    JSValue r = JS_Call(ctx, dom->wa_promise_then->value, promise, 2, args);
+    JS_FreeValue(ctx, r);
     JS_FreeValue(ctx, noop);
 }
 
@@ -565,7 +564,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
             apply_pending_rate(a);
             JSValue reason = abort_error(ctx);
             promise_call(ctx, a->ready_reject, reason);
-            mark_handled(ctx, a->ready);
+            mark_handled(a->dom, ctx, a->ready);
             JS_FreeValue(ctx, reason);
             JSValue resolved = JS_UNDEFINED, res = JS_UNDEFINED, rej = JS_UNDEFINED;
             if (promise_new(ctx, &resolved, &res, &rej) < 0) return -1;
@@ -579,7 +578,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
         if (!a->finished_done) {
             JSValue reason = abort_error(ctx);
             promise_call(ctx, a->finished_reject, reason);
-            mark_handled(ctx, a->finished);
+            mark_handled(a->dom, ctx, a->finished);
             JS_FreeValue(ctx, reason);
         }
         if (promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) return -1;
@@ -858,7 +857,8 @@ static int composite_check(JSContext *ctx, JSValueConst v)
 
 /* The properties of a keyframe-like object that animate: its own
  * enumerable string-keyed ones that are no member and name a property
- * (css_name), in ascending order of their names, the order § 6.6.3 reads
+ * libgarb reads (css_name, garb_prop_known), in ascending order of their
+ * names, the order § 6.6.3 reads
  * them in. Each atom is the caller's to free (props_free). */
 typedef struct {
     JSAtom atom;
@@ -888,8 +888,10 @@ static int animation_props(JSContext *ctx, JSValueConst obj, WaProp **out, uint3
             break;
         }
         WaProp *p = &v[n];
+        /* Only a property libgarb reads: anything else on the object is
+         * the page's own (metadata, a symbol, a getter), never read. */
         if (!member_is(name) && os64_strcopy(p->idl, sizeof(p->idl), name) < sizeof(p->idl) &&
-            css_name(name, p->css, sizeof(p->css))) {
+            css_name(name, p->css, sizeof(p->css)) && garb_prop_known(p->css, os64_strlen(p->css), false)) {
             p->atom = JS_DupAtom(ctx, props[i].atom);
             /* By name, as they come. */
             for (uint32_t j = n; j > 0 && os64_strcmp(v[j - 1].idl, v[j].idl) > 0; j--) {
@@ -2037,6 +2039,13 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JSValue timeline = JS_NewObjectClass(ctx, (int)tid);
     dom->wa_timeline = d_retain(dom, ctx, timeline);
     if (dom->wa_timeline == NULL) return -1;
+    JSValue promise = JS_GetPropertyStr(ctx, global, "Promise");
+    JSValue promise_prototype = JS_IsException(promise) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, promise, "prototype");
+    JS_FreeValue(ctx, promise);
+    dom->wa_promise_then = JS_IsException(promise_prototype) ? NULL
+                         : d_intrinsic(dom, ctx, promise_prototype, "then");
+    JS_FreeValue(ctx, promise_prototype);
+    if (dom->wa_promise_then == NULL) return -1;
     JSValueConst element = dom->prototypes[D_PROTO_ELEMENT]->value;
     JSValueConst document = dom->prototypes[D_PROTO_DOCUMENT]->value;
     if (d_method(dom, ctx, element, "animate", animate_method, 1, 0) < 0 ||

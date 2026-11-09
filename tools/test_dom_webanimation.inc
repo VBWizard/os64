@@ -212,7 +212,9 @@ static void wa_procedures(void)
         "const c=two.animate({opacity:[0,1]},1000);"
         "c.ready.then(()=>clog.push('ready'),e=>clog.push('ready:'+e.name));c.finished.catch(e=>clog.push(e.name));"
         "c.oncancel=e=>clog.push('cancel:'+e.currentTime);"
+        "c.finished.then=null;c.ready.then=function(){globalThis.reentered=true};"
         "c.cancel();assert(c.playState==='idle'&&c.currentTime===null&&c.startTime===null&&!c.pending);"
+        "assert(!globalThis.reentered,'cancel runs no then of the page');"
         "assert(two.getAnimations().length===0);"
         "c.cancel();",
         "web animations: cancel");
@@ -307,6 +309,10 @@ static void wa_procedures(void)
         "box.animate([{get marginTop(){seen.push('marginTop')},get opacity(){seen.push('opacity')},"
         "get margin(){seen.push('margin')}}],1);"
         "assert(seen.join()==='margin,marginTop,opacity',seen.join());seen.length=0;"
+        /* the page's own members are never read, a symbol among them */
+        "box.animate([{opacity:0,metadata:Symbol(),get data(){seen.push('data')}},{opacity:1}],1);"
+        "box.animate({opacity:[0,1],note:Symbol(),get extra(){seen.push('extra');return [1,2,3]}},1);"
+        "assert(seen.length===0,seen.join());"
         "box.animate(null,o);assert(seen.join()==='delay,direction,duration,easing,endDelay,fill,iterationStart,"
         "iterations,pseudoElement,id',seen.join());",
         "web animations: refused arguments");

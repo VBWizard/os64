@@ -132,6 +132,17 @@ mutants = [
      '        unbounded |= an->script != NULL && f_easing_overshoot(&an->script->timing.easing) > 0;\n', '', [FLOW]),
     ('sort-moves-the-entry', WA_C, 'j > 0 && os64_strcmp(v[j - 1].idl, v[j].idl) > 0; j--) {',
      'j > 0 && os64_strcmp(v[j - 1].idl, v[n].idl) > 0; j--) {', [DOM]),
+    ('side-effects-by-direction', 'userland/libflow/motion.c',
+     '        bool current = k.phase == GARB_PHASE_ACTIVE || (rate > 0 && k.phase == GARB_PHASE_BEFORE) ||\n'
+     '                       (rate < 0 && k.phase == GARB_PHASE_AFTER);',
+     '        bool current = ((void)rate, k.phase != GARB_PHASE_AFTER);', [FLOW]),
+    ('unknown-properties-unread', WA_C,
+     ' && garb_prop_known(p->css, os64_strlen(p->css), false)) {', ') {', [DOM]),
+    ('handled-through-intrinsic', WA_C,
+     '    JSValue r = JS_Call(ctx, dom->wa_promise_then->value, promise, 2, args);',
+     '    (void)dom;\n    JSValue then = JS_GetPropertyStr(ctx, promise, "then");\n'
+     '    JSValue r = JS_IsFunction(ctx, then) ? JS_Call(ctx, then, promise, 2, args) : JS_UNDEFINED;\n'
+     '    JS_FreeValue(ctx, then);', [DOM]),
     # ── yonder ──────────────────────────────────────────────────────────
     ('orphan-waits-for-trees', SCRIPTS_C, '    if (!standing) {\n        os64_dom_free(s->retired_dom);',
      '    if (true) {\n        os64_dom_free(s->retired_dom);', [YON]),

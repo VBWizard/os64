@@ -691,7 +691,7 @@ struct os64_dom {
     const os64_html_node_t **wa_index_nodes;
     const struct garb_effect **wa_index_fx;
     size_t wa_index_n;
-    DValue *wa_timeline, *wa_event_prototype;
+    DValue *wa_timeline, *wa_event_prototype, *wa_promise_then;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;

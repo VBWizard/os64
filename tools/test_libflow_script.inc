@@ -215,6 +215,42 @@ static void script_effect_cases(void)
     expect("script effects: a shadow an effect easing overshoots into view is asked for", due == 4001, NULL);
     flow_free(tree);
     sheeted_close(&p);
+    // A transform's side effect (a containing block for fixed descendants)
+    // lasts while the effect is current or in effect: held backwards at
+    // its start, unfilled, it is neither; held forwards there it is.
+    garb_parsed_t r0 = {0}, r1 = {0};
+    garb_set_t rs0[2], rs1[2];
+    int32_t nr0 = script_sets(&r0, "transform: rotate(0deg)", rs0, 2);
+    int32_t nr1 = script_sets(&r1, "transform: rotate(90deg)", rs1, 2);
+    garb_effect_keyframe_t turn[2] = {{0, false, {0}, rs0, nr0}, {1, false, {0}, rs1, nr1}};
+    garb_effect_t spin = run;
+    spin.frames = turn;
+    spin.nframes = 2;
+    spin.timing.duration_ms = 1000;
+    spin.timing.fill = GARB_FILL_NONE;
+    spin.held = true;
+    spin.hold_ms = 0;
+    const garb_effect_t *spinl[1] = {&spin};
+    for (int dir = 0; dir < 2; dir++) {
+        spin.rate = dir ? -1 : 1;
+        sheeted_open(&p, "<!doctype html><style>body{margin:0}</style><div id=k style='margin:50px 0 0 200px;width:100px;"
+                         "height:50px'><div id=f style='position:fixed;left:0;top:0;width:10px;height:10px'></div></div>",
+                     800, 600);
+        ScriptEffects ke = {computed_find(p.doc->document, "k"), spinl, 1};
+        p.script = &ke;
+        p.env.script_effects = script_effects_hook;
+        p.env.ctx = &p;
+        p.env.now_ms = 5000;
+        tree = flow_layout(p.doc, p.page, 800, &p.env);
+        const flow_box_t *fb = tree != NULL ? flow_box_for(tree, computed_find(p.doc->document, "f")) : NULL;
+        expect(dir ? "script effects: held backwards at its start, a transform holds no fixed box"
+                   : "script effects: held forwards at its start, a transform holds its fixed box",
+               fb != NULL && (fb->rect.x == 200) == !dir, NULL);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+    garb_free(&r0);
+    garb_free(&r1);
     garb_free(&t0);
     garb_free(&t1);
     garb_free(&o0);
