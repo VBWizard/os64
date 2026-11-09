@@ -1502,7 +1502,8 @@ enum { M_ADD, M_REMOVE, M_DISPATCH };
  * a listener was added or removed or a handler set. */
 static void listeners_changed(os64_dom_t *dom, DValue *entry)
 {
-    if (entry != NULL && entry->listeners_changed != NULL) entry->listeners_changed(dom->engine, entry);
+    if (entry != NULL && entry->engine_held && entry->listeners_changed != NULL)
+        entry->listeners_changed(dom->engine, entry);
 }
 
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,

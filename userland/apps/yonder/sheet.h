@@ -2,7 +2,8 @@
 #define YONDER_SHEET_H
 
 // A style sheet's job on the work pool (GARB.md, G4): a `<link>`ed sheet or
-// an `@import`, fetched, or read from a file, and parsed on a worker.
+// an `@import` fetched or read from a file and parsed, or a fetch-only
+// style preload retained until a stylesheet consumes it.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -23,17 +24,25 @@
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_SHEET
-    uint64_t page;                  // the page it belongs to (Page.serial)
-    int32_t index;                  // which of that page's sheets
+    uint64_t page;                  // stylesheet table serial, or stable preload account ID
+    int32_t index;                  // stylesheet or preload entry within that owner
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
     // The document's encoding: what a sheet that names none of its own is
     // read in (CSS Syntax 3 § 3.2).
     char environment[32];
-    // A sheet is read only when its server calls it `text/css` — except a
-    // same-origin one on a quirks-mode page, which is read whatever type it
-    // was given (HTML's `link` fetch).
-    bool any_type;
+    // Quirks mode permits another MIME type only for a same-origin final
+    // response. A redirect does not inherit the initial URL's exemption.
+    bool quirks;
+    way_request_t request;          // link origin, CORS, credentials and referrer policy
+    // Fetch-only preloads retain their outcome without parsing or applying it.
+    bool preload;
+    // An activated preload supplies its retained response to this parse job.
+    // The job owns this copy; input_present also represents an empty body.
+    bool input_present, input_fetched, input_usable;
+    uint8_t *input;
+    size_t input_len;
+    char input_label[HTTP_CHARSET_MAX];
     way_hooks_t hooks;              // the page's cookies, its Referer, who asks, the cache
     // The window keeps the page (keep_pages, diag.h): the product carries
     // what the sheet was parsed from.
@@ -41,14 +50,15 @@ typedef struct {
 } yonder_sheet_job_t;
 
 typedef struct {
-    bool ok;
+    bool ok;                       // parsed CSS, or a completed fetch for a preload
+    bool fetched, usable;          // fetch success, then status/MIME eligibility
     garb_parsed_t parsed;
     // Where the sheet came from after its redirects: its @imports are
     // resolved against it.
     char url[OS64_FETCH_URL_MAX];
-    // With the job's `keep`, a parsed sheet's bytes as they arrived and the
-    // charset its response labelled them with ("" for none), so a replay
-    // parses them again as this job did. os64_malloc'd; NULL otherwise.
+    // With `keep` after parsing, or for a preload, the response bytes and the
+    // charset its response labelled them with ("" for none), so a consumer
+    // uses the response encoding when parsing. os64_malloc'd; NULL otherwise.
     uint8_t *kept;
     size_t kept_len;
     char label[HTTP_CHARSET_MAX];

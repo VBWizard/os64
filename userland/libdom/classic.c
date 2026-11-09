@@ -675,6 +675,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLParagraphElement", D_PROTO_PARAGRAPH}, {"HTMLPreElement", D_PROTO_PRE},
         {"HTMLSpanElement", D_PROTO_SPAN}, {"HTMLTableCaptionElement", D_PROTO_TABLE_CAPTION},
         {"HTMLTitleElement", D_PROTO_TITLE},
+        {"HTMLSourceElement", D_PROTO_SOURCE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
      * IFRAME.md's HTMLIFrameElement is one row. */

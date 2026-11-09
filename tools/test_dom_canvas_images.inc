@@ -9,7 +9,8 @@ static os64_dom_image_status_t canvas_test_image(void *opaque,const os64_html_no
     *out=(os64_dom_image_view_t){0};
     if(!src||!strcmp(src->value,"pending"))return OS64_DOM_IMAGE_PENDING;
     if(!strcmp(src->value,"broken"))return OS64_DOM_IMAGE_BROKEN;
-    *out=(os64_dom_image_view_t){{colors,2,2,8,sizeof(colors),DRAW2D_ARGB8_STRAIGHT},strcmp(src->value,"tainted")!=0,(void *)colors};
+    *out=(os64_dom_image_view_t){.surface={colors,2,2,8,sizeof(colors),DRAW2D_ARGB8_STRAIGHT},
+        .origin_clean=strcmp(src->value,"tainted")!=0,.token=(void *)colors};
     canvas_image_loans++;return OS64_DOM_IMAGE_READY;
 }
 static void canvas_test_return(void *opaque,os64_dom_image_view_t *view)
@@ -17,7 +18,7 @@ static void canvas_test_return(void *opaque,os64_dom_image_view_t *view)
 static void dom_canvas_image_cases(void)
 {
     DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
-    os64_dom_image_provider_t provider={canvas_test_image,canvas_test_return,NULL};
+    os64_dom_image_provider_t provider={.acquire=canvas_test_image,.release=canvas_test_return};
     os64_dom_set_images(f.binding,&provider);canvas_image_loans=canvas_image_returns=0;
     dom_script(&f,STORAGE_ASSERT
         "var source=document.createElement('canvas');source.width=2;source.height=2;"

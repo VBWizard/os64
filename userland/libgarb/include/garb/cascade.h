@@ -368,6 +368,10 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
 // parse is false (`not all`).
 bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env);
 bool garb_media_text_matches(const char *text, garb_env_t env);
+// HTML sizes, in CSS pixels. Uses initial font metrics, viewport lengths and
+// CSS math; ineligible auto and unsupported values fall through to later
+// entries, then 100vw. No layout-dependent auto-sizing is performed.
+double garb_image_source_size(const char *text, garb_env_t env);
 
 // CSS.supports (CSS Conditional 3 § 6.1), judged as the cascade judges an
 // `@supports` rule, read as `how` reads: `text` a <supports-condition>, or,

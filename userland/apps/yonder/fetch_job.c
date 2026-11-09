@@ -743,32 +743,34 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
 // ── The final response ──────────────────────────────────────────────────
 
 // The final response, filtered for the page: from the network (`f`, whose
-// body is read here, whole for native images, or streamed for scripts when
+// body is read here, whole for native consumers, or streamed for scripts when
 // `s` is not NULL) or from the cache (`kept`, `kept_len`, `f` NULL) — the same
-// filtering either way, so a page cannot tell them apart. False, with the
-// reason in `got`, when it could not be had.
+// filtering either way. Native images/styles retain MIME headers for parsing;
+// styles also retain the final URL for relative imports. These products must
+// not enter script response delivery. False, with the reason in `got`, when it could not be had.
 static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current, int32_t status,
                    const char *reason, const way_response_t *resp, os64_fetch_t *f, const uint8_t *kept,
-                   size_t kept_len, uint64_t max_body, bool image, const Streaming *s)
+                   size_t kept_len, uint64_t max_body, way_dest_t destination, const Streaming *s)
 {
     way_type_t type = way_response_type(r);
     got->type = type;
-    got->status = type == WAY_TYPE_OPAQUE && !image ? 0 : status;
+    got->status = type == WAY_TYPE_OPAQUE && destination == WAY_DEST_EMPTY ? 0 : status;
     if (type != WAY_TYPE_OPAQUE)
         os64_strcopy(got->status_text, sizeof(got->status_text), reason);
-    got->url = type == WAY_TYPE_OPAQUE ? copy_text("", 0) : without_fragment(current);
-    got->redirected = type != WAY_TYPE_OPAQUE && r->urls > 1;
+    got->url = type == WAY_TYPE_OPAQUE && destination != WAY_DEST_STYLE ? copy_text("", 0) : without_fragment(current);
+    got->redirected = (type != WAY_TYPE_OPAQUE || destination == WAY_DEST_STYLE) && r->urls > 1;
     got->hops = r->urls - 1;
     got->headers = os64_malloc(resp->headers_len + 1);
     if (got->url == NULL || got->headers == NULL)
         return network_error(got, "out of memory"), false;
-    got->headers_len = way_response_headers(r, type, resp, got->headers, resp->headers_len + 1);
+    got->headers_len = way_response_headers(r, destination != WAY_DEST_EMPTY ? WAY_TYPE_BASIC : type,
+                                               resp, got->headers, resp->headers_len + 1);
     if (got->headers_len == SIZE_MAX)
         return network_error(got, "the answer's headers did not fit"), false;
-    // Script responses discard opaque bodies. Native images retain pixels
-    // with the opaque verdict so Canvas can enforce origin tainting.
-    got->has_body = way_response_has_body(r, image ? WAY_TYPE_BASIC : type, status);
-    if (got->has_body && f != NULL && s != NULL && !image) {
+    // Script responses discard opaque bodies. Native consumers retain bytes
+    // with the opaque verdict, which Canvas uses to enforce origin tainting.
+    got->has_body = way_response_has_body(r, destination != WAY_DEST_EMPTY ? WAY_TYPE_BASIC : type, status);
+    if (got->has_body && f != NULL && s != NULL && destination == WAY_DEST_EMPTY) {
         if (!stream_body(got, f, s, max_body))
             return false;
     } else if (got->has_body && f != NULL) {
@@ -964,9 +966,9 @@ static Cached *cache_open(const yonder_fetch_job_t *job, const way_request_t *r,
     os64_strcopy(c->accept, sizeof(c->accept), accept != NULL ? accept : "");
     os64_strcopy(c->extra, sizeof(c->extra), fields->extra);
     os64_strcopy(c->representation, sizeof(c->representation), fields->body);
-    // An entry way_fetch_whole kept (a picture's, a sheet's, a classic
-    // script's) has no head, which a script's request reads: it is a miss,
-    // and the answer kept now replaces it.
+    // An entry way_fetch_whole kept has no response headers for the live
+    // CORS check. Native and script consumers treat it as a miss; a complete
+    // cacheable response replaces it.
     if (job->cache_mode != WAY_CACHE_RELOAD &&
         way_cache_find(job->cache, &c->key, &c->e, &c->body, &c->len, &c->blocks, (size_t)max_body)) {
         c->have = c->blocks.headers_len > 0 && way_vary_matches(c->blocks.vary, c->blocks.vary_len, request_value, c);
@@ -982,12 +984,12 @@ static Cached *cache_open(const yonder_fetch_job_t *job, const way_request_t *r,
 // False when the live CORS check refuses it: a miss, not an error
 // (SCRIPT_CACHE.md § 6, ruled), so the network is asked.
 static bool serve_kept(Cached *c, way_request_t *r, const char *current, const way_blocks_t *b,
-                       yonder_fetched_t *got, uint64_t max_body, way_served_t how)
+                       yonder_fetched_t *got, uint64_t max_body, way_served_t how, way_dest_t destination)
 {
     way_response_t resp = {c->e.status, b->headers, b->headers_len, b->omitted, b->omitted_len};
     if (r->tainting == WAY_TAINT_CORS && !way_cors_check(r, &resp))
         return false;
-    finish(got, r, current, c->e.status, "OK", &resp, NULL, c->body, c->len, max_body, false, NULL);
+    finish(got, r, current, c->e.status, "OK", &resp, NULL, c->body, c->len, max_body, destination, NULL);
     got->served = how;
     return true;
 }
@@ -1002,14 +1004,14 @@ typedef enum {
 // The cache's answer for this hop, under the request's cache mode
 // (SCRIPT_CACHE.md § 5's table). ASKED has added the validator to `fields`.
 static CacheAnswer cache_answer(const yonder_fetch_job_t *job, way_request_t *r, const char *current,
-                                Cached *c, Fields *fields, yonder_fetched_t *got, uint64_t max_body)
+                                Cached *c, Fields *fields, yonder_fetched_t *got, uint64_t max_body, way_dest_t destination)
 {
     way_cache_mode_t mode = job->cache_mode;
     if (!c->have)
         return mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED : CACHE_MISS;
     bool any_age = mode == WAY_CACHE_FORCE_CACHE || mode == WAY_CACHE_ONLY_IF_CACHED;
     if (any_age || (mode != WAY_CACHE_NO_CACHE && way_keep_fresh(&c->e.keep, now_utc()))) {
-        if (serve_kept(c, r, current, &c->blocks, got, max_body, WAY_SERVED_KEPT)) {
+        if (serve_kept(c, r, current, &c->blocks, got, max_body, WAY_SERVED_KEPT, destination)) {
             c->held = got->ok;
             return CACHE_ANSWERED;
         }
@@ -1091,7 +1093,7 @@ static size_t omitted_update(const char *kept, size_t klen, const char *block, s
 // `got`, when it cannot be the answer.
 static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, const char *current, Cached *c,
                             const Hop *h, const os64_fetch_keep_t *fields, yonder_fetched_t *got,
-                            uint64_t max_body)
+                            uint64_t max_body, way_dest_t destination)
 {
     size_t cap = c->blocks.headers_len + h->len + 1, ocap = c->blocks.omitted_len + h->olen + 3;
     char *merged = os64_malloc(cap), *omitted = os64_malloc(ocap);
@@ -1106,7 +1108,7 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
     size_t olen = omitted_update(c->blocks.omitted, c->blocks.omitted_len, h->block != NULL ? h->block : "", h->len,
                                  h->omitted != NULL ? h->omitted : "", h->olen, omitted);
     way_blocks_t b = {merged, mlen, omitted, olen, c->blocks.vary, c->blocks.vary_len};
-    bool ok = serve_kept(c, r, current, &b, got, max_body, WAY_SERVED_CONFIRMED);
+    bool ok = serve_kept(c, r, current, &b, got, max_body, WAY_SERVED_CONFIRMED, destination);
     if (!ok)
         network_error(got, "CORS: the answer does not allow this origin to read it");
     else {
@@ -1141,8 +1143,9 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
 }
 
 // A new answer from the network, at the key's address with no redirect on
-// the way: kept, when it is a whole 200 that is not opaque and says it may
-// be — its head without its cookies, and what the request said of each
+// the way: kept when it is a whole 200 with retained bytes and permits
+// storage. Native consumers retain opaque bytes; script fetches discard
+// them. Keep its head without cookies, and what the request said of each
 // header it varies on. One the cache may not keep is still newer than
 // whatever the cache holds under the key, read or not (a reload does not
 // read), which must not be served again.
@@ -1151,7 +1154,7 @@ static void cache_store(const yonder_fetch_job_t *job, Cached *c, const way_requ
 {
     // A streamed body past max_body has no copy to keep (fetch_job.h).
     bool keep = job->cache_mode != WAY_CACHE_ONLY_IF_CACHED && r->urls == 1 && head->status == 200 &&
-                got->type != WAY_TYPE_OPAQUE && got->has_body && got->body != NULL;
+                got->has_body && got->body != NULL;
     way_entry_t *e = keep ? os64_calloc(1, sizeof(*e)) : NULL;
     char *headers = e != NULL ? os64_malloc(h->len + 1) : NULL;
     char *vary = headers != NULL ? os64_malloc(OS64_FETCH_EXTRA_MAX) : NULL;
@@ -1222,14 +1225,14 @@ static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t 
     os64_free(target);
 }
 
-static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, bool image);
+static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, way_dest_t destination);
 
 // The fetch, timed whole, whichever way it ended: what a request cost is
 // the page record's to say (yonder.c request_record).
-static int64_t fetch_timed(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, bool image)
+static int64_t fetch_timed(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, way_dest_t destination)
 {
     int64_t began = os64_micros();
-    int64_t verdict = fetch_run(job_ptr, cancelled, ctx, out, image);
+    int64_t verdict = fetch_run(job_ptr, cancelled, ctx, out, destination);
     int64_t ended = os64_micros();
     yonder_fetched_t *got = *out;
     if (got != NULL) {
@@ -1241,7 +1244,7 @@ static int64_t fetch_timed(void *job_ptr, bool (*cancelled)(void *ctx), void *ct
     return verdict;
 }
 
-static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, bool image)
+static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out, way_dest_t destination)
 {
     yonder_fetch_job_t *job = job_ptr;
     yonder_fetched_t *got = os64_calloc(1, sizeof(*got));
@@ -1261,7 +1264,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     if (current == NULL)
         return network_error(got, "out of memory");
     way_request_start(r, current);
-    way_metadata_request(&h.metadata, &r->origin, image?WAY_DEST_IMAGE:WAY_DEST_EMPTY, r->mode);
+    way_metadata_request(&h.metadata, &r->origin, destination, r->mode);
     h.page_given = page_sets(r);
     int64_t verdict = 0;
     Cached *cached = NULL;          // the cache's, for the first hop (cache_open)
@@ -1346,12 +1349,14 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         hop_reset(&h, current, false);
         os64_fetch_options_t opt;
         // A body streamed has no cap (fetch_job.h).
-        opt_base(&opt, &h, job, job->pipe != NULL && !image ? 0 : max_body);
+        opt_base(&opt, &h, job, job->pipe != NULL && destination == WAY_DEST_EMPTY ? 0 : max_body);
         opt.method_name = r->method;
         opt.accept = fields->accept;
-        // Fetch's own `*/*`, when the page set none, is the preset's list
-        // for a fetch when it has one (the captured browsers send `*/*`).
-        const char *preset = way_identity_accept(job->identity, WAY_DEST_EMPTY);
+        const char *preset = way_identity_accept(job->identity, destination);
+        if (preset == NULL)
+            preset = job->default_accept;
+        if (preset == NULL && destination == WAY_DEST_STYLE)
+            preset = "text/css,*/*;q=0.1";
         if (fields->accepts == 0 && preset != NULL)
             opt.accept = preset;
         // The cache, on the request's first hop alone (SCRIPT_CACHE.md §
@@ -1362,7 +1367,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         if (r->urls == 1 && cached == NULL && cache_wanted(job, r))
             cached = cache_open(job, r, current, fields, opt.accept, max_body);
         CacheAnswer answer = r->urls != 1 ? CACHE_MISS
-                             : cached != NULL ? cache_answer(job, r, current, cached, fields, got, max_body)
+                             : cached != NULL ? cache_answer(job, r, current, cached, fields, got, max_body, destination)
                              : job->cache_mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED
                                                                            : CACHE_MISS;
         if (answer == CACHE_ANSWERED || answer == CACHE_REFUSED) {
@@ -1402,7 +1407,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         // A 304 to the question the cache asked: the kept reply, its headers
         // brought up to date, judged and served as one from the cache.
         if (cached != NULL && cached->asked && r->urls == 1 && head->status == 304) {
-            if (cache_confirmed(job, r, current, cached, &h, &head->keep, got, max_body))
+            if (cache_confirmed(job, r, current, cached, &h, &head->keep, got, max_body, destination))
                 verdict = 1;
             os64_fetch_close(f);
             break;
@@ -1456,7 +1461,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         }
         Streaming s = {job->pipe, cached != NULL, cancelled, ctx};
         if (finish(got, r, current, head->status, head->reason, &resp, f, NULL, 0, max_body,
-                   image, job->pipe != NULL ? &s : NULL)) {
+                   destination, job->pipe != NULL ? &s : NULL)) {
             verdict = 1;
             // Kept, when the cache may keep it; a new answer it may not keep
             // is still newer than what it held, which must not be served.
@@ -1478,6 +1483,9 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
 }
 
 int64_t yonder_fetch_run(void *job,bool (*cancelled)(void *),void *ctx,void **out)
-{ return fetch_timed(job,cancelled,ctx,out,false); }
+{ return fetch_timed(job,cancelled,ctx,out,WAY_DEST_EMPTY); }
 int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,void **out)
-{ return fetch_timed(job,cancelled,ctx,out,true); }
+{ return fetch_timed(job,cancelled,ctx,out,WAY_DEST_IMAGE); }
+
+int64_t yonder_fetch_style_run(void *job, bool (*cancelled)(void *), void *ctx, void **out)
+{ return fetch_timed(job, cancelled, ctx, out, WAY_DEST_STYLE); }

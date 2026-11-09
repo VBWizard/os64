@@ -35,6 +35,10 @@ bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 // counts the element as not told. The window owes each element once per
 // sheet: per address it asked for, or for a `style`, per text.
 bool yonder_scripts_owe(yonder_scripts_t *, const os64_html_node_t *, bool failed);
+// A document-owned resource may invalidate a queued completion before its
+// task runs. The guard and context remain alive until this host is freed.
+bool yonder_scripts_owe_guarded(yonder_scripts_t *, const os64_html_node_t *, bool failed,
+                                bool (*valid)(void *), void *ctx);
 bool yonder_scripts_owed_pending(const yonder_scripts_t *);
 // The owed events, oldest first, until one is heard: true when a task ran
 // (a listener heard one, or the runtime one needed could not be made), and

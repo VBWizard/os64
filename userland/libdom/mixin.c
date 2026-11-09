@@ -643,13 +643,12 @@ enum { T_LENGTH, T_VALUE, T_ITEM, T_CONTAINS, T_ADD, T_REMOVE, T_TOGGLE, T_REPLA
 
 /* A link's supported tokens (DOM § DOMTokenList's validation steps): the
  * link types yonder acts on, compared without ASCII case. A stylesheet is
- * libpage's; a module preload is the Modern Web surface's, which runs
- * modules (MODERN_WEB.md § Slice 3), so it is supported only with it. */
+ * libpage's; style and module preloads use the Modern Web surface. */
 static bool rel_supported(const os64_dom_t *dom, const char *token, size_t length)
 {
-    static const char *const kinds[] = {"stylesheet", "modulepreload"};
+    static const char *const kinds[] = {"stylesheet", "modulepreload", "preload"};
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
-        if (k == 1 && !dom->options.modern) continue;
+        if (k != 0 && !dom->options.modern) continue;
         size_t n = 0;
         while (n < length && kinds[k][n] != '\0' &&
                (token[n] >= 'A' && token[n] <= 'Z' ? token[n] - 'A' + 'a' : token[n]) == kinds[k][n])

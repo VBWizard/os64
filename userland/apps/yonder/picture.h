@@ -25,6 +25,19 @@ _Static_assert(PICTURE_RESERVE >= (size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEM
                "picture admission must cover the raster codec budget");
 typedef enum { YONDER_PICTURE_RASTER, YONDER_PICTURE_SEQUENCE, YONDER_PICTURE_SVG } yonder_picture_kind_t;
 
+// Immutable reconstruction storage shared by the catalog, resample jobs and
+// Canvas loans. An owner holds response/URL bytes or a full raster. Reference
+// changes may cross worker/window threads; contents do not change after publish.
+typedef struct yonder_picture_backing {
+    unsigned refs;
+    uint8_t *bytes;
+    size_t length;
+    os64_image_t image;
+} yonder_picture_backing_t;
+yonder_picture_backing_t *yonder_picture_backing_new(void);
+yonder_picture_backing_t *yonder_picture_backing_hold(yonder_picture_backing_t *);
+void yonder_picture_backing_free(yonder_picture_backing_t *);
+
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_PICTURE
     int32_t index;                  // which of the page's pictures
@@ -37,6 +50,7 @@ typedef struct {
     // the worker is: yonder_picture_release frees it, product or none.
     char *data_url;
     unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
+    unsigned display_cors;          // 0 ordinary display; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a
     // picture is fetched as the page is (YONDER.md § Y3b); the agent's
     // preset lines and the picture's Fetch Metadata; and the browser's
@@ -54,6 +68,9 @@ typedef struct {
     // of arriving as new.
     uint32_t cover_w, cover_h;
     bool resample;
+    bool recoverable;              // preserve non-data raster bytes through admission/layout
+    yonder_picture_backing_t *source; // owned immutable input for a resample
+    bool source_clean;
 } yonder_picture_job_t;
 
 // A tagged product: raster pixels, a moving GIF sequence, or an independently
@@ -61,15 +78,22 @@ typedef struct {
 // temporary SVG rasterization has a separate serialized working allowance.
 typedef struct {
     yonder_picture_kind_t kind;
-    bool origin_clean;             // native Canvas request passed its origin/CORS checks
+    bool origin_clean;             // recorded response taint, including redirect hops
     yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
-    // Its own size in CSS pixels, any kind (an SVG's default object size),
+    // Source raster dimensions, or an SVG's default object size,
     // which layout reads; a raster's `image` may be smaller (cover_w/h).
     uint32_t width, height;
     os64_image_status_t status;     // OK, or why there is no picture
     os64_image_t image;             // when kind is YONDER_PICTURE_RASTER: the pixels kept
     os64_image_sequence_t *sequence;
-    size_t cost;
+    size_t cost;                    // decoded product, excluding encoded backing below
+    yonder_picture_backing_t *encoded; // worker retains bytes until catalog admission
+    // Observations of this worker, not retained allocation charges. Body
+    // bytes are the fetched entity length, not compressed wire traffic.
+    size_t body_bytes;
+    bool fetched, decoded, reduced, decode_timed;
+    way_served_t served;
+    uint64_t decode_us;             // includes reduction and codec/parser work
     // UNKNOWN_FORMAT: what the bytes are (yonder_diag_image_format), for
     // the page's record. NULL otherwise.
     const char *format;

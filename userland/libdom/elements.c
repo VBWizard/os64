@@ -18,6 +18,10 @@
  * One row of the Modern Web table, naming nothing of window's: the
  * interfaces row (classic.c) names the interfaces. */
 
+static const char *const kLinkDestinations[] = {
+    "fetch", "font", "image", "script", "style", "track", "json", "text",
+    "audioworklet", "paintworklet", "serviceworker", "sharedworker", "worker", NULL,
+};
 static const char *const kScopes[] = {"row", "col", "rowgroup", "colgroup", NULL};
 static const char *const kReferrerPolicies[] = {
     "", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
@@ -39,7 +43,13 @@ static const DReflection kRows[] = {
     STRING(D_PROTO_META, "content", "content"), STRING(D_PROTO_META, "media", "media"),
     STRING(D_PROTO_META, "scheme", "scheme"),
     STRING(D_PROTO_STYLE, "media", "media"), STRING(D_PROTO_STYLE, "type", "type"),
+    STRING(D_PROTO_IMAGE, "srcset", "srcset"), STRING(D_PROTO_IMAGE, "sizes", "sizes"),
+    STRING(D_PROTO_SOURCE, "srcset", "srcset"), STRING(D_PROTO_SOURCE, "sizes", "sizes"),
+    STRING(D_PROTO_SOURCE, "media", "media"), STRING(D_PROTO_SOURCE, "type", "type"),
     STRING(D_PROTO_LINK, "media", "media"), STRING(D_PROTO_LINK, "type", "type"),
+    STRING(D_PROTO_LINK, "integrity", "integrity"),
+    {"as", "as", K_ENUM, D_KIND(D_PROTO_LINK), kLinkDestinations, "", "", 0},
+    {"referrerPolicy", "referrerpolicy", K_ENUM, D_KIND(D_PROTO_LINK), kReferrerPolicies, "", "", 0},
     NUMBER(D_PROTO_CANVAS, "width", "width", K_UNSIGNED, 300),
     NUMBER(D_PROTO_CANVAS, "height", "height", K_UNSIGNED, 150),
     STRING(D_PROTO_TIME, "dateTime", "datetime"), STRING(D_PROTO_DATA, "value", "value"),
@@ -99,7 +109,7 @@ static const DReflection kRows[] = {
 };
 
 /* The members that are no plain reflection, numbered after the rows. */
-enum { E_TITLE_TEXT = 256 };
+enum { E_TITLE_TEXT = 256, E_LINK_CORS };
 _Static_assert(sizeof(kRows) / sizeof(kRows[0]) < E_TITLE_TEXT, "the rows are numbered below E_TITLE_TEXT");
 
 static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
@@ -112,8 +122,26 @@ static JSValue element_member(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    uint64_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE) : kRows[magic].on;
+    uint64_t own = magic == E_TITLE_TEXT ? D_KIND(D_PROTO_TITLE)
+                   : magic == E_LINK_CORS ? D_KIND(D_PROTO_LINK) : kRows[magic].on;
     if (D_KIND(d_node_kind(node)) != own) return JS_ThrowTypeError(ctx, "Illegal invocation");
+    if (magic == E_LINK_CORS) {
+        if (!set) {
+            const os64_html_attr_t *cors = os64_html_attr(node, "crossorigin");
+            return cors == NULL ? JS_NULL : JS_NewString(ctx,
+                os64_streq_nocase(cors->value, "use-credentials") ? "use-credentials" : "anonymous");
+        }
+        if (JS_IsNull(value)) {
+            int64_t status = d_set_attr(dom, node, "crossorigin", NULL, 0, true);
+            return status == OS64_HTML_OK ? JS_UNDEFINED : d_page_error(ctx, status);
+        }
+        size_t n;
+        const char *text = JS_ToCStringLen(ctx, &n, value);
+        if (text == NULL) return JS_EXCEPTION;
+        int64_t status = d_set_attr(dom, node, "crossorigin", text, n, false);
+        JS_FreeCString(ctx, text);
+        return status == OS64_HTML_OK ? JS_UNDEFINED : d_page_error(ctx, status);
+    }
     if (magic != E_TITLE_TEXT)
         return set ? d_reflection_set(dom, ctx, node, &kRows[magic], value)
                    : d_reflection_get(dom, ctx, node, &kRows[magic]);
@@ -139,6 +167,9 @@ int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_TITLE]->value, "text", element_member, E_TITLE_TEXT, true) <
         0)
+        return -1;
+    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_LINK]->value, "crossOrigin", element_member,
+                   E_LINK_CORS, true) < 0)
         return -1;
     /* WindowEventHandlers, which a body has as window has them: the
      * handlers of window's events that GlobalEventHandlers (every

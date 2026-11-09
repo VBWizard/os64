@@ -122,6 +122,9 @@ static void sizes_worker_cases(void)
           p->cost == 100u * 50u * 4u, "sizes: the worker keeps the covering size, and says the natural one");
     check(p && (p->image.pixels[0] >> 24) == 0xff && (p->image.pixels[0] & 0xff) == 0x40,
           "sizes: the kept pixels are the picture's");
+    check(p && p->fetched && p->served == WAY_SERVED_NETWORK && p->body_bytes == 13 &&
+          p->decoded && p->reduced,
+          "sizes: worker observations separate fetched entity bytes from retained pixels");
     yonder_picture_release(job, out);
     job = sizes_job(0, 0); out = NULL;
     (void)yonder_picture_run(job, NULL, NULL, &out); p = out;
@@ -180,6 +183,7 @@ static void sizes_open(const char *html, const char *picture)
     probe_page(html, false);
     picture_http_bytes = picture; picture_http_type = "image/png"; picture_http_status = 200;
     picture_http_failure = false;
+    fake_resolve=picture_resolve;
     pool_open = true; g.pool = (os64_work_pool_t *)&pool_fake; memset(&pool_work, 0, sizeof(pool_work));
 }
 static void sizes_close(void)
@@ -189,6 +193,7 @@ static void sizes_close(void)
     if (g.page.diag != NULL) { yonder_diag_free(g.page.diag); g.page.diag = NULL; }
     probe_drop();
     picture_http_bytes = NULL; picture_http_type = NULL; picture_http_failure = false;
+    fake_resolve=NULL;
 }
 static const yonder_picture_job_t *sizes_held(void)
 {
@@ -198,6 +203,7 @@ static const yonder_picture_job_t *sizes_held(void)
 /* The job in the pool, run, arrived and fed after as reaped() does. */
 static bool sizes_run(void)
 {
+    pictures_feed(&g.page);
     yonder_picture_job_t *job = pool_work.job;
     if (job == NULL || job->kind != YONDER_JOB_PICTURE) return false;
     memset(&pool_work, 0, sizeof(pool_work));
@@ -230,7 +236,7 @@ static void sizes_page_cases(void)
     check(job && job->cover_w == 100 && job->cover_h == 50 && !job->resample,
           "sizes: a fixed box asks to be covered from the first ask");
     check(sizes_run() && g.page.pics[0].width == 400 && g.page.pics[0].image.width == 100 &&
-          g.page.kept_bytes == 100u * 50u * 4u, "sizes: and arrives at that size, its own size kept apart");
+          g.page.kept_bytes == 100u * 50u * 4u + 13, "sizes: and arrives at that size, its own size kept apart");
     sizes_layout(1000);
     check(g.page.resample_owed == 0 && sizes_held() == NULL, "sizes: a picture kept at its need is left alone");
     sizes_close();
@@ -261,9 +267,9 @@ static void sizes_page_cases(void)
           "sizes: drawn at a quarter, it is asked for again at the size drawn");
     size_t held = live;
     check(sizes_run() && g.page.pics[0].image.width == 100 && g.page.pics[0].image.height == 50 &&
-          g.page.pics[0].width == 400 && g.page.kept_bytes == 100u * 50u * 4u && g.page.pics[0].cost == 20000,
-          "sizes: the resample replaces the pixels and the account moves by the difference");
-    check(live < held, "sizes: the whole decode is let go");
+          g.page.pics[0].width == 400 && g.page.kept_bytes == 20013 && g.page.pics[0].cost == 20013,
+          "sizes: early full arrival reduces to the display raster plus encoded reconstruction");
+    check(!g.page.pics[0].full && g.page.pics[0].encoded, "sizes: reduction releases the unborrowed full raster and retains exact bytes");
     sizes_layout(1000);
     os64_gui_rect_t now = sizes_box("pic");
     check(now.x == was.x && now.y == was.y && now.w == was.w && now.h == was.h && g.page.resample_owed == 0,
@@ -319,8 +325,9 @@ static void sizes_page_cases(void)
     pictures_start(&g.page);
     check(sizes_run(), "sizes: whole first");
     sizes_layout(1000);
-    picture_http_failure = true;
-    check(!sizes_run() && g.page.pics[0].image.width == 400 && g.page.pics[0].state == PIC_SHOWN &&
+    fail_at = attempts+1;
+    bool refused_run=sizes_run();fail_at=0;
+    check(!refused_run && g.page.pics[0].image.width == 400 && g.page.pics[0].state == PIC_SHOWN &&
           sizes_held() == NULL, "sizes: a failed resample keeps the picture, and does not ask again at once");
     sizes_layout(1000);
     check(sizes_held() == NULL, "sizes: nor at the next layout, the need unchanged");
@@ -345,7 +352,7 @@ static void sizes_page_cases(void)
     job = sizes_held();
     check(job && job->resample && job->cover_w == 100, "sizes: and it is asked for at the size drawn");
     check(sizes_run() && g.page.pics[0].state == PIC_SHOWN && g.page.not_kept == 0 &&
-          g.page.kept_bytes == PICTURES_KEPT_MAX - 30000 + 20000, "sizes: which fits, and is shown");
+          g.page.kept_bytes == PICTURES_KEPT_MAX - 30000 + 20013, "sizes: which fits, and is shown");
     yonder_diag_render(g.page.diag, text, sizeof(text));
     check(strstr(text, "kept at the size it is drawn: whole, it was past the memory kept") != NULL,
           "sizes: the record says so");
@@ -392,7 +399,7 @@ static void sizes_page_cases(void)
     sizes_close();
 
     /* No memory to ask for a resample: a fact, the picture as it was, and
-     * the next layout asks again. */
+     * the same need is not retried. */
     sizes_open("<!doctype html><style>body{margin:0}img{display:block;width:100px}</style>"
                "<img id=pic src='https://t.test/a.png'>", "SIZED 400x200");
     pictures_start(&g.page);
@@ -405,7 +412,9 @@ static void sizes_page_cases(void)
     check(g.page.pics[0].image.width == 400 && !g.page.pics[0].resampling && g.page.resample_owed == 0 &&
           sizes_held() == NULL && live == at, "sizes: a resample with no memory to ask is not asked, nothing held");
     sizes_layout(1000);
-    check(sizes_held() != NULL, "sizes: the next layout asks again");
+    check(sizes_held() == NULL && g.page.resample_owed == 0, "sizes: repeated judgement does not retry a refused submission");
+    sizes_layout(2000);
+    check(sizes_held() != NULL, "sizes: a different need permits resample submission again");
     sizes_close();
 
     /* Codex #444 rd1: a picture behind a box arrives moving nothing, and
@@ -469,8 +478,9 @@ static void sizes_page_cases(void)
     pictures_start(&g.page);
     check(sizes_run(), "sizes: whole, for the refusal");
     sizes_layout(1000);
-    picture_http_failure = true;
-    check(!sizes_run() && g.page.pics[0].refused_w == 100, "sizes: refused at 100 x 50");
+    fail_at = attempts+1;
+    bool refused_again=sizes_run();fail_at=0;
+    check(!refused_again && g.page.pics[0].refused_w == 100, "sizes: refused at 100 x 50");
     picture_http_failure = false;
     sizes_layout(1500);
     job = sizes_held();
@@ -497,6 +507,114 @@ static void sizes_page_cases(void)
     yonder_diag_render(g.page.diag, text, sizeof(text));
     check(strstr(text, "picture sizes: 0 kept at the size they are drawn, 0 KiB less than whole") != NULL &&
           strstr(text, "picture sizes: 1 kept") == NULL, "sizes: the record says none are kept smaller now");
+    sizes_close();
+}
+
+static char *memory_fixture_read(const char *name, size_t *length)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "tools/pages/%s", name);
+    FILE *f = fopen(path, "rb");
+    check(f != NULL, "image fixture: source opens");
+    if (!f) return NULL;
+    char *bytes = malloc(128 * 1024 + 1);
+    if (!bytes) { fclose(f); return NULL; }
+    *length = fread(bytes, 1, 128 * 1024, f);
+    check(feof(f) && !ferror(f), "image fixture: source fits and reads whole");
+    fclose(f);
+    bytes[*length] = '\0';
+    return bytes;
+}
+
+static void picture_memory_pages(void)
+{
+    size_t length;
+    char *png = memory_fixture_read("image-memory.png", &length);
+    if (!png) return;
+    char *base64 = data_b64(png, length);
+    free(png);
+    check(base64 != NULL, "image fixture: data transport allocated");
+    if (!base64) return;
+    const char *modes[] = {"untouched", "metadata", "canvas", "late-layout"};
+    for (unsigned m = 0; m < 4; m++) {
+        char name[128];
+        snprintf(name, sizeof(name), "image-memory-%s.html", modes[m]);
+        char *source = memory_fixture_read(name, &length);
+        if (!source) continue;
+        char *at = strstr(source, "image-memory.png");
+        check(at != NULL, "image fixture: source names the PNG");
+        if (!at) { free(source); continue; }
+        size_t cap = length + strlen(base64) + 64;
+        char *html = malloc(cap);
+        if (!html) { free(source); continue; }
+        /* The same bytes over a data URL avoid the harness's text-only
+         * HTTP transport. Production libpng still decodes the actual PNG. */
+        snprintf(html, cap, "%.*sdata:image/png;base64,%s%s", (int)(at - source), source,
+                 base64, at + strlen("image-memory.png"));
+        probe_page(html, true);
+        free(source); free(html);
+        pool_open = true; g.pool = (os64_work_pool_t *)&pool_fake;
+        memset(&pool_work, 0, sizeof(pool_work));
+        pictures_start(&g.page);
+        for (unsigned turn = 0; turn < 8; turn++) {
+            script_turn();
+            while (sizes_run()) {}
+        }
+        check(m == 0 ? probe_text_is("result", "The image is displayed; no script accesses it.") :
+              m == 1 ? probe_text_is("result", "PASS: natural size 1920 x 1080") :
+              m == 2 ? probe_text_is("result", "PASS: one draw in onload, immediate blue readback.") :
+                       probe_text_is("result", "PASS: late layout is 160 x 90; natural size is 1920 x 1080."),
+              "image fixture: delivered page completes its real script and one-shot readback");
+        PictureMemory memory = picture_memory(&g.page);
+        check(memory.display == 57600 && memory.native == (m == 2 ? 8294400u : 0u) &&
+              memory.metadata_only == 0 && memory.encoded == 0,
+              "image fixture: data URL supplies reconstruction without a body copy; only a draw promotes full pixels");
+        printf("image fixture %s: display=%lu native=%lu metadata_only=%lu bytes\n", modes[m],
+               (unsigned long)memory.display, (unsigned long)memory.native,
+               (unsigned long)memory.metadata_only);
+        sizes_close();
+    }
+    os64_free(base64);
+}
+
+static void picture_memory_baseline(void)
+{
+    sizes_open("<!doctype html><img id=pic src='data:image/png,SIZED%20400x200' width=100 height=50>",
+               "SIZED 400x200");
+    g.page.modern = true;
+    pictures_start(&g.page);
+    check(sizes_run(), "image baseline: display arrives");
+    PictureMemory before = picture_memory(&g.page);
+    check(before.display == 20000 && before.native == 0,
+          "image baseline: untouched thumbnail has only its reduced raster");
+    os64_dom_image_view_t view;
+    const os64_html_node_t *node = probe_id("pic");
+    check(canvas_source(g.page.way.doc, node, false, &view) == OS64_DOM_IMAGE_READY,
+          "image ownership: metadata immediately uses the completed display request");
+    check(!sizes_run(), "image ownership: metadata submits no worker request");
+    check(canvas_source(g.page.way.doc, node, false, &view) == OS64_DOM_IMAGE_READY &&
+          view.surface.width == 400 && view.surface.height == 200,
+          "image baseline: metadata reports natural dimensions");
+    canvas_source_release(g.page.way.doc, &view);
+    PictureMemory after = picture_memory(&g.page);
+    check(after.display == 20000 && after.native == 0 && after.metadata_only == 0 && after.encoded == 0 &&
+          after.native_with_display_url == 0 &&
+          after.display + after.native + after.encoded + after.sequence + after.svg == g.page.kept_bytes &&
+          g.page.picture_kept_peak == g.page.kept_bytes,
+          "image ownership: metadata needs no duplicate full raster and the ledger reconciles");
+    check(g.page.picture_jobs == 1 && g.page.picture_decodes == 1 && g.page.picture_reductions == 1 &&
+          g.page.picture_network == 0 && g.page.picture_network_bytes == 0,
+          "image ownership: one data decode, one reduction, no metadata decode or network");
+    printf("image baseline: display=%lu native=%lu metadata_only=%lu retained=%lu peak=%lu bytes\n",
+           (unsigned long)after.display, (unsigned long)after.native, (unsigned long)after.metadata_only,
+           (unsigned long)g.page.kept_bytes, (unsigned long)g.page.picture_kept_peak);
+    check(canvas_source(g.page.way.doc, node, true, &view) == OS64_DOM_IMAGE_READY,
+          "image baseline: pixel acquisition lends the same native raster");
+    canvas_source_release(g.page.way.doc, &view);
+    after = picture_memory(&g.page);
+    check(after.metadata_only == 0 && after.native == 320000 &&
+          g.page.image_metadata_reads == 2 && g.page.image_pixel_reads == 1,
+          "image ownership: pixel use synchronously promotes the full raster");
     sizes_close();
 }
 
