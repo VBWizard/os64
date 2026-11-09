@@ -217,8 +217,10 @@ completion to exercise the distinction between the shared slot's uses.
 The integrated Yonder host suite passes **24,215 checks, zero failures**, with
 ASan, UBSan and LeakSanitizer enabled outside the sandbox. The DOM target-engine
 profile passes **42,982 checks, zero failures** (3,849 binding allocation
-sweeps), also with leak detection enabled; its separate fully instrumented
-engine profile is not included in that result. The target Yonder build passes.
+sweeps). The separate fully instrumented engine profile passes **304,728
+checks, zero failures** (36,142 binding allocation sweeps). Both DOM profiles
+complete with leak detection enabled outside the sandbox. The target Yonder
+build passes.
 
 The integration checks cover the merged source; the P5 results
 above belong to the frozen `a131eece` implementation cohort, which remains
