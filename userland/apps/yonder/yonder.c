@@ -1353,6 +1353,12 @@ static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sampl
     if (p->diag) yonder_diag_layout_add(diag, sample);
     else yonder_diag_layout_stream_add(diag, sample);
 }
+static void layout_profile_one(const Page *p, const yonder_layout_one_t *one)
+{
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (p->diag) yonder_diag_layout_one(diag, one);
+    else yonder_diag_layout_stream_one(diag, one);
+}
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
@@ -1366,6 +1372,11 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
     }
     return model;
 }
+// THE LAYOUT BEING TAKEN, whole (yonder_layout_one_t), while the profile
+// is on: page_lay_out opens it and hands it to the record; the cascade and
+// each attempt at the layout add to it.
+static yonder_layout_one_t s_one;
+static bool s_one_open;
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
@@ -1398,6 +1409,17 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
         _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
         os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
         layout_profile_add(p, &sample);
+        if (s_one_open) {
+            s_one.style_us += sample.style_us;
+            s_one.boxes_us += sample.boxes_us;
+            s_one.layout_us += sample.layout_us;
+            s_one.public_us += sample.public_us;
+            s_one.elements = sample.elements;
+            s_one.boxes = sample.boxes;
+            s_one.reused = sample.reused;
+            s_one.attempts++;
+            for (int32_t r = 0; r < YONDER_LAYOUT_REUSE_REASONS; r++) s_one.reuse_refused[r] += sample.reuse_refused[r];
+        }
     }
     return tree;
 }
@@ -1611,6 +1633,11 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
+        if (s_one_open) {
+            s_one.cascade_us = sample.cascade_us;
+            s_one.cascade_why = why >= 0 ? why : sample.cascade_updates ? YONDER_LAYOUT_CASCADE_UPDATED
+                                                                         : YONDER_LAYOUT_CASCADE_KEPT;
+        }
     }
     if (cascade == NULL) return false;
     {
@@ -3103,11 +3130,28 @@ static uint64_t pointer_next(void);
 static bool pointer_turn(void);
 static void pointer_cancel_run(void);
 
-// A layout, timed (s_cost): page_lay_out_run is the layout itself.
+// A layout, timed (s_cost): page_lay_out_run is the layout itself. With
+// the profile on, the whole of one goes to the record as well
+// (layout_profile_one), when it got as far as its cascade.
+static void layout_profile_one(const Page *p, const yonder_layout_one_t *one);
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     cost_begin(PS_LAYOUTS);
+    bool profiled = s_layout_profile && layout_profile_diag(p) && !s_one_open;
+    int64_t began = profiled ? os64_micros() : -1;
+    if (profiled) {
+        s_one = (yonder_layout_one_t){.cascade_why = YONDER_LAYOUT_CASCADE_KEPT,
+                                      .cascade_reason_names = cascade_reason_names()};
+        s_one_open = true;
+    }
     bool laid = page_lay_out_run(p, width, height, zoom, reclaim);
+    if (profiled) {
+        uint64_t errors = 0;
+        s_one.total_us = layout_elapsed(began, &errors);
+        s_one.at_us = (uint64_t)os64_micros();
+        s_one_open = false;
+        if (s_one.cascade_us != 0 || s_one.attempts != 0) layout_profile_one(p, &s_one);
+    }
     if (laid && p == &g.page) pointer_geometry_changed();
     cost_end(PS_LAYOUTS);
     s_cost.layouts++;

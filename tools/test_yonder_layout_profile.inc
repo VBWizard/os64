@@ -84,6 +84,15 @@ static void layout_profile_cases(void)
     cascade=yonder_diag_fact_value(g.page.diag,"layout cascade");
     check(cascade && !strcmp(cascade,"updated 1, built fresh 1: sheets changed 1"),
           "layout profile: and the cascade it updated is counted");
+    /* Each layout whole: what became of its cascade sorts the counts, and
+     * the slowest says its phases, its cascade's fate and its attempts. */
+    const char *slow=yonder_diag_fact_value(g.page.diag,"layout slowest");
+    const char *by=yonder_diag_fact_value(g.page.diag,"layout by cascade");
+    check(by && strstr(by,"cascade updated 1, ") && strstr(by,"; cascade built fresh 1, ") && strstr(by," ms each"),
+          "layout profile: layouts are counted by what became of their cascade");
+    check(slow && strstr(slow," ms at +") && strstr(slow,": cascade ") && strstr(slow,", the rest ") &&
+          (strstr(slow,"(updated)") || strstr(slow,"(built fresh: sheets changed)")) && strstr(slow,"; 1 attempt"),
+          "layout profile: the slowest layout says its phases, its cascade's fate and its attempts");
     s_layout_profile=false;clock_step=saved_step;
     probe_drop();
     /* A page whose sheets hold :has(), anchored and in a subject, keeps

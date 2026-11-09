@@ -50,8 +50,17 @@ struct yonder_diag_claim {
     char *dir;
 };
 
+// What a record keeps of its layouts one by one (yonder_layout_one_t): the
+// slowest, and the time and count of layouts by what became of their
+// cascade (kept, updated, built fresh).
+typedef struct {
+    yonder_layout_one_t slowest;
+    uint64_t us[3], n[3];
+} LayoutOnes;
+
 struct yonder_diag {
     yonder_layout_stats_t layout, layout_stream;
+    LayoutOnes ones, ones_stream;
     char *url;
     uint32_t seq;
     struct yonder_diag_claim claim;
@@ -1335,6 +1344,12 @@ uint32_t yonder_diag_next_seq(const char *dir)
     return high < UINT32_MAX ? high + 1 : high;
 }
 
+// The graft's refusal reasons, in flow_reuse_reason_t's order, which the
+// `layout graft` line names in its bracket.
+static const char *const kReuseReasons[YONDER_LAYOUT_REUSE_REASONS] = {
+    "no source", "incomplete", "inputs", "history", "budget", "memory", "structure", "dirty",
+    "style", "motion", "role", "call", "floats", "marker", "translation", "retain"};
+
 /* Saturating totals preserve the meaning of a long-lived page's report. */
 static uint64_t layout_sum(uint64_t a, uint64_t b)
 {
@@ -1373,18 +1388,13 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     yonder_diag_fact(d, key, line);
     char graft_key[64];
     os64_snprintf(graft_key, sizeof(graft_key), "%s graft", key);
-    os64_snprintf(line, sizeof(line), "intrinsic hits %lu, marker measures %lu, peak new metadata %lu bytes; "
-        "refused [no source, incomplete, inputs, history, budget, memory, structure, dirty, style, motion, role, call, floats, marker, translation, retain]: "
-        "%lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu",
-        (unsigned long)s->intrinsic_hits, (unsigned long)s->marker_measures, (unsigned long)s->metadata_peak,
-        (unsigned long)s->reuse_refused[0], (unsigned long)s->reuse_refused[1],
-        (unsigned long)s->reuse_refused[2], (unsigned long)s->reuse_refused[3],
-        (unsigned long)s->reuse_refused[4], (unsigned long)s->reuse_refused[5],
-        (unsigned long)s->reuse_refused[6], (unsigned long)s->reuse_refused[7],
-        (unsigned long)s->reuse_refused[8], (unsigned long)s->reuse_refused[9],
-        (unsigned long)s->reuse_refused[10], (unsigned long)s->reuse_refused[11],
-        (unsigned long)s->reuse_refused[12], (unsigned long)s->reuse_refused[13],
-        (unsigned long)s->reuse_refused[14], (unsigned long)s->reuse_refused[15]);
+    int g = os64_snprintf(line, sizeof(line), "intrinsic hits %lu, marker measures %lu, peak new metadata %lu bytes; refused [",
+        (unsigned long)s->intrinsic_hits, (unsigned long)s->marker_measures, (unsigned long)s->metadata_peak);
+    for (int r = 0; r < YONDER_LAYOUT_REUSE_REASONS && g > 0 && (size_t)g < sizeof(line); r++)
+        g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%s", r ? ", " : "", kReuseReasons[r]);
+    for (int r = 0; r < YONDER_LAYOUT_REUSE_REASONS && g > 0 && (size_t)g < sizeof(line); r++)
+        g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%lu", r ? " " : "]: ",
+                           (unsigned long)s->reuse_refused[r]);
     yonder_diag_fact(d, graft_key, line);
     // `<key> cascade`: how many cascades were updated and how many built
     // fresh, by reason, the reasons that never happened left out.
@@ -1407,6 +1417,90 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         first = 0;
     }
     yonder_diag_fact(d, cascade_key, line);
+}
+
+// Microseconds as milliseconds with one decimal, for a line.
+static void ms_text(uint64_t us, char *out, size_t cap)
+{
+    os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100));
+}
+
+static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutOnes *ones, const char *key)
+{
+    if (!one) return;
+    int kind = one->cascade_why == YONDER_LAYOUT_CASCADE_KEPT ? 0
+             : one->cascade_why == YONDER_LAYOUT_CASCADE_UPDATED ? 1 : 2;
+    ones->us[kind] = layout_sum(ones->us[kind], one->total_us);
+    ones->n[kind] = layout_sum(ones->n[kind], 1);
+    char line[768], a[24];
+    // `<key> by cascade`: each kind's count and average whole layout.
+    static const char *const kKinds[3] = {"cascade kept", "cascade updated", "cascade built fresh"};
+    size_t at = 0;
+    for (int k = 0; k < 3; k++) {
+        if (ones->n[k] == 0) continue;
+        ms_text(ones->us[k] / ones->n[k], a, sizeof(a));
+        int n = os64_snprintf(line + at, sizeof(line) - at, "%s%s %lu, %s ms each", at ? "; " : "", kKinds[k],
+                              (unsigned long)ones->n[k], a);
+        if (n < 0 || (size_t)n >= sizeof(line) - at) break;
+        at += (size_t)n;
+    }
+    char by_key[64];
+    os64_snprintf(by_key, sizeof(by_key), "%s by cascade", key);
+    yonder_diag_fact(d, by_key, line);
+    if (one->total_us < ones->slowest.total_us) return;
+    ones->slowest = *one;
+    // `<key> slowest`: the slowest layout, phase by phase; `the rest` is
+    // what page_lay_out_run did beside them (gathering the layout's
+    // inputs, showing the tree, comparing its parts), and the graft's
+    // commonest refusals.
+    uint64_t phases = one->cascade_us + one->style_us + one->boxes_us + one->layout_us + one->public_us;
+    char why[80];
+    if (one->cascade_why == YONDER_LAYOUT_CASCADE_KEPT) os64_snprintf(why, sizeof(why), "kept");
+    else if (one->cascade_why == YONDER_LAYOUT_CASCADE_UPDATED) os64_snprintf(why, sizeof(why), "updated");
+    else os64_snprintf(why, sizeof(why), "built fresh: %s",
+                       one->cascade_reason_names != NULL && one->cascade_why < YONDER_LAYOUT_CASCADE_REASONS
+                           ? one->cascade_reason_names[one->cascade_why] : "?");
+    char total[24], cas[24], st[24], bx[24], ly[24], pb[24], rest[24];
+    ms_text(one->total_us, total, sizeof(total));
+    ms_text(one->cascade_us, cas, sizeof(cas));
+    ms_text(one->style_us, st, sizeof(st));
+    ms_text(one->boxes_us, bx, sizeof(bx));
+    ms_text(one->layout_us, ly, sizeof(ly));
+    ms_text(one->public_us, pb, sizeof(pb));
+    ms_text(one->total_us > phases ? one->total_us - phases : 0, rest, sizeof(rest));
+    int64_t since = d->began_us > 0 && (int64_t)one->at_us > d->began_us ? (int64_t)one->at_us - d->began_us : 0;
+    int n = os64_snprintf(line, sizeof(line),
+        "%s ms at +%lus: cascade %s ms (%s), style %s ms, boxes %s ms, layout %s ms, public %s ms, the rest %s ms; "
+        "elements %lu, boxes %lu, reused %lu; %lu attempt%s",
+        total, (unsigned long)(since / 1000000), cas, why, st, bx, ly, pb, rest, (unsigned long)one->elements,
+        (unsigned long)one->boxes, (unsigned long)one->reused, (unsigned long)one->attempts,
+        one->attempts == 1 ? "" : "s");
+    at = n > 0 && (size_t)n < sizeof(line) ? (size_t)n : 0;
+    // The three commonest graft refusals, most first.
+    bool used[YONDER_LAYOUT_REUSE_REASONS] = {false};
+    for (int shown = 0; shown < 3; shown++) {
+        int best = -1;
+        for (int r = 0; r < YONDER_LAYOUT_REUSE_REASONS; r++)
+            if (!used[r] && one->reuse_refused[r] > 0 && (best < 0 || one->reuse_refused[r] > one->reuse_refused[best]))
+                best = r;
+        if (best < 0) break;
+        used[best] = true;
+        n = os64_snprintf(line + at, sizeof(line) - at, "%s%s %lu", shown ? ", " : "; graft refused most for ",
+                          kReuseReasons[best], (unsigned long)one->reuse_refused[best]);
+        if (n < 0 || (size_t)n >= sizeof(line) - at) break;
+        at += (size_t)n;
+    }
+    char slow_key[64];
+    os64_snprintf(slow_key, sizeof(slow_key), "%s slowest", key);
+    yonder_diag_fact(d, slow_key, line);
+}
+void yonder_diag_layout_one(yonder_diag_t *d, const yonder_layout_one_t *one)
+{
+    if (d) layout_one(d, one, &d->ones, "layout");
+}
+void yonder_diag_layout_stream_one(yonder_diag_t *d, const yonder_layout_one_t *one)
+{
+    if (d) layout_one(d, one, &d->ones_stream, "layout stream");
 }
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
 {

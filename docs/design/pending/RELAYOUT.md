@@ -483,7 +483,12 @@ successful DOM-version advances within an existing cascade. The existing
 style reuse. Intrinsic hits, marker measurements, peak new metadata and the
 refusal histogram are reported on the separate `layout graft` line, and
 how many cascades were updated and how many built fresh, by reason (yonder's
-own, then `garb_update_refusal_t`), on the `layout cascade` line.
+own, then `garb_update_refusal_t`), on the `layout cascade` line. Each
+layout is also taken whole: `layout by cascade` gives the count and average
+of layouts whose cascade was kept, updated or built fresh, and `layout
+slowest` the slowest one phase by phase (cascade and its fate, style, boxes,
+layout, public, and the rest of what the layout did), with its attempts and
+its graft's commonest refusals.
 Measured and displayed layouts both use the incremental door. Validation
 and the history of the P5/design gates are recorded in
 [5b-validation.md](../../relayout-evidence/5b-validation.md).
