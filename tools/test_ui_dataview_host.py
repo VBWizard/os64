@@ -19,6 +19,7 @@ if a.real:
 sources=['tools/test_ui_dataview_host.c']
 if not a.real: sources+=['tools/fonts/fake_backend.c']
 sources+=['userland/libos64/'+n+'.c' for n in ['ui_data','ui_dataview','ui_font','ui','ui_list','ui_controls','ui_text','ui_menu','ui_menu_widget','ui_dispatcher','ui_icon','ui_action','ui_status','font_provider','font_adopt','text','text_cache','text_decode','text_bitmap','text_draw','draw','str','fmt','ui_theme']]
+sources.append('shared/damage.c')   # ui.c keeps its dirty list by the shared rule
 subprocess.run(['cc',*flags,*[str(ROOT/s) for s in sources],*objects,'-o',str(out/'test_ui_dataview')],check=True)
 print('Artifacts:',out,flush=True)
 raise SystemExit(subprocess.run([str(out/'test_ui_dataview'),str(ROOT/'userland/libfreetype/fixtures')],env={**os.environ,'ASAN_OPTIONS':os.environ.get('ASAN_OPTIONS','detect_leaks=1')}).returncode)

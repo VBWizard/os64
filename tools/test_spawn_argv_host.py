@@ -49,7 +49,6 @@ program = r'''
 #define SPAWN_MAX_ARGS OS64_SPAWN_MAX_ARGS
 #define TASK_ARGV_MAX_BYTES 0x100000
 #define TASK_ARGV_MAX_ARGS OS64_SPAWN_MAX_ARGS
-static const uintptr_t kHHDMOffset = (uintptr_t)0xffff800000000000ull;
 
 // One real hole: a page nobody may read.
 static char *hole;

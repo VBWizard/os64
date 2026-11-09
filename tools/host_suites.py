@@ -43,8 +43,11 @@ TOOLS = ROOT / 'tools'
 #
 # A suite is (name, argv, prerequisites). argv is relative to the tree's
 # top. A prerequisite is 'py:<module>' (a Python module the suite imports)
-# or 'bin:<program>' (one it execs); a missing one makes the suite a SKIP.
-# `OUT` in argv is replaced by a fresh directory under --out.
+# 'bin:<program>' (one it execs) or 'dir:<path>' (a tree under the top it
+# reads, such as the fetched WPT checkout); a missing one makes the suite a
+# SKIP.
+# `OUT` in argv is replaced by a fresh directory under --out (suites that
+# write an output directory they are given).
 
 def sh(name, *args, needs=()):
     return (f'{name}' + (' ' + ' '.join(args) if args else ''),
@@ -77,8 +80,10 @@ SH_WITH_ARGS = [
     # The XML suite's default step reaches for a network; the local half
     # is the regression suite.
     sh('test_xml_host', '--local-only'),
-    # The WPT runner's own pages, which need no fetched WPT tree.
-    sh('test_yonder_wpt_host', '--selftest'),
+    # The import-maps suite reads WPT's import-maps directory.
+    sh('test_importmap_host', needs=('dir:.vendor/wpt/import-maps',)),
+    # The WPT runner's own pages, run beside the fetched checkout's resources.
+    sh('test_yonder_wpt_host', '--selftest', needs=('dir:.vendor/wpt',)),
 ]
 
 # Python suites run directly. Not listed: .py files a .sh above execs or
@@ -115,8 +120,8 @@ PY_SUITES = [
     py('test_roam_ui_host'),
     py('test_scribe_host'),
     py('test_spawn_argv_host'),
-    py('test_svg_core'),
-    py('test_svg_geometry'),
+    py('test_svg_core', '--output', 'OUT'),
+    py('test_svg_geometry', '--output', 'OUT'),
     py('test_syscall_lifetime_host'),
     py('test_task_hold_host'),
     py('test_task_wait_host'),
@@ -131,11 +136,12 @@ PY_SUITES = [
     py('test_tls_store_host'),
     py('test_tls_transport_host'),
     py('test_ui_action_host'),
+    py('test_ui_action_host', '--menu'),
     py('test_ui_dataview_host'),
     py('test_ui_menu_mutations'),
     py('test_ui_text_host'),
     py('test_ui_text_host', '--real'),
-    py('test_webp_host'),
+    py('test_webp_host', '--output', 'OUT'),
     py('test_window_pin_host'),
     py('test_window_placement_host'),
 ]
@@ -220,6 +226,8 @@ def missing_prerequisite(needs):
             return f'python module {what} is not installed'
         if kind == 'bin' and shutil.which(what) is None:
             return f'{what} is not on PATH'
+        if kind == 'dir' and not (ROOT / what).is_dir():
+            return f'{what} is not in the tree'
     return None
 
 

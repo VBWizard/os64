@@ -63,9 +63,10 @@ struct packet { uint64_t tick; uint32_t seq,ack; uint16_t len; uint8_t flags; ip
 static struct packet packets[8192];
 static unsigned npackets;
 static int32_t ipv4_send_from_ex(net_device_t *,uint32_t,uint32_t,uint8_t,const void *,uint16_t,ipv4_tx_t *);
-static int32_t ipv4_send(net_device_t *,uint32_t,uint8_t,const void *,uint16_t);
+static int32_t ipv4_send_from(net_device_t *,uint32_t,uint32_t,uint8_t,const void *,uint16_t);
 '''
 s+=source('kernel/include/driver/net/net_wire.h')
+s+=source('kernel/include/driver/net/loopback.h')
 s+=source('kernel/src/driver/net/net_checksum.c')
 s+=source('kernel/include/driver/net/tcp_options.h')
 s+=source('kernel/src/driver/net/tcp_options.c')
@@ -82,8 +83,8 @@ static int32_t ipv4_send_from_ex(net_device_t *d,uint32_t src,uint32_t dst,uint8
  memcpy(packet->payload,b+(b[12]>>4)*4,packet->len);
  *how=fate; return fate==IPV4_TX_SENT ? 0 : -2;
 }
-static int32_t ipv4_send(net_device_t *d,uint32_t dst,uint8_t proto,const void *p,uint16_t n) {
- ipv4_tx_t how; return ipv4_send_from_ex(d,kNetIPv4Address,dst,proto,p,n,&how);
+static int32_t ipv4_send_from(net_device_t *d,uint32_t src,uint32_t dst,uint8_t proto,const void *p,uint16_t n) {
+ ipv4_tx_t how; return ipv4_send_from_ex(d,src,dst,proto,p,n,&how);
 }
 '''
 s+=Path(__file__).with_name('test_tcp_host.c').read_text()

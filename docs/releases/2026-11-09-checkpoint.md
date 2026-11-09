@@ -24,8 +24,41 @@ is what is consciously unfinished.*
   point.
 - Mutant runs are not repeated: this merge adds no code, and each slice's
   mutants ran when it landed.
-- **Results** are written here when the run completes, with the summary's
-  path and anything that failed and what was done about it.
+- **Results (2026-11-09, on `fable/checkpoint-2026-11` at userland HEAD
+  plus the harness repairs below).** Clean build from `distclean`: kernel,
+  userland, ISO and both images, under a minute on ccache. `make
+  fsck-ext2`: both ext2 images clean before the boots and again after the
+  default boot had written to them. Host suites: **164 passed, 0 failed,
+  4 skipped** of 168 (the skips, each said by name: two need the WPT
+  checkout `tools/wpt_fetch.sh` fetches, two need the Python modules
+  tinycss2, cssselect2 and html5lib, which this machine does not have).
+  QEMU, headless: the default ext2 entry mounted its root read-write and
+  passed 37 pre-boot, 34 post-boot and 7 LATE tests; the FAT lifeboat
+  entry mounted FAT and passed the same 37, 34 and 7. P5: Chris's pass
+  from the merge point, before he merges.
+- **What the first full run found, and fixed here.** The first pass
+  failed 19 of 167. None was a defect in product code. Three were the
+  runner's own manifest (suites that take an output directory) and two
+  were prerequisites it had not declared. The other **fourteen were stale
+  harnesses**: suites nobody had run since the code under them moved,
+  some for seven weeks. By the PR that left them behind: the loopback
+  slice (#120, the TCP harness's listener signature; #123, a handle kind
+  the syscall-lifetime harness lacked), the inbound-servers split of write
+  into a pinned half (#101, the TCP write harness), the frame table (#230,
+  the memory-try harness, rewritten for it), the wake owed (#282, task
+  wait), the damage merger shared by both rings (#316, gclock, dataview,
+  Roam and the menu mutations), file associations (the Roam harness),
+  the toolbar (#254 era, the action gallery), the canonical-ceiling check
+  (#340, spawn argv), keep-alive's pool (#345, the os64get harness, four
+  layers deep), ccache's compiler banner (#289, the math suite's eval),
+  the icon catalog's stats (the icon theme stub), the memory census's
+  three heap exports (#505, the JS port test) and five icons added on
+  2026-10-29 (#415, an exact count in the os64get routing case, now a
+  floor). Every fix is in tools/ or a suite's own test file; the one
+  behaviour change is the Roam activation case, which now activates an
+  unlisted row because activating a file really opens it since file
+  associations (test_roam_launch_host covers the open). Mutants were not
+  re-run: no product line changed.
 
 ## Kernel
 

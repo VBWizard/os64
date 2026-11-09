@@ -40,6 +40,7 @@ header = r'''
 #define SIGHUP 1
 #define HANDLE_PIPE_WRITE 3
 #define HANDLE_NET_TCP 7
+#define HANDLE_GLASS 14
 #define READ_CHUNK_SIZE 4096
 #define PIPE_CAPACITY 8192
 #define PIPE_ERR_CLOSED (-1)
