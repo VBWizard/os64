@@ -143,6 +143,8 @@ mutants = [
      '    (void)dom;\n    JSValue then = JS_GetPropertyStr(ctx, promise, "then");\n'
      '    JSValue r = JS_IsFunction(ctx, then) ? JS_Call(ctx, then, promise, 2, args) : JS_UNDEFINED;\n'
      '    JS_FreeValue(ctx, then);', [DOM]),
+    ('below-zero-first-frame', 'userland/libflow/motion.c', '    if (progress < 0 && zeros > 1) {',
+     '    if (progress < 0 && zeros > 1 && false) {', [FLOW]),
     # ── yonder ──────────────────────────────────────────────────────────
     ('orphan-waits-for-trees', SCRIPTS_C, '    if (!standing) {\n        os64_dom_free(s->retired_dom);',
      '    if (true) {\n        os64_dom_free(s->retired_dom);', [YON]),

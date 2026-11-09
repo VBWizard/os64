@@ -249,6 +249,39 @@ static void script_effect_cases(void)
         flow_free(tree);
         sheeted_close(&p);
     }
+    // Below 0 with several keyframes at 0, the first alone (§ 5.3.4):
+    // margin-left 100px, 200px at 0 and 300px at 1, eased below 0 by
+    // cubic-bezier(0,-1,1,-1), held half way, is 100px.
+    garb_parsed_t m0 = {0}, m1 = {0}, m2 = {0};
+    garb_set_t ms0[2], ms1[2], ms2[2];
+    int32_t nm0 = script_sets(&m0, "margin-left: 100px", ms0, 2);
+    int32_t nm1 = script_sets(&m1, "margin-left: 200px", ms1, 2);
+    int32_t nm2 = script_sets(&m2, "margin-left: 300px", ms2, 2);
+    garb_effect_keyframe_t twice[3] = {{0, false, {0}, ms0, nm0}, {0, false, {0}, ms1, nm1}, {1, false, {0}, ms2, nm2}};
+    garb_effect_t under = run;
+    under.frames = twice;
+    under.nframes = 3;
+    under.timing.duration_ms = 1000;
+    under.timing.fill = GARB_FILL_NONE;
+    under.timing.easing = (garb_easing_t){GARB_EASE_CUBIC, {0, -1, 1, -1}, 0, GARB_JUMP_END, false};
+    under.held = true;
+    under.hold_ms = 500;
+    under.rate = 1;
+    const garb_effect_t *underl[1] = {&under};
+    sheeted_open(&p, "<!doctype html><div id=k>x</div>", 800, 600);
+    ScriptEffects ue = {computed_find(p.doc->document, "k"), underl, 1};
+    p.script = &ue;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, ue.target, NULL) : NULL;
+    computed_is(c, "script effects: below 0 with keyframes twice at 0, the first", GARB_MARGIN_LEFT, "100px");
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&m0);
+    garb_free(&m1);
+    garb_free(&m2);
     garb_free(&r0);
     garb_free(&r1);
     garb_free(&t0);

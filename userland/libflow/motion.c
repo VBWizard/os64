@@ -1987,9 +1987,10 @@ static void interval(const FAnimation *an, const flow_style_t *under, garb_prop_
             l.at0 |= an->frames[i].offset == 0;
             l.at1 |= an->frames[i].offset == 1;
         }
-    // One pass over the line's offsets: how many frames, how many at 1,
-    // the last at or before the progress and before 1, the last at 0.
-    int32_t n = 0, ones = 0, s = -1, zero = -1;
+    // One pass over the line's offsets: how many frames, how many at 0 and
+    // at 1, the last at or before the progress and before 1, the first and
+    // the last at 0.
+    int32_t n = 0, zeros = 0, ones = 0, s = -1, zero = -1, first_zero = -1;
     for (int32_t j = -1; j <= an->nframes; j++) {
         double offset;
         if (j == -1) {
@@ -2008,12 +2009,23 @@ static void interval(const FAnimation *an, const flow_style_t *under, garb_prop_
         ones += offset == 1;
         if (offset <= progress && offset < 1)
             s = n;
-        if (offset == 0)
+        if (offset == 0) {
             zero = n;
+            if (first_zero < 0)
+                first_zero = n;
+            zeros++;
+        }
         n++;
     }
+    // Past either end with several frames there (§ 5.3.4): the last at 1,
+    // or the first at 0, alone — which only an effect's own easing reaches
+    // below 0.
     if (progress >= 1 && ones > 1) {
         *start = *end = line_frame(&l, n - 1);
+        return;
+    }
+    if (progress < 0 && zeros > 1) {
+        *start = *end = line_frame(&l, first_zero);
         return;
     }
     if (s < 0)
