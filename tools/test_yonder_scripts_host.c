@@ -1264,7 +1264,11 @@ static void script_lifecycle(void) {
         "for(var i=0;i<20000;i++)keep.push(document.createElement('i'));"
         "document.getElementById('heading').textContent='held';</script>",true);
     script_turn();
-    check(probe_text_is("heading","before") && strstr(g.status_text,"QuotaExceededError: DOM wrapper quota exceeded"),
+    /* Which of an element's allocations meets the ceiling first (its
+     * wrapper or its strings) moves with what the binding holds at birth;
+     * either is the DOM budget refusing. */
+    check(probe_text_is("heading","before") && strstr(g.status_text,"QuotaExceededError: DOM ") &&
+          strstr(g.status_text," quota exceeded"),
           "the page's DOM budget is the host's share");
     probe_drop();
     probe_page_memory=(yonder_page_memory_t){0};
@@ -4361,6 +4365,26 @@ static void loop_view_computed(void) {
         "view: on the page shown it reads the layout made current, a script's change included");
     loop_drop();
 }
+/* Element.animate's effect is what getComputedStyle reads (WEB_ANIMATIONS.md
+ * § 1): the sign-in page's key — animate, pause, seek to 440 — on a page still arriving,
+ * on a hidden element, and on the page shown, with the strings libflow's
+ * suite works out (tools/test_libflow_script.inc); and a second seek is
+ * read again, not the first one's layout. */
+static void loop_view_web_animations(void) {
+    loop_page("<div id=k>k</div><div id=h style=display:none></div><p id=early>-</p><p id=late>-</p><script>"
+        "function key(id){var d=document.getElementById(id);var a=d.animate({color:['#62df76','#31a6fd'],"
+        "transform:['rotate(0deg)','rotate(165deg)'],easing:'cubic-bezier(0.23,-0.07,0.53,0.55)'},4096);"
+        "a.pause();a.currentTime=440;var cs=getComputedStyle(d);var r=cs.color+'|'+cs.transform;"
+        "a.currentTime=0;return getComputedStyle(d).color==='rgb(98, 223, 118)'?r:'stale '+getComputedStyle(d).color}"
+        "document.getElementById('early').textContent=key('k');"
+        "onload=function(){document.getElementById('late').textContent=key('h')}</script>");
+    check(loop_settle() && g.page.tree!=NULL,"web animations: a page animating arrives");
+    check(probe_text_is("early","rgb(97, 222, 120)|matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)"),
+        "web animations: the sign-in key on a page still arriving");
+    check(probe_text_is("late","rgb(97, 222, 120)|matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)"),
+        "web animations: and on a hidden element of the page shown");
+    loop_drop();
+}
 /* A script's scroll moves g.view's, and any scroll of the view owes the
  * page a scroll event, at the document and bubbling to window. */
 static void loop_view_scroll(void) {
@@ -5297,6 +5321,7 @@ static void loop_view_off(void) {
 static void loop_view_cases(void) {
     io_cases();
     loop_view_computed();
+    loop_view_web_animations();
     loop_view_scroll();
     loop_view_media();
     loop_view_history();

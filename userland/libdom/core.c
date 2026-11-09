@@ -543,6 +543,7 @@ void os64_dom_drain(os64_dom_t *dom)
     d_message_drain(dom);
     d_idle_drain(dom);
     d_animation_drain(dom);
+    d_web_animations_drain(dom);
     d_pointer_drain(dom);
     d_observers_drain(dom);
     d_intersections_drain(dom);
@@ -570,6 +571,7 @@ void os64_dom_free(os64_dom_t *dom)
     }
     d_timer_free(dom);
     d_idle_free(dom);
+    d_web_animations_free(dom);
     d_fetch_free(dom);
     d_window_free(dom);
     d_document_free(dom);

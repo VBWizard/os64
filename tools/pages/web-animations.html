@@ -1,0 +1,180 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Web Animations</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.stage{position:relative;height:140px;border:1px solid #888;margin:.8em 0;overflow:hidden}
+#spinner{position:absolute;left:40px;top:30px;width:80px;height:80px;background:#62df76;border-radius:12px}
+#slider{position:absolute;left:0;top:10px;width:40px;height:40px;background:#0969da;border-radius:50%}
+.row{display:flex;gap:.6em;flex-wrap:wrap;margin:.6em 0}
+.probe{width:10px;height:10px}
+</style>
+</head><body>
+<h1>Web Animations</h1>
+<p>WEB_ANIMATIONS.md slice A: <code>Element.animate</code>, the
+<code>Animation</code> it answers, <code>document.timeline</code>,
+<code>getAnimations</code> and the playback events. The checks below hold in
+another browser, and should in yonder. The sweep block under them is the same
+animations read at fixed times: copy it from another browser and from yonder,
+and the two should match line for line.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+
+<h2>The sweep</h2>
+<p>Each line is an animation paused and set to a time, then read with
+<code>getComputedStyle</code>.</p>
+<pre id="sweep"></pre>
+
+<h2>Live</h2>
+<p>The square turns and changes colour over four seconds, back and forth;
+the ball crosses and comes back. The buttons drive the square's animation,
+and the line under them says what it is doing.</p>
+<div class="row">
+  <button id="b-play">play</button><button id="b-pause">pause</button>
+  <button id="b-reverse">reverse</button><button id="b-finish">finish</button>
+  <button id="b-cancel">cancel</button><button id="b-faster">twice as fast</button>
+</div>
+<p id="state">-</p>
+<div class="stage"><div id="spinner"></div><div id="slider"></div></div>
+<div id="probes"></div>
+
+<script>
+var lines=[],passed=0,failed=0;
+function check(ok,what,got){
+  if(ok)passed++;else failed++;
+  lines.push((ok?'PASS ':'FAIL ')+what+(ok||got===undefined?'':'  got '+got));
+}
+function show(){
+  document.getElementById('checks').textContent=lines.join('\n');
+  document.getElementById('summary').textContent=failed?failed+' of '+(passed+failed)+' checks FAILED':'All '+passed+' checks PASS';
+}
+function probe(){var d=document.createElement('div');d.className='probe';document.getElementById('probes').appendChild(d);return d}
+function threw(name,f){try{f()}catch(e){return e.name===name?true:e.name}return 'nothing'}
+
+/* The sign-in page's key: animate, pause at once, seek, read. */
+(function(){
+  var d=probe();
+  var a=d.animate({color:['#62df76','#31a6fd'],transform:['rotate(0deg)','rotate(165deg)'],
+    easing:'cubic-bezier(0.23,-0.07,0.53,0.55)'},4096);
+  check(a.playState==='running'&&a.pending,'animate() answers a running animation waiting to start',a.playState+' '+a.pending);
+  a.pause();a.currentTime=440;
+  check(a.playState==='paused'&&!a.pending&&a.currentTime===440,'pause() then a seek: paused at once, at the time set',
+    a.playState+' '+a.pending+' '+a.currentTime);
+  var cs=getComputedStyle(d);
+  check(cs.color==='rgb(97, 222, 120)','its colour at 440 of 4096',cs.color);
+  check(cs.transform==='matrix(0.999438, 0.0335322, -0.0335322, 0.999438, 0, 0)','its turn',cs.transform);
+  var h=probe();h.style.display='none';
+  var b=h.animate({opacity:[0,1]},1000);b.pause();b.currentTime=250;
+  check(getComputedStyle(h).opacity==='0.25','an element that is not shown has its animated value too',getComputedStyle(h).opacity);
+})();
+
+/* The objects and their errors. */
+(function(){
+  var d=probe(),a=d.animate({opacity:[0,1]},{duration:1000,id:'x'});
+  check(a instanceof Animation&&a.effect instanceof KeyframeEffect&&a.effect.target===d,'an Animation with a KeyframeEffect on the element');
+  check(a.timeline===document.timeline&&document.timeline instanceof DocumentTimeline,'on the document timeline');
+  check(typeof document.timeline.currentTime==='number','the timeline has a time',document.timeline.currentTime);
+  check(a.id==='x'&&a.playbackRate===1&&a.replaceState==='active','id, playbackRate and replaceState');
+  check(d.getAnimations().length===1&&d.getAnimations()[0]===a,'the element\'s getAnimations');
+  check(document.getAnimations().indexOf(a)>=0,'the document\'s getAnimations');
+  var r=threw('TypeError',function(){d.animate([{offset:0.6,opacity:0},{offset:0.2,opacity:1}],10)});
+  check(r===true,'offsets out of order are a TypeError',r);
+  r=threw('TypeError',function(){d.animate({opacity:[0,1]},{easing:'bogus'})});
+  check(r===true,'an easing that is none is a TypeError',r);
+  r=threw('TypeError',function(){d.animate({opacity:[0,1]},-1)});
+  check(r===true,'a negative duration is a TypeError',r);
+  var inf=d.animate({opacity:[0,1]},{duration:100,iterations:Infinity});
+  r=threw('InvalidStateError',function(){inf.reverse()});
+  check(r===true,'reversing an animation without end is an InvalidStateError',r);
+  r=threw('InvalidStateError',function(){inf.finish()});
+  check(r===true,'and so is finishing it',r);
+  var ev=new AnimationPlaybackEvent('finish',{currentTime:5});
+  check(ev.currentTime===5&&ev.timelineTime===null&&ev instanceof Event,'AnimationPlaybackEvent\'s constructor');
+  a.cancel();inf.cancel();
+  check(a.playState==='idle'&&a.currentTime===null&&d.getAnimations().length===0,'cancel() leaves it idle and gone from getAnimations');
+})();
+
+/* Time going by: ready, finished, and the finish event after the promise. */
+var waits=0;
+function later(){if(--waits===0)show()}
+(function(){
+  waits++;
+  var d=probe(),log=[],a=d.animate({opacity:[0,1]},{duration:200,fill:'forwards'});
+  a.ready.then(function(x){log.push('ready');check(x===a&&!a.pending&&a.startTime!==null,'ready resolves with the animation, started')});
+  a.finished.then(function(){log.push('finished')});
+  a.onfinish=function(e){log.push('finish');
+    check(e instanceof AnimationPlaybackEvent&&e.currentTime===200,'the finish event carries the end time',e.currentTime);
+    setTimeout(function(){
+      check(log.join()==='ready,finished,finish','ready, then the finished promise, then the event',log.join());
+      check(a.playState==='finished'&&getComputedStyle(d).opacity==='1','finished, and filling forwards',a.playState+' '+getComputedStyle(d).opacity);
+      check(d.getAnimations()[0]===a,'a filling animation is still in getAnimations');
+      later();
+    },0);
+  };
+})();
+(function(){
+  waits++;
+  var d=probe(),log=[],a=d.animate({opacity:[0,1]},1000);
+  a.ready.then(function(){log.push('ready')},function(e){log.push('ready '+e.name)});
+  a.finished.then(function(){log.push('finished')},function(e){log.push('finished '+e.name)});
+  a.oncancel=function(e){log.push('cancel '+e.currentTime);
+    setTimeout(function(){check(log.join()==='ready AbortError,finished AbortError,cancel null',
+      'cancel() rejects both waiting promises, then fires',log.join());later()},0)};
+  a.cancel();
+})();
+(function(){
+  waits++;
+  var d=probe(),a=d.animate({opacity:[0,1]},1000);
+  a.updatePlaybackRate(2);
+  check(a.playbackRate===1,'updatePlaybackRate waits for the animation to start',a.playbackRate);
+  a.ready.then(function(){check(a.playbackRate===2,'and applies when it does',a.playbackRate);a.cancel();later()});
+})();
+
+/* The sweep: the same strings in every browser. */
+(function(){
+  var cases=[
+    ['opacity linear',{opacity:[0,1]},{duration:1000},'opacity'],
+    ['colour ease',{color:['rgb(255, 0, 0)','rgb(0, 0, 255)']},{duration:1000,easing:'ease'},'color'],
+    ['turn steps(4)',{transform:['rotate(0deg)','rotate(90deg)']},{duration:1000,easing:'steps(4)'},'transform'],
+    ['width alternate x3',{width:['0px','100px']},{duration:400,iterations:3,direction:'alternate'},'width'],
+    ['delay, fill backwards',{opacity:[0.2,0.8]},{duration:500,delay:300,fill:'backwards'},'opacity'],
+    ['offsets 0 / .8 / 1',[{opacity:0},{opacity:1,offset:0.8},{opacity:0.5}],{duration:1000},'opacity'],
+    ['keyframe easing',[{opacity:0,easing:'ease-in'},{opacity:1}],{duration:1000},'opacity'],
+    ['iteration start .5',{opacity:[0,1]},{duration:1000,iterationStart:0.5,iterations:2},'opacity'],
+    ['translate + scale',{transform:['translateX(0px) scale(1)','translateX(50px) scale(2)']},{duration:1000},'transform'],
+    ['background-color',{backgroundColor:['#000','#fff']},{duration:1000},'background-color'],
+  ];
+  var times=[0,125,250,500,750,999,1000,1250];
+  var out=[];
+  cases.forEach(function(c){
+    var d=probe(),a=d.animate(c[1],c[2]);a.pause();
+    times.forEach(function(t){a.currentTime=t;out.push(c[0]+' @'+t+': '+getComputedStyle(d).getPropertyValue(c[3]))});
+    a.cancel();
+  });
+  document.getElementById('sweep').textContent=out.join('\n');
+})();
+show();
+
+/* The live demo. */
+var spin=document.getElementById('spinner').animate(
+  {transform:['rotate(0deg)','rotate(360deg)'],backgroundColor:['#62df76','#31a6fd']},
+  {duration:4000,iterations:Infinity,direction:'alternate',easing:'ease-in-out'});
+document.getElementById('slider').animate(
+  [{transform:'translateX(0px)'},{transform:'translateX(300px)',offset:0.5},{transform:'translateX(0px)'}],
+  {duration:3000,iterations:Infinity});
+function said(){
+  var t=spin.currentTime;
+  document.getElementById('state').textContent=spin.playState+(spin.pending?' (pending)':'')+
+    ', time '+(t===null?'none':Math.round(t))+', rate '+spin.playbackRate;
+  requestAnimationFrame(said);
+}
+said();
+function on(id,f){document.getElementById(id).onclick=function(){try{f()}catch(e){document.getElementById('state').textContent=e.name+': '+e.message}}}
+on('b-play',function(){spin.play()});
+on('b-pause',function(){spin.pause()});
+on('b-reverse',function(){spin.reverse()});
+on('b-finish',function(){spin.finish()});
+on('b-cancel',function(){spin.cancel()});
+on('b-faster',function(){spin.updatePlaybackRate(spin.playbackRate*2)});
+</script>
+</body></html>

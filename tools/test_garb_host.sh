@@ -36,13 +36,13 @@ host_sources=(tools/test_garb_host.c
    userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
    userland/libgarb/dump.c userland/libgarb/select.c
    userland/libgarb/values.c userland/libgarb/props.c
-   userland/libgarb/media.c userland/libgarb/cascade.c
+   userland/libgarb/media.c userland/libgarb/cascade.c userland/libgarb/timing.c
    userland/libhtml/core.c userland/libhtml/encoding.c
    userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c
    userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c userland/libhtml/range.c
    userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c)
 host_objects "$work"
-cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -o "$work/garb_driver"
+cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -lm -o "$work/garb_driver"
 
 if [ -n "${GARB_DRIVER:-}" ]; then cp "$work/garb_driver" "$GARB_DRIVER"; fi
 if [ "$#" -gt 0 ]; then "$work/garb_driver" "$@"; exit; fi
@@ -53,6 +53,7 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --sweep tools/garb_corpus/sweep.css
 "$work/garb_driver" --deep
 "$work/garb_driver" --numbers
+"$work/garb_driver" --timing
 "$work/garb_driver" --supports
 "$work/garb_driver" --cost 4194304
 "$work/garb_driver" --full

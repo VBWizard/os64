@@ -67,6 +67,7 @@ WPT_DIRS=(
     html/webappapis/scripting
     secure-contexts
     WebCryptoAPI
+    web-animations
     page-visibility
     html/interaction/focus
     dom/events

@@ -133,6 +133,11 @@ static const DModernRow kModern[] = {
                            NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
+    /* WEB_ANIMATIONS.md: Element.animate and what it makes, after the
+     * event row whose Event AnimationPlaybackEvent inherits. */
+    {(const char *const[]){"Animation", "KeyframeEffect", "AnimationTimeline", "DocumentTimeline",
+                           "AnimationPlaybackEvent", NULL},
+     d_web_animations_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its
      * entries carry. */
     {(const char *const[]){"IntersectionObserver", "IntersectionObserverEntry", NULL}, d_intersections_install},

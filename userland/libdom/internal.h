@@ -676,6 +676,22 @@ struct os64_dom {
     uint32_t animation_handle;
     uint64_t animation_due;
     bool animation_running;
+    /* Web Animations (webanimation.c): the animations in the order they
+     * were made, the pending playback events, the timeline's time as the
+     * last update step sampled it (and the face's clock less it), the
+     * buried keyframe data trees may still read, and the index of effects
+     * by target libflow reads (os64_dom_script_effects). */
+    struct DWaAnimation *wa_first, *wa_last;
+    size_t wa_count;
+    uint64_t wa_serial, wa_generation, wa_last_step;
+    double wa_time, wa_face;
+    bool wa_sampled, wa_wanted, wa_stepped, wa_running, wa_index_stale;
+    struct DWaEvent *wa_events, *wa_events_last;
+    struct DWaData *wa_dead;
+    const os64_html_node_t **wa_index_nodes;
+    const struct garb_effect **wa_index_fx;
+    size_t wa_index_n;
+    DValue *wa_timeline, *wa_event_prototype, *wa_promise_then;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;
@@ -1764,6 +1780,16 @@ int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 double d_performance_now(const os64_dom_t *dom);
 int d_animation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_animation_drain(os64_dom_t *dom);
+/* Web Animations (webanimation.c): the row; the drain, which lets go of
+ * every animation and buries its data; and the free, which frees what is
+ * buried (no layout reads an effect once the binding is freed). */
+int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_web_animations_drain(os64_dom_t *dom);
+void d_web_animations_free(os64_dom_t *dom);
+/* The document timeline sampled at `now` (performance.now()'s clock): a
+ * frame-callback batch's timestamp is the timeline's time in its
+ * callbacks (animation.c). */
+void d_web_animations_sample(os64_dom_t *dom, double now);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */

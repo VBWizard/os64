@@ -51,7 +51,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_yonder_gif_host.c tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,webanimation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit}.c \
         userland/apps/yonder/{scripts,census,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,sheet,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
@@ -59,7 +59,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range,image_source}.c \
         userland/libpage/upstream/ryu/ryu/d2s.c \
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \
-        userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
+        userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade,timing}.c \
         userland/libway/session.c userland/libway/origin.c userland/libway/jar.c userland/libway/cache.c \
         userland/apps/yonder/fetch_job.c userland/apps/yonder/fetch_pipe.c \
         tools/yonder_host_menus.c tools/yonder_host_console.c \

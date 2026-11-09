@@ -61,6 +61,7 @@ VALUES_H = 'userland/libgarb/include/garb/values.h'
 CASCADE = 'userland/libgarb/cascade.c'
 MEDIA = 'userland/libgarb/media.c'
 MOTION = 'userland/libflow/motion.c'
+TIMING = 'userland/libgarb/timing.c'
 STYLE = 'userland/libflow/style.c'
 FLOW = 'userland/libflow/flow.c'
 INTERNAL = 'userland/libflow/internal.h'
@@ -124,30 +125,30 @@ mutants = [
      '    if (os64_streq(f->name, "prefers-reduced-motion") && false)', GARB),
 
     # libflow: easing (CSS Easing 1).
-    ('a-bezier-has-no-tangent-below', MOTION,
+    ('a-bezier-has-no-tangent-below', TIMING,
      '        if (x < 0) {\n            if (p[0] > 0)',
      '        if (x < -1e300) {\n            if (p[0] > 0)', LIBFLOW),
-    ('a-bezier-has-no-tangent-above', MOTION,
+    ('a-bezier-has-no-tangent-above', TIMING,
      '        if (x > 1) {\n            if (p[2] < 1)',
      '        if (x > 1e300) {\n            if (p[2] < 1)', LIBFLOW),
-    ('the-before-flag-is-ignored', MOTION,
+    ('the-before-flag-is-ignored', TIMING,
      '    if (before && fmod(x * n, 1.0) == 0)\n        step -= 1;',
      '    (void)before;', LIBFLOW),
-    ('jump-start-does-not-jump', MOTION,
-     '    if (e->jump == FLOW_JUMP_START || e->jump == FLOW_JUMP_BOTH)\n        step += 1;',
-     '    if (e->jump == FLOW_JUMP_BOTH)\n        step += 1;', LIBFLOW),
+    ('jump-start-does-not-jump', TIMING,
+     '    if (e->jump == GARB_JUMP_START || e->jump == GARB_JUMP_BOTH)\n        step += 1;',
+     '    if (e->jump == GARB_JUMP_BOTH)\n        step += 1;', LIBFLOW),
     # libflow: the clock (Web Animations 1).
-    ('backwards-fill-is-ignored', MOTION,
-     '        if (a->fill != FLOW_FILL_BACKWARDS && a->fill != FLOW_FILL_BOTH)\n            return k;\n        at = fmax(local - delay, 0);',
+    ('backwards-fill-is-ignored', TIMING,
+     '        if (t->fill != GARB_FILL_BACKWARDS && t->fill != GARB_FILL_BOTH)\n            return k;\n        at = fmax(local - delay, 0);',
      '        return k;', LIBFLOW),
-    ('forwards-fill-is-ignored', MOTION,
-     '        if (a->fill != FLOW_FILL_FORWARDS && a->fill != FLOW_FILL_BOTH)\n            return k;',
+    ('forwards-fill-is-ignored', TIMING,
+     '        if (t->fill != GARB_FILL_FORWARDS && t->fill != GARB_FILL_BOTH)\n            return k;',
      '        return k;', LIBFLOW),
-    ('alternate-does-not-alternate', MOTION,
-     '        return isinf(d) || fmod(d, 2) == 0;',
-     '        (void)d;\n        return true;', LIBFLOW),
-    ('an-iteration-ends-at-zero', MOTION,
-     '    if (simple == 0 && k.phase != PHASE_BEFORE && at == active && count != 0)\n        simple = 1;',
+    ('alternate-does-not-alternate', TIMING,
+     '        return isinf(n) || fmod(n, 2) == 0;',
+     '        (void)n;\n        return true;', LIBFLOW),
+    ('an-iteration-ends-at-zero', TIMING,
+     '    if (simple == 0 && k.phase != GARB_PHASE_BEFORE && at == active && count != 0)\n        simple = 1;',
      '', LIBFLOW),
     # libflow: the timeline.
     ('a-paused-animation-does-not-hold', MOTION,
@@ -583,8 +584,8 @@ mutants = [
      '                if (record && resolved && same_value((garb_prop_t)p, s.style, e.style))',
      '                if (record && resolved && false && same_value((garb_prop_t)p, s.style, e.style))', LIBFLOW),
     ('a-paused-animation-runs', MOTION,
-     '        if (an->record == NULL || an->record->paused)\n            continue;\n        Clock k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != PHASE_ACTIVE)',
-     '        if (an->record == NULL)\n            continue;\n        Clock k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != PHASE_ACTIVE)', LIBFLOW),
+     '        if (an->record == NULL || an->record->paused)\n            continue;\n        garb_clock_t k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != GARB_PHASE_ACTIVE)',
+     '        if (an->record == NULL)\n            continue;\n        garb_clock_t k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != GARB_PHASE_ACTIVE)', LIBFLOW),
     ('a-3d-determinant-past-a-double-is-refused', MOTION,
      '    double dp = det4(pm);\n    if (!isfinite(dp)) {',
      '    double dp = det4(pm);\n    if (!isfinite(dp))\n        return false;\n    if (!isfinite(dp)) {', LIBFLOW),
@@ -593,10 +594,10 @@ mutants = [
      '        double ta = a->a[3], tb = b->a[3];\n        (void)has_axis;', LIBFLOW),
     # libflow: the curve solved to the last bit, a crossing still due after
     # a late layout, currentColor's used value, and what a box paints.
-    ('the-easing-stops-at-a-near-x', MOTION,
+    ('the-easing-stops-at-a-near-x', TIMING,
      '        if (!(mid > lo && mid < hi))\n            break;',
      '        if (!(mid > lo && mid < hi) || fabs(bezier(p[0], p[2], mid) - x) <= 1e-7)\n            break;', LIBFLOW),
-    ('the-easing-ends-are-halved', MOTION,
+    ('the-easing-ends-are-halved', TIMING,
      '    if (x <= 0)\n        return 0;\n    if (x >= 1)\n        return 1;\n    double lo = 0, hi = 1;',
      '    double lo = 0, hi = 1;', LIBFLOW),
     ('colour-is-composed-in-order', MOTION,
@@ -714,8 +715,8 @@ mutants = [
      '        return a->named == b->named && a->p[0] == b->p[0]',
      '        return a->p[0] == b->p[0]', LIBFLOW),
     ('the-initial-easing-is-unnamed', MOTION,
-     '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};',
-     '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, false};', LIBFLOW),
+     '                              : (garb_easing_t){GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};',
+     '                              : (garb_easing_t){GARB_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, false};', LIBFLOW),
     ('a-2d-length-past-a-double-is-held', MOTION,
      '    if (!isfinite(s0) || !isfinite(s1) || !isfinite(sk))\n        return false;\n'
      '    d->sc[0] = s0;\n    d->sc[1] = s1;\n    d->sk[0] = sk;',
@@ -1013,11 +1014,11 @@ mutants = [
      '    case GARB_TEXT_SHADOW:\n    case GARB_COLOR:',
      '    case GARB_COLOR:', LIBFLOW),
     ('no-easing-overshoots', MOTION,
-     '    if (e->kind != FLOW_EASE_CUBIC)\n        return 0;\n    double lo',
+     '    if (e->kind != GARB_EASE_CUBIC)\n        return 0;\n    double lo',
      '    if (e != NULL)\n        return 0;\n    double lo', LIBFLOW),
     ('steps-overshoot', MOTION,
-     '    if (e->kind != FLOW_EASE_CUBIC)\n        return 0;\n    double lo',
-     '    if (e->kind == FLOW_EASE_LINEAR)\n        return 0;\n    double lo', LIBFLOW),
+     '    if (e->kind != GARB_EASE_CUBIC)\n        return 0;\n    double lo',
+     '    if (e->kind == GARB_EASE_LINEAR)\n        return 0;\n    double lo', LIBFLOW),
     ('overshoot-forgets-the-low-side', MOTION,
      '    return fmax(0, fmax(-lo, hi - 1));',
      '    return fmax(0, ((void)lo, hi - 1));', LIBFLOW),
