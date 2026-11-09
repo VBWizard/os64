@@ -250,8 +250,18 @@ void garb_cascade_free(garb_cascade_t *c);
  * attribute's parse, and the slot table and dirty list it keeps on the
  * heap, at their capacity. Scratch a call frees before it returns is not
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
- * attributes, no walk of the rules. */
+ * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
+/* The same, by part: `state` is the cascade's own arena and the record
+ * itself, `reads` what it read from the sheets, `attributes` the `style`
+ * attributes' parses, `tables` the slot table and dirty list on the heap.
+ * The first two are held to ceilings of their own and each attribute's
+ * parse to another (garb_cascade_limits_t), which is why they are told
+ * apart. NULL answers zeros. */
+typedef struct {
+    size_t state, reads, attributes, tables;
+} garb_cascade_parts_t;
+garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c);
 
 // One `@font-face` rule (Fonts 4 § 4), read whole: the family it names; its
 // sources in order — a url() as written, resolved by whoever fetches it

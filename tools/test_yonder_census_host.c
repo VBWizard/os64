@@ -93,6 +93,22 @@ static void detail_cases(void)
     yonder_census_dom_line(&s, line, sizeof(line));
     check(!strcmp(line, "wrapper 36.7M 100242; retained 7.40M 20231"), "the dom line: kinds biggest first, empty ones left out");
     if (strcmp(line, "wrapper 36.7M 100242; retained 7.40M 20231")) printf("  %s\n", line);
+    check(yonder_census_parts_line(&s, YONDER_CENSUS_OF_LAYOUT, line, sizeof(line)) == 0 && line[0] == '\0',
+          "no parts named, no parts line");
+    yonder_census_part(&s, YONDER_CENSUS_OF_LAYOUT, "boxes", (uint64_t)6 << 20);
+    yonder_census_part(&s, YONDER_CENSUS_OF_LAYOUT, "styles", (uint64_t)50 << 20);
+    yonder_census_part(&s, YONDER_CENSUS_OF_LAYOUT, "lines", 0);
+    yonder_census_part(&s, YONDER_CENSUS_OF_CASCADE, "reads", (uint64_t)45 << 20);
+    for (int i = 0; i < YONDER_CENSUS_FEW + 2; i++) yonder_census_part(&s, YONDER_CENSUS_OF_LAYOUT, "public", 1);
+    check(s.nparts[YONDER_CENSUS_OF_LAYOUT] == YONDER_CENSUS_FEW, "an owner names no more than its few parts");
+    yonder_census_parts_line(&s, YONDER_CENSUS_OF_LAYOUT, line, sizeof(line));
+    check(!strcmp(line, "styles 50.0M; boxes 6.00M; public 1"),
+          "the layout line: parts biggest first, empty ones left out, no counts");
+    if (strcmp(line, "styles 50.0M; boxes 6.00M; public 1")) printf("  %s\n", line);
+    yonder_census_parts_line(&s, YONDER_CENSUS_OF_CASCADE, line, sizeof(line));
+    check(!strcmp(line, "reads 45.0M"), "the cascade line holds the cascade's parts alone");
+    check(yonder_census_parts_line(&s, YONDER_CENSUS_OF_N, line, sizeof(line)) == 0 && line[0] == '\0',
+          "past the owners, no line");
     check(yonder_census_script_line(&s, line, sizeof(line)) == 0, "no script census, no script line");
     s.script_known = true;
     s.script.objects = 818799;
@@ -157,18 +173,23 @@ static void timeline_cases(void)
     for (int k = 0; k < YONDER_CENSUS_PARTS; k++) yonder_census_dom_kind(&w, "intersection", (uint64_t)999 << 30, UINT32_MAX);
     static const char *const owners[] = {"script", "dom", "html", "layout", "pictures", "cascade"};
     for (int k = 0; k < 6; k++) yonder_census_owner(&w, owners[k], (uint64_t)999 << 30, UINT32_MAX, "boxes");
+    static const char *const kParts[] = {"attributes", "styles", "public", "tables"};
+    for (int of = 0; of < YONDER_CENSUS_OF_N; of++)
+        for (int k = 0; k < YONDER_CENSUS_FEW; k++) yonder_census_part(&w, (yonder_census_of_t)of, kParts[k], (uint64_t)999 << 30);
     w.script_known = true;
     memset(&w.script, 0xff, sizeof(w.script));
     w.script.charged_bytes = SIZE_MAX / 2;
     yonder_census_timeline_t full;
     yonder_census_timeline_init(&full);
     for (int i = 0; i < YONDER_CENSUS_SAMPLES; i++) yonder_census_timeline_add(&full, (uint64_t)999999 * 3600000, &w);
-    char a[8192], b[8192], c[8192], d[8192], e[512];
+    char a[8192], b[8192], c[8192], d[8192], e[512], f[512], g[512];
     size_t total = yonder_census_summary(&w, a, sizeof(a)) + yonder_census_dom_line(&w, b, sizeof(b)) +
                    yonder_census_script_line(&w, c, sizeof(c)) + yonder_census_timeline_line(&full, d, sizeof(d)) +
-                   yonder_census_state_line(&full, e, sizeof(e));
+                   yonder_census_state_line(&full, e, sizeof(e)) +
+                   yonder_census_parts_line(&w, YONDER_CENSUS_OF_LAYOUT, f, sizeof(f)) +
+                   yonder_census_parts_line(&w, YONDER_CENSUS_OF_CASCADE, g, sizeof(g));
     // Each line also carries its key ("memory timeline: ") and a newline.
-    total += 5 * 20;
+    total += 7 * 20;
     if (total > YONDER_CENSUS_DETAIL_MAX) printf("  worst detail: %zu bytes\n", total);
     check(total <= YONDER_CENSUS_DETAIL_MAX, "the worst censused record keeps its budget");
 }
