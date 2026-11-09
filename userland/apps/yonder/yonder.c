@@ -1515,6 +1515,23 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
+// The reasons a layout's cascade is built fresh, by the profile's index:
+// yonder's own (none yet, no memory for the scopes, sheets changed, sheets
+// that no longer match), then libgarb's refusals in their order, by
+// libgarb's own names.
+static const char *const *cascade_reason_names(void)
+{
+    _Static_assert(4 + GARB_UPDATE_REASONS - 1 == YONDER_LAYOUT_CASCADE_REASONS, "cascade refusal diagnostics");
+    static const char *names[YONDER_LAYOUT_CASCADE_REASONS];
+    if (names[0] == NULL) {
+        static const char *const kOwn[] = {"no cascade", "scope memory", "sheets changed", "inputs differ"};
+        for (int32_t r = 1; r < GARB_UPDATE_REASONS; r++)
+            names[3 + r] = garb_update_refusal_name((garb_update_refusal_t)r);
+        for (int32_t i = 0; i < 4; i++) names[i] = kOwn[i];
+    }
+    return names;
+}
+
 static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
@@ -1569,9 +1586,14 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     uint64_t prior_updates = garb_cascade_updates(cascade);
     // A live page can explicitly invalidate its sheets. A staged table
     // instead proves that its immutable inputs still match the source.
-    bool updated = scoped && (!p->sheets_changed || p->reuse_sheets) &&
-                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view) &&
-                   garb_cascade_update(cascade);
+    bool fresh_sheets = p->sheets_changed && !p->reuse_sheets;
+    bool matches = scoped && !fresh_sheets &&
+                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view);
+    bool updated = matches && garb_cascade_update(cascade);
+    // Why it is built fresh, for the layout profile: yonder's own reasons
+    // (cascade_reason_names), then libgarb's.
+    int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
+                : 3 + (int32_t)garb_cascade_update_refusal(cascade);
     if (!updated) {
         measured_fallback(p);
         // The cascade's own state is held to its share of page_memory_mb;
@@ -1584,7 +1606,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,
-            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
+            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates,
+            .cascade_reason_names = cascade_reason_names()};
+        if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
     }

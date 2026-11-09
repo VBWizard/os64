@@ -1225,52 +1225,45 @@ static bool featureless_matches(const garb_selectors_t *sel, const Compound *cp,
     return true;
 }
 
+static bool simple_matches(const garb_selectors_t *sel, const Simple *s,
+                           const os64_html_node_t *el, const os64_html_node_t *scope)
+{
+    bool quirky = sel->quirks == OS64_HTML_QUIRKS;
+    switch (s->kind) {
+    case S_UNIVERSAL:
+        return !(s->no_ns && el->ns != OS64_HTML_NS_NONE);
+    case S_TYPE: {
+        if ((s->no_ns && el->ns != OS64_HTML_NS_NONE) || el->name == NULL)
+            return false;
+        size_t n = os64_strlen(el->name);
+        return html(el) && !el->xml_document
+                   ? ieq2(el->name, n, s->name, s->len)
+                   : (n == s->len && os64_memcmp(el->name, s->name, n) == 0);
+    }
+    case S_ID: {
+        const char *id = attr(el, "id");
+        if (id == NULL)
+            return false;
+        size_t n = os64_strlen(id);
+        return quirky ? ieq2(id, n, s->name, s->len)
+                      : (n == s->len && os64_memcmp(id, s->name, n) == 0);
+    }
+    case S_CLASS:
+        return has_class(el, s->name, s->len, quirky);
+    case S_ATTR:
+        return attr_matches(s, el);
+    case S_PSEUDO:
+        return pseudo_matches(sel, s, el, scope);
+    }
+    return false;
+}
+
 static bool compound_matches(const garb_selectors_t *sel, const Compound *cp,
                              const os64_html_node_t *el, const os64_html_node_t *scope)
 {
-    bool quirky = sel->quirks == OS64_HTML_QUIRKS;
-    for (int32_t j = 0; j < cp->n; j++) {
-        const Simple *s = &cp->s[j];
-        switch (s->kind) {
-        case S_UNIVERSAL:
-            if (s->no_ns && el->ns != OS64_HTML_NS_NONE)
-                return false;
-            break;
-        case S_TYPE: {
-            if ((s->no_ns && el->ns != OS64_HTML_NS_NONE) || el->name == NULL)
-                return false;
-            size_t n = os64_strlen(el->name);
-            bool same = html(el) && !el->xml_document
-                            ? ieq2(el->name, n, s->name, s->len)
-                            : (n == s->len && os64_memcmp(el->name, s->name, n) == 0);
-            if (!same)
-                return false;
-            break;
-        }
-        case S_ID: {
-            const char *id = attr(el, "id");
-            if (id == NULL)
-                return false;
-            size_t n = os64_strlen(id);
-            if (quirky ? !ieq2(id, n, s->name, s->len)
-                       : (n != s->len || os64_memcmp(id, s->name, n) != 0))
-                return false;
-            break;
-        }
-        case S_CLASS:
-            if (!has_class(el, s->name, s->len, quirky))
-                return false;
-            break;
-        case S_ATTR:
-            if (!attr_matches(s, el))
-                return false;
-            break;
-        case S_PSEUDO:
-            if (!pseudo_matches(sel, s, el, scope))
-                return false;
-            break;
-        }
-    }
+    for (int32_t j = 0; j < cp->n; j++)
+        if (!simple_matches(sel, &cp->s[j], el, scope))
+            return false;
     return true;
 }
 
@@ -1427,12 +1420,17 @@ bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
 }
 
 // Walk the parsed form, including :is/:not/:where and nth-child's filter.
-static void dependencies(const List *list, garb_selector_dependencies_t *out)
+// `anchored`: the list sits in a compound left of a combinator, so a
+// :has() anywhere in it is an anchor (garb_selectors_anchors) rather than
+// an ancestor dependency. `counted`: the list is an nth-child's `of S`, or
+// inside one.
+static void dependencies(const List *list, bool anchored, bool counted, garb_selector_dependencies_t *out)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
         for (int32_t j = 0; j < x->n; ++j) {
             const Compound *c = &x->c[j];
+            bool left = anchored || j < x->n - 1;
             out->following |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
@@ -1445,13 +1443,23 @@ static void dependencies(const List *list, garb_selector_dependencies_t *out)
                 case P_NTH_LAST_CHILD: case P_NTH_LAST_OF_TYPE:
                     out->position_back = true; break;
                 case P_EMPTY: out->parent_state = true; break;
-                // An ancestor's dir=auto can depend on descendant text.
-                case P_HAS: case P_DIR: out->whole_tree = true; break;
+                case P_HAS:
+                    out->ancestors |= !left;
+                    out->has_filtered |= counted;
+                    for (int32_t a = 0; s->list && a < s->list->n; a++)
+                        out->ancestors_preceding |= s->list->v[a].relative == C_NEXT ||
+                                                    s->list->v[a].relative == C_SUBSEQUENT;
+                    break;
+                // :dir() reads the `dir` attribute of the element and of
+                // the ancestors it inherits from (dir_matches), so what a
+                // change can turn is in the changed element's subtree,
+                // which every change marks. (dir=auto, which would read
+                // descendants' text, is not implemented: DEBTS.md.)
                 default: break;
                 }
-                if ((s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list)
-                    out->filtered = true;
-                if (s->list) dependencies(s->list, out);
+                bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list;
+                out->filtered |= of;
+                if (s->list) dependencies(s->list, left, counted || of, out);
             }
         }
     }
@@ -1459,6 +1467,60 @@ static void dependencies(const List *list, garb_selector_dependencies_t *out)
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list)
 {
     garb_selector_dependencies_t out = {0};
-    if (list) dependencies(&list->list, &out);
+    if (list) dependencies(&list->list, false, false, &out);
     return out;
+}
+
+// What a compound's match reaches when it turns: `reach` gathers the
+// combinators right of it, in its own selector and in those around the
+// pseudo-class it is nested in.
+enum { REACH_DOWN = 1, REACH_SIBLINGS = 2 };
+static int reach_of(Comb comb)
+{
+    return comb == C_DESCENDANT || comb == C_CHILD ? REACH_DOWN
+           : comb == C_NEXT || comb == C_SUBSEQUENT ? REACH_SIBLINGS : 0;
+}
+static void anchors(const garb_selectors_t *sel, const List *list, int around, garb_anchor_t *out,
+                    int32_t cap, int32_t *n)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            int reach = around;
+            for (int32_t r = j + 1; r < x->n; r++) reach |= reach_of(x->c[r].left);
+            bool has = false, filtered = false;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                has |= s->kind == S_PSEUDO && s->pseudo == P_HAS;
+                filtered |= s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;
+                // A :has() inside a :has() argument is refused when parsed.
+                if (s->list && !(s->kind == S_PSEUDO && s->pseudo == P_HAS))
+                    anchors(sel, s->list, reach, out, cap, n);
+            }
+            if (has && reach != 0) {
+                if (*n < cap)
+                    out[*n] = (garb_anchor_t){sel, c, (reach & REACH_DOWN) != 0, (reach & REACH_SIBLINGS) != 0,
+                                              !filtered};
+                ++*n;
+            }
+        }
+    }
+}
+int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list) anchors(list, &list->list, 0, out, cap, &n);
+    return n;
+}
+bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element)
+{
+    const Compound *c = anchor->compound;
+    if (!is_el(element)) return false;
+    for (int32_t pass = 0; pass < 2; pass++)
+        for (int32_t k = 0; k < c->n; ++k)
+            if ((c->s[k].kind == S_PSEUDO) == (pass == 1) &&
+                !simple_matches(anchor->list, &c->s[k], element, NULL))
+                return false;
+    return true;
 }

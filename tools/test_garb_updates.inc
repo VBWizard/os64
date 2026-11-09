@@ -152,9 +152,193 @@ static void update_scratch_cost(void)
     printf("libgarb scratch: %zu batch-update failure positions\n",points);
 }
 
+/* :has() under change tracking (BRIEF_HAS_CASCADE): each case mutates,
+ * updates, and checks the update was incremental and its winners equal a
+ * fresh cascade's; then what was and was not restyled. */
+typedef struct {
+    os64_html_document_t *doc;
+    garb_parsed_t sheet;
+    garb_sheet_in_t in;
+    garb_cascade_t *c;
+} HasCase;
+// The document is padded with elements no rule touches, so a change and
+// the ancestors it reaches stay a small part of it (more than half is a
+// fresh cascade by design).
+static void has_open(HasCase *h, const char *css, const char *html)
+{
+    char padded[16384]="<!doctype html><aside>";
+    for(int i=0;i<200;++i) strcat(padded,"<i></i>");
+    strcat(padded,"</aside>");
+    strcat(padded,strncmp(html,"<!doctype html>",15) ? html : html+15);
+    h->doc=update_doc(padded);
+    garb_parse_sheet_text(css,strlen(css),&h->sheet);
+    h->in=(garb_sheet_in_t){.sheet=&h->sheet};
+    h->c=garb_cascade(&h->in,1,h->doc,(garb_env_t){.width=800,.height=600});
+    update_check(h->c && garb_cascade_tracks_changes(h->c),"a :has() cascade tracks changes");
+}
+static os64_html_node_t *has_el(HasCase *h, const char *id) { return (os64_html_node_t *)by_id(h->doc->document,id); }
+// One update: incremental, and its winners a fresh cascade's. Answers the
+// update number the next checks compare against.
+static uint64_t has_update(HasCase *h, const char *what)
+{
+    uint64_t before=garb_cascade_updates(h->c);
+    bool ok=garb_cascade_update(h->c);
+    update_check(ok && garb_cascade_update_refusal(h->c)==GARB_UPDATE_DONE,what);
+    if(!ok) fprintf(stderr,"  refused: %s\n",garb_update_refusal_name(garb_cascade_update_refusal(h->c)));
+    update_equal(h->c,h->doc,&h->in);
+    return before;
+}
+static void has_close(HasCase *h)
+{
+    garb_cascade_free(h->c);garb_free(&h->sheet);os64_html_document_free(h->doc);
+}
+static void update_has(void)
+{
+    size_t baseline=live;
+    HasCase h;
+    /* Subject: the ancestor's own winners and, through a custom property,
+     * its descendants'. A change that leaves the match as it was restyles
+     * neither the ancestor nor what is under it. */
+    has_open(&h,".a:has(.b){--ink:red}.a{--ink:blue}span{color:var(--ink)}",
+             "<!doctype html><div id=a class=a><p id=p><span id=s>t</span></p><p id=q><i id=i></i></p></div>"
+             "<div id=far><span id=fs>u</span></div>");
+    uint64_t was=garb_cascade_updates(h.c);
+    os64_html_set_attr(h.doc,has_el(&h,"i"),"class","b",1);
+    was=has_update(&h,"subject: an argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"a"),was) && garb_style_updated_since(h.c,has_el(&h,"s"),was),
+                 "subject: the ancestor and its descendants are restyled");
+    update_check(!garb_style_updated_since(h.c,has_el(&h,"fs"),was),"subject: an unrelated subtree is not");
+    os64_html_set_attr(h.doc,has_el(&h,"p"),"title","x",1);
+    was=has_update(&h,"subject: a change that keeps the match updates incrementally");
+    update_check(!garb_style_updated_since(h.c,has_el(&h,"a"),was) && !garb_style_updated_since(h.c,has_el(&h,"q"),was),
+                 "subject: an ancestor whose match held keeps its record, and its other children theirs");
+    os64_html_remove(h.doc,has_el(&h,"i"));
+    was=has_update(&h,"subject: the argument removed updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"s"),was),"subject: and restyles what inherited from it");
+    os64_html_node_t *b=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"b",NULL);
+    os64_html_set_attr(h.doc,b,"class","b",1);
+    os64_html_insert(h.doc,has_el(&h,"q"),b,NULL);
+    has_update(&h,"subject: an argument inserted updates incrementally");
+    has_close(&h);
+    /* A sibling argument: the preceding sibling is the subject. */
+    has_open(&h,".a:has(~ .b){color:red}.a:has(+ u){opacity:.5}",
+             "<!doctype html><div><p id=a class=a>a</p><p id=m>m</p><p id=n>n</p></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"n"),"class","b",1);
+    was=has_update(&h,":has(~): a following sibling turning updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"a"),was),":has(~): and restyles the subject before it");
+    /* An element with no attributes: the change is the parent's children
+     * alone, so the subject is found among them. */
+    os64_html_node_t *cc=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"u",NULL);
+    os64_html_insert(h.doc,has_el(&h,"a")->parent,cc,has_el(&h,"m"));
+    was=has_update(&h,":has(+): a sibling inserted after the subject updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"a"),was),":has(+): and restyles the subject before it");
+    has_close(&h);
+    /* :dir() follows the dir attribute's inheritance: an update. */
+    has_open(&h,"p:dir(rtl){color:green}","<!doctype html><div id=d><p id=p>x</p></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"d"),"dir","rtl",3);
+    has_update(&h,":dir(): a dir attribute changing updates incrementally");
+    has_close(&h);
+    /* Anchored: the :has() is left of a combinator, and what changes is
+     * below or beside the element it tests. */
+    has_open(&h,".g:has(.x) .y{color:red}.h:has(c) > a{color:blue}.p:has(.x) ~ .z{opacity:.5}"
+             ":is(.k:has(.x)) .y{background:green}",
+             "<!doctype html><div id=g class=g><p id=y class=y>y</p><p id=w>w</p></div>"
+             "<div id=g2 class=g><p id=y2 class=y>y</p></div>"
+             "<div id=h class=h><a id=ha>a</a></div>"
+             "<div><p id=pp class=p>p</p><p id=z class=z>z</p></div>"
+             "<div id=k class=k><p id=ky class=y>y</p></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"w"),"class","x",1);
+    was=has_update(&h,"anchored: an argument arriving under the anchor updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"y"),was),"anchored: what the anchor reaches is restyled");
+    update_check(!garb_style_updated_since(h.c,has_el(&h,"y2"),was),"anchored: another anchor's subtree is not");
+    os64_html_set_attr(h.doc,has_el(&h,"w"),"class","",0);
+    has_update(&h,"anchored: the argument going updates incrementally");
+    os64_html_insert(h.doc,has_el(&h,"h"),os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"c",NULL),NULL);
+    has_update(&h,"anchored with >: an argument inserted updates incrementally");
+    os64_html_node_t *px=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"i",NULL);
+    os64_html_set_attr(h.doc,px,"class","x",1);
+    os64_html_insert(h.doc,has_el(&h,"pp"),px,NULL);
+    was=has_update(&h,"anchored with ~: an argument inserted updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"z"),was),"anchored with ~: the following sibling is restyled");
+    os64_html_remove(h.doc,px);
+    was=has_update(&h,"anchored with ~: the argument removed updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"z"),was) && !garb_style_updated_since(h.c,has_el(&h,"pp"),was),
+                 "anchored with ~: the sibling is restyled back, the anchor itself is not");
+    os64_html_node_t *kx=os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"i",NULL);
+    os64_html_set_attr(h.doc,kx,"class","x",1);
+    os64_html_insert(h.doc,has_el(&h,"k"),kx,NULL);
+    was=has_update(&h,"anchored through :is(): an argument inserted updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"ky"),was),"anchored through :is(): what it reaches is restyled");
+    has_close(&h);
+    /* An element both marked alone (a subject :has() in the sheets) and an
+     * anchor whose answer turned owes its whole subtree. */
+    has_open(&h,".g:has(.x) .y{color:red}.q:has(.r){margin:1px}",
+             "<!doctype html><div id=g class=g><p id=y class=y>y</p><p id=w>w</p></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"w"),"class","x",1);
+    was=has_update(&h,"subject and anchor: an argument arriving updates incrementally");
+    update_check(garb_style_updated_since(h.c,has_el(&h,"y"),was),"subject and anchor: what the anchor reaches is restyled");
+    has_close(&h);
+    /* The body as an anchor: an append elsewhere under it restyles only
+     * what was appended; the argument turning restyles what it reaches. */
+    {
+        char html[8192]="<!doctype html><body><div id=panel class=panel>p</div><div id=feed>";
+        for(int i=0;i<40;++i) strcat(html,"<p class=post>x</p>");
+        strcat(html,"</div><t id=t></t>");
+        has_open(&h,"body:has(t[data-open]) .panel{color:red}.post{color:blue}",html);
+        os64_html_insert(h.doc,has_el(&h,"feed"),os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"p",NULL),NULL);
+        was=has_update(&h,"body anchor: an append updates incrementally");
+        update_check(!garb_style_updated_since(h.c,has_el(&h,"panel"),was) &&
+                     !garb_style_updated_since(h.c,has_el(&h,"feed")->first_child,was),
+                     "body anchor: an append whose match held restyles nothing it did not add");
+        /* The body's whole subtree is what it reaches: more than half the
+         * elements, so a fresh cascade, and the right one. */
+        os64_html_set_attr(h.doc,has_el(&h,"t"),"data-open","",0);
+        update_check(!garb_cascade_update(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_BROAD,
+                     "body anchor: the argument turning asks for a fresh cascade");
+        update_check(update_or_rebuild(&h.c,h.doc,&h.in),"body anchor: which builds");
+        update_equal(h.c,h.doc,&h.in);
+        has_close(&h);
+    }
+    /* A container changed and then taken out in one batch: nothing in it
+     * is visited, and the update goes ahead. */
+    has_open(&h,".a:has(~ .b){color:red}.g:has(.x) .y{color:blue}",
+             "<!doctype html><div id=out><div id=d><p id=dp class=a>a</p></div></div><p id=o>o</p>");
+    os64_html_insert(h.doc,has_el(&h,"d"),os64_html_create_element(h.doc,OS64_HTML_NS_HTML,"p",NULL),NULL);
+    os64_html_remove(h.doc,has_el(&h,"d"));
+    has_update(&h,"a container changed and taken out in one batch updates incrementally");
+    has_close(&h);
+    /* An ancestor whose winners are read through var(), and one with a
+     * custom property in its style attribute: new copies each recompute,
+     * the same rules matching, so neither is restyled when its match held. */
+    has_open(&h,":root{--f:Arial, sans-serif}body{font-family:var(--f)}.a:has(.x){color:red}",
+             "<!doctype html><div id=feed style='--g:1;font-family:serif'><p id=one>1</p><p id=two>2</p></div>");
+    os64_html_set_attr(h.doc,has_el(&h,"one"),"title","t",1);
+    was=has_update(&h,"var() and style-attribute ancestors: a change updates incrementally");
+    update_check(!garb_style_updated_since(h.c,h.doc->body,was) && !garb_style_updated_since(h.c,has_el(&h,"feed"),was) &&
+                 !garb_style_updated_since(h.c,has_el(&h,"two"),was),
+                 "var() and style-attribute ancestors: neither they nor their other children are restyled");
+    has_close(&h);
+    /* A turn that restyles more than half the elements asks for a fresh
+     * cascade, says why, and the fresh one is right. */
+    {
+        char html[8192]="<!doctype html><div id=a class=a>";
+        for(int i=0;i<260;++i) strcat(html,"<p>x</p>");
+        strcat(html,"<i id=i></i></div>");
+        has_open(&h,".a:has(.b){--ink:red}p{color:var(--ink)}",html);
+        os64_html_set_attr(h.doc,has_el(&h,"i"),"class","b",1);
+        update_check(!garb_cascade_update(h.c) && garb_cascade_update_refusal(h.c)==GARB_UPDATE_BROAD,
+                     "a broad :has() turn asks for a fresh cascade, and says it was broad");
+        update_check(update_or_rebuild(&h.c,h.doc,&h.in),"and the fresh cascade builds");
+        update_equal(h.c,h.doc,&h.in);
+        has_close(&h);
+    }
+    update_check(live==baseline,":has() updates release what they made");
+}
+
 static int cascade_updates(void)
 {
     update_dependencies();
+    update_has();
     update_scratch_cost();
     size_t baseline=live;
     const char *css[] = {
@@ -190,29 +374,44 @@ static int cascade_updates(void)
             }
             update_equal(c,doc,&in);
         }
+        garb_cascade_free(c);
+        c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
         os64_html_changes_limit(doc,0);
         os64_html_set_attr(doc,a,"class","lost",4);
-        update_check(!garb_cascade_update(c),"lost history refuses reuse");
+        update_check(!garb_cascade_update(c) && garb_cascade_update_refusal(c)==GARB_UPDATE_HISTORY,
+                     "lost history refuses reuse, and says so");
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
         update_check(live==baseline,"updates release allocations and node holds");
     }
-    const char *broad[]={"div:has(p){color:red}","div:is(:not(:has(p))){color:blue}","p:dir(rtl){color:green}"};
+    /* What still keeps a cascade from tracking changes: an anchored :has()
+     * with nothing to test before it (a subtree walk on every element),
+     * and more anchors than a record remembers. Each is named. */
+    char many[8192]; size_t mlen=0;
+    for(int i=0;i<=GARB_ANCHORS_MAX;++i) mlen+=(size_t)sprintf(many+mlen,".g%d:has(.x) i{color:red}",i);
+    /* And a :has() inside :nth-child(… of S): its turn moves which sibling
+     * the count picks, which nothing follows. */
+    const char *broad[]={":has(p) i{color:red}",many,"p:nth-child(1 of .a:has(.x)){color:red}"};
+    const garb_update_refusal_t why[]={GARB_UPDATE_BARE_ANCHOR,GARB_UPDATE_ANCHORS,GARB_UPDATE_COUNTED_HAS};
     for(size_t i=0;i<sizeof(broad)/sizeof(*broad);++i) {
         os64_html_document_t *doc=update_doc("<!doctype html><div id=a><p>text</p></div>");
         garb_parsed_t sheet;garb_parse_sheet_text(broad[i],strlen(broad[i]),&sheet);garb_sheet_in_t in={.sheet=&sheet};
         garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
-        update_check(!garb_cascade_tracks_changes(c),"broad cascade advertises no change tracking");
+        update_check(!garb_cascade_tracks_changes(c),"untrackable cascade advertises no change tracking");
         os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"class","x",1);
-        update_check(!os64_html_changes_bytes(doc),"broad dependency does not retain an unusable mutation log");
-        update_check(!garb_cascade_update(c),"nested broad dependency requests full cascade");
+        update_check(!os64_html_changes_bytes(doc),"untrackable cascade does not retain an unusable mutation log");
+        update_check(!garb_cascade_update(c) && garb_cascade_update_refusal(c)==why[i],
+                     "untrackable cascade requests a full cascade and says why");
         os64_html_reader_t *reader=os64_html_reader_new(doc,os64_html_version(doc));
         os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"title","kept",4);
         const os64_html_change_entry_t *entry=NULL;
         update_check(reader && os64_html_changes(reader,&entry)==1 && entry && entry->kind==OS64_HTML_CHANGE_ATTR,
-                     "broad cascade leaves another native reader's invalidations intact");
+                     "untrackable cascade leaves another native reader's invalidations intact");
         os64_html_reader_free(reader);
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     }
+    update_check(!strcmp(garb_update_refusal_name(GARB_UPDATE_BROAD),"broad") &&
+                 !strcmp(garb_update_refusal_name(GARB_UPDATE_REASONS),"?"),
+                 "refusals have names, and past the enum is '?'");
     // Broad changes renew by bytes, while small changes keep a large
     // cascade reusable. These are allocator-pressure regressions, not clocks.
     for (int broad=0;broad<2;++broad) {
@@ -239,16 +438,28 @@ static int cascade_updates(void)
         update_check(live==baseline,"retention-pressure ownership released");
     }
     size_t points=0;
-    for(int growth=0;growth<2;++growth) {
+    // 0: an inline style; 1: slots grown; 2: a :has() turned, its subject
+    // and an anchor both, with the elements it reaches marked and restyled.
+    static const char *const kSweepNames[]={"inline style","slot growth",":has() turn"};
+    for(int growth=0;growth<3;++growth) {
         points=0;
         for(size_t failure=0;failure<=points;++failure) {
-            char html[1024]="<!doctype html><body>";
+            char html[4096]="<!doctype html><body>";
             for(int i=0;i<27;++i)strcat(html,"<p></p>");
+            if(growth==2) {
+                strcpy(html,"<!doctype html><aside>");
+                for(int i=0;i<60;++i)strcat(html,"<i></i>");
+                strcat(html,"</aside><div id=a class=a><p>text</p><p id=w></p></div>");
+            }
             os64_html_document_t *doc=update_doc(growth?html:"<!doctype html><div id=a><p>text</p></div>");
-            garb_parsed_t sheet;const char *text="div{--x:red}p{color:var(--x)}";
+            garb_parsed_t sheet;
+            const char *text=growth==2 ? "div{--x:red}.a:has(.b){--x:blue}.a:has(.b) p{opacity:.5}p{color:var(--x)}"
+                                       : "div{--x:red}p{color:var(--x)}";
             garb_parse_sheet_text(text,strlen(text),&sheet);garb_sheet_in_t in={.sheet=&sheet};
             garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
-            if(growth) {
+            if(growth==2) {
+                os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"w"),"class","b",1);
+            } else if(growth) {
                 for(int i=0;i<3;++i) {
                     os64_html_node_t *p=os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL);
                     os64_html_insert(doc,doc->body,p,NULL);
@@ -261,7 +472,7 @@ static int cascade_updates(void)
             garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
             update_check(live==baseline,"allocation refusal releases ownership");
         }
-        printf("libgarb updates: %s sweep, %zu allocation positions\n",growth?"slot growth":"inline style",points);
+        printf("libgarb updates: %s sweep, %zu allocation positions\n",kSweepNames[growth],points);
     }
     printf("libgarb updates: %u checks, %u failed\n",update_checks,update_failures);
     return update_failures?1:0;
