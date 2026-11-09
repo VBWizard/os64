@@ -37,6 +37,7 @@ typedef struct {
     // the worker is: yonder_picture_release frees it, product or none.
     char *data_url;
     unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
+    unsigned display_cors;          // 0 ordinary display; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a
     // picture is fetched as the page is (YONDER.md § Y3b); the agent's
     // preset lines and the picture's Fetch Metadata; and the browser's

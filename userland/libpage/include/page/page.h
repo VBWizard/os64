@@ -269,11 +269,13 @@ typedef struct {
 // and belong to whoever lays the page out — its `width` and `height` stay
 // attributes on the node.
 //
-// Every `img` and every `input type=image` whose `src` names something. An
+// Images whose src names something, and img elements with srcset candidates
+// of their own or from preceding picture sources. Selection belongs to the
+// browser's environment; src here remains the resolved fallback. An
 // empty or blank `src` names nothing: such an image is shown broken rather
 // than fetching the page it sits on as a picture — the standard's rule for
 // the empty string, and browsers' for white space — so it is not
-// listed, and `os64_page_image_for` answers -1.
+// listed unless responsive candidates are present.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
     os64_page_ref_t src;            // resolved against the base; refused says why. A data:

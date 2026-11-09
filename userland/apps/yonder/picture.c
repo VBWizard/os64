@@ -210,12 +210,13 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         }
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
-    if(j->canvas_request) {
+    if(j->canvas_request || j->display_cors) {
         yonder_fetch_job_t request={.agent=j->agent,.identity=j->hooks.identity,.url=j->url,
             .jar=j->hooks.jar,.cache=j->hooks.cache,.max_body=OS64_IMAGE_CAP_DEFAULT,
             .default_accept=j->svg_enabled?PICTURE_ACCEPT:OS64_IMAGE_ACCEPT ", */*;q=0.5"};
-        request.request.mode=j->canvas_request==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
-        request.request.credentials=j->canvas_request==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
+        unsigned mode=j->canvas_request?j->canvas_request:j->display_cors;
+        request.request.mode=mode==1?WAY_MODE_NO_CORS:WAY_MODE_CORS;
+        request.request.credentials=mode==2?WAY_CREDENTIALS_SAME_ORIGIN:WAY_CREDENTIALS_INCLUDE;
         request.request.redirect=WAY_REDIRECT_FOLLOW;
         request.request.policy=WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN;
         way_origin_of(j->hooks.referrer,0,&request.request.origin);

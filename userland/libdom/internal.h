@@ -88,7 +88,7 @@ enum {
     D_PROTO_TABLE_CELL, D_PROTO_TABLE_COL, D_PROTO_TABLE, D_PROTO_TABLE_ROW, D_PROTO_TABLE_SECTION, D_PROTO_ULIST,
     D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
     D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
-    D_PROTO_COUNT
+    D_PROTO_SOURCE, D_PROTO_COUNT
 };
 /* A set of kinds is a uint64_t, bit `kind` for each (D_KIND): the tables
  * that put a member on some kinds' prototypes. More kinds than its bits
@@ -195,6 +195,7 @@ struct DValue {
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
     bool image_reported;
+    uint64_t image_generation;
     DQuery *child_nodes, *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;

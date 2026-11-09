@@ -6167,6 +6167,7 @@ static uint32_t *stand_in_shot(void) {
 #include "test_yonder_data_pictures.inc"
 #include "test_yonder_picture_sizes.inc"
 #include "test_yonder_image_cache.inc"
+#include "test_yonder_responsive_images.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -12005,7 +12006,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_IMAGES_ONLY")) {
-        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages(); image_cache_cases();
+        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages(); image_cache_cases(); responsive_image_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"images: text released");
         check(live==0,"images: heap empty");
@@ -12101,6 +12102,7 @@ int main(void)
     data_picture_cases();
     picture_sizes_cases();
     image_cache_cases();
+    responsive_image_cases();
     picture_memory_baseline();
     picture_memory_pages();
     local_link_cases();

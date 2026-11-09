@@ -772,7 +772,11 @@ static bool names_something(const os64_html_node_t *n, const char *name)
 
 static void add_image(os64_page_t *page, const os64_html_node_t *n)
 {
-    if (!names_something(n, "src"))
+    bool responsive=p_is(n,OS64_HTML_TAG_IMG) && names_something(n,"srcset");
+    if(p_is(n,OS64_HTML_TAG_IMG) && p_is(n->parent,OS64_HTML_TAG_PICTURE))
+        for(const os64_html_node_t *s=n->parent->first_child;s && s!=n;s=s->next)
+            if(p_is(s,OS64_HTML_TAG_SOURCE) && names_something(s,"srcset"))responsive=true;
+    if (!names_something(n, "src") && !responsive)
         return;
     const char *src = p_attr(n, "src");
     if (!p_grow((void **)&page->images, &page->imagecap, page->nimages, sizeof(*page->images))) {
@@ -782,7 +786,7 @@ static void add_image(os64_page_t *page, const os64_html_node_t *n)
     os64_page_image_t *image = &page->images[page->nimages];
     os64_memset(image, 0, sizeof(*image));
     image->node = n;
-    p_resolve_picture(page, src, &image->src);
+    if(src && names_something(n,"src"))p_resolve_picture(page, src, &image->src);
     image->alt = p_attr(n, "alt");
     if (!p_ptrmap_put(&page->image_map, n, page->nimages))
         page->incomplete = true;

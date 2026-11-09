@@ -43,7 +43,7 @@ static const DModernRow kModern[] = {
                            "HTMLTableSectionElement", "HTMLUListElement", "HTMLBRElement", "HTMLDListElement",
                            "HTMLDirectoryElement", "HTMLFontElement", "HTMLHRElement", "HTMLHeadingElement",
                            "HTMLHtmlElement", "HTMLMenuElement", "HTMLParagraphElement", "HTMLPreElement",
-                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", NULL},
+                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", "HTMLSourceElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},

@@ -1029,3 +1029,65 @@ bool garb_media_text_matches(const char *text, garb_env_t env)
     garb_free(&r);
     return ok;
 }
+
+static bool source_calc(const garb_calc_t *c, garb_env_t env, double *out, unsigned depth)
+{
+    if (!c || depth > 64) return false;
+    if (c->op == GARB_CALC_LEAF) {
+        if (c->leaf.kind == GARB_V_NUMBER) { *out=c->leaf.number; return true; }
+        static const char *const units[]={"px","em","rem","ex","ch","vw","vh","vmin",
+            "vmax","pt","pc","cm","mm","in","q"};
+        if (c->leaf.kind != GARB_V_LENGTH || (unsigned)c->leaf.unit >= sizeof(units)/sizeof(*units)) return false;
+        const char *unit=units[c->leaf.unit];
+        garb_value_t t={.kind=GARB_DIMENSION,.number=c->leaf.number,.unit=unit,.unit_len=os64_strlen(unit)};
+        return length_px(&t,env,out);
+    }
+    double v[3]={0}, result=c->op==GARB_CALC_PRODUCT?1:0;
+    for (int32_t i=0;i<c->nargs;i++) {
+        double one;
+        if (!source_calc(c->args[i],env,&one,depth+1)) return false;
+        if (i<3) v[i]=one;
+        bool invert=c->invert && c->invert[i];
+        switch(c->op) {
+        case GARB_CALC_SUM: result+=invert?-one:one; break;
+        case GARB_CALC_PRODUCT: if(invert && one==0)return false; result*=invert?1/one:one; break;
+        case GARB_CALC_MIN: if(i==0 || one<result)result=one; break;
+        case GARB_CALC_MAX: if(i==0 || one>result)result=one; break;
+        case GARB_CALC_CLAMP: break;
+        default: return false;
+        }
+    }
+    if(c->op==GARB_CALC_CLAMP) {
+        if(c->nargs!=3)return false;
+        result=v[1]<v[2]?v[1]:v[2]; if(result<v[0])result=v[0];
+    }
+    if (!(result>=-DBL_MAX && result<=DBL_MAX)) return false;
+    *out=result; return true;
+}
+
+double garb_image_source_size(const char *text, garb_env_t env)
+{
+    double result=env.width>0?env.width:1;
+    if(!text || os64_strlen(text)>65536)return result;
+    garb_parsed_t r={0};
+    if(garb_parse_values(text,os64_strlen(text),&r)!=GARB_OK || r.incomplete) {garb_free(&r);return result;}
+    for(int32_t start=0;start<r.nvalues;) {
+        int32_t end=start;
+        while(end<r.nvalues && r.values[end].kind!=GARB_COMMA)end++;
+        int32_t last=end-1;
+        while(last>=start && r.values[last].kind==GARB_WHITESPACE)last--;
+        if(last>=start) {
+            double px=0; const garb_value_t *t=&r.values[last];
+            bool valid=length_px(t,env,&px);
+            if(!valid && t->kind==GARB_FUNCTION) {
+                Arena a={r.arena,false}; int type=0;
+                const garb_calc_t *calc=read_calc(&a,t,ACCEPT_LENGTH,&type);
+                valid=calc && source_calc(calc,env,&px,0);
+                if(valid && px<0)px=0;
+            }
+            if(valid && px>=0 && px<=DBL_MAX && garb_media_matches(r.values+start,last-start,env)) {result=px;break;}
+        }
+        start=end+1;
+    }
+    garb_free(&r);return result;
+}

@@ -2,7 +2,7 @@
 #include <png/png.h>
 #include <math.h>
 
-enum { I_DRAW,I_SMOOTH,I_QUALITY,I_EXPORT,I_WIDTH,I_HEIGHT,I_COMPLETE,I_CORS };
+enum { I_DRAW,I_SMOOTH,I_QUALITY,I_EXPORT,I_WIDTH,I_HEIGHT,I_COMPLETE,I_CORS,I_CURRENT };
 void os64_dom_set_images(os64_dom_t *dom,const os64_dom_image_provider_t *provider)
 {
     if(dom&&!dom->closed)dom->image_provider=provider?*provider:(os64_dom_image_provider_t){0};
@@ -16,6 +16,14 @@ static os64_dom_image_status_t image_acquire(os64_dom_t *dom,const os64_html_nod
 static void image_release(os64_dom_t *dom,os64_dom_image_view_t *view)
 {
     if(dom->image_provider.release)dom->image_provider.release(dom->image_provider.opaque,view);
+}
+static double image_density(const os64_dom_image_view_t *view)
+{ return view->density_set?view->density:1; }
+static uint32_t image_dimension(const os64_dom_image_view_t *view,bool height)
+{
+    double d=image_density(view), n=height?view->surface.height:view->surface.width;
+    n=d>0?n/d:UINT32_MAX;
+    return n>UINT32_MAX?UINT32_MAX:n>0?(uint32_t)n:0;
 }
 static bool image_attribute_size(const os64_html_attr_t *attr,uint32_t *out)
 {
@@ -42,33 +50,36 @@ JSValue d_image_dimension(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t 
         return JS_NewUint32(ctx,value);
     os64_dom_image_view_t view;
     os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
-    value=status==OS64_DOM_IMAGE_READY?(height?view.surface.height:view.surface.width):0;
+    value=status==OS64_DOM_IMAGE_READY?image_dimension(&view,height):0;
     image_release(dom,&view);
     return JS_NewUint32(ctx,value);
 }
 void d_image_changed(os64_dom_t *dom,const os64_html_change_t *change)
 {
     if(change->kind!=OS64_HTML_CHANGE_ATTR||change->attr_ns||
-       (os64_strcmp(change->attr_local,"src")&&os64_strcmp(change->attr_local,"crossorigin")))return;
+       (os64_strcmp(change->attr_local,"src")&&os64_strcmp(change->attr_local,"crossorigin")&&
+        os64_strcmp(change->attr_local,"srcset")&&os64_strcmp(change->attr_local,"sizes")))return;
     DValue *e=d_find(dom,change->target);
-    if(e)e->image_reported=false;
+    if(e && !e->image_generation)e->image_reported=false;
 }
 bool os64_dom_image_event(os64_dom_t *dom,const os64_html_node_t **node,bool *failed,bool consume)
 {
     if(!dom||dom->closed||!dom->options.modern||!dom->image_provider.acquire)return false;
+    if(dom->image_provider.update)dom->image_provider.update(dom->image_provider.opaque);
     for(DValue *e=dom->values;e;e=e->next) {
-        if(e->image_reported||!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
-        const os64_html_attr_t *src=os64_html_attr(e->node,"src");
-        if(!src||!src->value[0])continue;
+        if(!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
         os64_dom_image_view_t view;
         os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view);
+        bool skip=view.pending||view.empty||(e->image_reported && e->image_generation==view.generation);
+        uint64_t generation=view.generation;
         image_release(dom,&view);
-        if(status==OS64_DOM_IMAGE_PENDING)continue;
-        if(consume)e->image_reported=true;
+        if(skip||status==OS64_DOM_IMAGE_PENDING)continue;
+        if(consume){e->image_reported=true;e->image_generation=generation;}
         if(node)*node=e->node;
         if(failed)*failed=status!=OS64_DOM_IMAGE_READY;
         return true;
     }
+    if(dom->image_provider.update)dom->image_provider.update(dom->image_provider.opaque);
     return false;
 }
 static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
@@ -92,11 +103,18 @@ static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     }
     os64_dom_image_view_t view;
     os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
-    uint32_t value=status==OS64_DOM_IMAGE_READY?(magic==I_WIDTH?view.surface.width:view.surface.height):0;
+    if(magic==I_CURRENT) {
+        JSValue result=JS_NewString(ctx,view.current_src?view.current_src:"");
+        image_release(dom,&view);return result;
+    }
+    uint32_t value=status==OS64_DOM_IMAGE_READY?image_dimension(&view,magic==I_HEIGHT):0;
+    bool pending=view.pending,empty=view.empty;
     image_release(dom,&view);
     if(magic==I_COMPLETE) {
         const os64_html_attr_t *src=os64_html_attr(node,"src");
-        return JS_NewBool(ctx,!src||!src->value[0]||status==OS64_DOM_IMAGE_READY||status==OS64_DOM_IMAGE_BROKEN);
+        const os64_html_attr_t *set=os64_html_attr(node,"srcset");
+        return JS_NewBool(ctx,empty||(!pending && (status==OS64_DOM_IMAGE_READY||status==OS64_DOM_IMAGE_BROKEN||
+            ((!src||!src->value[0])&&(!set||!set->value[0])))));
     }
     return JS_NewUint32(ctx,value);
 }
@@ -195,9 +213,11 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
                 d_error(ctx,status==OS64_DOM_IMAGE_REFUSED?"QuotaExceededError":"InvalidStateError","Image source is unavailable");
         }
     }
-    double sx=0,sy=0,sw=image.surface.width,sh=image.surface.height,dx=v[0],dy=v[1],dw=sw,dh=sh;
+    double density=image_density(&image);
+    double sx=0,sy=0,sw=image.surface.width,sh=image.surface.height,dx=v[0],dy=v[1],
+        dw=density>0?sw/density:UINT32_MAX,dh=density>0?sh/density:UINT32_MAX;
     if(count==4){dw=v[2];dh=v[3];}
-    if(count==8){sx=v[0];sy=v[1];sw=v[2];sh=v[3];dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
+    if(count==8){sx=v[0]*density;sy=v[1]*density;sw=v[2]*density;sh=v[3]*density;dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
     d_canvas_sync(e);
     canvas_status_t status=e->canvas?canvas_draw_image(e->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
     if(borrowed)image_release(dom,&image);
@@ -213,5 +233,6 @@ int d_canvas_images_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototyp
     return d_accessor(dom,ctx,image,"naturalWidth",image_member,I_WIDTH,false)<0||
         d_accessor(dom,ctx,image,"naturalHeight",image_member,I_HEIGHT,false)<0||
         d_accessor(dom,ctx,image,"complete",image_member,I_COMPLETE,false)<0||
+        d_accessor(dom,ctx,image,"currentSrc",image_member,I_CURRENT,false)<0||
         d_accessor(dom,ctx,image,"crossOrigin",image_member,I_CORS,true)<0?-1:0;
 }

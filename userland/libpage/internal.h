@@ -327,6 +327,7 @@ bool p_refresh_from(os64_page_t *page, const os64_html_node_t *n);
 
 // HTML numeric syntax is strict for values, prefix-parsed for attributes.
 bool p_number_parse(const char *text, bool strict, double *out);
+bool p_number_parse_clamped(const char *text, double *out);
 // Shortest decimal form of a finite binary64 value; out has at least 32 bytes.
 size_t p_number_spell(double value, char out[32]);
 long double p_number_mod(long double x, long double y);

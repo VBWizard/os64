@@ -201,6 +201,7 @@ static const yonder_picture_job_t *sizes_held(void)
 /* The job in the pool, run, arrived and fed after as reaped() does. */
 static bool sizes_run(void)
 {
+    pictures_feed(&g.page);
     yonder_picture_job_t *job = pool_work.job;
     if (job == NULL || job->kind != YONDER_JOB_PICTURE) return false;
     memset(&pool_work, 0, sizeof(pool_work));
