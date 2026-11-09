@@ -509,6 +509,28 @@ static const char *faces_open(void)
     return faces_fallback() ? NULL : "no faces for the page, not even the built-in one";
 }
 
+// The ceilings of each page's document stores (yonder.conf's
+// page_memory_mb, cut by yonder_page_memory_split), read once as yonder
+// starts. A ceiling of 0 is its library's own.
+static yonder_page_memory_t s_page_memory;
+// Takes the ceilings: the layout's is the budget every page's layout is
+// made with (s_env), the others are read where their store is made.
+static void page_memory_set(yonder_page_memory_t ceilings)
+{
+    s_page_memory = ceilings;
+    s_env.max_arena_bytes = ceilings.layout;
+}
+
+// The options a page's document is parsed with: libhtml's, its arena held
+// to the tree's share of page_memory_mb. What a script inserts later is
+// charged to the same arena (a fragment parses into what is left of it).
+static os64_html_options_t page_html_options(void)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    if (s_page_memory.tree != 0) opt.max_arena_bytes = s_page_memory.tree;
+    return opt;
+}
+
 // A file arrives with no Content-Type to name its encoding, and a page
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
@@ -527,7 +549,7 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
         wide |= took > 1;
         i += took;
     }
-    os64_html_options_t opt = os64_html_options_default();
+    os64_html_options_t opt = page_html_options();
     opt.charset = wide && valid ? "utf-8" : NULL;
     opt.scripting = scripting;
     os64_html_parser_t *p = os64_html_parser_new(&opt);
@@ -1563,6 +1585,23 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
+// The reasons a layout's cascade is built fresh, by the profile's index:
+// yonder's own (none yet, no memory for the scopes, sheets changed, sheets
+// that no longer match), then libgarb's refusals in their order, by
+// libgarb's own names.
+static const char *const *cascade_reason_names(void)
+{
+    _Static_assert(4 + GARB_UPDATE_REASONS - 1 == YONDER_LAYOUT_CASCADE_REASONS, "cascade refusal diagnostics");
+    static const char *names[YONDER_LAYOUT_CASCADE_REASONS];
+    if (names[0] == NULL) {
+        static const char *const kOwn[] = {"no cascade", "scope memory", "sheets changed", "inputs differ"};
+        for (int32_t r = 1; r < GARB_UPDATE_REASONS; r++)
+            names[3 + r] = garb_update_refusal_name((garb_update_refusal_t)r);
+        for (int32_t i = 0; i < 4; i++) names[i] = kOwn[i];
+    }
+    return names;
+}
+
 static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
@@ -1617,17 +1656,29 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     uint64_t prior_updates = garb_cascade_updates(cascade);
     // A live page can explicitly invalidate its sheets. A staged table
     // instead proves that its immutable inputs still match the source.
-    bool updated = scoped && (!p->sheets_changed || p->reuse_sheets) &&
-                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view) &&
-                   garb_cascade_update(cascade);
+    bool fresh_sheets = p->sheets_changed && !p->reuse_sheets;
+    bool matches = scoped && !fresh_sheets &&
+                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view);
+    bool updated = matches && garb_cascade_update(cascade);
+    // Why it is built fresh, for the layout profile: yonder's own reasons
+    // (cascade_reason_names), then libgarb's.
+    int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
+                : 3 + (int32_t)garb_cascade_update_refusal(cascade);
     if (!updated) {
         measured_fallback(p);
-        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, NULL) : NULL;
+        // The cascade's own state is held to its share of page_memory_mb;
+        // what it reads of the sheets, and each style attribute's parse,
+        // keep libgarb's ceilings (yonder_page_memory_split says why).
+        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
+                                               s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
     }
     page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,
-            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
+            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates,
+            .cascade_reason_names = cascade_reason_names()};
+        if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
     }
@@ -1867,7 +1918,9 @@ typedef enum {
 typedef struct {
     InputKind kind;
     const os64_html_node_t *node;       // held, in `doc`
-    const os64_html_node_t *related;    // held: over/out's other node, a click's link, a focus change's other node
+    // held: over/out's other node, a click's link, a focus change's other
+    // node, a button's click target (button_clicked)
+    const os64_html_node_t *related;
     const os64_html_document_t *doc;
     int32_t x, y;                       // window coordinates, for a mouse event
     uint8_t was;                        // IN_CHECK: the box before the click (WAS_*)
@@ -3112,6 +3165,9 @@ static void cost_reset(void)
 // Pointer hit testing follows published geometry, not every drawing operation.
 static bool s_pointer_replay, s_pointer_ignore_cancel, s_pointer_cancel_owed;
 static bool s_pointer_known, s_pointer_rehit, s_pointer_draining;
+// libui is dispatching a mouse button's release (ui_dispatch): a button's
+// click comes from the pointer, not from Space or Enter (button_target).
+static bool s_pointer_activation;
 static uint16_t s_pointer_buttons;
 static unsigned s_pointer_modifiers;
 static os64_ui_menu_model_t *s_pointer_menu;
@@ -3234,8 +3290,9 @@ static void diag_picture_memory(Page *p)
 }
 
 // One moment's census of `p`: every owner's total and the process heap
-// around them; with `detail`, libdom's kinds and the script heap's own
-// census too.
+// around them; with `detail`, libdom's kinds, the layout's and the
+// cascade's parts (whose ceilings differ, yonder_page_memory_split) and
+// the script heap's own census too.
 static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
 {
     os64_memset(sheet, 0, sizeof(*sheet));
@@ -3274,10 +3331,23 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
         yonder_census_owner(sheet, "style preloads", bytes, (uint64_t)p->preloads->count, "responses");
     }
     yonder_census_owner(sheet, "cascade", garb_cascade_bytes(p->cascade), 0, NULL);
+    if (detail && p->cascade != NULL) {
+        garb_cascade_parts_t c = garb_cascade_parts(p->cascade);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "state", c.state);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "reads", c.reads);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "attributes", c.attributes);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "tables", c.tables);
+    }
     if (p->tree != NULL) {
         flow_tree_stats_t t = flow_tree_stats(p->tree);
         yonder_census_owner(sheet, "layout", t.styles_bytes + t.boxes_bytes + t.lines_bytes + t.public_bytes,
                             t.boxes, "boxes");
+        if (detail) {
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "styles", t.styles_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "boxes", t.boxes_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "lines", t.lines_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "public", t.public_bytes);
+        }
     }
     yonder_census_owner(sheet, "pictures", p->kept_bytes, (uint64_t)p->npics, "pictures");
     size_t catalog=(size_t)p->cap_pics*sizeof(Picture)+p->pic_slot_cap*sizeof(int32_t)+p->picture_url_bytes;
@@ -3349,6 +3419,10 @@ static void diag_census(Page *p, bool sample)
     // earlier sample never stands beside this one's figures.
     census_fact(d, "memory dom", yonder_census_dom_line(&sheet, s_census_line, left), &left);
     census_fact(d, "memory script", yonder_census_script_line(&sheet, s_census_line, left), &left);
+    census_fact(d, "memory layout", yonder_census_parts_line(&sheet, YONDER_CENSUS_OF_LAYOUT, s_census_line, left),
+                &left);
+    census_fact(d, "memory cascade", yonder_census_parts_line(&sheet, YONDER_CENSUS_OF_CASCADE, s_census_line, left),
+                &left);
     census_fact(d, "census", yonder_census_state_line(&p->census, s_census_line, left), &left);
     census_fact(d, "memory timeline", yonder_census_timeline_line(&p->census, s_census_line, left), &left);
 }
@@ -8899,8 +8973,11 @@ static const os64_html_node_t *next_within(const os64_html_node_t *n, const os64
 }
 
 // A button's caption: its value, or the element's own text for a `button` —
-// all of it, however deep (`<button><span>Search</span></button>`) — or the
-// name the standard gives a submit or reset with neither.
+// all of it, however deep — or the name the standard gives a submit or
+// reset with neither. The face draws it only for a replaced button (a
+// `<button>` of text alone the page left alone, an input); a `<button>`
+// the page draws is laid out, and its caption names a widget that paints
+// nothing.
 static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
 {
     out[0] = '\0';
@@ -9059,13 +9136,34 @@ static void form_reset(int32_t form)
     forms_sync_from_model(true);
 }
 
+static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link);
+
+// What a button's click is dispatched at: the element under the pointer
+// when the pointer pressed it and is inside it, as other browsers target a
+// click on a button's icon at the icon and let it bubble; else the button
+// itself (a face's button holds no element, and a key's press is the
+// focused button's, wherever the pointer rests).
+static const os64_html_node_t *button_target(const FormWidget *fw)
+{
+    if (!s_pointer_activation)
+        return fw->node;
+    os64_gui_rect_t r = fw->w->bounds;
+    if (g.pointer_x < r.x || g.pointer_y < r.y || g.pointer_x >= r.x + r.w || g.pointer_y >= r.y + r.h)
+        return fw->node;
+    const os64_html_node_t *at = element_at(g.pointer_x, g.pointer_y, NULL);
+    for (const os64_html_node_t *n = at; n != NULL; n = os64_html_flat_parent(page_doc(&g.page), n))
+        if (n == fw->node)
+            return at;
+    return fw->node;
+}
+
 static void button_clicked(os64_ui_widget_t *w, void *user)
 {
     if (s_pointer_replay) return;
     (void)w;
     const FormWidget *fw = user;
     if (scripts_live()) {
-        input_queue(IN_BUTTON, fw->node, NULL, g.pointer_x, g.pointer_y, false);
+        input_queue(IN_BUTTON, fw->node, button_target(fw), g.pointer_x, g.pointer_y, false);
         return;
     }
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
@@ -9666,7 +9764,7 @@ static bool gadget(const flow_box_t *b, int32_t control)
 
 // A widget class that is `cls` in all but painting: libui skips a class
 // with no paint and still hit-tests, focuses and dispatches to it. One copy
-// per class, made once; NULL when the few slots are spent, and the gadget
+// per class, made once; NULL when the few slots are spent, and the widget
 // is then hidden instead.
 static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
 {
@@ -9703,7 +9801,9 @@ static void forms_place(void)
         if (fw->own_class == NULL)
             fw->own_class = fw->w->cls;
         const os64_ui_class_t *cls = fw->own_class;
-        if (gadget(b, widget_control(fw)))
+        // A button the page draws is laid out, not replaced, and its widget
+        // rides over it unpainted, as a gadget's does (STYLED_BUTTONS.md).
+        if (gadget(b, widget_control(fw)) || !b->replaced)
             cls = unpainted_class(fw->own_class);
         bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
                      at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
@@ -10181,7 +10281,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     int64_t modified;
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
-        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .serial = serial,
+        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .dom_bytes = s_page_memory.dom,
+        .serial = serial,
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
@@ -11518,7 +11619,8 @@ static Observed observed_now(void)
 // covered, as the animation frames are not. It only queues: the callbacks
 // run in the delivery task (script_turn). True when the step ran and that
 // task waits, which the loop rings itself back for; false when it did not
-// run, or its batch was refused.
+// run, or when its batch was refused, by the provider or by a DOM budget
+// that refused it before (os64_dom_intersections_update).
 static bool intersections_turn(void)
 {
     yonder_scripts_t *s = g.page.scripts;
@@ -13017,8 +13119,10 @@ static void inputs_run(void)
             break;
         }
         case IN_BUTTON: {
+            // The click goes to its target, inside the button or the button
+            // itself, and bubbles; what it does is the button's.
             os64_dom_event_t ev = mouse_event("click", true, &in);
-            if (page_event(&ev, in.node))
+            if (page_event(&ev, in.related != NULL ? in.related : in.node))
                 break;
             control = os64_page_control_for(page_model(&g.page), in.node);
             const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
@@ -13313,7 +13417,7 @@ static void image_page(os64_html_parser_t *parser, const char *url)
 static bool stream_parser(const void *first, size_t n)
 {
     page_departs();
-    os64_html_options_t opt = os64_html_options_default();
+    os64_html_options_t opt = page_html_options();
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
         opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
@@ -17418,7 +17522,10 @@ static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
 static void ui_dispatch(const os64_gui_event_t *ev)
 {
     os64_ui_widget_t *had = g.ui.focus;
+    bool was = s_pointer_activation;
+    s_pointer_activation = ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP;
     os64_ui_dispatch(&g.ui, ev);
+    s_pointer_activation = was;
     if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || g.ui.focus != had)
         field_selection_chosen(g.ui.focus);
 }
@@ -17527,6 +17634,7 @@ int main(int argc, char **argv)
     s_ranges = yonder_settings_saved_ranges();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
+    page_memory_set(yonder_page_memory_split(yonder_settings_saved_page_memory_mb()));
     const char *modern_refused;
     g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();

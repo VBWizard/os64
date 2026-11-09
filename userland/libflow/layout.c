@@ -2528,12 +2528,28 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
         translate(c, dx, dy);
 }
 
+// A button the page draws, laid out (f_button_faced false; a faced one is
+// FB_REPLACED): its own box, an inline one's atom content included, and
+// never an anonymous box inside it, which has no node. HTML's Rendering
+// chapter lays it out as a formatting context's root, as wide as its
+// content when its width is auto, and its content centred in the block
+// axis.
+static bool drawn_button(const FBox *b)
+{
+    const os64_html_node_t *n = b->node;
+    return b->kind == FB_BLOCK && n != NULL && n->kind == OS64_HTML_ELEMENT &&
+           n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_BUTTON;
+}
+
+static void translate_content(FBox *b, int64_t dy);
+
 // A box whose margins never collapse with its content's: the root, a
 // table and its cells and captions, a replaced block, an atom's content,
 // an out-of-flow box, a float, a block whose overflow scrolls or hides
 // (CSS Overflow 3 § 3; `clip` does not), a `display: flow-root` block, and
 // a flex or grid container and each of its items (Flexbox 1 § 3, § 4;
-// Grid 2 § 5, § 6) — each starts a formatting context of its own (§9.4.1,
+// Grid 2 § 5, § 6), and a button the page draws (drawn_button) — each
+// starts a formatting context of its own (§9.4.1,
 // §8.3.1).
 bool f_bfc_root(const FBox *b)
 {
@@ -2544,7 +2560,7 @@ bool f_bfc_root(const FBox *b)
            b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller || b->out_of_flow ||
            b->floated != FLOW_FLOAT_NONE || (b->node != NULL && s->flow_root) ||
            (b->kind == FB_BLOCK && b->node != NULL && f_display_atomic(s->display)) || b->flex ||
-           b->grid || (b->parent != NULL && (b->parent->flex || b->parent->grid));
+           b->grid || (b->parent != NULL && (b->parent->flex || b->parent->grid)) || drawn_button(b);
 }
 
 // The HTML alignments reach a block child whose margins are both set, that
@@ -3723,12 +3739,21 @@ typedef struct {
 static void refit(L *l, const FStyles *styles, FBox *c);
 
 // An item's height set by its container: an item that is itself a flex
-// container places its own items again, against it (refit).
+// container places its own items again, against it (refit), and a button
+// the page draws centres its content in the height it now has, by the
+// difference between the centring it had and the centring it needs; its
+// natural height is its content_h.
 static void set_item_h(L *l, const FStyles *styles, FBox *c, int64_t h)
 {
     if (c->h == h)
         return;
+    int64_t was = c->h;
     c->h = h;
+    if (drawn_button(c) && !c->flex && !c->grid) {
+        int64_t shift = max64(0, h - c->content_h) / 2 - max64(0, was - c->content_h) / 2;
+        if (shift != 0)
+            translate_content(c, shift);
+    }
     refit(l, styles, c);
 }
 
@@ -5486,13 +5511,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         forced_w = ratio_floor_w(l, b, ratio_width_held(b, content_of(s, s->height, 0, vf), cbw, hf, vf),
                                  cbw, hf);
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT ||
-               ((b->floated != FLOW_FLOAT_NONE ||
+               ((b->floated != FLOW_FLOAT_NONE || drawn_button(b) ||
                  (b->parent == NULL && s->float_side != FLOW_FLOAT_NONE)) &&
                 s->width.kind == FLOW_LENGTH_AUTO)) {
         // A float's auto width shrinks to fit, as fit-content does (§ 10.3.5);
         // so does a floated root's, which has no context round it to float
         // in but is laid out as a float's (Chrome 155: the float probe's
-        // case 6).
+        // case 6), and a block-level button's (HTML's button layout).
         forced_w = fit_content(l, b, cbw);
     }
     // A flex item's container sized it, a replaced one included — whose
@@ -5711,6 +5736,11 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
         content_h = ratio_content_h(s, cw, b->w - cw, vframe_px, content_h);
     // Content taller than a max-height is drawn past it.
     content_h = clamp_height(s, max64(0, content_h), vframe_px);
+    // A button's content is centred in the height it was given (HTML's
+    // button layout); a flex or grid button's items were placed by their
+    // own alignment.
+    if (drawn_button(b) && asked < 0 && content_h > flowed)
+        translate_content(b, (content_h - flowed) / 2);
     b->placed = true;
     b->y = y_border;
     b->h = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + content_h + b->padding[FLOW_BOTTOM] +
@@ -6860,8 +6890,11 @@ static void distribute(Col *cols, int32_t n, int64_t w)
 
 static void translate_content(FBox *b, int64_t dy)
 {
-    // The cell's content moved independently of its border. Its children
-    // get translated origins; the cell itself cannot replay one call result.
+    // A box's content moved independently of its border: a cell's by its
+    // valign, a button's to its centre. Its children get translated
+    // origins. A cell's recorded call did not make the move and cannot
+    // replay it; a button moves its content inside its own call, whose
+    // recording (graft_leave) takes the moved content.
     if (b->reuse_call) b->reuse_call->valid = false;
     for (FLine *ln = b->lines; ln != NULL; ln = ln->next) {
         ln->y += dy;

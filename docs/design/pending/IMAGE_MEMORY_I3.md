@@ -202,3 +202,24 @@ review. The evidence supports removing metadata-created copies; further
 reconstruction/eviction or decoder policy changes remain separate measured
 follow-ups. The local first-draw promotion's 58.2 ms cost is explicit evidence
 of the synchronous latency tradeoff, rather than a claim that promotion is free.
+
+## PR integration
+
+The review branch integrates `userland` through `1f42cb36`. Its DOM wrapper
+split keeps the image completion generation in the compact wrapper, sharing
+the plain engine-held target's listener-hook slot. Listener-hook dispatch is
+guarded by the target kind, preserving the existing 128-byte charged-size gate.
+The separate DOM Canvas fixture uses designated initializers so the extended
+image-provider API retains its documented zero-initialized defaults. The
+responsive-image regression also adds, removes and assigns listeners after
+completion to exercise the distinction between the shared slot's uses.
+
+The integrated Yonder host suite passes **24,215 checks, zero failures**, with
+ASan, UBSan and LeakSanitizer enabled outside the sandbox. The DOM target-engine
+profile passes **42,982 checks, zero failures** (3,849 binding allocation
+sweeps), also with leak detection enabled; its separate fully instrumented
+engine profile is not included in that result. The target Yonder build passes.
+
+The integration checks cover the merged source; the P5 results
+above belong to the frozen `a131eece` implementation cohort, which remains
+unchanged and has not been replaced with the integrated build.

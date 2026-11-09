@@ -696,6 +696,13 @@ typedef struct {
     uint32_t fill;
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
+    // An author declaration, a sheet's or the style attribute's, gives the
+    // element's background colour or image, a border's style, width or
+    // colour, or a corner's radius a value of its own (a `revert` hands it
+    // back, and does not count): the page drew its box, which is what
+    // keeps a `<button>` from being the face's own button
+    // (STYLED_BUTTONS.md § 2). Not inherited.
+    bool author_box;
     // Which of `background`, `border_color` and `fill` the page wrote as
     // currentColor (FLOW_CURRENT_*): resolved against this element's colour
     // above, and kept so that a child taking them by `inherit` — or, for
@@ -1111,7 +1118,9 @@ struct flow_box {
     // drew it — an underline and a line-through may differ.
     uint32_t underline_color, line_through_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
-    int32_t control;                // ATOMIC, REPLACED: libpage's control, or -1
+    // libpage's control, or -1: a REPLACED box's, an ATOMIC one's, and the
+    // BLOCK box of a block-level button the page draws (STYLED_BUTTONS.md).
+    int32_t control;
     // REPLACED always; an ATOMIC that is a replaced element's box, never an
     // inline-block's (or inline-flex, -grid, -table): what the face draws
     // inside, where the layout put no boxes of the element's content.
@@ -1390,7 +1399,7 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // pieces, its text and any block split out of it — and each box drawn
 // outside it that takes from it what changed,
 // in page coordinates at `scroll`; true. An element no box stands for, nor
-// any inside it (a button's content, what is under `display: none`), shows
+// any inside it (a select's options, what is under `display: none`), shows
 // nothing of what changed and is passed over. False when they cannot be
 // bounded so — then repaint the whole view — and `*said` (when not NULL)
 // names why (flow_parts_why_t), with the element and the property that

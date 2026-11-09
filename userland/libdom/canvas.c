@@ -42,30 +42,35 @@ static uint32_t dimension(const os64_html_node_t *node, const char *name, uint32
 }
 static canvas_status_t create(DValue *e)
 {
+    DValueMore *more = d_more(e->dom, NULL, e);
+    if (more == NULL) return CANVAS_NO_MEMORY;
     canvas_options_t options = canvas_options_default((os64_geometry_memory_t){
         .context = e->dom, .alloc = d_canvas_allocate, .free = d_canvas_release});
     options.geometry = os64_freetype_geometry_v1();
     return canvas_create(&options, dimension(e->node, "width", 300),
-                         dimension(e->node, "height", 150), &e->canvas);
+                         dimension(e->node, "height", 150), &more->canvas);
 }
 void d_canvas_sync(DValue *e)
 {
-    if (!e->canvas_reset_pending) return;
-    e->canvas_reset_pending = false;
-    canvas_status_t status = e->canvas ? canvas_reset(e->canvas,
+    /* Pending only on an entry with a canvas or a context, so with its
+     * DValueMore made. */
+    DValueMore *more = e->more;
+    if (more == NULL || !more->canvas_reset_pending) return;
+    more->canvas_reset_pending = false;
+    canvas_status_t status = more->canvas ? canvas_reset(more->canvas,
         dimension(e->node, "width", 300), dimension(e->node, "height", 150)) : create(e);
     /* A failed DOM resize cannot keep displaying pixels at the old size.
      * Drop the bitmap; the stable JS context is lost until a later resize
      * can allocate it. Reads of a lost context produce transparent pixels. */
     if (status != CANVAS_OK) {
-        canvas_destroy(e->canvas);
-        e->canvas = NULL;
+        canvas_destroy(more->canvas);
+        more->canvas = NULL;
     }
 }
 canvas_status_t d_canvas_prepare(DValue *e)
 {
     d_canvas_sync(e);
-    return e->canvas ? CANVAS_OK : e->canvas_object ? CANVAS_NO_MEMORY : create(e);
+    return d_more_peek(e)->canvas ? CANVAS_OK : d_more_peek(e)->canvas_object ? CANVAS_NO_MEMORY : create(e);
 }
 static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
@@ -73,15 +78,17 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *c)
     if (c->kind != OS64_HTML_CHANGE_ATTR || c->attr_ns ||
         (os64_strcmp(c->attr_local, "width") && os64_strcmp(c->attr_local, "height"))) return;
     DValue *e = d_find(dom, c->target);
-    if (e && (e->canvas_object || e->canvas)) e->canvas_reset_pending = true;
+    if (e && e->more && (e->more->canvas_object || e->more->canvas)) e->more->canvas_reset_pending = true;
 }
 void d_canvas_free(DValue *e)
 {
     d_path2d_free(e);
-    if (e->canvas) canvas_destroy(e->canvas);
-    e->canvas = NULL;
-    canvas_gradient_release(e->canvas_gradient);
-    e->canvas_gradient = NULL;
+    DValueMore *more = e->more;
+    if (more == NULL) return;
+    if (more->canvas) canvas_destroy(more->canvas);
+    more->canvas = NULL;
+    canvas_gradient_release(more->canvas_gradient);
+    more->canvas_gradient = NULL;
 }
 JSValue d_canvas_result(JSContext *ctx, canvas_status_t status)
 {
@@ -135,18 +142,19 @@ static JSValue get_context(JSContext *ctx, JSValueConst self, int argc, JSValueC
     JS_FreeCString(ctx, s);
     if (!two) return JS_NULL;
     DValue *e = d_find(dom, node);
-    if (e->canvas_object) return JS_DupValue(ctx, e->canvas_object->value);
+    if (d_more_peek(e)->canvas_object) return JS_DupValue(ctx, d_more_peek(e)->canvas_object->value);
     int supported = settings(ctx, argc > 1 ? argv[1] : JS_UNDEFINED);
     if (supported < 0) return JS_EXCEPTION;
     /* A dictionary getter may itself have created the context. */
-    if (e->canvas_object) return JS_DupValue(ctx, e->canvas_object->value);
+    if (d_more_peek(e)->canvas_object) return JS_DupValue(ctx, d_more_peek(e)->canvas_object->value);
     if (!supported || d_canvas_prepare(e) != CANVAS_OK) return JS_NULL;
     JSValue object = JS_NewObjectClass(ctx, dom->canvas_class);
     if (JS_IsException(object)) { d_canvas_free(e); return object; }
     DValue *held = d_retain(dom, ctx, object);
     if (!held) { d_canvas_free(e); return JS_EXCEPTION; }
     JS_SetOpaque(object, e);
-    e->canvas_object = held;
+    /* d_canvas_prepare's success made the DValueMore. */
+    e->more->canvas_object = held;
     return JS_DupValue(ctx, object);
 }
 static int integer(JSContext *ctx, JSValueConst v, int64_t *out)
@@ -196,7 +204,7 @@ static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValue
         uint32_t argb;bool current;double alpha;int valid=color(ctx,value,&argb,&current,&alpha);JS_FreeValue(ctx,value);
         if(valid<0)return JS_EXCEPTION;
         if(!valid)return d_error(ctx,"SyntaxError","Invalid gradient color");
-        return d_canvas_result(ctx,canvas_gradient_add_stop(g->canvas_gradient,offset,argb));
+        return d_canvas_result(ctx,canvas_gradient_add_stop(d_more_peek(g)->canvas_gradient,offset,argb));
     }
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
     if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
@@ -214,7 +222,9 @@ static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValue
     if(JS_IsException(object)){canvas_gradient_release(gradient);return object;}
     DValue *held=d_retain(dom,ctx,object);
     if(!held){canvas_gradient_release(gradient);return JS_EXCEPTION;}
-    held->dom=dom;held->canvas_gradient=gradient;JS_SetOpaque(object,held);
+    DValueMore *more=d_more(dom,ctx,held);
+    if(!more){d_unretain(dom,ctx,held);canvas_gradient_release(gradient);return JS_EXCEPTION;}
+    held->dom=dom;more->canvas_gradient=gradient;JS_SetOpaque(object,held);
     return JS_DupValue(ctx,object);
 }
 static int gradients_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst context)
@@ -250,7 +260,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
                 DValue *gradient=argc?JS_GetOpaque(argv[0],dom->gradient_class):NULL;
                 if(magic!=C_SHADOW_COLOR&&gradient&&gradient->dom==dom) {
                     d_canvas_sync(e);
-                    return e->canvas?d_canvas_result(ctx,canvas_set_gradient(e->canvas,gradient->canvas_gradient,magic==C_STROKE)):JS_UNDEFINED;
+                    return d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_gradient(d_more_peek(e)->canvas,d_more_peek(gradient)->canvas_gradient,magic==C_STROKE)):JS_UNDEFINED;
                 }
                 bool current = false;
                 int ok = color(ctx, argc ? argv[0] : JS_UNDEFINED, &fill, &current, &alpha);
@@ -265,16 +275,16 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
             } else if (JS_ToFloat64(ctx, &alpha, argc ? argv[0] : JS_UNDEFINED) < 0) return JS_EXCEPTION;
         }
         d_canvas_sync(e);
-        if (set) return e->canvas ? d_canvas_result(ctx, magic == C_FILL ? canvas_set_fill_rgb_alpha(e->canvas, fill, alpha) :
-                    magic == C_STROKE ? canvas_set_stroke(e->canvas, fill, alpha) :
-                    magic == C_SHADOW_COLOR ? canvas_set_shadow_color(e->canvas, fill, alpha) :
-                                                         canvas_set_alpha(e->canvas, alpha)) : JS_UNDEFINED;
+        if (set) return d_more_peek(e)->canvas ? d_canvas_result(ctx, magic == C_FILL ? canvas_set_fill_rgb_alpha(d_more_peek(e)->canvas, fill, alpha) :
+                    magic == C_STROKE ? canvas_set_stroke(d_more_peek(e)->canvas, fill, alpha) :
+                    magic == C_SHADOW_COLOR ? canvas_set_shadow_color(d_more_peek(e)->canvas, fill, alpha) :
+                                                         canvas_set_alpha(d_more_peek(e)->canvas, alpha)) : JS_UNDEFINED;
         canvas_state_t state = {.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1, .stroke_argb=0xff000000,.stroke_alpha=1};
-        if (e->canvas) canvas_state(e->canvas, &state);
+        if (d_more_peek(e)->canvas) canvas_state(d_more_peek(e)->canvas, &state);
         if (magic == C_ALPHA) return JS_NewFloat64(ctx, state.global_alpha);
         canvas_gradient_t *gradient=magic==C_SHADOW_COLOR?NULL:magic==C_STROKE?state.stroke_gradient:state.fill_gradient;
         if(gradient)for(DValue *held=dom->values;held;held=held->next)
-            if(held->canvas_gradient==gradient)return JS_DupValue(ctx,held->value);
+            if(d_more_peek(held)->canvas_gradient==gradient)return JS_DupValue(ctx,held->value);
         char text[80]; uint32_t p = magic == C_SHADOW_COLOR ? state.shadow_argb : magic == C_STROKE ? state.stroke_argb : state.fill_argb;
         double paint_alpha = magic == C_SHADOW_COLOR ? state.shadow_alpha : magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
         if (paint_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);
@@ -289,8 +299,8 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         double value=0;
         if(set && JS_ToFloat64(ctx,&value,argc?argv[0]:JS_UNDEFINED)<0)return JS_EXCEPTION;
         d_canvas_sync(e);
-        if(set)return e->canvas?d_canvas_result(ctx,canvas_set_shadow_value(e->canvas,magic-C_SHADOW_BLUR,value)):JS_UNDEFINED;
-        canvas_state_t state={0};if(e->canvas)canvas_state(e->canvas,&state);
+        if(set)return d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_shadow_value(d_more_peek(e)->canvas,magic-C_SHADOW_BLUR,value)):JS_UNDEFINED;
+        canvas_state_t state={0};if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
         return JS_NewFloat64(ctx,magic==C_SHADOW_BLUR?state.shadow_blur:magic==C_SHADOW_X?state.shadow_x:state.shadow_y);
     }
     if (magic == C_FILL_RECT || magic == C_CLEAR_RECT) {
@@ -298,9 +308,9 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         double v[4];
         for (unsigned i = 0; i < 4; ++i) if (JS_ToFloat64(ctx, &v[i], argv[i]) < 0) return JS_EXCEPTION;
         d_canvas_sync(e);
-        if (!e->canvas) return JS_UNDEFINED;
-        return d_canvas_result(ctx, magic == C_FILL_RECT ? canvas_fill_rect(e->canvas, v[0], v[1], v[2], v[3]) :
-                                                   canvas_clear_rect(e->canvas, v[0], v[1], v[2], v[3]));
+        if (!d_more_peek(e)->canvas) return JS_UNDEFINED;
+        return d_canvas_result(ctx, magic == C_FILL_RECT ? canvas_fill_rect(d_more_peek(e)->canvas, v[0], v[1], v[2], v[3]) :
+                                                   canvas_clear_rect(d_more_peek(e)->canvas, v[0], v[1], v[2], v[3]));
     }
     if (magic == C_CREATE_IMAGE || magic == C_GET_IMAGE) {
         int64_t x = 0, y = 0, w = 0, h = 0;
@@ -317,7 +327,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
             return d_error(ctx, "QuotaExceededError", "Canvas pixel read exceeds its work budget");
         if(magic==C_GET_IMAGE) {
             d_canvas_sync(e);
-            if(w && h && e->canvas && !canvas_origin_clean(e->canvas))
+            if(w && h && d_more_peek(e)->canvas && !canvas_origin_clean(d_more_peek(e)->canvas))
                 return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
         }
         JSValue image = d_image_data_new(ctx, (uint32_t)w, (uint32_t)h);
@@ -326,8 +336,8 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
             d_canvas_sync(e);
             canvas_rgba8_t view;
             if (d_image_data_view(dom, ctx, image, &view) < 0) { JS_FreeValue(ctx, image); return JS_EXCEPTION; }
-            if (e->canvas) {
-                canvas_status_t status = canvas_read_pixels(e->canvas, x, y, &view);
+            if (d_more_peek(e)->canvas) {
+                canvas_status_t status = canvas_read_pixels(d_more_peek(e)->canvas, x, y, &view);
                 if (status != CANVAS_OK) { JS_FreeValue(ctx, image); return d_canvas_result(ctx, status); }
             }
         }
@@ -349,15 +359,16 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         d_canvas_sync(e);
         canvas_rgba8_t view;
         if (d_image_data_view(dom, ctx, argv[0], &view) < 0) return JS_EXCEPTION;
-        if (!e->canvas || x1 <= x0 || y1 <= y0) return JS_UNDEFINED;
+        if (!d_more_peek(e)->canvas || x1 <= x0 || y1 <= y0) return JS_UNDEFINED;
         draw2d_damage_t dirty = {(uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1};
-        return d_canvas_result(ctx, canvas_put_pixels(e->canvas, &view, v[0], v[1], &dirty));
+        return d_canvas_result(ctx, canvas_put_pixels(d_more_peek(e)->canvas, &view, v[0], v[1], &dirty));
     }
-    if (magic == C_RESET) e->canvas_reset_pending = true;
+    /* A context's element has its DValueMore. */
+    if (magic == C_RESET) e->more->canvas_reset_pending = true;
     d_canvas_sync(e);
-    if (magic == C_LOST) return JS_NewBool(ctx, !e->canvas);
-    if (!e->canvas || magic == C_RESET) return JS_UNDEFINED;
-    return d_canvas_result(ctx, magic == C_SAVE ? canvas_save(e->canvas) : canvas_restore(e->canvas));
+    if (magic == C_LOST) return JS_NewBool(ctx, !d_more_peek(e)->canvas);
+    if (!d_more_peek(e)->canvas || magic == C_RESET) return JS_UNDEFINED;
+    return d_canvas_result(ctx, magic == C_SAVE ? canvas_save(d_more_peek(e)->canvas) : canvas_restore(d_more_peek(e)->canvas));
 }
 int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
@@ -399,19 +410,19 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
 {
     if (!dom || dom->closed || !out) return false;
     DValue *e = d_find(dom, node);
-    if (!e || !e->canvas_object) return false;
+    if (!e || !d_more_peek(e)->canvas_object) return false;
     d_canvas_sync(e);
-    return e->canvas && canvas_bitmap(e->canvas, out) == CANVAS_OK;
+    return d_more_peek(e)->canvas && canvas_bitmap(d_more_peek(e)->canvas, out) == CANVAS_OK;
 }
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
     if(!dom || dom->closed || !visit)return;
     for(DValue *e=dom->values;e;e=e->next) {
-        if(!e->canvas_object || !d_in_window_tree(dom,e->node))continue;
-        if(e->canvas_reset_pending){visit(opaque,e->node,0,0,NULL);continue;}
+        if(!d_more_peek(e)->canvas_object || !d_in_window_tree(dom,e->node))continue;
+        if(d_more_peek(e)->canvas_reset_pending){visit(opaque,e->node,0,0,NULL);continue;}
         draw2d_damage_t damage;canvas_bitmap_t bitmap;
-        if(e->canvas && canvas_damage(e->canvas,&damage)==CANVAS_OK &&
-           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(e->canvas,&bitmap)==CANVAS_OK)
+        if(d_more_peek(e)->canvas && canvas_damage(d_more_peek(e)->canvas,&damage)==CANVAS_OK &&
+           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK)
             visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
     }
 }
@@ -419,5 +430,5 @@ void os64_dom_canvas_painted(os64_dom_t *dom, const os64_html_node_t *node)
 {
     if (!dom || dom->closed) return;
     DValue *e = d_find(dom, node);
-    if (e && e->canvas) canvas_ack_damage(e->canvas);
+    if (e && d_more_peek(e)->canvas) canvas_ack_damage(d_more_peek(e)->canvas);
 }

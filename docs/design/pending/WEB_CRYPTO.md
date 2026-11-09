@@ -26,6 +26,13 @@ WPT's tier-2 pages, thousands of calls each, ran into the script
 deadline. The work is still done on the call; the promise now
 settles from a task (§ 5). The input-in-place dividend is unchanged.*
 
+*Tier 3c, RSA-OAEP and RSASSA-PKCS1-v1_5, was booked after 3b (Chris,
+2026-11-08): the corpus's RSA callers are telemetry, session replay,
+consent, a news-site verifier and two sign-in libraries, and no P5
+triage has met RSA as a page's wall, so it waits in DEBTS for a page
+that fails on it. When it is built it is both algorithms whole, as § 2
+cuts them, not the part the corpus happens to call.*
+
 ## 1. Why now, and what pages ask
 
 Two pages on the P5 die on the missing member today:
@@ -170,7 +177,23 @@ does not know.
   order, the spec is followed: an HKDF or PBKDF2 key in a format other
   than raw is NotSupportedError before its usages are checked, and
   deriveKey into HMAC with `length: 0` is get key length's TypeError,
-  not importKey's DataError.
+  not importKey's DataError. Tier 3b added: a compressed point (SEC 1's
+  `0x02`/`0x03` form) is refused with DataError, which the spec allows
+  and WPT marks optional, though other browsers take it (DEBTS); a
+  private key whose data carries a public point (a JWK's `x` and `y`, a
+  pkcs8's `publicKey`) must be `d`'s own, DataError otherwise, as other
+  browsers check (the spec says only "a valid key"); pkcs8 is exported
+  as other browsers write it and as WPT round-trips it byte for byte,
+  the ECPrivateKey without its own `[0]` parameters, which the spec's
+  text puts in; a pkcs8 is RFC 5208's version 0, as the spec's
+  PrivateKeyInfo is (RFC 5958's version 1 is refused), and a `d` whose
+  encoder dropped its leading zeros, or added more, is read as its value,
+  as BoringSSL reads it; ECDSA's nonce is RFC
+  6979's deterministic one, BearSSL's, so a key signs a message the same
+  way every time (any verifier takes it); a CryptoKeyPair's and an
+  exported JWK's members come in WebIDL's lexicographic order; and where
+  node departs from § 23.7.5 (exporting the wrong half of a pair, which
+  it calls NotSupportedError), the spec's InvalidAccessError is followed.
 - **Promises settle "in parallel"**: the spec computes off the event loop
   and queues a task to settle. See § 5.
 - **Inputs** are `BufferSource`: an ArrayBuffer or any view. The spec
@@ -248,12 +271,21 @@ does not know.
     pads on encrypt and checks on decrypt, a bad pad an OperationError.
   - **AES-KW** (RFC 3394) and **PBKDF2** (RFC 8018 over BearSSL's HMAC),
     a few dozen lines each.
-  - In tier 3, the **SubjectPublicKeyInfo** wrapper of a public key
-    (spki), a small DER reader and writer, since BearSSL decodes public
-    keys only inside certificates. ECDSA needs no DER at all: WebCrypto's
-    signature is fixed-width `r||s`, BearSSL's `_raw` sign and verify; its
-    raw EC public key is `0x04||X||Y`, which is `br_ec_public_key.q`; and
-    ECDH's `deriveBits` is the x-coordinate of the curve's `mul`.
+  - **spki and pkcs8** (tier 3b): a small DER reader and writer in
+    `subtle_core.c`, strict (definite, shortest lengths, nothing after
+    the value), since BearSSL decodes public keys only inside
+    certificates. ECDSA needs no DER at all: WebCrypto's signature is
+    fixed-width `r||s`, BearSSL's `_raw` sign and verify; its raw EC
+    public key is `0x04||X||Y`, which is `br_ec_public_key.q`; and ECDH's
+    `deriveBits` is the x-coordinate of the curve's `mul`, whose decoding
+    of the point checks it against the curve's equation (a point is
+    validated by multiplying it by one).
+- **The curves** are BearSSL's `br_ec_p256_m31` for P-256 and
+  `br_ec_prime_i31` for P-384 and P-521, the pair libtls uses. A
+  generated private key is `br_ec_keygen`'s draw below the order from an
+  HMAC-DRBG seeded with 48 bytes from the entropy hook; an imported one
+  is checked to lie between 1 and the order less one, which BearSSL's
+  multiplications (`mulgen`, `mul`) require and do not check.
 - **libdom links the BearSSL objects it uses privately** (question 4,
   answered). libdom.so is PIC, so what it links is the PIC family's
   BearSSL objects, the ones libtls.so is built from, as a subset list;
@@ -340,8 +372,9 @@ does not know.
   RSA key generation's below. The tier-3 page times 100,000 to a million
   iterations on the P5.
 - **RSA key generation blocks the page** for as long as it takes (a 2048-bit
-  key is the slow case; to be measured on the P5 in tier 3). One host in
-  the corpus generates RSA keys at all. If the P5 says it is too slow,
+  key is the slow case; to be measured on the P5 in tier 3c). Three hosts
+  in the corpus generate RSA keys: two through one session-replay
+  recorder, and one sign-in library. If the P5 says it is too slow,
   that operation alone moves to yonder's worker pool, then; it is the one
   operation where "in parallel" would be felt.
 - **A CryptoKey cannot be cloned** (`postMessage`, structured clone):
@@ -471,6 +504,44 @@ does not know.
 - `tools/pages/webcrypto-tier3.html`, the 3a section: 40 checks, every
   one PASS in node's WebCrypto and in yonder's window; its timing section
   measures PBKDF2 on the P5.
+**Tier 3b, as proved (2026-11-08):**
+- `tools/test_subtle_core_host.sh`: 429 checks, adding RFC 6979 A.2.5-A.2.7
+  (each curve's key, its public point, and its signatures of "sample" and
+  "test" under all four hashes, reproduced byte for byte, since BearSSL's
+  nonce is RFC 6979's, and verified; every vector first checked against
+  OpenSSL's verifier), a signature altered, shortened or with its halves
+  padded (a hand mutant without the length rule fails 24 of them), RFC
+  5903 § 8.1-8.3 from both sides, WPT's EC fixtures decoded and
+  re-encoded byte for byte, the containers' refusals (truncated, a byte
+  over, another algorithm, another curve in the ECPrivateKey, version
+  1), a `d` short and long of the curve's size, scalars at zero and at
+  the order, generated keys that sign and agree, and the registry's rows.
+- WPT WebCryptoAPI: 21,811 of 21,920 pass, 5,652 of them new, all joining
+  `[required]` (with the modern switch off, all 21,782 required tests
+  fail). Every 3b test passes but the 48 compressed-point cases, which
+  end PRECONDITION_FAILED as WPT allows; the hkdf and pbkdf2 pages'
+  "wrong (ECDH) key" tests pass now too. What fails is RSA-OAEP's wrapper
+  (39, tier 3c), X25519 (11, ruled out), and what tier 1 booked (11).
+- The DOM host's window subset, with 3b's cases: RFC 6979's key through
+  JWK import, its signature verified and reproduced, the four export
+  formats and their refusals for the wrong half, pkcs8 and spki round
+  trips, a compressed point, a point off the curve, unsupported and
+  misspelled curves, a JWK of another `crv` or `alg`, a key pair's shape,
+  P-521 signing, a mismatched JWK pair, RFC 5903's P-384 exchange at
+  null, 230 and 0 bits, every ECDH refusal in § 24.4.2's order, deriveKey
+  from ECDH, and EC keys wrapped as JWK under AES-KW and as pkcs8 and
+  spki under AES-GCM. Every expectation is node's WebCrypto's except
+  where § 3 says yonder follows the spec or WebIDL instead.
+- `tools/pages/webcrypto-tier3.html`, the 3b section: 36 checks (76 on
+  the page), every one PASS in yonder's window; node's WebCrypto passes
+  all but the wrong half exported as pkcs8, where node answers
+  NotSupportedError and the spec, and Chromium's source,
+  InvalidAccessError. Its second timing section times generation,
+  signing, verifying and an exchange on each curve on the P5.
+- A cold reader's findings (four comments that had gone half true, a
+  pkcs8 version 1 read where the spec's structure has only version 0, a
+  `d` with an extra leading zero refused where BoringSSL reads it) are
+  fixed in the same change.
 - **A validation page per tier, and a live page** (Chris, 2026-11-07:
   each tier shows it works on a page, ours or one on the Internet). Ours
   are `tools/pages/webcrypto-tier<n>.html`, which ship to `/tests/pages`:

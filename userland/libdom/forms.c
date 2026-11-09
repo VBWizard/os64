@@ -29,9 +29,11 @@ static JSValue fieldset_elements(os64_dom_t *dom, JSContext *ctx, const os64_htm
 {
     DValue *entry = d_find(dom, fieldset);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (entry->elements != NULL) return JS_DupValue(ctx, entry->elements->entry->value);
+    if (d_more_peek(entry)->elements != NULL) return JS_DupValue(ctx, d_more_peek(entry)->elements->entry->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue value = d_special_collection(dom, ctx, fieldset, D_QUERY_FIELDSET, NULL);
-    if (!JS_IsException(value)) entry->elements = JS_GetOpaque(value, dom->collection_class);
+    if (!JS_IsException(value)) more->elements = JS_GetOpaque(value, dom->collection_class);
     return value;
 }
 
@@ -39,9 +41,9 @@ static JSValue fieldset_elements(os64_dom_t *dom, JSContext *ctx, const os64_htm
  * one, else its text. */
 static JSValue output_default(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *output, DValue *entry)
 {
-    if (entry->output_default_set)
-        return JS_NewStringLen(ctx, entry->output_default != NULL ? entry->output_default : "",
-                               entry->output_default_len);
+    if (d_more_peek(entry)->output_default_set)
+        return JS_NewStringLen(ctx, d_more_peek(entry)->output_default != NULL ? d_more_peek(entry)->output_default : "",
+                               d_more_peek(entry)->output_default_len);
     return d_content_get(dom, ctx, output, D_TEXT_CONTENT);
 }
 
@@ -49,6 +51,8 @@ static JSValue output_default(os64_dom_t *dom, JSContext *ctx, const os64_html_n
  * thrown when there is no room, and then the override is as it was. */
 static bool keep_default(os64_dom_t *dom, JSContext *ctx, DValue *entry, const char *text, size_t length)
 {
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return false;
     char *copy = d_alloc(dom, length + 1);
     if (copy == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM string quota exceeded");
@@ -56,10 +60,10 @@ static bool keep_default(os64_dom_t *dom, JSContext *ctx, DValue *entry, const c
     }
     os64_memcpy(copy, text, length);
     copy[length] = '\0';
-    d_free(dom, entry->output_default);
-    entry->output_default = copy;
-    entry->output_default_len = length;
-    entry->output_default_set = true;
+    d_free(dom, more->output_default);
+    more->output_default = copy;
+    more->output_default_len = length;
+    more->output_default_set = true;
     return true;
 }
 
@@ -100,7 +104,7 @@ static JSValue output_member(os64_dom_t *dom, JSContext *ctx, const os64_html_no
         JS_FreeValue(ctx, now);
         d_string_free(dom, &kept);
         result = ok ? replace_text(dom, ctx, output, text) : JS_EXCEPTION;
-    } else if (!entry->output_default_set) {
+    } else if (!d_more_peek(entry)->output_default_set) {
         result = replace_text(dom, ctx, output, text);
     } else {
         DString given = {0};

@@ -213,14 +213,16 @@ JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
     const os64_html_node_t *node = d_node(dom,ctx,self);
     if (node == NULL) return JS_EXCEPTION;
     DValue *owner = d_find(dom,node);
-    if (owner->style != NULL) return JS_DupValue(ctx,owner->style->value);
+    if (d_more_peek(owner)->style != NULL) return JS_DupValue(ctx,d_more_peek(owner)->style->value);
+    DValueMore *more = d_more(dom,ctx,owner);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx,dom->style_class);
     DValue *entry = d_retain(dom,ctx,object);
     if (entry == NULL) return JS_EXCEPTION;
     entry->target = node;
     os64_html_hold(dom->document,node);
     JS_SetOpaque(object,entry);
-    owner->style = entry;
+    more->style = entry;
     return JS_DupValue(ctx,object);
 }
 

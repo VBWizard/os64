@@ -81,10 +81,11 @@ bool d_classic_match(const os64_html_node_t *root,
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
                               const os64_html_node_t *node, unsigned kind)
 {
-    DValue *entry = d_find(dom, node);
-    DQuery **slot = kind == D_QUERY_IMAGES ? &entry->images : kind == D_QUERY_FORMS ? &entry->forms :
-                    kind == D_QUERY_LINKS ? &entry->links : kind == D_QUERY_SCRIPTS ? &entry->scripts :
-                    &entry->elements;
+    DValueMore *more = d_more(dom, ctx, d_find(dom, node));
+    if (more == NULL) return JS_EXCEPTION;
+    DQuery **slot = kind == D_QUERY_IMAGES ? &more->images : kind == D_QUERY_FORMS ? &more->forms :
+                    kind == D_QUERY_LINKS ? &more->links : kind == D_QUERY_SCRIPTS ? &more->scripts :
+                    &more->elements;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(node) : node;
     JSValue value = d_special_collection(dom, ctx, root, kind, NULL);

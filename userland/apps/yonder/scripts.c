@@ -503,7 +503,9 @@ static size_t own_stack_bytes(void)
 
 // The runtime and its binding, made at the first script that runs. The heap
 // is the host's (options.memory_bytes, yonder.conf's script_memory_mb), else
-// libjs's standalone profile; source is yonder's own limit
+// libjs's standalone profile, and so is the binding's budget
+// (options.dom_bytes, libdom's share of page_memory_mb), else libdom's
+// default; source is yonder's own limit
 // (SCRIPT_SOURCE_MAX), which the fetches refuse past by a body's bytes and
 // the runtime by its decoded text, which can be longer. The stack
 // is the engine's share of yonder's window thread, which layout shares
@@ -530,6 +532,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
                                      &s->runtime, out) != OS64_JS_OK)
         return false;
     os64_dom_options_t options = os64_dom_default_options();
+    if (s->options.dom_bytes != 0)
+        options.max_bytes = s->options.dom_bytes;
     options.modern = s->options.modern;
     options.shadow_trees = s->options.shadow_trees;
     options.ranges = s->options.ranges;

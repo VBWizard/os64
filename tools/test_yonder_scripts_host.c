@@ -708,7 +708,7 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
     saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300], saved_cookies[16],
-    settings_report[256];
+    saved_page_memory[16], saved_script_memory[16], settings_report[256];
 /* yonder.conf's saved agent, "" for none. */
 static char saved_agent[300];
 /* What reading yonder.conf's profile answers instead, when not 0. */
@@ -721,7 +721,8 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
         os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
         os64_streq(key,"profile") ? saved_profile : os64_streq(key,"agent") ? saved_agent :
-        os64_streq(key,"cookies") ? saved_cookies : "";
+        os64_streq(key,"cookies") ? saved_cookies : os64_streq(key,"page_memory_mb") ? saved_page_memory :
+        os64_streq(key,"script_memory_mb") ? saved_script_memory : "";
     if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
@@ -872,6 +873,7 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 }
 static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
 static size_t probe_script_memory;  /* the next probe_page's script heap, bytes; 0: libjs's own */
+static yonder_page_memory_t probe_page_memory;  /* the next probe_page's document ceilings; 0s: the libraries' own */
 /* The window's agent's preset lines: not NULL, so a job handed none is told
  * from one handed the window's. */
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
@@ -880,6 +882,7 @@ static void probe_page(const char *html, bool scripts) {
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;
     g.modern=g.page.modern=!probe_modern_off;
     g.script_memory=probe_script_memory;
+    page_memory_set(probe_page_memory);
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -1224,6 +1227,68 @@ static void script_lifecycle(void) {
           yonder_scripts_heap_peak(g.page.scripts)<=os64_js_default_limits().memory_bytes,
           "a live runtime's heap peak holds what the page made");
     probe_drop();
+    /* The document side's ceilings are the host's (page_memory_mb, cut by
+     * yonder_page_memory_split): the tree's refuses a script's insert past
+     * it, and the layout's is libflow's budget. */
+    probe_page_memory=(yonder_page_memory_t){.tree=(size_t)1<<20, .layout=(size_t)48<<20};
+    /* The posts go in as markup, so no script object holds them and
+     * emptying the box gives their room back for the answer. */
+    probe_page("<h1 id=heading>before</h1><div id=box></div><script>var n='none',box=document.getElementById('box');"
+        "try{for(var i=0;i<100000;i++)box.insertAdjacentHTML('beforeend','<p>a few words to fill the tree</p>')}"
+        "catch(e){n=e.name}box.innerHTML='';"
+        "document.getElementById('heading').textContent=n;</script>",true);
+    check(s_env.max_arena_bytes==((size_t)48<<20),"the page's layout budget is the host's");
+    script_turn();
+    check(probe_text_is("heading","QuotaExceededError") && g.page.way.doc->peak_arena_bytes<=((size_t)1<<20),
+          "the page's tree is held to the host's ceiling, and a script's insert past it is refused");
+    probe_drop();
+    probe_page_memory=(yonder_page_memory_t){0};
+    probe_page("<h1 id=heading>before</h1><div id=box></div><script>var n='none',box=document.getElementById('box');"
+        "try{for(var i=0;i<3000;i++)box.insertAdjacentHTML('beforeend','<p>a few words to fill the tree</p>')}"
+        "catch(e){n=e.name}box.innerHTML='';"
+        "document.getElementById('heading').textContent=n;</script>",true);
+    script_turn();
+    check(probe_text_is("heading","none") && s_env.max_arena_bytes==0,
+          "with no ceilings from the host, the libraries' own hold the same page");
+    probe_drop();
+    /* libdom's share is the page's binding budget: wrapping elements past
+     * it is refused, where libdom's own 8 MiB holds them. */
+    probe_page_memory=(yonder_page_memory_t){.dom=(size_t)256<<10};
+    /* The full budget has no room left for an answer, so the refusal is
+     * read where yonder says what stopped a script. */
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];"
+        "for(var i=0;i<20000;i++)keep.push(document.createElement('i'));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    script_turn();
+    check(probe_text_is("heading","before") && strstr(g.status_text,"QuotaExceededError: DOM wrapper quota exceeded"),
+          "the page's DOM budget is the host's share");
+    probe_drop();
+    probe_page_memory=(yonder_page_memory_t){0};
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];"
+        "for(var i=0;i<20000;i++)keep.push(document.createElement('i'));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    script_turn();
+    check(probe_text_is("heading","held"),"the same page fits libdom's own budget");
+    probe_drop();
+    /* The cascade's own state is held to its share: a page with many rules
+     * comes up short under a small one, and is whole under libgarb's. */
+    {
+        static char many[96*1024];
+        size_t at=(size_t)snprintf(many,sizeof(many),"<style>");
+        for(int i=0;i<2000 && at<sizeof(many)-256;i++)
+            at+=(size_t)snprintf(many+at,sizeof(many)-at,".c%d p{margin:%dpx}",i,i);
+        snprintf(many+at,sizeof(many)-at,"</style><h1 id=heading>before</h1><p class=c1>a");
+        probe_page_memory=(yonder_page_memory_t){.cascade=(size_t)64<<10};
+        probe_page(many,false);
+        check(g.page.cascade!=NULL && garb_cascade_incomplete(g.page.cascade),
+              "the page's cascade is held to the host's ceiling for its state");
+        probe_drop();
+        probe_page_memory=(yonder_page_memory_t){0};
+        probe_page(many,false);
+        check(g.page.cascade!=NULL && !garb_cascade_incomplete(g.page.cascade),
+              "the same page's cascade is whole under libgarb's own ceiling");
+        probe_drop();
+    }
 }
 static void native_refusals(void) {
     unsigned refused_model=0, refused_layout=0, survived=0;
@@ -1311,6 +1376,26 @@ static void switch_cases(void) {
     settings_fixture.scripts.checked=true;
     settings_fixture.limit.value=12;
     check(yonder_settings_saved_script_seconds()==5,"a missing script time limit is the 5 s lean");
+    check(yonder_settings_saved_script_memory_mb()==512,"a missing script heap is 512 MiB");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a missing document side is 1024 MiB");
+    strcpy(saved_page_memory,"2048");
+    check(yonder_settings_saved_page_memory_mb()==2048,"page_memory_mb is read in MiB");
+    strcpy(saved_page_memory,"63");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a document side under 64 MiB is the default");
+    strcpy(saved_page_memory,"4097");
+    check(yonder_settings_saved_page_memory_mb()==1024,"a document side over 4096 MiB is the default");
+    saved_page_memory[0]=0;
+    {
+        yonder_page_memory_t m=yonder_page_memory_split(1024);
+        size_t ninth=((size_t)1024<<20)/9;
+        check(m.tree==2*ninth && m.layout==2*ninth && m.cascade==3*ninth && m.dom==2*ninth,
+              "the document side is cut in ninths: tree 2, layout 2, cascade 3, dom 2");
+        check(m.tree<=m.layout && m.tree<m.cascade && m.tree<=m.dom && m.tree+m.layout+m.cascade+m.dom<=(size_t)1024<<20,
+              "the tree's ceiling is the lowest, and the shares fit the whole");
+        yonder_page_memory_t big=yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_MAX);
+        check(big.cascade>m.cascade && big.cascade<((size_t)YONDER_PAGE_MEMORY_MB_MAX<<20),
+              "the largest document side splits without overflow");
+    }
     strcpy(saved_seconds,"61");
     check(yonder_settings_saved_script_seconds()==5,"a time limit outside 1 to 60 is the lean");
     saved_seconds[0]=0;
@@ -7035,6 +7120,9 @@ static void memory_census_cases(void) {
           "census: the record left behind still counts the scripts, taken before they were freed");
     check(has(file,"\nmemory dom: ") && has(file,"wrapper ") && has(file,"\nmemory script: objects "),
           "census: and has libdom by kind and the script heap by what it holds");
+    check(has(file,"\nmemory layout: styles ") && has(file,"; lines ") && has(file,"\nmemory cascade: ") &&
+          has(file,"; state "),
+          "census: and the layout and the cascade by part");
     check(has(file,"\nmemory timeline: +0s heap 64.0M script ") && has(file,"\ncensus: on; 2 samples every 10s;"),
           "census: and a timeline: the first sample and the one taken as the page was left");
     saved_census[0]=NULL;
@@ -7045,6 +7133,7 @@ static void memory_census_cases(void) {
     loop_drop();
     file=diag_file("/tmp/diag",name);
     check(has(file,"\nmemory: heap ") && !has(file,"memory dom") && !has(file,"memory timeline") &&
+          !has(file,"memory layout") && !has(file,"memory cascade") &&
           !has(file,"\ncensus: "),"census: its record has the summary and nothing more");
 }
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
@@ -11236,6 +11325,98 @@ static void diag_cases(void) {
     fake_reset();
 }
 
+/* A button the page draws (STYLED_BUTTONS.md): laid out, so its words and
+ * its elements are the page's to paint, and its widget rides over it
+ * unpainted, taking the click, the focus and the keys as the face's own
+ * button does. A button of text alone that the page left alone keeps the
+ * face's button. */
+static void styled_button_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} #styled{background:white;border:0}</style>"
+        "<button id=plain>Save</button><button id=styled>Go</button>"
+        "<button id=icon><b>B</b></button><button id=empty style='width:20px;height:20px'></button>"
+        "<p id=out>-</p><script>var o=document.getElementById('out'),n=0;"
+        "document.getElementById('icon').onclick=function(){n++;o.textContent=this.id+n;};"
+        "</script>",true);
+    script_turn();
+    forms_place();
+    const FormWidget *plain=probe_field("plain"),*styled=probe_field("styled");
+    const FormWidget *icon=probe_field("icon"),*empty=probe_field("empty");
+    check(plain!=NULL && !plain->w->hidden && plain->w->cls->paint!=NULL,
+        "styled button: one of text alone the page left alone is the face's, painted");
+    check(styled!=NULL && !styled->w->hidden && styled->w->cls->paint==NULL && styled->w->cls->event!=NULL &&
+          icon!=NULL && !icon->w->hidden && icon->w->cls->paint==NULL && icon->w->cls->event!=NULL &&
+          empty!=NULL && !empty->w->hidden && empty->w->cls->paint==NULL,
+        "styled button: a styled one, one holding an element and an empty one ride unpainted");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("icon"));
+    check(box!=NULL && !box->replaced && box->control>=0 && box->first!=NULL,
+        "styled button: one holding an element is laid out, its content boxed, still a control");
+    ui_click_on("icon");
+    check(probe_text_is("out","icon1") && icon->w->focused,
+        "styled button: a click on it is the button's click, and takes the focus");
+    ui_key_space();
+    check(probe_text_is("out","icon2"),
+        "styled button: Space presses it, as the face's button");
+    probe_drop();
+    /* The click is at what is under the pointer, inside the button, and
+     * bubbles: a page that delegates by its target reads the icon. */
+    static const char kTarget[]="<!doctype html><style>body{margin:0} button{padding:0;border:0;background:none}"
+        " #inner{display:block;width:40px;height:20px}</style>"
+        "<form id=f action=/sent><button id=go><span id=inner>B</span></button></form><p id=out>-</p>"
+        "<script>var o=document.getElementById('out');document.addEventListener('click',function(e){"
+        "o.textContent=e.target.id+'>'+e.currentTarget.nodeName;e.preventDefault();});</script>";
+    for(int classic=0;classic<2;classic++){
+        probe_modern_off=classic!=0;
+        probe_page(kTarget,true);
+        script_turn();
+        forms_place();
+        /* The pointer is where a person's click is: over the icon. Without
+         * modern pointers the press and release reach the widget through
+         * yonder's own dispatch, which says the click is the pointer's. */
+        os64_ui_widget_t *gw=probe_field("go")->w;
+        g.pointer_x=gw->bounds.x+2; g.pointer_y=gw->bounds.y+2;
+        if(classic){
+            g.root.bounds=g.view.bounds;
+            os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+            ev.mouse.x=g.pointer_x; ev.mouse.y=g.pointer_y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+            ui_dispatch(&ev); inputs_run();
+            ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+            ui_dispatch(&ev); inputs_run();
+        } else ui_click_on("go");
+        check(probe_text_is("out","inner>#document"),
+            classic ? "styled button: without modern pointers too, a click on its icon is targeted at the icon"
+                    : "styled button: a click on its icon is targeted at the icon, and bubbles");
+        /* Space on the focused button is the button's, though the pointer
+         * still rests on the icon. */
+        os64_ui_set_focus(&g.ui,gw);
+        ui_key_space();
+        check(probe_text_is("out","go>#document"),
+            classic ? "styled button: without modern pointers, Space is the button's, wherever the pointer rests"
+                    : "styled button: Space is the button's, wherever the pointer rests");
+        probe_drop();
+    }
+    probe_modern_off=false;
+    /* An inline button the page draws is an atom (HTML's button layout),
+     * so its widget rides at it like any other's. */
+    probe_page("<!doctype html><style>body{margin:0} .l{display:inline;background:none;border:0;padding:0}"
+        "</style><p>x <button class=l id=inl>more</button> y</p>",false);
+    forms_place();
+    check(probe_field("inl")!=NULL && !probe_field("inl")->w->hidden &&
+          probe_field("inl")->w->cls->paint==NULL,
+        "styled button: an inline one keeps its widget, unpainted");
+    probe_drop();
+    /* A transparent button laid over a field draws nothing at its centre,
+     * so the field stays drawn (flow_box_covered: a box covers only where
+     * it draws). */
+    probe_page("<!doctype html><style>body{margin:0} div{position:relative;width:200px;height:30px}"
+        " input{width:200px;height:30px;margin:0;padding:0;border:0} #over{position:absolute;left:0;top:0;"
+        "width:200px;height:30px;background:none;border:0;padding:0}</style>"
+        "<div><input id=q name=q><button id=over></button></div>",false);
+    forms_place();
+    check(probe_field("q")!=NULL && !probe_field("q")->w->hidden,
+        "styled button: a transparent one laid over a field does not hide it");
+    probe_drop();
+}
+
 /* A menu's invisible checkbox (MediaWiki Vector: absolute, width and
  * height 100%, opacity 0) covers its menu and nothing below it, so a link
  * under the menu is still the link under the pointer. */
@@ -12136,6 +12317,7 @@ int main(void)
     picture_memory_pages();
     local_link_cases();
     covered_link_cases();
+    styled_button_cases();
     clipped_control_cases();
     classic_downloaded_cases();
     downloads_list_cases();

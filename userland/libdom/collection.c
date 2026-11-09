@@ -246,13 +246,15 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, root);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DQuery *query = elements ? entry->children : entry->child_nodes;
+    DQuery *query = elements ? d_more_peek(entry)->children : entry->child_nodes;
     if (query != NULL) return JS_DupValue(ctx, query->entry->value);
+    DValueMore *more = elements ? d_more(dom, ctx, entry) : NULL;
+    if (elements && more == NULL) return JS_EXCEPTION;
     JSValue value = d_collection(dom, ctx, root, false, elements, NULL);
     if (!elements) value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
     query = JS_GetOpaque(value, dom->collection_class);
-    if (elements) entry->children = query;
+    if (elements) more->children = query;
     else entry->child_nodes = query;
     return value;
 }
@@ -262,7 +264,9 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, control);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (entry->labels != NULL) return JS_DupValue(ctx, entry->labels->entry->value);
+    if (d_more_peek(entry)->labels != NULL) return JS_DupValue(ctx, d_more_peek(entry)->labels->entry->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue value = d_special_collection(dom, ctx, control, D_QUERY_LABELS, NULL);
     if (JS_IsException(value)) return value;
     /* refresh() roots it at the control's tree, whose root moves with it. */
@@ -270,7 +274,7 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     query->owner = control;
     value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
-    entry->labels = query;
+    more->labels = query;
     return value;
 }
 
@@ -726,7 +730,9 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
         JS_ThrowTypeError(ctx, "Missing node wrapper");
         return NULL;
     }
-    DQuery **made = kind == D_QUERY_TBODIES ? &entry->bodies : &entry->members;
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return NULL;
+    DQuery **made = kind == D_QUERY_TBODIES ? &more->bodies : &more->members;
     if (*made != NULL) return *made;
     /* Children, but for a table's rows, which reach into its sections,
      * and a map's areas, which may lie anywhere below it. */
@@ -772,8 +778,10 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
 JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name)
 {
     DValue *entry = dom->radio_prototype != NULL ? d_find(dom, form) : NULL;
-    for (DQuery *made = entry != NULL ? entry->radio_lists : NULL; made != NULL; made = made->radio_next)
+    for (DQuery *made = entry != NULL ? d_more_peek(entry)->radio_lists : NULL; made != NULL; made = made->radio_next)
         if (os64_streq(made->named, name)) return JS_DupValue(ctx, made->entry->value);
+    DValueMore *more = entry != NULL ? d_more(dom, ctx, entry) : NULL;
+    if (entry != NULL && more == NULL) return JS_EXCEPTION;
     /* refresh() roots a form's controls at the document its form is in. */
     JSValue value = d_special_collection(dom, ctx, form, D_QUERY_CONTROLS, name);
     if (JS_IsException(value)) return value;
@@ -785,9 +793,9 @@ JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *fo
         JS_FreeValue(ctx, value);
         return JS_EXCEPTION;
     }
-    if (entry != NULL) {
-        query->radio_next = entry->radio_lists;
-        entry->radio_lists = query;
+    if (more != NULL) {
+        query->radio_next = more->radio_lists;
+        more->radio_lists = query;
     }
     return value;
 }
@@ -891,7 +899,9 @@ JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, document);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (entry->style_sheets != NULL) return JS_DupValue(ctx, entry->style_sheets->entry->value);
+    if (d_more_peek(entry)->style_sheets != NULL) return JS_DupValue(ctx, d_more_peek(entry)->style_sheets->entry->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue value = d_special_collection(dom, ctx, document, D_QUERY_SHEETS, NULL);
     if (JS_IsException(value)) return value;
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
@@ -901,7 +911,7 @@ JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
         JS_FreeValue(ctx, value);
         return JS_EXCEPTION;
     }
-    entry->style_sheets = query;
+    more->style_sheets = query;
     return value;
 }
 

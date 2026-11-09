@@ -27,6 +27,32 @@ SUBTLE_BEARSSL_SOURCES=(
     userland/libtls/upstream/src/hash/ghash_ctmul64.c
     userland/libtls/upstream/src/mac/hmac.c
     userland/libtls/upstream/src/kdf/hkdf.c
+    userland/libtls/upstream/src/ec/ec_p256_m31.c
+    userland/libtls/upstream/src/ec/ec_prime_i31.c
+    userland/libtls/upstream/src/ec/ec_secp256r1.c
+    userland/libtls/upstream/src/ec/ec_secp384r1.c
+    userland/libtls/upstream/src/ec/ec_secp521r1.c
+    userland/libtls/upstream/src/ec/ec_keygen.c
+    userland/libtls/upstream/src/ec/ecdsa_i31_sign_raw.c
+    userland/libtls/upstream/src/ec/ecdsa_i31_vrfy_raw.c
+    userland/libtls/upstream/src/ec/ecdsa_i31_bits.c
+    userland/libtls/upstream/src/rand/hmac_drbg.c
+    userland/libtls/upstream/src/codec/ccopy.c
+    userland/libtls/upstream/src/int/i31_add.c
+    userland/libtls/upstream/src/int/i31_bitlen.c
+    userland/libtls/upstream/src/int/i31_decmod.c
+    userland/libtls/upstream/src/int/i31_decode.c
+    userland/libtls/upstream/src/int/i31_encode.c
+    userland/libtls/upstream/src/int/i31_fmont.c
+    userland/libtls/upstream/src/int/i31_iszero.c
+    userland/libtls/upstream/src/int/i31_modpow.c
+    userland/libtls/upstream/src/int/i31_montmul.c
+    userland/libtls/upstream/src/int/i31_muladd.c
+    userland/libtls/upstream/src/int/i31_ninv31.c
+    userland/libtls/upstream/src/int/i31_rshift.c
+    userland/libtls/upstream/src/int/i31_sub.c
+    userland/libtls/upstream/src/int/i31_tmont.c
+    userland/libtls/upstream/src/int/i32_div32.c
 )
 SUBTLE_BEARSSL_FLAGS=(-D_DEFAULT_SOURCE -include userland/libtls/port/config.h
     -Iuserland/libtls/upstream/inc -Iuserland/libtls/upstream/src)

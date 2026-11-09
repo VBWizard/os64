@@ -22,7 +22,12 @@ LIBDOM_SRCS += libdom/subtle.c libdom/subtle_core.c
 LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 hash/sha2small hash/sha2big \
     codec/dec32be codec/enc32be codec/dec64be codec/enc64be codec/dec32le codec/enc32le codec/dec64le codec/enc64le \
     symcipher/aes_common symcipher/aes_ct64 symcipher/aes_ct64_enc symcipher/aes_ct64_dec symcipher/aes_ct64_cbcenc \
-    symcipher/aes_ct64_cbcdec symcipher/aes_ct64_ctr aead/gcm hash/ghash_ctmul64 mac/hmac kdf/hkdf)
+    symcipher/aes_ct64_cbcdec symcipher/aes_ct64_ctr aead/gcm hash/ghash_ctmul64 mac/hmac kdf/hkdf \
+    ec/ec_p256_m31 ec/ec_prime_i31 ec/ec_secp256r1 ec/ec_secp384r1 ec/ec_secp521r1 ec/ec_keygen \
+    ec/ecdsa_i31_sign_raw ec/ecdsa_i31_vrfy_raw ec/ecdsa_i31_bits rand/hmac_drbg codec/ccopy \
+    int/i31_add int/i31_bitlen int/i31_decmod int/i31_decode int/i31_encode int/i31_fmont \
+    int/i31_iszero int/i31_modpow int/i31_montmul int/i31_muladd int/i31_ninv31 int/i31_rshift \
+    int/i31_sub int/i31_tmont int/i32_div32)
 # The frames row (IFRAME.md): HTMLIFrameElement.
 LIBDOM_SRCS += libdom/frames.c
 # P2a: a script's failures, as the window's error and rejection events.

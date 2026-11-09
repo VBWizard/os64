@@ -5,9 +5,9 @@
 // host suite proves its formats and byte budgets without a page.
 //
 // A SHEET is one moment's answer: each owner's total, the process heap
-// around them, and — in the census tier — libdom's kinds and the script
-// heap's census. A TIMELINE keeps a bounded run of sheets' totals across
-// a page's life.
+// around them, and — in the census tier — libdom's kinds, the layout's and
+// the cascade's parts, and the script heap's census. A TIMELINE keeps a
+// bounded run of sheets' totals across a page's life.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -15,6 +15,10 @@
 
 #define YONDER_CENSUS_OWNERS 16
 #define YONDER_CENSUS_PARTS 24
+// An owner whose parts the census tier names (`memory layout`, `memory
+// cascade`), and the most parts one may name.
+typedef enum { YONDER_CENSUS_OF_LAYOUT, YONDER_CENSUS_OF_CASCADE, YONDER_CENSUS_OF_N } yonder_census_of_t;
+#define YONDER_CENSUS_FEW 4
 #define YONDER_CENSUS_SAMPLES 32
 // The record's byte budgets (MEMORY_CENSUS.md § 2): the summary line every
 // record carries, and everything a censused page adds to it.
@@ -42,6 +46,8 @@ typedef struct {
     // Census tier only.
     yonder_census_entry_t dom[YONDER_CENSUS_PARTS];
     int32_t ndom;
+    yonder_census_entry_t parts[YONDER_CENSUS_OF_N][YONDER_CENSUS_FEW];
+    int32_t nparts[YONDER_CENSUS_OF_N];
     bool script_known;
     os64_js_heap_census_t script;
     uint64_t cost_us;
@@ -68,6 +74,9 @@ void yonder_census_owner(yonder_census_sheet_t *sheet, const char *name, uint64_
                          const char *unit);
 // One of libdom's kinds, census tier.
 void yonder_census_dom_kind(yonder_census_sheet_t *sheet, const char *name, uint64_t bytes, uint64_t blocks);
+// One part of an owner the census tier breaks down; past
+// YONDER_CENSUS_FEW it is dropped.
+void yonder_census_part(yonder_census_sheet_t *sheet, yonder_census_of_t of, const char *name, uint64_t bytes);
 
 // The summary (the record's `memory` line, its value only): the process
 // heap first, as mapped, with how much of what is live in it no owner
@@ -82,6 +91,10 @@ size_t yonder_census_summary(const yonder_census_sheet_t *sheet, char *out, size
 // Zero length when the sheet has none.
 size_t yonder_census_dom_line(const yonder_census_sheet_t *sheet, char *out, size_t cap);
 size_t yonder_census_script_line(const yonder_census_sheet_t *sheet, char *out, size_t cap);
+// An owner's parts (`memory layout`, `memory cascade`), biggest first, as
+// `name value` separated by "; ", empty ones left out. Zero length when
+// the sheet names none.
+size_t yonder_census_parts_line(const yonder_census_sheet_t *sheet, yonder_census_of_t of, char *out, size_t cap);
 
 // THE TIMELINE. Begins empty with the first interval.
 void yonder_census_timeline_init(yonder_census_timeline_t *tl);

@@ -177,13 +177,44 @@ bool garb_cascade_matches_scoped(const garb_cascade_t *cascade, const garb_sheet
 bool garb_cascade_retain(garb_cascade_t *cascade);
 /* Consume this cascade's native change reader and update affected winners.
  * Sheets and environment must be unchanged. False requests a fresh cascade:
- * lost history, broad dependencies/dirty sets, arena renewal or refusal.
+ * lost history, selectors it cannot follow, broad dirty sets, arena renewal
+ * or refusal; garb_cascade_update_refusal names which.
  * On failure, previously returned values remain alive but no new queries may
  * use this cascade until it is replaced. On success, old values also remain
  * alive until free, for displayed animation records borrowing keyframes.
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
+// The most anchored :has() compounds (garb_anchor_t) a cascade tracks: each
+// is a bit every element's record keeps, what the compound answered there
+// when last asked, so an update can tell where the answer turned. A cascade
+// whose rules hold more is built without a change reader.
+#define GARB_ANCHORS_MAX 64
+// Why the latest garb_cascade_update answered false; GARB_UPDATE_DONE
+// before any and after one that answered true.
+typedef enum {
+    GARB_UPDATE_DONE,
+    GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
+    GARB_UPDATE_FAILED_BEFORE,  // an earlier update failed: a fresh cascade is owed
+    GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
+    GARB_UPDATE_ANCHORS,        // more anchored :has() compounds than GARB_ANCHORS_MAX
+    GARB_UPDATE_BARE_ANCHOR,    // an anchored :has() with nothing cheaper to test first
+    GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
+    GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
+    GARB_UPDATE_CAP,            // as many updates as one cascade takes
+    GARB_UPDATE_RETAINED,       // what updates added reached the retained budget
+    GARB_UPDATE_ATTRIBUTES,     // style attributes reparsed reached it
+    GARB_UPDATE_HISTORY,        // the document's change log could not be read
+    GARB_UPDATE_BODY_HINT,      // a <body> presentational attribute changed
+    GARB_UPDATE_SLOT_LEFT,      // a <slot> left a tree
+    GARB_UPDATE_BROAD,          // the changes reached more than half the elements
+    GARB_UPDATE_SHORT,          // a recompute came up short
+    GARB_UPDATE_NO_MEMORY,      // a record, the dirty list or the document's pin had none
+    GARB_UPDATE_REASONS
+} garb_update_refusal_t;
+garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);
+// A reason's name for a record ("broad", "anchors"); "?" past the enum.
+const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // Whether this cascade keeps a change reader for incremental updates. False
 // lets hosts skip speculative geometry snapshots whose generation cannot
 // survive a DOM change. True is not a promise that an update will succeed:
@@ -250,8 +281,18 @@ void garb_cascade_free(garb_cascade_t *c);
  * attribute's parse, and the slot table and dirty list it keeps on the
  * heap, at their capacity. Scratch a call frees before it returns is not
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
- * attributes, no walk of the rules. */
+ * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
+/* The same, by part: `state` is the cascade's own arena and the record
+ * itself, `reads` what it read from the sheets, `attributes` the `style`
+ * attributes' parses, `tables` the slot table and dirty list on the heap.
+ * The first two are held to ceilings of their own and each attribute's
+ * parse to another (garb_cascade_limits_t), which is why they are told
+ * apart. NULL answers zeros. */
+typedef struct {
+    size_t state, reads, attributes, tables;
+} garb_cascade_parts_t;
+garb_cascade_parts_t garb_cascade_parts(const garb_cascade_t *c);
 
 // One `@font-face` rule (Fonts 4 § 4), read whole: the family it names; its
 // sources in order — a url() as written, resolved by whoever fetches it

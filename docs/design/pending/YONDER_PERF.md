@@ -756,17 +756,19 @@ changed, which is perf-4's whole point. Nothing said why.
 
 **What it found.** In QEMU, every refusal was the same one: *an element
 with no box of its own, `span.home-scratch-character-performer`*. That
-span is inside the Scratch 2000 shop's `<button>`, and a button is a
-replaced element here (boxes.c `replaced`): its widget draws it, and
-nothing inside it gets a box. The span's looping `transform` changed its
+span is inside the Scratch 2000 shop's `<button>`, and a button was then a
+replaced element (boxes.c `replaced`): its widget drew it, and nothing
+inside it got a box. (Since STYLED_BUTTONS.md a button holding an element
+is laid out, its span boxed and marked as any element's; a `select`'s
+options are the content no box stands for.) The span's looping `transform` changed its
 style at every frame, and "no box of its own" refuses the whole page's
 parts, because it was written for `display: contents`, whose descendants
 draw what it changes.
 
 **The rule, fixed.** An element that no box stands for, and nothing
 inside it either (`draws_none`), shows nothing of what changed, so its
-change is skipped rather than refused: a button's content, what is under
-`display: none`. `display: contents` still refuses, because its
+change is skipped rather than refused: a replaced control's content, what
+is under `display: none`. `display: contents` still refuses, because its
 descendants have boxes. Asking the new tree alone is asking both: the box
 compare has already proved the trees' boxes stand for the same nodes.
 

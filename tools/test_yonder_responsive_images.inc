@@ -164,6 +164,9 @@ static void responsive_script_cases(void)
         "<canvas id=c width=220 height=110></canvas><p id=out>waiting</p>"
         "<script>var loads=0,i=document.getElementById('pic'),c=document.getElementById('c').getContext('2d');"
         "i.onload=function(){if(++loads>1){document.getElementById('out').textContent='duplicate';return;}"
+        "var hits=0,listen=function(){hits++;};i.addEventListener('probe',listen);i.dispatchEvent(new Event('probe'));"
+        "i.removeEventListener('probe',listen);i.dispatchEvent(new Event('probe'));i.onclick=listen;i.onclick=null;"
+        "if(hits!==1){document.getElementById('out').textContent='listener changes after completion';return;}"
         "c.imageSmoothingEnabled=false;c.drawImage(i,0,0);"
         "if(i.clientWidth!==200 || i.clientHeight!==100){document.getElementById('out').textContent='stale geometry';return;}"
         "var edge=c.getImageData(200,0,1,1).data[3];"
@@ -175,7 +178,7 @@ static void responsive_script_cases(void)
     for(int t=0;t<8;t++){responsive_drain();script_turn();}
     /* Nearest-neighbor samples the center of the 2x2 source crop. */
     check(probe_text_is("out","200,100,0,101,41,true"),
-          "responsive Canvas: natural size, default destination and cropped source use CSS dimensions");
+          "responsive Canvas: completed-image listener changes and density-correct natural size, destination and crop");
     uint64_t generation=image_source(&g.page,probe_id("pic"))->generation;
     responsive_set(probe_id("pic"),"sizes","200px");
     script_turn();responsive_drain();script_turn();

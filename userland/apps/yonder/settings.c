@@ -28,6 +28,7 @@
 #define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
 #define CONF_SCRIPT_MEMORY_MB "script_memory_mb"
+#define CONF_PAGE_MEMORY_MB "page_memory_mb"
 #define CONF_CENSUS "census"
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
@@ -216,10 +217,29 @@ uint32_t yonder_settings_saved_script_memory_mb(void)
     if (os64_conf_get(CONF_NAME, CONF_SCRIPT_MEMORY_MB, v, sizeof(v)) != 0)
         return YONDER_SCRIPT_MEMORY_MB_DEFAULT;
     if (!os64_parse_u64(v, &mb) || mb < YONDER_SCRIPT_MEMORY_MB_MIN || mb > YONDER_SCRIPT_MEMORY_MB_MAX) {
-        os64_debug_log("yonder: yonder.conf's script_memory_mb is not 16 to 2048; using 256");
+        os64_debug_log("yonder: yonder.conf's script_memory_mb is not 16 to 2048; using 512");
         return YONDER_SCRIPT_MEMORY_MB_DEFAULT;
     }
     return (uint32_t)mb;
+}
+
+uint32_t yonder_settings_saved_page_memory_mb(void)
+{
+    char v[16];
+    uint64_t mb;
+    if (os64_conf_get(CONF_NAME, CONF_PAGE_MEMORY_MB, v, sizeof(v)) != 0)
+        return YONDER_PAGE_MEMORY_MB_DEFAULT;
+    if (!os64_parse_u64(v, &mb) || mb < YONDER_PAGE_MEMORY_MB_MIN || mb > YONDER_PAGE_MEMORY_MB_MAX) {
+        os64_debug_log("yonder: yonder.conf's page_memory_mb is not 64 to 4096; using 1024");
+        return YONDER_PAGE_MEMORY_MB_DEFAULT;
+    }
+    return (uint32_t)mb;
+}
+
+yonder_page_memory_t yonder_page_memory_split(uint32_t mb)
+{
+    size_t ninth = ((size_t)mb << 20) / 9;
+    return (yonder_page_memory_t){.tree = 2 * ninth, .layout = 2 * ninth, .cascade = 3 * ninth, .dom = 2 * ninth};
 }
 
 typedef struct {

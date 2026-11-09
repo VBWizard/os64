@@ -188,7 +188,9 @@ static JSValue select_collection(os64_dom_t *dom, JSContext *ctx, const os64_htm
 {
     DValue *entry = d_find(dom, select);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DQuery **slot = selected ? &entry->selected_options : &entry->options;
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
+    DQuery **slot = selected ? &more->selected_options : &more->options;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     JSValue value = d_special_collection(dom, ctx, select, selected ? D_QUERY_SELECTED_OPTIONS : D_QUERY_OPTIONS,
                                          NULL);

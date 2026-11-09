@@ -174,29 +174,21 @@ enum {
     D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
     D_UI_SUBMIT, D_UI_POINTER, D_UI_KINDS
 };
-/* A wrapper, or another engine value the binding holds strongly. A node's
- * wrapper also carries the node's listener list, in the order listeners and
- * handler slots were first added, and the element's views (its style, its
- * classList, a link's relList, its dataset, its attributes), each made
- * once. A view's own entry holds the element it stands for as `target`; so
- * does an Attr's while it is attached (attr.c). */
-struct DValue {
-    JSValue value;
-    DValue *next, *hash_next;
-    const os64_html_node_t *node, *target;
-    os64_dom_t *dom;
+/* What a DValue carries that most never need: an element's views, a
+ * document's collections, canvas state and the rest of what one kind of
+ * node or object asks for. A wrapper is made by the thousand and most hold
+ * nothing here, so this record is made the first time something needs one
+ * of its members (d_more) and read through d_more_peek, which answers an
+ * empty record for an entry that has none. */
+typedef struct DValueMore {
     DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
-    /* An Attr's own entry: its record (attr.c). */
-    struct DAttr *attr;
     /* Canvas bitmap and stable context identity belong to the element entry. */
     canvas_context_t *canvas;
     DValue *canvas_object;
     canvas_gradient_t *canvas_gradient;
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
-    bool image_reported;
-    uint64_t image_generation;
-    DQuery *child_nodes, *children, *images, *forms, *links, *scripts, *elements;
+    DQuery *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
@@ -223,18 +215,37 @@ struct DValue {
     char *output_default;
     size_t output_default_len;
     bool output_default_set;
+    /* A document's DOMImplementation, made when first asked for. */
+    DValue *implementation;
+} DValueMore;
+/* A wrapper, or another engine value the binding holds strongly: the
+ * members an entry of any kind is likely to use, among them a node's
+ * listener list, in the order listeners and handler slots were first
+ * added, and its childNodes, which scripts ask of nodes of every kind; the
+ * rest of what an entry can carry is in its DValueMore. A view's own entry holds the element it stands for as
+ * `target`; so does an Attr's while it is attached (attr.c). */
+struct DValue {
+    JSValue value;
+    DValue *next, *hash_next;
+    const os64_html_node_t *node, *target;
+    os64_dom_t *dom;
     DListener *listeners, *last_listener;
+    DQuery *child_nodes;
+    /* An Attr's own entry: its record (attr.c). Here and not in the
+     * DValueMore because every Attr's entry has one. */
+    struct DAttr *attr;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
      * window's. Read only while the node is the root of a tree no document
      * holds (d_node_document). */
     const os64_html_node_t *document;
-    /* A document's DOMImplementation, made when first asked for, and what
-     * kind of document it is. */
-    DValue *implementation;
+    /* Made by d_more, freed with the entry; NULL until then. */
+    DValueMore *more;
+    /* What kind of document a document's entry is (D_DOCUMENT_*). */
     uint8_t document_type;
     /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
     uint8_t tokens;
+    bool image_reported;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -243,7 +254,13 @@ struct DValue {
      * a listener is added or removed or a handler set on it (an
      * AbortSignal's GC clause, abort.c); nothing else reads it. */
     bool engine_held;
-    void (*listeners_changed)(JSRuntime *rt, DValue *entry);
+    /* Plain engine-held targets use the listener hook; node wrappers use the
+     * image generation. Sharing the slot keeps completion polling allocation
+     * free without growing every node's wrapper. */
+    union {
+        void (*listeners_changed)(JSRuntime *rt, DValue *entry);
+        uint64_t image_generation;
+    };
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
  * HTML documents; createDocument and `new Document()` make XML documents
@@ -730,6 +747,23 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
+/* Undoes the latest d_retain, for a caller whose next step failed: `entry`
+ * must still be the registry's head, nothing retained since, and its value
+ * is freed with it. */
+void d_unretain(os64_dom_t *dom, JSContext *ctx, DValue *entry);
+/* An entry's DValueMore to read: its own, or an empty one when it has
+ * none. Never written through. */
+extern const DValueMore d_no_more;
+static inline const DValueMore *d_more_peek(const DValue *entry)
+{
+    return entry != NULL && entry->more != NULL ? entry->more : &d_no_more;
+}
+/* An entry's DValueMore to write, made zeroed the first time; NULL when the
+ * budget refuses it, with a QuotaExceededError pending on `ctx` when one is
+ * given. */
+DValueMore *d_more(os64_dom_t *dom, JSContext *ctx, DValue *entry);
+/* Frees the entry's DValueMore, after its members have been released. */
+void d_more_free(os64_dom_t *dom, DValue *entry);
 /* The function `name` of `from`, taken at install, before any page ran,
  * and kept for the binding's life (the registry owns the reference
  * d_retain is given): the engine's own, whatever a page later puts there.

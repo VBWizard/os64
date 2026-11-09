@@ -36,9 +36,38 @@
 // lives in it beside everything the app builds, and the two together pass
 // libjs's standalone 64 MiB on a large app; the record's `script heap`
 // line says what a page held.
-#define YONDER_SCRIPT_MEMORY_MB_DEFAULT 256
+#define YONDER_SCRIPT_MEMORY_MB_DEFAULT 512
 #define YONDER_SCRIPT_MEMORY_MB_MIN 16
 #define YONDER_SCRIPT_MEMORY_MB_MAX 2048
+
+// A page's document side, in MiB (yonder.conf's `page_memory_mb`): the
+// budget its tree, its layout, its cascade and libdom's records for its
+// scripts each take a share of as their ceiling (yonder_page_memory_split).
+// A feed that keeps every post it has shown keeps all four growing; the
+// record's `memory` line says what a page held. Its scripts' heap and its
+// pictures have ceilings of their own.
+#define YONDER_PAGE_MEMORY_MB_DEFAULT 1024
+#define YONDER_PAGE_MEMORY_MB_MIN 64
+#define YONDER_PAGE_MEMORY_MB_MAX 4096
+
+// Each store's ceiling, in bytes, cut from `page_memory_mb` (MiB) in
+// ninths: the tree 2 (libhtml's arena), the layout 2 (each of the two
+// arenas libflow lets a layout multiply, its boxes and its lines), the
+// cascade's own state 3, libdom 2 — the ratio of libhtml's, libflow's and
+// libgarb's defaults (64, 64 and 96 MiB), with libdom's beside the tree's.
+// THE TREE IS THE FIRST WALL: its refusal reaches the script
+// that asked to insert as a QuotaExceededError and leaves the document
+// whole, while a layout or a cascade that runs short does so silently (the
+// bottom of the page missing, or unstyled), and a short cascade tracks no
+// changes. A cascade's reading of the sheets grows with the sheets, not
+// the page, and keeps libgarb's ceiling (GARB_CASCADE_READ_MAX). What has
+// no ceiling of its own grows one per element, so the tree's bounds it: a
+// layout's computed styles, and a cascade's style attributes (each parse
+// held to libgarb's ceiling for one).
+typedef struct {
+    size_t tree, layout, cascade, dom;
+} yonder_page_memory_t;
+yonder_page_memory_t yonder_page_memory_split(uint32_t mb);
 
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
@@ -106,6 +135,9 @@ uint32_t yonder_settings_saved_script_seconds(void);
 // The saved script heap (`script_memory_mb = 512`), whole MiB from
 // YONDER_SCRIPT_MEMORY_MB_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_memory_mb(void);
+// The saved document side (`page_memory_mb = 2048`), whole MiB from
+// YONDER_PAGE_MEMORY_MB_MIN to _MAX; the default when absent or not one.
+uint32_t yonder_settings_saved_page_memory_mb(void);
 // Whether pages on `host` are censused (MEMORY_CENSUS.md § 7): a
 // `census = <host>` line names that host or a parent of it, or says `*`,
 // which alone names "" (a page with no host).

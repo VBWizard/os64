@@ -302,7 +302,8 @@ cache_dir = /var/cache/yonder
 | `appearance` | `dark` or `light` pages | `light` |
 | `scripts` | `on` or `off`: whether a page's JavaScript runs | `off` |
 | `script_seconds` | how long one piece of a page's JavaScript may run, 1 to 60 seconds | 5 |
-| `script_memory_mb` | how much memory one page's JavaScript may hold, 16 to 2048 megabytes; read when yonder starts | 256 |
+| `script_memory_mb` | how much memory one page's JavaScript may hold, 16 to 2048 megabytes; read when yonder starts | 512 |
+| `page_memory_mb` | the memory budget one page's document is cut from, 64 to 4096 megabytes: its tree, its layout, its styles and the objects its scripts are given each take a share as their ceiling (the tree two ninths, the layout two, the styles three, the objects two). No share is smaller than the tree's, because the tree's refusal is the one a page's scripts are told about. What reading the stylesheets costs keeps a ceiling of its own, the layout's computed styles (one for each element) are bounded by the tree's, and a page's JavaScript (`script_memory_mb`) and pictures are counted apart; read when yonder starts | 1024 |
 | `animations` | `on` or `off`: whether a page's CSS animations move | `on` |
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
@@ -315,7 +316,7 @@ cache_dir = /var/cache/yonder
 | `cookies` | `on`, `session` or `off`: whether cookies are kept in the profile's `cookies` file, only while the window is open, or not at all | `on` |
 
 A value yonder cannot use is ignored and the default used; a bad `agent`,
-`cache_mb`, `zoom`, `script_seconds`, `script_memory_mb` or `diagnostics` also says so in the
+`cache_mb`, `zoom`, `script_seconds`, `script_memory_mb`, `page_memory_mb` or `diagnostics` also says so in the
 log, and a bad `modern`, `profile`, `downloads` or `cookies` on the status line.
 
 ## Fonts
