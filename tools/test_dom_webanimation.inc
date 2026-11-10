@@ -595,8 +595,342 @@ static void wa_replace(void)
     fixture_free(&f);
 }
 
+/* Composite (slice B2): each keyframe hands libflow its own composite, or
+ * its effect's where it said auto, and the effect its iterationComposite;
+ * changing the effect's composite changes what an auto keyframe hands. */
+static void wa_composite(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    const os64_html_node_t *box = wa_by_id(f.document->document, "box");
+    const struct garb_effect *const *fx = NULL;
+    p2b_script(&f,
+        "globalThis.ca=document.getElementById('box').animate([{marginLeft:'0px'},{marginLeft:'10px',composite:'replace'}],"
+        "{duration:1000,composite:'add',iterationComposite:'accumulate'});ca.pause();",
+        "web animations: an effect that adds, one keyframe replacing");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 1 && fx[0]->frames[0].composite == GARB_COMPOSITE_ADD &&
+              fx[0]->frames[1].composite == GARB_COMPOSITE_REPLACE && fx[0]->iteration_accumulate,
+          "web animations: auto takes the effect's, its own stays");
+    p2b_script(&f, "ca.effect.composite='accumulate';ca.effect.iterationComposite='replace';",
+               "web animations: the effect's composite changed");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 1 &&
+              fx[0]->frames[0].composite == GARB_COMPOSITE_ACCUMULATE &&
+              fx[0]->frames[1].composite == GARB_COMPOSITE_REPLACE && !fx[0]->iteration_accumulate,
+          "web animations: and an auto keyframe follows it");
+    p2b_script(&f, "ca.effect.setKeyframes([{marginLeft:'0px'},{marginLeft:'10px'}]);",
+               "web animations: new keyframes, both auto");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 1 &&
+              fx[0]->frames[1].composite == GARB_COMPOSITE_ACCUMULATE,
+          "web animations: new keyframes take the effect's");
+    fixture_free(&f);
+}
+
+/* A host's CSS animations (os64_dom_set_css_animations), as libflow's
+ * timeline would answer: a table the cases write, whose drive records
+ * what a CSSAnimation handed it. */
+typedef struct {
+    os64_dom_css_animation_t r;
+    bool scripted;
+} WaCssRecord;
+static WaCssRecord wa_css_records[8];
+static int32_t wa_css_n, wa_css_counted_current;
+static uint64_t wa_css_version;
+
+static int32_t wa_css_count(void *opaque, bool current)
+{
+    (void)opaque;
+    wa_css_counted_current += current;
+    return wa_css_n;
+}
+
+static bool wa_css_at(void *opaque, int32_t i, os64_dom_css_animation_t *out)
+{
+    (void)opaque;
+    if (i < 0 || i >= wa_css_n) return false;
+    *out = wa_css_records[i].r;
+    return true;
+}
+
+static bool wa_css_drive(void *opaque, uint64_t id, bool paused, bool canceled, double start, double hold, double rate)
+{
+    (void)opaque;
+    for (int32_t i = 0; i < wa_css_n; i++) {
+        os64_dom_css_animation_t *r = &wa_css_records[i].r;
+        if (r->id != id) continue;
+        wa_css_records[i].scripted = true;
+        r->paused = paused;
+        r->canceled = canceled;
+        r->start_ms = start;
+        r->hold_ms = hold;
+        r->rate = rate;
+        return true;
+    }
+    return false;
+}
+
+static uint64_t wa_css_version_of(void *opaque)
+{
+    (void)opaque;
+    return wa_css_version;
+}
+
+static WaCssRecord *wa_css_add(uint64_t id, const os64_html_node_t *element, const char *name, double start,
+                               double duration, double delay, double iterations)
+{
+    WaCssRecord *c = &wa_css_records[wa_css_n++];
+    memset(c, 0, sizeof(*c));
+    c->r = (os64_dom_css_animation_t){.id = id, .element = element, .name = name, .name_len = strlen(name),
+                                      .start_ms = start, .rate = 1, .duration_ms = duration, .delay_ms = delay,
+                                      .iterations = iterations, .direction = GARB_DIRECTION_NORMAL,
+                                      .fill = GARB_FILL_NONE};
+    wa_css_version++;
+    return c;
+}
+
+static void wa_css_install(DomFixture *f)
+{
+    wa_css_n = 0;
+    wa_css_counted_current = 0;
+    os64_dom_css_animations_t css = {wa_css_count, wa_css_at, wa_css_drive, wa_css_version_of, NULL};
+    os64_dom_set_css_animations(f->binding, &css);
+}
+
+/* CSSAnimation (WEB_ANIMATIONS.md § 3): getAnimations answers the host's
+ * CSS animations first, each the same object while it lives; the
+ * CSSAnimation's state machine drives the host's clock from then on —
+ * pause, rate, cancel — and animation-play-state's changes reach it as a
+ * pause or a play; one whose CSS animation went is canceled. */
+static void wa_css(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    wa_css_install(&f);
+    const os64_html_node_t *one = wa_by_id(f.document->document, "one"), *two = wa_by_id(f.document->document, "two");
+    wa_css_add(7, one, "spin", 1000, 1000, 0, INFINITY);
+    WaCssRecord *fade = wa_css_add(9, two, "fade", 900, 500, 0, 1);
+    fade->r.paused = fade->r.style_paused = true;
+    fade->r.hold_ms = 200;
+    fade->r.fill = GARB_FILL_FORWARDS;
+    check(os64_dom_web_animations_next(f.binding) == UINT64_MAX,
+          "web animations: css: no CSSAnimation and no listener, nothing to step");
+    p2b_script(&f,
+        "throws('TypeError',()=>new CSSAnimation());"
+        "const s=document.getElementById('one').animate(null,100);"
+        "const all=document.getAnimations();"
+        "assert(all.length===3&&all[2]===s,'css first: '+all.length);"
+        "const [a,b]=all;globalThis.a=a;globalThis.b=b;"
+        "assert(a instanceof CSSAnimation&&a instanceof Animation&&!(s instanceof CSSAnimation));"
+        "assert(a.animationName==='spin'&&b.animationName==='fade');"
+        "assert(Object.getPrototypeOf(CSSAnimation.prototype)===Animation.prototype);"
+        "assert(document.getAnimations()[0]===a&&document.getElementById('two').getAnimations()[0]===b,'the same');"
+        "assert(a.playState==='running'&&a.currentTime===0&&a.startTime===0,a.playState+' '+a.currentTime+' '+a.startTime);"
+        "assert(b.playState==='paused'&&b.currentTime===200&&b.startTime===null);"
+        "assert(a.effect instanceof KeyframeEffect&&a.effect.target===document.getElementById('one'));"
+        "assert(a.effect.getTiming().duration===1000&&a.effect.getTiming().iterations===Infinity);"
+        "assert(b.effect.getTiming().fill==='forwards'&&b.effect.getKeyframes().length===0);"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(CSSAnimation.prototype,'animationName').get.call(s));",
+        "web animations: css: CSSAnimations first, the same objects");
+    check(wa_css_counted_current > 0, "web animations: css: getAnimations asks for the style made current");
+    check(wa_css_records[0].scripted && !wa_css_records[0].r.paused && wa_css_records[0].r.start_ms == 1000 &&
+              wa_css_records[1].scripted && wa_css_records[1].r.paused && wa_css_records[1].r.hold_ms == 200,
+          "web animations: css: a CSSAnimation drives its host's clock, as it found it");
+    /* A pause completes at the step; the host's clock holds there. */
+    p2b_script(&f, "a.pause();assert(a.pending&&a.playState==='paused');", "web animations: css: pause");
+    p2b_advance(100);
+    wa_step(&f, "web animations: css: the pause's step");
+    check(wa_css_records[0].r.paused && wa_css_records[0].r.hold_ms == 100,
+          "web animations: css: the host holds where the pause did");
+    p2b_script(&f, "assert(!a.pending&&a.currentTime===100&&a.playState==='paused',a.currentTime);",
+               "web animations: css: paused at 100");
+    /* animation-play-state turns running: a play, which does not rewind. */
+    wa_css_records[1].r.style_paused = false;
+    wa_css_version++;
+    check(os64_dom_web_animations_next(f.binding) <= p2b_ms + 20,
+          "web animations: css: the host's animations moved, a step is due");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: the play state's step");
+    p2b_script(&f, "assert(b.pending&&b.currentTime===200,b.pending+' '+b.currentTime);",
+               "web animations: css: running again, from where it was");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: the play's step");
+    check(!wa_css_records[1].r.paused && wa_css_records[1].r.start_ms == p2b_ms - 200 &&
+              wa_css_records[1].r.rate == 1,
+          "web animations: css: the host runs it on from 200");
+    /* The rate and a seek go to the host; a cancel cancels it there. */
+    p2b_script(&f, "a.playbackRate=2;a.currentTime=300;", "web animations: css: rate and seek");
+    check(wa_css_records[0].r.paused && wa_css_records[0].r.hold_ms == 300 && wa_css_records[0].r.rate == 2,
+          "web animations: css: the host holds at the seek, at the rate");
+    p2b_script(&f,
+        "globalThis.log=[];a.finished.catch(e=>log.push(e.name));a.oncancel=()=>log.push('cancel');a.cancel();"
+        "assert(a.playState==='idle'&&document.getAnimations().indexOf(a)<0);",
+        "web animations: css: cancel");
+    check(wa_css_records[0].r.canceled, "web animations: css: the host's animation canceled");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: the cancel's step");
+    p2b_script(&f, "assert(log.join()==='AbortError,cancel',log.join());",
+               "web animations: css: its promise rejected, its event fired");
+    /* The style's new timing becomes its effect's. */
+    wa_css_records[1].r.duration_ms = 800;
+    wa_css_version++;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: the style's timing moved");
+    p2b_script(&f, "assert(b.effect.getTiming().duration===800,b.effect.getTiming().duration);",
+               "web animations: css: retimed");
+    /* A CSSAnimation nothing holds, finished and no longer relevant, is
+     * the same object when its style makes it relevant again. */
+    WaCssRecord *done = wa_css_add(12, wa_by_id(f.document->document, "box"), "done", (double)p2b_ms - 500, 1000, 0, 1);
+    p2b_script(&f, "document.getElementById('box').getAnimations()[0].tag='kept';",
+               "web animations: css: an expando on an object nobody keeps");
+    p2b_advance(600);
+    wa_step(&f, "web animations: css: done finishes");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    p2b_script(&f, "assert(document.getElementById('box').getAnimations().length===0);",
+               "web animations: css: finished, not relevant");
+    done->r.iterations = INFINITY;
+    wa_css_version++;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: done runs again");
+    p2b_script(&f, "assert(document.getElementById('box').getAnimations()[0].tag==='kept');",
+               "web animations: css: the same object");
+    wa_css_n--;
+    wa_css_version++;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: done went");
+    /* One the page laid out since the timeline's time was sampled waits
+     * for the next step to start, as a play does. */
+    wa_css_add(11, wa_by_id(f.document->document, "box"), "late", (double)p2b_ms + 5, 1000, 0, 1);
+    p2b_script(&f,
+        "const l=document.getElementById('box').getAnimations()[0];"
+        "assert(l.animationName==='late'&&l.pending&&l.startTime===null&&l.currentTime===0,"
+        "l.pending+' '+l.startTime+' '+l.currentTime);globalThis.late=l;",
+        "web animations: css: a new one pending");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: the late one starts");
+    p2b_script(&f, "assert(!late.pending&&late.startTime!==null&&late.currentTime===0,late.currentTime);",
+               "web animations: css: started at the step");
+    wa_css_n--;
+    wa_css_version++;
+    /* fade's CSS animation goes: its CSSAnimation is canceled and stays a
+     * CSSAnimation, no longer the style's. */
+    wa_css_records[1] = wa_css_records[--wa_css_n];
+    wa_css_version++;
+    p2b_script(&f, "b.oncancel=()=>log.push('b cancel');", "web animations: css: listen for fade's cancel");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: fade went");
+    p2b_script(&f,
+        "assert(b.playState==='idle'&&b.animationName==='fade',b.playState);"
+        "assert(document.getElementById('two').getAnimations().length===0);"
+        "assert(log.join()==='AbortError,cancel,b cancel',log.join());",
+        "web animations: css: canceled, its name kept, its cancel heard");
+    fixture_free(&f);
+}
+
+/* The CSS animation events (CSS Animations 2 § 4.2): each boundary an
+ * animation crosses, heard where it bubbles, with its name and elapsed
+ * time; the step is due at the next boundary and not before; a CSS
+ * animation that goes before its end owes a cancel; AnimationEvent's
+ * constructor and the handlers. */
+static void wa_css_events(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    wa_css_install(&f);
+    const os64_html_node_t *box = wa_by_id(f.document->document, "box"), *one = wa_by_id(f.document->document, "one");
+    p2b_script(&f,
+        "for(const h of ['onanimationstart','onanimationend','onanimationiteration','onanimationcancel'])"
+        "assert(h in window&&h in document&&h in document.body,h);"
+        "const e=new AnimationEvent('animationend',{animationName:'x',elapsedTime:1.5});"
+        "assert(e instanceof Event&&e.animationName==='x'&&e.elapsedTime===1.5&&e.pseudoElement===''&&!e.bubbles);"
+        "const z=new AnimationEvent('animationstart');assert(z.animationName===''&&z.elapsedTime===0);"
+        "globalThis.log=[];"
+        "for(const t of ['animationstart','animationiteration','animationend','animationcancel'])"
+        "document.addEventListener(t,ev=>log.push(ev.type+':'+ev.animationName+':'+ev.elapsedTime+':'+ev.target.id+':'"
+        "+(ev instanceof AnimationEvent)+':'+ev.bubbles+':'+ev.cancelable));",
+        "web animations: css events: the constructor, the handlers and a listener");
+    check(os64_dom_web_animations_next(f.binding) == 0, "web animations: css events: a listener came: a look at once");
+    wa_step(&f, "web animations: css events: the first look");
+    check(os64_dom_web_animations_next(f.binding) == UINT64_MAX,
+          "web animations: css events: no CSS animation, nothing due");
+    wa_css_add(3, box, "pulse", 1000, 200, 100, 2);
+    p2b_advance(20);
+    wa_step(&f, "web animations: css events: pulse seen before its delay");
+    check(os64_dom_web_animations_next(f.binding) == 1100,
+          "web animations: css events: due when its active interval begins");
+    p2b_advance(80);
+    wa_step(&f, "web animations: css events: started");
+    check(os64_dom_web_animations_next(f.binding) == 1300,
+          "web animations: css events: due at the next iteration");
+    p2b_advance(200);
+    wa_step(&f, "web animations: css events: the second iteration");
+    p2b_advance(200);
+    wa_step(&f, "web animations: css events: ended");
+    p2b_script(&f,
+        "assert(log.join()==='animationstart:pulse:0:box:true:true:false,animationiteration:pulse:0.2:box:true:true:false,"
+        "animationend:pulse:0.4:box:true:true:false',log.join());log.length=0;",
+        "web animations: css events: start, iteration, end");
+    /* Over in one step: start and end, in the order they happened beside
+     * another's start; one that goes while active: a cancel at its active
+     * time. */
+    wa_css_add(4, one, "blink", 1500, 50, 0, 1);
+    WaCssRecord *gone = wa_css_add(5, one, "gone", 1500, 1000, 0, 1);
+    (void)gone;
+    p2b_advance(100);
+    wa_step(&f, "web animations: css events: blink over, gone running");
+    wa_css_n--;
+    wa_css_version++;
+    p2b_advance(150);
+    wa_step(&f, "web animations: css events: gone went");
+    p2b_script(&f,
+        "assert(log.join()==='animationstart:blink:0:one:true:true:false,animationstart:gone:0:one:true:true:false,"
+        "animationend:blink:0.05:one:true:true:false,animationcancel:gone:0.1:one:true:true:false',log.join());",
+        "web animations: css events: together, and a cancel");
+    fixture_free(&f);
+}
+
+/* A listener that comes after a CSS animation ended does not hear its end
+ * (the `{once: true}` listener's next one), and still hears the start and
+ * end of one that began since the step before it. */
+static void wa_css_late_listener(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    wa_css_install(&f);
+    const os64_html_node_t *box = wa_by_id(f.document->document, "box");
+    p2b_script(&f,
+        "globalThis.log=[];globalThis.h=e=>log.push(e.type+':'+e.animationName);"
+        "document.addEventListener('animationend',h,{once:true});",
+        "web animations: css late: a listener once");
+    wa_css_add(1, box, "first", 1000, 50, 0, 1);
+    p2b_advance(20);
+    wa_step(&f, "web animations: css late: first seen");
+    p2b_advance(100);
+    wa_step(&f, "web animations: css late: first ends, heard once");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css late: nobody listens now");
+    p2b_script(&f, "document.addEventListener('animationend',h);document.addEventListener('animationstart',h);",
+               "web animations: css late: listeners again");
+    wa_css_add(2, box, "fresh", (double)p2b_ms + 5, 50, 0, 1);
+    p2b_advance(20);
+    wa_step(&f, "web animations: css late: listening again");
+    p2b_advance(100);
+    wa_step(&f, "web animations: css late: fresh ends");
+    p2b_script(&f, "assert(log.join()==='animationend:first,animationstart:fresh,animationend:fresh',log.join());",
+               "web animations: css late: no stale end, the fresh one's heard");
+    fixture_free(&f);
+}
+
 static void dom_webanimation_cases(void)
 {
+    wa_composite();
     wa_x_key();
     wa_running();
     wa_procedures();
@@ -604,4 +938,7 @@ static void dom_webanimation_cases(void)
     wa_frame_time();
     wa_effects();
     wa_replace();
+    wa_css();
+    wa_css_events();
+    wa_css_late_listener();
 }

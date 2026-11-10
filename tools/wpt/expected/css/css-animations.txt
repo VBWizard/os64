@@ -1,0 +1,452 @@
+# WPT's css/css-animations in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-animations --update
+# rewrites [passing].
+[required]
+# Slice B2 (WEB_ANIMATIONS.md § 6): AnimationEvent and the CSS animation
+# events, on the pages where a CSS animation reaches a shown page. The
+# CSSAnimation pages (CSSAnimation-*, Element- and Document-getAnimations,
+# event-dispatch, event-order) ask at load, while the page is still being
+# laid out to be measured, and a page's CSS animations start when it is
+# first laid out to be shown (yonder's page_timeline), so those find no
+# CSS animation and fail (DEBTS); libdom's host tests hold them.
+animation-iteration-event-001.html	Got the expected elapsedTime in the correct order
+animation-iteration-event-002.html	By the time the finite animation ends, the infinite one had identical elapsedTime
+animationevent-interface.html	AnimationEvent.pseudoElement initialized from the dictionary
+animationevent-interface.html	AnimationEventInit animation property sets value
+animationevent-interface.html	AnimationEventInit properties set value
+animationevent-interface.html	Missing type argument
+animationevent-interface.html	animationEventInit argument is empty dictionary
+animationevent-interface.html	animationEventInit argument is null
+animationevent-interface.html	animationEventInit argument is undefined
+animationevent-interface.html	animationName has default value of empty string
+animationevent-interface.html	animationName is readonly
+animationevent-interface.html	animationName set to 'sample'
+animationevent-interface.html	animationName set to [1, 2, 3]
+animationevent-interface.html	animationName set to []
+animationevent-interface.html	animationName set to a number
+animationevent-interface.html	animationName set to an object
+animationevent-interface.html	animationName set to an object with a valueOf function
+animationevent-interface.html	animationName set to false
+animationevent-interface.html	animationName set to null
+animationevent-interface.html	animationName set to true
+animationevent-interface.html	animationName set to undefined
+animationevent-interface.html	elapsedTime cannot be set to 'sample'
+animationevent-interface.html	elapsedTime cannot be set to -Infinity
+animationevent-interface.html	elapsedTime cannot be set to Infinity
+animationevent-interface.html	elapsedTime cannot be set to NaN
+animationevent-interface.html	elapsedTime cannot be set to [0.5, 1.0]
+animationevent-interface.html	elapsedTime cannot be set to an object
+animationevent-interface.html	elapsedTime has default value of 0.0
+animationevent-interface.html	elapsedTime is readonly
+animationevent-interface.html	elapsedTime set to ''
+animationevent-interface.html	elapsedTime set to -0.5
+animationevent-interface.html	elapsedTime set to 0.5
+animationevent-interface.html	elapsedTime set to [0.5]
+animationevent-interface.html	elapsedTime set to []
+animationevent-interface.html	elapsedTime set to an object with a valueOf function
+animationevent-interface.html	elapsedTime set to false
+animationevent-interface.html	elapsedTime set to null
+animationevent-interface.html	elapsedTime set to true
+animationevent-interface.html	elapsedTime set to undefined
+animationevent-interface.html	event type set to undefined
+animationevent-interface.html	the event inherts from Event
+animationevent-interface.html	the event is an instance of AnimationEvent
+animationevent-interface.html	type argument is null
+animationevent-interface.html	type argument is string
+stability/animation-event-destroy-renderer.html?animationiteration	Triggering the cancel of an animation during event handling does not crash.
+stability/animation-event-destroy-renderer.html?animationstart	Triggering the cancel of an animation during event handling does not crash.
+[excluded]
+[passing]
+AnimationEffect-getComputedTiming.tentative.html	currentIteration of an AnimationEffect without an Animation
+AnimationEffect-getComputedTiming.tentative.html	localTime of an AnimationEffect without an Animation
+CSSAnimation-compositeOrder.tentative.html	Web-animation replaces CSS animation
+Document-getAnimations.tentative.html	getAnimations for non-animated content
+Element-getAnimations-dynamic-changes.tentative.html	Animations are removed from the start of the list while preserving the state of existing Animations
+Element-getAnimations-dynamic-changes.tentative.html	Updated Animations maintain their order in the list
+Element-getAnimations.tentative.html	getAnimations for CSS Animations that have finished
+Element-getAnimations.tentative.html	getAnimations for CSS Animations that have finished but are forwards filling
+Element-getAnimations.tentative.html	getAnimations for non-animated content
+animation-before-initial-box-construction-001.html	animations started before initial-containing-block creation properly function
+animation-iteration-count-010.html	animation-iteration-count: 1
+animation-iteration-count-010.html	animation-iteration-count: 2
+animation-iteration-event-001.html	Got the expected elapsedTime in the correct order
+animation-iteration-event-002.html	By the time the finite animation ends, the infinite one had identical elapsedTime
+animation-name-case-sensitive.html	animation-name is case-sensitive
+animation-play-state-005.tentative.html	CSS animation should not restart after resetting its animation-play-state
+animationevent-interface.html	AnimationEvent.pseudoElement initialized from the dictionary
+animationevent-interface.html	AnimationEventInit animation property sets value
+animationevent-interface.html	AnimationEventInit properties set value
+animationevent-interface.html	Missing type argument
+animationevent-interface.html	animationEventInit argument is empty dictionary
+animationevent-interface.html	animationEventInit argument is null
+animationevent-interface.html	animationEventInit argument is undefined
+animationevent-interface.html	animationName has default value of empty string
+animationevent-interface.html	animationName is readonly
+animationevent-interface.html	animationName set to 'sample'
+animationevent-interface.html	animationName set to [1, 2, 3]
+animationevent-interface.html	animationName set to []
+animationevent-interface.html	animationName set to a number
+animationevent-interface.html	animationName set to an object
+animationevent-interface.html	animationName set to an object with a valueOf function
+animationevent-interface.html	animationName set to false
+animationevent-interface.html	animationName set to null
+animationevent-interface.html	animationName set to true
+animationevent-interface.html	animationName set to undefined
+animationevent-interface.html	elapsedTime cannot be set to 'sample'
+animationevent-interface.html	elapsedTime cannot be set to -Infinity
+animationevent-interface.html	elapsedTime cannot be set to Infinity
+animationevent-interface.html	elapsedTime cannot be set to NaN
+animationevent-interface.html	elapsedTime cannot be set to [0.5, 1.0]
+animationevent-interface.html	elapsedTime cannot be set to an object
+animationevent-interface.html	elapsedTime has default value of 0.0
+animationevent-interface.html	elapsedTime is readonly
+animationevent-interface.html	elapsedTime set to ''
+animationevent-interface.html	elapsedTime set to -0.5
+animationevent-interface.html	elapsedTime set to 0.5
+animationevent-interface.html	elapsedTime set to [0.5]
+animationevent-interface.html	elapsedTime set to []
+animationevent-interface.html	elapsedTime set to an object with a valueOf function
+animationevent-interface.html	elapsedTime set to false
+animationevent-interface.html	elapsedTime set to null
+animationevent-interface.html	elapsedTime set to true
+animationevent-interface.html	elapsedTime set to undefined
+animationevent-interface.html	event type set to undefined
+animationevent-interface.html	the event inherts from Event
+animationevent-interface.html	the event is an instance of AnimationEvent
+animationevent-interface.html	type argument is null
+animationevent-interface.html	type argument is string
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (-1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (0) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [none] at (-1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [none] at (0) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [none] at (0.1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [block] to [none] at (0.9) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [none] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [none] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [none] to [block] at (1) should be [block]
+display-interpolation.html	CSS Animations: property <display> from [none] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition-behavior:allow-discrete: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	CSS Transitions with transition-behavior:allow-discrete: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	CSS Transitions with transition-behavior:allow-discrete: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions with transition-behavior:allow-discrete: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition-property:all and transition-behavor:allow-discrete: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	CSS Transitions with transition-property:all and transition-behavor:allow-discrete: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	CSS Transitions with transition-property:all and transition-behavor:allow-discrete: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions with transition-property:all and transition-behavor:allow-discrete: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (-1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [none] at (1) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [block] to [none] at (1.5) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (-0.3) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (0.3) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (-1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (-1) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (0) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (0.1) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (0.9) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (1) should be [none]
+display-interpolation.html	CSS Transitions with transition: all: property <display> from [none] to [none] at (1.5) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (-1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [none] at (1) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [block] to [none] at (1.5) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (-0.3) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (0.3) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (-1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (0) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (0.1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (0.9) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (1) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [block] at (1.5) should be [block]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (-1) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (0) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (0.1) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (0.9) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (1) should be [none]
+display-interpolation.html	CSS Transitions: property <display> from [none] to [none] at (1.5) should be [none]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (-1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (0) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (0.1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (0.9) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [block] at (1.5) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [none] at (-1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [none] at (0) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [none] at (0.1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [block] to [none] at (0.9) should be [block]
+display-interpolation.html	Web Animations: property <display> from [inline] to [block] at (0.5) should be [block]
+display-interpolation.html	Web Animations: property <display> from [inline] to [block] at (0.6) should be [block]
+display-interpolation.html	Web Animations: property <display> from [inline] to [block] at (1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [inline] to [block] at (1.5) should be [block]
+display-interpolation.html	Web Animations: property <display> from [none] to [block] at (0.1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [none] to [block] at (0.9) should be [block]
+display-interpolation.html	Web Animations: property <display> from [none] to [block] at (1) should be [block]
+display-interpolation.html	Web Animations: property <display> from [none] to [block] at (1.5) should be [block]
+empty-pseudo-class-with-animation.html	Setting an "animation" style property on an element does not interfere with the :empty pseudo-class.
+historical.html	Historical CSS features must be removed: WebKitAnimationEvent
+idlharness.html	AnimationEvent interface object length
+idlharness.html	AnimationEvent interface object name
+idlharness.html	AnimationEvent interface: existence and properties of interface object
+idlharness.html	AnimationEvent interface: existence and properties of interface prototype object
+idlharness.html	AnimationEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.html	AnimationEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.html	AnimationEvent must be primary interface of new AnimationEvent("animationstart")
+idlharness.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.html	Document includes NonElementParentNode: member names are unique
+idlharness.html	Document includes ParentNode: member names are unique
+idlharness.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.html	Element includes ChildNode: member names are unique
+idlharness.html	Element includes NonDocumentTypeChildNode: member names are unique
+idlharness.html	Element includes ParentNode: member names are unique
+idlharness.html	Element includes Slottable: member names are unique
+idlharness.html	HTMLElement includes ElementCSSInlineStyle: member names are unique
+idlharness.html	HTMLElement includes ElementContentEditable: member names are unique
+idlharness.html	HTMLElement includes GlobalEventHandlers: member names are unique
+idlharness.html	HTMLElement includes HTMLOrSVGOrMathMLElement: member names are unique
+idlharness.html	Partial interface CSSRule: member names are unique
+idlharness.html	Partial interface CSSRule: original interface defined
+idlharness.html	Partial interface Document: member names are unique
+idlharness.html	Partial interface Document[2]: member names are unique
+idlharness.html	Partial interface Element: member names are unique
+idlharness.html	Partial interface Window: member names are unique
+idlharness.html	Partial interface mixin GlobalEventHandlers: member names are unique
+idlharness.html	Partial interface mixin GlobalEventHandlers: original interface mixin defined
+idlharness.html	Stringification of new AnimationEvent("animationstart")
+idlharness.html	Window includes AnimationFrameProvider: member names are unique
+idlharness.html	Window includes GlobalEventHandlers: member names are unique
+idlharness.html	Window includes WindowEventHandlers: member names are unique
+idlharness.html	Window includes WindowLocalStorage: member names are unique
+idlharness.html	Window includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.html	Window includes WindowSessionStorage: member names are unique
+idlharness.html	idl_test setup
+idlharness.html	idl_test validation
+inheritance.html	Property animation-delay does not inherit
+inheritance.html	Property animation-delay has initial value 0s
+inheritance.html	Property animation-direction does not inherit
+inheritance.html	Property animation-direction has initial value normal
+inheritance.html	Property animation-duration does not inherit
+inheritance.html	Property animation-duration has initial value 0s
+inheritance.html	Property animation-fill-mode does not inherit
+inheritance.html	Property animation-fill-mode has initial value none
+inheritance.html	Property animation-iteration-count does not inherit
+inheritance.html	Property animation-iteration-count has initial value 1
+inheritance.html	Property animation-name does not inherit
+inheritance.html	Property animation-name has initial value none
+inheritance.html	Property animation-play-state does not inherit
+inheritance.html	Property animation-play-state has initial value running
+inheritance.html	Property animation-timing-function does not inherit
+inheritance.html	Property animation-timing-function has initial value ease
+parsing/animation-composition-invalid.tentative.html	e.style['animation-composition'] = "add replace" should not set the property value
+parsing/animation-composition-invalid.tentative.html	e.style['animation-composition'] = "add, initial" should not set the property value
+parsing/animation-composition-invalid.tentative.html	e.style['animation-composition'] = "auto" should not set the property value
+parsing/animation-composition-invalid.tentative.html	e.style['animation-composition'] = "initial, add" should not set the property value
+parsing/animation-delay-computed.html	Property animation-delay value '-500ms'
+parsing/animation-delay-computed.html	Property animation-delay value '20s, 10s'
+parsing/animation-delay-invalid.html	e.style['animation-delay'] = "-3s, initial" should not set the property value
+parsing/animation-delay-invalid.html	e.style['animation-delay'] = "0" should not set the property value
+parsing/animation-delay-invalid.html	e.style['animation-delay'] = "1s 2s 3s" should not set the property value
+parsing/animation-delay-invalid.html	e.style['animation-delay'] = "infinite" should not set the property value
+parsing/animation-delay-invalid.html	e.style['animation-delay'] = "initial, -3s" should not set the property value
+parsing/animation-delay-valid.html	e.style['animation-delay'] = "-5ms" should set the property value
+parsing/animation-delay-valid.html	e.style['animation-delay'] = "0s" should set the property value
+parsing/animation-delay-valid.html	e.style['animation-delay'] = "10s" should set the property value
+parsing/animation-delay-valid.html	e.style['animation-delay'] = "20s, 10s" should set the property value
+parsing/animation-direction-computed.html	Property animation-direction value 'normal, reverse, alternate, alternate-reverse'
+parsing/animation-direction-invalid.html	e.style['animation-direction'] = "auto" should not set the property value
+parsing/animation-direction-invalid.html	e.style['animation-direction'] = "initial, reverse" should not set the property value
+parsing/animation-direction-invalid.html	e.style['animation-direction'] = "normal reverse" should not set the property value
+parsing/animation-direction-invalid.html	e.style['animation-direction'] = "reverse, initial" should not set the property value
+parsing/animation-direction-valid.html	e.style['animation-direction'] = "alternate" should set the property value
+parsing/animation-direction-valid.html	e.style['animation-direction'] = "alternate-reverse" should set the property value
+parsing/animation-direction-valid.html	e.style['animation-direction'] = "normal" should set the property value
+parsing/animation-direction-valid.html	e.style['animation-direction'] = "normal, reverse, alternate, alternate-reverse" should set the property value
+parsing/animation-direction-valid.html	e.style['animation-direction'] = "reverse" should set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "-3s" should not set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "0" should not set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "1s 2s" should not set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "1s, initial" should not set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "infinite" should not set the property value
+parsing/animation-duration-invalid.html	e.style['animation-duration'] = "initial, 1s" should not set the property value
+parsing/animation-duration-valid.html	e.style['animation-duration'] = "1s, 2s, 3s" should set the property value
+parsing/animation-duration-valid.html	e.style['animation-duration'] = "3s" should set the property value
+parsing/animation-duration-valid.html	e.style['animation-duration'] = "500ms" should set the property value
+parsing/animation-fill-mode-computed.html	Property animation-fill-mode value 'none, forwards, backwards, both'
+parsing/animation-fill-mode-invalid.html	e.style['animation-fill-mode'] = "auto" should not set the property value
+parsing/animation-fill-mode-invalid.html	e.style['animation-fill-mode'] = "both, initial" should not set the property value
+parsing/animation-fill-mode-invalid.html	e.style['animation-fill-mode'] = "forwards backwards" should not set the property value
+parsing/animation-fill-mode-invalid.html	e.style['animation-fill-mode'] = "initial, both" should not set the property value
+parsing/animation-fill-mode-valid.html	e.style['animation-fill-mode'] = "backwards" should set the property value
+parsing/animation-fill-mode-valid.html	e.style['animation-fill-mode'] = "both" should set the property value
+parsing/animation-fill-mode-valid.html	e.style['animation-fill-mode'] = "forwards" should set the property value
+parsing/animation-fill-mode-valid.html	e.style['animation-fill-mode'] = "none" should set the property value
+parsing/animation-fill-mode-valid.html	e.style['animation-fill-mode'] = "none, forwards, backwards, both" should set the property value
+parsing/animation-invalid.html	e.style['animation'] = "-1s -2s" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "1 2" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "1s 2s 3s" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "anim1 timeline1 anim2" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "both backwards forwards anim" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "paused running paused anim" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "reverse alternate alternate-reverse anim" should not set the property value
+parsing/animation-invalid.html	e.style['animation'] = "steps(1) steps(2)" should not set the property value
+parsing/animation-iteration-count-computed.html	Property animation-iteration-count value '0, infinite, 3'
+parsing/animation-iteration-count-invalid.html	e.style['animation-iteration-count'] = "-2" should not set the property value
+parsing/animation-iteration-count-invalid.html	e.style['animation-iteration-count'] = "3 4" should not set the property value
+parsing/animation-iteration-count-invalid.html	e.style['animation-iteration-count'] = "4, initial" should not set the property value
+parsing/animation-iteration-count-invalid.html	e.style['animation-iteration-count'] = "auto" should not set the property value
+parsing/animation-iteration-count-invalid.html	e.style['animation-iteration-count'] = "initial, 4" should not set the property value
+parsing/animation-iteration-count-valid.html	e.style['animation-iteration-count'] = "0" should set the property value
+parsing/animation-iteration-count-valid.html	e.style['animation-iteration-count'] = "0, infinite, 3" should set the property value
+parsing/animation-iteration-count-valid.html	e.style['animation-iteration-count'] = "3" should set the property value
+parsing/animation-iteration-count-valid.html	e.style['animation-iteration-count'] = "4.5" should set the property value
+parsing/animation-iteration-count-valid.html	e.style['animation-iteration-count'] = "infinite" should set the property value
+parsing/animation-name-computed.html	Property animation-name value '"something"'
+parsing/animation-name-computed.html	Property animation-name value 'Both'
+parsing/animation-name-computed.html	Property animation-name value 'NONE'
+parsing/animation-name-computed.html	Property animation-name value 'ease-in'
+parsing/animation-name-computed.html	Property animation-name value 'first, second, third'
+parsing/animation-name-computed.html	Property animation-name value 'foo'
+parsing/animation-name-computed.html	Property animation-name value 'infinite'
+parsing/animation-name-computed.html	Property animation-name value 'none'
+parsing/animation-name-computed.html	Property animation-name value 'paused'
+parsing/animation-name-invalid.html	e.style['animation-name'] = "12" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "\\"\\"" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "default, two" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "one two" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "one, inherit" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "one, initial" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "one, unset" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "revert, three" should not set the property value
+parsing/animation-name-invalid.html	e.style['animation-name'] = "revert-layer, four" should not set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "Both" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"DEFAULT\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"INHERIT\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"INITIAL\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"NoNe\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"REVERT-LAYER\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"REVERT\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"UNSET\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"default\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"inherit\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"initial\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"none\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"none\\", \\"INITIAL\\", \\"inherit\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"none\\", both, ease-in" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"revert-layer\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"revert\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "\\"unset\\"" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "ease-in" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "first, second, third" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "foo" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "infinite" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "none" should set the property value
+parsing/animation-name-valid.html	e.style['animation-name'] = "paused" should set the property value
+parsing/animation-play-state-computed.html	Property animation-play-state value 'running, paused'
+parsing/animation-play-state-invalid.html	e.style['animation-play-state'] = "auto" should not set the property value
+parsing/animation-play-state-invalid.html	e.style['animation-play-state'] = "initial, paused" should not set the property value
+parsing/animation-play-state-invalid.html	e.style['animation-play-state'] = "paused running" should not set the property value
+parsing/animation-play-state-invalid.html	e.style['animation-play-state'] = "paused, initial" should not set the property value
+parsing/animation-play-state-valid.html	e.style['animation-play-state'] = "paused" should set the property value
+parsing/animation-play-state-valid.html	e.style['animation-play-state'] = "running" should set the property value
+parsing/animation-play-state-valid.html	e.style['animation-play-state'] = "running, paused" should set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "1s / 2s" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "1s 2s" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "50% contain" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "50% cover" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "50% enter" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "50% entry" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "50% exit" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "contain contain" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "cover 50% enter 50%" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "infinite" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "none" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "normal 10px" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "normal foo" should not set the property value
+parsing/animation-range-end-invalid.html	e.style['animation-range-end'] = "peek 50%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "#ff0000" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "-1s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "0s entry 50%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "0s, 1s 2s 3s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "100% thing" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s / 2s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s 2s 3s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s 2s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s 2s, 3s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s, 2px" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s, 2s 3s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s, 2s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "1s, 2s, 3s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "entry 50% 0s" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "normal foo normal 100%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "normal normal 100%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "red" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "thing 0%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "thing 100%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "thing 100px" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "thing 42%" should not set the property value
+parsing/animation-range-shorthand.html	e.style['animation-range'] = "thing" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "50% contain" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "50% cover" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "50% enter" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "50% entry" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "50% exit" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "contain contain" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "cover 50% enter 50%" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "none" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "normal 10px" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "normal foo" should not set the property value
+parsing/animation-range-start-invalid.html	e.style['animation-range-start'] = "peek 50%" should not set the property value
+parsing/animation-shorthand.html	e.style['animation'] = "4 1s -3s cubic-bezier(0, -2, 1, 3), anim paused both reverse" should not set unrelated longhands
+parsing/animation-shorthand.html	e.style['animation'] = "anim paused both reverse 4 1s -3s cubic-bezier(0, -2, 1, 3)" should not set unrelated longhands
+parsing/animation-shorthand.html	e.style['animation'] = "anim paused both reverse, 4 1s -3s cubic-bezier(0, -2, 1, 3)" should not set unrelated longhands
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2 ())" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2())" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2, ())" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2, ()start)" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2,() start)" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2,())" should not set the property value
+parsing/animation-timing-function-invalid.html	e.style['animation-timing-function'] = "steps(2,()start)" should not set the property value
+parsing/animation-valid.html	e.style['animation'] = "1s -3s" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "1s" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "4" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "anim" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "both" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "cubic-bezier(0, -2, 1, 3)" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "none" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "paused" should set the property value
+parsing/animation-valid.html	e.style['animation'] = "reverse" should set the property value
+stability/animation-event-destroy-renderer.html?animationiteration	Triggering the cancel of an animation during event handling does not crash.
+stability/animation-event-destroy-renderer.html?animationstart	Triggering the cancel of an animation during event handling does not crash.

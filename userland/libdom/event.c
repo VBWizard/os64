@@ -17,7 +17,8 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
     "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror", "invalid",
     "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout", "pointerenter", "pointerleave",
-    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick", "slotchange"
+    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick", "slotchange",
+    "animationstart", "animationend", "animationiteration", "animationcancel"
 };
 /* A page's handler attributes are a bit per kind in a uint64_t
  * (os64_dom_handler_attributes, attribute_mask). */
@@ -1183,6 +1184,14 @@ int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object,
     Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
+}
+
+int d_dispatch_node_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *node,
+                         os64_js_outcome_t *outcome)
+{
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL, NULL, NULL, NULL, 0};
+    if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
+    return dispatch(&d, node);
 }
 
 static bool define_number(JSContext *ctx, JSValueConst object, const char *name, double value)

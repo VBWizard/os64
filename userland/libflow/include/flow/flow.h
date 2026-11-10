@@ -1321,6 +1321,43 @@ void flow_timeline_free(flow_timeline_t *t);
 // built none and leaves `*shown` as it is, so animations turned off and on
 // again run on from their starts. Allocates nothing.
 void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
+// A CSS animation's clock: while `paused`, the local time it holds;
+// else the time on the face's clock its local time was 0 at, and how fast
+// it runs (local time = (now - start_ms) * rate). A `canceled` one applies
+// nothing.
+typedef struct {
+    bool paused, canceled;
+    double start_ms, hold_ms, rate;
+} flow_css_clock_t;
+// The timeline's CSS animations, a canceled one included, for a script's
+// CSSAnimation objects (WEB_ANIMATIONS.md § 3): in its order, which is composite
+// order — elements as their layout met them, each element's by its
+// animation-name list — each with an id the same through every layout it
+// lives through, its element, its name (the timeline's bytes, good while
+// it is), its place in the list, its clock, animation-play-state as its
+// style last gave it, whether a script drives it (flow_timeline_drive),
+// and its timing as its style last gave it.
+typedef struct {
+    uint64_t id;
+    const os64_html_node_t *node;
+    const char *name;
+    uint32_t name_len;
+    int32_t place;
+    flow_css_clock_t clock;
+    bool style_paused, scripted;
+    double duration_ms, delay_ms, iterations;
+    garb_direction_t direction;
+    garb_fill_t fill;
+} flow_css_animation_t;
+int32_t flow_timeline_size(const flow_timeline_t *t);
+bool flow_timeline_at(const flow_timeline_t *t, int32_t i, flow_css_animation_t *out);
+// A script's CSSAnimation drives animation `id` from now on: its clock is
+// `clock`, written into the timeline the page shows, whose tree reads it at
+// once and whose next layouts carry it on, leaving it alone when
+// animation-play-state changes — the script answers that itself (CSS
+// Animations 2: the change pauses or plays the CSSAnimation). False when
+// no animation has that id.
+bool flow_timeline_drive(flow_timeline_t *t, uint64_t id, const flow_css_clock_t *clock);
 
 #define FLOW_NEVER UINT64_MAX
 // When the page next shows another value than the layout at its time

@@ -5,7 +5,8 @@ events and holds, keyframe and timing processing, the effects it
 publishes, KeyframeEffect as an object of its own, the removal of
 replaced animations and commitStyles; yonder's keeping of a binding a tree may still read, and the
 scripts a measured layout reads; libflow's script effects under
-`display: none`. A mutant is CAUGHT when one of its harnesses fails, MISSED
+`display: none`; B2's composite add and accumulate, CSSAnimation driving
+libflow's record, and the CSS animation events. A mutant is CAUGHT when one of its harnesses fails, MISSED
 when they all pass, which means a test is missing and gets written. A build
 failure is neither.
 
@@ -34,6 +35,9 @@ STYLE_C = 'userland/libflow/style.c'
 DOM = 'tools/test_dom_host.sh --web-animations'
 YON = 'tools/test_yonder_scripts_host.sh'
 FLOW = 'tools/test_libflow_host.sh'
+FLOW_FX = 'tools/test_libflow_host.sh --script-effects'
+FLOW_MOTION = 'tools/test_libflow_host.sh --motion'
+MOTION_C = 'userland/libflow/motion.c'
 
 mutants = [
     # ── The state machine ───────────────────────────────────────────────
@@ -222,6 +226,69 @@ mutants = [
     ('no-timeline-keeps-stepping', WA_C, '        if (a->no_timeline) continue;\n        if (a->pending_play', '        if (a->pending_play', [DOM]),
     ('target-set-not-republished', WA_C,
      '        e->element = element;\n        effect_changed(ctx, e, false);', '        e->element = element;', [DOM]),
+    # ── B2: composite add and accumulate, iterationComposite ───────────
+    ('composite-auto-is-replace', WA_C,
+     'd->kept[i].composite == WA_COMPOSITE_AUTO ? e->composite : d->kept[i].composite;',
+     'd->kept[i].composite == WA_COMPOSITE_AUTO ? WA_COMPOSITE_REPLACE : d->kept[i].composite;', [DOM]),
+    ('iteration-composite-ignored', WA_C,
+     'd->fx.iteration_accumulate = e->iteration_composite == WA_COMPOSITE_ACCUMULATE;',
+     'd->fx.iteration_accumulate = false;', [DOM]),
+    ('add-is-accumulate', MOTION_C, '&met[end], op == GARB_COMPOSITE_ACCUMULATE,', '&met[end], true,', [FLOW_FX]),
+    ('composite-not-applied', MOTION_C, '                        f->style = &met[end];\n', '                        (void)0;\n', [FLOW_FX]),
+    ('iterations-not-accumulated', MOTION_C, '                    if (an->iteration_accumulate && k.iteration >= 1)',
+     '                    if (false)', [FLOW_FX]),
+    ('accumulate-once', MOTION_C, '    int32_t n = iterations > 1000 ? 1000 : (int32_t)iterations;',
+     '    int32_t n = iterations >= 1 ? 1 : 0;', [FLOW_FX]),
+    ('scale-add-adds', MOTION_C, '            one->a[i] = u->a[i] * v->a[i];', '            one->a[i] = u->a[i] + v->a[i];',
+     [FLOW_FX]),
+    ('accumulate-unpaired-concatenates', MOTION_C, '    if (accumulate && !pairwise) {', '    if (false) {', [FLOW_FX]),
+    ('script-frames-drop-iteration-accumulate', STYLE_C, '        an->iteration_accumulate = x->iteration_accumulate;',
+     '        an->iteration_accumulate = false;', [FLOW_FX]),
+    # ── B2: CSS animations a script drives ──────────────────────────────
+    ('drive-not-scripted', MOTION_C, '        r->scripted = true;\n', '', [FLOW_MOTION]),
+    ('scripted-not-carried', MOTION_C, '        r->scripted = was->scripted;\n', '', [FLOW_MOTION]),
+    ('record-rate-ignored', MOTION_C, '    return r->paused ? r->hold : (now - r->start) * r->rate;',
+     '    return r->paused ? r->hold : now - r->start;', [FLOW_MOTION]),
+    ('record-backwards-ignored', MOTION_C, 'local_time(an->record, now), an->record->rate < 0);',
+     'local_time(an->record, now), false);', [FLOW_MOTION]),
+    ('canceled-applies', MOTION_C, '    return (an->record != NULL && !an->record->canceled) || an->script != NULL;',
+     '    return an->record != NULL || an->script != NULL;', [FLOW_MOTION]),
+    ('canceled-not-carried', MOTION_C, '        r->canceled = was->canceled;\n', '', [FLOW_MOTION]),
+    ('css-push-skipped', WA_C, '    if (a->css) {\n        css_push(a);\n        return;', '    if (a->css) {\n        if (false) css_push(a);\n        return;', [DOM]),
+    ('css-push-pause-as-running', WA_C, '    bool paused = !isnan(a->held), canceled = !paused && isnan(a->start);',
+     '    bool paused = false, canceled = isnan(a->held) && isnan(a->start);', [DOM]),
+    ('css-wrapper-not-kept', WA_C, '    if (a->css_id != 0) return true;\n', '', [DOM]),
+    ('css-play-state-ignored', WA_C, '    if (r->style_paused != a->css_style_paused) {', '    if (false) {', [DOM]),
+    ('css-timing-not-pulled', WA_C, '        a->css_timing = t;\n        d->fx.timing = t;', '        a->css_timing = t;', [DOM]),
+    ('css-vanish-ignored', WA_C, '        if (a != NULL && a->css_id != 0) css_vanish(ctx, a);', '        if (a != NULL && a->css_id != 0 && false) css_vanish(ctx, a);', [DOM]),
+    ('css-new-not-pending', WA_C, '    } else if (!r->canceled && r->start_ms > now) {', '    } else if (false && r->start_ms > now) {', [DOM]),
+    ('css-step-before-pending', WA_C,
+     '            held[n++] = JS_DupValue(ctx, a->target.value);\n        for (size_t i = 0; i < n; i++) {',
+     '            held[n++] = JS_DupValue(ctx, a->target.value);\n'
+     '        if (ctx != NULL) css_step(ctx, dom, (double)now, since);\n        for (size_t i = 0; i < n; i++) {', [DOM]),
+    # ── B2: the CSS animation events ────────────────────────────────────
+    ('css-events-skip-end-with-start', WA_C,
+     '        css_queue(dom, s, "animationstart", from, css_when(dom, s, delay + from));\n'
+     '        css_queue(dom, s, "animationend", to, css_when(dom, s, delay + to));\n    } else if (was == CSS_ACTIVE && phase == CSS_BEFORE)',
+     '        css_queue(dom, s, "animationstart", from, css_when(dom, s, delay + from));\n'
+     '    } else if (was == CSS_ACTIVE && phase == CSS_BEFORE)', [DOM]),
+    ('css-iteration-elapsed-count', WA_C, '        double at = k.iteration * s->timing.duration_ms;',
+     '        double at = k.iteration;', [DOM]),
+    ('css-cancel-on-vanish-skipped', WA_C,
+     '        if (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE)\n'
+     '            css_queue(dom, s, "animationcancel", s->active_time, wa_now(dom));\n', '', [DOM]),
+    ('css-events-unsorted', WA_C, '        while (*at != NULL && !(event_when(e) < event_when(*at))) at = &(*at)->next;',
+     '        while (*at != NULL && (event_when(e), true)) at = &(*at)->next;', [DOM]),
+    ('css-events-do-not-bubble', WA_C, "dom->wa_css_event_prototype->value, e->type, true,",
+     "dom->wa_css_event_prototype->value, e->type, false,", [DOM]),
+    ('css-due-no-boundary', WA_C, '    if (local < delay) b = delay;', '    if (local < delay) b = INFINITY;', [DOM]),
+    ('css-due-ignores-listener', WA_C, '    if (listening != dom->wa_css_listening) return 0;\n', '', [DOM]),
+    ('css-seed-loud', WA_C, 'css_events(dom, &r, now, seeding && (r.paused || r.start_ms <= since));',
+     'css_events(dom, &r, now, false && seeding && (r.paused || r.start_ms <= since));', [DOM]),
+    ('css-seed-everything', WA_C, 'css_events(dom, &r, now, seeding && (r.paused || r.start_ms <= since));',
+     'css_events(dom, &r, now, seeding && (true || r.paused || r.start_ms <= since));', [DOM]),
+    ('css-due-from-now', WA_C, 'seen_next(&dom->wa_seen[i], (double)dom->wa_last_step)',
+     'seen_next(&dom->wa_seen[i], (double)dom->options.now_ms(dom->options.host_opaque))', [DOM]),
 ]
 
 caught, missed, unbuilt = [], [], []

@@ -197,19 +197,41 @@ visual on a few UI libraries, better than today's throw. A P5 tester
 who sees a menu vanish rather than slide should know that is this, and
 that B ends it.
 
-**`CSSAnimation`'s controls** (B): `pause()` and `play()` write the
-timeline record's hold and start, and the API's play state then wins
-over `animation-play-state` until that property next CHANGES, when the
-property wins again (CSS Animations 2, the interaction of
-`animation-play-state` with the API): a sticky flag per animation, not
-a field the two share.
+**`CSSAnimation`'s controls** (B2, as built): the host answers the
+document's CSS animations through `os64_dom_set_css_animations` (dom.h),
+which yonder answers from the timeline the page shows
+(`flow_timeline_at`). A `CSSAnimation` is made when `getAnimations()`
+first answers its animation, and kept while that animation lives, so
+asking again gives the same object. From then on the `CSSAnimation`'s
+own state machine — the one every `Animation` has — IS the clock:
+each change (pause, play, a seek, the rate, finish, cancel) is handed to
+the host (`flow_timeline_drive`), whose tree draws it, and a driven
+record keeps its clock through every layout. `animation-play-state`
+then no longer moves the record; the binding reads the property's
+changes at the update step and answers each as CSS Animations 2 says:
+a change to `paused` pauses the `CSSAnimation`, a change to `running`
+plays it without rewinding. That is the "API wins until the property
+next changes" rule, with no flag the two share. An animation whose
+name leaves the list cancels its `CSSAnimation`, which keeps its
+`animationName` and loses its owning element. Its effect is a
+`KeyframeEffect` with the animation's target and timing and no keyframes
+of its own (DEBTS.md).
 
 The CSS animation events (`animationstart`, `animationend`,
-`animationiteration`, `animationcancel`) are not dispatched today
-either. They come with this work, from the same "update animations and
-send events" step, because `CSSAnimation.finished` and `animationend`
-are the same moment told two ways, and a page that waits on one should
-not see the other never happen.
+`animationiteration`, `animationcancel`) come from the same "update
+animations and send events" step, because `CSSAnimation.finished` and
+`animationend` are the same moment told two ways, and a page that waits
+on one should not see the other never happen. While any of the four has
+a listener, the step keeps a table of each CSS animation's phase and
+iteration as it last saw them and queues an `AnimationEvent` for each
+boundary crossed since (CSS Animations 2 § 4.2's table), sorted with the
+playback events by when each happened. For them the step wakes when the
+host's animations change, a listener comes or goes, or the next
+boundary of one at rate 1 comes; one at another rate is watched every
+frame, as a running `CSSAnimation` is. A listener that arrives hears
+only what happens from then on: the animations that were already there
+are taken as they stand, so a page that listens again after a
+`{once: true}` listener fired does not hear an old end a second time.
 
 ## 4. The slices
 
@@ -266,7 +288,10 @@ spec has it and the `remove` event.
   `interfaces/Animatable/animate.html`. B1 takes
   `interfaces/KeyframeEffect/*`, `interfaces/AnimationEffect/*`, and
   `interfaces/Animation/commitStyles.html` and `persist.html`; B2
-  `animation-model/animation-types/*` and the composite pages.
+  `animation-model/animation-types/*` and the composite pages, and from
+  `css/css-animations` (added to the checkout for it) `AnimationEvent`
+  and the event pages that reach a shown page — its CSSAnimation pages
+  ask at load, before a page's CSS animations start (DEBTS.md).
 - **The sign-in page:** the replay of the 2026-11-08 record, logged as in § 1, shows
   the generator's hash input ending in a real key instead of `000`;
   then the P5 shows the dialog's form.

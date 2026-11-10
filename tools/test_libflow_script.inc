@@ -36,8 +36,86 @@ static int32_t script_sets(garb_parsed_t *owner, const char *text, garb_set_t *o
     return n;
 }
 
+/* One script effect of two keyframes on `#k` in `html`, its composite and
+ * iterationComposite as given, held at `hold` ms of a 1000 ms iteration
+ * run `iterations` times; `prop` read as getComputedStyle reads it. */
+static void composite_case(const char *name, const char *html, const char *from, const char *to,
+                           garb_composite_t op, bool iteration_accumulate, double iterations, double hold,
+                           garb_prop_t prop, const char *want)
+{
+    garb_parsed_t a = {0}, b = {0};
+    garb_set_t sa[8], sb[8];
+    int32_t na = script_sets(&a, from, sa, 8), nb = script_sets(&b, to, sb, 8);
+    garb_effect_keyframe_t frames[2] = {{0, false, {0}, sa, na, op}, {1, false, {0}, sb, nb, op}};
+    garb_effect_t fx;
+    memset(&fx, 0, sizeof(fx));
+    fx.frames = frames;
+    fx.nframes = 2;
+    fx.timing.duration_ms = 1000;
+    fx.timing.iterations = iterations;
+    fx.held = true;
+    fx.hold_ms = hold;
+    fx.rate = 1;
+    fx.iteration_accumulate = iteration_accumulate;
+    const garb_effect_t *list[1] = {&fx};
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    ScriptEffects se = {computed_find(p.doc->document, "k"), list, 1};
+    p.script = &se;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    flow_computed_t *c = tree != NULL ? flow_computed_new(tree, &p.env, se.target, NULL) : NULL;
+    computed_is(c, name, prop, want);
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&a);
+    garb_free(&b);
+}
+
+/* Composite (Web Animations 1 § 5.4): a keyframe that adds meets the value
+ * underneath before the interval is mixed. */
+static void composite_cases(void)
+{
+    const char *box = "<!doctype html><style>#k{margin-left:100px;opacity:0.25;color:rgb(10,20,30);"
+                      "transform:translateX(10px)}</style><div id=k>x</div>";
+    composite_case("composite: replace mixes the keyframes alone", box, "margin-left: 0px", "margin-left: 50px",
+                   GARB_COMPOSITE_REPLACE, false, 1, 500, GARB_MARGIN_LEFT, "25px");
+    composite_case("composite: add meets the value underneath", box, "margin-left: 0px", "margin-left: 50px",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_MARGIN_LEFT, "125px");
+    composite_case("composite: an added number is clamped", box, "opacity: 0.5", "opacity: 1",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_OPACITY, "1");
+    composite_case("composite: an added colour, channel by channel", box, "color: rgb(10, 10, 10)",
+                   "color: rgb(10, 10, 10)", GARB_COMPOSITE_ADD, false, 1, 500, GARB_COLOR, "rgb(20, 30, 40)");
+    composite_case("composite: an added transform follows the one underneath", box, "transform: translateX(0px)",
+                   "transform: translateX(20px)", GARB_COMPOSITE_ADD, false, 1, 500, GARB_TRANSFORM,
+                   "matrix(1, 0, 0, 1, 20, 0)");
+    composite_case("composite: an accumulated scale builds from 1", "<!doctype html><style>#k{transform:scale(2)}"
+                   "</style><div id=k>x</div>", "transform: scale(3)", "transform: scale(3)",
+                   GARB_COMPOSITE_ACCUMULATE, false, 1, 500, GARB_TRANSFORM, "matrix(4, 0, 0, 4, 0, 0)");
+    composite_case("composite: an added scale multiplies", "<!doctype html><style>#k{transform:scale(2)}"
+                   "</style><div id=k>x</div>", "transform: scale(3)", "transform: scale(3)",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_TRANSFORM, "matrix(6, 0, 0, 6, 0, 0)");
+    composite_case("composite: an added scale property multiplies", "<!doctype html><style>#k{scale:2}"
+                   "</style><div id=k>x</div>", "scale: 3", "scale: 3", GARB_COMPOSITE_ADD, false, 1, 500,
+                   GARB_SCALE, "6");
+    composite_case("composite: lists that do not pair accumulate as the keyframe's alone", box,
+                   "transform: scale(2)", "transform: scale(2)", GARB_COMPOSITE_ACCUMULATE, false, 1, 500,
+                   GARB_TRANSFORM, "matrix(2, 0, 0, 2, 0, 0)");
+    composite_case("composite: a kind that does not add replaces", box, "visibility: hidden", "visibility: hidden",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_VISIBILITY, "hidden");
+    composite_case("composite: an added number past its range mixes, then is held", box, "opacity: 0.5",
+                   "opacity: 1", GARB_COMPOSITE_ADD, false, 1, 250, GARB_OPACITY, "0.875");
+    composite_case("composite: each finished iteration builds on the last", box, "margin-left: 0px",
+                   "margin-left: 10px", GARB_COMPOSITE_REPLACE, true, 3, 2500, GARB_MARGIN_LEFT, "25px");
+    composite_case("composite: without iterationComposite each iteration starts over", box, "margin-left: 0px",
+                   "margin-left: 10px", GARB_COMPOSITE_REPLACE, false, 3, 2500, GARB_MARGIN_LEFT, "5px");
+}
+
 static void script_effect_cases(void)
 {
+    composite_cases();
     // The sign-in page's animation key, as the 2026-11-08 record makes it: a box animated
     // from one colour and turn to another over 4096 ms, every keyframe
     // eased by cubic-bezier(0.23, -0.07, 0.53, 0.55), paused and set to
@@ -48,7 +126,7 @@ static void script_effect_cases(void)
     int32_t nto = script_sets(&to_p, "color: #31a6fd; transform: rotate(165deg)", to_s, 8);
     expect("script effects: the keyframes read", nfrom == 2 && nto == 2, NULL);
     garb_easing_t ease = {GARB_EASE_CUBIC, {0.23, -0.07, 0.53, 0.55}, 0, GARB_JUMP_END, false};
-    garb_effect_keyframe_t frames[2] = {{0, true, ease, from_s, nfrom}, {1, true, ease, to_s, nto}};
+    garb_effect_keyframe_t frames[2] = {{0, true, ease, from_s, nfrom, GARB_COMPOSITE_REPLACE}, {1, true, ease, to_s, nto, GARB_COMPOSITE_REPLACE}};
     garb_effect_t fx;
     memset(&fx, 0, sizeof(fx));
     fx.frames = frames;
@@ -106,7 +184,7 @@ static void script_effect_cases(void)
     garb_parsed_t o0 = {0}, o1 = {0};
     garb_set_t s0[2], s1[2];
     int32_t n0 = script_sets(&o0, "opacity: 0", s0, 2), n1 = script_sets(&o1, "opacity: 1", s1, 2);
-    garb_effect_keyframe_t fade[2] = {{0, false, {0}, s0, n0}, {1, false, {0}, s1, n1}};
+    garb_effect_keyframe_t fade[2] = {{0, false, {0}, s0, n0, GARB_COMPOSITE_REPLACE}, {1, false, {0}, s1, n1, GARB_COMPOSITE_REPLACE}};
     garb_effect_t run;
     memset(&run, 0, sizeof(run));
     run.frames = fade;
@@ -168,7 +246,7 @@ static void script_effect_cases(void)
     // value is left early: 0 at 0 and 0.5, 1 at 1, eased out over 1000 ms,
     // leaves 0.5 at about 349 ms, where its linear far end is 500; asked at
     // 300 it is due at once.
-    garb_effect_keyframe_t flat[3] = {{0, false, {0}, s0, n0}, {0.5, false, {0}, s0, n0}, {1, false, {0}, s1, n1}};
+    garb_effect_keyframe_t flat[3] = {{0, false, {0}, s0, n0, GARB_COMPOSITE_REPLACE}, {0.5, false, {0}, s0, n0, GARB_COMPOSITE_REPLACE}, {1, false, {0}, s1, n1, GARB_COMPOSITE_REPLACE}};
     garb_effect_t bent = run;
     bent.frames = flat;
     bent.nframes = 3;
@@ -198,7 +276,7 @@ static void script_effect_cases(void)
     garb_set_t ts0[2], ts1[2];
     int32_t nt0 = script_sets(&t0, "text-shadow: 0 0 black", ts0, 2);
     int32_t nt1 = script_sets(&t1, "text-shadow: 0 -100px black", ts1, 2);
-    garb_effect_keyframe_t lift[2] = {{0, false, {0}, ts0, nt0}, {1, false, {0}, ts1, nt1}};
+    garb_effect_keyframe_t lift[2] = {{0, false, {0}, ts0, nt0, GARB_COMPOSITE_REPLACE}, {1, false, {0}, ts1, nt1, GARB_COMPOSITE_REPLACE}};
     garb_effect_t over = bent;
     over.frames = lift;
     over.nframes = 2;
@@ -222,7 +300,7 @@ static void script_effect_cases(void)
     garb_set_t rs0[2], rs1[2];
     int32_t nr0 = script_sets(&r0, "transform: rotate(0deg)", rs0, 2);
     int32_t nr1 = script_sets(&r1, "transform: rotate(90deg)", rs1, 2);
-    garb_effect_keyframe_t turn[2] = {{0, false, {0}, rs0, nr0}, {1, false, {0}, rs1, nr1}};
+    garb_effect_keyframe_t turn[2] = {{0, false, {0}, rs0, nr0, GARB_COMPOSITE_REPLACE}, {1, false, {0}, rs1, nr1, GARB_COMPOSITE_REPLACE}};
     garb_effect_t spin = run;
     spin.frames = turn;
     spin.nframes = 2;
@@ -257,7 +335,7 @@ static void script_effect_cases(void)
     int32_t nm0 = script_sets(&m0, "margin-left: 100px", ms0, 2);
     int32_t nm1 = script_sets(&m1, "margin-left: 200px", ms1, 2);
     int32_t nm2 = script_sets(&m2, "margin-left: 300px", ms2, 2);
-    garb_effect_keyframe_t twice[3] = {{0, false, {0}, ms0, nm0}, {0, false, {0}, ms1, nm1}, {1, false, {0}, ms2, nm2}};
+    garb_effect_keyframe_t twice[3] = {{0, false, {0}, ms0, nm0, GARB_COMPOSITE_REPLACE}, {0, false, {0}, ms1, nm1, GARB_COMPOSITE_REPLACE}, {1, false, {0}, ms2, nm2, GARB_COMPOSITE_REPLACE}};
     garb_effect_t under = run;
     under.frames = twice;
     under.nframes = 3;

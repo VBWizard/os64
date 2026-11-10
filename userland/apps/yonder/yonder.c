@@ -10335,6 +10335,11 @@ static size_t script_text_rects(void *, const os64_html_node_t *, size_t, size_t
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
+static int32_t css_animations_count(void *opaque, bool current);
+static bool css_animations_at(void *opaque, int32_t i, os64_dom_css_animation_t *out);
+static bool css_animations_drive(void *opaque, uint64_t id, bool paused, bool canceled, double start_ms,
+                                 double hold_ms, double rate);
+static uint64_t css_animations_version(void *opaque);
 static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push);
 static bool history_fragment(void *opaque, const char *url, bool replace);
 static uint32_t history_length(void *opaque);
@@ -10405,6 +10410,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .images={canvas_source,canvas_source_release,doc,image_sources_update},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
+        .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom, .ranges = s_ranges,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
@@ -12663,6 +12669,58 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
     }
     flow_computed_free(c);
     return kept;
+}
+
+// A page's CSS animations as its scripts see them (os64_dom_set_css_animations):
+// the timeline the page on screen shows, made current first when a script
+// asks (getAnimations, as a computed style read lays out); a page not on
+// screen shows none. The version is the trees shown, since a new tree is
+// what brings a new timeline.
+static flow_timeline_t *css_animations_of(void *opaque, bool current)
+{
+    const os64_html_document_t *doc = opaque;
+    if (page_of_doc(doc) != &g.page)
+        return NULL;
+    if (current) {
+        flow_env_t env;
+        uint64_t layouts = 0, elapsed_us = 0;
+        (void)layout_current(doc, &env, &layouts, &elapsed_us);
+    }
+    return g.page.timeline;
+}
+
+static int32_t css_animations_count(void *opaque, bool current)
+{
+    return flow_timeline_size(css_animations_of(opaque, current));
+}
+
+static bool css_animations_at(void *opaque, int32_t i, os64_dom_css_animation_t *out)
+{
+    flow_css_animation_t a;
+    if (!flow_timeline_at(css_animations_of(opaque, false), i, &a))
+        return false;
+    *out = (os64_dom_css_animation_t){.id = a.id, .element = a.node, .name = a.name, .name_len = a.name_len,
+                                      .paused = a.clock.paused, .canceled = a.clock.canceled,
+                                      .start_ms = a.clock.start_ms, .hold_ms = a.clock.hold_ms,
+                                      .rate = a.clock.rate, .style_paused = a.style_paused,
+                                      .duration_ms = a.duration_ms, .delay_ms = a.delay_ms,
+                                      .iterations = a.iterations, .direction = (int32_t)a.direction,
+                                      .fill = (int32_t)a.fill};
+    return true;
+}
+
+static bool css_animations_drive(void *opaque, uint64_t id, bool paused, bool canceled, double start_ms,
+                                 double hold_ms, double rate)
+{
+    flow_css_clock_t clock = {.paused = paused, .canceled = canceled, .start_ms = start_ms, .hold_ms = hold_ms,
+                              .rate = rate};
+    return flow_timeline_drive(css_animations_of(opaque, false), id, &clock);
+}
+
+static uint64_t css_animations_version(void *opaque)
+{
+    (void)opaque;
+    return s_trees_given;
 }
 
 // THE SHOWN PAGE'S TURN: at most one ordinary task, then due animation callbacks

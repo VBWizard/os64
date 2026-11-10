@@ -68,6 +68,7 @@ WPT_DIRS=(
     secure-contexts
     WebCryptoAPI
     web-animations
+    css/css-animations
     page-visibility
     html/interaction/focus
     dom/events

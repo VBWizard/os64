@@ -47,9 +47,10 @@ flow_animation_t f_animation_at(const flow_style_t *s, int32_t i)
 // A CSS animation at local time `local`: Web Animations 1's clock, which
 // libgarb keeps for libdom's animations too, with what CSS has none of —
 // no end delay, no iteration start, an effect easing that is linear (the
-// animation-timing-function eases each keyframe interval, eased()), and a
-// clock that only runs forwards.
-static garb_clock_t clock_at(const flow_animation_t *a, double local)
+// animation-timing-function eases each keyframe interval, eased()). It
+// runs forwards unless a script's CSSAnimation turned it round
+// (`backwards`).
+static garb_clock_t clock_at(const flow_animation_t *a, double local, bool backwards)
 {
     garb_timing_t t;
     os64_memset(&t, 0, sizeof(t));
@@ -58,18 +59,32 @@ static garb_clock_t clock_at(const flow_animation_t *a, double local)
     t.iterations = a->iterations;
     t.direction = a->direction;
     t.fill = a->fill;
-    return garb_clock_at(&t, local, false);
+    return garb_clock_at(&t, local, backwards);
 }
 
 // ── The timeline ────────────────────────────────────────────────────────
 
-// One running animation: its element and name, when it started, and while
-// it is paused, the time it holds.
+// One CSS animation: its element and name, and its clock — while it is
+// paused, the local time it holds, else when its local time was 0 and how
+// fast it runs.
 struct FRecord {
     const os64_html_node_t *node;
     double start;               // on the face's clock, ms
     double hold;                // paused: how far it had run
+    double rate;                // 1, unless a script's CSSAnimation set another
     bool paused;
+    bool canceled;              // a script canceled it: it applies nothing
+    uint64_t id;                // the same through every layout it lives through
+    // Its timing as its style last gave it, the name apart, for a script's
+    // CSSAnimation (flow_timeline_at).
+    double duration_ms, delay_ms, iterations;
+    garb_direction_t direction;
+    garb_fill_t fill;
+    // animation-play-state as the last layout read it; and whether a
+    // script's CSSAnimation drives the clock (flow_timeline_drive), which
+    // then answers that property's changes itself (CSS Animations 2: they
+    // pause and play the CSSAnimation), so a layout leaves the clock alone.
+    bool style_paused, scripted;
     int32_t place;              // its place in its element's list
     int32_t index;              // its place in its timeline's records
     FRecord *next;              // its element's next record
@@ -88,6 +103,7 @@ struct flow_timeline {
     FMap by_node;               // node -> its first record
     const flow_timeline_t *from;
     bool *met;                  // which of `from`'s records a name took
+    uint64_t next_id;           // the last record id given, carried on from `from`
 };
 
 flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc)
@@ -117,6 +133,43 @@ int32_t f_timeline_records(const flow_timeline_t *t)
     return t != NULL ? t->n : 0;
 }
 
+int32_t flow_timeline_size(const flow_timeline_t *t)
+{
+    return t != NULL ? t->n : 0;
+}
+
+bool flow_timeline_at(const flow_timeline_t *t, int32_t i, flow_css_animation_t *out)
+{
+    if (t == NULL || i < 0 || i >= t->n)
+        return false;
+    const FRecord *r = t->records[i];
+    *out = (flow_css_animation_t){.id = r->id, .node = r->node, .name = r->name, .name_len = r->len,
+                                  .place = r->place,
+                                  .clock = {.paused = r->paused, .canceled = r->canceled, .start_ms = r->start,
+                                            .hold_ms = r->hold, .rate = r->rate},
+                                  .style_paused = r->style_paused, .scripted = r->scripted,
+                                  .duration_ms = r->duration_ms, .delay_ms = r->delay_ms,
+                                  .iterations = r->iterations, .direction = r->direction, .fill = r->fill};
+    return true;
+}
+
+bool flow_timeline_drive(flow_timeline_t *t, uint64_t id, const flow_css_clock_t *clock)
+{
+    for (int32_t i = 0; t != NULL && i < t->n; i++) {
+        FRecord *r = t->records[i];
+        if (r->id != id)
+            continue;
+        r->scripted = true;
+        r->paused = clock->paused;
+        r->canceled = clock->canceled;
+        r->start = clock->start_ms;
+        r->hold = clock->hold_ms;
+        r->rate = clock->rate;
+        return true;
+    }
+    return false;
+}
+
 int32_t f_timeline_elements(const flow_timeline_t *t)
 {
     return t != NULL ? (int32_t)t->by_node.count : 0;
@@ -128,6 +181,7 @@ flow_timeline_t *f_timeline_begin(const flow_timeline_t *from)
     if (t == NULL)
         return NULL;
     t->from = from;
+    t->next_id = from->next_id;
     if (from->n > 0 && (t->met = os64_calloc((size_t)from->n, sizeof(*t->met))) == NULL) {
         os64_free(t);
         return NULL;
@@ -158,7 +212,20 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const 
     if (was != NULL) {
         r->start = was->start;
         r->hold = was->hold;
+        r->rate = was->rate;
         r->paused = was->paused;
+        r->canceled = was->canceled;
+        r->id = was->id;
+        r->duration_ms = was->duration_ms;
+        r->delay_ms = was->delay_ms;
+        r->iterations = was->iterations;
+        r->direction = was->direction;
+        r->fill = was->fill;
+        r->style_paused = was->style_paused;
+        r->scripted = was->scripted;
+    } else {
+        r->id = ++t->next_id;
+        r->rate = 1;
     }
     os64_html_hold(t->doc, n);
     t->records[t->n++] = r;
@@ -168,25 +235,32 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const 
 // The local time a record is at: what it holds while paused.
 static double local_time(const FRecord *r, double now)
 {
-    return r->paused ? r->hold : now - r->start;
+    return r->paused ? r->hold : (now - r->start) * r->rate;
 }
 
 // ── An animation's clock, CSS or script ─────────────────────────────────
 
 // Whether it has a clock: a CSS animation once the timeline gave it a
-// record, a script's effect always.
+// record, unless a script canceled it; a script's effect always.
 static bool anim_live(const FAnimation *an)
 {
-    return an->record != NULL || an->script != NULL;
+    return (an->record != NULL && !an->record->canceled) || an->script != NULL;
 }
 
-// Whether its clock stands still: a paused CSS animation, a held script
-// one, or one whose rate is 0.
+// How fast its clock runs, CSS or script: a CSS animation's is 1 unless a
+// script's CSSAnimation set another.
+static double anim_rate(const FAnimation *an)
+{
+    return an->script != NULL ? an->script->rate : an->record->rate;
+}
+
+// Whether its clock stands still: a paused animation, CSS or script, or
+// one whose rate is 0.
 static bool anim_paused(const FAnimation *an)
 {
     if (an->script != NULL)
         return an->script->held || an->script->rate == 0;
-    return an->record->paused;
+    return an->record->paused || an->record->rate == 0;
 }
 
 // Where it is at `now`. A script effect's clock may run at any rate and
@@ -201,7 +275,7 @@ static garb_clock_t anim_clock(const FAnimation *an, double now)
          * Animation reads it (garb_clock_at, § 4.5.5). */
         return garb_clock_at(&x->timing, local, x->rate < 0);
     }
-    return clock_at(&an->timing, local_time(an->record, now));
+    return clock_at(&an->timing, local_time(an->record, now), an->record->rate < 0);
 }
 
 // The time on the face's clock its local time 0 is at, for a clock that
@@ -211,7 +285,7 @@ static double anim_base(const FAnimation *an)
 {
     if (an->script != NULL)
         return an->script->rate == 1 ? an->script->start_ms : NAN;
-    return an->record->start;
+    return an->record->rate == 1 ? an->record->start : NAN;
 }
 
 // A name with its order in its list — a record's place, or a name's index
@@ -296,16 +370,24 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
             break;
         }
         r->place = names[b].order;
+        r->duration_ms = an->timing.duration_ms;
+        r->delay_ms = an->timing.delay_ms;
+        r->iterations = an->timing.iterations;
+        r->direction = an->timing.direction;
+        r->fill = an->timing.fill;
+        // animation-play-state, unless a script drives the clock.
+        bool paused = an->timing.paused;
+        r->style_paused = paused;
         if (was != NULL) {
             t->met[was->index] = true;
         } else {
             r->start = now;
-            r->paused = an->timing.paused;
+            r->paused = paused;
         }
-        if (an->timing.paused && !r->paused) {
+        if (!r->scripted && paused && !r->paused) {
             r->hold = now - r->start;
             r->paused = true;
-        } else if (!an->timing.paused && r->paused) {
+        } else if (!r->scripted && !paused && r->paused) {
             r->start = now - r->hold;
             r->paused = false;
         }
@@ -1941,6 +2023,235 @@ typedef struct {
     int32_t frame;
 } Frame;
 
+// ── Adding (Web Animations 1 § 5.4.4, the composite operation) ──────────
+//
+// A keyframe whose composite is add or accumulate has its value met with
+// the value underneath before the interval is mixed: lengths, numbers and
+// colours are summed (a colour premultiplied, as it is mixed); a transform
+// list is added by following the one underneath with this one, and
+// accumulated function by function where the two lists pair, as their
+// mix pairs them. A property of any other kind replaces (DEBTS), and so
+// does an accumulated list that does not pair.
+
+static bool add_length(flow_length_t u, flow_length_t v, flow_length_t *out)
+{
+    bool lu = u.kind == FLOW_LENGTH_PX || u.kind == FLOW_LENGTH_PERCENT;
+    bool lv = v.kind == FLOW_LENGTH_PX || v.kind == FLOW_LENGTH_PERCENT;
+    if (!lu || !lv)
+        return false;
+    if (u.kind == FLOW_LENGTH_PX && v.kind == FLOW_LENGTH_PX) {
+        *out = (flow_length_t){FLOW_LENGTH_PX, u.value + v.value, 0};
+        return true;
+    }
+    int32_t pu = u.kind == FLOW_LENGTH_PERCENT ? u.value : 0, pv = v.kind == FLOW_LENGTH_PERCENT ? v.value : 0;
+    int32_t xu = u.kind == FLOW_LENGTH_PERCENT ? u.offset : u.value;
+    int32_t xv = v.kind == FLOW_LENGTH_PERCENT ? v.offset : v.value;
+    *out = (flow_length_t){FLOW_LENGTH_PERCENT, pu + pv, xu + xv};
+    return true;
+}
+
+static uint32_t add_colour(uint32_t u, uint32_t v)
+{
+    double au = flow_alpha(u), av = flow_alpha(v);
+    double alpha = fmin(au + av, 255);
+    if (alpha <= 0)
+        return 0xFF000000u;
+    uint32_t r = 0;
+    for (int shift = 16; shift >= 0; shift -= 8) {
+        double c = (((u >> shift) & 0xFF) * au + ((v >> shift) & 0xFF) * av) / alpha;
+        int32_t x = (int32_t)floor(fmin(fmax(c, 0), 255) + 0.5);
+        r |= (uint32_t)(x > 255 ? 255 : x) << shift;
+    }
+    return (uint32_t)(255 - round_i32(alpha)) << 24 | r;
+}
+
+// One function accumulated onto another of its kind (`u` and `v` pair):
+// lengths and angles summed, a scale's factors as (u + v - 1), so that 1
+// is what changes nothing.
+static flow_transform_t accumulate_fn(const flow_transform_t *u, const flow_transform_t *v)
+{
+    flow_transform_t r = *u;
+    r.three_d = u->three_d || v->three_d;
+    r.blend = NULL;
+    switch (u->fn) {
+    case FLOW_FN_TRANSLATE:
+        (void)add_length(u->x, v->x, &r.x);
+        (void)add_length(u->y, v->y, &r.y);
+        r.a[2] = u->a[2] + v->a[2];
+        break;
+    case FLOW_FN_SCALE:
+        for (int i = 0; i < 3; i++)
+            r.a[i] = u->a[i] + v->a[i] - 1;
+        break;
+    case FLOW_FN_ROTATE: {
+        double axis[3];
+        (void)same_axis(u, v, axis);
+        os64_memcpy(r.a, axis, sizeof(axis));
+        r.unit = f_angle_common(u->unit, v->unit);
+        double tu = has_axis(u) ? u->a[3] : 0, tv = has_axis(v) ? v->a[3] : 0;
+        r.a[3] = f_angle_in_unit(tu, u->unit, r.unit) + f_angle_in_unit(tv, v->unit, r.unit);
+        break;
+    }
+    default: {
+        int n = u->fn == FLOW_FN_SKEW ? 2 : 1;
+        r.unit = f_angle_common(u->unit, v->unit);
+        for (int i = 0; i < n; i++)
+            r.a[i] = f_angle_in_unit(u->a[i], u->unit, r.unit) + f_angle_in_unit(v->a[i], v->unit, r.unit);
+        break;
+    }
+    }
+    f_transform_fn_matrix(&r);
+    return r;
+}
+
+// Whether two functions accumulate one onto the other: of one kind, and a
+// rotation about one axis; a matrix and a blend do not.
+static bool accumulates(const flow_transform_t *u, const flow_transform_t *v)
+{
+    double axis[3];
+    if (u->fn != v->fn || u->fn == FLOW_FN_MATRIX || u->fn == FLOW_FN_BLEND || u->fn == FLOW_FN_PERSPECTIVE)
+        return false;
+    return u->fn != FLOW_FN_ROTATE || same_axis(u, v, axis);
+}
+
+// A transform list met with the one underneath: `v` after `u` (add), or,
+// accumulating, function by function where every pair accumulates — and
+// where one does not, `v` alone, as accumulating matrices that do not
+// decompose is (Transforms 2 § 16; decomposing the ones that do is DEBTS).
+static bool add_transforms(const flow_transform_t *u, int32_t nu, const flow_transform_t *v, int32_t nv,
+                           bool accumulate, const flow_transform_t **out, int32_t *nout, FAlloc alloc,
+                           void *ctx)
+{
+    bool pairwise = accumulate && nu == nv;
+    for (int32_t i = 0; pairwise && i < nu; i++)
+        pairwise = accumulates(&u[i], &v[i]);
+    if (accumulate && !pairwise) {
+        *out = v;
+        *nout = nv;
+        return true;
+    }
+    int32_t n = pairwise ? nu : nu + nv;
+    if (n == 0) {
+        *out = NULL;
+        *nout = 0;
+        return true;
+    }
+    flow_transform_t *list = alloc(ctx, (size_t)n * sizeof(*list));
+    if (list == NULL)
+        return false;
+    for (int32_t i = 0; i < n; i++)
+        list[i] = pairwise ? accumulate_fn(&u[i], &v[i]) : i < nu ? u[i] : v[i - nu];
+    *out = list;
+    *nout = n;
+    return true;
+}
+
+// An individual transform (translate, rotate, scale) met with the one
+// underneath, none being the identity: summed where they accumulate —
+// added, a scale multiplies and a rotation about another axis follows —
+// else this one follows the one underneath.
+static bool add_individual(const flow_transform_t *u, const flow_transform_t *v, bool accumulate,
+                           const flow_transform_t **out, FAlloc alloc, void *ctx)
+{
+    if (u == NULL || v == NULL) {
+        *out = u == NULL ? v : u;
+        return true;
+    }
+    flow_transform_t *one = alloc(ctx, sizeof(*one));
+    if (one == NULL)
+        return false;
+    if (u->fn == FLOW_FN_SCALE && v->fn == FLOW_FN_SCALE && !accumulate) {
+        *one = *v;
+        for (int i = 0; i < 3; i++)
+            one->a[i] = u->a[i] * v->a[i];
+        f_transform_fn_matrix(one);
+    } else if (accumulates(u, v)) {
+        *one = accumulate_fn(u, v);
+    } else {
+        *one = *v;
+        return false;
+    }
+    *out = one;
+    return true;
+}
+
+// Property `p` of `d` (a copy of the keyframe's `v`) made `v`'s value met
+// with `u`'s, the value underneath; false where `p` is of a kind that does
+// not add, and then `d` keeps `v`'s.
+static bool add_prop(garb_prop_t p, const flow_style_t *u, const flow_style_t *v, flow_style_t *d,
+                     bool accumulate, FAlloc alloc, void *ctx)
+{
+    int i;
+    switch (p) {
+    case GARB_COLOR: d->color = add_colour(u->color, v->color); return true;
+    case GARB_BACKGROUND_COLOR:
+        d->background = add_colour(u->has_background ? u->background : 0xFF000000u,
+                                   v->has_background ? v->background : 0xFF000000u);
+        d->has_background = flow_alpha(d->background) > 0;
+        return true;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        i = p - GARB_BORDER_TOP_COLOR;
+        d->border_color[i] = add_colour(u->border_color[i], v->border_color[i]);
+        return true;
+    case GARB_OUTLINE_COLOR: d->outline_color = add_colour(u->outline_color, v->outline_color); return true;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        i = p - GARB_MARGIN_TOP;
+        return add_length(u->margin[i], v->margin[i], &d->margin[i]);
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM: case GARB_PADDING_LEFT:
+        i = p - GARB_PADDING_TOP;
+        if (!add_length(u->padding[i], v->padding[i], &d->padding[i]))
+            return false;
+        hold_nonneg(&d->padding[i]);
+        return true;
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        i = p - GARB_TOP;
+        return add_length(u->inset[i], v->inset[i], &d->inset[i]);
+    case GARB_TEXT_INDENT: return add_length(u->text_indent, v->text_indent, &d->text_indent);
+    case GARB_WIDTH: case GARB_HEIGHT: {
+        flow_length_t *out = p == GARB_WIDTH ? &d->width : &d->height;
+        if (!add_length(p == GARB_WIDTH ? u->width : u->height, p == GARB_WIDTH ? v->width : v->height, out))
+            return false;
+        hold_nonneg(out);
+        return true;
+    }
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH:
+        i = p - GARB_BORDER_TOP_WIDTH;
+        d->border_width[i] = u->border_width[i] + v->border_width[i];
+        return true;
+    case GARB_FONT_SIZE: d->font_size = u->font_size + v->font_size; return true;
+    // A number past its range is kept past it here: the interval mixes the
+    // values met, and the mix holds the result to the range.
+    case GARB_FONT_WEIGHT:
+        d->font_weight = (uint16_t)(u->font_weight + v->font_weight > 65535 ? 65535 : u->font_weight + v->font_weight);
+        return true;
+    case GARB_LETTER_SPACING: d->letter_spacing = u->letter_spacing + v->letter_spacing; return true;
+    case GARB_OUTLINE_WIDTH: d->outline_width = u->outline_width + v->outline_width; return true;
+    case GARB_OUTLINE_OFFSET: d->outline_offset = u->outline_offset + v->outline_offset; return true;
+    case GARB_OPACITY:
+        d->opacity = (uint16_t)(u->opacity + v->opacity > 65535 ? 65535 : u->opacity + v->opacity);
+        return true;
+    case GARB_Z_INDEX:
+        if (!u->has_z_index || !v->has_z_index)
+            return false;
+        d->z_index = u->z_index + v->z_index;
+        return true;
+    case GARB_TRANSFORM:
+        return add_transforms(u->transform, u->ntransform, v->transform, v->ntransform, accumulate,
+                              &d->transform, &d->ntransform, alloc, ctx);
+    case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE: {
+        const flow_transform_t *fu = p == GARB_TRANSLATE ? u->translate : p == GARB_ROTATE ? u->rotate : u->scale;
+        const flow_transform_t *fv = p == GARB_TRANSLATE ? v->translate : p == GARB_ROTATE ? v->rotate : v->scale;
+        return add_individual(fu, fv, accumulate,
+                              p == GARB_TRANSLATE ? &d->translate : p == GARB_ROTATE ? &d->rotate : &d->scale,
+                              alloc, ctx);
+    }
+    default:
+        return false;
+    }
+}
+
 // The frames property `p` is worked between: the implicit first at 0,
 // where no keyframe that sets it is at 0; those that do, in their order;
 // the implicit last at 1, where none is at 1 — eased as the animation is
@@ -2091,6 +2402,31 @@ static void follow_colour(flow_style_t *out)
 // before it made, held still while it mixes over the look's style, and
 // never resolved again. When `record`, each interval whose two ends are
 // one value is recorded for the schedule (FAnimation.holds).
+// iterationComposite: accumulate (Web Animations 1 § 4.10.3 and § 5.4):
+// the value each finished iteration ended on, its last keyframe's, built
+// onto this iteration's, as many times as iterations are finished. A
+// last keyframe that does not resolve, or a property that does not add,
+// leaves the value as this iteration made it.
+static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_style_t *under, garb_prop_t p,
+                                  double iterations, Look *look)
+{
+    Frame s, e;
+    interval(an, under, p, 1, &s, &e);
+    const flow_style_t *last = under;
+    if (!e.implicit) {
+        const FResolved *r = look->resolve(look->ctx, a, e.frame, look->out);
+        if (r == NULL)
+            return;
+        last = &r->style;
+    }
+    // add_prop reads a field before it writes it, so the value is built
+    // where it stands.
+    int32_t n = iterations > 1000 ? 1000 : (int32_t)iterations;
+    for (int32_t i = 0; i < n; i++)
+        if (!add_prop(p, look->out, last, look->out, true, look->alloc, look->ctx))
+            return;
+}
+
 static bool motion_walk(const FMotion *m, Look *look, bool record)
 {
     bool ok = true;
@@ -2136,10 +2472,27 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                 bool resolved = s.style != NULL && e.style != NULL;
                 if (record && resolved && same_value((garb_prop_t)p, s.style, e.style))
                     f_props_add(&m->anims[a].holds, (garb_prop_t)p);
+                // A keyframe that adds or accumulates meets the value
+                // underneath before the interval is mixed; an implicit one
+                // is the value underneath already.
+                flow_style_t met[2];
+                for (int end = 0; resolved && end < 2; end++) {
+                    Frame *f = end == 0 ? &s : &e;
+                    garb_composite_t op = f->implicit ? GARB_COMPOSITE_REPLACE : an->frames[f->frame].composite;
+                    if (op == GARB_COMPOSITE_REPLACE)
+                        continue;
+                    met[end] = *f->style;
+                    if (add_prop((garb_prop_t)p, &under, f->style, &met[end], op == GARB_COMPOSITE_ACCUMULATE,
+                                 look->alloc, look->ctx))
+                        f->style = &met[end];
+                }
                 if (resolved && room &&
                     mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
-                             look->out, look->alloc, look->ctx))
+                             look->out, look->alloc, look->ctx)) {
+                    if (an->iteration_accumulate && k.iteration >= 1)
+                        accumulate_iterations(an, a, &under, (garb_prop_t)p, k.iteration, look);
                     continue;
+                }
                 ok = false;
                 if (look->failed != NULL)
                     f_props_add(look->failed, (garb_prop_t)p);
@@ -2191,9 +2544,8 @@ uint8_t f_motion_effects(const FMotion *m, double now)
         garb_clock_t k = anim_clock(an, now);
         // Current (Web Animations 1 § 4.5.5) — in its active phase, or
         // before it on the way to it: before it going forwards, after it
-        // going backwards, neither at a rate of 0 — or in effect. A CSS
-        // animation always plays forwards.
-        double rate = an->script != NULL ? an->script->rate : 1;
+        // going backwards, neither at a rate of 0 — or in effect.
+        double rate = anim_rate(an);
         bool current = k.phase == GARB_PHASE_ACTIVE || (rate > 0 && k.phase == GARB_PHASE_BEFORE) ||
                        (rate < 0 && k.phase == GARB_PHASE_AFTER);
         if (!current && !k.in_effect)
@@ -2419,8 +2771,8 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
         // A clock at another rate, or running backwards, is due at once
         // until it is past its active phase the way it runs.
         if (isnan(base)) {
-            if (!(k.phase == GARB_PHASE_AFTER && an->script->rate > 0) &&
-                !(k.phase == GARB_PHASE_BEFORE && an->script->rate < 0))
+            if (!(k.phase == GARB_PHASE_AFTER && anim_rate(an) > 0) &&
+                !(k.phase == GARB_PHASE_BEFORE && anim_rate(an) < 0))
                 next = now;
             continue;
         }

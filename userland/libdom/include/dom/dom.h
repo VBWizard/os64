@@ -948,17 +948,23 @@ bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *o
 /* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md). The update step is
  * HTML's "update animations and send events": it samples the document
  * timeline's time, runs each animation's pending play and pause tasks,
- * updates their finished states, removes the filling animations later
- * ones replace (Web Animations 1 § 5.5), dispatches the playback events
- * queued since the last step in the order they happened, as one task, and lets go
- * of the animations that can change nothing more. next answers when a step
- * is due on the host's clock — at once for the first, then a frame after
- * the last — or UINT64_MAX while no step has work (no pending task, no
- * running animation, no event, no script that read the timeline, nothing
- * to let go of, no animation that finished since the last look for
- * replaced ones). The
- * host runs it on its rendering step, before the frame callbacks; update
- * answers whether it ran (outcome filled). Owner thread, between tasks. */
+ * updates their finished states, brings each CSSAnimation the style's
+ * changes and cancels one whose CSS animation went, works out the CSS
+ * animation events owed (os64_dom_set_css_animations), removes the
+ * filling animations later ones replace (Web Animations 1 § 5.5),
+ * dispatches the playback and CSS animation events queued since the last
+ * step in the order they happened, as one task, and lets go of the
+ * animations that can change nothing more. next answers when a step is
+ * due on the host's clock — at once for the first, then no sooner than a
+ * frame after the last: at once while a script animation or CSSAnimation
+ * has work (a pending task, running, an event, a script that read the
+ * timeline, something to let go of, one that finished since the last look
+ * for replaced ones), or the host's CSS animations moved while a
+ * CSSAnimation or a CSS animation event's listener cares, or such a
+ * listener came or went; else when a listened-for CSS animation next
+ * crosses a boundary — or UINT64_MAX for none of these. The host runs it
+ * on its rendering step, before the frame callbacks; update answers
+ * whether it ran (outcome filled). Owner thread, between tasks. */
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom);
 bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
@@ -982,6 +988,52 @@ void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest);
  * such a tree stands must keep it (drained, its engine gone) until the
  * tree goes. */
 bool os64_dom_effects_held(const os64_dom_t *dom);
+
+/* CSS ANIMATIONS as a script sees them (CSSAnimation and the CSS animation
+ * events; WEB_ANIMATIONS.md § 3): the host keeps them, and answers for
+ * every one the document's style names, a canceled or finished one
+ * included. Each has an id, the same while it lives and never 0; its
+ * element; its animation-name (good until the next count);
+ * its clock on now_ms's — while `paused` the local time it holds, else
+ * the time its local time was 0 at and its rate (local time = (now -
+ * start_ms) * rate), and a `canceled` one applies nothing;
+ * animation-play-state as its style gives it; and its timing as its style
+ * gives it, `direction` and `fill` garb/timing.h's garb_direction_t and
+ * garb_fill_t. */
+typedef struct {
+    uint64_t id;
+    const os64_html_node_t *element;
+    const char *name;
+    size_t name_len;
+    bool paused, canceled;
+    double start_ms, hold_ms, rate;
+    bool style_paused;
+    double duration_ms, delay_ms, iterations;
+    int32_t direction, fill;
+} os64_dom_css_animation_t;
+typedef struct {
+    /* How many there are, in composite order, the style made current first
+     * when `current` (a script asked: getAnimations); else as the page
+     * shows them. */
+    int32_t (*count)(void *opaque, bool current);
+    /* The i'th of them as count last answered; false past them. */
+    bool (*at)(void *opaque, int32_t i, os64_dom_css_animation_t *out);
+    /* A script drives `id` from now on: its clock is the one given (as
+     * `at` reads it), shown at once, and animation-play-state no longer
+     * moves it — the binding answers that property's changes itself. False
+     * when no animation has that id. */
+    bool (*drive)(void *opaque, uint64_t id, bool paused, bool canceled, double start_ms, double hold_ms,
+                  double rate);
+    /* A number that moves whenever what count and at answer may have
+     * changed other than by drive (a layout the page shows). */
+    uint64_t (*version)(void *opaque);
+    void *opaque;
+} os64_dom_css_animations_t;
+/* Copied; NULL removes it, after which getAnimations answers a script's
+ * animations alone and no CSS animation event fires. The callbacks are
+ * owner-thread, inside a script's task: they must not enter JS. Install
+ * outside callbacks. */
+void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css);
 
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
  * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the

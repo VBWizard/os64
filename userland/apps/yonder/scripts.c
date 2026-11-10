@@ -631,6 +631,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
+    if (s->options.css_animations.count != NULL)
+        os64_dom_set_css_animations(s->dom, &s->options.css_animations);
     // The state the session gave the document before there was a binding
     // to tell (a traversal's or a reload's entry): a binding that cannot
     // take it is not built, so the page never reads a state the window
