@@ -134,7 +134,9 @@ first anyway, since h3 is discovered through Alt-Svc. One DEBTS row when
 this arc lands; no design now.
 
 **The ranking the slices follow (§ 3)**: session resumption first, because
-it is the cheapest cut of the same handshake cost and stands alone; the
+it is the cheapest cut of the same handshake cost and stands alone (so it
+looked: H2.1's "as built" has the P5's measurement, which found the
+handshake's cost to be its round trip, and resumption to save none of it); the
 pool's new ownership and the cap second, because h2 rides on it and h1
 sites gain from it today; then the pure pieces; then the one hard thing,
 the multiplexer; then the switch.
@@ -983,7 +985,22 @@ proof; this is where the build departs from the brief above, or says more.
   407 ms; the three after it, each resumed on a connection of its own,
   124, 140 and 125 ms. The first figure includes the name lookup, and TCG
   overstates what the signature checks cost, so the P5 is the number to
-  trust. **Not measured:** WIRE.md's blog page before and after, which the
+  trust.
+- **Measured on the P5, and what it says** (Chris, 2026-11-10, one public
+  site, `resumeprobe ... 4`): the full handshake's open 149 ms; the three
+  resumed ones 157, 139 and 160 ms. No difference outside the network's
+  own variation. A TLS 1.3 handshake is one round trip full or resumed,
+  and `psk_dhe_ke` resumption removes none of it: what it removes is the
+  certificate chain's bytes and the CPU that checks them, which on this
+  machine is milliseconds inside an open that is mostly round trips. The
+  brief's claim, and § 1's ranking of this slice as "the cheapest cut of
+  the same handshake cost", held under QEMU's emulated CPU and does not
+  hold on the hardware. What the slice buys on the P5 is a client that
+  resumes as every browser does, fewer bytes, and less work on a slow or
+  loaded CPU; what cuts a page's waiting is fewer handshakes, which is
+  H2.2's cap and H2.5's one connection per origin. Only 0-RTT would take a
+  round trip out of a reconnect, and § "The hello" in TLS13.md says why
+  that is not offered. **Not measured:** WIRE.md's blog page before and after, which the
   brief asked for. Resumption changes no connection count, and that
   page's arrival time under TCG is its scripts'.
 

@@ -14,7 +14,7 @@ H2.0.7,"/tests/belltest: ring-before-wait kept, cross-thread wake, timeout, two 
 H2.0.8,"Kernel case for the park/ring race",H2.0.1,done,#526,
 H2.0.9,"Codex round",H2.0.7,done,#526,
 
-H2.1,"Session resumption: TLS 1.3 tickets kept and offered, a resumed handshake skips the chain",,review,,"HTTP2.md § 4 H2.1; reverses TLS13.md ruling 6 by Chris's 2026-11-09 ruling"
+H2.1,"Session resumption: TLS 1.3 tickets kept and offered, a resumed handshake skips the chain",,done,#529,"HTTP2.md § 4 H2.1; reverses TLS13.md ruling 6 by Chris's 2026-11-09 ruling. Codex round 1 clean, P5 passed 2026-11-10; on the P5 a resumed open is no faster than a full one (as built)"
 H2.1.1,"Keep NewSessionTicket's fields in ticket_byte (lifetime, age_add, nonce, ticket up to TLS13_TICKET_MAX); derive the PSK",H2.1,done,#529,
 H2.1.2,"Derive resumption_master_secret at client Finished; wipe with the rest",H2.1,done,#529,"TLS13.md § The key schedule's 'not derived' line changes"
 H2.1.3,"Session cache in libtls: key (host, port, trust), each entry holding a reference on its store, 32 entries, two tickets per key, use-once, expiry, os64_tls_sessions_drop",H2.1.1,done,#529,
@@ -26,7 +26,7 @@ H2.1.8,"Host cases against OpenSSL s_server: extension 45 on a first hello check
 H2.1.9,"Fuzz loop gains the PSK server extension shapes; mutants once at the end",H2.1.8,done,#529,
 H2.1.10,"Measurement in the PR body: cold vs resumed handshake time in the guest; WIRE.md blog page connections and arrival",H2.1.7,done,#529,"the handshake measured in the guest (full 407 ms, resumed 124 to 140 ms, QEMU TCG); the blog page not re-measured: resumption changes no connection count (as built)"
 H2.1.11,"TLS13.md § The profile and DEBTS § TLS 1.3 engine boundaries updated; as-built section",H2.1.8,done,#529,
-H2.1.12,"Codex round",H2.1.9,doing,,
+H2.1.12,"Codex round",H2.1.9,done,#529,
 
 H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,design-review,,"HTTP2.md § 2.2 and § 4 H2.2; h1-only, behaviour-neutral under six connections"
 H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,todo,,
