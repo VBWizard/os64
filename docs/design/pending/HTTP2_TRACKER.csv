@@ -51,7 +51,7 @@ H2.3.4,"HPACK decoder: static table, dynamic table bounded by our advertised siz
 H2.3.5,"HPACK encoder: dynamic table bounded by the peer's size, indexing policy, never-indexed for authorization and marked fields, Huffman when shorter, size update on a shrink",H2.3,done,#535,
 H2.3.6,"h2_head_check: RFC 9113 § 8.2's rules on a decoded field list, the rule broken returned",H2.3.4,done,#535,
 H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table state checked; every frame rule; reassembly; byte-at-a-time; head-check rules; encoder shrink; fuzz loop",H2.3.6,done,#535,"about 630,000 checks; also the hpack-test-case corpus from the WPT checkout, 36,990 blocks, run once and not kept"
-H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"212 of 212"
+H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
 H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round open"
 
 H2.4,"The connection: state machine, streams, flow control, the reader thread, against a scripted peer",H2.0 H2.2 H2.3,todo,,"HTTP2.md § 2.2 § 2.3 § 2.5 § 2.6; brief written by Fable after H2.2's round"

@@ -1335,6 +1335,9 @@ or says more than it did:
   ceiling under 4096 announces that in its first block.
 - **A field too large for the table is sent without indexing**, not
   added: adding it would only empty the table.
+- **A sensitive field is never sent as an index**, even when a table
+  holds it whole: an index carries no never-indexed instruction, and a
+  decoder hands it over as an ordinary field. (Codex, on the PR.)
 - **"Huffman when shorter" is not "Huffman always"**, and one of the
   RFC's examples shows the difference: C.6.2's `:status: 307` is three
   bytes either way, the RFC's encoder codes it and ours does not. The
@@ -1364,7 +1367,7 @@ or says more than it did:
   one byte to a frame; each of the decoder's refusals; the head rules one
   at a time; and three random loops (blocks at a decoder, frames at the
   parser, field lists through an encoder into a decoder with the table
-  size moving). Mutants: `tools/test_h2_mutants.py`, 212 of 212 caught,
+  size moving). Mutants: `tools/test_h2_mutants.py`, 215 of 215 caught,
   one deliberate break to a rule. The first whole run caught 192: ten
   mutants did not compile and were rewritten, five were gaps in the
   harness and each has a case now (a setting identifier past one byte,

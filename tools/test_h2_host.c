@@ -783,6 +783,10 @@ static void head_cases(void)
     ONE(H2_HEAD_REQUEST, H2_HEAD_OK, 4, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "TRAILERS"));
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "trailerz"));
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "trailer"));
+    // Seven bytes of it, with the eighth lying just past the value.
+    h2_field_t cut = F("te", "trailers");
+    cut.value_len = 7;
+    ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), cut);
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "TRAILER\x13"));
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"),
         F("te", "trailers, gzip"));
