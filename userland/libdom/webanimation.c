@@ -146,8 +146,7 @@ struct DWaEvent {
 /* A CSS animation as the last step saw it, kept while a CSS animation
  * event has a listener, so the next can tell which of its boundaries it
  * crossed (CSS Animations 2 § 4.2): its element (held), its name, its
- * clock and timing, and its phase (WaCssPhase), iteration and active time
- * then. */
+ * clock and timing, and its phase (WaCssPhase) and iteration then. */
 typedef enum { CSS_IDLE, CSS_BEFORE, CSS_ACTIVE, CSS_AFTER } WaCssPhase;
 typedef struct DWaSeen DWaSeen;
 struct DWaSeen {
@@ -159,7 +158,7 @@ struct DWaSeen {
     double start, hold, rate;
     garb_timing_t timing;
     WaCssPhase phase;
-    double iteration, active_time;
+    double iteration;
     uint32_t pass;
 };
 
@@ -2758,6 +2757,15 @@ static void css_queue(os64_dom_t *dom, const DWaSeen *s, const char *type, doubl
     dom->wa_events_last = e;
 }
 
+/* The seen animation's active time at `now` on the host's clock, by its
+ * clock as the last step saw it: where a cancel found it, the clock it had
+ * until then (CSS Animations 2: animationcancel's elapsed time). */
+static double seen_active_at(const DWaSeen *s, double now)
+{
+    double local = css_local(s->paused, false, s->start, s->hold, s->rate, now);
+    return garb_clock_at(&s->timing, local, s->rate < 0).active_time;
+}
+
 /* When on the timeline the seen animation's local time was `local`. */
 static double css_when(os64_dom_t *dom, const DWaSeen *s, double local)
 {
@@ -2774,6 +2782,7 @@ static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, doubl
 {
     DWaSeen *s = seen_of(dom, r);
     if (s == NULL) return;
+    double canceled_at = seen_active_at(s, now);
     s->pass = dom->wa_css_pass;
     s->paused = r->paused;
     s->canceled = r->canceled;
@@ -2811,13 +2820,10 @@ static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, doubl
         css_queue(dom, s, "animationstart", to, css_when(dom, s, delay + to));
         css_queue(dom, s, "animationend", from, css_when(dom, s, delay + from));
     } else if (was != CSS_IDLE && was != CSS_AFTER && phase == CSS_IDLE) {
-        css_queue(dom, s, "animationcancel", s->active_time, wa_now(dom));
+        css_queue(dom, s, "animationcancel", canceled_at, wa_now(dom));
     }
     s->phase = phase;
-    if (phase != CSS_IDLE) {
-        s->iteration = k.iteration;
-        s->active_time = k.active_time;
-    }
+    if (phase != CSS_IDLE) s->iteration = k.iteration;
 }
 
 /* The step's look at the CSS animations: each CSSAnimation takes what its
@@ -2867,7 +2873,7 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
         DWaSeen *s = &dom->wa_seen[i];
         if (s->pass == pass) continue;
         if (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE)
-            css_queue(dom, s, "animationcancel", s->active_time, wa_now(dom));
+            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));
         seen_drop(dom, i);
     }
 }

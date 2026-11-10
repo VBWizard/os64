@@ -877,7 +877,7 @@ static void wa_css_events(void)
         "web animations: css events: start, iteration, end");
     /* Over in one step: start and end, in the order they happened beside
      * another's start; one that goes while active: a cancel at its active
-     * time. */
+     * time when it went, not when a step last looked. */
     wa_css_add(4, one, "blink", 1500, 50, 0, 1);
     WaCssRecord *gone = wa_css_add(5, one, "gone", 1500, 1000, 0, 1);
     (void)gone;
@@ -889,7 +889,7 @@ static void wa_css_events(void)
     wa_step(&f, "web animations: css events: gone went");
     p2b_script(&f,
         "assert(log.join()==='animationstart:blink:0:one:true:true:false,animationstart:gone:0:one:true:true:false,"
-        "animationend:blink:0.05:one:true:true:false,animationcancel:gone:0.1:one:true:true:false',log.join());",
+        "animationend:blink:0.05:one:true:true:false,animationcancel:gone:0.25:one:true:true:false',log.join());",
         "web animations: css events: together, and a cancel");
     /* Backwards across an iteration's start: the boundary crossed is the
      * later iteration's start, one second in. */

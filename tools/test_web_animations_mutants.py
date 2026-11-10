@@ -253,6 +253,9 @@ mutants = [
     ('accumulate-first-pass-overridden', MOTION_C, 'e.frame, resolved_first(p) ? NULL : look->out);',
      'e.frame, look->out);', [FLOW_FX]),
     ('accumulate-implicit-underlying', MOTION_C, '    if (e.implicit)\n        return;\n', '    if (e.implicit && false)\n        return;\n', [FLOW_FX]),
+    ('css-cancel-elapsed-stale', WA_C,
+     '            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));',
+     '            css_queue(dom, s, "animationcancel", seen_active_at(s, s->start), wa_now(dom));', [DOM]),
     ('records-in-name-order', MOTION_C, '    names = tmp;\n    bool ok = true;', '    bool ok = true;', [FLOW_MOTION]),
     ('scale-add-adds', MOTION_C, '            one->a[i] = u->a[i] * v->a[i];', '            one->a[i] = u->a[i] + v->a[i];',
      [FLOW_FX]),
@@ -295,7 +298,7 @@ mutants = [
      '        double at = k.iteration * s->timing.duration_ms;', [DOM]),
     ('css-cancel-on-vanish-skipped', WA_C,
      '        if (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE)\n'
-     '            css_queue(dom, s, "animationcancel", s->active_time, wa_now(dom));\n', '', [DOM]),
+     '            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));\n', '', [DOM]),
     ('css-events-unsorted', WA_C, '        while (*at != NULL && !(event_when(e) < event_when(*at))) at = &(*at)->next;',
      '        while (*at != NULL && (event_when(e), true)) at = &(*at)->next;', [DOM]),
     ('css-events-do-not-bubble', WA_C, "dom->wa_css_event_prototype->value, e->type, true,",
