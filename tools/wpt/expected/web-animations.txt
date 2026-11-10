@@ -853,6 +853,8 @@ animation-model/keyframe-effects/effect-value-replaced-animations.html	Animation
 animation-model/keyframe-effects/effect-value-replaced-animations.html	Persisted animations contribute to the effect stack
 animation-model/keyframe-effects/effect-value-replaced-animations.html	Removed animations do not contribute to the effect stack
 interfaces/KeyframeEffect/iterationComposite.html	iterationComposite can be updated while an animation is in progress
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation that green component is decreasing
 [excluded]
 interfaces/Animatable/getAnimations.html	its "Triggers a style change event" test waits for a CSS transition's transitionrun, and CSS transitions are not built (PILE3.md § Transitions): since slice B's constructors let that test reach the wait, the page times out whole. getAnimations is held by tools/test_dom_webanimation.inc meanwhile
 [passing]
@@ -1893,6 +1895,8 @@ animation-model/keyframe-effects/effect-value-interval-distance.html	Interval di
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	duration changes with an iteration composition operation of accumulate
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation that the values can'tbe reduced
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation that green component is decreasing
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <length> type animation
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <percentage> type animation
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of opacity animation

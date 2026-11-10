@@ -2493,7 +2493,9 @@ static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_st
     interval(an, under, p, 1, &s, &e);
     const flow_style_t *last = under;
     if (!e.implicit) {
-        const FResolved *r = look->resolve(look->ctx, a, e.frame, look->out);
+        // In the property's own pass, as motion_walk resolves it: the
+        // first pass's (colour, font size) against nothing yet built.
+        const FResolved *r = look->resolve(look->ctx, a, e.frame, resolved_first(p) ? NULL : look->out);
         if (r == NULL)
             return;
         last = &r->style;

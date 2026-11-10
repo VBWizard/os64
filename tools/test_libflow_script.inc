@@ -212,6 +212,10 @@ static void composite_cases(void)
     composite_case("composite: added rotations about two axes compose", "<!doctype html><style>#k{rotate:x 90deg}"
                    "</style><div id=k>x</div>", "rotate: y 90deg", "rotate: y 90deg", GARB_COMPOSITE_ADD, false, 1,
                    500, GARB_ROTATE, "0.57735 0.57735 0.57735 120deg");
+    composite_case("composite: a font size's iterations build on its last keyframe", box, "font-size: 10px",
+                   "font-size: 20px", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_FONT_SIZE, "35px");
+    composite_case("composite: a colour's iterations build on its last keyframe", box, "color: rgb(0, 0, 0)",
+                   "color: rgb(100, 0, 0)", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_COLOR, "rgb(150, 0, 0)");
     composite_due_case();
     composite_under_cases();
     composite_case("composite: an added currentColor is a colour of its own",
