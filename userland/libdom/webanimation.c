@@ -2768,8 +2768,8 @@ static double css_when(os64_dom_t *dom, const DWaSeen *s, double local)
 /* The events the animation owes for the boundaries it crossed since the
  * last step, by its phase then and now (CSS Animations 2 § 4.2's table):
  * the interval's start and end are where its active interval begins and
- * ends, clamped to it, and an iteration's elapsed time is where that
- * iteration begins. `quiet` takes where it is and owes nothing. */
+ * ends, clamped to it, and an iteration's elapsed time is the boundary
+ * between iterations it crossed last. `quiet` takes where it is and owes nothing. */
 static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, double now, bool quiet)
 {
     DWaSeen *s = seen_of(dom, r);
@@ -2799,7 +2799,9 @@ static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, doubl
     } else if (was == CSS_ACTIVE && phase == CSS_BEFORE) {
         css_queue(dom, s, "animationend", from, css_when(dom, s, delay + from));
     } else if (was == CSS_ACTIVE && phase == CSS_ACTIVE && k.iteration != s->iteration) {
-        double at = k.iteration * s->timing.duration_ms;
+        /* The boundary crossed last: the new iteration's start going
+         * forwards, its end going back. */
+        double at = (k.iteration < s->iteration ? k.iteration + 1 : k.iteration) * s->timing.duration_ms;
         css_queue(dom, s, "animationiteration", at, css_when(dom, s, delay + at));
     } else if (was == CSS_ACTIVE && phase == CSS_AFTER) {
         css_queue(dom, s, "animationend", to, css_when(dom, s, delay + to));

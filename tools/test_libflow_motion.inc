@@ -4654,6 +4654,14 @@ static void motion_css_api_cases(void)
                a.clock.canceled, NULL);
     expect("css api: no animation has an unknown id", !flow_timeline_drive(m.tl, 9999, &held), NULL);
     moving_close(&m);
+    // Listed in the order the list names them, not by name.
+    moving_open(&m, "<!doctype html><style>@keyframes zeta{to{margin-left:1px}}@keyframes alpha{to{margin-top:1px}}"
+                    "#z{animation:zeta 1s,alpha 1s}</style><div id=z>z</div>", 1000);
+    flow_css_animation_t first;
+    expect("css api: in animation-name's order",
+           flow_timeline_at(m.tl, 0, &first) && first.name_len == 4 && memcmp(first.name, "zeta", 4) == 0 &&
+               first.place == 0, NULL);
+    moving_close(&m);
 }
 
 static void motion_cases(void)

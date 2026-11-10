@@ -359,7 +359,12 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         }
     }
     // Each name gets a record of this layout's: a matched one carries its
-    // record's times on, and one matched to nothing starts now.
+    // record's times on, and one matched to nothing starts now. They are
+    // made in the order the list names them, which is composite order, the
+    // order a script's CSSAnimations are listed in (flow_timeline_at).
+    for (int32_t b = 0; b < m->ncss; b++)
+        tmp[names[b].order] = names[b];
+    names = tmp;
     bool ok = true;
     for (int32_t b = 0; ok && b < m->ncss; b++) {
         FAnimation *an = &m->anims[names[b].order];
@@ -2033,6 +2038,15 @@ typedef struct {
 // mix pairs them. A property of any other kind replaces (DEBTS), and so
 // does an accumulated list that does not pair.
 
+// Two of libflow's integer values added, held to int32_t's range: an
+// accumulation repeats an addition as often as its iterations, which have
+// no bound.
+static int32_t add_i32(int32_t a, int32_t b)
+{
+    int64_t r = (int64_t)a + b;
+    return r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : (int32_t)r;
+}
+
 static bool add_length(flow_length_t u, flow_length_t v, flow_length_t *out)
 {
     bool lu = u.kind == FLOW_LENGTH_PX || u.kind == FLOW_LENGTH_PERCENT;
@@ -2040,13 +2054,13 @@ static bool add_length(flow_length_t u, flow_length_t v, flow_length_t *out)
     if (!lu || !lv)
         return false;
     if (u.kind == FLOW_LENGTH_PX && v.kind == FLOW_LENGTH_PX) {
-        *out = (flow_length_t){FLOW_LENGTH_PX, u.value + v.value, 0};
+        *out = (flow_length_t){FLOW_LENGTH_PX, add_i32(u.value, v.value), 0};
         return true;
     }
     int32_t pu = u.kind == FLOW_LENGTH_PERCENT ? u.value : 0, pv = v.kind == FLOW_LENGTH_PERCENT ? v.value : 0;
     int32_t xu = u.kind == FLOW_LENGTH_PERCENT ? u.offset : u.value;
     int32_t xv = v.kind == FLOW_LENGTH_PERCENT ? v.offset : v.value;
-    *out = (flow_length_t){FLOW_LENGTH_PERCENT, pu + pv, xu + xv};
+    *out = (flow_length_t){FLOW_LENGTH_PERCENT, add_i32(pu, pv), add_i32(xu, xv)};
     return true;
 }
 
@@ -2146,10 +2160,51 @@ static bool add_transforms(const flow_transform_t *u, int32_t nu, const flow_tra
     return true;
 }
 
+// Rotation `v` after rotation `u`, about axes that differ, as one rotation
+// (Transforms 2 § 13, the rotate property's addition): the quaternions
+// multiplied, the result in degrees about its own axis — a turn of
+// nothing about z.
+static flow_transform_t compose_rotations(const flow_transform_t *u, const flow_transform_t *v)
+{
+    double q[2][4];
+    const flow_transform_t *r[2] = {u, v};
+    for (int i = 0; i < 2; i++) {
+        double axis[3] = {0, 0, 1};
+        if (!unit3(r[i]->a[0], r[i]->a[1], r[i]->a[2], axis))
+            axis[0] = axis[1] = 0, axis[2] = 1;
+        double half = f_angle_in_unit(r[i]->a[3], r[i]->unit, FLOW_ANGLE_RAD) / 2;
+        q[i][0] = cos(half);
+        for (int k = 0; k < 3; k++)
+            q[i][k + 1] = axis[k] * sin(half);
+    }
+    double w = q[0][0] * q[1][0] - q[0][1] * q[1][1] - q[0][2] * q[1][2] - q[0][3] * q[1][3];
+    double x = q[0][0] * q[1][1] + q[0][1] * q[1][0] + q[0][2] * q[1][3] - q[0][3] * q[1][2];
+    double y = q[0][0] * q[1][2] - q[0][1] * q[1][3] + q[0][2] * q[1][0] + q[0][3] * q[1][1];
+    double z = q[0][0] * q[1][3] + q[0][1] * q[1][2] - q[0][2] * q[1][1] + q[0][3] * q[1][0];
+    flow_transform_t one = *v;
+    one.three_d = true;
+    one.blend = NULL;
+    one.unit = FLOW_ANGLE_DEG;
+    double s2 = sqrt(x * x + y * y + z * z);
+    if (s2 < 1e-12) {
+        one.a[0] = one.a[1] = 0;
+        one.a[2] = 1;
+        one.a[3] = 0;
+    } else {
+        one.a[0] = x / s2;
+        one.a[1] = y / s2;
+        one.a[2] = z / s2;
+        one.a[3] = f_angle_in_unit(2 * atan2(s2, w), FLOW_ANGLE_RAD, FLOW_ANGLE_DEG);
+    }
+    f_transform_fn_matrix(&one);
+    return one;
+}
+
 // An individual transform (translate, rotate, scale) met with the one
-// underneath, none being the identity: summed where they accumulate —
-// added, a scale multiplies and a rotation about another axis follows —
-// else this one follows the one underneath.
+// underneath, none being the identity: where they accumulate, a
+// translation summed, a rotation about one axis turned further and a scale
+// summed from 1; adding, a scale multiplied and a rotation about another
+// axis composed with it; else this one alone, the one underneath dropped.
 static bool add_individual(const flow_transform_t *u, const flow_transform_t *v, bool accumulate,
                            const flow_transform_t **out, FAlloc alloc, void *ctx)
 {
@@ -2167,12 +2222,26 @@ static bool add_individual(const flow_transform_t *u, const flow_transform_t *v,
         f_transform_fn_matrix(one);
     } else if (accumulates(u, v)) {
         *one = accumulate_fn(u, v);
+    } else if (u->fn == FLOW_FN_ROTATE && v->fn == FLOW_FN_ROTATE && !accumulate) {
+        *one = compose_rotations(u, v);
     } else {
         *one = *v;
         return false;
     }
     *out = one;
     return true;
+}
+
+// The ranges a mix holds its result to (mix_prop), for the numbers an
+// accumulation can carry past them; the other kinds it builds are
+// unbounded, or sizes whose underlying and keyframe values are already in
+// range and only grow.
+static void hold_range(garb_prop_t p, flow_style_t *d)
+{
+    if (p == GARB_OPACITY && d->opacity > 1000)
+        d->opacity = 1000;
+    if (p == GARB_FONT_WEIGHT && d->font_weight > 1000)
+        d->font_weight = 1000;
 }
 
 // Property `p` of `d` (a copy of the keyframe's `v`) made `v`'s value met
@@ -2218,24 +2287,24 @@ static bool add_prop(garb_prop_t p, const flow_style_t *u, const flow_style_t *v
     case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
     case GARB_BORDER_LEFT_WIDTH:
         i = p - GARB_BORDER_TOP_WIDTH;
-        d->border_width[i] = u->border_width[i] + v->border_width[i];
+        d->border_width[i] = add_i32(u->border_width[i], v->border_width[i]);
         return true;
-    case GARB_FONT_SIZE: d->font_size = u->font_size + v->font_size; return true;
+    case GARB_FONT_SIZE: d->font_size = add_i32(u->font_size, v->font_size); return true;
     // A number past its range is kept past it here: the interval mixes the
     // values met, and the mix holds the result to the range.
     case GARB_FONT_WEIGHT:
         d->font_weight = (uint16_t)(u->font_weight + v->font_weight > 65535 ? 65535 : u->font_weight + v->font_weight);
         return true;
-    case GARB_LETTER_SPACING: d->letter_spacing = u->letter_spacing + v->letter_spacing; return true;
-    case GARB_OUTLINE_WIDTH: d->outline_width = u->outline_width + v->outline_width; return true;
-    case GARB_OUTLINE_OFFSET: d->outline_offset = u->outline_offset + v->outline_offset; return true;
+    case GARB_LETTER_SPACING: d->letter_spacing = add_i32(u->letter_spacing, v->letter_spacing); return true;
+    case GARB_OUTLINE_WIDTH: d->outline_width = add_i32(u->outline_width, v->outline_width); return true;
+    case GARB_OUTLINE_OFFSET: d->outline_offset = add_i32(u->outline_offset, v->outline_offset); return true;
     case GARB_OPACITY:
         d->opacity = (uint16_t)(u->opacity + v->opacity > 65535 ? 65535 : u->opacity + v->opacity);
         return true;
     case GARB_Z_INDEX:
         if (!u->has_z_index || !v->has_z_index)
             return false;
-        d->z_index = u->z_index + v->z_index;
+        d->z_index = add_i32(u->z_index, v->z_index);
         return true;
     case GARB_TRANSFORM:
         return add_transforms(u->transform, u->ntransform, v->transform, v->ntransform, accumulate,
@@ -2404,9 +2473,12 @@ static void follow_colour(flow_style_t *out)
 // one value is recorded for the schedule (FAnimation.holds).
 // iterationComposite: accumulate (Web Animations 1 § 4.10.3 and § 5.4):
 // the value each finished iteration ended on, its last keyframe's, built
-// onto this iteration's, as many times as iterations are finished. A
-// last keyframe that does not resolve, or a property that does not add,
-// leaves the value as this iteration made it.
+// onto this iteration's, as many times as iterations are finished — by
+// doubling, since an accumulation of every kind add_prop accumulates is
+// associative and a running animation's iterations have no bound. A last
+// keyframe that does not resolve, or a property that does not add, leaves
+// the value as this iteration made it; what is built is then held to the
+// property's range, as a mix holds its result (mix_prop).
 static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_style_t *under, garb_prop_t p,
                                   double iterations, Look *look)
 {
@@ -2419,12 +2491,16 @@ static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_st
             return;
         last = &r->style;
     }
-    // add_prop reads a field before it writes it, so the value is built
+    // add_prop reads a field before it writes it, so each value is built
     // where it stands.
-    int32_t n = iterations > 1000 ? 1000 : (int32_t)iterations;
-    for (int32_t i = 0; i < n; i++)
-        if (!add_prop(p, look->out, last, look->out, true, look->alloc, look->ctx))
-            return;
+    flow_style_t power = *last;
+    for (double n = floor(iterations); n >= 1; n = floor(n / 2)) {
+        if (fmod(n, 2) >= 1 && !add_prop(p, look->out, &power, look->out, true, look->alloc, look->ctx))
+            break;
+        if (n >= 2 && !add_prop(p, &power, &power, &power, true, look->alloc, look->ctx))
+            break;
+    }
+    hold_range(p, look->out);
 }
 
 static bool motion_walk(const FMotion *m, Look *look, bool record)
@@ -2470,8 +2546,6 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                     room = room && (r == NULL || !f_props_has(&r->refused, (garb_prop_t)p));
                 }
                 bool resolved = s.style != NULL && e.style != NULL;
-                if (record && resolved && same_value((garb_prop_t)p, s.style, e.style))
-                    f_props_add(&m->anims[a].holds, (garb_prop_t)p);
                 // A keyframe that adds or accumulates meets the value
                 // underneath before the interval is mixed; an implicit one
                 // is the value underneath already.
@@ -2486,6 +2560,10 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                                  look->alloc, look->ctx))
                         f->style = &met[end];
                 }
+                // An interval holds when its ends, as composited, are one
+                // value: two equal keyframes, one adding, do not.
+                if (record && resolved && same_value((garb_prop_t)p, s.style, e.style))
+                    f_props_add(&m->anims[a].holds, (garb_prop_t)p);
                 if (resolved && room &&
                     mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
                              look->out, look->alloc, look->ctx)) {

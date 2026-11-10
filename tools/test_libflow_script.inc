@@ -76,6 +76,44 @@ static void composite_case(const char *name, const char *html, const char *from,
 
 /* Composite (Web Animations 1 § 5.4): a keyframe that adds meets the value
  * underneath before the interval is mixed. */
+// Two keyframes of one value, the second adding: their composited ends
+// differ, so the interval moves and a running effect is due at once, not
+// at its end.
+static void composite_due_case(void)
+{
+    garb_parsed_t a = {0}, b = {0};
+    garb_set_t sa[2], sb[2];
+    int32_t na = script_sets(&a, "margin-left: 10px", sa, 2), nb = script_sets(&b, "margin-left: 10px", sb, 2);
+    garb_effect_keyframe_t frames[2] = {{0, false, {0}, sa, na, GARB_COMPOSITE_REPLACE},
+                                        {1, false, {0}, sb, nb, GARB_COMPOSITE_ADD}};
+    garb_effect_t fx;
+    memset(&fx, 0, sizeof(fx));
+    fx.frames = frames;
+    fx.nframes = 2;
+    fx.timing.duration_ms = 1000;
+    fx.timing.iterations = 1;
+    fx.start_ms = 4000;
+    fx.rate = 1;
+    const garb_effect_t *list[1] = {&fx};
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>#k{margin-left:100px}</style><div id=k>x</div>", 800, 600);
+    ScriptEffects se = {computed_find(p.doc->document, "k"), list, 1};
+    p.script = &se;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4500;
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    flow_computed_t *c = tree != NULL ? flow_computed_new(tree, &p.env, se.target, NULL) : NULL;
+    computed_is(c, "composite: equal keyframes, one adding, move", GARB_MARGIN_LEFT, "60px");
+    flow_computed_free(c);
+    uint64_t due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("composite: so they are due at once", due == 4500, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&a);
+    garb_free(&b);
+}
+
 static void composite_cases(void)
 {
     const char *box = "<!doctype html><style>#k{margin-left:100px;opacity:0.25;color:rgb(10,20,30);"
@@ -111,6 +149,14 @@ static void composite_cases(void)
                    "margin-left: 10px", GARB_COMPOSITE_REPLACE, true, 3, 2500, GARB_MARGIN_LEFT, "25px");
     composite_case("composite: without iterationComposite each iteration starts over", box, "margin-left: 0px",
                    "margin-left: 10px", GARB_COMPOSITE_REPLACE, false, 3, 2500, GARB_MARGIN_LEFT, "5px");
+    composite_case("composite: what iterations build is held to the property's range", box, "opacity: 0.5",
+                   "opacity: 0.5", GARB_COMPOSITE_REPLACE, true, 3, 2500, GARB_OPACITY, "1");
+    composite_case("composite: iterations build past a thousand", box, "margin-left: 0px", "margin-left: 1px",
+                   GARB_COMPOSITE_REPLACE, true, 2000, 1001500, GARB_MARGIN_LEFT, "1001.5px");
+    composite_case("composite: added rotations about two axes compose", "<!doctype html><style>#k{rotate:x 90deg}"
+                   "</style><div id=k>x</div>", "rotate: y 90deg", "rotate: y 90deg", GARB_COMPOSITE_ADD, false, 1,
+                   500, GARB_ROTATE, "0.57735 0.57735 0.57735 120deg");
+    composite_due_case();
 }
 
 static void script_effect_cases(void)

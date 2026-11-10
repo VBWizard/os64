@@ -891,6 +891,18 @@ static void wa_css_events(void)
         "assert(log.join()==='animationstart:blink:0:one:true:true:false,animationstart:gone:0:one:true:true:false,"
         "animationend:blink:0.05:one:true:true:false,animationcancel:gone:0.1:one:true:true:false',log.join());",
         "web animations: css events: together, and a cancel");
+    /* Backwards across an iteration's start: the boundary crossed is the
+     * later iteration's start, one second in. */
+    p2b_script(&f, "log.length=0;", "web animations: css events: a new log");
+    WaCssRecord *back = wa_css_add(6, box, "back", (double)p2b_ms + 1500, 1000, 0, 3);
+    back->r.rate = -1;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css events: back seen in its second iteration");
+    p2b_advance(600);
+    wa_step(&f, "web animations: css events: back into its first");
+    p2b_script(&f, "assert(log.join()==='animationstart:back:0:box:true:true:false,"
+               "animationiteration:back:1:box:true:true:false',log.join());",
+               "web animations: css events: the boundary it crossed");
     fixture_free(&f);
 }
 

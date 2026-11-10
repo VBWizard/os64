@@ -62,6 +62,7 @@ AnimationEffect-getComputedTiming.tentative.html	currentIteration of an Animatio
 AnimationEffect-getComputedTiming.tentative.html	localTime of an AnimationEffect without an Animation
 CSSAnimation-compositeOrder.tentative.html	Web-animation replaces CSS animation
 Document-getAnimations.tentative.html	getAnimations for non-animated content
+Element-getAnimations-dynamic-changes.tentative.html	Animation state is preserved when interleaving animations in list
 Element-getAnimations-dynamic-changes.tentative.html	Animations are removed from the start of the list while preserving the state of existing Animations
 Element-getAnimations-dynamic-changes.tentative.html	Updated Animations maintain their order in the list
 Element-getAnimations.tentative.html	getAnimations for CSS Animations that have finished
