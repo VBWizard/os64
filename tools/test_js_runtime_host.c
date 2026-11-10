@@ -12,6 +12,23 @@
 #define JS_TEARDOWN_HOST
 #include "../userland/libjs/tests/teardown.h"
 
+/* Observe the runtime's native call boundary without replacing execution.
+ * The module watcher test checks which captured intrinsic is invoked. */
+static JSContext *realm_watch_context;
+static JSValue realm_watch_then;
+static unsigned realm_watch_calls;
+JSValue js_realm_observed_call(JSContext *context, JSValueConst function,
+                               JSValueConst self, int argc, JSValueConst *argv)
+{
+    if (realm_watch_context != NULL) {
+        check(context == realm_watch_context && JS_VALUE_GET_TAG(function) == JS_VALUE_GET_TAG(realm_watch_then) &&
+              JS_VALUE_GET_PTR(function) == JS_VALUE_GET_PTR(realm_watch_then),
+              "module watcher invokes its owner's captured intrinsic then");
+        realm_watch_calls++;
+    }
+    return JS_Call(context, function, self, argc, argv);
+}
+
 static const char *input_bytes;
 static size_t input_length, input_position, read_limit = SIZE_MAX;
 static unsigned input_opens, input_closes;
@@ -49,8 +66,18 @@ int64_t os64_close(int32_t handle)
     input_closes++;
     return close_error;
 }
+static bool realm_output_recording;
+static char realm_output_bytes[2][512];
+static size_t realm_output_lengths[2];
 int64_t os64_write(int32_t handle, const void *bytes, size_t size)
 {
+    if (realm_output_recording && (handle == 101 || handle == 102)) {
+        unsigned at = (unsigned)(handle - 101);
+        if (size >= sizeof(realm_output_bytes[at]) - realm_output_lengths[at]) return -1;
+        memcpy(realm_output_bytes[at] + realm_output_lengths[at], bytes, size);
+        realm_output_lengths[at] += size;
+        return (int64_t)size;
+    }
     if (handle != 2 && output_len >= output_fail_at) return output_error;
     return js_port_fixture_write(handle, bytes, size);
 }
@@ -2546,8 +2573,17 @@ static void module_bytecode_cases(void)
     free(large);
 }
 
+#include "../userland/libjs/tests/realms.h"
+#include "test_js_realms_host.inc"
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--realms-only")) {
+        realm_cases(); realm_host_cases();
+        check(live == 0, "realm cases release every allocation");
+        printf("libjs realms: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if ((argc == 2 && !strcmp(argv[1], "--compile-failure")) ||
         ((argc == 2 || argc == 3) && !strcmp(argv[1], "--compile-failure-pending"))) {
         if (!strcmp(argv[1], "--compile-failure")) compile_failure_cases();
@@ -2601,6 +2637,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    realm_cases(); realm_host_cases();
     task_cases();
     script_host_cases();
     module_cases();

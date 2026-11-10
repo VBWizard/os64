@@ -2,7 +2,15 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 js_runtime_work=$(mktemp -d)
-trap 'rm -rf "$js_runtime_work"' EXIT
+js_runtime_cleanup() {
+    result=$?
+    if [ "$result" -ne 0 ] || [ "${JS_RUNTIME_KEEP:-0}" = 1 ]; then
+        printf 'Runtime test artifacts: %s\n' "$js_runtime_work"
+    else
+        rm -rf "$js_runtime_work"
+    fi
+}
+trap js_runtime_cleanup EXIT
 make -C userland -j8 js-runtime-test > "$js_runtime_work/build.log" 2>&1 || { cat "$js_runtime_work/build.log"; exit 1; }
 flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
@@ -11,7 +19,11 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fsanitize=address,undefined -fno-sanitize-recover=all -DLIBJS_INTL_DIR='"userland/libjs/intl/"')
 for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     tools/test_js_port_calendar.c tools/test_js_runtime_host.c; do
-    cc "${flags[@]}" -c "$source" -o "$js_runtime_work/$(basename "$source" .c).o"
+    observe_call=()
+    if [ "$source" = userland/libjs/runtime/runtime.c ]; then
+        observe_call=(-DJS_Call=js_realm_observed_call)
+    fi
+    cc "${flags[@]}" "${observe_call[@]}" -c "$source" -o "$js_runtime_work/$(basename "$source" .c).o"
 done
 objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
     --localize-symbol=memcmp "$js_runtime_work/str.o" "$js_runtime_work/str-local.o"
@@ -27,6 +39,10 @@ cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack userland/obj/js/core
     "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/probe"
+if [ "${JS_RUNTIME_REALMS_ONLY:-0}" = 1 ]; then
+    "$js_runtime_work/probe" --realms-only
+    exit
+fi
 # Also instrument the engine: ASan bypasses its small-object arenas, giving
 # the constructor sweep independent coverage of individual allocations.
 engine_flags=("${flags[@]}" -U__linux__ -I userland/libjs/port/compat

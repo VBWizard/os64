@@ -982,3 +982,12 @@ every test passes but localeCompare's canonical-equivalence one (DEBTS).
 The runtime suite passes (9,885 checks on the target core, 27,514
 sanitized), and so do the DOM host (211,049) and yonder's scripted pages
 (16,569).
+
+## F.1 — shared-runtime realms (2026-11-10)
+
+The [F.1 validation record](../../docs/design/pending/IFRAME_F1_REALMS_VALIDATION.md)
+records the two-engine sanitizer matrix, guest JSRT proof, routing mutants,
+allocation/teardown coverage and unchanged named WPT results against its base.
+The [realm contract](CONTRACT.md#realms) defines ABI 3 and the primary-realm
+compatibility boundary; multiple DOM bindings and independent retirement are
+outside this cut.

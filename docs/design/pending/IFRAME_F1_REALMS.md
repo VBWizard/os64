@@ -1,10 +1,11 @@
 # F.1 — realms and runtime service routing
 
-**Proposed implementation brief, 2026-11-10; ready for design review.**
+**Implementation brief, 2026-11-10; Fable approved with amendments below.**
 This is tracker slice `F.1`, the first cut of IFRAME.md's F1 foundation
 stage. Source inspection used `userland` `fb68bdcd` (the merged design
-refresh, PR #528) plus tracker commit `483d0734`. It does not report an
-implementation, runtime test pass, or Fable review.
+refresh, PR #528) plus tracker commit `483d0734`. Fable reviewed `b81fe744`;
+his promise-key correction and four asks are adopted here. Implementation
+evidence is recorded in [the F.1 validation record](IFRAME_F1_REALMS_VALIDATION.md).
 
 The result is a libjs runtime that can own several explicitly addressed
 realms, with independent modules, output and reporting services. Existing
@@ -33,9 +34,10 @@ do not remove the single-context assumptions below. F.1 does not change
 animation ownership. Workers retain their own runtime and thread, as
 WORKERS.md specifies; this slice adds neither a thread nor a wake primitive.
 
-## What the code establishes
+## Inspected baseline
 
-Paths in this table are relative to `userland/`. Names are search anchors.
+This table describes `fb68bdcd`, before the implementation below. Paths are
+relative to `userland/`; the as-built contract is in `libjs/CONTRACT.md`.
 
 | Site | Existing contract | Consequence for this cut |
 |---|---|---|
@@ -49,7 +51,7 @@ Paths in this table are relative to `userland/`. Names are search anchors.
 | `libdom/report.c`, `d_report_host`, `d_report_drain` | Installing/clearing a host affects the runtime; script-name records belong to one binding | Legacy setters must affect the primary realm only |
 | `apps/yonder/modules.c`, `yonder_modules_new`, `yonder_modules_drop` | Installing/clearing the module provider affects the runtime | Compatibility calls select the primary; F.2 adapts the provider to an explicit realm |
 | `apps/yonder/scripts.c`, `ensure_runtime`, `retire` | A script host creates and destroys its runtime | Keep the single-document lifecycle; it is not a child-retirement operation |
-| `libjs/upstream/quickjs.c`, `js_new_module_def`, `JS_ExecutePendingJob`, `js_call_c_function` | Module lists belong to contexts; jobs retain a context; native functions use their creation realm | Reuse engine module separation, preserve queue ordering, and distinguish native context from browser caller/settings policy |
+| `libjs/upstream/quickjs.c`, `js_new_module_def`, `JS_ExecutePendingJob`, `js_call_c_function` | Module lists belong to contexts; jobs retain a context; ordinary C functions use their creation realm; CFunctionData callbacks receive the caller context | Reuse engine module separation, preserve queue ordering, and distinguish native context from browser caller/settings policy |
 
 ## Ownership decisions
 
@@ -69,32 +71,28 @@ not a claim of reclamation when a document departs.
 | Rejection record | Its reporting realm, promise/reason references, sequence and host tag | Handled-before-take, take, unhosted checkpoint cleanup, or runtime destruction |
 | Host | Provider opaque objects and installed output handles | Host clears its provider before releasing its opaque; output handle remains valid until runtime destruction |
 
-Embed the primary descriptor in the wrapper allocation, which construction
-already reserves against the configured memory limit. Additional descriptors
-are wrapper-owned `os64_malloc` allocations so they can outlive engine
-destruction without a `js_free_rt` call on a freed engine. Charge their
-actual `os64_malloc_size`, checking the combined ceiling before admitting
-the descriptor. Track the total as `realm_storage_bytes` and lower
-`allocator.allocation_limit` by that total; the allocator already takes
-the smaller of its owner ceiling and the engine's ceiling. Restore this
-reservation on construction rollback. Refusal latches the same memory or
-host-allocation failure as the corresponding engine allocation.
-
-Contexts, captured values and service records use the engine allocator.
-There is no new allowance per realm. Keep existing heap counters' engine-
-charge meaning and add the owner-thread, script-free query
-`os64_js_realm_storage_bytes(runtime)` for the additional wrapper storage
-(zero for NULL). Tests reconcile both against the configured ceiling and
-the primary wrapper reservation. Heap census remains runtime-wide: shared
-objects cannot honestly be assigned to one realm by summing counters.
+Store 65 realm descriptors (primary plus 64 additional realms) in the
+runtime wrapper's fixed allocation. Its actual allocation size is already
+reserved against the configured memory limit. Admission checks the count
+before allocation and returns the non-sticky `OS64_JS_REALM_LIMIT` when
+full. Failed construction does not consume a slot; successful slots stay
+occupied until runtime destruction, including any retirement added by F.3.
+The fixed table avoids a second allocation/accounting/teardown protocol.
+Rejection records store the stable slot index beside their existing tag,
+keeping the record at 56 bytes on the embedding ABI. A pointer per record
+would add 1.6 MB of raw record payload before allocator rounding; the
+measured flood then exceeds the existing 64 MiB sanitized DOM fixture budget.
+Contexts and captured values still use the bounded engine allocator.
+The runtime's heap counters retain their engine-charge meaning; the wrapper
+reservation, including this table, is separate and must fit at construction.
+There is no realm-storage query or new memory allowance per realm.
 Aggregate native/document budgets are F.8.
 
 Destruction disables host dispatch, clears rejection/module references
 and realm-owned captured values, then drops the owned context references
 and destroys the engine. Keep realm descriptors and host backing valid
-through engine finalizers and the reporting-teardown boundary. Free the
-additional descriptors with `os64_free` after engine teardown and any
-RECLAIM ledger cleanup, then release the primary's enclosing wrapper.
+through engine finalizers and the reporting-teardown boundary. Release the enclosing wrapper, including its descriptors, after engine
+teardown and any RECLAIM ledger cleanup.
 No engine callback may reach a descriptor after that point. Finalizers run no script.
 Retained cross-realm functions are part of the destruction tests.
 
@@ -148,11 +146,16 @@ do not gain that permission by delegating.
 
 | Family | New entry points |
 |---|---|
-| Source execution | `os64_js_realm_eval`, `os64_js_realm_run`, `os64_js_realm_run_bytecode`, `os64_js_realm_run_file` |
-| Task entry/call | `os64_js_realm_task_begin`, `os64_js_realm_call` |
-| Installers | `os64_js_realm_install_output`, `os64_js_realm_install_args`, `os64_js_realm_install_intl` |
-| Script reporting | `os64_js_realm_set_script_host`, `os64_js_realm_take_rejection` |
-| Module provider/handles | `os64_js_realm_set_module_loader`, `os64_js_realm_module_compile`, `os64_js_realm_module_compile_bytecode`, `os64_js_realm_module_requests`, `os64_js_realm_module_run`, `os64_js_realm_module_state`, `os64_js_realm_module_release` |
+| Source execution | `os64_js_realm_run`, `os64_js_realm_run_bytecode` — F.2 adapts scripts.c's existing plain/cached classic-script paths |
+| Task entry/call | `os64_js_realm_task_begin`, `os64_js_realm_call` — F.2 event/timer/report delivery |
+| Installers | `os64_js_realm_install_output`, `os64_js_realm_install_intl` — F.2 ensure_runtime setup |
+| Script reporting | `os64_js_realm_set_script_host`, `os64_js_realm_take_rejection` — F.2 report.c |
+| Module provider/handles | `os64_js_realm_set_module_loader`, `os64_js_realm_module_compile`, `os64_js_realm_module_compile_bytecode`, `os64_js_realm_module_requests`, `os64_js_realm_module_run`, `os64_js_realm_module_state`, `os64_js_realm_module_release` — F.2 modules.c graph compilation, evaluation, polling and cleanup |
+
+F.2 uses the accessors to attach a binding to its explicit realm. Keep
+`run` and `run_bytecode`: scripts.c calls both at its classic-script entry.
+Do not add public realm `eval`, `run_file` or `install_args`; those have no
+frame consumer. Legacy file/argument entry points stay primary-only.
 
 Checkpoint, task-end and sliced job-drain remain runtime operations:
 there is one queue to drain and one open task to close. Cancellation,
@@ -199,7 +202,8 @@ before a new realm/setup operation starts. During destruction, refuse
 access. A realm may install each facility once, before that realm's first
 evaluation, even if another realm has evaluated. Use an installation-in-
 progress guard to refuse recursive setup of the same facility while its
-property traps run. Preserve output's staged-property rollback and Intl's
+property traps run. Such traps can be installed by the native host binding
+between realm creation and installation. Preserve output's staged-property rollback and Intl's
 failure rules; a setup failure that becomes sticky affects the runtime.
 
 Ordinary eval/run/call entry points retain the existing re-entry rules.
@@ -231,6 +235,12 @@ of late module failures for the single aggregate outcome. Store the
 failure's own source information; do not overwrite it with the task's
 name or deliver its error hook to the task owner merely because it drained
 the queue. The primary-only case must preserve existing outcome behavior.
+
+QuickJS's `JS_NewCFunctionData` does not retain a callback realm: its callback
+receives the calling context. Module watchers and console methods therefore
+retain the installing realm's stable slot explicitly in function data. Plain
+`JS_NewCFunction` keeps its creation realm, so `print` can use its native
+context. The runtime's selected context is never temporarily swapped.
 
 Each realm owns its loader, script host and output state. Setting or
 clearing B's provider leaves A's provider intact. Detach hooks outside an
@@ -275,15 +285,21 @@ direct/indirect eval, muted errors and absent running script. This cut
 does not infer that bridge from `JS_GetScriptOrModuleName` strings.
 
 Store pending rejection records with their selected realm and host tag;
-lookup for reject/handle processing is scoped to that reporting realm and
-promise identity. Taking A's oldest record cannot consume B's. Preserve
+lookup stays keyed by the promise alone. A handled-before-take notice
+removes that record regardless of the notice's realm or the router's new
+answer. Otherwise a promise rejected in B and awaited/handled in A could
+leave a false pending report in B. The record retains its reporting realm
+for taking, not for matching handled notices. Taking A's oldest record cannot consume B's. Preserve
 per-realm order and a runtime sequence for choosing the standalone
 diagnostic at a checkpoint. For a handled notification after a record was
 taken, dispatch to the policy-selected realm's host; its outstanding
 promise bookkeeping determines whether there is an event to emit. Do not
 add an unbounded strong-reference registry for already-taken promises.
-The selector runs for both reject and handle operations; a native callback
-context is not silently replaced by a saved promise-construction realm.
+The selector runs for a new rejection and for a handled-after-take notice;
+a pending record's removal requires no selection. A native callback context
+is not silently replaced by a saved promise-construction realm. The routing
+record is an F.4 seam exercised by native fixtures here; its shape may change
+when F.4 implements the real browser selector.
 
 Hosted rejections wait for that realm's take operation; unhosted realms'
 records are judged/released at checkpoint exhaustion. Clearing B's host
@@ -331,12 +347,13 @@ pass C's JSValues into their engine.
 | Modules | Same URL compiled in A/B has independent state; different loaders resolve the same specifier differently; dynamic import and import.meta route correctly; clearing B's loader leaves A working |
 | Bytecode | One compatible cached source blob can be read into each realm with distinct instantiated values; kind/name checks remain; no compiled module handle crosses realms |
 | Reporting | A/B exceptions reach their selected hosts; a B job and B top-level-await failure drained by A retain B's reporting/source identity; first-outcome selection is stable |
-| Rejection routing | Interleaved A/B records are taken only by their selected realm; handled-before/after-take and a router selecting A from a B native context follow the defined policy; foreign router result fails safely |
+| Rejection routing | Interleaved A/B records are taken only by their selected realm; handled-before/after-take and a router selecting A from a B native context follow the defined policy; foreign router result fails safely; B rejection handled by A via borrowed then and await leaves nothing for B to take |
 | Mixed host modes | Hosted A and unhosted B do not suppress each other's checkpoint handling; clearing one host leaves the other installed; no report is duplicated |
-| Output/setup separation | Distinct handles, group depth, label counters and timers; borrowed console method uses its installing realm; args/Intl installation in B still works after A has evaluated |
+| Output/setup separation | Distinct handles, group depth, label counters and timers; borrowed console method uses its installing realm; Intl installation in B still works after A has evaluated |
 | Nested creation/setup | A callback creates and initializes B under A's budget; setup traps cannot recursively reinstall the same facility or overwrite A's active outcome; pending jobs and task-end ownership remain correct |
 | Shared turns | A-to-B raw calls, then jobs in both realms, share the original deadline/job cap; wrapper re-entry is BUSY; no checkpoint or realm crossing grants time/jobs |
 | Failure policy | Allocation/timeout/cancel/host failure stays sticky for the runtime; later A/B entries refuse; task-end still closes its task; no child-survival claim |
+| Capacity | Fill the 64 additional slots; the next creation returns REALM_LIMIT without allocation or latching; A and B still run |
 | Allocation and teardown | Sweep additional-context, captured-intrinsic and installer allocations; partial construction publishes nothing; repeat clean create/destroy with cross-realm functions, pending jobs, rejections and module handles; both teardown policies retain their promised behavior |
 
 Run the existing tools on the implementation and its base, recording exact
@@ -345,9 +362,8 @@ and its separately instrumented build. Keep ASan/UBSan and leak detection
 enabled. If sandbox attachment denies LSan, diagnose with
 `LSAN_OPTIONS=verbosity=1:log_threads=1`, preserve the built binaries, and
 use the normal outside-sandbox approval path with
-`ASAN_OPTIONS=detect_leaks=1`. The runtime runner currently removes its
-temporary directory unconditionally; give it a failure/keep-artifacts path
-when needed to reuse those binaries. Do not turn a leak report into a skip.
+`ASAN_OPTIONS=detect_leaks=1`. The runtime runner retains its temporary directory on failure or when
+`JS_RUNTIME_KEEP=1`, so the built binaries can be reused. Do not turn a leak report into a skip.
 
 ```sh
 tools/test_js_contract_headers.sh
@@ -372,8 +388,8 @@ regression sets, not newly enabled cross-frame coverage. Run both sets
 before and after implementation; record attempted/pass/fail/excluded counts
 and explain changes. Do not refresh expectations to conceal regressions.
 Fable reviews this selection alongside the native matrix. A missing pinned
-checkout is missing evidence, not zero failures. The brief inspection did
-not fetch or execute WPT and supplies no new counts.
+checkout is missing evidence, not zero failures. Use the F.1 validation record for the measured comparison; this selection
+does not enable cross-frame tests.
 
 ```sh
 tools/test_yonder_wpt_host.sh html/webappapis/scripting
@@ -382,20 +398,24 @@ tools/test_yonder_wpt_host.sh html/semantics/scripting-1/the-script-element/modu
 
 ## Review and landing
 
-Fable's design read should settle the explicit service/turn ownership,
-nested setup protocol, routing-hook boundary with F.4, rejection lifetime,
-and both teardown paths. Confirm this is still one reviewable implementation
-cut; if its proof requires a split, revise the slice map before coding.
-The libjs owner reviews the API/ABI and failure contract. This brief does
-not claim their approval. The child-only interrupt-soundness approval is
-still an F.3 gate.
+Fable approved the ownership/turn split, nested setup, routing seam and
+teardown boundaries on 2026-11-10. This amendment keeps promise-only lookup,
+adds a non-sticky count ceiling, trims unused APIs, adopts fixed descriptors,
+and requires the routing mutants below. The child-only interrupt-soundness
+approval remains an F.3 gate.
 
-Keep `F.1` at `design` while this proposed brief awaits its read; move to
-`design-review` when that review starts, then follow the tracker contract.
-The documentation PR, if separate, does not mark the implementation done.
-Its final implementation PR carries the applicable tests, as-built notes,
-tracker completion and PR number. Single-document behavior remains the
-shipping browser path throughout F.1.
+Run the routing mutants once after the positive matrix and regressions pass,
+using `tools/mutants_parallel.py` with twelve workers. Mutate each routed
+site to select the primary: loader lookup, module list, captured watcher's
+`then`, output handle, console depth, exception host, late module failure,
+and rejection record owner. A compiler failure is not a kill; each must
+fail its intended assertion from a passing unmutated baseline.
+
+F.1 moves to `review` with this implementation and its
+[validation record](IFRAME_F1_REALMS_VALIDATION.md). The tracker completion
+and PR number follow code review and required acceptance in the implementing
+PR. The documentation alone never marks it done.
+Single-document behavior remains the shipping browser path throughout F.1.
 
 Useful references: [iframe design](IFRAME.md),
 [tracker contract](IFRAME_TRACKER.md),

@@ -1,6 +1,6 @@
 id,task,depends_on,status,done_in,notes
 
-F.1,F1: Realm API and runtime service routing,,design,,Brief: IFRAME_F1_REALMS.md (proposed; awaiting Fable review). Preserve single-document behavior; prove per-realm services and shared budgets in a two-realm native host; two-DOM ownership follows in F.2.
+F.1,F1: Realm API and runtime service routing,,review,,Brief: IFRAME_F1_REALMS.md; evidence: IFRAME_F1_REALMS_VALIDATION.md. Leak-enabled host checks passed; guest JSRT and 12 routing mutants passed; named WPT results match baseline. Code review pending; DOM ownership follows in F.2.
 
 F.2,F1: Binding ownership and cross-document adoption,F.1,todo,,"Prove arena ownership and node/wrapper identity, prototypes, listeners and custom elements across adoption; retain native-object backing safely."
 
