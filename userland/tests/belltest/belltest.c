@@ -7,7 +7,8 @@
 //   1. a ring made BEFORE the wait is kept, and ends the wait at once;
 //   2. an unrung wait runs out its patience, all of it, and answers
 //      OS64_ERR_TIMEOUT;
-//   3. two rings before a wait are one;
+//   3. two rings before a wait are one; a write of no bytes is no ring; a
+//      wait that cannot deliver its byte gives the ring back;
 //   4. a ring from another thread wakes a PARKED waiter, promptly;
 //   5. a second thread waiting on a bell that has a waiter is refused;
 //   6. a close under a parked waiter wakes it with 0, promptly;
@@ -204,6 +205,19 @@ int main(int argc, char **argv)
     r = os64_bell_wait(&bell, 0);
     if (r != OS64_ERR_TIMEOUT)
         return die(3, "two rings were counted as two", r);
+    // A write of no bytes is no ring.
+    char none = 0;
+    if (os64_write(bell.handle, &none, 0) != 0 || os64_bell_wait(&bell, 0) != OS64_ERR_TIMEOUT)
+        return die(3, "a write of no bytes rang the bell", 0);
+    // A wait whose byte cannot be delivered gives the ring back.
+    static const char unwritable[] = "read-only";
+    os64_bell_ring(&bell);
+    r = os64_read_for(bell.handle, (void *)(uintptr_t)unwritable, 1, 0);
+    if (r >= 0)
+        return die(3, "a wait wrote its byte into read-only memory", r);
+    r = os64_bell_wait(&bell, 0);
+    if (r != 1)
+        return die(3, "a wait that could not deliver its byte lost the ring", r);
 
     // 4. A parked waiter, rung from here.
     int64_t waiter = os64_thread(wait_forever, &bell);

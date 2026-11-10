@@ -94,19 +94,24 @@ long bell_wait(bell_t *b, uint64_t deadline)
 			spinlock_release_irqrestore(&b->lock, flags);
 			return BELL_ERR_INTERRUPTED;
 		}
+		// One waiter. A second thread is refused rather than queued behind
+		// the first: one ring wakes one wait, and which of two it would be
+		// is a question a bell has no answer to. Asked BEFORE the ring is
+		// looked at, because a ring made while a waiter is registered is
+		// that waiter's: it may be awake and on its way back to take it,
+		// and a second thread that took it first would leave the waiter to
+		// find nothing and park again. (Our own slot was voided above, so
+		// a name here is another thread's.)
+		if (b->waiter != NULL)
+		{
+			spinlock_release_irqrestore(&b->lock, flags);
+			return BELL_ERR_BUSY;
+		}
 		if (b->rung)
 		{
 			b->rung = false;
 			spinlock_release_irqrestore(&b->lock, flags);
 			return 1;
-		}
-		// One waiter. A second thread is refused rather than queued behind
-		// the first: one ring wakes one wait, and which of two it would be
-		// is a question a bell has no answer to.
-		if (b->waiter != NULL)
-		{
-			spinlock_release_irqrestore(&b->lock, flags);
-			return BELL_ERR_BUSY;
 		}
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{

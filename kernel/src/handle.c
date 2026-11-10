@@ -30,9 +30,8 @@
 // So a handle is now resolved PINNED. handle_pin does two things in one
 // critical section under the task's handleLock: it checks the slot is live,
 // and it takes a reference ON THE OBJECT in the object's own currency (a pipe
-// end's readers/writers, a file's holds, a TCP conn's pins, a
-// listener's busy, a directory's handleRefCount, a join object's refcount, a
-// pty's holds, a UDP or ICMP conn's holders). handle_close claims the slot
+// end's readers or writers, a file's holds, a TCP conn's pins: each kind's
+// arm of handle_object_ref says which). handle_close claims the slot
 // under the same lock and only then releases the table's reference — outside
 // the lock, because a release can do disk I/O. The two cannot interleave: a
 // pin that saw the slot

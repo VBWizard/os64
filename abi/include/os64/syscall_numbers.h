@@ -98,7 +98,10 @@
 //       patience above otherwise: OS64_ERR_TIMEOUT when it runs out unrung,
 //       OS64_INTERRUPTED when a signal the program handles ends the wait,
 //       0 when the bell is closed under the waiter. ONE thread waits at a
-//       time: a second read while one is parked is refused (negative).
+//       time: a read while another thread is waiting is refused (negative),
+//       rung or not, because a ring made then is that waiter's. (A read of
+//       no bytes is no wait: like an empty read of any handle it answers 0
+//       at once, and takes no ring.)
 //   write(bell, &byte, 1)             RING, from any thread of the task.
 //       Never blocks, and what the byte says is not looked at. (A write of
 //       no bytes is no ring: an empty write moves nothing on any handle.)

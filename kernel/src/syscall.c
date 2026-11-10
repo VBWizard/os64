@@ -2099,8 +2099,17 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 				return 0;   // a sibling closed the handle under the wait: no ring will come
 			if (got < 0)
 				return SYSCALL_RESULT_INVALID;   // another thread is already waiting on it
+			// The ring is consumed; the byte goes out here, not through the
+			// common tail, so that a buffer the kernel cannot write gives
+			// the ring back. A ring is never lost (the ABI's promise), and a
+			// caller's bad pointer is no exception to it.
 			kbuf[0] = 1;
-			break;
+			if (!copy_to_user_buffer(user_buffer, kbuf, 1))
+			{
+				(void)bell_ring((bell_t *)h->object);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return 1;
 
 		case HANDLE_PIPE_READ:
 			// Waits for bytes, EOF, a signal or the caller's deadline.
@@ -2357,33 +2366,6 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // copies — if it doesn't, the writer count never reaches zero, the reader never
 // sees EOF, and `a | b` hangs forever. That is the single most common way a
 // hand-written shell breaks, so it is worth saying twice.
-// bell() — a new bell, as a handle (contract at SYSCALL_BELL in the abi
-// header; the object is bell.h's).
-static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
-    uint64_t arg3, uint64_t arg4, uint64_t arg5)
-{
-	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
-
-	core_local_storage_t *cls = get_core_local_storage();
-	task_t *task = cls ? cls->task : NULL;
-	if (task == NULL)
-		return SYSCALL_RESULT_INVALID;
-
-	bell_t *b = bell_create();
-	if (b == NULL)
-		return SYSCALL_RESULT_INVALID;
-
-	int h = handle_alloc(task, HANDLE_BELL, b);
-	if (h < 0)
-	{
-		// The handle table is full: the bell never had a handle, so its
-		// one hold is ours to give back.
-		bell_release(b);
-		return SYSCALL_RESULT_INVALID;
-	}
-	return (uint64_t)h;
-}
-
 static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -2419,6 +2401,33 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
 	return 0;
+}
+
+// bell() — a new bell, as a handle (contract at SYSCALL_BELL in the abi
+// header; the object is bell.h's).
+static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	bell_t *b = bell_create();
+	if (b == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_BELL, b);
+	if (h < 0)
+	{
+		// The handle table is full: the bell never had a handle, so its
+		// one hold is ours to give back.
+		bell_release(b);
+		return SYSCALL_RESULT_INVALID;
+	}
+	return (uint64_t)h;
 }
 
 // pty_snapshot copies grid rows directly into the ABI struct, so their sizes

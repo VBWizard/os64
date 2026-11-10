@@ -628,9 +628,12 @@ from the brief, or says more than it did:
 - **The answers.** A wait returns 1 with one byte when rung; a close under
   the wait returns 0, as a pipe's EOF and a closed glass view do ("no ring
   will come"); a second waiter is refused with -1, the syscall's plain
-  refusal, since no handle kind has a busy code to borrow. A signal that
-  ends the wait outranks a ring already made, and the ring stays for the
-  next wait.
+  refusal, since no handle kind has a busy code to borrow, and it is
+  refused BEFORE the ring is looked at: a ring made while a waiter is
+  registered is that waiter's, which may be awake and on its way back for
+  it. A signal that ends the wait outranks a ring already made, and the
+  ring stays for the next wait; so does the ring of a wait whose byte
+  could not be written to the caller's buffer, which is rung back.
 - **A ring is a write of at least one byte.** An empty write moves nothing
   on any handle and rings nothing here. A ring that finds the bell closed
   (possible only for a write that held its pin across a sibling's close)
@@ -652,13 +655,15 @@ from the brief, or says more than it did:
   2,000 rings each a random fraction of a millisecond after the waiter
   took the one before (under QEMU's TCG, eight CPUs: all taken, worst
   1.4 ms, mean 200 us, against the one-second backstop a lost ring would
-  wait for). Seven hand mutants, each built and booted against both, and
-  each caught: a ring that wakes only a parked waiter (the kernel case
-  sleeps its whole backstop, and the race loses 8 rings of 2,000 at
-  1,008 ms each), a wait that leaves the ring set, no refusal of a second
-  waiter, a close that wakes nobody, a wait that keeps its registration, a
-  wait that never asks `signal_park_must_end`, and a pin that takes no
-  reference.
+  wait for). Twelve hand mutants, each built and booted against both, and
+  each caught by at least one: a ring, and a close, that wake only a
+  parked waiter (the kernel case sleeps its whole backstop, and the race
+  loses 8 rings of 2,000 at 1,008 ms each); a wait that leaves the ring
+  set; no refusal of a second waiter; a second thread allowed the ring of
+  a registered waiter; a close that wakes nobody; a wait that keeps its
+  registration, or a debt owed to it; a wait that never asks
+  `signal_park_must_end`; a wait that keeps a ring it could not deliver;
+  and a pin that takes no reference.
 
 ### H2.1 — Session resumption
 
