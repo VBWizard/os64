@@ -1073,7 +1073,7 @@ one host are not capped at once" paid.
   the waiter list, and to ring the bells on it. Never across a dial, a
   probe, a close or a bell wait.
 
-**fetch.c.** `take_kept` (built as `acquire`), `dial` and/`release_connection` speak to connections
+**fetch.c.** `take_kept` (built as `acquire`), `dial` and `release_connection` speak to connections
 instead of transports; the fetch gains its bell, made on the first wait
 and closed with the fetch (`os64_fetch_close`); the retry rule, the 408
 rule, the probe and the ONCE_MS rule are untouched and their cases prove

@@ -28,19 +28,19 @@ H2.1.10,"Measurement in the PR body: cold vs resumed handshake time in the guest
 H2.1.11,"TLS13.md § The profile and DEBTS § TLS 1.3 engine boundaries updated; as-built section",H2.1.8,done,#529,
 H2.1.12,"Codex round",H2.1.9,done,#529,
 
-H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,design-review,,"HTTP2.md § 2.2 and § 4 H2.2; h1-only, behaviour-neutral under six connections"
-H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,todo,,
-H2.2.2,"fetch_pool_take: idle of the key, else a dial slot under both caps (closing an idle connection that stands in the way), else wait on the bell in the pool's queue",H2.2.1,todo,,
-H2.2.3,"The waiter list: node added under the lock, removed under the lock before any return; put / death / a dial's end ring EVERY matching waiter, under the lock",H2.2.2,todo,,
-H2.2.4,"A wait that outlives its patience answers DIAL_FAILED with NO_RESOURCES and the sentence; a cancelled wait INTERRUPTED",H2.2.2,todo,,
-H2.2.5,"fetch_pool_put / evict_one / drain / idle over the new table; fetch_pool_live for the harness",H2.2.1,todo,,
-H2.2.6,"fetch.c speaks to connections; the fetch's bell made on first wait, closed with the fetch; retry / 408 / probe / ONCE_MS untouched",H2.2.1,todo,,
-H2.2.7,"FETCH_POOL_TOTAL's reasoning in pool.h rewritten for a table that counts live connections; distinct hosts at once measured on a corpus page",H2.2.1,todo,,
-H2.2.8,"Host cases: seventh waits and proceeds on put / on death; cancelled wait removes its node; patience expiry; a new key waits on sixteen live and evicts an idle one otherwise; a once-only request at the cap evicts the idle it passed over; a rung waiter that leaves strands nobody; no ring reaches a closed bell; failed dial releases its slot; every existing pool case unchanged",H2.2.6,todo,,
-H2.2.9,"Mutants once at the end",H2.2.8,todo,,
-H2.2.10,"QEMU make run-net on the W2 page: at most six SYNs to the host at once, arrival within W2's figures",H2.2.8,todo,,
-H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md § 2 pointer; as-built section",H2.2.10,todo,,
-H2.2.12,"Codex round",H2.2.9,todo,,
+H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,review,,"HTTP2.md § 2.2, § 4 H2.2 and 'H2.2, as built'; removes handshakes, not latency. Codex round open on #531"
+H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,done,#531,
+H2.2.2,"fetch_pool_take: idle of the key, else a dial slot under both caps (closing an idle connection that stands in the way), else wait on the bell in the pool's queue",H2.2.1,done,#531,
+H2.2.3,"The waiter list: node added under the lock, removed under the lock before any return; put / death / a dial's end ring EVERY matching waiter, under the lock",H2.2.2,done,#531,
+H2.2.4,"A wait that outlives its patience answers DIAL_FAILED with NO_RESOURCES and the sentence; a cancelled wait INTERRUPTED",H2.2.2,done,#531,"the sentence names the host's six or the program's sixteen; the wait's bound is FETCH_POOL_WAIT_MS, not the idle deadline (as built)"
+H2.2.5,"fetch_pool_put / evict_one / drain / idle over the new table; fetch_pool_live for the harness",H2.2.1,done,#531,
+H2.2.6,"fetch.c speaks to connections; the fetch's bell made on first wait, closed with the fetch; retry / 408 / probe / ONCE_MS untouched",H2.2.1,done,#531,
+H2.2.7,"FETCH_POOL_TOTAL's reasoning in pool.h rewritten for a table that counts live connections; distinct hosts at once measured on a corpus page",H2.2.1,todo,,"pool.h's reasoning rewritten (#531); the corpus measurement of distinct hosts at once is not done"
+H2.2.8,"Host cases: seventh waits and proceeds on put / on death; cancelled wait removes its node; patience expiry; a new key waits on sixteen live and evicts an idle one otherwise; a once-only request at the cap evicts the idle it passed over; a rung waiter that leaves strands nobody; no ring reaches a closed bell; failed dial releases its slot; every existing pool case unchanged",H2.2.6,done,#531,
+H2.2.9,"Mutants once at the end",H2.2.8,done,#531,"102 of 102"
+H2.2.10,"QEMU make run-net on the W2 page: at most six SYNs to the host at once, arrival within W2's figures",H2.2.8,todo,,"not done as written: /tests/capprobe measured the cap from inside the guest (12 fetches, at most 6 at once); no SYN capture on the W2 page"
+H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md § 2 pointer; as-built section",H2.2.10,done,#531,
+H2.2.12,"Codex round",H2.2.9,doing,,
 H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,todo,,
 
 H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,design-review,,"HTTP2.md § 4 H2.3; unreachable until H2.4"
