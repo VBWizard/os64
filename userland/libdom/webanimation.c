@@ -146,7 +146,9 @@ struct DWaEvent {
 /* A CSS animation as the last step saw it, kept while a CSS animation
  * event has a listener, so the next can tell which of its boundaries it
  * crossed (CSS Animations 2 § 4.2): its element (held), its name, its
- * clock and timing, and its phase (WaCssPhase) and iteration then. */
+ * clock and timing, its phase (WaCssPhase) and iteration then, and its
+ * place in the host's list then, which orders the cancels of those that
+ * go together. */
 typedef enum { CSS_IDLE, CSS_BEFORE, CSS_ACTIVE, CSS_AFTER } WaCssPhase;
 typedef struct DWaSeen DWaSeen;
 struct DWaSeen {
@@ -159,6 +161,7 @@ struct DWaSeen {
     garb_timing_t timing;
     WaCssPhase phase;
     double iteration;
+    int32_t place;
     uint32_t pass;
 };
 
@@ -2691,8 +2694,6 @@ static bool css_listening(os64_dom_t *dom)
     return false;
 }
 
-/* The table keeps the order the host listed its animations in, composite
- * order, which is the order their cancels are queued in. */
 static void seen_drop(os64_dom_t *dom, size_t i)
 {
     DWaSeen *s = &dom->wa_seen[i];
@@ -2781,12 +2782,13 @@ static double css_when(os64_dom_t *dom, const DWaSeen *s, double local)
  * the interval's start and end are where its active interval begins and
  * ends, clamped to it, and an iteration's elapsed time is the boundary
  * between iterations it crossed last. `quiet` takes where it is and owes nothing. */
-static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, double now, bool quiet)
+static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, int32_t place, double now, bool quiet)
 {
     DWaSeen *s = seen_of(dom, r);
     if (s == NULL) return;
     double canceled_at = seen_active_at(s, now);
     s->pass = dom->wa_css_pass;
+    s->place = place;
     s->paused = r->paused;
     s->canceled = r->canceled;
     s->start = r->start_ms;
@@ -2856,7 +2858,7 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
             a->css_pass = pass;
             css_pull(ctx, a, &r);
         }
-        if (listening) css_events(dom, &r, now, seeding && (r.paused || r.start_ms <= since));
+        if (listening) css_events(dom, &r, i, now, seeding && (r.paused || r.start_ms <= since));
     }
     /* Each gone one held while all are canceled: a cancel settles promises,
      * which may run a page's getter, which may make or drop animations. */
@@ -2872,10 +2874,19 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
         JS_FreeValue(ctx, gone[i]);
     }
     js_free(ctx, gone);
-    for (size_t i = 0; listening && i < dom->wa_nseen; i++) {
-        DWaSeen *s = &dom->wa_seen[i];
-        if (s->pass != pass && (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE))
-            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));
+    /* The ones that went, cancelled in the order the host last listed
+     * them: composite order, as they last stood. */
+    for (int32_t next = INT32_MIN; listening;) {
+        DWaSeen *first = NULL;
+        for (size_t i = 0; i < dom->wa_nseen; i++) {
+            DWaSeen *s = &dom->wa_seen[i];
+            if (s->pass != pass && s->place >= next && (first == NULL || s->place < first->place)) first = s;
+        }
+        if (first == NULL) break;
+        if (first->phase == CSS_BEFORE || first->phase == CSS_ACTIVE)
+            css_queue(dom, first, "animationcancel", seen_active_at(first, now), wa_now(dom));
+        if (first->place == INT32_MAX) break;
+        next = first->place + 1;
     }
     for (size_t i = dom->wa_nseen; listening && i-- > 0;)
         if (dom->wa_seen[i].pass != pass) seen_drop(dom, i);

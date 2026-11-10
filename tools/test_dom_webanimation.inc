@@ -903,19 +903,27 @@ static void wa_css_events(void)
     p2b_script(&f, "assert(log.join()==='animationstart:back:0:box:true:true:false,"
                "animationiteration:back:1:box:true:true:false',log.join());",
                "web animations: css events: the boundary it crossed");
-    /* Two that go together are canceled in composite order. */
+    /* Two that go together are canceled in composite order as they last
+     * stood, after their list turned round. */
     p2b_script(&f, "log.length=0;", "web animations: css events: another log");
     wa_css_add(7, box, "c1", (double)p2b_ms, 1000, 0, 1);
     wa_css_add(8, box, "c2", (double)p2b_ms, 1000, 0, 1);
     p2b_advance(20);
     wa_step(&f, "web animations: css events: c1 and c2 start");
+    /* The list turns round: c2, then c1. */
+    WaCssRecord swap = wa_css_records[wa_css_n - 1];
+    wa_css_records[wa_css_n - 1] = wa_css_records[wa_css_n - 2];
+    wa_css_records[wa_css_n - 2] = swap;
+    wa_css_version++;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css events: c2 before c1");
     wa_css_n -= 2;
     wa_css_version++;
     p2b_advance(20);
     wa_step(&f, "web animations: css events: both go");
     p2b_script(&f, "assert(log.join()==='animationstart:c1:0:box:true:true:false,animationstart:c2:0:box:true:true:false,"
-               "animationcancel:c1:0.04:box:true:true:false,animationcancel:c2:0.04:box:true:true:false',log.join());",
-               "web animations: css events: canceled in composite order");
+               "animationcancel:c2:0.06:box:true:true:false,animationcancel:c1:0.06:box:true:true:false',log.join());",
+               "web animations: css events: canceled in composite order, as it last stood");
     fixture_free(&f);
 }
 
