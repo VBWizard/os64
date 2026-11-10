@@ -118,6 +118,13 @@ Remaining hardware checks include Apply/Save/restart, show/hide/resize,
 and closing with the Settings popup open.
 Host tests do not establish native window stacking or timer behavior.
 
+## Graphical views proposal
+
+[Pulse graphical views](PULSE_GRAPHICAL.md) proposes a resizable Instruments
+view with optional Compact mode, recent-peak markers, hover details, and sizes
+remembered per view/mode while retaining Classic.
+It describes planned behavior; the controls above document the implemented app.
+
 ## Next disk-activity slice
 
 Use `/sys/disk/stats` for per-device read/write activity. Leave `/sys/mounts`

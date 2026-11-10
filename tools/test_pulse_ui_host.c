@@ -5,9 +5,13 @@ static uint64_t pulse_test_parent_flags, pulse_test_create_flags, pulse_test_dia
 static bool pulse_test_pin_failure;
 static unsigned pulse_test_focuses;
 static bool pulse_test_state_failure;
+static os64_draw_ctx_t *pulse_test_live;
+static int64_t pulse_test_exact_error;
+static unsigned pulse_test_exact_failures,pulse_test_exact_calls;
 static int64_t pulse_test_state(int64_t window,os64_gui_window_state_t *state)
 {
-    *state=(os64_gui_window_state_t){.flags=window==2?pulse_test_dialog_flags:pulse_test_parent_flags,.x=10,.y=20};
+    *state=(os64_gui_window_state_t){.flags=window==2?pulse_test_dialog_flags:pulse_test_parent_flags,.x=10,.y=20,.width=pulse_test_live?pulse_test_live->surf.width+2:322,
+        .height=pulse_test_live?pulse_test_live->surf.height+21:441};
     return pulse_test_state_failure?-1:0;
 }
 static int64_t pulse_test_pin(int64_t window,bool pinned)
@@ -40,13 +44,32 @@ static int64_t pulse_test_min_size(int64_t window,uint32_t width,uint32_t height
 {
     (void)window;
     if(pulse_test_resize_failure || width>1600 || height>1200)return -1;
-    pulse_test_min_w=width;ui_test_min_h=height;return 0;
+    pulse_test_min_w=width;ui_test_min_h=height;
+    if(pulse_test_live){
+        if(pulse_test_live->surf.width<width)pulse_test_live->surf.width=width;
+        if(pulse_test_live->surf.height<height)pulse_test_live->surf.height=height;
+    }return 0;
 }
 static int64_t pulse_test_refresh(os64_draw_ctx_t *ctx)
 {
     if(ctx->surf.width<pulse_test_min_w)ctx->surf.width=pulse_test_min_w;
     return ui_test_ctx_refresh(ctx);
 }
+static int64_t pulse_test_content(int64_t window,os64_gui_rect_t *out)
+{(void)window;*out=(os64_gui_rect_t){11,40,(int32_t)pulse_test_live->surf.width,(int32_t)pulse_test_live->surf.height};return 0;}
+static int64_t pulse_test_screen(uint32_t *w,uint32_t *h){*w=1600;*h=1200;return 0;}
+static int64_t pulse_test_exact(int64_t window,uint32_t w,uint32_t h)
+{
+    (void)window;++pulse_test_exact_calls;
+    if(pulse_test_exact_failures){--pulse_test_exact_failures;return pulse_test_exact_error;}
+    if(w<pulse_test_min_w || h<ui_test_min_h)return OS64_GUI_ERR_BELOW_MINIMUM;
+    if(!(pulse_test_parent_flags&OS64_GUI_WINDOW_MAXIMIZED)){pulse_test_live->surf.width=w;pulse_test_live->surf.height=h;}
+    return 0;
+}
+#define os64_gui_window_get_content_rect pulse_test_content
+#define os64_gui_screen_info pulse_test_screen
+#define os64_gui_window_set_content_size pulse_test_exact
+#define pulse_record_placement pulse_test_placement
 #define os64_gui_window_set_min_size pulse_test_min_size
 #define os64_draw_ctx_refresh pulse_test_refresh
 #define pulse_sample pulse_test_sample
@@ -62,7 +85,16 @@ static int64_t pulse_test_refresh(os64_draw_ctx_t *ctx)
 #undef pulse_sample
 #undef os64_draw_ctx_refresh
 #undef os64_gui_window_set_min_size
+#undef os64_gui_window_get_content_rect
+#undef os64_gui_screen_info
+#undef os64_gui_window_set_content_size
+#undef pulse_record_placement
 
+static int64_t pulse_test_clock;
+static unsigned pulse_test_samples;
+int64_t os64_micros(void){return pulse_test_clock;}
+void os64_complain(const char *fmt,...){(void)fmt;}
+int64_t pulse_test_placement(pulse_config_t *c,const os64_gui_event_t *e){(void)c;(void)e;return 0;}
 bool os64_ui_theme_session(os64_ui_theme_t *t,uint64_t *installed,uint64_t hint)
 { (void)t;(void)installed;(void)hint;return false; }
 int64_t os64_open(const char *p,const char *mode){(void)p;(void)mode;return -1;}
@@ -79,7 +111,7 @@ os64_slurp_status_t os64_slurp(const char *path,size_t cap,uint8_t **out,size_t 
 }
 
 void pulse_test_sample(pulse_sampler_t *sampler,const pulse_config_t *config,pulse_sample_t *sample)
-{ (void)sampler;(void)config;*sample=(pulse_sample_t){0}; }
+{ (void)sampler;(void)config;++pulse_test_samples;*sample=(pulse_sample_t){0}; }
 /* Popup ownership is covered by test_menu_apps_host; this harness drives
  * dropdown values and Apply without opening a native popup. */
 os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *s,const os64_ui_menu_list_t *list,os64_gui_rect_t anchor)
@@ -91,7 +123,7 @@ static unsigned pulse_test_saves;
 static bool pulse_test_save_failure;
 int64_t os64_conf_write(const char *name,const os64_conf_pair_t *pairs,size_t count)
 {
-    CHECK(!strcmp(name,"pulse.conf"));CHECK(count==10);CHECK(!strcmp(pairs[9].key,"stay_on_top"));CHECK(!strcmp(pairs[8].key,"font_size"));CHECK(!strcmp(pairs[7].key,"refresh_ms"));
+    CHECK(!strcmp(name,"pulse.conf"));CHECK(count==12);CHECK(!strcmp(pairs[9].key,"stay_on_top"));CHECK(!strcmp(pairs[8].key,"font_size"));CHECK(!strcmp(pairs[7].key,"refresh_ms"));
     ++pulse_test_saves;return pulse_test_save_failure?-1:0;
 }
 static unsigned visible_count(const pulse_config_t *c)
@@ -100,12 +132,12 @@ static void pulse_test_settings(void)
 {
     current="settings Apply and Save";
     g.settings.ui.ctx=&g.settings.ctx;g.settings.ui.theme=g.ui.theme;
-    g.settings.ctx.surf.width=760;g.settings.ctx.surf.height=420;
+    g.settings.ctx.surf.width=760;g.settings.ctx.surf.height=560;
     os64_ui_panel(&g.settings.root);os64_ui_panel(&g.settings.body);
     os64_ui_set_root(&g.settings.ui,&g.settings.root);os64_ui_add_child(&g.settings.root,&g.settings.body);
     os64_ui_label(&g.settings.status,g.settings.message);os64_ui_add_child(&g.settings.root,&g.settings.status);
     build_settings_widgets();
-    CHECK(settings_arrange(&g.settings,(os64_gui_rect_t){16,16,728,288},32,false));
+    CHECK(settings_arrange(&g.settings,(os64_gui_rect_t){16,16,728,416},32,false));
     CHECK(g.units.selected==PULSE_MIB && g.show[0].checked);
     os64_ui_textfield_set(&g.settings.ui,&g.refresh,"1");settings_apply(&g.settings,true);
     CHECK(g.config.refresh_ms==1000 && !pulse_test_saves);CHECK(strstr(g.settings.message,"Refresh")!=NULL);
@@ -167,6 +199,116 @@ static void pulse_test_preview(const char *path)
     }
     CHECK(wrote);CHECK(fclose(out)==0);
 }
+static void pulse_test_views(void)
+{
+    current="live Instruments and preferred sizes";
+    pulse_config_t c=g.config;c.view=PULSE_INSTRUMENTS;c.font_size=26;
+    for(unsigned i=0;i<PULSE_METERS;++i)c.show[i]=true;
+    g.sample=(pulse_sample_t){.cpu_valid=true,.cpu_percent=45,.peak_valid={true},.peak={80},.network_scale=1024};
+    CHECK(change_view(&c));CHECK(g.renderer && !g.instruments.hidden && g.settings_button.hidden);
+    CHECK(g.ctx.surf.width==600 && g.ctx.surf.height==610);
+    CHECK(g.sample.cpu_percent==45 && g.sample.peak[0]==80);
+    os64_gui_rect_t damage;CHECK(os64_ui_render(&g.ui,&damage));CHECK(!g.paint_failed);
+    c=g.config;c.instruments_compact=true;CHECK(change_view(&c));
+    CHECK(g.ctx.surf.width==360 && g.ctx.surf.height==390);CHECK(os64_ui_render(&g.ui,&damage));CHECK(!g.paint_failed);
+    pulse_size_t compact_size={g.ctx.surf.width,g.ctx.surf.height},minimum=g.minimum;
+    current="minimum growth followed by exact-size refusal rolls back";
+    pulse_test_exact_error=OS64_GUI_ERR_SCREEN_FIT;pulse_test_exact_failures=1;
+    c=g.config;c.instruments_compact=false;CHECK(!change_view(&c));
+    CHECK(g.config.instruments_compact && g.ctx.surf.width==compact_size.w && g.ctx.surf.height==compact_size.h);
+    CHECK(pulse_test_min_w==minimum.w && ui_test_min_h==minimum.h);
+    CHECK(g.transition_error==OS64_GUI_ERR_SCREEN_FIT);
+    current="failed rollback is reported and actual surface retained";
+    pulse_test_exact_failures=2;CHECK(!change_view(&c));
+    CHECK(strstr(g.transition_message,"restoring")!=NULL && g.config.instruments_compact);
+    CHECK(g.root.bounds.w==(int32_t)g.ctx.surf.width && g.root.bounds.h==(int32_t)g.ctx.surf.height);
+    CHECK(os64_ui_render(&g.ui,&damage));CHECK(!g.paint_failed);
+    CHECK(change_view(&c));c=g.config;c.instruments_compact=true;CHECK(change_view(&c));
+    current="older kernel cannot grow a view through minimum side effects";
+    g.resize_supported=false;unsigned calls=pulse_test_exact_calls;
+    minimum=g.minimum;c=g.config;c.instruments_compact=false;
+    CHECK(!change_view(&c));CHECK(g.config.instruments_compact && strstr(g.transition_message,"kernel")!=NULL);
+    CHECK(pulse_test_exact_calls==calls && g.minimum.w==minimum.w && g.minimum.h==minimum.h);
+    // The same mode change is usable after the owner manually makes room.
+    g.ctx.surf.width=700;g.ctx.surf.height=700;layout(&g.ui);
+    CHECK(change_view(&c));CHECK(g.resize_warning && g.ctx.surf.width==700 && g.ctx.surf.height==700);
+    CHECK(pulse_test_exact_calls==calls);g.resize_supported=true;
+    current="view-specific compact preference survives Classic";
+    c=g.config;c.instruments_compact=true;CHECK(change_view(&c));c=g.config;c.view=PULSE_CLASSIC;
+    CHECK(change_view(&c));CHECK(g.config.instruments_compact && g.instruments.hidden && !g.settings_button.hidden);
+    c=g.config;c.view=PULSE_INSTRUMENTS;CHECK(change_view(&c));CHECK(g.ctx.surf.width==360 && g.ctx.surf.height==390);
+    current="maximized transition changes normal target, not visible size";
+    pulse_test_parent_flags|=OS64_GUI_WINDOW_MAXIMIZED;g.ctx.surf.width=1000;g.ctx.surf.height=900;
+    c=g.config;c.instruments_compact=false;CHECK(change_view(&c));
+    CHECK(g.ctx.surf.width==1000 && g.ctx.surf.height==900 && g.normal_size.w==600 && g.normal_size.h==610);
+    pulse_test_parent_flags&=~OS64_GUI_WINDOW_MAXIMIZED;
+}
+static void pulse_test_details(void)
+{
+    current="hover state, clocks, and cancellation";
+    pulse_overlay_t overlay;pulse_overlay_init(&overlay);
+    pulse_overlay_hover(&overlay,0,100);CHECK(overlay.deadline==500100 && overlay.shown==-1);
+    CHECK(!pulse_overlay_due(&overlay,500099));CHECK(!pulse_overlay_due(&overlay,-1));
+    CHECK(pulse_overlay_due(&overlay,500100) && overlay.shown==0 && !overlay.deadline);
+    pulse_overlay_hover(&overlay,0,800000);CHECK(overlay.shown==0);
+    pulse_overlay_hover(&overlay,1,800000);CHECK(overlay.shown==-1 && overlay.deadline==1300000);
+    pulse_overlay_cancel(&overlay);CHECK(!pulse_overlay_due(&overlay,2000000));
+    pulse_overlay_hover(&overlay,0,INT64_MAX);CHECK(!overlay.deadline);
+    pulse_overlay_hover(&overlay,1,-1);CHECK(!overlay.deadline);
+    pulse_overlay_focus(&overlay,2);CHECK(overlay.shown==2 && overlay.keyboard && !overlay.deadline);
+    pulse_overlay_hover(&overlay,-1,4000000);CHECK(overlay.shown==-1);
+    current="live unfocused hover and independent notification bits";
+    pulse_config_t c=g.config;c.view=PULSE_INSTRUMENTS;c.instruments_compact=true;c.font_size=24;
+    CHECK(change_view(&c));g.ui.window_blurred=true;g.settings.window=0;g.want_settings=false;
+    pulse_test_clock=1000000;unsigned samples=pulse_test_samples;
+    os64_gui_rect_t dial=g.dials[0].bounds;
+    os64_gui_event_t pointer={.type=OS64_GUI_EVENT_POINTER_STATE,.pointer={.inside=1,.x=dial.x+dial.w/2,.y=dial.y+dial.h/2}};
+    window_event(NULL,&pointer);CHECK(g.overlay.target==0 && g.hover_deadline==1500000);
+    os64_gui_event_t ring={.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=PULSE_NOTIFY_HOVER}};
+    pulse_test_clock=1499999;window_event(NULL,&ring);CHECK(g.overlay.shown==-1);
+    pulse_test_clock=1500000;window_event(NULL,&ring);CHECK(g.overlay.shown==0 && !g.hover_deadline);
+    CHECK(pulse_test_samples==samples);
+    os64_gui_rect_t damage;CHECK(os64_ui_render(&g.ui,&damage) && !g.overlay_failed);
+    char text[768];g.sample.cpu_valid=true;g.sample.cpu_percent=23;g.sample.peak_valid[0]=true;g.sample.peak[0]=91;
+    pulse_details(text,sizeof(text),0,&g.config,&g.sample);CHECK(strstr(text,"Current: 23%") && strstr(text,"60s: 91%"));
+    for(unsigned i=0;i<PULSE_DIAL_COUNT;++i){
+        pulse_overlay_focus(&g.overlay,(int)i);os64_ui_mark_dirty(&g.ui,&g.instruments);
+        CHECK(os64_ui_render(&g.ui,&damage) && !g.overlay_failed);
+    }
+    memset(g.config.mount,'x',sizeof(g.config.mount)-1);g.config.mount[0]='/';g.config.mount[sizeof(g.config.mount)-1]=0;
+    pulse_overlay_focus(&g.overlay,PULSE_DIAL_DISK);os64_ui_mark_dirty(&g.ui,&g.instruments);
+    CHECK(os64_ui_render(&g.ui,&damage) && !g.overlay_failed);strcpy(g.config.mount,"/");
+    ring.doorbell.mask=PULSE_NOTIFY_SAMPLE;window_event(NULL,&ring);CHECK(pulse_test_samples==samples+1);
+    os64_gui_event_t escape={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=27}};
+    window_event(NULL,&escape);CHECK(g.overlay.shown==-1 && !g.hover_deadline);
+    window_event(NULL,&ring);CHECK(g.overlay.shown==-1);
+    current="keyboard dials and cancellation routes";
+    g.ui.window_blurred=false;os64_ui_set_focus(&g.ui,NULL);
+    os64_gui_event_t tab={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='\t'}};
+    window_event(NULL,&tab);CHECK(g.ui.focus==&g.dials[0] && g.overlay.shown==0 && g.overlay.keyboard);
+    window_event(NULL,&tab);CHECK(g.ui.focus==&g.dials[1] && g.overlay.shown==1);
+    os64_gui_event_t cancel={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    window_event(NULL,&cancel);CHECK(g.overlay.shown==-1);
+    pulse_overlay_focus(&g.overlay,0);cancel.type=OS64_GUI_EVENT_INPUT_LOST;window_event(NULL,&cancel);CHECK(g.overlay.shown==-1);
+    pulse_overlay_focus(&g.overlay,0);cancel.type=OS64_GUI_EVENT_WINDOW_COVERED;window_event(NULL,&cancel);CHECK(g.overlay.shown==-1);
+    pulse_overlay_focus(&g.overlay,0);layout(&g.ui);CHECK(g.overlay.shown==-1 && !g.hover_deadline);
+    pulse_overlay_focus(&g.overlay,0);ask_settings(NULL,NULL);CHECK(g.overlay.shown==-1);g.want_settings=false;
+    current="detail font changes and clipped UTF-8 wrapping";
+    for(unsigned pass=0;pass<6;++pass){
+        c=g.config;c.font_size=pass%2?26:24;c.instruments_compact=pass%2;
+        CHECK(change_view(&c));pulse_overlay_focus(&g.overlay,PULSE_DIAL_RAM);
+        os64_ui_mark_dirty(&g.ui,&g.instruments);CHECK(os64_ui_render(&g.ui,&damage) && !g.overlay_failed);
+    }
+    uint32_t *pixels=malloc(200*200*4);CHECK(pixels);
+    for(unsigned i=0;i<200*200;++i)pixels[i]=0x12345678;
+    os64_gui_surface_t guarded={.pixels=pixels,.width=200,.height=200,.pitch_px=200};
+    CHECK(pulse_overlay_paint(&g.overlay,&g.ui,&guarded,(os64_gui_rect_t){10,10,180,180},
+        (os64_gui_rect_t){170,170,20,20},"Mount: /home/caf\xc3\xa9/very-long-directory-name-without-spaces\nSpace usage\nMore lines\nMore lines\nMore lines\nMore lines\nMore lines\nMore lines"));
+    bool guard=true;for(unsigned y=0;y<200;++y)for(unsigned x=0;x<200;++x)
+        if((x<10 || y<10 || x>=190 || y>=190) && pixels[y*200+x]!=0x12345678)guard=false;
+    CHECK(guard);free(pixels);
+    pulse_overlay_release(&g.overlay);
+}
 int main(int argc,char **argv)
 {
     current="settings inherits pinned band";
@@ -184,6 +326,7 @@ int main(int argc,char **argv)
     pulse_test_state_failure=false;pulse_test_parent_flags=OS64_GUI_WINDOW_PINNED;
     current="meter selection and layout";
     pulse_config_defaults(&g.config);g.ui.ctx=&g.ctx;ui_test_view_theme(&g.ui.theme);
+    pulse_test_live=&g.ctx;g.resize_supported=true;g.minimum=(pulse_size_t){64,32};
     g.ui.theme.panel_bg=0xff202833;g.ui.theme.label_fg=0xffedf3fa;
     g.ui.theme.button_face=0xff315e85;g.ui.theme.button_fg=0xffedf3fa;
     g.ui.theme.scroll_track=0xff394553;g.ui.theme.text_sel_bg=0xff62bad7;
@@ -249,7 +392,8 @@ int main(int argc,char **argv)
     if(argc>2)pulse_test_preview(argv[2]);
     g.sample=(pulse_sample_t){0};render_sample();
     CHECK(strstr(g.title[0],"waiting")!=NULL && strstr(g.title[1],"unavailable")!=NULL);
-    pulse_test_settings();
+    pulse_test_settings();pulse_test_views();pulse_test_details();
+    pulse_instruments_destroy(g.renderer);g.renderer=NULL;
     CHECK(os64_ui_font_release(&g.ui)==OS64_FONT_OK);free(g.ctx.surf.pixels);
     printf("pulse UI: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;
