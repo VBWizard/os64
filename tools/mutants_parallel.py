@@ -194,12 +194,23 @@ MEMORY_CAP = ['systemd-run', '--user', '--scope', '--quiet', '--collect',
               '-p', f'MemoryMax={args.memory_gib}G', '-p', 'MemorySwapMax=0', '--']
 
 
+# Run under MEMORY_CAP, this prints the memory ceiling of the control group
+# it finds itself in, as the kernel has it.
+OWN_CEILING = ('import pathlib\n'
+               'group = pathlib.Path("/proc/self/cgroup").read_text().strip().rpartition("::")[2]\n'
+               'print(pathlib.Path("/sys/fs/cgroup" + group, "memory.max").read_text().strip())')
+
+
 def memory_cap_works():
+    """Whether a command behind MEMORY_CAP is held to the ceiling asked for:
+    not whether systemd-run starts, which it also does where the property is
+    accepted and nothing enforces it."""
     try:
-        return subprocess.run(MEMORY_CAP + ['true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              timeout=30).returncode == 0
+        said = subprocess.run(MEMORY_CAP + [sys.executable, '-c', OWN_CEILING], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return False
+    return said.returncode == 0 and said.stdout.strip() == str(args.memory_gib << 30)
 
 
 def capped(command):
