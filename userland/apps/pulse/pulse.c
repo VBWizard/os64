@@ -1,6 +1,8 @@
 #include "pulse_data.h"
 #include "pulse_instruments.h"
 #include "pulse_placement.h"
+#include "pulse_overlay.h"
+#include "pulse_details.h"
 #include "os64/os64.h"
 #include "os64/ui.h"
 #include "os64/ui_window.h"
@@ -21,6 +23,11 @@ static struct {
     os64_ui_checkbox_t compact;
     os64_ui_class_t instruments_class,toolbar_button_class,toolbar_dropdown_class;
     pulse_instruments_t *renderer;
+    os64_ui_widget_t dials[PULSE_DIAL_COUNT];
+    pulse_overlay_t overlay;
+    int64_t hover_deadline;
+    bool overlay_failed;
+
     os64_ui_menu_session_t *main_menu;
     pulse_size_t target_size,normal_size,minimum;
     bool startup,resize_supported,restore_size,resize_warning,paint_failed;
@@ -46,6 +53,21 @@ static struct {
     os64_ui_textfield_t mount, interface, refresh, font_size;
     char mount_text[256], interface_text[64], refresh_text[16], font_size_text[16];
 } g;
+enum { PULSE_NOTIFY_SAMPLE=1, PULSE_NOTIFY_HOVER=2 };
+static void cancel_details(void)
+{
+    pulse_overlay_cancel(&g.overlay);
+    __atomic_store_n(&g.hover_deadline,0,__ATOMIC_RELEASE);
+    os64_ui_mark_dirty(&g.ui,&g.instruments);
+}
+static void publish_hover(void)
+{__atomic_store_n(&g.hover_deadline,g.overlay.deadline,__ATOMIC_RELEASE);}
+static int focused_dial(void)
+{
+    for(unsigned i=0;i<PULSE_DIAL_COUNT;++i)
+        if(g.ui.focus==&g.dials[i] && !g.dials[i].hidden && !g.ui.window_blurred)return (int)i;
+    return -1;
+}
 static bool change_view(const pulse_config_t *);
 static void sync_view_widgets(void);
 static const char *view_label(size_t i,void *user)
@@ -89,7 +111,9 @@ static bool arrange(os64_ui_t *ui,bool stage)
         place(&g.toolbar_view.w,(os64_gui_rect_t){pad,pad,a,h},stage);
         place(&g.toolbar_compact,(os64_gui_rect_t){2*pad+a,pad,d,h},stage);
         place(&g.toolbar_settings,(os64_gui_rect_t){b.w-pad-e,pad,e,h},stage);
-        place(&g.instruments,body,stage);return true;
+        place(&g.instruments,body,stage);
+        for(unsigned i=0;i<PULSE_DIAL_COUNT;++i)place(&g.dials[i],plan.dials[i],stage);
+        return true;
     }
     int32_t bh=os64_ui_control_min_height(ui),width=b.w-2*pad;
     if(width<1 || b.h<needed_height(ui,c)) return false;
@@ -110,6 +134,7 @@ static bool arrange(os64_ui_t *ui,bool stage)
 }
 static void layout(os64_ui_t *ui)
 {
+    cancel_details();
     g.root.bounds=(os64_gui_rect_t){0,0,(int32_t)g.ctx.surf.width,(int32_t)g.ctx.surf.height};
     (void)arrange(ui,false);
     os64_gui_window_state_t state;
@@ -199,6 +224,7 @@ static os64_font_status_t resize_for_font(void *user,void *plan)
 static void commit_font(os64_ui_t *ui,void *user,void *plan)
 {
     (void)user;(void)plan;
+    pulse_overlay_release(&g.overlay);
     pulse_instruments_invalidate(g.renderer);
     if(os64_draw_ctx_refresh(&g.ctx)<0)ui->quit=true;
 }
@@ -287,6 +313,17 @@ static void instruments_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os6
         if(!g.paint_failed)os64_complain("pulse: instrument rendering failed");
     }
     g.paint_failed=!ok;
+    if(ok){
+        int focused=focused_dial();
+        if(focused>=0)os64_draw_rect(&ctx->surf,plan.dials[focused],0xff87b9e9);
+        int shown=g.overlay.shown;
+        if(shown>=0 && shown<PULSE_DIAL_COUNT && plan.visible[shown]){
+            char text[768];pulse_details(text,sizeof(text),(unsigned)shown,&g.config,&g.sample);
+            bool painted=pulse_overlay_paint(&g.overlay,&g.ui,&ctx->surf,w->bounds,plan.dials[shown],text);
+            if(!painted && !g.overlay_failed)os64_complain("pulse: could not draw detail card");
+            g.overlay_failed=!painted;
+        }
+    }
 }
 static void meter_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_theme_t *t)
 {
@@ -366,6 +403,9 @@ static void sample_now(void)
 static void sync_view_widgets(void)
 {
     bool graphical=g.config.view==PULSE_INSTRUMENTS;
+    const unsigned meter[]={PULSE_CPU,PULSE_RAM,PULSE_DISK,PULSE_NET,PULSE_NET};
+    for(unsigned i=0;i<PULSE_DIAL_COUNT;++i)
+        os64_ui_set_hidden(&g.ui,&g.dials[i],!graphical || !g.config.show[meter[i]]);
     os64_ui_set_hidden(&g.ui,&g.settings_button,graphical);
     os64_ui_set_hidden(&g.ui,&g.instruments,!graphical);
     os64_ui_set_hidden(&g.ui,&g.toolbar_view.w,!graphical);
@@ -391,6 +431,7 @@ static const char *transition_failure(void)
 }
 static bool change_view(const pulse_config_t *c)
 {
+    cancel_details();
     if(!apply_font(c)){sync_view_widgets();return false;}
     g.config=*c;sync_view_widgets();layout(&g.ui);render_sample();os64_ui_mark_dirty(&g.ui,&g.root);
     return true;
@@ -414,15 +455,17 @@ static void compact_clicked(os64_ui_widget_t *w,void *user)
     }
 }
 static void ask_settings(os64_ui_widget_t *w,void *user)
-{ (void)w;(void)user;g.want_settings=true; }
+{ (void)w;(void)user;cancel_details();g.want_settings=true; }
 static void close_window(os64_ui_t *ui)
-{ (void)ui;g.running=false; }
+{ (void)ui;cancel_details();g.running=false; }
 // Native state is authoritative, including changes from frame compositions
 // and the keyboard. Input-loss and periodic reconciliation cover dropped hints.
 static void sync_pin_state(void)
 {
     os64_gui_window_state_t state;
     if(os64_gui_window_get_state(g.window,&state)<0)return;
+    if((state.flags&(OS64_GUI_WINDOW_COVERED|OS64_GUI_WINDOW_MINIMIZED)) &&
+       (g.overlay.shown>=0 || g.overlay.deadline))cancel_details();
     g.config.stay_on_top=(state.flags & OS64_GUI_WINDOW_PINNED)!=0;
     if(g.settings.window>0){
         os64_ui_checkbox_set(&g.settings.ui,&g.stay_on_top,g.config.stay_on_top);
@@ -452,9 +495,32 @@ static void window_event(void *user,const os64_gui_event_t *ev)
     if(ev->type==OS64_GUI_EVENT_WINDOW_PLACEMENT){
         if(pulse_record_placement(&g.config,ev))os64_complain("pulse: could not save window placement");
     }
-    else if(ev->type==OS64_GUI_EVENT_SETTINGS) g.want_settings=true;
-    else if(ev->type==OS64_GUI_EVENT_DOORBELL) sample_now();
-    else os64_ui_dispatch(&g.ui,ev);
+    else if(ev->type==OS64_GUI_EVENT_SETTINGS){cancel_details();g.want_settings=true;}
+    else if(ev->type==OS64_GUI_EVENT_DOORBELL){
+        if(ev->doorbell.mask&PULSE_NOTIFY_SAMPLE)sample_now();
+        if((ev->doorbell.mask&PULSE_NOTIFY_HOVER) && pulse_overlay_due(&g.overlay,os64_micros())){
+            publish_hover();os64_ui_mark_dirty(&g.ui,&g.instruments);
+        }
+    }else{
+        bool pointer=ev->type==OS64_GUI_EVENT_POINTER_STATE;
+        bool keyboard=ev->type==OS64_GUI_EVENT_KEY_DOWN;
+        if(ev->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev->type==OS64_GUI_EVENT_INPUT_LOST ||
+           ev->type==OS64_GUI_EVENT_WINDOW_COVERED || ev->type==OS64_GUI_EVENT_WINDOW_RESIZE ||
+           ev->type==OS64_GUI_EVENT_WINDOW_FOCUS || (keyboard && ev->key.ascii==27))cancel_details();
+        os64_ui_dispatch(&g.ui,ev);
+        if(g.config.view==PULSE_INSTRUMENTS && !g.settings.window && !g.want_settings){
+            if(pointer){
+                int hit=-1;pulse_instrument_layout_t plan;
+                if(ev->pointer.inside && pulse_instruments_layout(&g.ui,&g.config,g.config.instruments_compact,g.instruments.bounds,&plan))
+                    hit=pulse_instruments_hit(&plan,ev->pointer.x,ev->pointer.y);
+                int before=g.overlay.shown;
+                pulse_overlay_hover(&g.overlay,hit,os64_micros());publish_hover();
+                if(before!=g.overlay.shown)os64_ui_mark_dirty(&g.ui,&g.instruments);
+            }else if((keyboard && ev->key.ascii=='\t') || (ev->type==OS64_GUI_EVENT_WINDOW_FOCUS && ev->focus.gained)){
+                pulse_overlay_focus(&g.overlay,focused_dial());publish_hover();os64_ui_mark_dirty(&g.ui,&g.instruments);
+            }
+        }
+    }
 }
 static void window_paint(void *user)
 { (void)user;os64_ui_paint(&g.ui); }
@@ -464,13 +530,18 @@ static void window_paint(void *user)
 static int64_t timer_main(void *user)
 {
     (void)user;
+    int64_t notified_deadline=0;
     while(!__atomic_load_n(&g.stop_timer,__ATOMIC_ACQUIRE)){
         unsigned remaining=__atomic_load_n(&g.refresh_ms,__ATOMIC_RELAXED);
         while(remaining && !__atomic_load_n(&g.stop_timer,__ATOMIC_ACQUIRE)){
             unsigned step=remaining>250?250:remaining;
             (void)os64_sleep(step);remaining-=step;
+            int64_t deadline=__atomic_load_n(&g.hover_deadline,__ATOMIC_ACQUIRE);
+            if(deadline && deadline!=notified_deadline && os64_micros()>=deadline){
+                (void)os64_gui_event_ring(g.window,PULSE_NOTIFY_HOVER);notified_deadline=deadline;
+            }
         }
-        if(!__atomic_load_n(&g.stop_timer,__ATOMIC_ACQUIRE)) (void)os64_gui_event_ring(g.window,1);
+        if(!__atomic_load_n(&g.stop_timer,__ATOMIC_ACQUIRE)) (void)os64_gui_event_ring(g.window,PULSE_NOTIFY_SAMPLE);
     }
     return 0;
 }
@@ -591,6 +662,7 @@ static void build_settings_widgets(void)
 }
 static void open_settings(void)
 {
+    cancel_details();
     g.want_settings=false;
     sync_pin_state();
     if(!os64_ui_settings_open(&g.settings,g.window,"Pulse Settings",13,settings_arrange,settings_apply,NULL))return;
@@ -607,10 +679,16 @@ static void open_settings(void)
 
 static void build_widgets(void)
 {
+    pulse_overlay_init(&g.overlay);
     os64_ui_panel(&g.root);os64_ui_set_root(&g.ui,&g.root);
     os64_ui_panel(&g.instruments);g.instruments_class=*g.instruments.cls;
     g.instruments_class.paint=instruments_paint;g.instruments.cls=&g.instruments_class;
     os64_ui_add_child(&g.root,&g.instruments);
+    static const os64_ui_class_t dial_class={.name="Pulse dial"};
+    for(unsigned i=0;i<PULSE_DIAL_COUNT;++i){
+        g.dials[i].cls=&dial_class;g.dials[i].focusable=true;
+        os64_ui_add_child(&g.instruments,&g.dials[i]);
+    }
     os64_ui_dropdown(&g.toolbar_view,PULSE_VIEWS,view_label,toolbar_changed,NULL);
     g.toolbar_dropdown_class=*g.toolbar_view.w.cls;
     g.toolbar_dropdown_class.paint=toolbar_dropdown_paint;g.toolbar_dropdown_class.prepare=toolbar_dropdown_prepare;
@@ -684,6 +762,7 @@ int main(void)
         if(g.settings.window && g.settings.ui.quit)(void)close_settings();
         if(g.want_settings && os64_ui_dispatcher_can_create(&g.dispatcher))open_settings();
     }
+    cancel_details();
     __atomic_store_n(&g.stop_timer,1,__ATOMIC_RELEASE);
     if(g.timer>=0 && os64_thread_join((int32_t)g.timer,NULL)<0){
         os64_complain("pulse: refresh timer did not join");return 1;
@@ -691,6 +770,7 @@ int main(void)
     if(g.timer>=0)(void)os64_close((int32_t)g.timer);
     if(!close_settings()){os64_complain("pulse: settings cleanup refused");return 1;}
     if(os64_ui_menu_session_dispose(g.main_menu)!=OS64_UI_OK){os64_complain("pulse: view menu cleanup refused");return 1;}
+    pulse_overlay_release(&g.overlay);
     pulse_instruments_destroy(g.renderer);
     (void)os64_ui_font_release(&g.ui);
     (void)os64_ui_dispatcher_destroy(&g.dispatcher,g.window);

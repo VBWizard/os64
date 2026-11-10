@@ -637,5 +637,67 @@ Verification for this checkpoint:
   refuses a larger view with an explicit hint, and switches after manual
   enlargement with an automatic-sizing warning.
 
-Native hardware acceptance, hover/keyboard detail cards, and the idle/loaded
-performance comparison remain the gates described above.
+The slice 3 checkpoint below covers detail cards and the native CPU comparison.
+Hardware acceptance of those additions remains pending.
+
+## Slice 3 checkpoint — details and measured cost
+
+Each visible dial participates in Tab/Shift+Tab navigation and shows its detail
+card immediately when reached by keyboard. Pointer hover uses a 500 ms
+monotonic deadline, serviced by the existing worker's at-most-250 ms sleep
+steps. Sampling and hover have distinct doorbell bits; a hover wake does not
+resample system reports. The worker reads only an atomic deadline and rings
+the owner; widget state stays on the UI thread. Pending deadlines are cancelled
+before the worker is joined and rendering resources are released.
+
+Cards use the displayed sample, including full formatted rates, the selected
+mount/interface, available/used/total capacity, and recent peaks. Disk is
+explicitly labelled filesystem capacity. The local overlay helper owns no
+native window or input target. Text wraps inside the instrument area; unusually
+long paths have a bounded final-line ellipsis. At most ten retained text runs
+are kept, separately from the renderer's 8 MiB drawing ledger. Font adoption
+and teardown release those runs.
+
+Pointer departure, clicks, Escape, resize, view changes, Settings, input loss,
+blur, and covered/minimized reconciliation cancel details. A fresh pointer
+snapshot may start another hover while the window remains unfocused. The
+card does not participate in hit testing, so crossing its painted rectangle
+does not change which underlying dial owns the hover.
+
+Validation:
+
+- Before overlay implementation, native instrumentation confirmed a pinned
+  Pulse receives POINTER_STATE with `inside=1` and its UI blurred while a
+  companion window retains keyboard focus.
+- The expanded host UI suite passes 340 checks with ASan, UBSan, and
+  LeakSanitizer. Additions cover deadlines, stale notifications, no sampling
+  on hover, keyboard traversal, cancellation routes, repeated font/mode
+  changes with retained cards, long paths, and clipped UTF-8 wrapping.
+- Native QEMU confirms unfocused hover, Tab details, Escape dismissal,
+  resizing with a card visible, and closing the parent with Settings open. The renderer's 1,379-check cache,
+  allocation-failure, and minimum-layout matrix remains the slice 1 evidence.
+
+`/tests/pulsebench` runs the production event loop with a five-second settling
+period and a thirty-second measurement per presentation. It records the
+process CPU ledger against monotonic elapsed time, with 100% meaning one CPU.
+Loaded phases run a separate ring-3 spin task; the fixture terminates and reaps
+it on exit. It uses a 1-second refresh, 24-pixel primary text, all meters,
+600 × 610 normal Instruments, and 360 × 390 Compact. Keep the window visible
+and do not interact with its controls. Results are written to the terminal
+and system log.
+
+Measured on QEMU TCG, two virtual CPUs, 4 GiB, 1280 × 960:
+
+| Presentation | Idle CPU | CPU with spin task | Peak drawing allocation |
+| --- | --- | --- | --- |
+| Classic | 1.124% | 1.037% | No instrument renderer |
+| Instruments | 5.385% | 5.122% | 1,118,380 bytes |
+| Compact | 2.739% | 2.665% | 456,964 bytes |
+| Compact with CPU detail card | — | 2.831% | 456,964 bytes |
+
+These are process costs under emulation, not P5 predictions or whole-desktop
+costs. Compositor work is excluded. The first idle interval overlaps the tail
+of native late boot tests, so small differences between idle and loaded rows
+should not be interpreted as improvements under load. Both graphical modes
+stay below the drawing budget; font/text allocations are accounted separately
+by the font provider. Hardware CPU/readability acceptance is still needed.

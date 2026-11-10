@@ -527,6 +527,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
                        $(if $(filter $(1),sshtest),$(addprefix $(OBJ)/apps/sshd/,ssh_codec.c.o ssh_keys.c.o ssh_transport.c.o ssh_connection.c.o)) \
                        $(if $(filter $(1),pulsedialtest),$(addprefix $(OBJ)/apps/pulse/,pulse_instruments.c.o pulse_data.c.o)) \
+                       $(if $(filter $(1),pulsebench),$(addprefix $(OBJ)/apps/pulse/,pulse_instruments.c.o pulse_data.c.o pulse_placement.c.o pulse_overlay.c.o pulse_details.c.o)) \
                        $(if $(filter $(1),scribefonttest),$(addprefix $(OBJ)/apps/scribe/,scribe.c.o scribe_buf.c.o)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
@@ -541,7 +542,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) 
                        $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder scribe scribefonttest grootmenu actiongallery roam),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
-                       $(if $(filter $(1),fonttest texttest flowdump yonder pulse pulsedialtest),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),fonttest texttest flowdump yonder pulse pulsedialtest pulsebench),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),js),$(LIBJS_SO)) \
                        $(if $(filter $(1),mathtest yonder),$(LIBMATH_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
