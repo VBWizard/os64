@@ -137,3 +137,11 @@ that the fixed descriptor table replaced.
 
 F.1 supplies engine realms, not multiple DOM bindings, iframe loading, independent
 retirement, or HTML settings-object attribution. Those remain F.2 onward.
+
+## Code review acceptance
+
+Codex completed review of `fb70d6e5ace1fa108d18a679403ed35d68e023fe` with
+no findings on 2026-11-10 ([review receipt](https://github.com/VBWizard/os64/pull/532#issuecomment-6774790328)).
+The final tracker/acceptance commit changes documentation only. PR #532 carries
+the completion flip for merge into `userland`; no P5 acceptance is required
+for this runtime-only slice.

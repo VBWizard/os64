@@ -411,10 +411,9 @@ site to select the primary: loader lookup, module list, captured watcher's
 and rejection record owner. A compiler failure is not a kill; each must
 fail its intended assertion from a passing unmutated baseline.
 
-F.1 moves to `review` with this implementation and its
-[validation record](IFRAME_F1_REALMS_VALIDATION.md). The tracker completion
-and PR number follow code review and required acceptance in the implementing
-PR. The documentation alone never marks it done.
+Codex completed code review of `fb70d6e5` with no findings. The
+[validation record](IFRAME_F1_REALMS_VALIDATION.md) records review and test
+evidence; PR #532 carries the tracker completion flip for merge into `userland`.
 Single-document behavior remains the shipping browser path throughout F.1.
 
 Useful references: [iframe design](IFRAME.md),
