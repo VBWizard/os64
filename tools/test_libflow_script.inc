@@ -228,6 +228,11 @@ static void composite_cases(void)
                    "font-size: 20px", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_FONT_SIZE, "35px");
     composite_case("composite: a colour's iterations build on its last keyframe", box, "color: rgb(0, 0, 0)",
                    "color: rgb(100, 0, 0)", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_COLOR, "rgb(150, 0, 0)");
+    composite_case("composite: an implicit first keyframe accumulates the neutral value, then adds",
+                   "<!doctype html><style>#k{scale:2}</style><div id=k>x</div>", "", "scale: 3",
+                   GARB_COMPOSITE_ADD, true, 3, 1500, GARB_SCALE, "8");
+    composite_case("composite: an implicit keyframe of a kind that does not add is the value underneath", box,
+                   "", "visibility: hidden", GARB_COMPOSITE_ADD, true, 3, 1250, GARB_VISIBILITY, "visible");
     composite_case("composite: an implicit last keyframe adds nothing to the iterations", box, "margin-left: 0px",
                    "", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_MARGIN_LEFT, "50px");
     composite_due_case();

@@ -2583,8 +2583,11 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                 // value once for each finished iteration, then, where it
                 // adds or accumulates, met with the value underneath. An
                 // implicit endpoint is the neutral value, added: the value
-                // underneath, plus what it accumulates. The mix then holds
-                // the result to the property's range (mix_prop).
+                // underneath as it stands, or, where it accumulates, the
+                // final value accumulated one time fewer (the neutral value
+                // is what accumulating onto changes nothing) added onto it.
+                // The mix then holds the result to the property's range
+                // (mix_prop).
                 const flow_style_t *last = resolved && an->iteration_accumulate && k.iteration >= 1
                                          ? final_value(an, a, &under, (garb_prop_t)p, look) : NULL;
                 // A colour that accumulates or composites is built wide,
@@ -2629,6 +2632,15 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                     if (last == NULL && op == GARB_COMPOSITE_REPLACE)
                         continue;
                     met[end] = *f->style;
+                    if (last != NULL && f->implicit) {
+                        // A kind that does not add keeps the value underneath.
+                        copy_prop((garb_prop_t)p, &met[end], last);
+                        accumulate_onto((garb_prop_t)p, &met[end], last, k.iteration - 1, look);
+                        if (!add_prop((garb_prop_t)p, &under, &met[end], &met[end], false, look->alloc, look->ctx))
+                            met[end] = *f->style;
+                        f->style = &met[end];
+                        continue;
+                    }
                     if (last != NULL)
                         accumulate_onto((garb_prop_t)p, &met[end], last, k.iteration, look);
                     if (op != GARB_COMPOSITE_REPLACE)
