@@ -60,3 +60,9 @@ Render/open the board with `tools/tracker.sh iframe [worktree]`.
 [Shared tool documentation](../../../tools/TRACKERS.md) covers the format
 and launcher. The iframe rows do not modify HTTP/2's tracker or its upkeep
 rules. Workers and the remaining browser roadmap are separate arcs.
+
+F.2 uses two implementation PRs under one row, as adopted in its design
+review: F.2a for native ownership and F.2b for bindings. Keep the row in
+progress after F.2a and name its evidence in notes. F.2b's completion flip
+records both PRs; merging the brief or the native half alone does not finish
+the slice.

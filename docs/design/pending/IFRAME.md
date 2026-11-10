@@ -588,15 +588,19 @@ timers, listeners, requests, storage areas, providers. The fields are
 largely per binding already, but class registration, context validation,
 host attribution and retained ownership still require the changes above.
 
-**A wrapper is made in the realm of its node's document.** `DValue`
-already tags the node's document; the lookup becomes "the document's
-binding, through the cluster", not "the binding in hand". So when the
+**A node's creation realm is fixed before it is wrapped.** Record its
+creation realm slot in native metadata, including parser-created nodes that
+script has not reached. Resolve that realm's binding through the cluster
+when materializing the wrapper, not the node's possibly changed current
+document or the binding in hand. So when the
 parent's script walks `iframe.contentDocument.body.children`, the
 wrappers it receives are the child's, with the child's prototypes, and
 `child.contentDocument.body instanceof HTMLElement` is false in the
 parent and true in the child, as in a browser. The node's owning document
-can change after wrapper creation: adoption preserves an existing
-wrapper's identity and prototype. Its arena, document bookkeeping and
+can change before or after wrapper creation: adoption preserves the node's
+creation realm and an existing wrapper's identity and prototype. The
+[F.2 brief](IFRAME_F2_OWNERSHIP.md) gives the three-realm, never-wrapped-node
+counterexample and proposed native lifetime model. Its arena, document bookkeeping and
 lifetime follow § Retained ownership; the current windowless-document
 adoption path does not move across arenas.
 
