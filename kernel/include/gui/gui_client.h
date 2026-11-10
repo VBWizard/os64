@@ -37,6 +37,9 @@
 #define GUI_ERR_NOT_RUNNING     (-6)
 #define GUI_ERR_BUSY            (-7)
 #define GUI_ERR_NOT_FOCUSED     (-8)
+#define GUI_ERR_BELOW_MINIMUM OS64_GUI_ERR_BELOW_MINIMUM
+#define GUI_ERR_ABOVE_CAPACITY OS64_GUI_ERR_ABOVE_CAPACITY
+#define GUI_ERR_SCREEN_FIT OS64_GUI_ERR_SCREEN_FIT
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,
@@ -53,6 +56,8 @@ int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags);
 // Owner-only content floors; os64/gui.h defines normalization and growth.
 int64_t gui_window_focus(int64_t handle);
 int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height);
+// Raw dimensions are validated before narrowing; exact-size contract in os64/gui.h.
+int64_t gui_window_set_content_size(int64_t handle,uint64_t width,uint64_t height);
 
 // Get the window's drawable CANVAS (the client-owned back buffer). Draw at
 // will — nothing shows until publish() snapshots your damage rect into the

@@ -582,6 +582,43 @@ int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)
 	return valid ? 0 : GUI_ERR_BAD_ARGS;
 }
 
+int64_t gui_window_set_content_size(int64_t handle,uint64_t width,uint64_t height)
+{
+    if(!width || !height || width>INT32_MAX || height>INT32_MAX)return GUI_ERR_BAD_ARGS;
+    int64_t err=0;
+    uint64_t lock=gui_lock(GUI_LOCK_WINDOW);
+    window_t *w=handle_lookup_owned(handle,&err);
+    if(!w)goto done;
+    if(w->flags & (GUI_WINDOW_DESKTOP|GUI_WINDOW_POPUP)){err=GUI_ERR_BAD_ARGS;goto done;}
+    uint64_t frame_w=width+2u*wm_border_width(w->flags);
+    uint64_t frame_h=height+wm_chrome_top(w->flags)+wm_border_width(w->flags);
+    if(frame_w>INT32_MAX || frame_h>INT32_MAX){err=GUI_ERR_BAD_ARGS;goto done;}
+    if(width<w->min_content_w || height<w->min_content_h ||
+       frame_w<wm_decoration_min_width(w->flags)){err=GUI_ERR_BELOW_MINIMUM;goto done;}
+    if(width>w->canvas_cap_w || height>w->canvas_cap_h){err=GUI_ERR_ABOVE_CAPACITY;goto done;}
+    if(frame_w>kFrameBuffer.width || frame_h>kFrameBuffer.height){err=GUI_ERR_SCREEN_FIT;goto done;}
+    bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
+    rect_t target=maximized?w->restoreFrame:w->frame;
+    target.w=(int32_t)frame_w;target.h=(int32_t)frame_h;
+    int32_t max_x=(int32_t)(kFrameBuffer.width-frame_w),max_y=(int32_t)(kFrameBuffer.height-frame_h);
+    if(target.x<0)target.x=0;
+    if(target.y<0)target.y=0;
+    if(target.x>max_x)target.x=max_x;
+    if(target.y>max_y)target.y=max_y;
+    // Refusals above leave gestures untouched. A valid request takes over
+    // geometry and drains the remaining releases of a cancelled resize.
+    gui_geometry_changing(w);gui_cancel_resize(w);
+    if(maximized)w->restoreFrame=target;
+    else {
+        (void)wm_resize(w,target);
+        // wm_resize returns false for both no-op and invariant refusal.
+        if(w->frame.x!=target.x || w->frame.y!=target.y ||
+           w->frame.w!=target.w || w->frame.h!=target.h)err=GUI_ERR_NO_RESOURCES;
+    }
+done:
+    gui_unlock(lock);return err;
+}
+
 // The most pieces of one publish's visible part that go on the damage list;
 // past it, their bounding box goes instead. Four is one rectangle minus one
 // cover in its middle, the ring. It is small because the list is: a full

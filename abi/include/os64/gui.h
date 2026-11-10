@@ -33,6 +33,9 @@
 #define OS64_GUI_ERR_NO_RESOURCES    (-2)
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
 #define OS64_GUI_ERR_BUSY            (-7) // child windows or another event waiter
+#define OS64_GUI_ERR_BELOW_MINIMUM   (-9)
+#define OS64_GUI_ERR_ABOVE_CAPACITY  (-10)
+#define OS64_GUI_ERR_SCREEN_FIT      (-11)
 #define OS64_GUI_ERR_NOT_FOCUSED     (-8) // owned popup parent lost focus
 // A blocking wait (os64_gui_event_wait) cut short by a signal. NOT a GUI
 // error of its own: it is THE system-wide sentinel, OS64_INTERRUPTED, because
@@ -521,6 +524,23 @@ static inline int64_t os64_gui_window_set_min_size(int64_t handle,
 {
     return (int64_t)os64_syscall3(SYSCALL_GUI_WINDOW_SET_MIN_SIZE,
                                   (uint64_t)handle, width, height);
+}
+
+// Request exact content dimensions on an owned ordinary window. Desktop and
+// popup targets are refused. BELOW_MINIMUM, ABOVE_CAPACITY and SCREEN_FIT
+// leave geometry and gestures unchanged. The complete frame uses the current
+// decoration metrics: preserve its top-left where possible, otherwise shift
+// it onto the screen. Sizes are refused rather than silently reduced.
+// Maximized windows update their normal restore frame only; their visible
+// surface stays maximized. No-op requests succeed. Visible changes emit
+// WINDOW_RESIZE, never WINDOW_PLACEMENT; refresh the surface after success.
+// Focus, pin and minimization state are preserved. Valid requests cancel an
+// active resize gesture using the compositor's normal release-draining rules.
+static inline int64_t os64_gui_window_set_content_size(int64_t handle,
+                                                        uint32_t width,uint32_t height)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,
+                                  (uint64_t)handle,width,height);
 }
 
 static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
