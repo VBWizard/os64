@@ -205,7 +205,7 @@ LIBPNG_SO   := $(BIN)/libpng.so
 # downstream of the framing. It records real DT_NEEDED edges on libtls,
 # libgzip and libos64; none of those knows a URL exists.
 LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c \
-                 libfetch/pool.c
+                 libfetch/pool.c libfetch/h2_frame.c libfetch/h2_hpack.c
 LIBFETCH_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFETCH_SRCS))
 LIBFETCH_SO   := $(BIN)/libfetch.so
 
