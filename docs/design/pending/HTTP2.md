@@ -1282,6 +1282,113 @@ frames under the sanitizers (tools/fuzz_tls13_host.py's shape) run for a
 fixed count in the script. A mutant per rule, run once at the end. No
 QEMU: nothing in this slice runs in the guest yet.
 
+#### H2.3, as built (2026-11-10, Fable)
+
+`userland/libfetch/h2_frame.c/.h` and `h2_hpack.c/.h`, with RFC 7541's two
+tables as data in `h2_hpack_tables.h`. They are compiled into libfetch.so
+with the library's hidden visibility and nothing calls them: no program's
+behaviour changes with this slice. Where the build departs from the brief,
+or says more than it did:
+
+- **A fault says whose it is.** `h2_fault_t` is the error code, the rule,
+  and whether RFC 9113 makes it the stream's or the connection's. Two
+  frame rules are the stream's (a PRIORITY of the wrong length, a
+  WINDOW_UPDATE of nothing on a stream); the connection would otherwise
+  have had to know that by frame type.
+- **`h2_frame_header_check`** judges a header alone, so a connection can
+  refuse a frame longer than its max frame size before reading sixteen
+  megabytes of it. `h2_frame_parse` takes the payload's length from the
+  header and not as a separate argument.
+- **`flow_len`** on a parsed DATA frame is the whole payload, padding
+  included, which is what the windows are charged (§ 6.9.1); `data_len`
+  is the body's bytes alone.
+- **`h2_setting_check`** judges a setting's value (ENABLE_PUSH, the
+  initial window's 31 bits with its own error code, the max frame size's
+  two bounds). The brief did not list it; H2.4 applies the peer's
+  settings and would have written it there.
+- **Names are never NULL**: an error code or a setting this file has no
+  name for answers "UNKNOWN_ERROR" or "UNKNOWN_SETTING", since a peer may
+  send either and a reason sentence must print something.
+- **The reassembler copies every fragment** into the caller's buffer,
+  the one-frame block included, so there is one path. A block past the
+  buffer is the connection's ENHANCE_YOUR_CALM.
+- **HPACK allocates nothing.** Each side is given its storage once
+  (`H2_HPACK_STORAGE(size)`), and the decoder a scratch for one literal
+  field. A literal's name and value are copied to the scratch before the
+  field is added, which is what makes RFC 7541 § 4.4's case sound: a
+  field named by the index of the entry its own insertion evicts.
+- **Three answers from a decode.** `H2_HPACK_OK`; `H2_HPACK_REFUSED`, the
+  block decoded whole and the table in step but its fields not all
+  delivered (the caller's emit said enough, or a field was larger than
+  the scratch), which is the stream's problem; `H2_HPACK_BAD`, the
+  connection's COMPRESSION_ERROR.
+- **The decoder's table size has a before and an after.** Until the peer
+  has acknowledged our SETTINGS it may encode against the default 4096
+  whatever we advertised, so the decoder allows the larger of the two;
+  `h2_hpack_decoder_settings_acked` then holds it to what we advertised,
+  and when that is under the table's size at that moment, the peer's next
+  block must begin with the size update that shrinks it (RFC 7541 § 4.2)
+  or the connection ends.
+- **The encoder has a ceiling of its own** (its storage) and follows the
+  peer's size up to it, announcing each change at the next block's start,
+  the smallest size it passed through first. An encoder made with a
+  ceiling under 4096 announces that in its first block.
+- **A field too large for the table is sent without indexing**, not
+  added: adding it would only empty the table.
+- **A sensitive field is never sent as an index**, even when a table
+  holds it whole: an index carries no never-indexed instruction, and a
+  decoder hands it over as an ordinary field. (Codex, on the PR.)
+- **"Huffman when shorter" is not "Huffman always"**, and one of the
+  RFC's examples shows the difference: C.6.2's `:status: 307` is three
+  bytes either way, the RFC's encoder codes it and ours does not. The
+  harness checks our bytes for that one string and the RFC's bytes for
+  everything else, in both directions. The encoder has a `huffman` switch
+  (on by default) because C.3 and C.5 are the plain-string examples.
+- **An integer is at most 2^31 - 1 and at most five continuation bytes.**
+- **Padding is judged after a frame's fixed fields.** A HEADERS or
+  PUSH_PROMISE too short to hold its priority fields or its promised
+  stream is FRAME_SIZE_ERROR; one that holds them, with padding longer
+  than what is left for the block, is PROTOCOL_ERROR (§§ 6.2, 6.6).
+- **An owed size update is owed by the very next block**, an empty one
+  included.
+- **`h2_head_check` takes a kind** (request, response, or trailers, which
+  may carry no pseudo-header at all) and answers which field broke the
+  rule. Beyond the brief's list it requires a response's `:status` to be
+  three digits, a request's method, scheme and path to be present
+  (`:authority` may be absent, § 8.3.1), and a value to carry no NUL, CR
+  or LF and no space or tab at either end (§ 8.2.1). CONNECT's different
+  pseudo-header set is not modelled (§ 2.10).
+- **Proof.** `tools/test_h2_host.sh` under ASan and UBSan, 630,000-odd
+  checks in about eleven seconds: the Huffman code proved canonical and
+  complete from its lengths; RFC 7541 C.1 to C.6, each block in both
+  directions with the table read after it; every frame type's rules by
+  name; the writers read back through the parser, HEADERS split at ten
+  block sizes around the frame boundary; reassembly including a block
+  one byte to a frame; each of the decoder's refusals; the head rules one
+  at a time; and three random loops (blocks at a decoder, frames at the
+  parser, field lists through an encoder into a decoder with the table
+  size moving). Mutants: `tools/test_h2_mutants.py`, 215 of 215 caught,
+  one deliberate break to a rule. The first whole run caught 192: ten
+  mutants did not compile and were rewritten, five were gaps in the
+  harness and each has a case now (a setting identifier past one byte,
+  the settings count asked of another frame, a content-length of `-`, a
+  plain string copied past the scratch, a name and a value that fit the
+  scratch apart and not together), and one was a line in the encoder
+  that did nothing, which is gone.
+- **The harness ends itself.** It stops at its fiftieth failed check and
+  sets a two-minute alarm. One mutant (the table evicting nothing) made a
+  loop here print a failure line for each of a wrapped entry count, at
+  125 MB a second, into a log the mutant harness then read back whole:
+  it filled the disk and then memory, twice, before it was found. The
+  runner's own ceilings are `tools/mutants_parallel.py`'s (#534).
+- **The sanitizer does not watch libos64's long copies** in a host
+  harness (DEBTS § Build system), so the harness keeps guard bytes after
+  the decoder's scratch and checks them.
+- **A second opinion on the decoder**, run once on the host and not kept
+  in the tree: the hpack-test-case stories that ship in the WPT checkout
+  (the output of eleven other implementations' encoders), 36,990 blocks
+  and 430,305 fields, every one decoded to the fields the corpus lists.
+
 ### H2.4 — The connection (brief when its turn comes)
 
 Contracts: § 2.2 (which connection a fetch takes, now with the h2
