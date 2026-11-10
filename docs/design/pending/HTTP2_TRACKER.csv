@@ -56,7 +56,7 @@ H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
 H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round 1 found two more, fixed; round 2 clean"
 
 H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,design-review,,"HTTP2.md § 2.3 § 2.4 § 2.5 § 2.6 and § 4 H2.4; nothing calls it until H2.6; brief awaits Chris"
-H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,doing,,"adds this slice's rows; the fetch.c half is split out as H2.6 (Q4)"
+H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,done,#536,"adds this slice's rows; the fetch.c half is split out as H2.6 (Q4)"
 H2.4.2,"libtls: os64_tls_transport_release hands the engine, the socket and unread ciphertext over; exports, audit, transport harness cases",H2.4.1,todo,,
 H2.4.3,"h2_conn_t and h2_stream_t: the lock, what the reader owns alone, holds counted atomically; adopt queues preface, greeting SETTINGS and WINDOW_UPDATE",H2.4.2,todo,,
 H2.4.4,"The out queue: ciphertext in the engine's order, one drainer, no lock across a write, drains with no patience for the reader and the cancelled, the DATA mark and the control ceiling",H2.4.3,todo,,
