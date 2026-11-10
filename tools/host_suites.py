@@ -112,6 +112,7 @@ PY_SUITES = [
     py('test_js_prepare'),
     py('test_js_teardown_audit'),
     py('test_math_audit'),
+    py('test_mutants_parallel_caps'),
     py('test_mutants_parallel_discard'),
     py('test_memory_try_host'),
     py('test_pty_budget_host'),

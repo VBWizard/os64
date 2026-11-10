@@ -53,6 +53,16 @@ the one someone has to look at.
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
 
+A MUTANT CANNOT TAKE THE MACHINE WITH IT. Everything a worker runs, baseline
+and mutants alike, runs with a ceiling on any one file it writes (--file-mib)
+and, where `systemd-run --user --scope` works, in a control group with a
+ceiling on memory and no swap (--memory-gib, for each worker). A mutant whose
+broken loop prints without end is ended when its log reaches the first, and
+one that allocates without end, or a harness reading back a log, is ended at
+the second; either reads as a failed case or as "no verdict", and the run
+goes on. The first line of a run says which ceilings it has.
+tools/test_mutants_parallel_caps.py runs a mutant of each kind.
+
 Each mutant's harness call is timed, and summary.txt gives the seconds
 beside its verdict. A mutant that took more than SLOW_TIMES its harness's
 median, and more than SLOW_SECONDS, is named at the end as SLOW: a stall
@@ -76,6 +86,14 @@ import tempfile
 TREE_DIRS = ('userland', 'tools', 'abi', 'shared')
 # The longest an unmutated suite may run when its harness sets no case limit.
 BASELINE_SECONDS = 1800
+# What one file may grow to, and what one worker's processes may hold in
+# memory together, unless the command line says otherwise. A mutant is a
+# program with a rule broken, and a broken loop can print or allocate without
+# end: its log filled a disk, and the harness reading that log back filled
+# memory, before either had a ceiling. No build here writes a file a sixth
+# this size.
+FILE_MIB = 256
+MEMORY_GIB = 8
 # A mutant is SLOW past this many times its harness's median, and past this
 # many seconds (a fast harness's small jitter is not news).
 SLOW_TIMES = 5
@@ -89,6 +107,10 @@ parser.add_argument('--with', dest='extra', action='append', default=[],
                     help='another top-level directory to copy')
 parser.add_argument('--jobs', type=int, default=2, help='compiles at once in each worker (HOST_BUILD_JOBS)')
 parser.add_argument('--only', help='exact mutant names, comma-separated: run these alone')
+parser.add_argument('--file-mib', type=int, default=FILE_MIB,
+                    help='the largest file a suite or a mutant may write (default %(default)s)')
+parser.add_argument('--memory-gib', type=int, default=MEMORY_GIB,
+                    help="the most memory one worker's processes may hold (default %(default)s)")
 args = parser.parse_args()
 only = set(filter(None, (args.only or '').split(','))) or None
 
@@ -152,9 +174,41 @@ def plan(spec):
     return jobs
 
 
+# Put before a command, this runs it with a ceiling on each file it or its
+# children write (the writer is ended by SIGXFSZ at the ceiling) and with no
+# core dumps. A program of its own and not a preexec_fn, which may not be
+# used from the threads the workers are.
+FILE_CAP = [sys.executable, '-c',
+            'import os, resource, sys\n'
+            'n = int(sys.argv[1])\n'
+            'resource.setrlimit(resource.RLIMIT_FSIZE, (n, n))\n'
+            'resource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n'
+            'os.execvp(sys.argv[2], sys.argv[2:])',
+            str(args.file_mib << 20)]
+# Put before that, this runs the command in a control group of its own that
+# may hold so much memory and no swap; past it the kernel ends a process
+# inside the group and nothing outside it. An address-space limit would do
+# for less, but the sanitizers reserve terabytes of address space they never
+# touch, and every suite here is built with one.
+MEMORY_CAP = ['systemd-run', '--user', '--scope', '--quiet', '--collect',
+              '-p', f'MemoryMax={args.memory_gib}G', '-p', 'MemorySwapMax=0', '--']
+
+
+def memory_cap_works():
+    try:
+        return subprocess.run(MEMORY_CAP + ['true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def capped(command):
+    return (MEMORY_CAP if MEMORY_CAPPED else []) + FILE_CAP + command
+
+
 def bounded(cmd, cwd, env, log, seconds):
     """Run cmd in its own process group; past `seconds`, kill all of it."""
-    p = subprocess.Popen(['bash', '-c', cmd], cwd=cwd, env=env, stdout=log, stderr=log,
+    p = subprocess.Popen(capped(['bash', '-c', cmd]), cwd=cwd, env=env, stdout=log, stderr=log,
                          start_new_session=True)
     try:
         return p.wait(timeout=max(seconds, 0))
@@ -209,7 +263,7 @@ def work(job):
         for name in names:
             o.flush()
             began = time.monotonic()
-            subprocess.run([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
+            subprocess.run(capped([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)]),
                            cwd=root, env=env, stdout=o, stderr=subprocess.STDOUT)
             seconds[name] = time.monotonic() - began
     text = (root / 'out.txt').read_text()
@@ -226,8 +280,12 @@ if only is not None:
     unknown = only - {n for job in jobs for n in job[2]}
     if unknown:
         sys.exit(f'mutants_parallel: no harness named has {", ".join(sorted(unknown))}')
+MEMORY_CAPPED = memory_cap_works()
 print(f'mutants_parallel: {sum(len(j[2]) for j in jobs)} mutants, {len(jobs)} workers, in {out}',
       flush=True)
+print(f'mutants_parallel: no file past {args.file_mib} MiB; '
+      + (f'no worker past {args.memory_gib} GiB of memory' if MEMORY_CAPPED else
+         'NO MEMORY CEILING (systemd-run --user --scope does not work here)'), flush=True)
 verdicts, broken, took = {}, [], {}
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
     for harness, k, names, text, seconds in pool.map(work, jobs):
