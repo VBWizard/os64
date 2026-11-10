@@ -43,7 +43,7 @@ H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md §
 H2.2.12,"Codex round",H2.2.9,done,#531,"round 1 clean, 2026-11-10"
 H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,done,#531,"capprobe on the P5 2026-11-10: 12 fetches, at most 6 at once, opens 190 to 694 ms, 998 ms in all; Chris tested his pages in yonder and passed it"
 
-H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,review,,"HTTP2.md § 4 H2.3 and 'H2.3, as built'; unreachable until H2.4"
+H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,done,#535,"HTTP2.md § 4 H2.3 and 'H2.3, as built'; unreachable until H2.4. Codex round 2 clean 2026-11-10; no P5 pass, nothing calls it yet"
 H2.3.1,"h2_frame: header parse, per-type length and stream-id rules, padding, PRIORITY fields, unknown types ignored",H2.3,done,#535,
 H2.3.2,"h2_frame writers: SETTINGS in the order given, ack, WINDOW_UPDATE, PING ack, RST_STREAM, GOAWAY, HEADERS with CONTINUATION split, DATA cut to size, PRIORITY",H2.3,done,#535,
 H2.3.3,"CONTINUATION reassembly state with the hard cap; the preface; error-code and setting name tables",H2.3.1,done,#535,
@@ -52,7 +52,7 @@ H2.3.5,"HPACK encoder: dynamic table bounded by the peer's size, indexing policy
 H2.3.6,"h2_head_check: RFC 9113 § 8.2's rules on a decoded field list, the rule broken returned",H2.3.4,done,#535,
 H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table state checked; every frame rule; reassembly; byte-at-a-time; head-check rules; encoder shrink; fuzz loop",H2.3.6,done,#535,"about 630,000 checks; also the hpack-test-case corpus from the WPT checkout, 36,990 blocks, run once and not kept"
 H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
-H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round open"
+H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round 1 found two more, fixed; round 2 clean"
 
 H2.4,"The connection: state machine, streams, flow control, the reader thread, against a scripted peer",H2.0 H2.2 H2.3,todo,,"HTTP2.md § 2.2 § 2.3 § 2.5 § 2.6; brief written by Fable after H2.2's round"
 H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,todo,,"adds this slice's rows"
