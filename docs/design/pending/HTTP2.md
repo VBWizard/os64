@@ -95,8 +95,8 @@ for forty resources dials more than that over its life, because only six
 idle connections per key are kept between requests (DEBTS § libfetch,
 "Fetches to one host are not capped at once"; WIRE.md § 2's table counts
 21 connections for a page of 26 resources). Each one pays a TCP handshake and a
-WHOLE TLS 1.3 handshake, because session tickets are consumed and
-discarded (TLS13.md § The profile; DEBTS § TLS 1.3 engine boundaries). On
+WHOLE TLS 1.3 handshake, because session tickets were consumed and
+discarded when this arc began (H2.1 keeps them: TLS13.md § Resumption). On
 a kept connection a request waits for the one before it to finish; the
 pool's measurement showed connections falling to a quarter and arrival
 time barely moving, because a page's burst of same-host requests dials

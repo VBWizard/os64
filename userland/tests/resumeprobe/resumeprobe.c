@@ -6,7 +6,11 @@
 // Opens the address several times (three unless told), each on a connection
 // of its own: every fetch is closed with its body unread, and a connection
 // with a reply still on it is one libfetch does not keep, so the next open
-// dials and handshakes afresh. The first is a full handshake.
+// dials and handshakes afresh. The first is a full handshake. (Give it an
+// address whose reply HAS a body. A reply with none, a 204 or a 304, leaves
+// nothing unread, so libfetch keeps the connection and the next open rides
+// it with no handshake at all: a line that says "full handshake" in a few
+// milliseconds is that, and it reports the kept connection's own.)
 // A server that issues tickets lets the ones after it resume, and each line
 // says which it was and how long the open took, dial and handshake and the
 // reply's head together. The difference between the first line and the rest

@@ -40,8 +40,9 @@ void os64_tls_session_put(const tls_session_key *key, const tls13_session *sessi
 
 // Take the most recently kept session for `key` that has not outlived its
 // lifetime, with `age_ms` filled in: true, and it is the caller's alone. It
-// is REMOVED: a ticket is offered once, so that two connections cannot be
-// tied together by the ticket they showed (RFC 8446 C.4). Sessions of the
+// is REMOVED: a ticket is offered once, so that somebody watching the wire
+// cannot tie two connections together by the ticket they showed (RFC 8446
+// C.4). The server that issued it always can. Sessions of the
 // key found past their lifetime are dropped on the way.
 bool os64_tls_session_take(const tls_session_key *key, uint64_t now_ms, tls13_session *out);
 

@@ -84,7 +84,9 @@ typedef struct {
     // The peer's port, and with it leave to RESUME (TLS 1.3 only): the
     // tickets this connection is given are kept, and one kept for the same
     // hostname, port and trust is offered. 0: neither, and the hello says
-    // nothing of resumption.
+    // nothing of resumption. The kept session is taken when the client is
+    // CREATED, and a session is offered once: a client made and freed
+    // without a handshake has spent it.
     uint16_t port;
 } os64_tls_config_t;
 

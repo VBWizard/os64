@@ -79,7 +79,8 @@ typedef struct {
     void *entropy_context;
     tls_validator_factory validator;
     os64_tls_protocol_t protocol;
-    // Resumption, TLS 1.3 only (session_cache.h). port 0: none of it. The
+    // Resumption, TLS 1.3 only (session_cache.h). port 0, or no clock: none
+    // of it. The
     // trust is the key's identity with its optional retain/release pair,
     // and the clock is milliseconds that only move forward; both are used
     // for as long as the engine lives.

@@ -581,9 +581,13 @@ address while the entry names it. Thirty-two sessions in all, two a key
 (what one connection's worth of tickets usually is), least recently kept
 out first.
 
-**A session is offered once.** Taking one for an offer removes it, so two
-connections cannot be tied together by the ticket they showed (RFC 8446
-C.4); the server's new tickets refill the key. One is never offered past
+**A session is offered once.** Taking one for an offer removes it, so
+somebody watching the wire cannot tie two connections together by the
+ticket they showed (RFC 8446 C.4); the server's new tickets refill the
+key. The server that issued a ticket can always tell which connection it
+gave it to, and the cache is the process's, not a site's: a host embedded
+by two sites can tie its two visits together through its own tickets, as
+it can through its cookies (a DEBTS row). One is never offered past
 its lifetime, which is the server's `ticket_lifetime` held to the RFC's
 seven days, told by `os64_micros` (a clock that does not jump when the
 wall clock is set).
