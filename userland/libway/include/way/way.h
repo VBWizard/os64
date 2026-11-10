@@ -289,6 +289,7 @@ typedef struct {
     bool encrypted;
     uint16_t tls_version;
     bool tls_fallback;
+    bool tls_resumed;      // the connection's TLS 1.3 handshake resumed a kept session
     way_body_t body;
     // Navigation Timing's redirectCount: the redirects followed to get here
     // when every one stayed on the origin of the address asked for, and 0

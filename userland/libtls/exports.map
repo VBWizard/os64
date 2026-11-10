@@ -14,6 +14,7 @@
     os64_tls_status_name;
     os64_tls_error_description;
     os64_tls_license;
+    os64_tls_sessions_drop;
     os64_tls_trust_create;
     os64_tls_trust_add_der;
     os64_tls_trust_seal;

@@ -191,6 +191,7 @@ typedef struct {
     int      tls_engine;
     uint16_t tls_version;                    // 0 until selected; 0x0303 or 0x0304
     bool     tls_fallback;                   // this hop redialed explicitly with TLS 1.2
+    bool     tls_resumed;                    // the connection's handshake resumed a kept TLS 1.3 session: no certificate was shown
     bool     store_failed;                    // TLS_FAILED: the trust store, not the handshake
     os64_tls_store_status_t store;
     os64_tls_store_report_t store_report;

@@ -23,6 +23,7 @@ def engine(archive, work):
         "-I" + str(ROOT / "abi/include"),
         str(BASE / "port/tls13_schedule.c"), str(BASE / "port/tls13_record.c"),
         str(BASE / "port/tls13_handshake.c"), str(BASE / "port/client_engine.c"), str(BASE / "port/client_profile.c"),
+        str(BASE / "port/session_cache.c"),
         str(ROOT / "tools/test_tls_engine_host.c"),
         str(ROOT / "tools/tls_engine_fixture_ec.c"),
         str(ROOT / "tools/tls_engine_fixture_rsa.c"),

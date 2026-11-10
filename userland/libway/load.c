@@ -537,6 +537,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;
+    out->head.tls_resumed = detail->tls_resumed;
     os64_strcopy(out->asked, sizeof(out->asked), url);
     return true;
 }

@@ -1448,7 +1448,7 @@ static int fetch_url(const http_url_t *url, const char *urlText,
     if (verbose_run && tls_detail->tls_version) {
         os64_hprintf(OS64_STDERR, "os64get: TLS %s%s\n",
             tls_detail->tls_version == 0x0304 ? "1.3" : "1.2",
-            tls_detail->tls_fallback ? " (fallback)" : "");
+            tls_detail->tls_fallback ? " (fallback)" : tls_detail->tls_resumed ? " (resumed)" : "");
     }
     if (head->via_proxy && head->hops == 0)
         proxy_notice(&narr, head->url.scheme, head->proxy_host, head->proxy_port);

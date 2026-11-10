@@ -176,7 +176,7 @@ count, then discard the view before any further engine operation.
 | Operation | Contract |
 |---|---|
 | `trust_create` / `trust_add_der` / `trust_seal` / `trust_free` | Build an owned, bounded CA snapshot. A failed addition does not partly add an anchor. Sealed stores are immutable and remain alive while connections retain them. |
-| `client_create` | Validate parameters, sample OS UTC and acquire fresh OS entropy before starting a new handshake. Retain a sealed trust snapshot; no session reuse or input overrides. |
+| `client_create` | Validate parameters, sample OS UTC and acquire fresh OS entropy before starting a new handshake. Retain a sealed trust snapshot; no input overrides. A nonzero `port` gives leave to resume a kept TLS 1.3 session (TLS13.md § Resumption). |
 | `state` | Report handshake completion, available byte directions, closure progress, and terminal error separately. Availability can change after an operation. |
 | `feed_ciphertext` | Copy and acknowledge an accepted prefix. The caller retains the unaccepted suffix. Does not accept data after transport EOF. |
 | `take_ciphertext` | Copy pending encrypted output and transfer responsibility for those bytes to the caller. The transport must retain an unwritten suffix across short writes. |

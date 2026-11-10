@@ -49,7 +49,8 @@ def build(archive, work, run_tests=True):
     subprocess.run([sys.executable, str(ROOT/'tools/tls_license.py'), str(work/'tls_license.h')], check=True)
     sources = ['api.c', 'port/client_engine.c', 'port/client_profile.c', 'port/platform_inputs.c',
                'port/certificate_der.c', 'port/certificate_policy.c',
-               'port/tls13_schedule.c', 'port/tls13_record.c', 'port/tls13_handshake.c']
+               'port/tls13_schedule.c', 'port/tls13_record.c', 'port/tls13_handshake.c',
+               'port/session_cache.c']
     flags = ['-std=c11','-D_DEFAULT_SOURCE','-DOS64_TLS13_TEST','-O2','-g','-Wall','-Wextra','-Werror','-fno-builtin',
              '-fsanitize=address,undefined','-fno-sanitize-recover=all','-fstack-usage',
              '-include',str(BASE/'port/config.h'),'-I'+str(BASE/'upstream/inc'),

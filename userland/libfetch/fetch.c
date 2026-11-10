@@ -574,6 +574,7 @@ static void tls_snapshot(os64_fetch_t *f)
     f->detail.tls_policy = f->io.error.policy_reason;
     f->detail.tls_engine = f->io.error.upstream_error;
     f->detail.tls_version = f->io.error.version;
+    f->detail.tls_resumed = f->io.error.resumed;
 }
 
 static os64_fetch_status_t drop_connection(os64_fetch_t *f, os64_fetch_status_t status)
@@ -957,10 +958,15 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
     const os64_tls_name_t alpn = {"http/1.1", 8};
     os64_tls_config_t config = {
         .hostname = {f->current.host, os64_strlen(f->current.host)},
-        .alpn = &alpn, .alpn_count = 1, .trust = f->trust
+        .alpn = &alpn, .alpn_count = 1, .trust = f->trust,
+        // The port is leave to resume (tls.h): a session kept from an
+        // earlier connection to this host, port and store is offered, and
+        // this connection's tickets are kept for the next.
+        .port = peerPort
     };
     f->detail.tls_version = 0;
     f->detail.tls_fallback = false;
+    f->detail.tls_resumed = false;
     for (;;) {
         int64_t conn = os64_dial(dialstring);
         // A dial refused for want of resources (a handle above all) may be

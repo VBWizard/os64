@@ -8,6 +8,7 @@ typedef struct {
     size_t alpn_count;
     os64_tls_trust *trust;
     os64_tls_protocol_t protocol;
+    uint16_t port;      // nonzero: resume under (hostname, port, trust)
 } tls_os_config;
 
 // Private constructor using /dev/random, UTC time and the certificate policy.

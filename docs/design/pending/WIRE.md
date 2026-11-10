@@ -247,8 +247,8 @@ object, invisible to callers:
   applies to the hop); `Proxy-Connection` is not sent. TLS through a
   proxy (`CONNECT`) is keyed by the tunnelled host as well and reused
   only for it.
-- **Not in this PR:** TLS session resumption (tickets are consumed and
-  discarded today, DEBTS § TLS 1.3), which would cut the first-connection
+- **Not in this PR:** TLS session resumption (it came later: TLS13.md
+  § Resumption), which cuts the first-connection
   cost further; HTTP/2; pipelining (nobody speaks it). Each stays a row,
   and the first is the next worth paying once this lands.
 

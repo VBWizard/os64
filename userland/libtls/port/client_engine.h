@@ -79,11 +79,24 @@ typedef struct {
     void *entropy_context;
     tls_validator_factory validator;
     os64_tls_protocol_t protocol;
+    // Resumption, TLS 1.3 only (session_cache.h). port 0, or no clock: none
+    // of it. The
+    // trust is the key's identity with its optional retain/release pair,
+    // and the clock is milliseconds that only move forward; both are used
+    // for as long as the engine lives.
+    struct {
+        uint16_t port;
+        const void *trust;
+        bool (*retain)(const void *trust);
+        void (*release)(const void *trust);
+        uint64_t (*now_ms)(void *context);
+        void *context;
+    } session;
 } tls_engine_config;
 
 // Each connection has one serialized owner. Inputs are borrowed for this
 // call; hostname/ALPN and callback results needed later become engine-owned.
-// Failure sets *out=NULL and releases acquired resources. No session reuse.
+// Failure sets *out=NULL and releases acquired resources.
 tls_status os64_tls_engine_create(const tls_engine_config *config, os64_tls_engine **out);
 void os64_tls_engine_destroy(os64_tls_engine *engine);
 tls_state os64_tls_engine_state(os64_tls_engine *engine);
