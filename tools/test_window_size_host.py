@@ -69,7 +69,7 @@ static void refused(uint64_t w,uint64_t h,int64_t error)
 assert(!memcmp(&before,&window,sizeof(window)) && cancellations==n && !locked);}
 int main(void)
 {
- assert(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE==67);reset();
+ assert(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE==68);reset();
  refused(0,100,GUI_ERR_BAD_ARGS);refused(UINT64_C(1)<<32,100,GUI_ERR_BAD_ARGS);
  refused(99,100,GUI_ERR_BELOW_MINIMUM);refused(100,79,GUI_ERR_BELOW_MINIMUM);
  refused(801,100,GUI_ERR_ABOVE_CAPACITY);refused(800,100,GUI_ERR_SCREEN_FIT);

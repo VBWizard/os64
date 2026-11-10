@@ -143,6 +143,7 @@ PY_SUITES = [
     py('test_ui_text_host', '--real'),
     py('test_webp_host', '--output', 'OUT'),
     py('test_window_pin_host'),
+    py('test_window_size_host'),
     py('test_window_placement_host'),
 ]
 
