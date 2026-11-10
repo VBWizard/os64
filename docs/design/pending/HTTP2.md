@@ -86,8 +86,10 @@ GENERATED and never edited: the CSV is the truth, the page is the view.
 
 ## 1. Why, and why now
 
-**What today costs.** libfetch speaks HTTP/1.1 with keep-alive and a pool
-of kept connections (WIRE.md § 2): six idle per key, sixteen in all, sixty
+**What it cost when this arc began** (H2.1 and H2.2 have since paid the
+ticket and the cap; their as-built sections say how; the rest of this
+paragraph is the state they started from). libfetch speaks HTTP/1.1 with
+keep-alive and a pool of kept connections (WIRE.md § 2): six idle per key, sixteen in all, sixty
 seconds idle. Concurrency is not capped by the pool — a host is dialled by
 as many fetches as are asking at once, which is the caller's thread count
 (yonder: its twelve workers and a synchronous XHR), and a page that asks
@@ -221,7 +223,9 @@ h2 many fetches use one connection at once, so the unit changes:
   strand the rest until their own patience ran out; ringing all costs a
   wake apiece for at most a caller's thread count of waiters. No order is
   promised among them. The wait is under the fetch's idle deadline and
-  its cancellation predicate like every wait in libfetch.
+  its cancellation predicate like every wait in libfetch. (As built, the
+  wait has a bound of its own and not the idle deadline: "H2.2, as
+  built" says why.)
 - **Excess h2 connections to one key** (the burst case above) are not
   spread across: a new stream goes to the h2 connection that has been
   live longest and has room, so the duplicates carry what was already
@@ -1069,7 +1073,7 @@ one host are not capped at once" paid.
   the waiter list, and to ring the bells on it. Never across a dial, a
   probe, a close or a bell wait.
 
-**fetch.c.** `take_kept`/`dial`/`release_connection` speak to connections
+**fetch.c.** `take_kept` (built as `acquire`), `dial` and/`release_connection` speak to connections
 instead of transports; the fetch gains its bell, made on the first wait
 and closed with the fetch (`os64_fetch_close`); the retry rule, the 408
 rule, the probe and the ONCE_MS rule are untouched and their cases prove
@@ -1102,6 +1106,96 @@ pool sees of it. QEMU `make run-net` against the W2 local page: the dump shows a
 six SYNs to the host at once and the requests queued behind them, and the
 arrival time within the W2 figures. P5: Chris on the blog page and the
 storefront, by feel and by the record's connection count.
+
+#### H2.2, as built (2026-11-10, Fable)
+
+The pool is `userland/libfetch/pool.c` still, with pool.h's contract
+rewritten; fetch.c asks it through `acquire`. Where the build departs from
+the brief above, or says more than it did:
+
+- **What it removes, said first** (the lesson of H2.1's measurement). Not
+  latency by itself. A page that asked one host for twelve things at once
+  opened up to thirteen connections and now opens six: up to seven fewer
+  TCP and TLS handshakes a burst, and a client that looks like a browser
+  to the server. The requests that would have dialled wait for one of the
+  six instead, so a page of many small same-host requests should load
+  about as fast, and one whose replies are slow can load SLOWER, at half
+  the parallelism: Chrome's own trade. What makes a page faster is H2.5,
+  where the twelve go at once down one connection; this slice is the
+  ownership that needs, and the cap HTTP/1.1 sites get meanwhile.
+- **THE WAIT IS NOT UNDER THE FETCH'S IDLE DEADLINE.** § 2.2 and the brief
+  put it there. That deadline measures a server's silence, thirty seconds
+  by default; a fetch in this queue is waiting on its own program's other
+  fetches, and six slow downloads to one host would have failed the
+  seventh at thirty seconds where before it simply dialled. The wait has
+  its own bound, `FETCH_POOL_WAIT_MS`, five minutes: a browser's queue has
+  none, and this one has a long one so that connections held by fetches
+  nobody is reading end as a named refusal and not as a wait nobody can
+  explain. Cancellation is a flag that rings nothing, so a waiter looks
+  up once a second (`FETCH_POOL_LOOK_MS`) to ask, and leaves as
+  INTERRUPTED within that.
+- **A connection's transport is lent, not shared.** `fetch_conn_t` is the
+  heap object the brief asked for (key, transport, protocol, count, when
+  it was kept, whether it is being dialled). An HTTP/1.1 connection has
+  one user, so the fetch still works on its own copy of the transport, as
+  it always did, and the object holds the transport while the connection
+  is idle. H2.4's connections keep theirs in the object.
+- **`fetch_pool_take` answers one of two things to do**: KEPT (probe it;
+  `fetch_pool_gone` if the probe refuses) or DIAL (a slot reserved;
+  `fetch_pool_dialled` or `fetch_pool_gone`). The old pool's `put` took a
+  key and found a slot; now a connection has had its slot since before
+  its dial, which is what makes the cap a cap on what a server sees.
+- **Room is made before the dial, not after the put.** With the table
+  full, the least recently kept connection goes when the next dial needs
+  its slot. The old pool closed it when the seventeenth was given back. A
+  consequence in the harness: "out of handles" now needs a task with one
+  handle fewer than before to reach the refused dial.
+- **Every waiter is rung at every put and every departure**, of any key:
+  a connection given back is one a waiter of its key can take and one a
+  waiter of another key can put out for its slot.
+- **A fetch that cannot have a bell cannot wait**, and says so
+  (`FETCH_POOL_FAILED`, DIAL_FAILED with the sentence). The bell is made
+  at a fetch's first wait and closed with the fetch, after its connection
+  is released.
+- **The reason sentence.** A wait that ran out is DIAL_FAILED with
+  `detail.dial = OS64_NET_ERR_NO_RESOURCES`, and the sentence is the
+  pool's ("waited N ms for one of the 6 connections to it, all in use",
+  or "one of this program's 16 connections" when it was the whole table
+  that was full), not the kernel's word for no resources, which would
+  point at the wrong thing.
+- **`fetch_pool_counts`** reads the kept and the in-use counts in one
+  look. The harness needed it: adding two separate reads counted a
+  connection twice as it changed hands.
+- **`tools/host_bell.c`** is os64/bell.h for the host harnesses that link
+  the pool: a mutex and a condition with the bell's three rules, a ring of
+  a bell that is not one stopping the program, and hooks only a stand-in
+  can give (a wait that never blocks, for a harness with one thread; an
+  interrupt, as a caught signal would be; a refusal to make one).
+- **Proof.** `tools/test_fetch_pool_host.sh` (ASan and UBSan, then TSan):
+  each rule of the cap and the wait as a case of its own, then eight
+  threads on three keys, 160,000 asks, about 26,000 connections made,
+  never seven in use to a key or seventeen held in all, several hundred
+  to some 1,500 waits a run, every connection closed once; ten runs in a row clean. (One TSan report
+  on an earlier run, before a read the harness itself made of a field
+  another thread was writing was replaced with an atomic flag; it was not
+  kept and has not come back.) `tools/test_fetch_host.sh`: the six-per-key
+  case rewritten for the cap, with the wait's sentence checked word for
+  word, and a check at the end that no case left a fetch holding a place
+  or a bell; 2,781 checks. The libway, os64get, wend and yonder fetch-job
+  suites pass with the pool linked in. Mutants:
+  `tools/test_fetch_keepalive_mutants.py`, 102 of 102 caught, 26 of them
+  new for the cap and the wait. The first run missed two (the order
+  `fetch_pool_evict_one` closes in, which the fetch harness no longer
+  reaches now that room is made before the dial, and a cancelled waiter
+  taking the connection that rang it); each has a pool case now.
+- **In the guest** (QEMU under TCG, e1000 on slirp, one public site):
+  `/tests/capprobe <address> 12` starts twelve fetches at one moment, each
+  holding its connection a third of a second: none failed, and at most six
+  held a connection at once. `testrun`: 63 passed, 0 failed, 6 skipped.
+  **Not done:** the brief's `make run-net` dump counting SYNs on the W2
+  page, and the corpus page's count of distinct hosts at once (whether
+  sixteen in all starves a page). capprobe shows the cap on the wire's
+  near side; the SYN count would show it on the far side.
 
 ### H2.3 — Framing and HPACK
 

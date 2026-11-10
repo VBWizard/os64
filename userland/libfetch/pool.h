@@ -1,18 +1,28 @@
 #ifndef FETCH_POOL_H
 #define FETCH_POOL_H
-// pool.h — the connections libfetch keeps between fetches, so one connection
-// carries many requests (WIRE.md § 2). Private to the library: callers see
-// only fetches, and a fetch takes a connection here before it dials and
-// gives it back at close when connection_reusable says it may.
+// pool.h — the connections libfetch holds, in use and kept between fetches,
+// so one connection carries many requests (WIRE.md § 2) and one host is
+// spoken to over a bounded number of them (HTTP2.md § 2.2). Private to the
+// library: callers see only fetches, and a fetch asks here for a connection
+// before it dials and gives it back at close when connection_reusable says
+// it may.
 //
-// ONE LOCK, HELD ONLY TO TAKE, PUT OR LET GO. A connection belongs to
-// exactly one fetch between its take and its put; the pool never reads or
-// writes one it does not hold, and closes what it evicts after the lock is
-// let go.
+// A CONNECTION IS AN OBJECT WITH A COUNT (fetch_conn_t). The pool's table
+// holds every one libfetch has: DIALLING (a slot reserved while its dial is
+// in flight), LIVE (a fetch is using it; the count is 1), or IDLE (kept; the
+// count is 0). All three count toward the two caps below, which is what
+// makes them caps on what a server sees and not only on what is kept.
+//
+// ONE LOCK, HELD ONLY TO TAKE, PUT OR LET GO, to edit the waiters' list and
+// to ring the bells on it. Never across a dial, a probe, a close or a wait.
+// A connection belongs to exactly one fetch between its take and its put:
+// the pool reads its key and its state to count it and leaves its transport
+// alone, and closes what it evicts after the lock is let go.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include "os64/bell.h"
 #include "os64/file.h"
 #include "fetch/http.h"
 #include "fetch/transport.h"
@@ -37,19 +47,17 @@ typedef struct {
     const os64_tls_trust *trust;
 } fetch_pool_key_t;
 
-// THE NUMBERS. Six idle connections for one key is Chrome's per-host
-// figure, and more than that to one server is a burst a server reads as
-// abuse. Sixteen in all is a quarter of a task's handle table
-// (OS64_TASK_HANDLES): every kept connection holds a handle, and the
-// program holds the rest — its standard three, the connections its fetches
-// are using (a browser runs a dozen at once), its files, its windows — so
-// the pool may never be what runs a task out of handles. When a dial is
-// refused for want of resources all the same, a kept connection is closed
-// and the dial tried once more (fetch.c's dial). The least recently used
-// goes first when either cap is full. Sixty seconds idle and a connection
-// is closed when next seen: most servers close theirs sooner, which the
-// probe at take and the retry rule (fetch.c) absorb, and one that keeps it
-// longer is not kept waiting on.
+// THE NUMBERS. Six connections to one key is Chrome's per-host figure, and
+// more than that to one server is a burst a server reads as abuse. Sixteen
+// in all is a quarter of a task's handle table (OS64_TASK_HANDLES): every
+// connection holds a handle, in use or kept, and the program holds the rest
+// — its standard three, its files, its windows, a bell for each fetch that
+// had to wait — so libfetch's connections may never be what runs a task out
+// of handles. When a dial is refused for want of resources all the same, a
+// kept connection is closed and the dial tried once more (fetch.c's dial).
+// Sixty seconds idle and a connection is closed when next seen: most
+// servers close theirs sooner, which the probe at take and the retry rule
+// (fetch.c) absorb, and one that keeps it longer is not kept waiting on.
 #define FETCH_POOL_PER_KEY 6
 #define FETCH_POOL_TOTAL   16
 #define FETCH_POOL_IDLE_MS 60000u
@@ -61,31 +69,100 @@ typedef struct {
 // a common server keeps (Apache's KeepAliveTimeout and Node's
 // keepAliveTimeout, 5 s each) is more than twice this, while a page's own
 // burst of requests, a script's POST right behind the requests that loaded
-// the page, still shares the connection. The connections it passes over stay kept
-// for requests that can be sent again.
+// the page, still shares the connection. A connection it passes over stays
+// kept for a request that can be sent again, unless this one needs its slot
+// to dial in (fetch_pool_take).
 #define FETCH_POOL_ONCE_MS 2000u
+// HOW LONG A FETCH WAITS FOR A CONNECTION when every one that stands in its
+// way is in use. Not the fetch's idle deadline: that measures a server's
+// silence, and a fetch in this queue is waiting on its own program's other
+// fetches, each of which is making progress or will be ended by its own
+// deadline. A browser's queue has no limit at all; this one has a long
+// one, so that connections held by fetches nobody is reading end as a
+// named refusal and not as a wait nobody can explain.
+#define FETCH_POOL_WAIT_MS 300000u
+// A WAITING FETCH LOOKS UP THIS OFTEN to ask whether it was cancelled. A
+// cancellation is a flag the caller sets, which rings nothing, so a waiter
+// that slept its whole patience would learn of it only when some other
+// fetch gave a connection back.
+#define FETCH_POOL_LOOK_MS 1000u
 _Static_assert(FETCH_POOL_ONCE_MS < FETCH_POOL_IDLE_MS, "a request sent once asks less of a connection's age");
 _Static_assert(FETCH_POOL_TOTAL <= OS64_TASK_HANDLES / 4,
-               "kept connections may hold at most a quarter of a task's handles");
+               "libfetch's connections may hold at most a quarter of a task's handles");
 _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within the whole's");
 
-// A kept connection for `key` given back less than `idle_most_ms` ago
-// (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a request sent once), the
-// most recently kept first: true with `*io` the caller's to own. One idle
-// longer than `idle_most_ms` but not past FETCH_POOL_IDLE_MS stays kept.
-// Connections past their idle time are closed on the way, whatever their
-// key. The caller probes what it takes (fetch_transport_idle_ok) and closes
-// it if the probe says no.
-bool fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, fetch_transport_t *io);
+// What a connection speaks. One value until HTTP/2 arrives (HTTP2.md H2.4
+// adds its own); it is here so that slice adds a value and not a field.
+typedef enum { FETCH_PROTO_H1 = 1 } fetch_proto_t;
 
-// Give a connection to the pool, which owns it from here: kept, or closed at
-// once when the clock cannot be read. Evicts the least recently used of its
-// key past FETCH_POOL_PER_KEY, and of all past FETCH_POOL_TOTAL. The
-// connection's cancellation is dropped: it names the fetch that is leaving.
-void fetch_pool_put(const fetch_pool_key_t *key, const fetch_transport_t *io);
+typedef struct fetch_conn fetch_conn_t;
+
+// What a fetch brings to the wait: its bell (OS64_BELL_NONE until its first
+// wait makes it; the fetch closes it), its patience, and its cancellation.
+// `node` is the pool's while a take is waiting and nobody's otherwise.
+typedef struct fetch_pool_wait {
+    os64_bell_t *bell;
+    uint32_t patience_ms;                   // how long a take may wait in all
+    bool (*cancelled)(void *ctx);           // NULL = never
+    void *cancel_ctx;
+    uint64_t waited_ms;                     // out: how long the take did wait
+    bool for_the_table;                     // out: its last wait was for a place in the whole
+                                            // table, its key being under its own cap
+    struct {
+        struct fetch_pool_wait *next;
+    } node;
+} fetch_pool_wait_t;
+
+typedef enum {
+    // A kept connection of the key, now the caller's, its transport in *io.
+    // The caller probes it (fetch_transport_idle_ok); one the probe refuses
+    // it closes and reports with fetch_pool_gone, then asks again.
+    FETCH_POOL_KEPT,
+    // A slot for a connection the caller is to dial. fetch_pool_dialled
+    // when the dial succeeds, fetch_pool_gone when it does not.
+    FETCH_POOL_DIAL,
+    FETCH_POOL_TIMED_OUT,       // waited out its patience
+    FETCH_POOL_INTERRUPTED,     // its cancellation said stop
+    FETCH_POOL_FAILED           // no bell, no memory or no clock to wait by
+} fetch_pool_take_t;
+
+// A connection for `key`, in this order (HTTP2.md § 2.2):
+//   1. unless `fresh`, a kept one given back less than `idle_most_ms` ago
+//      (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a request sent once),
+//      the most recently kept first;
+//   2. a slot to dial in, when the key holds fewer than FETCH_POOL_PER_KEY
+//      connections of every kind. AN IDLE CONNECTION NEVER MAKES A FETCH
+//      WAIT FOR ONE: with the table full, the least recently kept of any
+//      key is closed for the slot; with the key at its cap and holding a
+//      kept connection this fetch may not take (`fresh`, or kept too long
+//      for it), that one is;
+//   3. otherwise the fetch WAITS, on its bell, until a connection is given
+//      back or goes, and asks again from the top.
+// Connections past their idle time are closed on the way, whatever their
+// key. Every waiter is rung at every put and every departure: a ring is a
+// hint, and each one woken asks again under the lock. No order is promised
+// among waiters.
+fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, bool fresh,
+                                  fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io);
+
+// The dial a FETCH_POOL_DIAL slot was reserved for succeeded: the
+// connection is in use, by the fetch that dialled it.
+void fetch_pool_dialled(fetch_conn_t *conn);
+
+// Give a connection in use back to be kept, with its transport, which is
+// the pool's from here: kept, or closed at once when the clock cannot be
+// read. The transport's cancellation is dropped: it names the fetch that is
+// leaving.
+void fetch_pool_put(fetch_conn_t *conn, const fetch_transport_t *io);
+
+// A connection that is no more: a dial that failed, a kept one its probe
+// refused, one its fetch closed. The caller has closed its transport, or
+// never had one. Its slot is free from here.
+void fetch_pool_gone(fetch_conn_t *conn);
 
 // Close every kept connection. For a program that wants none left behind,
-// and for the host harness, which checks for leaks at exit.
+// and for the host harness, which checks for leaks at exit. Connections in
+// use are their fetches'.
 void fetch_pool_drain(void);
 
 // Close the least recently used kept connection, whatever its key: true
@@ -93,8 +170,12 @@ void fetch_pool_drain(void);
 // a port, memory), which a kept connection may be holding.
 bool fetch_pool_evict_one(void);
 
-// How many connections are kept now.
+// How many connections are kept now, and how many are in use or being
+// dialled. fetch_pool_counts reads both in one look, for a caller that
+// adds them up.
 size_t fetch_pool_idle(void);
+size_t fetch_pool_live(void);
+void fetch_pool_counts(size_t *kept, size_t *live);
 
 // ── The system's trust store, one per process ───────────────────────────
 //
