@@ -757,7 +757,7 @@ typedef enum os64_shutdown_mode
 // Change an owned ordinary window's stacking band: arg0 handle, arg1 0/1.
 #define SYSCALL_GUI_WINDOW_SET_PINNED 66
 // Exact owned-window content size; arg0 handle, arg1 width, arg2 height.
-#define SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE 67
+#define SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE 68
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.
