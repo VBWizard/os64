@@ -288,6 +288,22 @@ static void literal_cases(void)
     memset(&g, 0, sizeof(g));
     CHECK(h2_hpack_decode(&p->dec, out, len, take, &g) == H2_HPACK_OK && got_is(&g, 0, "authorization", "Basic abc") &&
           g.sensitive[0]);
+    // And never sent as an index: not the static table's own empty
+    // authorization, and not a field the dynamic table holds whole because
+    // it was sent before without the mark.
+    one = F("authorization", "");
+    CHECK(h2_hpack_encode(&p->enc, &one, 1, out, sizeof(out), &len) && len == 3 && out[0] == 0x1f && out[1] == 23 - 15 &&
+          out[2] == 0x00);
+    one = F("x-secret", "foo");
+    CHECK(h2_hpack_encode(&p->enc, &one, 1, out, sizeof(out), &len) && out[0] == 0x40 && p->enc.table.count == 1);
+    memset(&g, 0, sizeof(g));
+    CHECK(h2_hpack_decode(&p->dec, out, len, take, &g) == H2_HPACK_OK && !g.sensitive[0]);
+    CHECK(h2_hpack_encode(&p->enc, &one, 1, out, sizeof(out), &len) && len == 1 && out[0] == 0xbe);
+    one.sensitive = true;
+    CHECK(h2_hpack_encode(&p->enc, &one, 1, out, sizeof(out), &len) && len == 6 && out[0] == 0x1f && out[1] == 62 - 15 &&
+          out[2] == 0x03 && memcmp(out + 3, "foo", 3) == 0 && p->enc.table.count == 1);
+    memset(&g, 0, sizeof(g));
+    CHECK(h2_hpack_decode(&p->dec, out, len, take, &g) == H2_HPACK_OK && got_is(&g, 0, "x-secret", "foo") && g.sensitive[0]);
 
     // C.2.4: indexed.
     n = hex("82", wire);
@@ -763,6 +779,11 @@ static void head_cases(void)
     ONE(H2_HEAD_RESPONSE, H2_HEAD_OK, 2, F(":status", "200"), F("connections", "x"));
     ONE(H2_HEAD_TRAILERS, H2_HEAD_CONNECTION_FIELD, 0, F("upgrade", "x"));
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "gzip"));
+    ONE(H2_HEAD_REQUEST, H2_HEAD_OK, 4, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "Trailers"));
+    ONE(H2_HEAD_REQUEST, H2_HEAD_OK, 4, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "TRAILERS"));
+    ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "trailerz"));
+    ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "trailer"));
+    ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("te", "TRAILER\x13"));
     ONE(H2_HEAD_REQUEST, H2_HEAD_TE, 3, F(":method", "GET"), F(":scheme", "https"), F(":path", "/"),
         F("te", "trailers, gzip"));
     ONE(H2_HEAD_RESPONSE, H2_HEAD_CONTENT_LENGTH, 1, F(":status", "200"), F("content-length", ""));
@@ -1296,7 +1317,7 @@ static void fuzz_cases(void)
                           memcmp(g->value[i], fields[i].value, fields[i].value_len) == 0 &&
                           memcmp(g->name[i], fields[i].name, fields[i].name_len) == 0);
                     bool never = fields[i].sensitive || strcmp((const char *)fields[i].name, "authorization") == 0;
-                    CHECK(!g->sensitive[i] || never);
+                    CHECK(g->sensitive[i] == never);
                 }
             }
             free(g);

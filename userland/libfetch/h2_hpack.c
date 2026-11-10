@@ -454,11 +454,14 @@ bool h2_hpack_encode(h2_hpack_encoder_t *encoder, const h2_field_t *fields, size
         const h2_field_t *f = &fields[i];
         bool whole;
         uint32_t index = find(table, f, &whole);
-        if (whole) {
+        // Never indexed means never sent AS an index either: an index says
+        // nothing of the kind to whoever forwards the field, and a decoder
+        // hands it over as an ordinary one.
+        bool never = f->sensitive || same(f->name, f->name_len, kAuthorization, sizeof(kAuthorization) - 1);
+        if (whole && !never) {
             p = int_write(p, 7, 0x80, index);
             continue;
         }
-        bool never = f->sensitive || same(f->name, f->name_len, kAuthorization, sizeof(kAuthorization) - 1);
         bool adds = !never && (uint64_t)f->name_len + f->value_len + H2_HPACK_ENTRY_OVERHEAD <= table->most;
         p = adds ? int_write(p, 6, 0x40, index) : int_write(p, 4, never ? 0x10 : 0x00, index);
         if (index == 0)
@@ -531,8 +534,15 @@ h2_head_rule_t h2_head_check(const h2_field_t *fields, size_t count, h2_head_kin
         for (size_t k = 0; k < sizeof(kConnection) / sizeof(kConnection[0]); k++)
             if (named(f, kConnection[k]))
                 return H2_HEAD_CONNECTION_FIELD;
-        if (named(f, "te") && !same(f->value, f->value_len, (const uint8_t *)"trailers", 8))
-            return H2_HEAD_TE;
+        // "trailers" in any case: a field's NAME is lowercase in HTTP/2, and
+        // this is a value, a token RFC 9110 § 10.1.4 compares without case.
+        if (named(f, "te")) {
+            bool trailers = f->value_len == 8;
+            for (uint32_t k = 0; trailers && k < 8; k++)
+                trailers = (f->value[k] | 0x20) == (uint8_t)"trailers"[k];
+            if (!trailers)
+                return H2_HEAD_TE;
+        }
         if (named(f, "content-length")) {
             uint64_t n = 0;
             if (f->value_len == 0)

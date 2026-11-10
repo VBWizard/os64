@@ -119,8 +119,9 @@ size_t h2_hpack_encode_bound(const h2_field_t *fields, size_t count);
 // The fields as one block, in order. A field found whole in a table is sent
 // as its index; any other is sent literally and added to the table, its name
 // as an index when a table has the name. `authorization`, and a field its
-// caller marked sensitive, is sent never-indexed and is not added; neither
-// is one too large for the table to hold. False, with nothing written and
+// caller marked sensitive, is sent as a never-indexed literal, a table
+// holding it whole or not, and is not added; one too large for the table to
+// hold is not added either. False, with nothing written and
 // the table as it was, when `room` is under h2_hpack_encode_bound, or a name
 // or value is longer than 2^31 - 1 bytes.
 bool h2_hpack_encode(h2_hpack_encoder_t *encoder, const h2_field_t *fields, size_t count, uint8_t *out,
@@ -145,7 +146,7 @@ typedef enum {
     H2_HEAD_PSEUDO_MISSING,             // a request without its method, scheme or path; a response without a status
     H2_HEAD_STATUS,                     // a status that is not three digits
     H2_HEAD_CONNECTION_FIELD,           // connection, keep-alive, proxy-connection, transfer-encoding, upgrade
-    H2_HEAD_TE,                         // te with anything but "trailers"
+    H2_HEAD_TE,                         // te with anything but "trailers", in whatever case
     H2_HEAD_CONTENT_LENGTH,             // not a number, or past 64 bits
 } h2_head_rule_t;
 
