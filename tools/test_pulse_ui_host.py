@@ -21,7 +21,7 @@ sources=['tools/'+harness+'_host.c','userland/apps/pulse/pulse_data.c','userland
 sources+=['userland/libos64/'+name+'.c' for name in
           ['ui_dropdown','ui_action','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
            'text_cache','text_decode','text_bitmap','text_draw','draw','str']]
-if a.instruments:sources.append('userland/apps/pulse/pulse_instruments.c')
+sources.append('userland/apps/pulse/pulse_instruments.c')
 sources.append('shared/damage.c')   # ui.c keeps its dirty list by the shared rule
 subprocess.run(['cc',*flags,*[str(ROOT/s) for s in sources],*objects,'-o',str(out/harness)],check=True)
 if a.build_only:

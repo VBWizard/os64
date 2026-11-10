@@ -499,9 +499,9 @@ separation that can support them without committing to a skin file format.
 ## Slice 1 checkpoint — production renderer
 
 The renderer and `pulsedialtest` fixture implement the draw-and-fit slice.
-Pulse's live view selection, sampling history, hover details, and exact-size
-syscall remain in the subsequent slices above. Fixture readings and peak
-markers are deterministic examples, not live measurements.
+Fixture readings and peak markers are deterministic examples, not live
+measurements. The live integration is described in the slice 2 checkpoint
+below; hover details and performance comparison belong to slice 3.
 
 Measured content sizes with DejaVu Sans:
 
@@ -575,3 +575,67 @@ failures and direct host-test probes.
 
 The next gate is readability inspection on the target display, especially
 Compact at 26 pixels, before implementing the live application transitions.
+
+## Slice 2 checkpoint — live views and native sizing
+
+Pulse supports Classic (the default) and Instruments, with an independent
+Compact preference for Instruments. Settings selects the view; Instruments
+also exposes View, Compact, and Settings controls in a caption-sized toolbar.
+Save as default persists view/mode choices. The live default content sizes
+are 600 × 610 for normal Instruments and 360 × 390 for Compact. The measured
+24-pixel Compact floor including the toolbar is 328 × 352.
+
+Both views consume the same sampler. CPU, RAM, download, and upload use a
+bounded 60-slot, one-second peak history. Valid zero samples participate;
+missing samples do not invent peaks. A monotonic clock read is independent
+of measurement availability. Failed or backwards clock readings leave the
+history untouched and suppress that turn's markers. The next valid clock
+ages history normally. Changing interface clears network history only.
+Network directions share a power-of-two recent-peak scale; disk remains
+filesystem capacity, without a peak marker.
+
+The Pulse placement adapter records completed WINDOW_PLACEMENT gestures.
+It merges shared position and the active presentation's dimensions after
+re-reading saved values. Automatic resizing generates WINDOW_RESIZE instead
+and cannot overwrite preferred sizes. Classic's geometry format is retained.
+In-memory preferences follow a completed gesture even if the write fails;
+the failure is logged.
+
+`os64_gui_window_set_content_size` (syscall 67) checks raw dimensions and
+window ownership, rejects desktop/popup targets, and distinguishes minimum,
+capacity, and screen-fit refusals. It reuses compositor sizing, anchors the
+top-left where possible, and shifts the complete frame on screen when needed.
+Maximized requests update the restore frame. Focus, stacking band, and
+minimization are preserved. Validation precedes gesture cancellation.
+
+View transitions stage font/layout work before changing the native minimum
+and exact size. A failed exact request restores the previous minimum and size;
+failed restoration is reported and the retained view follows actual geometry.
+An older kernel is detected with a no-op size probe plus owned-window
+readback. A fitting transition proceeds without automatic size restoration;
+an undersized transition leaves the view unchanged with a manual-resize/kernel
+update hint.
+
+Verification for this checkpoint:
+
+- Kernel, Pulse, and `windowsizetest` cross-build. The compiler reports only
+  the existing compiler-runtime assembly mnemonic warnings in the kernel build.
+- Host suites pass with ASan, UBSan, and LeakSanitizer: 1,379 renderer checks,
+  277 live/Classic UI checks, data/history/placement assertions, and extracted
+  production syscall/WM tests. UI failure injection covers minimum growth
+  followed by exact-size refusal and failed rollback.
+- Native QEMU `windowsizetest`: zero failures for exact dimensions, no-op,
+  raw argument validation, bounds, foreign owner, popup refusal, screen-edge
+  positioning, preserved flags, maximized visible geometry, and resize event
+  delivery without placement events.
+- Live QEMU: Classic → Instruments → Compact, saved Compact startup, valid
+  and unavailable network readings, measured minimum clamping, Apply/Save,
+  and independent preferred-size restoration. After resizing Compact to
+  328 × 352 and switching away/back, saved Classic remains 420 × 440 and
+  normal Instruments remains 600 × 610.
+- The same binary on the previous kernel starts from saved Compact settings,
+  refuses a larger view with an explicit hint, and switches after manual
+  enlargement with an automatic-sizing warning.
+
+Native hardware acceptance, hover/keyboard detail cards, and the idle/loaded
+performance comparison remain the gates described above.

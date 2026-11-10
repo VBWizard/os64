@@ -5,8 +5,6 @@
 
 // Pure presentation: readings and peak history are supplied by the owner.
 // The renderer performs no I/O, sampling, window operations, or time reads.
-enum { PULSE_DIAL_CPU, PULSE_DIAL_RAM, PULSE_DIAL_DISK,
-       PULSE_DIAL_DOWN, PULSE_DIAL_UP, PULSE_DIAL_COUNT };
 typedef struct {
     pulse_sample_t current;
     bool peak_valid[PULSE_DIAL_COUNT];
