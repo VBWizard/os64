@@ -2253,17 +2253,24 @@ static bool add_prop(garb_prop_t p, const flow_style_t *u, const flow_style_t *v
     int i;
     switch (p) {
     case GARB_COLOR: d->color = add_colour(u->color, v->color); return true;
+    // A sum is a colour of its own: a keyframe's currentColor mark goes, or
+    // settling the style would put the element's colour back over it.
     case GARB_BACKGROUND_COLOR:
         d->background = add_colour(u->has_background ? u->background : 0xFF000000u,
                                    v->has_background ? v->background : 0xFF000000u);
         d->has_background = flow_alpha(d->background) > 0;
+        d->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
         return true;
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR:
         i = p - GARB_BORDER_TOP_COLOR;
         d->border_color[i] = add_colour(u->border_color[i], v->border_color[i]);
+        d->current_colours &= (uint8_t)~FLOW_CURRENT_BORDER(i);
         return true;
-    case GARB_OUTLINE_COLOR: d->outline_color = add_colour(u->outline_color, v->outline_color); return true;
+    case GARB_OUTLINE_COLOR:
+        d->outline_color = add_colour(u->outline_color, v->outline_color);
+        d->current_colours &= (uint8_t)~FLOW_CURRENT_OUTLINE;
+        return true;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         i = p - GARB_MARGIN_TOP;
         return add_length(u->margin[i], v->margin[i], &d->margin[i]);
@@ -2493,8 +2500,13 @@ static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_st
     }
     // add_prop reads a field before it writes it, so each value is built
     // where it stands.
+    // An iteration count past 2^62 (an infinite one included, which a tiny
+    // duration can make of a finite time) builds what 2^62 does: the sums
+    // saturate long before, and the loop must end.
+    if (isnan(iterations))
+        return;
     flow_style_t power = *last;
-    for (double n = floor(iterations); n >= 1; n = floor(n / 2)) {
+    for (double n = fmin(floor(iterations), 0x1p62); n >= 1; n = floor(n / 2)) {
         if (fmod(n, 2) >= 1 && !add_prop(p, look->out, &power, look->out, true, look->alloc, look->ctx))
             break;
         if (n >= 2 && !add_prop(p, &power, &power, &power, true, look->alloc, look->ctx))
@@ -2812,8 +2824,9 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
 {
     // Of the animations in effect now, the last to set each property with a
     // value wholly its own — its list for it not dropped, its interval
-    // between two of its own keyframes, not resting on the value
-    // underneath: that value replaces an earlier one's (f_motion_style), so
+    // between two of its own keyframes that replace, neither resting on
+    // nor adding to the value underneath: that value replaces an earlier
+    // one's (f_motion_style), so
     // what an earlier one does to the property is not shown — until the
     // later one's interval or its effect ends, which that one is due for
     // itself.
@@ -2833,7 +2846,8 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
                 continue;
             Frame s, e;
             interval(an, NULL, (garb_prop_t)p, k.progress, &s, &e);
-            if (!s.implicit && !e.implicit)
+            if (!s.implicit && !e.implicit && an->frames[s.frame].composite == GARB_COMPOSITE_REPLACE &&
+                an->frames[e.frame].composite == GARB_COMPOSITE_REPLACE)
                 last[p] = a;
         }
     }

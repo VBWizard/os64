@@ -245,6 +245,11 @@ mutants = [
     ('rotations-not-composed', MOTION_C,
      '    } else if (u->fn == FLOW_FN_ROTATE && v->fn == FLOW_FN_ROTATE && !accumulate) {',
      '    } else if (u->fn == FLOW_FN_ROTATE && v->fn == FLOW_FN_ROTATE && !accumulate && false) {', [FLOW_FX]),
+    ('adding-ends-mask-underneath', MOTION_C,
+     'if (!s.implicit && !e.implicit && an->frames[s.frame].composite == GARB_COMPOSITE_REPLACE &&\n'
+     '                an->frames[e.frame].composite == GARB_COMPOSITE_REPLACE)',
+     'if (!s.implicit && !e.implicit)', [FLOW_FX]),
+    ('added-current-kept', MOTION_C, '        d->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;\n', '', [FLOW_FX]),
     ('records-in-name-order', MOTION_C, '    names = tmp;\n    bool ok = true;', '    bool ok = true;', [FLOW_MOTION]),
     ('scale-add-adds', MOTION_C, '            one->a[i] = u->a[i] * v->a[i];', '            one->a[i] = u->a[i] + v->a[i];',
      [FLOW_FX]),

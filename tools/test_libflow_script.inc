@@ -114,6 +114,62 @@ static void composite_due_case(void)
     garb_free(&b);
 }
 
+// A paused effect that adds, over a running one: the running one still
+// shows through it, so the property is due at once. And an accumulation
+// whose duration is so small that its iteration count is infinite at a
+// finite time ends.
+static void composite_under_cases(void)
+{
+    garb_parsed_t a = {0}, b = {0}, c = {0};
+    garb_set_t sa[2], sb[2], sc[2];
+    int32_t na = script_sets(&a, "margin-left: 0px", sa, 2), nb = script_sets(&b, "margin-left: 100px", sb, 2);
+    int32_t nc = script_sets(&c, "margin-left: 10px", sc, 2);
+    garb_effect_keyframe_t run_frames[2] = {{0, false, {0}, sa, na, GARB_COMPOSITE_REPLACE},
+                                            {1, false, {0}, sb, nb, GARB_COMPOSITE_REPLACE}};
+    garb_effect_keyframe_t add_frames[2] = {{0, false, {0}, sc, nc, GARB_COMPOSITE_ADD},
+                                            {1, false, {0}, sc, nc, GARB_COMPOSITE_ADD}};
+    garb_effect_t run, add;
+    memset(&run, 0, sizeof(run));
+    run.frames = run_frames;
+    run.nframes = 2;
+    run.timing.duration_ms = 1000;
+    run.timing.iterations = 1;
+    run.start_ms = 4000;
+    run.rate = 1;
+    add = run;
+    add.frames = add_frames;
+    add.held = true;
+    add.hold_ms = 500;
+    const garb_effect_t *list[2] = {&run, &add};
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><div id=k>x</div>", 800, 600);
+    ScriptEffects se = {computed_find(p.doc->document, "k"), list, 2};
+    p.script = &se;
+    p.env.script_effects = script_effects_hook;
+    p.env.ctx = &p;
+    p.env.now_ms = 4500;
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    flow_computed_t *cc = tree != NULL ? flow_computed_new(tree, &p.env, se.target, NULL) : NULL;
+    computed_is(cc, "composite: a held effect adds to a running one", GARB_MARGIN_LEFT, "60px");
+    flow_computed_free(cc);
+    uint64_t due = tree != NULL ? flow_motion_due(tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) : 0;
+    expect("composite: the running one under it is still due", due == 4500, NULL);
+    flow_free(tree);
+    run.timing.duration_ms = 1e-320;
+    run.timing.iterations = INFINITY;
+    run.held = true;
+    run.hold_ms = 1;
+    run.iteration_accumulate = true;
+    se.n = 1;
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    expect("composite: an infinite iteration count at a finite time ends", tree != NULL, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+    garb_free(&a);
+    garb_free(&b);
+    garb_free(&c);
+}
+
 static void composite_cases(void)
 {
     const char *box = "<!doctype html><style>#k{margin-left:100px;opacity:0.25;color:rgb(10,20,30);"
@@ -157,6 +213,11 @@ static void composite_cases(void)
                    "</style><div id=k>x</div>", "rotate: y 90deg", "rotate: y 90deg", GARB_COMPOSITE_ADD, false, 1,
                    500, GARB_ROTATE, "0.57735 0.57735 0.57735 120deg");
     composite_due_case();
+    composite_under_cases();
+    composite_case("composite: an added currentColor is a colour of its own",
+                   "<!doctype html><style>#k{color:rgb(10,20,30);background-color:rgb(10,20,30)}</style>"
+                   "<div id=k>x</div>", "background-color: currentColor", "background-color: currentColor",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_BACKGROUND_COLOR, "rgb(20, 40, 60)");
 }
 
 static void script_effect_cases(void)
