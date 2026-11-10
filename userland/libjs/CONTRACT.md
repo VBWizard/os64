@@ -1,7 +1,6 @@
 # JavaScript runtime API contract
 
-Status: R0/R2 contract with D7a's host tasks, D8's opt-in teardown and D10's
-callback budget extensions, 2026-10-06, and P2a's script host, 2026-10-23.
+Status: embedding ABI 3, including F.1's shared-runtime realms, 2026-11-10.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -49,10 +48,10 @@ before publishing its context. No filesystem module loader is installed.
 Creation binds the runtime to the creating thread. The same thread owns setup,
 evaluation, jobs, diagnostic extraction, and destruction. This is a caller
 obligation: os64 does not expose a current-thread identifier for a runtime to
-compare. Calls on one runtime must not overlap. Wrapper evaluation/drain/setup
-entry points reject active-call re-entry with BUSY without replacing the outer
-call's result or budget. Native bindings are responsible for obeying the rule
-when using the raw engine API. Independent runtimes may execute on different
+compare. Concurrent calls on one runtime must not overlap. Wrapper evaluation,
+drain and setup entry points reject active-call re-entry with BUSY without
+replacing the outer call's result or budget, except initial realm setup
+(§ Realms). Native bindings must obey this rule when using the raw engine API. Independent runtimes may execute on different
 threads; class IDs use `os64_js_class_id(&slot)`. The library serializes the
 slot check and engine allocation together process-wide: a zero-initialized,
 process-lifetime slot receives an ID once; later calls reuse it. Bindings access
@@ -61,7 +60,7 @@ NULL returns the invalid ID zero without entering the engine. The caller
 registers the returned ID in each runtime with QuickJS's class API; allocation
 and per-runtime registration are different operations.
 
-`os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the owned context.
+`os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the primary context.
 It is available for idle setup and inside native callbacks executing in an
 evaluation/job call; it is unavailable during destruction. Its caller-owned
 outcome is required and must be separate from an active outer call's outcome.
@@ -70,13 +69,94 @@ null runtime/ABI argument, or FAILED_RUNTIME for a failed runtime, without
 changing the runtime or active budgets. On success it initializes the outcome
 with OK. Each translation unit using engine inline helpers checks through this
 accessor before using the context. Consumers must
-not free it, create additional contexts, migrate its runtime, or replace the
+not free it, create contexts through the raw engine API, migrate its runtime, or replace the
 library's allocator, interrupt hook, Promise tracker, or loader configuration.
 The runtime and context opaque slots both hold wrapper state. Custom bindings
 must leave them unchanged and keep native state in their own objects and
 function data. A raw engine runtime constructed outside this wrapper has its
 ordinary engine configuration, including shared-buffer exposure; this contract
-governs the wrapper-owned context.
+governs the wrapper-owned contexts.
+
+## Realms
+
+One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
+the primary plus 64 additional realms. `os64_js_primary_realm` returns the
+primary handle; `os64_js_realm_create` creates an independent global and
+intrinsics with the same capability profile. Both require the binding ABI.
+`os64_js_realm_context` borrows a realm's context and
+`os64_js_realm_from_context` checks membership without trusting a foreign
+context's opaque slot. A context or realm handle remains borrowed until
+runtime destruction. There is no per-realm retirement operation.
+
+The wrapper reserves a fixed descriptor table in its enclosing allocation,
+charged before the engine memory ceiling is set. Contexts, retained values,
+modules and rejection records use the shared engine allocator. A full table
+returns non-sticky `OS64_JS_REALM_LIMIT` before allocation; failed construction
+publishes no handle. Memory, cancellation, clock, stack and job-limit failures
+remain sticky for the entire runtime. A failing child does not isolate its
+parent from those failures.
+
+Legacy verbs select the primary realm. Explicit realm verbs select the owner
+for source/bytecode execution, task begin/call, module operations, script hosts,
+rejection taking, output and Intl. They do not swap a runtime context pointer.
+There is no realm-specific eval, file or argument installer: legacy eval/file/
+arguments retain their primary-only behavior. A realm module handle is refused
+by another realm's module operations, even within the same engine; release
+returns BAD_ARGUMENT rather than releasing a foreign handle. Release remains
+available after runtime failure. Module state without an ABI parameter assumes
+the caller already obtained the realm through the checked binding interface.
+
+Tasks, the engine job queue, deadline, job count, guard and active outcome are
+shared. A task begun for A can call B with `os64_js_realm_call`; raw native
+bindings can call shared-runtime values through `JS_Call`. Neither changes the
+enclosing task's budget. Checkpoints drain the shared queue. Exceptions from a
+job use the context returned by the engine; late module failures use their
+module's owner and source name, with runtime-wide first-failure ordering.
+Values from a different engine must not be passed to these calls.
+
+Creation and the explicit realm output/Intl installers support three setup
+modes: idle setup owns a bounded turn; setup between calls of an open task
+borrows its budget and acquires the guard; setup inside a native callback
+borrows the existing guard and budget. The last mode preserves the outer
+outcome and stack origin. Each nested operation needs separate outcome storage.
+An installer requires an unevaluated realm and an uninstalled facility; a
+recursive install of the same facility is refused. A binding can install host
+objects or traps between creation and installation, so those traps remain
+inside this guard. Setup that queues jobs leaves them with its enclosing task,
+or with its own idle setup turn for draining. Legacy installers retain their
+idle-only rule. Wrapper run/call re-entry remains BUSY.
+
+A child's script host and module loader may be installed for the first time
+inside a native callback while that realm is unused. Replacing or clearing
+configured services during a call is BUSY. Outside a call, explicit realm
+service setters can copy or clear their non-executing configuration after
+a sticky failure; this does not restore execution. The legacy module-loader
+setter retains its FAILED_RUNTIME entry refusal. Script hosts, loaders, module lists and captured
+Promise `then` belong to each realm. A borrowed script function's dynamic
+import uses its code realm's loader. Output handles, console group depth,
+counts, timers and Intl belong to the installing realm. QuickJS data-bearing
+native callbacks receive the caller's context, so console methods and module
+watchers retain their owner's slot explicitly in their function data.
+
+Rejection lookup is keyed by promise identity across the engine. Each record
+also carries a reporting realm; taking A's oldest record leaves B's records
+alone. Handling a promise before take removes its pending record regardless
+of the attaching realm or routing policy. Handling after take uses the policy
+at that later moment. Hosted realms retain records for their hosts; unhosted
+realms are judged at checkpoints without consuming hosted siblings' records.
+
+The optional runtime rejection router selects a reporting realm while the
+native callback stack is present; absent a router, the engine callback context
+selects it. The router must execute no script. NULL suppresses a new report;
+a foreign handle causes sticky HOST_FAILURE. Host hooks receive the triggering
+native context even when policy selects a different host. Pending-record removal
+precedes router invocation. This is a native policy seam, not HTML settings-
+object attribution; the browser bridge and any needed record changes belong
+to F.4. F.1 does not expose arbitrary realm selection to page JavaScript.
+
+Destroy disables service reporting, releases per-realm retained values and
+module handles, drops all contexts, then destroys the engine before freeing
+the fixed descriptor table. Both teardown policies apply to this whole set.
 
 ## Capabilities and native bindings
 
@@ -251,7 +331,7 @@ for an already-reported rejection is harmless. If an exception is the primary
 outcome at the same queue exhaustion, EXCEPTION takes precedence and checkpoint
 bookkeeping is still released. The standalone outcome carries one diagnostic;
 a browser that fires an event per rejection sets a script host instead
-(§ A script host), and then none of this paragraph's judging happens. A
+(§ A script host), and then that realm's records wait for its host. A
 browser's tasks and checkpoints use § Host tasks; the standalone profile does
 not implement the HTML event loop. The tracker finds a rejection by its
 promise in a table, so neither the thousandth rejection of a turn nor a
@@ -274,7 +354,8 @@ message is parsed. Returned status equals the
 outcome's status. There is no release operation for an outcome.
 
 OK and MORE_JOBS keep the runtime usable. BAD_ARGUMENT and BUSY reject the
-operation without changing its runtime. ABI_MISMATCH publishes no runtime at
+operation without changing its runtime. REALM_LIMIT refuses realm admission
+before allocation and also leaves the runtime usable. ABI_MISMATCH publishes no runtime at
 creation and no context at access; an existing runtime stays unchanged.
 
 EXCEPTION and UNHANDLED_REJECTION report script outcomes and keep the runtime
@@ -424,7 +505,8 @@ The rules:
 - **A sticky failure ends the task's work.** LIMIT, CANCELLED and
   HOST_FAILURE inside any entry make every later entry of the task answer
   FAILED_RUNTIME, except `task_end`, which closes the task and reports the
-  sticky status. After that, as before, nothing is accepted but destroy.
+  sticky status. Script execution stays refused; non-executing access, service
+  cleanup and module release retain their documented failure-state contracts.
 - **Calls are not re-entrant.** `os64_js_call` and `task_begin` are refused
   from inside a callback, as eval is. A native binding that must run script
   synchronously under a call (a script's `dispatchEvent`) uses the raw

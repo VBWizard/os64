@@ -8,7 +8,7 @@ typedef struct JSContext JSContext;
 typedef struct JSValue JSValue;
 typedef uint32_t JSClassID;
 
-/* Borrow the runtime-owned context, including inside its native callbacks.
+/* Borrow the primary realm context, including inside native callbacks.
  * The calling unit supplies its compiled-in ABI ID and a separate outcome;
  * mismatch returns NULL/ABI_MISMATCH without exposing the context.
  * No concurrent use, ownership transfer, configuration replacement, or bypass
@@ -213,4 +213,102 @@ void os64_js_module_release(os64_js_runtime_t *runtime, os64_js_module_t *module
  * Native work cannot be preempted here; check before and after bounded work. */
 os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime, const char *caller_abi,
                                       os64_js_outcome_t *outcome);
+/* Multiple realms share one engine, queue, owner thread and task budget.
+ * Handles/contexts are borrowed until runtime destruction; no per-realm
+ * retirement is exposed. Legacy operations select the primary realm.
+ * Realm creation and initial installers may borrow an active task's guard;
+ * run/call do not permit wrapper re-entry. Each handle must come from this
+ * library and remain live; arbitrary/stale native pointers are not validated.
+ * Realm verbs have their legacy counterpart's contract except for selection
+ * and the setup exception. Explicit realm service setters also permit
+ * non-executing configuration after failure. See CONTRACT.md § Realms. */
+typedef struct {
+    void *opaque;
+    /* Called without script execution while the triggering stack is present.
+     * NULL suppresses a new report. A foreign realm fails the runtime.
+     * Handling a still-pending promise removes its record before selection.
+     * The browser's settings-policy bridge may extend this seam. */
+    os64_js_realm_t *(*select)(void *opaque, JSContext *context, JSValue promise, bool handled);
+} os64_js_rejection_router_t;
+
+JSContext *os64_js_realm_context(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_outcome_t *outcome);
+
+os64_js_realm_t *os64_js_primary_realm(os64_js_runtime_t *runtime, const char *caller_abi,
+    os64_js_outcome_t *outcome);
+
+os64_js_realm_t *os64_js_realm_from_context(os64_js_runtime_t *runtime, JSContext *context,
+    const char *caller_abi, os64_js_outcome_t *outcome);
+
+/* Returns no handle on failure. REALM_LIMIT is non-sticky and attempts no
+ * allocation; other resource failures affect the shared runtime. */
+os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, const char *caller_abi,
+    os64_js_realm_t **out, os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_run(os64_js_realm_t *realm,
+                                     const void *source, size_t length,
+                                     const char *source_name,
+                                     os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_run_bytecode(os64_js_realm_t *realm,
+    const void *source, size_t length,
+    const char *source_name,
+    os64_js_bytecode_t *bytecode,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, const char *caller_abi,
+    const char *source_name, os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char *caller_abi,
+    JSValue function, JSValue this_value, int argc,
+    JSValue *argv, bool *returned_false,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm, const char *caller_abi,
+    const os64_js_script_host_t *host,
+    os64_js_outcome_t *outcome);
+
+bool os64_js_realm_take_rejection(os64_js_realm_t *realm, const char *caller_abi,
+                                     JSValue *promise, JSValue *reason, uint32_t *tag);
+
+os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *realm, const char *caller_abi,
+    const os64_js_module_loader_t *loader,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_module_compile(os64_js_realm_t *realm, const char *caller_abi,
+    const void *source, size_t length, const char *name,
+    const char *url, os64_js_module_t **module,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_module_compile_bytecode(os64_js_realm_t *realm, const char *caller_abi,
+    const void *source, size_t length, const char *name,
+    const char *url, os64_js_bytecode_t *bytecode,
+    os64_js_module_t **module, os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_module_requests(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_module_t *module,
+    void (*each)(void *opaque, const char *specifier),
+    void *opaque, os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_module_run(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_module_t *module, os64_js_outcome_t *outcome);
+
+os64_js_module_state_t os64_js_realm_module_state(os64_js_realm_t *realm, os64_js_module_t *module,
+    os64_js_outcome_t *failure);
+
+/* BAD_ARGUMENT for a handle owned by another realm; usable after a sticky
+ * failure. NULL module succeeds. Legacy release retains fatal misuse checks. */
+os64_js_status_t os64_js_realm_module_release(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_module_t *module, os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_install_output(os64_js_realm_t *realm,
+    int32_t handle, uint32_t names,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_realm_install_intl(os64_js_realm_t *realm, const char *locale,
+    os64_js_outcome_t *outcome);
+
+os64_js_status_t os64_js_set_rejection_router(os64_js_runtime_t *runtime, const char *caller_abi,
+    const os64_js_rejection_router_t *router,
+    os64_js_outcome_t *outcome);
 #endif

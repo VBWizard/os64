@@ -8,6 +8,12 @@ hosts register capabilities through the borrowed context using the pinned
 QuickJS API. Creation removes SharedArrayBuffer exposure and grants no host
 output, arguments, filesystem, networking or process functions.
 
+F.1 adds explicit realms within one engine: separate globals, module providers,
+script hosts and output state, sharing the job queue, task budget and failure
+state. Legacy operations address the primary realm. A runtime admits up to 65
+realms and keeps them until whole-runtime destruction; this does not enable
+iframe elements or independent child retirement. See CONTRACT.md § Realms.
+
 D8 adds creation-selected teardown reporting/reclamation for audited browser
 hosts. Ordinary creation and raw engine destruction retain the fatal policy.
 The contract and audits are in [TEARDOWN.md](TEARDOWN.md); independent review
@@ -27,9 +33,9 @@ application addresses.
 Read CONTRACT.md before implementing a consumer and port/README.md for the
 adapter's accounting, headers and diagnostic formats. Upstream originals stay
 byte-identical; generated copies receive the hash-checked manifest patch series.
-`exports.map` publishes 188 engine symbols and nineteen runtime symbols, with
-adapter/compiler helpers private. The two R2 slices provide the complete
-standalone embedding interface. Their review/merge, Opus's C1 runner integration,
+`exports.map` publishes the pinned engine binding symbols and public
+`os64_js_*` embedding operations, with adapter/compiler helpers private.
+The standalone runner integration,
 image/licence installation and independent
 validation are tracked in JAVASCRIPT_TASKS.md.
 
@@ -44,6 +50,9 @@ Checks:
   partial output writes, transactional property/handle publication, copied
   arguments and installer failure sweeps. Fatal fixtures
   verify the full JSFA badge through a host exit hook.
+- `tools/test_js_realms_host.sh`: focused target-engine realm ownership cases
+  from the full runtime suite; `tools/test_js_realms_mutants.py` injects routing
+  mistakes through the isolated `tools/mutants_parallel.py` runner.
 - `tools/test_js_port_target.sh`: strict target core and binding example,
   import/export and ELF audits, a symbol-only core link with trap dependencies,
   real shared-library dependencies, public maths headers and relink triggers.
