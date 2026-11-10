@@ -2482,24 +2482,24 @@ static void follow_colour(flow_style_t *out)
 // the value each finished iteration ended on, its last keyframe's, built
 // onto this iteration's, as many times as iterations are finished — by
 // doubling, since an accumulation of every kind add_prop accumulates is
-// associative and a running animation's iterations have no bound. A last
-// keyframe that does not resolve, or a property that does not add, leaves
-// the value as this iteration made it; what is built is then held to the
-// property's range, as a mix holds its result (mix_prop).
+// associative and a running animation's iterations have no bound. An
+// implicit last keyframe is the neutral value (Web Animations 1 § 5.3.4),
+// which adds nothing; one that does not resolve, or a property that does
+// not add, leaves the value as this iteration made it. What is built is
+// then held to the property's range, as a mix holds its result (mix_prop).
 static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_style_t *under, garb_prop_t p,
                                   double iterations, Look *look)
 {
     Frame s, e;
     interval(an, under, p, 1, &s, &e);
-    const flow_style_t *last = under;
-    if (!e.implicit) {
-        // In the property's own pass, as motion_walk resolves it: the
-        // first pass's (colour, font size) against nothing yet built.
-        const FResolved *r = look->resolve(look->ctx, a, e.frame, resolved_first(p) ? NULL : look->out);
-        if (r == NULL)
-            return;
-        last = &r->style;
-    }
+    if (e.implicit)
+        return;
+    // In the property's own pass, as motion_walk resolves it: the first
+    // pass's (colour, font size) against nothing yet built.
+    const FResolved *r = look->resolve(look->ctx, a, e.frame, resolved_first(p) ? NULL : look->out);
+    if (r == NULL)
+        return;
+    const flow_style_t *last = &r->style;
     // add_prop reads a field before it writes it, so each value is built
     // where it stands.
     // An iteration count past 2^62 (an infinite one included, which a tiny

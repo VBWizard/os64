@@ -216,6 +216,8 @@ static void composite_cases(void)
                    "font-size: 20px", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_FONT_SIZE, "35px");
     composite_case("composite: a colour's iterations build on its last keyframe", box, "color: rgb(0, 0, 0)",
                    "color: rgb(100, 0, 0)", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_COLOR, "rgb(150, 0, 0)");
+    composite_case("composite: an implicit last keyframe adds nothing to the iterations", box, "margin-left: 0px",
+                   "", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_MARGIN_LEFT, "50px");
     composite_due_case();
     composite_under_cases();
     composite_case("composite: an added currentColor is a colour of its own",
