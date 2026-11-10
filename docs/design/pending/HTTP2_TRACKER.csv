@@ -28,7 +28,7 @@ H2.1.10,"Measurement in the PR body: cold vs resumed handshake time in the guest
 H2.1.11,"TLS13.md § The profile and DEBTS § TLS 1.3 engine boundaries updated; as-built section",H2.1.8,done,#529,
 H2.1.12,"Codex round",H2.1.9,done,#529,
 
-H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,review,,"HTTP2.md § 2.2, § 4 H2.2 and 'H2.2, as built'; removes handshakes, not latency. Codex round open on #531"
+H2.2,"Connections as shared objects with a count, and the six-per-host cap in front of the dial",H2.0,p5,,"HTTP2.md § 2.2, § 4 H2.2 and 'H2.2, as built'; removes handshakes, not latency. Codex round 1 clean on #531"
 H2.2.1,"fetch_conn_t replaces kept_t: key, io, protocol (H1 only), refs, kept_at, dialling; the table holds pointers, idle and live",H2.2,done,#531,
 H2.2.2,"fetch_pool_take: idle of the key, else a dial slot under both caps (closing an idle connection that stands in the way), else wait on the bell in the pool's queue",H2.2.1,done,#531,
 H2.2.3,"The waiter list: node added under the lock, removed under the lock before any return; put / death / a dial's end ring EVERY matching waiter, under the lock",H2.2.2,done,#531,
@@ -40,8 +40,8 @@ H2.2.8,"Host cases: seventh waits and proceeds on put / on death; cancelled wait
 H2.2.9,"Mutants once at the end",H2.2.8,done,#531,"102 of 102"
 H2.2.10,"QEMU make run-net on the W2 page: at most six SYNs to the host at once, arrival within W2's figures",H2.2.8,todo,,"not done as written: /tests/capprobe measured the cap from inside the guest (12 fetches, at most 6 at once); no SYN capture on the W2 page"
 H2.2.11,"DEBTS row 'Fetches to one host are not capped at once' paid; WIRE.md § 2 pointer; as-built section",H2.2.10,done,#531,
-H2.2.12,"Codex round",H2.2.9,doing,,
-H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,todo,,
+H2.2.12,"Codex round",H2.2.9,done,#531,"round 1 clean, 2026-11-10"
+H2.2.13,"P5: Chris on the blog page and the storefront, by feel and by the record's connection count",H2.2.12,doing,,"capprobe on the P5 2026-11-10: 12 fetches, at most 6 at once, opens 190 to 694 ms, 998 ms in all; the pages by feel are still to come"
 
 H2.3,"Framing and HPACK: pure libraries with host tests and the RFC's vectors",,design-review,,"HTTP2.md § 4 H2.3; unreachable until H2.4"
 H2.3.1,"h2_frame: header parse, per-type length and stream-id rules, padding, PRIORITY fields, unknown types ignored",H2.3,todo,,
