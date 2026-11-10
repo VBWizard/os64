@@ -62,7 +62,13 @@ struct os64_fetch {
     // holds a pointer to `io`, so these live here and are never copied while
     // the stream reads; a connection kept between fetches is copied into
     // `io` when it is taken and out of it when it is given back (pool.h).
+    // `conn` is that connection in the pool's books while this fetch holds
+    // it, and NULL when it holds none.
     fetch_transport_t io;
+    fetch_conn_t     *conn;
+    // What this fetch parks on when every connection to its peer is in use
+    // (pool.h): none until its first wait, closed with the fetch.
+    os64_bell_t       bell;
     http_stream_t     stream;
     http_response_t   reply;
     http_body_t       body;
@@ -582,6 +588,8 @@ static os64_fetch_status_t drop_connection(os64_fetch_t *f, os64_fetch_status_t 
     if (f->connected) {
         fetch_transport_close(&f->io, false);
         f->connected = false;
+        fetch_pool_gone(f->conn);
+        f->conn = NULL;
     }
     if (status == OS64_FETCH_TLS_FAILED)
         tls_snapshot(f);
@@ -649,39 +657,90 @@ static void release_connection(os64_fetch_t *f, bool normal)
     f->connected = false;
     fetch_reuse_facts_t facts;
     reuse_facts(f, &facts);
+    fetch_conn_t *conn = f->conn;
+    f->conn = NULL;
     if (connection_reusable(&facts)) {
-        fetch_pool_key_t key;
-        pool_key(f, f->io.encrypted, &key);
-        fetch_pool_put(&key, &f->io);
+        fetch_pool_put(conn, &f->io);
         f->io.handle = -1;          // the pool's now; the diagnostics stay here
         f->io.tls = NULL;
         return;
     }
     fetch_transport_close(&f->io, normal);
+    fetch_pool_gone(conn);
 }
 
 static bool idempotent(const os64_fetch_t *f);
 
-// A kept connection for this hop that still answers its probe, adopted:
-// true with it in `io`. One the probe refuses is closed, and the next is
-// tried. A request the retry rule would not send again takes only one used
-// moments ago (FETCH_POOL_ONCE_MS), since nothing could save it from one
-// its server closed while it sat idle.
-static bool take_kept(os64_fetch_t *f, const fetch_pool_key_t *key)
+static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
+                                uint16_t peerPort);
+
+// A connection for this hop, in the pool's order (pool.h): a kept one that
+// still answers its probe, adopted (one the probe refuses is closed, and
+// the pool asked again); else one dialled in the slot the pool gave; else,
+// with every connection to the peer in use, a wait for one. A request the
+// retry rule would not send again takes only a kept connection used moments
+// ago (FETCH_POOL_ONCE_MS), since nothing could save it from one its server
+// closed while it sat idle. `fresh` takes no kept connection at all.
+static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key, bool encrypted,
+                                   bool fresh, const char *peerHost, uint16_t peerPort)
 {
-    fetch_transport_t io;
     uint32_t idle_most = idempotent(f) ? FETCH_POOL_IDLE_MS : FETCH_POOL_ONCE_MS;
-    while (fetch_pool_take(key, idle_most, &io)) {
-        if (fetch_transport_idle_ok(&io)) {
-            f->io = io;
-            fetch_transport_adopt(&f->io, f->opt.idle_ms, cancel_predicate, f);
-            tls_snapshot(f);                // the version its handshake chose
-            f->detail.tls_fallback = false; // no dial on this hop at all
-            return true;
+    fetch_pool_wait_t wait = {.bell = &f->bell, .patience_ms = FETCH_POOL_WAIT_MS,
+                              .cancelled = cancel_predicate, .cancel_ctx = f};
+    f->detail.why[0] = '\0';
+    for (;;) {
+        fetch_transport_t io;
+        fetch_conn_t *conn = NULL;
+        switch (fetch_pool_take(key, idle_most, fresh, &wait, &conn, &io)) {
+        case FETCH_POOL_KEPT:
+            if (fetch_transport_idle_ok(&io)) {
+                f->io = io;
+                fetch_transport_adopt(&f->io, f->opt.idle_ms, cancel_predicate, f);
+                tls_snapshot(f);                // the version its handshake chose
+                f->detail.tls_fallback = false; // no dial on this hop at all
+                f->conn = conn;
+                f->reused = true;
+                return OS64_FETCH_OK;
+            }
+            fetch_transport_close(&io, false);
+            fetch_pool_gone(conn);
+            continue;
+        case FETCH_POOL_DIAL: {
+            f->reused = false;
+            os64_fetch_status_t dialled = dial(f, encrypted, peerHost, peerPort);
+            if (dialled != OS64_FETCH_OK) {
+                fetch_pool_gone(conn);      // dial closed what it opened
+                return dialled;
+            }
+            fetch_pool_dialled(conn);
+            f->conn = conn;
+            return OS64_FETCH_OK;
         }
-        fetch_transport_close(&io, false);
+        case FETCH_POOL_INTERRUPTED:
+            return OS64_FETCH_INTERRUPTED;
+        case FETCH_POOL_TIMED_OUT:
+            // No road within patience, and the reason is this program's own
+            // connections: said in the sentence, since the kernel's word
+            // for "no resources" would point at the wrong thing.
+            f->detail.dial = OS64_NET_ERR_NO_RESOURCES;
+            if (wait.for_the_table)
+                os64_snprintf(f->detail.why, sizeof(f->detail.why),
+                              "waited %lu ms for one of this program's %d connections, all in use",
+                              (unsigned long)wait.waited_ms, FETCH_POOL_TOTAL);
+            else
+                os64_snprintf(f->detail.why, sizeof(f->detail.why),
+                              "waited %lu ms for one of the %d connections to it, all in use",
+                              (unsigned long)wait.waited_ms, FETCH_POOL_PER_KEY);
+            return OS64_FETCH_DIAL_FAILED;
+        default:
+            // The pool could not answer or could not wait: no memory for a
+            // connection's record, no clock, or no bell.
+            f->detail.dial = OS64_NET_ERR_NO_RESOURCES;
+            os64_snprintf(f->detail.why, sizeof(f->detail.why),
+                          "no connection could be asked for or waited for (memory, the clock or a bell)");
+            return OS64_FETCH_DIAL_FAILED;
+        }
     }
-    return false;
 }
 
 // RFC 9110 § 9.2.2's idempotent methods, as WIRE.md § 2 lists them: the
@@ -706,7 +765,7 @@ static bool idempotent(const os64_fetch_t *f)
 // a reply began, a silence, or a non-idempotent method's (POST, PATCH, any
 // name the list does not hold, or one in lower case), is the caller's as it
 // always was. That last is why such a request rides only a connection used
-// moments ago (take_kept): the close it cannot recover from is the one a
+// moments ago (acquire): the close it cannot recover from is the one a
 // connection meets while it sits idle.
 static bool retry_on_fresh(os64_fetch_t *f)
 {
@@ -833,7 +892,8 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 
 // One request on one connection, to the end of its final head: a kept
 // connection for `key` when one answers its probe, unless `fresh` (the retry
-// rule's second try), and one dialled otherwise. On OK the head is in
+// rule's second try), and one dialled otherwise, after a wait in the pool's
+// queue when the peer's connections are all in use (acquire). On OK the head is in
 // `reply` and the connection positioned at the body; on anything else the
 // connection is closed, and `*again` says whether the failure is one the
 // retry rule sends again (retry_on_fresh).
@@ -853,12 +913,9 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     f->detail.dial_port = peerPort;
     f->detail.dial_hop = f->head.hops;
 
-    f->reused = !fresh && take_kept(f, key);
-    if (!f->reused) {
-        os64_fetch_status_t dialled = dial(f, encrypted, peerHost, peerPort);
-        if (dialled != OS64_FETCH_OK)
-            return dialled;
-    }
+    os64_fetch_status_t acquired = acquire(f, key, encrypted, fresh, peerHost, peerPort);
+    if (acquired != OS64_FETCH_OK)
+        return acquired;
     f->connected = true;
 
     // Upload and response heads share the connection. A final response
@@ -1276,6 +1333,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     if (f == NULL)
         return NULL;
     os64_memset(f, 0, sizeof(*f));
+    f->bell = (os64_bell_t)OS64_BELL_NONE;      // zero is a handle; "none" is not
     if (opt != NULL)
         f->opt = *opt;
     if (f->opt.max_hops == 0)
@@ -1466,9 +1524,11 @@ const char *os64_fetch_reason(os64_fetch_t *f)
             os64_snprintf(out, cap, "%s is not a scheme this fetches (http and https are)", d->scheme);
             break;
         case OS64_FETCH_DIAL_FAILED:
+            // `why` is the pool's own sentence, when the dial was never
+            // made because every connection to the peer was in use.
             os64_snprintf(out, cap, "cannot reach %s%s:%u: %s",
                           d->dial_was_proxy ? "the proxy at " : "", d->dial_host,
-                          (unsigned)d->dial_port, os64_dial_reason(d->dial));
+                          (unsigned)d->dial_port, d->why[0] != '\0' ? d->why : os64_dial_reason(d->dial));
             break;
         case OS64_FETCH_PROXY_BAD:
         case OS64_FETCH_REQUEST_FAILED:
@@ -1634,6 +1694,9 @@ void os64_fetch_close(os64_fetch_t *f)
     // the peer. A fetch its owner closes mid-body or cancels has not read its
     // body to the end, or is cancelled, and its connection is closed.
     release_connection(f, f->over && f->status == OS64_FETCH_OK);
+    // After the release: the bell is in the pool's list only inside a take,
+    // and this fetch is in none.
+    os64_bell_close(&f->bell);
     if (f->gz != NULL)
         os64_gzip_destroy(f->gz);
     if (f->wire != NULL)

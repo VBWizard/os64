@@ -11,8 +11,11 @@
 // their own. What they do share is the CONNECTIONS a finished fetch leaves
 // open (WIRE.md § 2): a fetch takes a kept connection to its peer before it
 // dials, and gives its own back at close when HTTP says it may be kept, one
-// fetch at a time on each, under one lock held only to take or put
-// (pool.h). A caller sees it in time, in one sentence when a request on a
+// fetch at a time on each (pool.h). At most six connections go to one
+// peer and sixteen to all, so `open` can also wait for another of the
+// program's fetches to give one back: until it does, the fetch is
+// cancelled, or five minutes pass, which ends it as a failed dial with the
+// wait in its reason. A caller sees it in time, in one sentence when a request on a
 // kept connection had to go again (os64_fetch_reason), and in its handle
 // table: up to a quarter of it stays open after its fetches close, for as
 // long as their connections are kept, and a dial refused for want of
