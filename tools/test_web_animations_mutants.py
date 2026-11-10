@@ -297,8 +297,10 @@ mutants = [
      '        double at = (k.iteration < s->iteration ? k.iteration + 1 : k.iteration) * s->timing.duration_ms;',
      '        double at = k.iteration * s->timing.duration_ms;', [DOM]),
     ('css-cancel-on-vanish-skipped', WA_C,
-     '        if (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE)\n'
-     '            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));\n', '', [DOM]),
+     '        if (s->pass != pass && (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE))\n'
+     '            css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));\n', '        (void)s;\n', [DOM]),
+    ('css-cancels-reversed', WA_C, '    for (size_t i = 0; listening && i < dom->wa_nseen; i++) {\n        DWaSeen *s = &dom->wa_seen[i];',
+     '    for (size_t j = dom->wa_nseen; listening && j-- > 0;) {\n        DWaSeen *s = &dom->wa_seen[j];', [DOM]),
     ('css-events-unsorted', WA_C, '        while (*at != NULL && !(event_when(e) < event_when(*at))) at = &(*at)->next;',
      '        while (*at != NULL && (event_when(e), true)) at = &(*at)->next;', [DOM]),
     ('css-events-do-not-bubble', WA_C, "dom->wa_css_event_prototype->value, e->type, true,",

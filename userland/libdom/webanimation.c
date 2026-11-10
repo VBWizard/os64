@@ -2691,12 +2691,15 @@ static bool css_listening(os64_dom_t *dom)
     return false;
 }
 
+/* The table keeps the order the host listed its animations in, composite
+ * order, which is the order their cancels are queued in. */
 static void seen_drop(os64_dom_t *dom, size_t i)
 {
     DWaSeen *s = &dom->wa_seen[i];
     os64_html_release(dom->document, s->element);
     d_free(dom, s->name);
-    dom->wa_seen[i] = dom->wa_seen[--dom->wa_nseen];
+    dom->wa_nseen--;
+    if (i < dom->wa_nseen) os64_memmove(&dom->wa_seen[i], &dom->wa_seen[i + 1], (dom->wa_nseen - i) * sizeof(*s));
 }
 
 static void seen_clear(os64_dom_t *dom)
@@ -2869,13 +2872,13 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
         JS_FreeValue(ctx, gone[i]);
     }
     js_free(ctx, gone);
-    for (size_t i = dom->wa_nseen; listening && i-- > 0;) {
+    for (size_t i = 0; listening && i < dom->wa_nseen; i++) {
         DWaSeen *s = &dom->wa_seen[i];
-        if (s->pass == pass) continue;
-        if (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE)
+        if (s->pass != pass && (s->phase == CSS_BEFORE || s->phase == CSS_ACTIVE))
             css_queue(dom, s, "animationcancel", seen_active_at(s, now), wa_now(dom));
-        seen_drop(dom, i);
     }
+    for (size_t i = dom->wa_nseen; listening && i-- > 0;)
+        if (dom->wa_seen[i].pass != pass) seen_drop(dom, i);
 }
 
 /* When a seen animation crosses its next boundary after `then` (the step
