@@ -65,7 +65,15 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 `docs/design/pending/HTTP2.md` § 0 says how `HTTP2_TRACKER.csv` beside it is
 kept: a branch adds and flips only its own slice's rows, the `done` flip
 lands in the PR that did the work, and `tools/http2_tracker.py` passes
-before a push. That arc's rule alone; no other arc has a tracker.
+before a push. Those upkeep rules apply to HTTP/2.
+
+### Working an iframe slice
+`docs/design/pending/IFRAME_TRACKER.md` defines the slice map and upkeep
+rules for `IFRAME_TRACKER.csv`. Update the implementing slice's row with
+its work; prepare its `done` flip and PR number in that PR's final commit.
+Run `python3 -I tools/tracker.py --csv docs/design/pending/IFRAME_TRACKER.csv --prefix F --quiet`
+before committing or pushing tracker changes. Slice briefs carry detailed
+tasks and proofs; the board tracks mergeable slices.
 
 ## Project Overview
 

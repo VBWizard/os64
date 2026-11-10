@@ -830,6 +830,11 @@ an old corpus record with no frame resources.
 
 ## The cut
 
+The mergeable slice map and status live in [IFRAME_TRACKER.csv](IFRAME_TRACKER.csv).
+[IFRAME_TRACKER.md](IFRAME_TRACKER.md) defines its upkeep and the proposed
+14-slice breakdown of the stages below. Detailed tasks and proofs belong
+in each slice's implementation brief.
+
 | Cut | Builds | Oracle | Owner |
 |---|---|---|---|
 | F1 | realms and realm-aware services in libjs; pre-execution job filtering; the cluster, cross-arena ownership/adoption, context validation, WindowProxy and Location security, cross-realm messaging; independent retirement only after its proof | two-document host cases, retained-object and adoption tests, interrupt/failure injection; WPT subsets runnable without the F2 host | Builder assigned per PR; **Fable reads** security and lifetimes; libjs owner confirms interrupt soundness; Codex review |
