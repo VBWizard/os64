@@ -56,6 +56,8 @@ typedef enum handle_type
 	HANDLE_GLASS,          // object = glass_view_t*, one viewer of the screen
 	                       // (/dev/glass; read = one changed rectangle and
 	                       // its pixels, os64/glass.h)
+	HANDLE_BELL,           // object = bell_t*, a bit to wait on (bell.h;
+	                       // read = wait for a ring, write = ring)
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

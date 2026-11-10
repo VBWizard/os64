@@ -607,6 +607,59 @@ claim/forget pair exists for). Under the fallback, belltest runs unchanged
 against the pipe-backed `os64_bell_t`, which is the point of the one
 header.
 
+#### H2.0, as built (2026-11-10, Fable)
+
+The bell is `kernel/src/bell.c` behind `HANDLE_BELL`, made by
+`SYSCALL_BELL` (67), wrapped by `os64/bell.h`. Where the build departs
+from the brief, or says more than it did:
+
+- **The owed wake, not pipe.c's claim and sweep.** The brief asked for
+  `pipe_read`'s park loop to the letter. A pipe's wake acts only on a
+  waiter that has finished parking, so pipes keep a list and a sweep in
+  `processSignals` for the one that registered and had not parked yet,
+  and a ring in that window costs a scheduler pass. `bell_ring` uses
+  `scheduler_wake_or_owe` under the bell's lock instead (WAKE_OWED.md,
+  the glass reader's shape): a waiter not yet parked is left a debt its
+  own park pays. So there is no list of bells and no sweep, and the
+  window is closed rather than swept. What is kept from pipe.c is the
+  discipline the brief was after: the waiter voids its registration (and
+  any debt) at the top of every pass under the lock it registered under,
+  asks `signal_park_must_end`, and parks with a one-second backstop.
+- **The answers.** A wait returns 1 with one byte when rung; a close under
+  the wait returns 0, as a pipe's EOF and a closed glass view do ("no ring
+  will come"); a second waiter is refused with -1, the syscall's plain
+  refusal, since no handle kind has a busy code to borrow. A signal that
+  ends the wait outranks a ring already made, and the ring stays for the
+  next wait.
+- **A ring is a write of at least one byte.** An empty write moves nothing
+  on any handle and rings nothing here. A ring that finds the bell closed
+  (possible only for a write that held its pin across a sibling's close)
+  is refused.
+- **The pin.** A bell counts its holders (`refs`): the handle, and each
+  read or write in flight through `handle_pin`. `handle_share` refuses it
+  by its default arm, so a spawn that names a bell as a child's 0/1/2
+  fails, and a child's table never holds one.
+- **The interrupt case is SIGINT, not SIGWINCH.** A program can raise
+  SIGINT on a task through `/proc/<id>/ctl`; nothing lets one raise
+  SIGWINCH without a pty. `belltest` spawns a child to send it, so the
+  only thread of the fixture that can take the signal is the one parked
+  in the bell.
+- **Proof.** Kernel: `test_bell` (late phase) drives the object with no
+  handle, and stands in the window itself: it registers as the waiter,
+  rings while still running, then parks against a ten-second backstop
+  (the park returned in 0 ticks). Ring 3: `/tests/belltest`, in testrun,
+  nine steps through the syscalls with real second threads; its last is
+  2,000 rings each a random fraction of a millisecond after the waiter
+  took the one before (under QEMU's TCG, eight CPUs: all taken, worst
+  1.4 ms, mean 200 us, against the one-second backstop a lost ring would
+  wait for). Seven hand mutants, each built and booted against both, and
+  each caught: a ring that wakes only a parked waiter (the kernel case
+  sleeps its whole backstop, and the race loses 8 rings of 2,000 at
+  1,008 ms each), a wait that leaves the ring set, no refusal of a second
+  waiter, a close that wakes nobody, a wait that keeps its registration, a
+  wait that never asks `signal_park_must_end`, and a pin that takes no
+  reference.
+
 ### H2.1 — Session resumption
 
 **What.** TLS 1.3 session tickets are kept and offered, so a connection to

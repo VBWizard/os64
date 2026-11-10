@@ -57,6 +57,7 @@
 extern bool test_window_minimum_clamp(void);
 extern bool test_window_opacity(void);
 extern bool test_window_title(void);
+extern bool test_bell(void);
 extern bool test_window_maximized(void);
 extern bool test_surface_blit(void);
 extern volatile uint64_t kTicksSinceStart;
@@ -6144,6 +6145,7 @@ static void register_builtin_tests(void)
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
     test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
     test_register("wake_owed", test_wake_owed, TEST_PHASE_LATE);
+    test_register("bell", test_bell, TEST_PHASE_LATE);
     test_register("window_opacity", test_window_opacity, TEST_PHASE_LATE);
     test_register("window_title", test_window_title, TEST_PHASE_LATE);
     test_register("window_maximized", test_window_maximized, TEST_PHASE_LATE);

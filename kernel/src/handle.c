@@ -63,6 +63,7 @@
 #include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
 #include "driver/net/tcp.h"        // tcp_conn_release / tcp_listener_close — the TCP kinds' releases
+#include "bell.h"                    // bell_ref / _release / _close — the bell's holders
 #include "gui/glass.h"               // glass_view_ref / _release / _close — the /dev/glass viewer's
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
@@ -240,6 +241,7 @@ static void handle_object_ref(handle_type_t type, void *object)
 		case HANDLE_NET_LISTENER:  tcp_listener_hold((tcp_listener_t *)object); break;
 		case HANDLE_PTY_MASTER:    pty_master_hold((tty_t *)object); break;
 		case HANDLE_GLASS:         glass_view_ref((glass_view_t *)object); break;
+		case HANDLE_BELL:          bell_ref((bell_t *)object); break;
 		default: break;
 	}
 }
@@ -301,6 +303,7 @@ void handle_unpin(const handle_t *pinned)
 		case HANDLE_NET_LISTENER:  tcp_listener_release((tcp_listener_t *)pinned->object); break;
 		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;
 		case HANDLE_GLASS:         glass_view_release((glass_view_t *)pinned->object); break;
+		case HANDLE_BELL:          bell_release((bell_t *)pinned->object); break;
 		default: break;
 	}
 }
@@ -707,6 +710,11 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 			// The viewer stops watching: a reader parked in it wakes to
 			// CLOSED, and the last reference frees it (gui/glass.h).
 			glass_view_close((glass_view_t *)object);
+			break;
+		case HANDLE_BELL:
+			// A waiter parked in it wakes to CLOSED, and the last holder
+			// frees it (bell.h).
+			bell_close((bell_t *)object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port, wakes a parked reader to
