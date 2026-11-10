@@ -109,12 +109,49 @@ static void scenario(os64_ui_t *ui,const char *dir,bool compact,int w,int h,unsi
     CHECK(pulse_instruments_peak_bytes(p)<=8u*1024*1024);
     pulse_instruments_destroy(p);free(s->pixels);ui->ctx=NULL;
 }
+static void minimum_sizes(os64_ui_t *ui,const char *dir,unsigned px)
+{
+    current="measured minimum keeps the renderer usable";
+    pulse_instruments_t *p=pulse_instruments_create(ui);CHECK(p);if(!p)return;
+    pulse_config_t c;pulse_config_defaults(&c);
+    pulse_instrument_readings_t sample=example();
+    for(unsigned compact=0;compact<2;++compact)for(unsigned mask=0;mask<16;++mask){
+        for(unsigned i=0;i<PULSE_METERS;++i)c.show[i]=(mask&(1u<<i))!=0;
+        os64_gui_rect_t size={0};CHECK(pulse_instruments_min_size(ui,&c,compact,&size));
+        CHECK(size.w>=64 && size.h>=32);
+        pulse_instrument_layout_t l;
+        CHECK(pulse_instruments_layout(ui,&c,compact,size,&l));
+        os64_gui_surface_t dst={.width=size.w,.height=size.h,.pitch_px=size.w};
+        dst.pixels=calloc((size_t)size.w*size.h,4);CHECK(dst.pixels);if(!dst.pixels)continue;
+        sample=example();c.units=PULSE_MIB;
+        CHECK(pulse_instruments_paint(p,&dst,&l,&c,&sample));
+        if(mask==15){
+            char name[64];snprintf(name,sizeof(name),"minimum-%s-%upx",compact?"compact":"normal",px);
+            ppm(dir,name,&dst,size);printf("%s: %dx%d\n",name,size.w,size.h);
+        }
+        for(unsigned units=0;units<PULSE_UNITS;++units){
+            c.units=units;sample.current.download=UINT64_MAX;sample.current.network_scale=UINT64_MAX;
+            CHECK(pulse_instruments_paint(p,&dst,&l,&c,&sample));
+        }
+        sample.current=(pulse_sample_t){.network_scale=1024};
+        CHECK(pulse_instruments_paint(p,&dst,&l,&c,&sample));
+        free(dst.pixels);
+        // The WM clamps axes independently, so growing just one axis must
+        // not cross into an arrangement that needs more of the other axis.
+        size.w+=500;CHECK(pulse_instruments_layout(ui,&c,compact,size,&l));
+        size.w-=500;size.h+=500;CHECK(pulse_instruments_layout(ui,&c,compact,size,&l));
+    }
+    os64_gui_rect_t out={1,2,3,4},before=out;
+    CHECK(!pulse_instruments_min_size(NULL,&c,true,&out));CHECK(!memcmp(&out,&before,sizeof(out)));
+    pulse_instruments_destroy(p);
+}
 int main(int argc,char **argv)
 {
     if(argc!=3)return 2;
     os64_ui_t ui={0};ui_test_view_theme(&ui.theme);
     for(unsigned px=24;px<=26;px+=2){
         current="adopt primary and caption fonts";CHECK(dial_font(&ui,argv[1],px));
+        minimum_sizes(&ui,argv[2],px);
         scenario(&ui,argv[2],false,600,560,px);
         scenario(&ui,argv[2],false,300,1120,px);
         scenario(&ui,argv[2],true,px==24?320:360,px==24?320:360,px);

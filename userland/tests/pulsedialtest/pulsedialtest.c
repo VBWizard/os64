@@ -1,5 +1,5 @@
 // Deterministic preview of Pulse's production Instruments renderer.
-// Values are examples: no sampling, configuration writes, or resize syscall.
+// Values are examples: no sampling or configuration writes.
 #include "../../apps/pulse/pulse_instruments.h"
 #include "os64/os64.h"
 #include "os64/ui_window.h"
@@ -59,6 +59,23 @@ static void resized(os64_ui_t *u)
     root.bounds=(os64_gui_rect_t){0,0,(int32_t)ctx.surf.width,(int32_t)ctx.surf.height};
     os64_ui_mark_dirty(u,&root);
 }
+static bool apply_view(const pulse_config_t *next,bool next_compact)
+{
+    os64_gui_rect_t minimum;
+    if(!pulse_instruments_min_size(&ui,next,next_compact,&minimum) ||
+       os64_gui_window_set_min_size(ctx.win,(uint32_t)minimum.w,(uint32_t)minimum.h)){
+        os64_complain("pulsedialtest: could not install the content minimum; keeping the current view");
+        return false;
+    }
+    // Raising the minimum can grow the native surface immediately. Refresh
+    // before changing the view or drawing through the previous surface.
+    if(os64_draw_ctx_refresh(&ctx)){
+        os64_complain("pulsedialtest: surface refresh failed after setting minimum");
+        ui.quit=true;return false;
+    }
+    config=*next;compact=next_compact;resized(&ui);
+    return true;
+}
 int main(int argc,char **argv)
 {
     unsigned px=24;
@@ -81,7 +98,8 @@ int main(int argc,char **argv)
     renderer=pulse_instruments_create(&ui);
     if(!renderer){os64_complain("pulsedialtest: renderer allocation failed");goto fail;}
     os64_ui_panel(&root);canvas_class=*root.cls;canvas_class.paint=paint;root.cls=&canvas_class;
-    os64_ui_set_root(&ui,&root);ui.on_resize=resized;resized(&ui);
+    os64_ui_set_root(&ui,&root);ui.on_resize=resized;
+    if(!apply_view(&config,compact))goto fail;
     char message[160];
     os64_snprintf(message,sizeof(message),"pulsedialtest: %s %ux%u, %upx; c compact, 1-4 meters, u unavailable, n units, q quit\n",
         compact?"compact":"normal",ctx.surf.width,ctx.surf.height,px);
@@ -93,19 +111,23 @@ int main(int argc,char **argv)
             if(ev.type==OS64_GUI_EVENT_KEY_DOWN){
                 char key=ev.key.ascii;
                 if(key=='q')ui.quit=true;
-                else if(key=='c')compact=!compact;
-                else if(key>='1' && key<='4')config.show[key-'1']=!config.show[key-'1'];
+                else if(key=='c')(void)apply_view(&config,!compact);
+                else if(key>='1' && key<='4'){
+                    pulse_config_t next=config;next.show[key-'1']=!next.show[key-'1'];
+                    (void)apply_view(&next,compact);
+                }
                 else if(key=='u'){unavailable=!unavailable;example();}
                 else if(key=='n')config.units=(config.units+1)%PULSE_UNITS;
                 os64_ui_mark_dirty(&ui,&root);
             }
+            if(ui.quit)break;
             os64_ui_dispatch(&ui,&ev);
         }while(!ui.quit && os64_gui_event_poll(window,&ev)==1);
-        os64_ui_paint(&ui);
+        if(!ui.quit)os64_ui_paint(&ui);
     }
     os64_snprintf(message,sizeof(message),"pulsedialtest: closed; peak drawing allocation %lu bytes",(unsigned long)pulse_instruments_peak_bytes(renderer));
     os64_printf("%s\n",message);os64_debug_log(message);
     pulse_instruments_destroy(renderer);os64_ui_font_release(&ui);os64_gui_window_destroy(window);return 0;
 fail:
-    os64_ui_font_release(&ui);os64_gui_window_destroy(window);return 1;
+    pulse_instruments_destroy(renderer);os64_ui_font_release(&ui);os64_gui_window_destroy(window);return 1;
 }

@@ -533,26 +533,45 @@ Verification:
 
 - `python3 tools/test_pulse_ui_host.py --instruments` exercises the production
   geometry, fonts, blending, and renderer under ASan/UBSan/LeakSanitizer:
-  465 checks passed. Coverage includes both font sizes, all 16 meter-visibility
+  1,379 checks passed. Coverage includes both font sizes, all 16 meter-visibility
   combinations, every network unit, zero and extreme rates, unavailable data,
   peaks, allocation refusal/recovery, clipping guards, and refusal without
-  changing the prior layout. Cached and uncached renders match pixel-for-pixel.
+  changing the prior layout. The measured minimum is exercised at both font
+  sizes with all visibility combinations, extreme rates, unavailable samples,
+  and independent growth of each window dimension. Cached and uncached renders
+  match pixel-for-pixel.
 - The existing Classic UI suite also passes: 219 checks with ASan, UBSan,
   and LeakSanitizer enabled.
 - `pulsedialtest` and Pulse cross-build with strict warnings enabled.
 - In QEMU, the native fixture opens, switches to Compact, resizes through the
   existing Ctrl+Alt+right-drag gesture to 320 × 320, displays missing data and
   hidden-meter layouts, and closes with exit status zero. The compact content
-  capture matches the host renderer pixel-for-pixel.
+  capture matches the host renderer pixel-for-pixel. Native minimum-size
+  regression checks also confirm clamping to 296 × 305 in Compact, lowering
+  the floor to 104 × 124 with CPU alone, growing back when meters return, and
+  growing/clamping to 512 × 464 when switching to Normal (24-pixel font).
 
 Run `/tests/pulsedialtest` for normal, or
 `/tests/pulsedialtest --compact --26` for the 360-pixel compact preview.
 `--compact` without `--26` opens at 320 pixels with 24-pixel numbers.
 Click the window to focus it. Keys: `c` toggles Compact at the current size,
 `1`–`4` toggle CPU/RAM/Disk/Network, `u` toggles unavailable samples, `n` cycles
-network units, and `q` closes. Ctrl+Alt+right-drag resizes it. An undersized
-preview reports that it cannot fit; the fixture deliberately permits that
-case for inspection. It does not save preferences or use a new kernel API.
+network units, and `q` closes. Ctrl+Alt+right-drag resizes it. The fixture sets
+an existing native content minimum from the renderer's font measurements and
+visible meters; it updates that floor before committing mode/visibility
+changes. Revealing meters or switching to Normal grows an undersized surface
+as needed, then refreshes the surface before drawing. Hiding meters lowers
+the floor without shrinking the window automatically. It does not save
+preferences or use a new kernel API.
+
+With all meters visible, measured content floors are 296 × 305 (Compact,
+24 px), 296 × 321 (Compact, 26 px), 512 × 464 (Normal, 24 px), and
+532 × 482 (Normal, 26 px). Normal's native rectangular floor reserves two
+columns for multiple cards so independent width/height clamping cannot expose
+an unrenderable layout. The renderer's narrow/tall layout remains covered by
+host tests; selecting a different native normal-layout floor is separate from
+this preview's resize limit. Renderer refusal remains available for resource
+failures and direct host-test probes.
 
 The next gate is readability inspection on the target display, especially
 Compact at 26 pixels, before implementing the live application transitions.

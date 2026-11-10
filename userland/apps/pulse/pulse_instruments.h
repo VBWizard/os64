@@ -25,6 +25,12 @@ pulse_instruments_t *pulse_instruments_create(os64_ui_t *ui);
 void pulse_instruments_destroy(pulse_instruments_t *);
 // Clear retained text/face caches after font changes. Layout must be recomputed.
 void pulse_instruments_invalidate(pulse_instruments_t *);
+// Measured native content floor for the selected meters and presentation.
+// Normal reserves two columns for multiple cards. Larger rectangles retain
+// that arrangement; a narrow/tall renderer layout has a different floor.
+// Output is changed only on success; x/y are zero.
+bool pulse_instruments_min_size(os64_ui_t *, const pulse_config_t *, bool compact,
+                                os64_gui_rect_t *out);
 // Layout plans write out only on success. Bounds must lie within a surface
 // representable by int32 coordinates. A refusal leaves the prior plan intact.
 bool pulse_instruments_layout(os64_ui_t *, const pulse_config_t *, bool compact,

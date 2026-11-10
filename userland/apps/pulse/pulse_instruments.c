@@ -90,14 +90,15 @@ static bool inside(os64_gui_rect_t r,int32_t x,int32_t y)
 {return x>=r.x && y>=r.y && (int64_t)x< (int64_t)r.x+r.w && (int64_t)y<(int64_t)r.y+r.h;}
 static int32_t largest(int32_t a,int32_t b){return a>b?a:b;}
 static int32_t smallest(int32_t a,int32_t b){return a<b?a:b;}
-bool pulse_instruments_layout(os64_ui_t *ui,const pulse_config_t *c,bool compact,
-                              os64_gui_rect_t b,pulse_instrument_layout_t *out)
+typedef struct {
+    int32_t primary_row,caption_row,percent_w,network_w,cell_w,cell_h;
+} instrument_metrics_t;
+static bool measure(os64_ui_t *ui,instrument_metrics_t *out)
 {
-    if(!ui || !c || !out || !safe_rect(b))return false;
-    pulse_instrument_layout_t l={.bounds=b,.compact=compact};
-    l.primary_row=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI);
-    l.caption_row=os64_ui_font_row_height(ui,CAPTION);
-    if(l.primary_row<=0 || l.caption_row<=0)return false;
+    if(!ui || !out)return false;
+    instrument_metrics_t m={.primary_row=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI),
+        .caption_row=os64_ui_font_row_height(ui,CAPTION)};
+    if(m.primary_row<=0 || m.caption_row<=0)return false;
     int32_t number,label,rate;
     if(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,"100%",4,&number) ||
        os64_ui_text_measure(ui,CAPTION,"DOWNLOAD",8,&label) ||
@@ -107,8 +108,45 @@ bool pulse_instruments_layout(os64_ui_t *ui,const pulse_config_t *c,bool compact
         if(os64_ui_text_measure(ui,CAPTION,pulse_unit_names[i],os64_strlen(pulse_unit_names[i]),&w))return false;
         unit=largest(unit,w);
     }
-    // Compact percent dials and network dials have different useful widths.
-    int32_t percent_w=largest(number+12,88),network_w=largest(largest(rate,unit),label)+12;
+    m.percent_w=largest(number+12,88);
+    m.network_w=largest(largest(rate,unit),label)+12;
+    m.cell_w=largest(2*m.network_w+24,220);
+    m.cell_h=110+m.primary_row+3*m.caption_row+24;
+    *out=m;return true;
+}
+static int32_t compact_row_height(const instrument_metrics_t *m,bool network)
+{return 60+m->primary_row+m->caption_row+(network?m->caption_row:0);}
+bool pulse_instruments_min_size(os64_ui_t *ui,const pulse_config_t *c,bool compact,
+                                os64_gui_rect_t *out)
+{
+    instrument_metrics_t m;
+    if(!c || !out || !measure(ui,&m))return false;
+    unsigned top=0;for(unsigned i=0;i<3;++i)if(c->show[i])++top;
+    bool net=c->show[PULSE_NET];unsigned count=top+net;
+    os64_gui_rect_t size={0,0,64,32};
+    if(count && compact){
+        unsigned rows=(top?1:0)+net;
+        if(top)size.w=largest(size.w,(int32_t)top*m.percent_w+((int32_t)top+1)*8);
+        if(net)size.w=largest(size.w,2*m.network_w+24);
+        size.h=(int32_t)rows*compact_row_height(&m,net)+((int32_t)rows+1)*8+(net?m.caption_row+8:0);
+    }else if(count){
+        // Both dimensions can reach their floors together. Reserve two
+        // columns for multiple cards; the renderer's
+        // single-column layout remains available to taller surfaces.
+        unsigned cols=count>1?2:1,rows=(count+cols-1)/cols;
+        size.w=(int32_t)cols*m.cell_w+((int32_t)cols+1)*8;
+        size.h=(int32_t)rows*m.cell_h+((int32_t)rows+1)*8;
+    }
+    *out=size;return true;
+}
+bool pulse_instruments_layout(os64_ui_t *ui,const pulse_config_t *c,bool compact,
+                              os64_gui_rect_t b,pulse_instrument_layout_t *out)
+{
+    instrument_metrics_t m;
+    if(!c || !out || !safe_rect(b) || !measure(ui,&m))return false;
+    pulse_instrument_layout_t l={.bounds=b,.compact=compact,
+        .primary_row=m.primary_row,.caption_row=m.caption_row};
+    int32_t percent_w=m.percent_w,network_w=m.network_w;
     unsigned count=0;for(unsigned i=0;i<PULSE_METERS;++i)if(c->show[i])++count;
     if(!count){*out=l;return true;}
     int32_t gap=8,footer=c->show[PULSE_NET]?l.caption_row+gap:0;
@@ -118,7 +156,7 @@ bool pulse_instruments_layout(os64_ui_t *ui,const pulse_config_t *c,bool compact
         int32_t available=b.h-footer-(int32_t)(rows+1)*gap;
         if(available<=0)return false;
         int32_t height=available/(int32_t)rows;
-        int32_t min_h=60+l.primary_row+l.caption_row+(c->show[PULSE_NET]?l.caption_row:0);
+        int32_t min_h=compact_row_height(&m,c->show[PULSE_NET]);
         if(height<min_h)return false;
         unsigned slot=0;
         for(unsigned i=0;i<3;++i)if(c->show[i]){
@@ -134,12 +172,12 @@ bool pulse_instruments_layout(os64_ui_t *ui,const pulse_config_t *c,bool compact
             }
         }
     }else{
-        int32_t cell_w=largest(2*network_w+24,220);
+        int32_t cell_w=m.cell_w;
         unsigned cols=b.w>=2*cell_w+3*gap && count>1?2:1;
         unsigned rows=(count+cols-1)/cols;
         int32_t width=(b.w-(int32_t)(cols+1)*gap)/(int32_t)cols;
         int32_t height=(b.h-(int32_t)(rows+1)*gap)/(int32_t)rows;
-        if(width<cell_w || height<110+l.primary_row+3*l.caption_row+24)return false;
+        if(width<cell_w || height<m.cell_h)return false;
         unsigned slot=0;
         for(unsigned i=0;i<PULSE_METERS;++i)if(c->show[i]){
             os64_gui_rect_t card={b.x+gap+(int32_t)(slot%cols)*(width+gap),b.y+gap+(int32_t)(slot/cols)*(height+gap),width,height};
