@@ -30,9 +30,8 @@
 // So a handle is now resolved PINNED. handle_pin does two things in one
 // critical section under the task's handleLock: it checks the slot is live,
 // and it takes a reference ON THE OBJECT in the object's own currency (a pipe
-// end's readers/writers, a file's holds, a TCP conn's pins, a
-// listener's busy, a directory's handleRefCount, a join object's refcount, a
-// pty's holds, a UDP or ICMP conn's holders). handle_close claims the slot
+// end's readers or writers, a file's holds, a TCP conn's pins: each kind's
+// arm of handle_object_ref says which). handle_close claims the slot
 // under the same lock and only then releases the table's reference — outside
 // the lock, because a release can do disk I/O. The two cannot interleave: a
 // pin that saw the slot
@@ -63,6 +62,7 @@
 #include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
 #include "driver/net/tcp.h"        // tcp_conn_release / tcp_listener_close — the TCP kinds' releases
+#include "bell.h"                    // bell_ref / _release / _close — the bell's holders
 #include "gui/glass.h"               // glass_view_ref / _release / _close — the /dev/glass viewer's
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
@@ -240,6 +240,7 @@ static void handle_object_ref(handle_type_t type, void *object)
 		case HANDLE_NET_LISTENER:  tcp_listener_hold((tcp_listener_t *)object); break;
 		case HANDLE_PTY_MASTER:    pty_master_hold((tty_t *)object); break;
 		case HANDLE_GLASS:         glass_view_ref((glass_view_t *)object); break;
+		case HANDLE_BELL:          bell_ref((bell_t *)object); break;
 		default: break;
 	}
 }
@@ -301,6 +302,7 @@ void handle_unpin(const handle_t *pinned)
 		case HANDLE_NET_LISTENER:  tcp_listener_release((tcp_listener_t *)pinned->object); break;
 		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;
 		case HANDLE_GLASS:         glass_view_release((glass_view_t *)pinned->object); break;
+		case HANDLE_BELL:          bell_release((bell_t *)pinned->object); break;
 		default: break;
 	}
 }
@@ -707,6 +709,11 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 			// The viewer stops watching: a reader parked in it wakes to
 			// CLOSED, and the last reference frees it (gui/glass.h).
 			glass_view_close((glass_view_t *)object);
+			break;
+		case HANDLE_BELL:
+			// A waiter parked in it wakes to CLOSED, and the last holder
+			// frees it (bell.h).
+			bell_close((bell_t *)object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port, wakes a parked reader to

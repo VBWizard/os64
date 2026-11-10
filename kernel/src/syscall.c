@@ -54,6 +54,7 @@
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 #include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
 #include "gui/glass.h"               // glass_view_read — the object behind HANDLE_GLASS
+#include "bell.h"                    // bell_wait / bell_ring — the object behind HANDLE_BELL
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -101,6 +102,8 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -254,6 +257,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv (args 2-4 = in/out/err handles, NOT pointers)
 	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_PIPE,      "pipe",      syscall_pipe,      false, 0x01),  // arg0 = int[2] out
+	SYSCALL_DEFINE(SYSCALL_BELL,      "bell",      syscall_bell,      false, 0x00),  // no args — the answer is the new handle
 	SYSCALL_DEFINE(SYSCALL_CLOSE,     "close",     syscall_close,     false, 0x00),  // arg0 = handle (an int, not a pointer)
 	SYSCALL_DEFINE(SYSCALL_OPEN,      "open",      syscall_open,      false, 0x03),  // arg0 = path, arg1 = mode (both strings)
 	SYSCALL_DEFINE(SYSCALL_SEEK,      "seek",      syscall_seek,      false, 0x00),  // args: handle, offset, whence — no pointers
@@ -1540,6 +1544,14 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			return copied;
 		}
 
+		case HANDLE_BELL:
+			// A ring (bell.h). What the bytes say is not looked at: a bell
+			// carries one bit, and the write is it. Refused only on a bell
+			// a sibling closed while this write held its pin.
+			if (bell_ring((bell_t *)h->object) != 0)
+				return SYSCALL_RESULT_INVALID;
+			return length;
+
 		case HANDLE_PIPE_WRITE:
 		{
 			pipe_t *p = (pipe_t *)h->object;
@@ -1902,7 +1914,7 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
 		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
-		    h->type != HANDLE_GLASS)
+		    h->type != HANDLE_GLASS && h->type != HANDLE_BELL)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -2069,6 +2081,35 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			if (got < 0)
 				return SYSCALL_RESULT_INVALID;   // too small for the header and one row
 			break;
+
+		case HANDLE_BELL:
+			// Waits for a ring (bell.h): 1 and one byte when the bell was
+			// rung, which the common tail copies out.
+			got = bell_wait((bell_t *)h->object, deadline);
+			if (got == BELL_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == BELL_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == BELL_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: no ring will come
+			if (got < 0)
+				return SYSCALL_RESULT_INVALID;   // another thread is already waiting on it
+			// The ring is consumed; the byte goes out here, not through the
+			// common tail, so that a buffer the kernel cannot write gives
+			// the ring back. A ring is never lost (the ABI's promise), and a
+			// caller's bad pointer is no exception to it.
+			kbuf[0] = 1;
+			if (!copy_to_user_buffer(user_buffer, kbuf, 1))
+			{
+				(void)bell_ring((bell_t *)h->object);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return 1;
 
 		case HANDLE_PIPE_READ:
 			// Waits for bytes, EOF, a signal or the caller's deadline.
@@ -2360,6 +2401,33 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
 	return 0;
+}
+
+// bell() — a new bell, as a handle (contract at SYSCALL_BELL in the abi
+// header; the object is bell.h's).
+static uint64_t syscall_bell(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	bell_t *b = bell_create();
+	if (b == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_BELL, b);
+	if (h < 0)
+	{
+		// The handle table is full: the bell never had a handle, so its
+		// one hold is ours to give back.
+		bell_release(b);
+		return SYSCALL_RESULT_INVALID;
+	}
+	return (uint64_t)h;
 }
 
 // pty_snapshot copies grid rows directly into the ABI struct, so their sizes
