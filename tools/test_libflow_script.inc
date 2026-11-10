@@ -212,6 +212,18 @@ static void composite_cases(void)
     composite_case("composite: added rotations about two axes compose", "<!doctype html><style>#k{rotate:x 90deg}"
                    "</style><div id=k>x</div>", "rotate: y 90deg", "rotate: y 90deg", GARB_COMPOSITE_ADD, false, 1,
                    500, GARB_ROTATE, "0.57735 0.57735 0.57735 120deg");
+    composite_case("composite: an added colour past a channel's top mixes as the sum",
+                   "<!doctype html><style>#k{color:rgb(128,128,128)}</style><div id=k>x</div>", "color: rgb(255, 0, 0)",
+                   "color: rgb(0, 0, 255)", GARB_COMPOSITE_ADD, false, 1, 500, GARB_COLOR, "rgb(255, 128, 255)");
+    composite_case("composite: an accumulated colour at an iteration's start", box, "color: rgb(0, 0, 0)",
+                   "color: rgb(120, 120, 120)", GARB_COMPOSITE_REPLACE, true, 10, 2000, GARB_COLOR, "rgb(240, 240, 240)");
+    composite_case("composite: an accumulated colour past a channel's top mixes as the sum", box, "color: rgb(0, 0, 0)",
+                   "color: rgb(120, 120, 120)", GARB_COMPOSITE_REPLACE, true, 10, 2500, GARB_COLOR, "rgb(255, 255, 255)");
+    composite_case("composite: each endpoint accumulates before it is composited",
+                   "<!doctype html><style>#k{scale:2}</style><div id=k>x</div>", "scale: 3", "scale: 3",
+                   GARB_COMPOSITE_ADD, true, 3, 1500, GARB_SCALE, "10");
+    composite_case("composite: an implicit first keyframe accumulates onto the value underneath", box, "",
+                   "margin-left: 10px", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_MARGIN_LEFT, "65px");
     composite_case("composite: a font size's iterations build on its last keyframe", box, "font-size: 10px",
                    "font-size: 20px", GARB_COMPOSITE_REPLACE, true, 3, 1500, GARB_FONT_SIZE, "35px");
     composite_case("composite: a colour's iterations build on its last keyframe", box, "color: rgb(0, 0, 0)",
@@ -223,6 +235,10 @@ static void composite_cases(void)
     composite_case("composite: an added currentColor is a colour of its own",
                    "<!doctype html><style>#k{color:rgb(10,20,30);background-color:rgb(10,20,30)}</style>"
                    "<div id=k>x</div>", "background-color: currentColor", "background-color: currentColor",
+                   GARB_COMPOSITE_ADD, false, 1, 500, GARB_BACKGROUND_COLOR, "rgb(20, 40, 60)");
+    composite_case("composite: a colour added onto currentColor is a colour of its own",
+                   "<!doctype html><style>#k{color:rgb(10,20,30);background-color:currentColor}</style>"
+                   "<div id=k>x</div>", "background-color: rgb(10, 20, 30)", "background-color: rgb(10, 20, 30)",
                    GARB_COMPOSITE_ADD, false, 1, 500, GARB_BACKGROUND_COLOR, "rgb(20, 40, 60)");
 }
 

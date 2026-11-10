@@ -924,6 +924,42 @@ static void wa_css_events(void)
     p2b_script(&f, "assert(log.join()==='animationstart:c1:0:box:true:true:false,animationstart:c2:0:box:true:true:false,"
                "animationcancel:c2:0.06:box:true:true:false,animationcancel:c1:0.06:box:true:true:false',log.join());",
                "web animations: css events: canceled in composite order, as it last stood");
+    /* The rest of CSS Animations 2's table, backwards and in a delay:
+     * after → active is a start at the interval's end; active → before an
+     * end at its start; after → before both; before → idle a cancel —
+     * each sorted by when its boundary was crossed (jump's lie earlier
+     * than rev's, and back, reversed since before, ends on the way). */
+    p2b_script(&f, "log.length=0;", "web animations: css events: a log for the table");
+    WaCssRecord *rev = wa_css_add(9, box, "rev", (double)p2b_ms + 1100, 1000, 0, 1);
+    rev->r.rate = -1;
+    WaCssRecord *jump = wa_css_add(10, box, "jump", (double)p2b_ms + 1100, 1000, 0, 1);
+    jump->r.rate = -1;
+    WaCssRecord *later = wa_css_add(11, box, "later", (double)p2b_ms, 1000, 5000, 1);
+    (void)later;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css events: rev and jump seen after their end, later in its delay");
+    p2b_script(&f, "log.length=0;", "web animations: css events: first sight set aside");
+    jump->r.start_ms -= 1300;
+    wa_css_version++;
+    p2b_advance(200);
+    wa_step(&f, "web animations: css events: rev back into its active phase, jump past its start");
+    p2b_script(&f, "assert(log.join()==='animationstart:jump:1:box:true:true:false,animationend:jump:0:box:true:true:false,"
+               "animationstart:rev:1:box:true:true:false',log.join());log.length=0;",
+               "web animations: css events: after to active, and after to before");
+    p2b_advance(1000);
+    wa_step(&f, "web animations: css events: rev before its start");
+    for (int32_t i = 0; i < wa_css_n; i++)
+        if (wa_css_records[i].r.id == 11) {
+            wa_css_n--;
+            memmove(&wa_css_records[i], &wa_css_records[i + 1], (size_t)(wa_css_n - i) * sizeof(wa_css_records[0]));
+            break;
+        }
+    wa_css_version++;
+    p2b_advance(20);
+    wa_step(&f, "web animations: css events: later goes in its delay");
+    p2b_script(&f, "assert(log.join()==='animationend:back:0:box:true:true:false,animationend:rev:0:box:true:true:false,"
+               "animationcancel:later:0:box:true:true:false',"
+               "log.join());", "web animations: css events: active to before, and before to idle");
     fixture_free(&f);
 }
 
@@ -952,12 +988,45 @@ static void wa_css_late_listener(void)
     p2b_script(&f, "document.addEventListener('animationend',h);document.addEventListener('animationstart',h);",
                "web animations: css late: listeners again");
     wa_css_add(2, box, "fresh", (double)p2b_ms + 5, 50, 0, 1);
+    /* And one made since, paused from its start: it began, so it starts. */
+    WaCssRecord *held = wa_css_add(3, box, "held", (double)p2b_ms + 5, 1000, 0, 1);
+    held->r.paused = held->r.style_paused = true;
     p2b_advance(20);
     wa_step(&f, "web animations: css late: listening again");
     p2b_advance(100);
     wa_step(&f, "web animations: css late: fresh ends");
-    p2b_script(&f, "assert(log.join()==='animationend:first,animationstart:fresh,animationend:fresh',log.join());",
+    p2b_script(&f, "assert(log.join()==='animationend:first,animationstart:fresh,animationstart:held,animationend:fresh',log.join());",
                "web animations: css late: no stale end, the fresh one's heard");
+    fixture_free(&f);
+}
+
+/* An animation with a pending pause task owes no event until the task
+ * runs (CSS Animations 2): the style pauses it in the step it reaches its
+ * active phase, and its start comes at the next step. */
+static void wa_css_pending(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    wa_css_install(&f);
+    WaCssRecord *wait = wa_css_add(1, wa_by_id(f.document->document, "box"), "wait", 1000, 1000, 100, 1);
+    p2b_script(&f,
+        "globalThis.log=[];document.addEventListener('animationstart',e=>log.push(e.type+':'+e.animationName));"
+        "globalThis.w=document.getElementById('box').getAnimations()[0];assert(w.animationName==='wait');",
+        "web animations: css pending: a CSSAnimation and a listener");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css pending: in its delay");
+    wait->r.style_paused = true;
+    wa_css_version++;
+    p2b_advance(100);
+    wa_step(&f, "web animations: css pending: paused by the style as it starts");
+    p2b_script(&f, "assert(log.length===0&&w.pending,log.join()+' '+w.pending);",
+               "web animations: css pending: no start while the pause is pending");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css pending: the pause task ran");
+    p2b_script(&f, "assert(log.join()==='animationstart:wait'&&!w.pending&&w.playState==='paused',log.join());",
+               "web animations: css pending: then its start");
     fixture_free(&f);
 }
 
@@ -974,4 +1043,5 @@ static void dom_webanimation_cases(void)
     wa_css();
     wa_css_events();
     wa_css_late_listener();
+    wa_css_pending();
 }

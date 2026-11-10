@@ -2781,14 +2781,18 @@ static double css_when(os64_dom_t *dom, const DWaSeen *s, double local)
  * last step, by its phase then and now (CSS Animations 2 § 4.2's table):
  * the interval's start and end are where its active interval begins and
  * ends, clamped to it, and an iteration's elapsed time is the boundary
- * between iterations it crossed last. `quiet` takes where it is and owes nothing. */
-static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, int32_t place, double now, bool quiet)
+ * between iterations it crossed last. `quiet` takes where it is and owes
+ * nothing; `pending` (a pending play or pause task) keeps it where it was,
+ * owing nothing yet. */
+static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, int32_t place, double now, bool quiet,
+                       bool pending)
 {
     DWaSeen *s = seen_of(dom, r);
     if (s == NULL) return;
     double canceled_at = seen_active_at(s, now);
     s->pass = dom->wa_css_pass;
     s->place = place;
+    if (pending) return;
     s->paused = r->paused;
     s->canceled = r->canceled;
     s->start = r->start_ms;
@@ -2836,9 +2840,11 @@ static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, int32
  * animation event has a listener each animation's crossed boundaries are
  * queued — a cancel for one that went before its end. In the first step
  * that hears a listener, an animation that was there at the step before
- * (`since`, on the host's clock; -INFINITY before the first) is taken
- * where it stands: what it crossed then, nobody was listening for, and a
- * listener added once it had ended must not hear its end. */
+ * — its start, paused or not, at or before `since`, on the host's clock;
+ * -INFINITY before the first — is taken where it stands: what it crossed
+ * then, nobody was listening for, and a listener added once it had ended
+ * must not hear its end. (A record holds the time it was made until a
+ * play moves it, which is never later; a driven, held one hands 0.) */
 static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
 {
     os64_dom_css_animations_t *h = &dom->wa_css;
@@ -2858,7 +2864,11 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
             a->css_pass = pass;
             css_pull(ctx, a, &r);
         }
-        if (listening) css_events(dom, &r, i, now, seeding && (r.paused || r.start_ms <= since));
+        /* CSS Animations 2 works the events out only for an animation with
+         * no pending play or pause task (one the style's change just
+         * gave it): it keeps the phase it had until that task runs. */
+        bool pending = a != NULL && (a->pending_play || a->pending_pause);
+        if (listening) css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);
     }
     /* Each gone one held while all are canceled: a cancel settles promises,
      * which may run a page's getter, which may make or drop animations. */

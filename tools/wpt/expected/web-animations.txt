@@ -870,6 +870,7 @@ animation-model/animation-types/accumulation-per-property-001.html	background-co
 animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	background-image (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	background-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
@@ -883,6 +884,7 @@ animation-model/animation-types/accumulation-per-property-001.html	border-bottom
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-style: "dotted" onto "solid"
@@ -898,6 +900,7 @@ animation-model/animation-types/accumulation-per-property-001.html	border-left-c
 animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-left-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-left-style: "dotted" onto "solid"
@@ -910,6 +913,7 @@ animation-model/animation-types/accumulation-per-property-001.html	border-right-
 animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-right-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-right-style: "dotted" onto "solid"
@@ -923,6 +927,7 @@ animation-model/animation-types/accumulation-per-property-001.html	border-top-co
 animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-top-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-top-style: "dotted" onto "solid"
@@ -953,6 +958,7 @@ animation-model/animation-types/accumulation-per-property-001.html	color support
 animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	color-interpolation (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	column-gap (type: discrete) has testAccumulation function
@@ -1065,6 +1071,7 @@ animation-model/animation-types/accumulation-per-property-002.html	outline-color
 animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of #RGBa
 animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsl()
 animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-002.html	outline-offset (type: length) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	outline-offset: length
@@ -1169,6 +1176,7 @@ animation-model/animation-types/addition-per-property-001.html	background-color 
 animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	background-image (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	background-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
@@ -1182,6 +1190,7 @@ animation-model/animation-types/addition-per-property-001.html	border-bottom-col
 animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-bottom-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-bottom-style: "dotted" onto "solid"
@@ -1197,6 +1206,7 @@ animation-model/animation-types/addition-per-property-001.html	border-left-color
 animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-left-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-left-style: "dotted" onto "solid"
@@ -1209,6 +1219,7 @@ animation-model/animation-types/addition-per-property-001.html	border-right-colo
 animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-right-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-right-style: "dotted" onto "solid"
@@ -1222,6 +1233,7 @@ animation-model/animation-types/addition-per-property-001.html	border-top-color 
 animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-top-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-top-style: "dotted" onto "solid"
@@ -1252,6 +1264,7 @@ animation-model/animation-types/addition-per-property-001.html	color supports an
 animation-model/animation-types/addition-per-property-001.html	color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-001.html	color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	color-interpolation (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	column-gap (type: discrete) has testAddition function
@@ -1363,6 +1376,7 @@ animation-model/animation-types/addition-per-property-002.html	outline-color sup
 animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of #RGBa
 animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsl()
 animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of rgb() with overflowed  from and to values
 animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-002.html	outline-offset (type: length) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	outline-offset: length

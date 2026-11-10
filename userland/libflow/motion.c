@@ -2064,21 +2064,6 @@ static bool add_length(flow_length_t u, flow_length_t v, flow_length_t *out)
     return true;
 }
 
-static uint32_t add_colour(uint32_t u, uint32_t v)
-{
-    double au = flow_alpha(u), av = flow_alpha(v);
-    double alpha = fmin(au + av, 255);
-    if (alpha <= 0)
-        return 0xFF000000u;
-    uint32_t r = 0;
-    for (int shift = 16; shift >= 0; shift -= 8) {
-        double c = (((u >> shift) & 0xFF) * au + ((v >> shift) & 0xFF) * av) / alpha;
-        int32_t x = (int32_t)floor(fmin(fmax(c, 0), 255) + 0.5);
-        r |= (uint32_t)(x > 255 ? 255 : x) << shift;
-    }
-    return (uint32_t)(255 - round_i32(alpha)) << 24 | r;
-}
-
 // One function accumulated onto another of its kind (`u` and `v` pair):
 // lengths and angles summed, a scale's factors as (u + v - 1), so that 1
 // is what changes nothing.
@@ -2232,45 +2217,16 @@ static bool add_individual(const flow_transform_t *u, const flow_transform_t *v,
     return true;
 }
 
-// The ranges a mix holds its result to (mix_prop), for the numbers an
-// accumulation can carry past them; the other kinds it builds are
-// unbounded, or sizes whose underlying and keyframe values are already in
-// range and only grow.
-static void hold_range(garb_prop_t p, flow_style_t *d)
-{
-    if (p == GARB_OPACITY && d->opacity > 1000)
-        d->opacity = 1000;
-    if (p == GARB_FONT_WEIGHT && d->font_weight > 1000)
-        d->font_weight = 1000;
-}
-
 // Property `p` of `d` (a copy of the keyframe's `v`) made `v`'s value met
 // with `u`'s, the value underneath; false where `p` is of a kind that does
-// not add, and then `d` keeps `v`'s.
+// not add, and then `d` keeps `v`'s. Colours are not met here: motion_walk
+// builds them wide (FWide), since a sum past a channel's top must survive
+// until the mix.
 static bool add_prop(garb_prop_t p, const flow_style_t *u, const flow_style_t *v, flow_style_t *d,
                      bool accumulate, FAlloc alloc, void *ctx)
 {
     int i;
     switch (p) {
-    case GARB_COLOR: d->color = add_colour(u->color, v->color); return true;
-    // A sum is a colour of its own: a keyframe's currentColor mark goes, or
-    // settling the style would put the element's colour back over it.
-    case GARB_BACKGROUND_COLOR:
-        d->background = add_colour(u->has_background ? u->background : 0xFF000000u,
-                                   v->has_background ? v->background : 0xFF000000u);
-        d->has_background = flow_alpha(d->background) > 0;
-        d->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
-        return true;
-    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
-    case GARB_BORDER_LEFT_COLOR:
-        i = p - GARB_BORDER_TOP_COLOR;
-        d->border_color[i] = add_colour(u->border_color[i], v->border_color[i]);
-        d->current_colours &= (uint8_t)~FLOW_CURRENT_BORDER(i);
-        return true;
-    case GARB_OUTLINE_COLOR:
-        d->outline_color = add_colour(u->outline_color, v->outline_color);
-        d->current_colours &= (uint8_t)~FLOW_CURRENT_OUTLINE;
-        return true;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         i = p - GARB_MARGIN_TOP;
         return add_length(u->margin[i], v->margin[i], &d->margin[i]);
@@ -2478,43 +2434,105 @@ static void follow_colour(flow_style_t *out)
 // before it made, held still while it mixes over the look's style, and
 // never resolved again. When `record`, each interval whose two ends are
 // one value is recorded for the schedule (FAnimation.holds).
-// iterationComposite: accumulate (Web Animations 1 § 4.10.3 and § 5.4):
-// the value each finished iteration ended on, its last keyframe's, built
-// onto this iteration's, as many times as iterations are finished — by
-// doubling, since an accumulation of every kind add_prop accumulates is
-// associative and a running animation's iterations have no bound. An
-// implicit last keyframe is the neutral value (Web Animations 1 § 5.3.4),
-// which adds nothing; one that does not resolve, or a property that does
-// not add, leaves the value as this iteration made it. What is built is
-// then held to the property's range, as a mix holds its result (mix_prop).
-static void accumulate_iterations(const FAnimation *an, int32_t a, const flow_style_t *under, garb_prop_t p,
-                                  double iterations, Look *look)
+// A colour an endpoint is made into before the mix: premultiplied
+// channels and alpha (0..255 each when in range), none of them clamped,
+// so that a sum past a channel's top still mixes as the sum (WPT's
+// property-types overflow cases) and only the mixed result is held to
+// range. Colours add as premultiplied channels and alphas sum, so n copies
+// of one are n times it.
+typedef struct {
+    double c[3], alpha;
+} FWide;
+
+// The colour property `p` of `s`, or NULL for one that is not a colour
+// this path builds: a background the style has none of reads transparent.
+static uint32_t *colour_of(garb_prop_t p, flow_style_t *s)
+{
+    switch (p) {
+    case GARB_COLOR: return &s->color;
+    case GARB_BACKGROUND_COLOR: return &s->background;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        return &s->border_color[p - GARB_BORDER_TOP_COLOR];
+    case GARB_OUTLINE_COLOR: return &s->outline_color;
+    default: return NULL;
+    }
+}
+
+static FWide wide_of(garb_prop_t p, const flow_style_t *s)
+{
+    uint32_t v = p == GARB_BACKGROUND_COLOR && !s->has_background ? 0xFF000000u : *colour_of(p, (flow_style_t *)s);
+    FWide w = {.alpha = flow_alpha(v)};
+    for (int i = 0; i < 3; i++)
+        w.c[i] = ((v >> (16 - 8 * i)) & 0xFF) * w.alpha;
+    return w;
+}
+
+// `w` plus `n` copies of `x`.
+static FWide wide_add(FWide w, FWide x, double n)
+{
+    w.alpha += n * x.alpha;
+    for (int i = 0; i < 3; i++)
+        w.c[i] += n * x.c[i];
+    return w;
+}
+
+// The mix of two wide colours at `t`, held to range: what mix_colour
+// does with packed ones.
+static uint32_t wide_mix(FWide a, FWide b, double t)
+{
+    double alpha = fmin(fmax(lerp(a.alpha, b.alpha, t), 0), 255);
+    uint8_t ta = (uint8_t)(255 - round_i32(alpha));
+    if (ta == 255)
+        return 0xFF000000u;
+    uint32_t r = 0;
+    for (int i = 0; i < 3; i++) {
+        double c = lerp(a.c[i], b.c[i], t) / alpha;
+        int32_t v = (int32_t)floor(fmin(fmax(c, 0), 255) + 0.5);
+        r |= (uint32_t)(v > 255 ? 255 : v) << (16 - 8 * i);
+    }
+    return (uint32_t)ta << 24 | r;
+}
+
+// iterationComposite: accumulate (Web Animations 2, the effect value of a
+// keyframe effect): the final property-specific keyframe's value, which
+// each endpoint accumulates as many times as iterations are finished. NULL
+// for none: an implicit final keyframe is the neutral value, which
+// accumulates to nothing, and one that does not resolve leaves the
+// endpoints as they are. Resolved in the property's own pass, as
+// motion_walk resolves its endpoints: the first pass's (colour, font
+// size) against nothing yet built.
+static const flow_style_t *final_value(const FAnimation *an, int32_t a, const flow_style_t *under, garb_prop_t p,
+                                       Look *look)
 {
     Frame s, e;
     interval(an, under, p, 1, &s, &e);
     if (e.implicit)
-        return;
-    // In the property's own pass, as motion_walk resolves it: the first
-    // pass's (colour, font size) against nothing yet built.
+        return NULL;
     const FResolved *r = look->resolve(look->ctx, a, e.frame, resolved_first(p) ? NULL : look->out);
-    if (r == NULL)
-        return;
-    const flow_style_t *last = &r->style;
-    // add_prop reads a field before it writes it, so each value is built
-    // where it stands.
-    // An iteration count past 2^62 (an infinite one included, which a tiny
-    // duration can make of a finite time) builds what 2^62 does: the sums
-    // saturate long before, and the loop must end.
+    return r != NULL ? &r->style : NULL;
+}
+
+// `last` accumulated onto `d` as many times as `iterations` — by doubling,
+// since an accumulation of every kind add_prop accumulates is associative,
+// and a running animation's iterations have no bound. A count past 2^62
+// (an infinite one included, which a tiny duration can make of a finite
+// time) builds what 2^62 does: the sums saturate long before, and the loop
+// must end. A kind that does not accumulate leaves `d` as it is. add_prop
+// reads a field before it writes it, so each value is built where it
+// stands.
+static void accumulate_onto(garb_prop_t p, flow_style_t *d, const flow_style_t *last, double iterations,
+                            Look *look)
+{
     if (isnan(iterations))
         return;
     flow_style_t power = *last;
     for (double n = fmin(floor(iterations), 0x1p62); n >= 1; n = floor(n / 2)) {
-        if (fmod(n, 2) >= 1 && !add_prop(p, look->out, &power, look->out, true, look->alloc, look->ctx))
+        if (fmod(n, 2) >= 1 && !add_prop(p, d, &power, d, true, look->alloc, look->ctx))
             break;
         if (n >= 2 && !add_prop(p, &power, &power, &power, true, look->alloc, look->ctx))
             break;
     }
-    hold_range(p, look->out);
 }
 
 static bool motion_walk(const FMotion *m, Look *look, bool record)
@@ -2560,19 +2578,63 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                     room = room && (r == NULL || !f_props_has(&r->refused, (garb_prop_t)p));
                 }
                 bool resolved = s.style != NULL && e.style != NULL;
-                // A keyframe that adds or accumulates meets the value
-                // underneath before the interval is mixed; an implicit one
-                // is the value underneath already.
+                // Each endpoint as Web Animations 2 makes it before the
+                // mix, in its order: accumulated with the final keyframe's
+                // value once for each finished iteration, then, where it
+                // adds or accumulates, met with the value underneath. An
+                // implicit endpoint is the neutral value, added: the value
+                // underneath, plus what it accumulates. The mix then holds
+                // the result to the property's range (mix_prop).
+                const flow_style_t *last = resolved && an->iteration_accumulate && k.iteration >= 1
+                                         ? final_value(an, a, &under, (garb_prop_t)p, look) : NULL;
+                // A colour that accumulates or composites is built wide,
+                // mixed, and held to range only then.
+                bool builds = last != NULL;
+                for (int end = 0; resolved && !builds && end < 2; end++) {
+                    Frame *f = end == 0 ? &s : &e;
+                    builds = !f->implicit && an->frames[f->frame].composite != GARB_COMPOSITE_REPLACE;
+                }
+                if (builds && colour_of((garb_prop_t)p, look->out) != NULL) {
+                    FWide w[2], u = wide_of((garb_prop_t)p, &under);
+                    for (int end = 0; end < 2; end++) {
+                        Frame *f = end == 0 ? &s : &e;
+                        garb_composite_t op = f->implicit ? GARB_COMPOSITE_REPLACE : an->frames[f->frame].composite;
+                        w[end] = wide_of((garb_prop_t)p, f->style);
+                        if (last != NULL && !isnan(k.iteration))
+                            w[end] = wide_add(w[end], wide_of((garb_prop_t)p, last), fmin(floor(k.iteration), 0x1p62));
+                        if (op != GARB_COMPOSITE_REPLACE)
+                            w[end] = wide_add(w[end], u, 1);
+                    }
+                    if (record && os64_memcmp(&w[0], &w[1], sizeof(w[0])) == 0)
+                        f_props_add(&m->anims[a].holds, (garb_prop_t)p);
+                    // A built colour is a colour of its own: a keyframe's
+                    // currentColor mark goes, or settling the style would
+                    // put the element's colour back over it.
+                    uint32_t mixed = wide_mix(w[0], w[1], eased(&s, &e, k.progress, k.before));
+                    *colour_of((garb_prop_t)p, look->out) = mixed;
+                    if (p == GARB_BACKGROUND_COLOR) {
+                        look->out->has_background = flow_alpha(mixed) > 0;
+                        look->out->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
+                    } else if (p >= GARB_BORDER_TOP_COLOR && p <= GARB_BORDER_LEFT_COLOR) {
+                        look->out->current_colours &= (uint8_t)~FLOW_CURRENT_BORDER(p - GARB_BORDER_TOP_COLOR);
+                    } else if (p == GARB_OUTLINE_COLOR) {
+                        look->out->current_colours &= (uint8_t)~FLOW_CURRENT_OUTLINE;
+                    }
+                    continue;
+                }
                 flow_style_t met[2];
                 for (int end = 0; resolved && end < 2; end++) {
                     Frame *f = end == 0 ? &s : &e;
                     garb_composite_t op = f->implicit ? GARB_COMPOSITE_REPLACE : an->frames[f->frame].composite;
-                    if (op == GARB_COMPOSITE_REPLACE)
+                    if (last == NULL && op == GARB_COMPOSITE_REPLACE)
                         continue;
                     met[end] = *f->style;
-                    if (add_prop((garb_prop_t)p, &under, f->style, &met[end], op == GARB_COMPOSITE_ACCUMULATE,
-                                 look->alloc, look->ctx))
-                        f->style = &met[end];
+                    if (last != NULL)
+                        accumulate_onto((garb_prop_t)p, &met[end], last, k.iteration, look);
+                    if (op != GARB_COMPOSITE_REPLACE)
+                        (void)add_prop((garb_prop_t)p, &under, &met[end], &met[end],
+                                       op == GARB_COMPOSITE_ACCUMULATE, look->alloc, look->ctx);
+                    f->style = &met[end];
                 }
                 // An interval holds when its ends, as composited, are one
                 // value: two equal keyframes, one adding, do not.
@@ -2580,11 +2642,8 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
                     f_props_add(&m->anims[a].holds, (garb_prop_t)p);
                 if (resolved && room &&
                     mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
-                             look->out, look->alloc, look->ctx)) {
-                    if (an->iteration_accumulate && k.iteration >= 1)
-                        accumulate_iterations(an, a, &under, (garb_prop_t)p, k.iteration, look);
+                             look->out, look->alloc, look->ctx))
                     continue;
-                }
                 ok = false;
                 if (look->failed != NULL)
                     f_props_add(look->failed, (garb_prop_t)p);
