@@ -589,8 +589,8 @@ largely per binding already, but class registration, context validation,
 host attribution and retained ownership still require the changes above.
 
 **A node's creation realm is fixed before it is wrapped.** Record its
-creation document in native metadata, including parser-created nodes that
-script has not reached. Resolve that document's binding through the cluster
+creation realm slot in native metadata, including parser-created nodes that
+script has not reached. Resolve that realm's binding through the cluster
 when materializing the wrapper, not the node's possibly changed current
 document or the binding in hand. So when the
 parent's script walks `iframe.contentDocument.body.children`, the

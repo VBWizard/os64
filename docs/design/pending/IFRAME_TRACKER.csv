@@ -2,9 +2,9 @@ id,task,depends_on,status,done_in,notes
 
 F.1,F1: Realm API and runtime service routing,,done,#532,Brief: IFRAME_F1_REALMS.md; evidence: IFRAME_F1_REALMS_VALIDATION.md. Leak-enabled host checks passed; guest JSRT and 12 routing mutants passed; named WPT results match baseline. Codex review clean at fb70d6e5; completion prepared for merge. DOM ownership follows in F.2.
 
-F.2,F1: Binding ownership and cross-document adoption,F.1,design-review,,Brief: IFRAME_F2_OWNERSHIP.md. Review creation-document metadata and shared lifetime protection across separate arenas before implementation; preserve wrapper/control/custom-element state. No child retirement in this slice.
+F.2,F1: Binding ownership and cross-document adoption,F.1,design-review,,Brief: IFRAME_F2_OWNERSHIP.md. Fable approved with amendments 2026-11-10. F.2a native ownership then F.2b bindings; creation-realm slot and shared pin/reaction/observer state. Both PRs required for completion.
 
-F.3,F1: Realm retirement and task budget boundaries,F.1 F.2,todo,,"Prove job suppression before execution, retained functions/Blob/Canvas lifetime, bounded retention and enclosing cross-realm task budgets; confirm interrupt soundness."
+F.3,F1: Realm retirement and task budget boundaries,F.1 F.2,todo,,"Prove job suppression before execution, retained functions/Blob/Canvas lifetime, bounded retention and enclosing cross-realm task budgets; confirm interrupt soundness. Prove child-only rollback after failed admission/installation before frames ship; never reuse a realm slot still referenced by nodes."
 
 F.4,F1: WindowProxy and Location security,F.2 F.3,todo,,"Prove stable proxy identity and complete same/cross-origin internal methods, caller attribution and navigation gates; security and lifetime review before enabling."
 

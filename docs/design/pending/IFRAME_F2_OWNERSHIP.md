@@ -2,8 +2,8 @@
 
 Design brief, 2026-11-10. Inspection baseline: `03a18579` (`userland`,
 including F.1 PR #532). This is tracker slice **F.2**, within IFRAME.md's
-F1 foundation stage. It is a proposal for design review, not an as-built
-record. No implementation or new test result is claimed here.
+F1 foundation stage. Fable approved the design with the amendments recorded below; it is not
+an as-built record. No implementation or new test result is claimed here.
 
 ## Result and boundary
 
@@ -21,10 +21,12 @@ new scheduling policy. F.3 supplies retirement/job filtering, F.4 supplies
 the window security boundary, and F.6 onward integrates Pages. Calling
 `os64_dom_drain` on one child is not a substitute for those contracts.
 
-The current tracker stays at fourteen slices. The implementation can use
-separate commits for the native lifetime foundation, bindings, and proofs;
-if those cannot be reviewed coherently, revise the cut before publishing
-implementation rather than calling an incomplete ownership change done.
+The tracker stays at fourteen slices, with two implementation PRs under F.2:
+**F.2a** contains libhtml/libpage native ownership, lifetime groups, adoption
+and control-state migration with native proofs. **F.2b** stacks the libdom
+cluster, wrappers, operation routing, shared reactions/observers and teardown
+on that foundation. F.2 stays in progress after F.2a; its completion commit
+in F.2b records both PRs. The native foundation needs no JavaScript engine.
 
 ## Design correction: record creation before wrapping
 
@@ -44,9 +46,9 @@ first reader's realm is the descendant's creation realm.
 
 Record this distinction in native metadata, not just `DValue`. A wrapper
 cache keyed by the node gives one object across the cluster. Construct its
-prototype using the recorded creation document's binding. Existing objects
+prototype using the recorded creation realm's binding. Existing objects
 are returned unchanged. A clone/import is a new node and records its own
-creation document; it does not copy that field from its source.
+creation realm from its destination document; it does not copy that field from its source.
 
 ## What the source currently ties together
 
@@ -54,7 +56,7 @@ Paths below are relative to `userland/` at the inspection baseline.
 
 | Site | Existing assumption | F.2 change required |
 |---|---|---|
-| `libhtml/internal.h`, `HDoc`, `HMeta`; `libhtml/core.c`, `os64_html_owns_node` | `document_id` identifies the allocation arena; holds, blocks, reclamation and snapshot pins belong to that arena | Separate storage ownership from node document and creation document; preserve allocation accounting |
+| `libhtml/internal.h`, `HDoc`, `HMeta`; `libhtml/core.c`, `os64_html_owns_node` | `document_id` identifies the allocation arena; holds, blocks, reclamation and snapshot pins belong to that arena | Separate storage ownership from node document and creation realm; preserve allocation accounting |
 | `libhtml/dom.c`, `ours`, `node_free`, `subtree_free`, `d_collect` | A detached subtree can be reclaimed using one document's ledger | Collect a mixed-storage subtree without freeing from the wrong ledger or missing a borrowing snapshot |
 | `libhtml/fragment.c`, `isolated`, `d_transfer_blocks` | A temporary parse shares the destination's mark and transfers a whole staging ledger | Preserve creation/current-document metadata when staging commits; failure publishes neither nodes nor accounting |
 | `libhtml/range.c`, `os64_html_range_set`, removal hooks | Ranges and boundary holds belong to one native document | Keep live boundaries correct across removal/adoption and later moves between roots |
@@ -89,16 +91,19 @@ Each native node needs three stable facts:
 - **Allocation owner:** the arena whose blocks/free lists and counters must
   release its storage. The existing `document_id` remains an allocation
   identity; audit and rename claims that equate it with ownerDocument.
-- **Creation document:** immutable, including nodes created by parsing,
-  fragments, cloning, XML, templates and shadow attachment. Its association
-  with a realm survives adoption. libhtml stores a native document token,
-  not a JSContext or JSValue.
+- **Creation realm:** an immutable byte-sized slot, including nodes created
+  by parsing, fragments, cloning, XML, templates and shadow attachment. F.1
+  has at most 65 slots. libhtml stores the host-assigned integer, not a
+  JSContext, JSValue or reference to a creation document. Nodes from an inert
+  document use its creating binding's slot. They do not keep the inert
+  document alive after adoption solely to recover their prototype realm.
+  F.3 cannot reuse a retired slot while surviving nodes still name it.
 - **Node document:** mutable, including detached nodes with no wrapper.
   Adoption updates this for the affected descendants and attached attributes.
   Windowless documents are explicit document records too.
 
-The first implementation may use pointers in private node metadata; measure
-that overhead on the HTML corpus and reclamation tests before selecting a
+The node-document field may need a pointer in private metadata; the creation
+fact needs one byte. Measure the resulting layout overhead on the HTML corpus and reclamation tests before selecting a
 compact representation. Do not hide it by increasing existing limits.
 Ordinary documents use a singleton lifetime group so they exercise the same
 invariants. Group membership is native memory membership, not origin access.
@@ -117,7 +122,7 @@ Put mixed-tree detached-unit bookkeeping at group scope. A unit may contain
 nodes from several arenas; its hold sum includes native and parser holds
 from each. Reclaiming it dispatches each node, private attribute and text
 allocation to its physical ledger. Recycled node metadata is cleared before
-recording a new creation document. Preserve fragment replacement's bounded
+recording a new creation realm. Preserve fragment replacement's bounded
 reclamation and the existing no-full-live-tree-scan fast path.
 
 Keep per-document mutation versions for change readers and layout invalidation.
@@ -134,6 +139,23 @@ pins in either order, cross-arena text replacement, re-adoption, and churn.
 Do not use a permanent pin to keep exported nodes alive; that would disable
 ordinary reclamation for the source arena. Keep group epoch and document
 revision overflow fail-closed, as identity/pin serial exhaustion is today.
+
+Snapshot owners and release points at this baseline:
+
+| Borrower | End of protection |
+|---|---|
+| libpage's compiled model (`libpage/core.c`) | `os64_page_free` releases its pin when the model/layout owner discards it |
+| libgarb cascade (`libgarb/cascade.c`) | Successful update replaces its pin; cascade destruction releases it |
+| SVG adapter (`apps/yonder/svg.c`) | The matching snapshot `release` ends the acquired pin |
+| Change readers (cascade, image-source and preload tracking) | Advancing a reader permits pruning acknowledged log entries; freeing it removes its retention claim; the capped log can report lost history |
+
+Pins have a count bound (`H_PINS`, 16 per arena), not a wall-clock expiry.
+A retained layout/cascade can stall reclamation until its owner releases or
+refreshes it. Storage remains bounded by the local arena and aggregate caps;
+progress is not guaranteed under an indefinitely held pin. Prove pin A held,
+fragment churn B reaching B's cap, a nonsticky refusal, then release A and
+verify B reclaims and proceeds. Record the retained-byte peak and recovered
+bytes in the as-built; F.8 must use that measured cross-document cost.
 
 The cluster adopts its first arena's existing singleton lifetime group,
 preserving that arena's current holds and pins. Join an additional arena
@@ -180,15 +202,19 @@ sibling's page state.
 Live Range registrations follow their current boundary root when a setter
 changes documents, including ranges in a detached subtree that is then
 adopted. Keep their JavaScript creation realm separate from that native
-registration. Mutation-observer registrations are resolved by target across
-the cluster; records return to the observer's binding even after its target
-moves. A document-local notification must not lose a foreign observer.
+registration. Mutation observers have one cluster-owned registry in creation
+order and one queued/owed notification state, with registrations indexed by
+target. Pending observers are delivered in creation order; callbacks retain
+their defining bindings even after targets move. This follows the
+[agent-wide observer state](https://dom.spec.whatwg.org/#mutation-observers),
+rather than coordinating independent per-document lists.
 
 Preserve the element's existing custom definition and callbacks; do not look
 up a same-named destination definition for an already-custom element. Make
-reaction ordering explicit at cluster task scope so source disconnection,
-adoption and destination connection cannot be reordered by separate binding
-queues. Newly created elements use their new node document's registry.
+the [custom-element reactions stack](https://html.spec.whatwg.org/multipage/custom-elements.html#custom-element-reactions)
+and its backup queue cluster-owned. Source disconnection, adoption and
+destination connection then use one stack instead of coordinating binding
+stacks. Newly created elements use their new node document's registry.
 Account for callbacks that re-adopt the node or throw during delivery.
 `definition_for` currently searches a binding by element name; record a stable
 definition owner/reference at upgrade so later adoption cannot change it.
@@ -347,8 +373,8 @@ providers are not a routing test.
 | Execution routing | Child timer/event/observer/report host and rejection queue; borrowed methods; no new cross-realm task budget; sibling remains unchanged on nonsticky refusal |
 | Teardown | Repeated two/three-document lifecycles; pending jobs and native payloads; both finalizer and reclaim policies; zero surviving native fixture allocations |
 
-After the positive matrix, mutate creation-document selection to current
-document, receiver routing to method owner, wrapper lookup to binding-local,
+After the positive matrix, mutate creation-realm selection to the current
+document's realm, receiver routing to method owner, wrapper lookup to binding-local,
 release to destination ledger, omit source pin protection, omit state migration,
 choose destination custom definition, and route child task/report entry to
 primary. Each mutant needs a passing baseline and an assertion failure;
@@ -375,6 +401,7 @@ from the unmodified WPT runner's exclusions/results:
 
 - `dom/nodes/node-creation-realm.html`
 - `dom/nodes/node-realm-preserved-across-adoption.html`
+- `dom/nodes/node-realm-preserved-across-frameless-adoption.html`
 - `dom/nodes/node-realm-mixed-across-adoption.html`
 - `dom/nodes/create-element-realm-after-adoption.html`
 - `dom/nodes/attach-shadow-realm-after-adoption.html`
@@ -390,9 +417,14 @@ an assertion that those frame-removal tests pass.
 
 ## Design review and implementation acceptance
 
-This brief needs a design read before the ownership refactor. In particular:
+Fable's [design review](https://github.com/VBWizard/os64/pull/533#pullrequestreview-5847065479)
+approved the ownership model on 2026-11-10. Its requested changes are adopted:
+creation realm instead of creation document; explicit pin owners and recovery
+proof; cluster-wide observer/reaction state; child-only admission rollback
+tracked under F.3; and the F.2a/F.2b implementation split. The accepted proof
+boundaries are:
 
-1. Accept the creation-document correction and the never-wrapped three-realm
+1. Preserve the creation-realm correction and the never-wrapped three-realm
    oracle, rather than making wrapper creation determine realm identity.
 2. Review the physical-owner / node-document split and group epoch pin rule;
    confirm the bounded retention tradeoff and initial admission preconditions.
@@ -403,5 +435,4 @@ This brief needs a design read before the ownership refactor. In particular:
 
 The implementation PR must carry measured validation and code review before
 its tracker completion flip. Preserve the existing single-document browser
-and the remaining iframe debts. The design correction is published explicitly
-for review; the original refresh did not settle this storage mechanism.
+and the remaining iframe debts. The reviewed design correction is recorded explicitly; the original refresh did not settle this storage mechanism.
