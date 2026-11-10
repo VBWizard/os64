@@ -6,11 +6,14 @@
 #include "os64/fmt.h"
 
 /* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md): Element.animate,
- * Animation, KeyframeEffect's target, DocumentTimeline, getAnimations and
- * AnimationPlaybackEvent. This file owns the script's half: the Animation's
- * state machine (§ 4.4, Animations; the numbers are the 2023-06-05 Working
- * Draft's) as written, its promises and events, and keyframe processing
- * (§ 6.6.3). The values are libflow's: each animation publishes
+ * Animation and KeyframeEffect with their constructors, AnimationEffect's
+ * timing, DocumentTimeline, getAnimations, commitStyles, the replacement
+ * of filling animations (§ 5.5) and AnimationPlaybackEvent. This file
+ * owns the script's half: the Animation's state machine (§ 4.4,
+ * Animations; the numbers are the 2023-06-05 Working Draft's) as written,
+ * its promises and events, and keyframe processing (§ 6.6.3). An effect is
+ * an object of its own, which owns its target and keyframes; an animation
+ * has one or none. The values are libflow's: each animation publishes
  * a garb_effect_t (garb/timing.h) — its keyframes as libgarb reads them,
  * its timing, and its clock — which the host hands to libflow's layouts
  * (os64_dom_script_effects), and libgarb's garb_clock_at is the one clock
@@ -22,17 +25,31 @@
  * script reads between two steps agree. The step runs while anything
  * needs a fresh time (os64_dom_web_animations_next).
  *
- * THE KEYFRAMES OUTLIVE THEIR ANIMATION. A layout tree keeps the effects
- * it was laid out with for its ticks and its paints, so a collected
- * animation's data (DWaData) is buried, marked with the generation it died
- * in, and freed only once the host says no tree that old is left
- * (os64_dom_effects_mark / os64_dom_effects_release). */
+ * THE KEYFRAMES OUTLIVE THEIR EFFECT. A layout tree keeps the effects it
+ * was laid out with for its ticks and its paints, so an effect's data
+ * (DWaData) — when the effect is collected, or setKeyframes replaces it —
+ * is buried, marked with the generation it died in, and freed only once
+ * the host says no tree that old is left (os64_dom_effects_mark /
+ * os64_dom_effects_release). */
 
 static JSClassID animation_slot, effect_slot, timeline_slot;
 
 #define WA_FRAME_MS 20
 #define WA_PROPERTIES_MAX 256      /* properties one keyframes argument may name */
 #define WA_KEYFRAMES_MAX 1024      /* keyframes one effect may hold */
+
+/* A keyframe as the page gave it, which getKeyframes answers and a copied
+ * effect is made from: the offset it gave (NAN for none), its composite
+ * (WaComposite), and its declarations as data_make read them. */
+typedef enum { WA_COMPOSITE_REPLACE, WA_COMPOSITE_ADD, WA_COMPOSITE_ACCUMULATE, WA_COMPOSITE_AUTO } WaComposite;
+static const char *const kComposites[] = {"replace", "add", "accumulate", "auto"};
+
+typedef struct {
+    double given;
+    WaComposite composite;
+    char *text;                     /* `name:value` texts, each ended by a NUL */
+    size_t len;
+} WaKept;
 
 /* What libflow reads, and what a tree may keep after the animation goes. */
 typedef struct DWaData DWaData;
@@ -44,6 +61,27 @@ struct DWaData {
     garb_set_t *sets;
     garb_parsed_t *parsed;          /* the declaration blocks the sets' values point into */
     int32_t nparsed;
+    WaKept *kept;                   /* fx.nframes of them */
+    /* The longhands its keyframes set, each once: its target properties,
+     * which § 5.5 compares to replace it. */
+    garb_prop_t *props;
+    int32_t nprops;
+};
+
+/* A KeyframeEffect: its target, its keyframes and timing (DWaData, which
+ * it owns and buries), what the page specified that the timing does not
+ * keep (`fill: auto`, `duration: auto`), its composite operations, and the
+ * animation it is the effect of — by serial, found in dom's list, so that
+ * neither object's finalizer reads the other's memory. */
+typedef struct DWaEffect DWaEffect;
+struct DWaEffect {
+    os64_dom_t *dom;                /* NULL once the binding drained it */
+    DWaEffect *prev, *next;         /* dom->wa_fx_first */
+    const os64_html_node_t *element;    /* the target, held */
+    DWaData *data;
+    uint64_t owner;                 /* the animation's serial, or 0 */
+    bool fill_auto, duration_auto;
+    WaComposite composite, iteration_composite;
 };
 
 typedef struct DWaAnimation DWaAnimation;
@@ -52,11 +90,13 @@ struct DWaAnimation {
     os64_dom_t *dom;
     DWaAnimation *prev, *next;      /* dom->wa_first..wa_last, in the order they were made */
     uint64_t serial;
-    const os64_html_node_t *element;    /* the effect's target, held */
-    JSValue effect;                 /* the KeyframeEffect object */
-    JSValue hold;                   /* the animation itself while it is relevant (wa_relevant) */
-    DWaData *data;
+    JSValue effect;                 /* the KeyframeEffect object, or null */
+    JSValue hold;                   /* the animation itself while it is live (wa_live) */
     char *id;
+    /* § 5.5, Replacing animations: active, removed (its effect applies to
+     * nothing) or persisted (never removed). */
+    enum { WA_ACTIVE, WA_REMOVED, WA_PERSISTED } replace;
+    bool no_timeline;               /* made with a null timeline: it has no time */
     /* The clock: NAN is unresolved. */
     double start, held, rate, pending_rate, previous;
     bool has_pending_rate, pending_play, pending_pause;
@@ -65,6 +105,7 @@ struct DWaAnimation {
     JSValue ready, ready_resolve, ready_reject;
     JSValue finished, finished_resolve, finished_reject;
     bool ready_done, finished_done, notify_queued;
+    bool was_finished;              /* as update_finished last saw it */
     /* The clock as last published (wa_changed): the hold and start times,
      * the rate and whether a task is pending, each NAN-for-unresolved
      * compared as equal to itself. */
@@ -85,6 +126,30 @@ struct DWaEvent {
 static DWaAnimation *wa_state(JSValueConst value)
 {
     return JS_GetOpaque(value, os64_js_class_id(&animation_slot));
+}
+
+static DWaEffect *fx_state(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&effect_slot));
+}
+
+/* An animation's effect, its keyframes and timing, and its target: each
+ * NULL for an animation with no effect, or an effect with no target. */
+static DWaEffect *wa_fx(const DWaAnimation *a)
+{
+    return fx_state(a->effect);
+}
+
+static DWaData *wa_data(const DWaAnimation *a)
+{
+    DWaEffect *e = wa_fx(a);
+    return e != NULL ? e->data : NULL;
+}
+
+static const os64_html_node_t *wa_target(const DWaAnimation *a)
+{
+    DWaEffect *e = wa_fx(a);
+    return e != NULL ? e->element : NULL;
 }
 
 /* ── The timeline ────────────────────────────────────────────────────── */
@@ -120,9 +185,11 @@ static double wa_now(os64_dom_t *dom)
 
 /* ── The clock ──────────────────────────────────────────────────────── */
 
+/* The associated effect's end (§ 4.4.6): 0 with no effect. */
 static double effect_end(const DWaAnimation *a)
 {
-    return garb_clock_at(&a->data->fx.timing, 0, false).end_time;
+    DWaData *d = wa_data(a);
+    return d != NULL ? garb_clock_at(&d->fx.timing, 0, false).end_time : 0;
 }
 
 static double effective_rate(const DWaAnimation *a)
@@ -133,7 +200,7 @@ static double effective_rate(const DWaAnimation *a)
 static double current_time(DWaAnimation *a)
 {
     if (!isnan(a->held)) return a->held;
-    if (isnan(a->start)) return NAN;
+    if (isnan(a->start) || a->no_timeline) return NAN;
     return (wa_now(a->dom) - a->start) * a->rate;
 }
 
@@ -162,13 +229,14 @@ static void apply_pending_rate(DWaAnimation *a)
 static garb_clock_t wa_clock(DWaAnimation *a)
 {
     double t = current_time(a);
-    if (isnan(t)) {
+    DWaData *d = wa_data(a);
+    if (isnan(t) || d == NULL) {
         garb_clock_t none;
         os64_memset(&none, 0, sizeof(none));
         none.phase = GARB_PHASE_BEFORE;
         return none;
     }
-    return garb_clock_at(&a->data->fx.timing, t, a->rate < 0);
+    return garb_clock_at(&d->fx.timing, t, a->rate < 0);
 }
 
 /* Relevant (§ 4.5.6, Relevant animations): not idle, and current — in
@@ -176,7 +244,7 @@ static garb_clock_t wa_clock(DWaAnimation *a)
  * getAnimations answers, and what the binding keeps alive unreferenced. */
 static bool wa_relevant(DWaAnimation *a)
 {
-    if (play_state(a) == WA_IDLE) return false;
+    if (play_state(a) == WA_IDLE || wa_data(a) == NULL) return false;
     garb_clock_t k = wa_clock(a);
     if (k.in_effect || k.phase == GARB_PHASE_ACTIVE) return true;
     /* At a rate of 0 it is in neither phase's way: it never gets there. */
@@ -192,7 +260,10 @@ static bool wa_relevant(DWaAnimation *a)
  * idle asks for (wa_changed). */
 static void wa_publish(DWaAnimation *a)
 {
-    garb_effect_t *fx = &a->data->fx;
+    a->dom->wa_index_stale = true;
+    DWaData *d = wa_data(a);
+    if (d == NULL) return;
+    garb_effect_t *fx = &d->fx;
     if (!isnan(a->held)) {
         fx->held = true;
         fx->hold_ms = a->held;
@@ -204,7 +275,6 @@ static void wa_publish(DWaAnimation *a)
         fx->hold_ms = -INFINITY;
     }
     fx->rate = a->rate;
-    a->dom->wa_index_stale = true;
 }
 
 static bool same_time(double x, double y)
@@ -230,7 +300,18 @@ static void wa_changed(DWaAnimation *a)
     a->pub_rate = a->rate;
     a->pub_pending = pending;
     wa_publish(a);
-    if (a->element != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)a->element);
+    if (wa_target(a) != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)wa_target(a));
+}
+
+/* After a change the clock does not show — the effect's keyframes, timing
+ * or target, which effect it is, its replace state: published and the
+ * target's style moved whatever the clock says. */
+static void wa_restyle(DWaAnimation *a)
+{
+    a->published = false;
+    /* Which effect, target or keyframes it has moves what replaces what. */
+    a->dom->wa_replace_check = true;
+    wa_changed(a);
 }
 
 /* ── Promises ────────────────────────────────────────────────────────── */
@@ -375,6 +456,9 @@ static void update_finished(JSContext *ctx, DWaAnimation *a, bool did_seek, bool
     }
     a->previous = current_time(a);
     bool finished = play_state(a) == WA_FINISHED;
+    /* Becoming finished makes it replaceable, and may make it replace. */
+    if (finished && !a->was_finished) a->dom->wa_replace_check = true;
+    a->was_finished = finished;
     if (finished && !a->finished_done) {
         if (sync) {
             finish_notify(ctx, a);
@@ -647,13 +731,16 @@ static void data_free(os64_dom_t *dom, DWaData *d)
 {
     if (d == NULL) return;
     for (int32_t i = 0; i < d->nparsed; i++) garb_free(&d->parsed[i]);
+    for (int32_t i = 0; d->kept != NULL && i < d->fx.nframes; i++) d_free(dom, d->kept[i].text);
+    d_free(dom, d->kept);
+    d_free(dom, d->props);
     d_free(dom, d->parsed);
     d_free(dom, d->frames);
     d_free(dom, d->sets);
     d_free(dom, d);
 }
 
-/* A collected animation's data, kept while a tree laid out before now may
+/* An effect's data it lets go of, kept while a tree laid out before now may
  * read it (os64_dom_effects_release). */
 static void data_bury(os64_dom_t *dom, DWaData *d)
 {
@@ -672,9 +759,10 @@ static void data_bury(os64_dom_t *dom, DWaData *d)
  * (data_make), so that a value that does not parse cannot take another
  * with it. */
 typedef struct {
-    double offset, place;
+    double offset, place, given;    /* `given`: the offset as the page gave it, NAN for none */
     bool has_easing;
     garb_easing_t easing;
+    WaComposite composite;
     char *text;
     size_t len, cap;
 } WaFrame;
@@ -707,7 +795,8 @@ static WaFrame *frames_add(JSContext *ctx, WaFrames *f)
     }
     WaFrame *k = &f->v[f->n++];
     os64_memset(k, 0, sizeof(*k));
-    k->offset = k->place = NAN;
+    k->offset = k->place = k->given = NAN;
+    k->composite = WA_COMPOSITE_AUTO;
     return k;
 }
 
@@ -845,14 +934,14 @@ static int iterable(os64_dom_t *dom, JSContext *ctx, JSValueConst v)
 
 static int enum_of(JSContext *ctx, JSValueConst v, const char *const *words, int n, int *out);
 
-/* A keyframe's `composite` (CompositeOperationOrAuto): checked and not
- * kept, as every effect of slice A replaces (WEB_ANIMATIONS.md § 4,
- * DEBTS). TypeError for a word that is none of them. */
-static int composite_check(JSContext *ctx, JSValueConst v)
+/* A keyframe's `composite` (CompositeOperationOrAuto), kept for
+ * getKeyframes; TypeError for a word that is none of them. */
+static int composite_read(JSContext *ctx, JSValueConst v, WaComposite *out)
 {
-    static const char *const kWords[] = {"replace", "add", "accumulate", "auto"};
-    int w;
-    return JS_IsUndefined(v) ? 0 : enum_of(ctx, v, kWords, 4, &w);
+    int w = WA_COMPOSITE_AUTO;
+    if (!JS_IsUndefined(v) && enum_of(ctx, v, kComposites, 4, &w) < 0) return -1;
+    *out = (WaComposite)w;
+    return 0;
 }
 
 /* The properties of a keyframe-like object that animate: its own
@@ -890,8 +979,10 @@ static int animation_props(JSContext *ctx, JSValueConst obj, WaProp **out, uint3
         WaProp *p = &v[n];
         /* Only a property libgarb reads: anything else on the object is
          * the page's own (metadata, a symbol, a getter), never read. */
+        bool custom = name[0] == '-' && name[1] == '-' && name[2] != '\0';
         if (!member_is(name) && os64_strcopy(p->idl, sizeof(p->idl), name) < sizeof(p->idl) &&
-            css_name(name, p->css, sizeof(p->css)) && garb_prop_known(p->css, os64_strlen(p->css), false)) {
+            (custom ? os64_strcopy(p->css, sizeof(p->css), name) < sizeof(p->css)
+                    : css_name(name, p->css, sizeof(p->css)) && garb_prop_known(p->css, os64_strlen(p->css), false))) {
             p->atom = JS_DupAtom(ctx, props[i].atom);
             /* By name, as they come. */
             for (uint32_t j = n; j > 0 && os64_strcmp(v[j - 1].idl, v[j].idl) > 0; j--) {
@@ -927,7 +1018,7 @@ static int read_keyframe(JSContext *ctx, JSValueConst obj, WaFrames *out)
     if (frames_add(ctx, out) == NULL) return -1;
     if (empty) return 0;
     JSValue v = JS_GetPropertyStr(ctx, obj, "composite");
-    int r = JS_IsException(v) ? -1 : composite_check(ctx, v);
+    int r = JS_IsException(v) ? -1 : composite_read(ctx, v, &out->v[out->n - 1].composite);
     JS_FreeValue(ctx, v);
     if (r < 0) return -1;
     v = JS_GetPropertyStr(ctx, obj, "easing");
@@ -1005,6 +1096,7 @@ static int read_indexed(os64_dom_t *dom, JSContext *ctx, JSValueConst obj, WaFra
     JSValue *items[3] = {NULL, NULL, NULL};
     size_t n[3] = {0, 0, 0};
     garb_easing_t *easings = NULL;
+    WaComposite *composites = NULL;
     double *offsets = NULL;
     int r = 0;
     for (int m = 0; r == 0 && m < 3; m++) {
@@ -1013,7 +1105,11 @@ static int read_indexed(os64_dom_t *dom, JSContext *ctx, JSValueConst obj, WaFra
         else if (!JS_IsUndefined(mv)) r = as_list(dom, ctx, mv, &items[m], &n[m]);
         JS_FreeValue(ctx, mv);
     }
-    for (size_t i = 0; r == 0 && i < n[0]; i++) r = composite_check(ctx, items[0][i]);
+    if (r == 0 && n[0] > 0) {
+        composites = js_malloc(ctx, n[0] * sizeof(*composites));
+        if (composites == NULL) r = -1;
+        for (size_t i = 0; r == 0 && i < n[0]; i++) r = composite_read(ctx, items[0][i], &composites[i]);
+    }
     if (r == 0 && n[1] > 0) {
         easings = js_malloc(ctx, n[1] * sizeof(*easings));
         if (easings == NULL) r = -1;
@@ -1062,8 +1158,10 @@ static int read_indexed(os64_dom_t *dom, JSContext *ctx, JSValueConst obj, WaFra
             out->v[i].easing = easings[(size_t)i % n[1]];
             out->v[i].has_easing = true;
         }
+        for (int32_t i = 0; i < out->n && n[0] > 0; i++) out->v[i].composite = composites[(size_t)i % n[0]];
     }
     js_free(ctx, easings);
+    js_free(ctx, composites);
     js_free(ctx, offsets);
     return r;
 }
@@ -1093,6 +1191,7 @@ static int process_keyframes(os64_dom_t *dom, JSContext *ctx, JSValueConst arg, 
         return -1;
     }
     double last = -1;
+    for (int32_t i = 0; i < out->n; i++) out->v[i].given = out->v[i].offset;
     for (int32_t i = 0; i < out->n; i++)
         if (!isnan(out->v[i].offset)) {
             if (out->v[i].offset < last) {
@@ -1123,6 +1222,17 @@ static int process_keyframes(os64_dom_t *dom, JSContext *ctx, JSValueConst arg, 
  * longhand once, from the declaration that set the fewest. A value
  * holding var() is held by libgarb (GARB_DECL_HELD) and dropped
  * (WEB_ANIMATIONS.md § 2, DEBTS). */
+/* Whether a declaration's text holds var(), which libgarb holds for the
+ * cascade to substitute (GARB_DECL_HELD) rather than reading it. */
+static bool holds_var(const char *text)
+{
+    for (const char *c = text; *c != '\0'; c++)
+        if ((c[0] == 'v' || c[0] == 'V') && (c[1] == 'a' || c[1] == 'A') && (c[2] == 'r' || c[2] == 'R') &&
+            c[3] == '(')
+            return true;
+    return false;
+}
+
 static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
 {
     DWaData *d = d_alloc(dom, sizeof(*d));
@@ -1139,10 +1249,15 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
         return NULL;
     }
     if (pieces > 0) os64_memset(d->parsed, 0, pieces * sizeof(*d->parsed));
-    size_t nsets = 0, capsets = 0;
+    size_t nsets = 0, capsets = 0, piece_at = 0;
     int32_t *ranks = NULL;     /* each set's declaration's longhand count */
     size_t *firsts = n > 0 ? js_malloc(ctx, (size_t)n * 2 * sizeof(size_t)) : NULL;
-    if (n > 0 && firsts == NULL) {
+    /* Which declarations getKeyframes gives back: each that parsed, a
+     * custom property's and one libgarb holds for its var() included,
+     * though neither is animated (DEBTS). */
+    bool *accepted = pieces > 0 ? js_mallocz(ctx, pieces * sizeof(*accepted)) : NULL;
+    if ((n > 0 && firsts == NULL) || (pieces > 0 && accepted == NULL)) {
+        js_free(ctx, firsts);
         data_free(dom, d);
         return NULL;
     }
@@ -1152,6 +1267,7 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
             const char *piece = f->v[i].text + at;
             size_t len = os64_strlen(piece);
             at += len + 1;
+            size_t this_piece = piece_at++;
             garb_parsed_t *p = &d->parsed[d->nparsed];
             if (garb_parse_block(piece, len, p) != GARB_OK) {
                 garb_free(p);
@@ -1160,9 +1276,14 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
             }
             d->nparsed++;
             for (int32_t j = 0; j < p->nitems; j++) {
-                if (p->items[j].kind != GARB_ITEM_DECL || garb_decl_is_custom(&p->items[j].decl)) continue;
+                if (p->items[j].kind != GARB_ITEM_DECL) continue;
+                if (garb_decl_is_custom(&p->items[j].decl)) {
+                    accepted[this_piece] = true;
+                    continue;
+                }
                 garb_set_t sets[64];
                 int32_t k = garb_read_declaration(p, &p->items[j].decl, (garb_reading_t){0}, sets);
+                if (k > 0 || holds_var(piece)) accepted[this_piece] = true;
                 for (int32_t s = 0; s < k; s++) {
                     /* A longhand two declarations of this keyframe set
                      * (§ 5.3.3): the one that set fewer longhands wins — a
@@ -1188,6 +1309,7 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
                             d_free(dom, grown);
                             js_free(ctx, ranks);
                             js_free(ctx, firsts);
+                            js_free(ctx, accepted);
                             data_free(dom, d);
                             return NULL;
                         }
@@ -1215,6 +1337,94 @@ static DWaData *data_make(os64_dom_t *dom, JSContext *ctx, const WaFrames *f)
     js_free(ctx, firsts);
     d->fx.frames = d->frames;
     d->fx.nframes = n;
+    /* What the page gave, as it gave it, and the properties once each. */
+    d->kept = n > 0 ? d_alloc(dom, (size_t)n * sizeof(*d->kept)) : NULL;
+    d->props = nsets > 0 ? d_alloc(dom, nsets * sizeof(*d->props)) : NULL;
+    if ((n > 0 && d->kept == NULL) || (nsets > 0 && d->props == NULL)) {
+        d_free(dom, d->kept);
+        d->kept = NULL;
+        js_free(ctx, accepted);
+        data_free(dom, d);
+        return NULL;
+    }
+    if (n > 0) os64_memset(d->kept, 0, (size_t)n * sizeof(*d->kept));
+    piece_at = 0;
+    for (int32_t i = 0; i < n; i++) {
+        d->kept[i].given = f->v[i].given;
+        d->kept[i].composite = f->v[i].composite;
+        size_t keep = 0;
+        for (size_t at = 0, pi = piece_at; at < f->v[i].len; pi++) {
+            size_t len = os64_strlen(f->v[i].text + at) + 1;
+            if (accepted[pi]) keep += len;
+            at += len;
+        }
+        d->kept[i].text = keep > 0 ? d_alloc(dom, keep) : NULL;
+        if (keep > 0 && d->kept[i].text == NULL) {
+            js_free(ctx, accepted);
+            data_free(dom, d);
+            return NULL;
+        }
+        for (size_t at = 0; at < f->v[i].len; piece_at++) {
+            size_t len = os64_strlen(f->v[i].text + at) + 1;
+            if (accepted[piece_at]) {
+                os64_memcpy(d->kept[i].text + d->kept[i].len, f->v[i].text + at, len);
+                d->kept[i].len += len;
+            }
+            at += len;
+        }
+    }
+    js_free(ctx, accepted);
+    for (size_t i = 0; i < nsets; i++) {
+        int32_t j = 0;
+        while (j < d->nprops && d->props[j] != d->sets[i].prop) j++;
+        if (j == d->nprops) d->props[d->nprops++] = d->sets[i].prop;
+    }
+    return d;
+}
+
+/* A keyframes argument processed into the data libflow takes; NULL on a
+ * throw. */
+static DWaData *keyframes_data(os64_dom_t *dom, JSContext *ctx, JSValueConst arg)
+{
+    WaFrames frames = {0};
+    if (process_keyframes(dom, ctx, arg, &frames) < 0) {
+        frames_free(ctx, &frames);
+        return NULL;
+    }
+    DWaData *d = data_make(dom, ctx, &frames);
+    frames_free(ctx, &frames);
+    if (d == NULL) d_error(ctx, "QuotaExceededError", "No room for an animation's keyframes");
+    return d;
+}
+
+/* A copy of `from`'s keyframes, as the page gave them (a KeyframeEffect
+ * made from another), its timing beside them; NULL on a throw. */
+static DWaData *data_copy(os64_dom_t *dom, JSContext *ctx, const DWaData *from)
+{
+    WaFrames frames = {0};
+    for (int32_t i = 0; i < from->fx.nframes; i++) {
+        WaFrame *k = frames_add(ctx, &frames);
+        char *text = k != NULL && from->kept[i].len > 0 ? js_malloc(ctx, from->kept[i].len) : NULL;
+        if (k == NULL || (from->kept[i].len > 0 && text == NULL)) {
+            frames_free(ctx, &frames);
+            return NULL;
+        }
+        k->offset = from->frames[i].offset;
+        k->given = from->kept[i].given;
+        k->has_easing = from->frames[i].has_easing;
+        k->easing = from->frames[i].easing;
+        k->composite = from->kept[i].composite;
+        if (text != NULL) os64_memcpy(text, from->kept[i].text, from->kept[i].len);
+        k->text = text;
+        k->len = k->cap = from->kept[i].len;
+    }
+    DWaData *d = data_make(dom, ctx, &frames);
+    frames_free(ctx, &frames);
+    if (d == NULL) {
+        d_error(ctx, "QuotaExceededError", "No room for an animation's keyframes");
+        return NULL;
+    }
+    d->fx.timing = from->fx.timing;
     return d;
 }
 
@@ -1270,13 +1480,44 @@ static bool pseudo_known(const char *s)
  * name order: EffectTiming's, KeyframeEffectOptions' composite,
  * iterationComposite and pseudoElement, then KeyframeAnimationOptions' id. `id` is that id (NULL for none),
  * js_malloc'd. */
-static int timing_of(JSContext *ctx, JSValueConst options, garb_timing_t *t, char **id)
+/* What a page's timing says that garb_timing_t does not keep, and the
+ * options beside the timing: `fill: auto` and `duration: auto` (getTiming
+ * gives them back), the effect's composite operations, and the id. */
+typedef struct {
+    bool fill_auto, duration_auto;
+    WaComposite composite, iteration_composite;
+    char *id;
+} WaSpec;
+
+/* Which dictionary a timing argument converts to: animate()'s
+ * KeyframeAnimationOptions, the KeyframeEffect constructor's
+ * KeyframeEffectOptions, or updateTiming()'s OptionalEffectTiming, whose
+ * members left out keep what `t` and `spec` hold. */
+typedef enum { WA_TIMING_ANIMATE, WA_TIMING_EFFECT, WA_TIMING_UPDATE } WaTimingFor;
+
+static void timing_default(garb_timing_t *t, WaSpec *spec)
 {
     os64_memset(t, 0, sizeof(*t));
     t->iterations = 1;
-    *id = NULL;
-    if (JS_IsUndefined(options)) return 0;
+    os64_memset(spec, 0, sizeof(*spec));
+    spec->fill_auto = spec->duration_auto = true;
+    spec->composite = spec->iteration_composite = WA_COMPOSITE_REPLACE;
+}
+
+/* The members in WebIDL's order, an inherited dictionary's first and each
+ * dictionary's by name; all read and checked before any is kept, so a
+ * throw leaves `t` and `spec` as they were. */
+static int timing_of(JSContext *ctx, JSValueConst options, garb_timing_t *t, WaSpec *spec, WaTimingFor what)
+{
+    garb_timing_t nt = *t;
+    WaSpec ns = *spec;
+    ns.id = NULL;
+    if (JS_IsUndefined(options) || (what == WA_TIMING_UPDATE && JS_IsNull(options))) return 0;
     if (!JS_IsObject(options)) {
+        if (what == WA_TIMING_UPDATE) {
+            JS_ThrowTypeError(ctx, "updateTiming takes an object");
+            return -1;
+        }
         double d;
         if (JS_ToFloat64(ctx, &d, options) < 0) return -1;
         if (isnan(d) || d < 0) {
@@ -1284,68 +1525,83 @@ static int timing_of(JSContext *ctx, JSValueConst options, garb_timing_t *t, cha
             return -1;
         }
         t->duration_ms = d;
+        spec->duration_auto = false;
         return 0;
     }
     static const char *const kDirections[] = {"normal", "reverse", "alternate", "alternate-reverse"};
     static const char *const kFills[] = {"none", "forwards", "backwards", "both", "auto"};
-    static const char *const kComposites[] = {"replace", "add", "accumulate"};
-    static const char *const kIterationComposites[] = {"replace", "accumulate"};
     static const char *const kMembers[] = {"delay", "direction", "duration", "easing", "endDelay", "fill",
                                            "iterationStart", "iterations", "composite", "iterationComposite",
                                            "pseudoElement", "id"};
-    for (int m = 0; m < (int)(sizeof(kMembers) / sizeof(kMembers[0])); m++) {
+    int members = what == WA_TIMING_UPDATE ? 8 : what == WA_TIMING_EFFECT ? 11 : 12;
+    for (int m = 0; m < members; m++) {
         JSValue v = JS_GetPropertyStr(ctx, options, kMembers[m]);
-        if (JS_IsException(v)) return -1;
+        if (JS_IsException(v)) {
+            js_free(ctx, ns.id);
+            return -1;
+        }
         int r = 0, w;
         if (!JS_IsUndefined(v)) {
             switch (m) {
-            case 0: r = finite_of(ctx, v, &t->delay_ms, false); break;
+            case 0: r = finite_of(ctx, v, &nt.delay_ms, false); break;
             case 1:
                 r = enum_of(ctx, v, kDirections, 4, &w);
-                if (r == 0) t->direction = (garb_direction_t)w;
+                if (r == 0) nt.direction = (garb_direction_t)w;
                 break;
             case 2:
                 if (JS_IsString(v)) {
-                    const char *s = JS_ToCString(ctx, v);
-                    r = s != NULL && os64_streq(s, "auto") ? 0 : -1;
-                    if (s != NULL) JS_FreeCString(ctx, s);
+                    const char *str = JS_ToCString(ctx, v);
+                    r = str != NULL && os64_streq(str, "auto") ? 0 : -1;
+                    if (str != NULL) JS_FreeCString(ctx, str);
                     if (r < 0) JS_ThrowTypeError(ctx, "A duration is a number or auto");
+                    else {
+                        nt.duration_ms = 0;
+                        ns.duration_auto = true;
+                    }
                 } else {
-                    r = JS_ToFloat64(ctx, &t->duration_ms, v);
-                    if (r == 0 && (isnan(t->duration_ms) || t->duration_ms < 0)) {
+                    r = JS_ToFloat64(ctx, &nt.duration_ms, v);
+                    if (r == 0 && (isnan(nt.duration_ms) || nt.duration_ms < 0)) {
                         JS_ThrowTypeError(ctx, "A duration is a non-negative number");
                         r = -1;
                     }
+                    ns.duration_auto = false;
                 }
                 break;
-            case 3: r = easing_of(ctx, v, &t->easing); break;
-            case 4: r = finite_of(ctx, v, &t->end_delay_ms, false); break;
+            case 3: r = easing_of(ctx, v, &nt.easing); break;
+            case 4: r = finite_of(ctx, v, &nt.end_delay_ms, false); break;
             case 5:
                 r = enum_of(ctx, v, kFills, 5, &w);
                 /* `auto` is none for a keyframe effect (§ 4.6.1, Fill modes). */
-                if (r == 0) t->fill = w == 4 ? GARB_FILL_NONE : (garb_fill_t)w;
+                if (r == 0) {
+                    nt.fill = w == 4 ? GARB_FILL_NONE : (garb_fill_t)w;
+                    ns.fill_auto = w == 4;
+                }
                 break;
-            case 6: r = finite_of(ctx, v, &t->iteration_start, true); break;
+            case 6: r = finite_of(ctx, v, &nt.iteration_start, true); break;
             case 7:
-                r = JS_ToFloat64(ctx, &t->iterations, v);
-                if (r == 0 && (isnan(t->iterations) || t->iterations < 0)) {
+                r = JS_ToFloat64(ctx, &nt.iterations, v);
+                if (r == 0 && (isnan(nt.iterations) || nt.iterations < 0)) {
                     JS_ThrowTypeError(ctx, "Iterations are a non-negative number");
                     r = -1;
                 }
                 break;
-            /* Checked and not kept, as a keyframe's composite is
-             * (composite_check). */
-            case 8: r = enum_of(ctx, v, kComposites, 3, &w); break;
-            case 9: r = enum_of(ctx, v, kIterationComposites, 2, &w); break;
+            case 8:
+                r = enum_of(ctx, v, kComposites, 3, &w);
+                if (r == 0) ns.composite = (WaComposite)w;
+                break;
+            case 9:
+                r = enum_of(ctx, v, (const char *const[]){"replace", "accumulate"}, 2, &w);
+                if (r == 0) ns.iteration_composite = w == 0 ? WA_COMPOSITE_REPLACE : WA_COMPOSITE_ACCUMULATE;
+                break;
             case 10:
                 if (!JS_IsNull(v)) {
-                    const char *s = JS_ToCString(ctx, v);
-                    if (s == NULL) {
+                    const char *str = JS_ToCString(ctx, v);
+                    if (str == NULL) {
                         r = -1;
                         break;
                     }
-                    bool known = pseudo_known(s);
-                    JS_FreeCString(ctx, s);
+                    bool known = pseudo_known(str);
+                    JS_FreeCString(ctx, str);
                     d_error(ctx, known ? "NotSupportedError" : "SyntaxError",
                             known ? "A pseudo-element's animations are not run here" : "Not a pseudo-element");
                     r = -1;
@@ -1353,13 +1609,13 @@ static int timing_of(JSContext *ctx, JSValueConst options, garb_timing_t *t, cha
                 break;
             case 11: {
                 size_t len;
-                const char *s = JS_ToCStringLen(ctx, &len, v);
-                if (s == NULL) r = -1;
+                const char *str = JS_ToCStringLen(ctx, &len, v);
+                if (str == NULL) r = -1;
                 else {
-                    *id = js_malloc(ctx, len + 1);
-                    if (*id != NULL) os64_memcpy(*id, s, len + 1);
-                    JS_FreeCString(ctx, s);
-                    r = *id != NULL ? 0 : -1;
+                    ns.id = js_malloc(ctx, len + 1);
+                    if (ns.id != NULL) os64_memcpy(ns.id, str, len + 1);
+                    JS_FreeCString(ctx, str);
+                    r = ns.id != NULL ? 0 : -1;
                 }
                 break;
             }
@@ -1367,32 +1623,77 @@ static int timing_of(JSContext *ctx, JSValueConst options, garb_timing_t *t, cha
         }
         JS_FreeValue(ctx, v);
         if (r < 0) {
-            js_free(ctx, *id);
-            *id = NULL;
+            js_free(ctx, ns.id);
             return -1;
         }
     }
+    *t = nt;
+    *spec = ns;
     return 0;
 }
 
 /* ── The objects ─────────────────────────────────────────────────────── */
 
-typedef struct {
-    JSValue animation;
-} DWaEffect;
+static void effect_unlink(os64_dom_t *dom, DWaEffect *e)
+{
+    if (e->prev != NULL) e->prev->next = e->next;
+    else dom->wa_fx_first = e->next;
+    if (e->next != NULL) e->next->prev = e->prev;
+    e->prev = e->next = NULL;
+}
+
+/* An effect lets go of what it holds: its data buried (a tree may still
+ * read it) and its target released. */
+static void effect_let_go(os64_dom_t *dom, DWaEffect *e)
+{
+    data_bury(dom, e->data);
+    e->data = NULL;
+    if (e->element != NULL) os64_html_release(dom->document, e->element);
+    e->element = NULL;
+}
 
 static void effect_finalizer(JSRuntime *rt, JSValue value)
 {
-    DWaEffect *e = JS_GetOpaque(value, os64_js_class_id(&effect_slot));
+    DWaEffect *e = fx_state(value);
     if (e == NULL) return;
-    JS_FreeValueRT(rt, e->animation);
+    if (e->dom != NULL) {
+        effect_unlink(e->dom, e);
+        effect_let_go(e->dom, e);
+    }
     js_free_rt(rt, e);
 }
 
-static void effect_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+/* A new effect, its target held and its data taken, on `prototype` (a
+ * subclass's, from a constructor's new.target) or the class's; an
+ * exception on a throw, the data freed. */
+static JSValue effect_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, DWaData *data,
+                          const WaSpec *spec, JSValueConst prototype)
 {
-    DWaEffect *e = JS_GetOpaque(value, os64_js_class_id(&effect_slot));
-    if (e != NULL) JS_MarkValue(rt, e->animation, mark);
+    DWaEffect *e = js_mallocz(ctx, sizeof(*e));
+    JSClassID id = os64_js_class_id(&effect_slot);
+    JSValue object = e == NULL ? JS_EXCEPTION
+                   : JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id)
+                                            : JS_NewObjectClass(ctx, (int)id);
+    if (JS_IsException(object)) {
+        js_free(ctx, e);
+        data_free(dom, data);
+        return JS_EXCEPTION;
+    }
+    e->dom = dom;
+    e->data = data;
+    e->fill_auto = spec->fill_auto;
+    e->duration_auto = spec->duration_auto;
+    e->composite = spec->composite;
+    e->iteration_composite = spec->iteration_composite;
+    if (element != NULL) {
+        os64_html_hold(dom->document, element);
+        e->element = element;
+    }
+    e->next = dom->wa_fx_first;
+    if (e->next != NULL) e->next->prev = e;
+    dom->wa_fx_first = e;
+    JS_SetOpaque(object, e);
+    return object;
 }
 
 static void unlink_animation(os64_dom_t *dom, DWaAnimation *a)
@@ -1407,17 +1708,13 @@ static void unlink_animation(os64_dom_t *dom, DWaAnimation *a)
 }
 
 /* An animation goes with the garbage once nothing holds it: neither a
- * script nor the binding, which holds one while it is live (wa_keep). Its data is buried, not freed: a tree may still read it. */
+ * script nor the binding, which holds one while it is live (wa_keep). Its
+ * effect is an object of its own, which a script may hold on after it. */
 static void animation_finalizer(JSRuntime *rt, JSValue value)
 {
     DWaAnimation *a = wa_state(value);
     if (a == NULL) return;
-    os64_dom_t *dom = a->dom;
-    if (dom != NULL) {
-        unlink_animation(dom, a);
-        data_bury(dom, a->data);
-        if (a->element != NULL) os64_html_release(dom->document, a->element);
-    }
+    if (a->dom != NULL) unlink_animation(a->dom, a);
     d_event_target_finalize(rt, &a->target);
     JS_FreeValueRT(rt, a->effect);
     JS_FreeValueRT(rt, a->hold);
@@ -1447,27 +1744,60 @@ static void animation_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     JS_MarkValue(rt, a->finished_reject, mark);
 }
 
-/* A new animation of `element` by `data` (its timing set), idle: the
- * caller plays it. Takes `data` and `id`. */
-static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, DWaData *data,
-                             char *id)
+/* The animation `e` is the effect of, or NULL. */
+static DWaAnimation *effect_owner(DWaEffect *e)
+{
+    if (e == NULL || e->owner == 0 || e->dom == NULL) return NULL;
+    for (DWaAnimation *a = e->dom->wa_first; a != NULL; a = a->next)
+        if (a->serial == e->owner) return wa_fx(a) == e ? a : NULL;
+    return NULL;
+}
+
+static void update_finished(JSContext *ctx, DWaAnimation *a, bool did_seek, bool sync);
+
+/* § 4.4.2, Setting the associated effect of an animation: `effect` (null
+ * or a KeyframeEffect) taken from the animation it was the effect of, the
+ * old one's target and the new one's restyled, and the finished state
+ * updated. */
+static void set_effect(JSContext *ctx, DWaAnimation *a, JSValueConst effect)
+{
+    DWaEffect *e = fx_state(effect), *old = wa_fx(a);
+    if (e == old) return;
+    DWaAnimation *previous = effect_owner(e);
+    if (previous != NULL) set_effect(ctx, previous, JS_NULL);
+    if (old != NULL) {
+        old->owner = 0;
+        if (old->element != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)old->element);
+    }
+    JSValue was = a->effect;
+    a->effect = e != NULL ? JS_DupValue(ctx, effect) : JS_NULL;
+    JS_FreeValue(ctx, was);
+    if (e != NULL) e->owner = a->serial;
+    update_finished(ctx, a, false, false);
+    wa_restyle(a);
+}
+
+/* A new animation of `effect` (null for none), idle, on `prototype` or
+ * the class's: the caller plays it. */
+static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effect, char *id,
+                             JSValueConst prototype)
 {
     JSClassID cid = os64_js_class_id(&animation_slot);
-    JSValue object = JS_NewObjectClass(ctx, (int)cid);
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, cid)
+                                            : JS_NewObjectClass(ctx, (int)cid);
     DWaAnimation *a = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*a));
     if (a == NULL) {
         JS_FreeValue(ctx, object);
-        data_free(dom, data);
         js_free(ctx, id);
         return JS_EXCEPTION;
     }
     d_event_target_init(dom, &a->target, object);
     a->dom = dom;
-    a->data = data;
     a->id = id;
     a->start = a->held = a->previous = NAN;
     a->rate = 1;
-    a->effect = a->hold = JS_UNDEFINED;
+    a->effect = JS_NULL;
+    a->hold = JS_UNDEFINED;
     a->ready = a->ready_resolve = a->ready_reject = JS_UNDEFINED;
     a->finished = a->finished_resolve = a->finished_reject = JS_UNDEFINED;
     JS_SetOpaque(object, a);
@@ -1478,10 +1808,6 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     dom->wa_last = a;
     dom->wa_count++;
     dom->wa_index_stale = true;
-    if (element != NULL) {
-        os64_html_hold(dom->document, element);
-        a->element = element;
-    }
     /* A new animation's ready promise is resolved, its finished one
      * pending (an animation's initial state, § 4.4.7 and § 4.4.11). */
     if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
@@ -1491,16 +1817,7 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     }
     promise_call(ctx, a->ready_resolve, object);
     a->ready_done = true;
-    DWaEffect *e = js_mallocz(ctx, sizeof(*e));
-    JSValue effect = e != NULL ? JS_NewObjectClass(ctx, (int)os64_js_class_id(&effect_slot)) : JS_EXCEPTION;
-    if (JS_IsException(effect)) {
-        js_free(ctx, e);
-        JS_FreeValue(ctx, object);
-        return JS_EXCEPTION;
-    }
-    e->animation = JS_DupValue(ctx, object);
-    JS_SetOpaque(effect, e);
-    a->effect = effect;
+    if (fx_state(effect) != NULL) set_effect(ctx, a, effect);
     return object;
 }
 
@@ -1510,7 +1827,11 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, const os64_html_no
  * delay), or relevant. */
 static bool wa_live(DWaAnimation *a)
 {
-    return a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING || wa_relevant(a);
+    /* With no timeline nothing moves it but a script: it is kept while it
+     * shows (relevant), and never for a task it cannot run. */
+    if (a->no_timeline) return a->replace != WA_REMOVED && wa_relevant(a);
+    if (a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING) return true;
+    return a->replace != WA_REMOVED && wa_relevant(a);
 }
 
 /* The binding holds a live animation (wa_live), so that nothing a page
@@ -1545,9 +1866,407 @@ static int time_arg(JSContext *ctx, JSValueConst v, double *out)
     return 0;
 }
 
+/* ── commitStyles (Web Animations 1's commitStyles(), its steps) ──────── */
+
+/* Each property the effect animates written into its target's style
+ * attribute as its value now: NoModificationAllowedError with no target,
+ * InvalidStateError for a target that is not rendered (target_rendered).
+ * The value is the target's computed one, which is the
+ * effect stack's result with every animation in it: the spec's is the
+ * stack up to and including this one (DEBTS). */
+/* Whether `target` has a box (HTML's "being rendered"): in the document,
+ * neither it nor an ancestor `display: none`, and not itself `display:
+ * contents`, which makes its children's boxes and none of its own. -1 on
+ * a throw. */
+static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)
+{
+    if (!d_in_window_tree(dom, target)) return 0;
+    for (const os64_html_node_t *n = target; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
+        JSValue display = d_computed_property(dom, ctx, n, GARB_DISPLAY, "none");
+        if (JS_IsException(display)) return -1;
+        const char *word = JS_ToCString(ctx, display);
+        JS_FreeValue(ctx, display);
+        if (word == NULL) return -1;
+        bool boxless = os64_streq(word, "none") || (n == target && os64_streq(word, "contents"));
+        JS_FreeCString(ctx, word);
+        if (boxless) return 0;
+    }
+    return 1;
+}
+
+static int commit_styles(JSContext *ctx, DWaAnimation *a)
+{
+    os64_dom_t *dom = a->dom;
+    const os64_html_node_t *target = wa_target(a);
+    DWaData *d = wa_data(a);
+    if (target == NULL || d == NULL) {
+        d_error(ctx, "NoModificationAllowedError", "An animation with no target has nothing to commit");
+        return -1;
+    }
+    int rendered = target_rendered(dom, ctx, target);
+    if (rendered < 0) return -1;
+    if (!rendered) {
+        d_error(ctx, "InvalidStateError", "The animation's target is not rendered");
+        return -1;
+    }
+    for (int32_t i = 0; i < d->nprops; i++) {
+        JSValue v = d_computed_property(dom, ctx, target, d->props[i], "");
+        if (JS_IsException(v)) return -1;
+        const char *text = JS_ToCString(ctx, v);
+        JS_FreeValue(ctx, v);
+        if (text == NULL) return -1;
+        JSValue done = text[0] != '\0' ? d_style_write(dom, ctx, target, garb_prop_name(d->props[i]), text)
+                                       : JS_UNDEFINED;
+        JS_FreeCString(ctx, text);
+        if (JS_IsException(done)) return -1;
+        JS_FreeValue(ctx, done);
+    }
+    return 0;
+}
+
+/* ── KeyframeEffect's members (§ 6.6) ────────────────────────────────── */
+
+/* An easing as Chrome writes it, which is how libflow's computed style
+ * writes one: a keyword when it was one, else the function. */
+static void easing_text(const garb_easing_t *e, char *out, size_t cap)
+{
+    if (e->kind == GARB_EASE_LINEAR) {
+        os64_strcopy(out, cap, "linear");
+        return;
+    }
+    char n[4][32];
+    if (e->kind == GARB_EASE_CUBIC) {
+        static const struct { double p[4]; const char *name; } kNamed[] = {
+            {{0.25, 0.1, 0.25, 1}, "ease"}, {{0.42, 0, 1, 1}, "ease-in"},
+            {{0, 0, 0.58, 1}, "ease-out"}, {{0.42, 0, 0.58, 1}, "ease-in-out"},
+        };
+        for (size_t k = 0; e->named && k < sizeof(kNamed) / sizeof(kNamed[0]); k++)
+            if (os64_memcmp(kNamed[k].p, e->p, sizeof(e->p)) == 0) {
+                os64_strcopy(out, cap, kNamed[k].name);
+                return;
+            }
+        for (int k = 0; k < 4; k++) garb_css_number(e->p[k], n[k], sizeof(n[k]));
+        os64_snprintf(out, cap, "cubic-bezier(%s, %s, %s, %s)", n[0], n[1], n[2], n[3]);
+        return;
+    }
+    static const char *const kJumps[] = {"end", "start", "jump-none", "jump-both"};
+    if (e->jump == GARB_JUMP_END) os64_snprintf(out, cap, "steps(%d)", (int)e->steps);
+    else os64_snprintf(out, cap, "steps(%d, %s)", (int)e->steps, kJumps[e->jump]);
+}
+
+static const char *const kDirectionWords[] = {"normal", "reverse", "alternate", "alternate-reverse"};
+static const char *const kFillWords[] = {"none", "forwards", "backwards", "both", "auto"};
+
+static int put_number(JSContext *ctx, JSValue o, const char *name, double v)
+{
+    return JS_DefinePropertyValueStr(ctx, o, name, JS_NewFloat64(ctx, v + 0.0), JS_PROP_C_W_E);
+}
+
+static int put_string(JSContext *ctx, JSValue o, const char *name, const char *v)
+{
+    return JS_DefinePropertyValueStr(ctx, o, name, JS_NewString(ctx, v), JS_PROP_C_W_E);
+}
+
+/* The EffectTiming members both getTiming and getComputedTiming answer;
+ * `computed` resolves `auto`, as getComputedTiming does. */
+static int put_timing(JSContext *ctx, JSValue o, const DWaEffect *e, bool computed)
+{
+    const garb_timing_t *t = &e->data->fx.timing;
+    char easing[160];
+    easing_text(&t->easing, easing, sizeof(easing));
+    int r = put_number(ctx, o, "delay", t->delay_ms) | put_number(ctx, o, "endDelay", t->end_delay_ms) |
+            put_string(ctx, o, "fill", kFillWords[e->fill_auto && !computed ? 4 : (int)t->fill]) |
+            put_number(ctx, o, "iterationStart", t->iteration_start) |
+            put_number(ctx, o, "iterations", t->iterations) |
+            put_string(ctx, o, "direction", kDirectionWords[t->direction]) | put_string(ctx, o, "easing", easing);
+    if (e->duration_auto && !computed) r |= put_string(ctx, o, "duration", "auto");
+    else r |= put_number(ctx, o, "duration", t->duration_ms);
+    return r < 0 ? -1 : 0;
+}
+
+/* A property's name as a keyframe object writes it (§ 6.6.2, "animation
+ * property name to IDL attribute name"): `float` as cssFloat, `offset` as
+ * cssOffset, the rest camel-cased. */
+static void idl_name(const char *css, size_t len, char *out, size_t cap)
+{
+    if (len >= 2 && css[0] == '-' && css[1] == '-') {
+        os64_snprintf(out, cap, "%.*s", (int)len, css);
+        return;
+    }
+    if (len == 5 && os64_memcmp(css, "float", 5) == 0) {
+        os64_strcopy(out, cap, "cssFloat");
+        return;
+    }
+    if (len == 6 && os64_memcmp(css, "offset", 6) == 0) {
+        os64_strcopy(out, cap, "cssOffset");
+        return;
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < len && n + 1 < cap; i++) {
+        if (css[i] == '-' && i + 1 < len) {
+            char c = css[++i];
+            out[n++] = c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c;
+        } else {
+            out[n++] = css[i];
+        }
+    }
+    out[n] = '\0';
+}
+
+/* getKeyframes (§ 6.6, KeyframeEffect): each keyframe as the page gave it — the offset
+ * it gave or null, the one it was given, its easing, its composite, and
+ * its properties' values as their texts. */
+static JSValue get_keyframes(JSContext *ctx, const DWaEffect *e)
+{
+    JSValue list = JS_NewArray(ctx);
+    if (JS_IsException(list) || e->data == NULL) return list;
+    const DWaData *d = e->data;
+    for (int32_t i = 0; i < d->fx.nframes; i++) {
+        JSValue k = JS_NewObject(ctx);
+        if (JS_IsException(k)) goto fail;
+        char easing[160];
+        if (d->frames[i].has_easing) easing_text(&d->frames[i].easing, easing, sizeof(easing));
+        else os64_strcopy(easing, sizeof(easing), "linear");
+        int r = JS_DefinePropertyValueStr(ctx, k, "offset",
+                                          isnan(d->kept[i].given) ? JS_NULL : JS_NewFloat64(ctx, d->kept[i].given),
+                                          JS_PROP_C_W_E) |
+                put_number(ctx, k, "computedOffset", d->frames[i].offset) | put_string(ctx, k, "easing", easing) |
+                put_string(ctx, k, "composite", kComposites[d->kept[i].composite]);
+        for (size_t at = 0; r >= 0 && at < d->kept[i].len;) {
+            const char *piece = d->kept[i].text + at;
+            size_t len = os64_strlen(piece);
+            at += len + 1;
+            const char *colon = os64_strchr(piece, ':');
+            if (colon == NULL) continue;
+            char name[160];
+            idl_name(piece, (size_t)(colon - piece), name, sizeof(name));
+            r = JS_DefinePropertyValueStr(ctx, k, name, JS_NewStringLen(ctx, colon + 1, len - (size_t)(colon - piece) - 1),
+                                          JS_PROP_C_W_E);
+        }
+        if (r < 0 || JS_SetPropertyUint32(ctx, list, (uint32_t)i, k) < 0) {
+            if (r < 0) JS_FreeValue(ctx, k);
+            goto fail;
+        }
+    }
+    return list;
+fail:
+    JS_FreeValue(ctx, list);
+    return JS_EXCEPTION;
+}
+
+/* getComputedTiming (§ 6.5, AnimationEffect): the timing with `auto` resolved, and where
+ * the effect is at its animation's current time — its local time, null
+ * with no animation or no time, and its progress and iteration, null
+ * when it is not in effect. */
+static JSValue computed_timing(JSContext *ctx, DWaEffect *e)
+{
+    JSValue o = JS_NewObject(ctx);
+    if (JS_IsException(o) || e->data == NULL) return o;
+    DWaAnimation *a = effect_owner(e);
+    double local = a != NULL ? current_time(a) : NAN;
+    garb_clock_t k = garb_clock_at(&e->data->fx.timing, isnan(local) ? 0 : local, a != NULL && a->rate < 0);
+    bool shows = !isnan(local) && k.in_effect;
+    int r = put_timing(ctx, o, e, true) | put_number(ctx, o, "startTime", 0) |
+            put_number(ctx, o, "endTime", k.end_time) | put_number(ctx, o, "activeDuration", k.active_duration);
+    r |= JS_DefinePropertyValueStr(ctx, o, "localTime", time_value(ctx, local), JS_PROP_C_W_E);
+    r |= JS_DefinePropertyValueStr(ctx, o, "progress", shows ? JS_NewFloat64(ctx, k.progress + 0.0) : JS_NULL,
+                                   JS_PROP_C_W_E);
+    r |= JS_DefinePropertyValueStr(ctx, o, "currentIteration", shows ? JS_NewFloat64(ctx, k.iteration) : JS_NULL,
+                                   JS_PROP_C_W_E);
+    if (r < 0) {
+        JS_FreeValue(ctx, o);
+        return JS_EXCEPTION;
+    }
+    return o;
+}
+
+/* After the effect's keyframes, timing or target changed: its animation
+ * restyled and, for its timing, its finished state updated (updateTiming's
+ * steps, § 6.5). */
+static void effect_changed(JSContext *ctx, DWaEffect *e, bool timing)
+{
+    DWaAnimation *a = effect_owner(e);
+    if (a == NULL) return;
+    if (timing) update_finished(ctx, a, false, false);
+    wa_restyle(a);
+    wa_keep(ctx, a);
+}
+
+enum { E_TARGET, E_PSEUDO, E_COMPOSITE, E_ITERATION_COMPOSITE, E_GET_KEYFRAMES, E_SET_KEYFRAMES, E_GET_TIMING,
+       E_COMPUTED_TIMING, E_UPDATE_TIMING };
+
+static JSValue effect_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
+    DWaEffect *e = fx_state(self);
+    if (e == NULL) return JS_ThrowTypeError(ctx, "Expected a KeyframeEffect");
+    if (e->dom == NULL || e->data == NULL) return JS_UNDEFINED;
+    switch (magic) {
+    case E_TARGET: {
+        if (!set) return e->element != NULL ? d_wrap(dom, ctx, e->element) : JS_NULL;
+        const os64_html_node_t *element = NULL;
+        if (!JS_IsNull(arg)) {
+            element = d_node(dom, ctx, arg);
+            if (element == NULL || element->kind != OS64_HTML_ELEMENT)
+                return JS_ThrowTypeError(ctx, "An effect's target is an element or null");
+        }
+        if (element == e->element) return JS_UNDEFINED;
+        if (e->element != NULL) {
+            (void)os64_html_touch(dom->document, (os64_html_node_t *)e->element);
+            os64_html_release(dom->document, e->element);
+        }
+        if (element != NULL) os64_html_hold(dom->document, element);
+        e->element = element;
+        effect_changed(ctx, e, false);
+        return JS_UNDEFINED;
+    }
+    case E_PSEUDO: {
+        if (!set) return JS_NULL;
+        if (JS_IsNull(arg)) return JS_UNDEFINED;
+        const char *str = JS_ToCString(ctx, arg);
+        if (str == NULL) return JS_EXCEPTION;
+        bool known = pseudo_known(str);
+        JS_FreeCString(ctx, str);
+        return d_error(ctx, known ? "NotSupportedError" : "SyntaxError",
+                       known ? "A pseudo-element's animations are not run here" : "Not a pseudo-element");
+    }
+    case E_COMPOSITE:
+    case E_ITERATION_COMPOSITE: {
+        WaComposite *field = magic == E_COMPOSITE ? &e->composite : &e->iteration_composite;
+        if (!set) return JS_NewString(ctx, kComposites[*field]);
+        int w;
+        if (magic == E_COMPOSITE) {
+            if (enum_of(ctx, arg, kComposites, 3, &w) < 0) return JS_EXCEPTION;
+        } else {
+            if (enum_of(ctx, arg, (const char *const[]){"replace", "accumulate"}, 2, &w) < 0) return JS_EXCEPTION;
+            w = w == 0 ? WA_COMPOSITE_REPLACE : WA_COMPOSITE_ACCUMULATE;
+        }
+        *field = (WaComposite)w;
+        effect_changed(ctx, e, false);
+        return JS_UNDEFINED;
+    }
+    case E_GET_KEYFRAMES: return get_keyframes(ctx, e);
+    case E_SET_KEYFRAMES: {
+        if (argc < 1) return JS_ThrowTypeError(ctx, "setKeyframes needs keyframes");
+        DWaData *d = keyframes_data(dom, ctx, arg);
+        if (d == NULL) return JS_EXCEPTION;
+        /* The new keyframes take the timing and the clock as they were; the
+         * old ones are buried, as a tree laid out with them may read them. */
+        d->fx.timing = e->data->fx.timing;
+        d->fx.start_ms = e->data->fx.start_ms;
+        d->fx.hold_ms = e->data->fx.hold_ms;
+        d->fx.rate = e->data->fx.rate;
+        d->fx.held = e->data->fx.held;
+        data_bury(dom, e->data);
+        e->data = d;
+        effect_changed(ctx, e, false);
+        return JS_UNDEFINED;
+    }
+    case E_GET_TIMING: {
+        JSValue o = JS_NewObject(ctx);
+        if (!JS_IsException(o) && put_timing(ctx, o, e, false) < 0) {
+            JS_FreeValue(ctx, o);
+            return JS_EXCEPTION;
+        }
+        return o;
+    }
+    case E_COMPUTED_TIMING: return computed_timing(ctx, e);
+    case E_UPDATE_TIMING: {
+        /* Into a copy: the members' getters are the page's, and may give
+         * the effect new keyframes before the timing lands. */
+        WaSpec spec = {.fill_auto = e->fill_auto, .duration_auto = e->duration_auto,
+                       .composite = e->composite, .iteration_composite = e->iteration_composite};
+        garb_timing_t timing = e->data->fx.timing;
+        if (timing_of(ctx, arg, &timing, &spec, WA_TIMING_UPDATE) < 0) return JS_EXCEPTION;
+        if (e->data == NULL) return JS_UNDEFINED;
+        e->data->fx.timing = timing;
+        e->fill_auto = spec.fill_auto;
+        e->duration_auto = spec.duration_auto;
+        effect_changed(ctx, e, true);
+        return JS_UNDEFINED;
+    }
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, JSValueConst prototype);
+
+/* `new KeyframeEffect(target, keyframes, options)`, or `new
+ * KeyframeEffect(source)`, a copy of another (§ 6.6): the options before
+ * the keyframes, as WebIDL converts them first. */
+static JSValue effect_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue made = effect_make(dom, ctx, argc, argv, prototype);
+    JS_FreeValue(ctx, prototype);
+    return made;
+}
+
+static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, JSValueConst prototype)
+{
+    /* WebIDL's overloads: one argument is the copy, more the target's. */
+    DWaEffect *source = argc == 1 ? fx_state(argv[0]) : NULL;
+    if (argc == 1 && source == NULL) return JS_ThrowTypeError(ctx, "KeyframeEffect copies a KeyframeEffect");
+    if (source != NULL) {
+        if (source->data == NULL) return JS_ThrowTypeError(ctx, "That effect is gone");
+        DWaData *d = data_copy(dom, ctx, source->data);
+        if (d == NULL) return JS_EXCEPTION;
+        WaSpec spec = {.fill_auto = source->fill_auto, .duration_auto = source->duration_auto,
+                       .composite = source->composite, .iteration_composite = source->iteration_composite};
+        return effect_new(dom, ctx, source->element, d, &spec, prototype);
+    }
+    if (argc < 2) return JS_ThrowTypeError(ctx, "KeyframeEffect needs a target and keyframes");
+    const os64_html_node_t *element = NULL;
+    if (!JS_IsNull(argv[0])) {
+        element = d_node(dom, ctx, argv[0]);
+        if (element == NULL || element->kind != OS64_HTML_ELEMENT)
+            return JS_ThrowTypeError(ctx, "An effect's target is an element or null");
+    }
+    garb_timing_t timing;
+    WaSpec spec;
+    timing_default(&timing, &spec);
+    if (timing_of(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &timing, &spec, WA_TIMING_EFFECT) < 0)
+        return JS_EXCEPTION;
+    DWaData *d = keyframes_data(dom, ctx, argv[1]);
+    if (d == NULL) return JS_EXCEPTION;
+    d->fx.timing = timing;
+    return effect_new(dom, ctx, element, d, &spec, prototype);
+}
+
+/* `new Animation(effect, timeline)` (§ 6.4, Animation): idle, of `effect` (null or
+ * undefined for none), on the document's timeline unless `timeline` is
+ * null; any other timeline is not one this binding has. */
+static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValueConst effect = argc > 0 ? argv[0] : JS_UNDEFINED;
+    if (!JS_IsNull(effect) && !JS_IsUndefined(effect) && fx_state(effect) == NULL)
+        return JS_ThrowTypeError(ctx, "An animation's effect is a KeyframeEffect or null");
+    JSValueConst timeline = argc > 1 ? argv[1] : JS_UNDEFINED;
+    bool none = JS_IsNull(timeline);
+    if (!none && !JS_IsUndefined(timeline) && !JS_StrictEq(ctx, timeline, dom->wa_timeline->value))
+        return JS_ThrowTypeError(ctx, "An animation's timeline is the document's or null");
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue animation = animation_new(dom, ctx, effect, NULL, prototype);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(animation)) return animation;
+    wa_state(animation)->no_timeline = none;
+    return animation;
+}
+
 enum {
     A_ID, A_EFFECT, A_TIMELINE, A_START, A_CURRENT, A_RATE, A_STATE, A_REPLACE, A_PENDING, A_READY, A_FINISHED,
-    A_CANCEL, A_FINISH, A_PLAY, A_PAUSE, A_UPDATE_RATE, A_REVERSE, E_TARGET, T_CURRENT, D_TIMELINE
+    A_CANCEL, A_FINISH, A_PLAY, A_PAUSE, A_UPDATE_RATE, A_REVERSE, A_PERSIST, A_COMMIT, T_CURRENT, D_TIMELINE
 };
 
 static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
@@ -1563,14 +2282,9 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
         return JS_NewFloat64(ctx, wa_now(dom));
     }
     if (magic == D_TIMELINE) return JS_DupValue(ctx, dom->wa_timeline->value);
-    if (magic == E_TARGET) {
-        DWaEffect *e = JS_GetOpaque(self, os64_js_class_id(&effect_slot));
-        if (e == NULL) return JS_ThrowTypeError(ctx, "Expected a KeyframeEffect");
-        DWaAnimation *a = wa_state(e->animation);
-        return a != NULL && a->element != NULL ? d_wrap(dom, ctx, a->element) : JS_NULL;
-    }
     DWaAnimation *a = wa_state(self);
     if (a == NULL) return JS_ThrowTypeError(ctx, "Expected an Animation");
+    if (a->dom == NULL) return JS_UNDEFINED;
     int r = 0;
     switch (magic) {
     case A_ID:
@@ -1587,8 +2301,15 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
             return JS_UNDEFINED;
         }
         return JS_NewString(ctx, a->id != NULL ? a->id : "");
-    case A_EFFECT: return JS_DupValue(ctx, a->effect);
-    case A_TIMELINE: return JS_DupValue(ctx, dom->wa_timeline->value);
+    case A_EFFECT:
+        if (set) {
+            if (!JS_IsNull(arg) && fx_state(arg) == NULL)
+                return JS_ThrowTypeError(ctx, "An animation's effect is a KeyframeEffect or null");
+            set_effect(ctx, a, arg);
+            break;
+        }
+        return JS_DupValue(ctx, a->effect);
+    case A_TIMELINE: return a->no_timeline ? JS_NULL : JS_DupValue(ctx, dom->wa_timeline->value);
     case A_START:
         if (set) {
             double t;
@@ -1615,7 +2336,17 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
         }
         return JS_NewFloat64(ctx, a->rate + 0.0);   /* reverse() at a rate of 0 makes -0 */
     case A_STATE: return JS_NewString(ctx, kStates[play_state(a)]);
-    case A_REPLACE: return JS_NewString(ctx, "active");
+    case A_REPLACE:
+        return JS_NewString(ctx, a->replace == WA_REMOVED ? "removed" : a->replace == WA_PERSISTED ? "persisted"
+                                                                                                  : "active");
+    case A_PERSIST:
+        /* § 5.5: never removed, and a removed one's effect applies again. */
+        if (a->replace != WA_PERSISTED) {
+            a->replace = WA_PERSISTED;
+            wa_restyle(a);
+        }
+        break;
+    case A_COMMIT: r = commit_styles(ctx, a); break;
     case A_PENDING: return JS_NewBool(ctx, a->pending_play || a->pending_pause);
     case A_READY: return JS_DupValue(ctx, a->ready);
     case A_FINISHED: return JS_DupValue(ctx, a->finished);
@@ -1652,22 +2383,23 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     /* The options first: they are the call's argument to convert, where
      * the keyframes are an object the method's steps then process. */
     garb_timing_t timing;
-    char *id = NULL;
-    if (timing_of(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, &timing, &id) < 0) return JS_EXCEPTION;
-    WaFrames frames = {0};
-    if (process_keyframes(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &frames) < 0) {
-        frames_free(ctx, &frames);
-        js_free(ctx, id);
+    WaSpec spec;
+    timing_default(&timing, &spec);
+    if (timing_of(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, &timing, &spec, WA_TIMING_ANIMATE) < 0)
+        return JS_EXCEPTION;
+    DWaData *d = keyframes_data(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+    if (d == NULL) {
+        js_free(ctx, spec.id);
         return JS_EXCEPTION;
     }
-    DWaData *d = data_make(dom, ctx, &frames);
-    frames_free(ctx, &frames);
-    if (d == NULL) {
-        js_free(ctx, id);
-        return d_error(ctx, "QuotaExceededError", "No room for an animation's keyframes");
-    }
     d->fx.timing = timing;
-    JSValue animation = animation_new(dom, ctx, element, d, id);
+    JSValue effect = effect_new(dom, ctx, element, d, &spec, JS_UNDEFINED);
+    if (JS_IsException(effect)) {
+        js_free(ctx, spec.id);
+        return effect;
+    }
+    JSValue animation = animation_new(dom, ctx, effect, spec.id, JS_UNDEFINED);
+    JS_FreeValue(ctx, effect);
     if (JS_IsException(animation)) return animation;
     DWaAnimation *a = wa_state(animation);
     if (play(ctx, a, true) < 0) {
@@ -1713,8 +2445,9 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
     if (JS_IsException(list)) return list;
     uint32_t n = 0;
     for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
-        if (a->element == NULL || !wa_relevant(a)) continue;
-        bool mine = magic == 0 ? (subtree ? within(a->element, root) : a->element == root) : d_connected(a->element);
+        const os64_html_node_t *target = wa_target(a);
+        if (target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;
+        bool mine = magic == 0 ? (subtree ? within(target, root) : target == root) : d_connected(target);
         if (!mine) continue;
         if (JS_SetPropertyUint32(ctx, list, n++, JS_DupValue(ctx, a->target.value)) < 0) {
             JS_FreeValue(ctx, list);
@@ -1770,16 +2503,67 @@ static JSValue playback_construct(JSContext *ctx, JSValueConst new_target, int a
 /* ── The update step (HTML's "update animations and send events") ────── */
 
 /* Whether the step has work: a queued event, a timeline a script read, an
- * animation with a pending task or running, or one the binding holds that
- * is no longer live (wa_live) and is to be let go. */
+ * animation that finished since the last look for replaced ones, an
+ * animation on the timeline with a pending task or running, or one the
+ * binding holds that is no longer live (wa_live) and is to be let go. */
 static bool wa_busy(os64_dom_t *dom)
 {
-    if (dom->wa_events != NULL || dom->wa_wanted) return true;
+    if (dom->wa_events != NULL || dom->wa_wanted || dom->wa_replace_check) return true;
     for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
-        if (a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING) return true;
         if (!JS_IsUndefined(a->hold) && !wa_live(a)) return true;
+        if (a->no_timeline) continue;
+        if (a->pending_play || a->pending_pause || play_state(a) == WA_RUNNING) return true;
     }
     return false;
+}
+
+/* § 5.5, Replacing animations: replaceable is finished, filling, of a
+ * target in the document, on the document's timeline, and not removed. */
+static bool wa_replaceable(DWaAnimation *a)
+{
+    return a->replace != WA_REMOVED && !a->no_timeline && wa_target(a) != NULL &&
+           d_in_window_tree(a->dom, wa_target(a)) && wa_data(a) != NULL &&
+           play_state(a) == WA_FINISHED && wa_clock(a).in_effect;
+}
+
+/* § 5.5, removing replaced animations: an active replaceable animation
+ * goes when, for every property it sets, a later replaceable one of the
+ * same target sets it too; its effect then applies to nothing, and its
+ * `remove` event is queued. A persisted one replaces others and is never
+ * removed itself. */
+static void remove_replaced(JSContext *ctx, os64_dom_t *dom)
+{
+    dom->wa_replace_check = false;
+    size_t n = 0;
+    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) n += wa_replaceable(a);
+    if (n < 2) return;
+    DWaAnimation **v = js_malloc(ctx, n * sizeof(*v));
+    if (v == NULL) return;
+    size_t k = 0;
+    for (DWaAnimation *a = dom->wa_first; a != NULL && k < n; a = a->next)
+        if (wa_replaceable(a)) v[k++] = a;
+    for (size_t i = 0; i < k; i++) {
+        DWaAnimation *a = v[i];
+        if (a->replace != WA_ACTIVE) continue;
+        DWaData *d = wa_data(a);
+        /* One that sets nothing is covered by any later one of its target. */
+        bool covered = d->nprops > 0;
+        for (size_t j = i + 1; !covered && j < k; j++) covered = wa_target(v[j]) == wa_target(a);
+        for (int32_t p = 0; covered && d->nprops > 0 && p < d->nprops; p++) {
+            bool found = false;
+            for (size_t j = i + 1; !found && j < k; j++) {
+                if (wa_target(v[j]) != wa_target(a)) continue;
+                DWaData *later = wa_data(v[j]);
+                for (int32_t q = 0; !found && q < later->nprops; q++) found = later->props[q] == d->props[p];
+            }
+            covered = found;
+        }
+        if (!covered) continue;
+        a->replace = WA_REMOVED;
+        queue_event(ctx, a, "remove", current_time(a), wa_now(dom), wa_now(dom));
+        wa_restyle(a);
+    }
+    js_free(ctx, v);
 }
 
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom)
@@ -1835,9 +2619,11 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
         for (size_t i = 0; i < n; i++) {
             DWaAnimation *a = wa_state(held[i]);
             if (a == NULL) continue;
+            if (a->no_timeline) continue;
             if (a->pending_play || a->pending_pause) run_pending(ctx, a, dom->wa_time);
             else if (play_state(a) != WA_IDLE) update_finished(ctx, a, false, false);
         }
+        if (ctx != NULL) remove_replaced(ctx, dom);
         if (ctx != NULL) d_task_settle(dom, out);
         DWaEvent *events = events_sorted(dom->wa_events);
         dom->wa_events = dom->wa_events_last = NULL;
@@ -1882,9 +2668,16 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
 
 /* ── What libflow reads ──────────────────────────────────────────────── */
 
+/* Whether an animation's effect is handed to the layouts: it has one, with
+ * a target, it is not idle, and it was not removed (§ 5.5). */
+static bool wa_applies(DWaAnimation *a)
+{
+    return wa_target(a) != NULL && wa_data(a) != NULL && a->replace != WA_REMOVED && play_state(a) != WA_IDLE;
+}
+
 /* The effects by target, rebuilt when an animation changed: (element,
  * effect) pairs sorted by element, each element's in composite order (the
- * order they were made). An idle animation is handed to no layout. */
+ * order they were made). */
 static void index_rebuild(os64_dom_t *dom)
 {
     d_free(dom, dom->wa_index_nodes);
@@ -1895,7 +2688,7 @@ static void index_rebuild(os64_dom_t *dom)
     dom->wa_index_stale = false;
     size_t n = 0;
     for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next)
-        n += a->element != NULL && play_state(a) != WA_IDLE;
+        n += wa_applies(a);
     if (n == 0) return;
     dom->wa_index_nodes = d_alloc(dom, n * sizeof(*dom->wa_index_nodes));
     dom->wa_index_fx = d_alloc(dom, n * sizeof(*dom->wa_index_fx));
@@ -1909,17 +2702,18 @@ static void index_rebuild(os64_dom_t *dom)
     }
     size_t k = 0;
     for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
-        if (a->element == NULL || play_state(a) == WA_IDLE) continue;
+        if (!wa_applies(a)) continue;
+        const os64_html_node_t *target = wa_target(a);
         /* Insertion by element; the list's order keeps each element's
          * effects in the order they were made. */
         size_t at = k;
-        while (at > 0 && (uintptr_t)dom->wa_index_nodes[at - 1] > (uintptr_t)a->element) {
+        while (at > 0 && (uintptr_t)dom->wa_index_nodes[at - 1] > (uintptr_t)target) {
             dom->wa_index_nodes[at] = dom->wa_index_nodes[at - 1];
             dom->wa_index_fx[at] = dom->wa_index_fx[at - 1];
             at--;
         }
-        dom->wa_index_nodes[at] = a->element;
-        dom->wa_index_fx[at] = &a->data->fx;
+        dom->wa_index_nodes[at] = target;
+        dom->wa_index_fx[at] = &wa_data(a)->fx;
         k++;
     }
     dom->wa_index_n = k;
@@ -1964,7 +2758,7 @@ void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest)
 
 bool os64_dom_effects_held(const os64_dom_t *dom)
 {
-    return dom != NULL && (dom->wa_dead != NULL || dom->wa_first != NULL);
+    return dom != NULL && (dom->wa_dead != NULL || dom->wa_first != NULL || dom->wa_fx_first != NULL);
 }
 
 /* ── The binding's lifetime ──────────────────────────────────────────── */
@@ -1979,27 +2773,31 @@ void d_web_animations_drain(os64_dom_t *dom)
     }
     dom->wa_events_last = NULL;
     /* The binding's holds first: an animation they alone kept goes now,
-     * and finalizes against a live binding. */
+     * and finalizes against a live binding. Freeing one may free others
+     * its listeners alone kept, so the walk starts again after each. */
     for (DWaAnimation *a = dom->wa_first; a != NULL;) {
-        DWaAnimation *next = a->next;
-        if (!JS_IsUndefined(a->hold)) {
-            JSValue h = a->hold;
-            a->hold = JS_UNDEFINED;
-            JS_FreeValueRT(dom->engine, h);
+        if (JS_IsUndefined(a->hold)) {
+            a = a->next;
+            continue;
         }
-        a = next;
+        JSValue h = a->hold;
+        a->hold = JS_UNDEFINED;
+        JS_FreeValueRT(dom->engine, h);
+        a = dom->wa_first;
     }
-    /* What a script still holds outlives the binding: it is cut loose and
-     * its data buried, as a tree laid out with it may still be painted
-     * until the binding is freed (d_web_animations_free). */
+    /* What a script still holds outlives the binding: it is cut loose,
+     * each effect's data buried, as a tree laid out with it may still be
+     * painted until the binding is freed (d_web_animations_free). */
     while (dom->wa_first != NULL) {
         DWaAnimation *a = dom->wa_first;
         unlink_animation(dom, a);
-        data_bury(dom, a->data);
-        a->data = NULL;
-        if (a->element != NULL) os64_html_release(dom->document, a->element);
-        a->element = NULL;
         a->dom = NULL;
+    }
+    while (dom->wa_fx_first != NULL) {
+        DWaEffect *e = dom->wa_fx_first;
+        effect_unlink(dom, e);
+        effect_let_go(dom, e);
+        e->dom = NULL;
     }
 }
 
@@ -2017,8 +2815,7 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 {
     static const JSClassDef animation_class = {.class_name = "Animation", .finalizer = animation_finalizer,
                                                .gc_mark = animation_mark};
-    static const JSClassDef effect_class = {.class_name = "KeyframeEffect", .finalizer = effect_finalizer,
-                                            .gc_mark = effect_mark};
+    static const JSClassDef effect_class = {.class_name = "KeyframeEffect", .finalizer = effect_finalizer};
     static const JSClassDef timeline_class = {.class_name = "DocumentTimeline"};
     JSClassID aid = os64_js_class_id(&animation_slot), eid = os64_js_class_id(&effect_slot),
               tid = os64_js_class_id(&timeline_slot);
@@ -2027,7 +2824,8 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         (!JS_IsRegisteredClass(dom->engine, tid) && JS_NewClass(dom->engine, tid, &timeline_class) < 0))
         return -1;
     DValue *ap = d_retain(dom, ctx, JS_NewObject(ctx));
-    DValue *ep = ap != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
+    DValue *aep = ap != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
+    DValue *ep = aep != NULL ? d_retain(dom, ctx, JS_NewObjectProto(ctx, aep->value)) : NULL;
     DValue *atp = ep != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
     if (atp == NULL) return -1;
     JSValue dtp_value = JS_NewObjectProto(ctx, atp->value);
@@ -2037,14 +2835,15 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JS_SetClassProto(ctx, eid, JS_DupValue(ctx, ep->value));
     JS_SetClassProto(ctx, tid, JS_DupValue(ctx, dtp->value));
     static const struct { const char *name; int magic; bool writable; } kAccessors[] = {
-        {"id", A_ID, true}, {"effect", A_EFFECT, false}, {"timeline", A_TIMELINE, false},
+        {"id", A_ID, true}, {"effect", A_EFFECT, true}, {"timeline", A_TIMELINE, false},
         {"startTime", A_START, true}, {"currentTime", A_CURRENT, true}, {"playbackRate", A_RATE, true},
         {"playState", A_STATE, false}, {"replaceState", A_REPLACE, false}, {"pending", A_PENDING, false},
         {"ready", A_READY, false}, {"finished", A_FINISHED, false},
     };
     static const struct { const char *name; int magic, length; } kMethods[] = {
         {"cancel", A_CANCEL, 0}, {"finish", A_FINISH, 0}, {"play", A_PLAY, 0}, {"pause", A_PAUSE, 0},
-        {"updatePlaybackRate", A_UPDATE_RATE, 1}, {"reverse", A_REVERSE, 0},
+        {"updatePlaybackRate", A_UPDATE_RATE, 1}, {"reverse", A_REVERSE, 0}, {"persist", A_PERSIST, 0},
+        {"commitStyles", A_COMMIT, 0},
     };
     JSValueConst a = ap->value;
     for (size_t i = 0; i < sizeof(kAccessors) / sizeof(kAccessors[0]); i++)
@@ -2056,9 +2855,27 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             return -1;
     if (d_event_target(dom, ctx, a, aid, NULL) < 0 || d_event_handler_named(dom, ctx, a, "finish") < 0 ||
         d_event_handler_named(dom, ctx, a, "cancel") < 0 || d_event_handler_named(dom, ctx, a, "remove") < 0 ||
-        d_accessor(dom, ctx, ep->value, "target", animation_member, E_TARGET, false) < 0 ||
         d_accessor(dom, ctx, atp->value, "currentTime", animation_member, T_CURRENT, false) < 0)
         return -1;
+    /* AnimationEffect's members, and KeyframeEffect's own on the
+     * prototype that inherits them. */
+    static const struct { const char *name; int magic, length; bool keyframe; } kEffectMethods[] = {
+        {"getTiming", E_GET_TIMING, 0, false}, {"getComputedTiming", E_COMPUTED_TIMING, 0, false},
+        {"updateTiming", E_UPDATE_TIMING, 0, false}, {"getKeyframes", E_GET_KEYFRAMES, 0, true},
+        {"setKeyframes", E_SET_KEYFRAMES, 1, true},
+    };
+    static const struct { const char *name; int magic; } kEffectAccessors[] = {
+        {"target", E_TARGET}, {"pseudoElement", E_PSEUDO}, {"composite", E_COMPOSITE},
+        {"iterationComposite", E_ITERATION_COMPOSITE},
+    };
+    for (size_t i = 0; i < sizeof(kEffectMethods) / sizeof(kEffectMethods[0]); i++)
+        if (d_method(dom, ctx, kEffectMethods[i].keyframe ? ep->value : aep->value, kEffectMethods[i].name,
+                     effect_member, kEffectMethods[i].length, kEffectMethods[i].magic) < 0)
+            return -1;
+    for (size_t i = 0; i < sizeof(kEffectAccessors) / sizeof(kEffectAccessors[0]); i++)
+        if (d_accessor(dom, ctx, ep->value, kEffectAccessors[i].name, effect_member, kEffectAccessors[i].magic,
+                       true) < 0)
+            return -1;
     JSValue timeline = JS_NewObjectClass(ctx, (int)tid);
     dom->wa_timeline = d_retain(dom, ctx, timeline);
     if (dom->wa_timeline == NULL) return -1;
@@ -2076,9 +2893,9 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         d_method(dom, ctx, document, "getAnimations", get_animations, 0, 1) < 0 ||
         d_accessor(dom, ctx, document, "timeline", animation_member, D_TIMELINE, false) < 0)
         return -1;
-    /* The interfaces: Animation and KeyframeEffect are made by animate()
-     * alone in this slice (their constructors are slice B's,
-     * WEB_ANIMATIONS.md § 4), DocumentTimeline by the document. */
+    /* The interfaces: Animation and KeyframeEffect with their
+     * constructors, AnimationEffect with none (it is abstract), and
+     * DocumentTimeline made by the document. */
     JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
     JSValue event_interface = JS_GetPropertyStr(ctx, global, "Event");
     JSValue playback_proto = JS_NewObjectProto(ctx, event_prototype);
@@ -2089,14 +2906,18 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
         return -1;
     }
     JSValue timeline_interface = d_interface_new(ctx, "AnimationTimeline", 0, NULL, atp->value, JS_UNDEFINED);
+    JSValue effect_interface = d_interface_new(ctx, "AnimationEffect", 0, NULL, aep->value, JS_UNDEFINED);
     struct { const char *name; int length; JSCFunction *construct; JSValueConst proto, parent; } kInterfaces[] = {
-        {"Animation", 0, NULL, ap->value, JS_UNDEFINED},
-        {"KeyframeEffect", 0, NULL, ep->value, JS_UNDEFINED},
+        {"Animation", 0, animation_construct, ap->value, JS_UNDEFINED},
+        {"KeyframeEffect", 1, effect_construct, ep->value, effect_interface},
         {"DocumentTimeline", 0, NULL, dtp->value, timeline_interface},
         {"AnimationPlaybackEvent", 1, playback_construct, dom->wa_event_prototype->value, event_interface},
     };
-    int result = JS_IsException(timeline_interface) ? -1 : 0;
+    int result = JS_IsException(timeline_interface) || JS_IsException(effect_interface) ? -1 : 0;
     if (result == 0 && JS_DefinePropertyValueStr(ctx, global, "AnimationTimeline", JS_DupValue(ctx, timeline_interface),
+                                                 JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        result = -1;
+    if (result == 0 && JS_DefinePropertyValueStr(ctx, global, "AnimationEffect", JS_DupValue(ctx, effect_interface),
                                                  JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         result = -1;
     for (size_t i = 0; result == 0 && i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
@@ -2107,6 +2928,7 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             result = -1;
     }
     JS_FreeValue(ctx, timeline_interface);
+    JS_FreeValue(ctx, effect_interface);
     JS_FreeValue(ctx, event_interface);
     return result;
 }

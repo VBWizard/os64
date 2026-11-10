@@ -948,13 +948,15 @@ bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *o
 /* WEB ANIMATIONS (Web Animations 1; WEB_ANIMATIONS.md). The update step is
  * HTML's "update animations and send events": it samples the document
  * timeline's time, runs each animation's pending play and pause tasks,
- * updates their finished states, dispatches the playback events queued
- * since the last step in the order they happened, as one task, and lets go
+ * updates their finished states, removes the filling animations later
+ * ones replace (Web Animations 1 § 5.5), dispatches the playback events
+ * queued since the last step in the order they happened, as one task, and lets go
  * of the animations that can change nothing more. next answers when a step
  * is due on the host's clock — at once for the first, then a frame after
  * the last — or UINT64_MAX while no step has work (no pending task, no
  * running animation, no event, no script that read the timeline, nothing
- * to let go of). The
+ * to let go of, no animation that finished since the last look for
+ * replaced ones). The
  * host runs it on its rendering step, before the frame callbacks; update
  * answers whether it ran (outcome filled). Owner thread, between tasks. */
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom);
@@ -967,9 +969,9 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
  * releases its generation. A layout tree keeps effects past the call, so
  * a host MARKS each tree it builds with the generation current then
  * (effects_mark answers it) and RELEASES, whenever trees go, everything
- * buried before the oldest generation still held: an effect whose
- * animation was collected is freed by release, never sooner, and every
- * one by os64_dom_free. */
+ * buried before the oldest generation still held: the keyframes of an
+ * effect that was collected, or that setKeyframes gave new ones, are freed
+ * by release, never sooner, and every one by os64_dom_free. */
 struct garb_effect;
 int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node,
                                 const struct garb_effect *const **out);

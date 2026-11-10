@@ -35,8 +35,11 @@ static void wa_x_key(void)
     p2b_script(&f,
         "const d=document.getElementById('box');"
         "assert(typeof d.animate==='function'&&d.animate.length===1);"
-        "for(const n of ['Animation','KeyframeEffect','DocumentTimeline','AnimationTimeline'])"
+        "for(const n of ['KeyframeEffect','DocumentTimeline','AnimationTimeline','AnimationEffect'])"
         "throws('TypeError',()=>new globalThis[n]());"
+        "const idle=new Animation();"
+        "assert(idle.playState==='idle'&&idle.effect===null&&idle.timeline===document.timeline,"
+        "'new Animation(): '+idle.playState+' '+idle.effect);"
         "const a=d.animate({color:['#62df76','#31a6fd'],transform:['rotate(0deg)','rotate(165deg)'],"
         "easing:'cubic-bezier(0.23,-0.07,0.53,0.55)'},4096);"
         "assert(a instanceof Animation&&a instanceof EventTarget);"
@@ -400,6 +403,198 @@ static void wa_frame_time(void)
     fixture_free(&f);
 }
 
+/* KeyframeEffect as an object of its own (slice B): made, copied,
+ * read back as the page gave it, its timing updated all or nothing, moved
+ * between animations, and its target and keyframes changed under the
+ * layouts. */
+static void wa_effects(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    const os64_html_node_t *box = wa_by_id(f.document->document, "box");
+    const os64_html_node_t *one = wa_by_id(f.document->document, "one");
+    const struct garb_effect *const *fx = NULL;
+    p2b_script(&f,
+        "const d=document.getElementById('box'),one=document.getElementById('one');"
+        "const e=new KeyframeEffect(d,[{opacity:0,easing:'ease-in',composite:'add'},{opacity:0.5,offset:0.4},"
+        "{opacity:1,backgroundColor:'red',cssFloat:'left'}],{duration:1000,fill:'forwards',easing:'steps(2, start)'});"
+        "assert(e instanceof KeyframeEffect&&e instanceof AnimationEffect&&e.target===d&&KeyframeEffect.length===1);"
+        "const k=e.getKeyframes();"
+        "assert(k.length===3&&k[0].offset===null&&k[0].computedOffset===0&&k[0].easing==='ease-in'&&"
+        "k[0].composite==='add'&&k[0].opacity==='0',JSON.stringify(k[0]));"
+        "assert(k[1].offset===0.4&&k[1].computedOffset===0.4&&k[1].easing==='linear'&&k[1].composite==='auto',"
+        "JSON.stringify(k[1]));"
+        "assert(k[2].offset===null&&k[2].computedOffset===1&&k[2].backgroundColor==='red'&&k[2].cssFloat==='left',"
+        "JSON.stringify(k[2]));"
+        "const t=e.getTiming();"
+        "assert(t.duration===1000&&t.fill==='forwards'&&t.easing==='steps(2, start)'&&t.delay===0&&"
+        "t.iterations===1&&t.direction==='normal'&&t.endDelay===0&&t.iterationStart===0,JSON.stringify(t));"
+        "const plain=new KeyframeEffect(null,null);"
+        "assert(new KeyframeEffect(null,null,500).getTiming().duration===500,'a number is the duration');"
+        "const dt=plain.getTiming();assert(dt.fill==='auto'&&dt.duration==='auto'&&dt.easing==='linear',JSON.stringify(dt));"
+        "const ct=plain.getComputedTiming();"
+        "assert(ct.fill==='none'&&ct.duration===0&&ct.localTime===null&&ct.progress===null&&"
+        "ct.currentIteration===null&&ct.endTime===0&&ct.activeDuration===0,JSON.stringify(ct));"
+        "assert(plain.target===null&&plain.getKeyframes().length===0&&plain.pseudoElement===null);"
+        "const kv=new KeyframeEffect(null,{left:['10px','20px'],top:['15px','bogus'],'--custom':['a','b']}).getKeyframes();"
+        "assert(kv[1].left==='20px'&&!('top' in kv[1])&&kv[0].top==='15px'&&kv[0]['--custom']==='a',JSON.stringify(kv));"
+        "throws('TypeError',()=>plain.setKeyframes());"
+        "assert(plain.getComputedTiming().startTime===0);"
+        "e.updateTiming({delay:100,iterations:2});"
+        "const t2=e.getTiming();assert(t2.delay===100&&t2.iterations===2&&t2.duration===1000&&t2.fill==='forwards');"
+        "throws('TypeError',()=>e.updateTiming({delay:5,duration:-1}));"
+        "assert(e.getTiming().delay===100&&e.getTiming().duration===1000,'a throw keeps all');"
+        "e.updateTiming({fill:'auto',duration:'auto'});"
+        "assert(e.getTiming().fill==='auto'&&e.getTiming().duration==='auto'&&e.getComputedTiming().duration===0);"
+        "e.updateTiming({fill:'forwards',duration:1000});"
+        "throws('TypeError',()=>new KeyframeEffect(e,{opacity:[0,1]}));"
+        "class Fade extends Animation{stop(){this.cancel();return 'ok'}}"
+        "class Kf extends KeyframeEffect{}"
+        "assert(new Fade().stop()==='ok'&&new Kf(null,null) instanceof Kf&&new Kf(new Kf(null,null)) instanceof Kf,"
+        "'subclasses keep their prototypes');"
+        "const copy=new KeyframeEffect(e);"
+        "assert(copy!==e&&copy.target===d&&copy.getKeyframes().length===3&&copy.getTiming().delay===100&&"
+        "copy.getKeyframes()[0].composite==='add');"
+        "e.composite='accumulate';assert(e.composite==='accumulate');"
+        "throws('TypeError',()=>{e.composite='bogus'});"
+        "throws('NotSupportedError',()=>{e.pseudoElement='::before'});"
+        "throws('SyntaxError',()=>{e.pseudoElement='nope'});"
+        "const a=new Animation(e);assert(a.effect===e&&a.playState==='idle');"
+        "a.play();assert(a.playState==='running'&&a.pending);"
+        "globalThis.a=a;globalThis.e=e;",
+        "web animations: KeyframeEffect made, read, copied and timed");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 1 && fx[0]->nframes == 3,
+          "web animations: a made effect is drawn by its animation");
+    p2b_script(&f,
+        "const b=new Animation();b.effect=e;"
+        "assert(b.effect===e&&a.effect===null,'moved: '+(a.effect===null));"
+        "assert(a.playState==='finished'||a.playState==='running',a.playState);"
+        "globalThis.b=b;",
+        "web animations: an effect moves to the animation it is given to");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 0,
+          "web animations: an idle animation's effect is not drawn");
+    p2b_script(&f,
+        "b.pause();b.currentTime=150;"
+        "const c=e.getComputedTiming();"
+        "assert(c.localTime===150&&c.progress===0.5&&c.currentIteration===0&&c.endTime===2100&&"
+        "c.activeDuration===2000,JSON.stringify(c));"
+        "e.setKeyframes({opacity:[0.2,0.8]});"
+        "assert(e.getKeyframes().length===2&&e.getKeyframes()[0].opacity==='0.2');"
+        "assert(e.getTiming().delay===100&&e.getTiming().duration===1000,'new keyframes keep the timing');",
+        "web animations: computed timing and new keyframes");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 1 && fx[0]->nframes == 2,
+          "web animations: the new keyframes are drawn");
+    p2b_script(&f, "e.target=document.getElementById('one');", "web animations: a new target");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 0, "web animations: the old target is let go");
+    check(os64_dom_script_effects(f.binding, one, &fx) == 1 && fx[0]->nframes == 2 && fx[0]->held &&
+              fx[0]->hold_ms == 150,
+          "web animations: the new target draws the new keyframes at the held time");
+    fixture_free(&f);
+}
+
+/* § 5.5: finished, filling animations a later one covers are removed and
+ * hear `remove`; a persisted one is not; commitStyles writes the computed
+ * value into the style attribute. */
+static void wa_replace(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    ComputedFake c;
+    memset(&c, 0, sizeof(c));
+    os64_dom_set_computed(f.binding, fake_computed, &c);
+    const os64_html_node_t *box = wa_by_id(f.document->document, "box");
+    const struct garb_effect *const *fx = NULL;
+    p2b_script(&f,
+        "const d=document.getElementById('box');globalThis.heard=[];"
+        "const o={duration:10,fill:'forwards'};"
+        "globalThis.o1=document.getElementById('one').animate({color:['red','blue']},o);"
+        "globalThis.a1=d.animate({opacity:[0,1]},o);globalThis.a2=d.animate({opacity:[1,0]},o);"
+        "globalThis.a3=d.animate({color:['red','blue']},o);"
+        "globalThis.p1=d.animate({width:['1px','2px']},o);p1.persist();globalThis.p2=d.animate({width:['2px','3px']},o);"
+        "for(const n of ['o1','a1','a2','a3','p1','p2'])globalThis[n].onremove=ev=>heard.push(n+':'+ev.type+':'+"
+        "(ev instanceof AnimationPlaybackEvent));"
+        "assert(p1.replaceState==='persisted'&&a1.replaceState==='active');",
+        "web animations: five filling animations");
+    wa_step(&f, "web animations: started");
+    p2b_script(&f, "assert(heard.length===0,heard.join())", "web animations: nothing running is replaced");
+    p2b_advance(50);
+    wa_step(&f, "web animations: finished, and the replaced removed");
+    p2b_script(&f,
+        "assert(heard.join()==='a1:remove:true',heard.join());"
+        "assert(a1.replaceState==='removed'&&a2.replaceState==='active'&&a3.replaceState==='active'&&"
+        "p1.replaceState==='persisted',a1.replaceState);"
+        "assert(document.getElementById('box').getAnimations().indexOf(a1)<0&&"
+        "document.getElementById('box').getAnimations().length===4);",
+        "web animations: the covered one went, the persisted one stayed");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 4, "web animations: a removed effect is not drawn");
+    p2b_script(&f, "a1.persist();assert(a1.replaceState==='persisted');", "web animations: persisted after removal");
+    check(os64_dom_script_effects(f.binding, box, &fx) == 5, "web animations: a persisted one is drawn again");
+    p2b_script(&f,
+        "const o={duration:10,fill:'forwards'};"
+        "globalThis.x1=document.getElementById('one').animate({left:['1px','2px']},o);"
+        "globalThis.x2=document.getElementById('box').animate({left:['2px','3px']},o);",
+        "web animations: two filling animations of two targets");
+    p2b_advance(20);
+    wa_step(&f, "web animations: those started");
+    p2b_advance(50);
+    wa_step(&f, "web animations: those finished");
+    p2b_script(&f, "assert(x1.replaceState==='active'&&x2.replaceState==='active');"
+                   "x2.effect.target=document.getElementById('one');",
+               "web animations: neither replaces the other, until one moves to the other's target");
+    p2b_advance(20);
+    check(os64_dom_web_animations_next(f.binding) <= p2b_ms, "web animations: a moved effect asks for a step");
+    wa_step(&f, "web animations: the step after the move");
+    p2b_script(&f, "assert(x1.replaceState==='removed',x1.replaceState)", "web animations: the moved one replaces");
+    p2b_script(&f,
+        "const d=document.getElementById('box');"
+        "a3.commitStyles();"
+        "assert((d.getAttribute('style')||'').indexOf('color:rgb(1, 2, 3)')>=0,String(d.getAttribute('style')));"
+        "throws('NoModificationAllowedError',()=>new Animation(new KeyframeEffect(null,{opacity:[0,1]},10)).commitStyles());"
+        "globalThis.det=document.createElement('div').animate({color:['red','blue']},10);"
+        "throws('InvalidStateError',()=>det.commitStyles());"
+        "globalThis.nt=new Animation(new KeyframeEffect(d,{opacity:[0,1]},100),null);nt.play();"
+        "assert(nt.timeline===null&&nt.pending);",
+        "web animations: commitStyles writes the computed value");
+    c.body_display = "none";
+    p2b_script(&f, "throws('InvalidStateError',()=>a3.commitStyles())",
+               "web animations: commitStyles refuses a target under display: none");
+    c.body_display = "contents";
+    p2b_script(&f, "throws('InvalidStateError',()=>document.body.animate({color:['red','blue']},10).commitStyles())",
+               "web animations: and a target that is display: contents");
+    c.body_display = NULL;
+    p2b_script(&f,
+        "(function(){const n=new Animation(new KeyframeEffect(document.getElementById('box'),{opacity:[0,1]},1000),null);"
+        "n.currentTime=500;n.id='kept'})();"
+        "const loose=document.createElement('div');globalThis.loose=loose;"
+        "globalThis.l1=loose.animate({opacity:[0,1]},{duration:10,fill:'forwards'});"
+        "globalThis.l2=loose.animate({opacity:[1,0]},{duration:10,fill:'forwards'});",
+        "web animations: a positioned timeline-less one nobody keeps, and two on a detached element");
+    p2b_advance(20);
+    wa_step(&f, "web animations: a step with an animation that has no timeline");
+    p2b_advance(50);
+    wa_step(&f, "web animations: the detached ones finished");
+    os64_js_outcome_t gc2;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc2)));
+    p2b_script(&f,
+        "assert(document.getAnimations().some(x=>x.id==='kept'),'a timeline-less one that shows is kept');"
+        "assert(l1.replaceState==='active'&&l2.replaceState==='active','nothing detached is replaced');"
+        "l1.cancel();l2.cancel();",
+        "web animations: kept while it shows, and detached ones left alone");
+    p2b_script(&f, "assert(nt.pending&&nt.startTime===null&&nt.currentTime===0,nt.pending+' '+nt.startTime);"
+                   "for(const x of document.getAnimations())if(x!==nt)x.cancel();det.cancel()",
+               "web animations: one with no timeline never starts");
+    p2b_advance(20);
+    if (os64_dom_web_animations_next(f.binding) <= p2b_ms) wa_step(&f, "web animations: the cancels' events");
+    p2b_advance(20);
+    check(os64_dom_web_animations_next(f.binding) == UINT64_MAX,
+          "web animations: one waiting for a time it will not have asks for no steps");
+    fixture_free(&f);
+}
+
 static void dom_webanimation_cases(void)
 {
     wa_x_key();
@@ -407,4 +602,6 @@ static void dom_webanimation_cases(void)
     wa_procedures();
     wa_collection();
     wa_frame_time();
+    wa_effects();
+    wa_replace();
 }

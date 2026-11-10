@@ -153,6 +153,12 @@ static JSValue write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
     return budget(dom,ctx) ? JS_UNDEFINED : JS_EXCEPTION;
 }
 
+JSValue d_style_write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *name,
+                      const char *value)
+{
+    return write(dom,ctx,node,name,value,"");
+}
+
 static JSValue member(JSContext *ctx, JSValueConst self, int argc,
                        JSValueConst *argv, int magic, JSValue *data)
 {
