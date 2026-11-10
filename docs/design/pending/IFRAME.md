@@ -1,31 +1,18 @@
 # IFRAME.md — a document inside a document: frames, realms and the window proxy
 
-*Tier 1 of the Modern Web arc ([MODERN_WEB.md](MODERN_WEB.md) § The tiers:
-"`iframe` with `postMessage` ... the arc's biggest structural change and
-gets its own design document before any code"). Written by Fable on
-2026-10-23 at `userland` d53bb802, from the tree as it stands (every
-function and line named below was read that day; the map is § What the
-tree is today) and from the HTML standard's browsing-context, window
-proxy and cross-origin-object sections. It is written before Tier 0 is
-finished on purpose: slices 0e, 3 and 5c and the two WIRE.md PRs each
-touch a seam a frame needs, and § What the open slices do now says what
-each does differently so this design lands on a tree shaped for it. No
-host names from the corpus appear here; counts only.*
+*Tier 1 of the Modern Web arc ([MODERN_WEB.md](MODERN_WEB.md)). Design
+by Fable; code reconciliation by Quinn, 2026-11-09, against `userland`
+`91ad9413` (through percentage heights, PR #517). This is a design, not
+an implementation or an acceptance report. The navigation-history and
+popup rulings below stand. The source map distinguishes existing code
+from the ownership, realm and host-loop work still required. Historical
+corpus counts are dated observations, not a new census.*
 
-*Revised 2026-11-07 at `userland` a0af6b11, when Chris asked for the
-frames design and it turned out to exist. Nothing settled below changed:
-the eight rulings and the three cuts stand as written. What changed is
-the tree under them — 0e's P1-W and P2b, modules, RELAYOUT, WIRE,
-Shadow DOM, Range, MessageChannel and the load events all landed on the
-seams § What the open slices do now named, most of them the way it
-asked — so § What the tree is today is re-read against today's code,
-§ What the open slices do now says what each did, the patch number is
-corrected (the series reached 0017 meanwhile), and § Workers says how
-WORKERS.md, written the same day, hangs off a frame. The consumer that
-reopened it: a search engine's unusual-traffic page, whose CAPTCHA is a
-frame that speaks to its page only by `postMessage` (DEBTS.md's frames
-row). Anchors below name functions, not line numbers; every one was
-found in the tree that day.*
+*HTTP/2 coordination was checked against Fable's design at `425e6c99`;
+H2.0's bell and H2.2's connection cap are dependencies only where named
+below, not capabilities claimed for this source baseline. The next arc
+is frames, then Workers. Delivery uses short-lived, stackable PRs while
+the `userland` checkpoint comparison is held stable (§ The cut).*
 
 ## What this settles
 
@@ -44,36 +31,43 @@ found in the tree that day.*
    JavaScript runtime stays the top-level page's (its heap, its memory
    limit, its job queue, its teardown); each document in the tree gets a
    realm of its own, a QuickJS context in that runtime, with its own
-   global object, intrinsics and prototypes. This is the standard's
-   shape (one agent for the frame tree, one realm per window) and the
-   only shape QuickJS allows for same-origin frames, where the parent's
-   script holds the child's objects directly: a value belongs to its
-   runtime, and two runtimes cannot share one. libjs gains realms; libdom
+   global object, intrinsics and prototypes. Sharing one runtime across
+   this tree is Yonder's implementation choice, not a requirement that
+   HTML puts cross-origin documents in one agent. Documents that can
+   synchronously share objects need coordinated execution; QuickJS
+   contexts can share objects inside one runtime, but runtimes cannot.
+   The runtime stays on its creating thread. Frames get no dedicated
+   execution threads; their animation joins the window's rendering loop
+   (§ Scheduling and animation). libjs gains realms; libdom
    gains the per-runtime CLUSTER that owns what is shared (the class
    registrations, the document-to-binding registry) and one binding per
-   document; a node's wrapper is made in the realm of the node's
-   document, whoever touches it, so `instanceof` answers per realm as it
-   does in a browser.
+   document; a new node wrapper uses its document's realm, whoever first
+   asks for it. Adoption preserves an already-created wrapper's identity
+   and prototype (§ Retained ownership).
 3. **Script sees the window proxy and never the global object.** One
    proxy per browsing context, the same JavaScript object across every
    document that context shows, forwarding to the current document's
-   global. `window`, `self`, `globalThis`, `frames`, `top`, `parent`,
-   `frameElement.contentWindow`, the `this` of a sloppy function and of a
-   top-level script all answer the proxy, so identity holds across the
+   global. `window`, `self`, `globalThis`, `frames`, the `this` of a
+   sloppy function and of a top-level script answer that context's proxy;
+   `top`, `parent` and `contentWindow` answer the appropriate context's
+   proxy. Identity holds across the
    boundary (`parent.frames[0] === window` inside the frame is true, and
    `window.top === window` in a top-level page stays true). The engine
    substitutes the global object for an undefined `this` at
-   `OP_push_this`; a one-line patch in the series (the next number when
-   F1 is cut; 0018 at the revision) makes that substitute a per-context
-   value the binding sets to the proxy.
+   `OP_push_this`; the proposed engine patch makes that substitute a
+   per-context value the binding sets to the proxy. The rest of the
+   global/WindowProxy behavior has its own proof in F1.
 4. **Cross-origin access is the standard's list and nothing else.** Two
    documents are same-origin when their origins compare equal, exactly
    (scheme, host, port; an opaque origin only to itself). Across origins
    the proxy answers `window`, `self`, `location` (as a location proxy
    whose only verbs are setting `href` and `replace`), `close`,
    `closed`, `focus`, `blur`, `frames`, `length`, `top`, `opener`,
-   `parent`, `postMessage`, and the frames by index and name; every
-   other get, set, call, delete or enumeration throws `SecurityError`.
+   `parent`, `postMessage`, and indexed child windows. Named child lookup
+   is not a cross-origin grant. Implement HTML's WindowProxy and Location
+   internal methods, including descriptor/enumeration behavior and the
+   specified `then`/symbol fallbacks; a blanket "everything else throws"
+   is not that contract (§ The cluster and the window proxy).
    `document.domain` never relaxes it (P1-W's `originAgentCluster` is
    true, the modern default).
 5. **A frame lays out AFTER its parent, paints clipped inside its box,
@@ -83,24 +77,26 @@ found in the tree that day.*
    `flow_layout` then runs as a sibling call with the box's content size
    as its viewport. Nothing nests inside `flow_layout`, which is what
    lets yonder's one-at-a-time layout state stay one at a time. A frame
-   whose viewport did not change and whose document did not move is not
-   laid out again.
+   whose layout inputs are unchanged can reuse its existing layout.
 6. **A frame's navigation adds no session entry.** Back and forward move
    the top-level page only; a frame navigating (its `src` set, a link
    followed inside it, `location` assigned, `pushState`) replaces its
-   own current document and entry and pushes nothing. The standard's
+   own current entry and pushes nothing into the joint history; a
+   same-document change does not replace the document. The standard's
    joint session history makes Back step through a page's ad rotations,
    which is the web's most-complained-about behaviour, and one person on
    one machine gets the useful half. DIVERGENCES.md row. Ruled (§ Rulings).
-7. **A frame departs at the end of the task that removed it, and its
-   document lives while anything still holds it.** Removal from the
-   tree, a navigation of the frame, or the parent's own departure all
-   schedule the departure; none runs it mid-task, because the task that
-   removed the frame may be the frame's own script. A departed document
-   keeps its arena while any wrapper of its nodes is alive in the
-   runtime (the parent may have kept `contentDocument` in a variable);
-   the last wrapper's finalizer frees it, and the runtime's teardown
-   frees whatever is left.
+7. **A removed frame's backing is not freed under its running script.**
+   Removal or navigation updates observable context state at the specified
+   point; destructive host cleanup waits until the running task and its
+   checkpoint have unwound. The task removing a frame may be its own
+   script. A departed document keeps the backing needed by retained
+   nodes, functions and native objects (the parent may have kept
+   `contentDocument`, a Blob or a
+   Canvas context). The existing wrapper registry holds values strongly;
+   "free at the last wrapper finalizer" is not an implemented lifetime
+   mechanism. F1 must prove the release model in § Retained ownership
+   before F2 can retire child documents independently.
 8. **A frame's overrun retires the frame.** The script budget stays per
    task. When a frame's task exceeds it, the interrupt unwinds that task,
    the frame's realm is retired (no task of that document runs again, the
@@ -115,7 +111,8 @@ found in the tree that day.*
    window and `opener` (P3a answers `null`, the blocked popup, and the
    status line says a popup was blocked; a second GUI window is the
    window model's design, not the frame's); `frameset` and `frame` (a
-   layout mode of their own); `MessageChannel` and `MessagePort`;
+   layout mode of their own); transfer of `MessagePort` (channels and
+   ports already exist, but port transfer is Workers W3);
    Content Security Policy beyond `frame-ancestors`; a third-party
    cookie policy (cookies keep today's by-destination rule until the
    SameSite row is paid, and this design records what that row needs
@@ -123,17 +120,17 @@ found in the tree that day.*
 
 ## What the tree is today
 
-The facts this design moves, with where they live, so the builder and the
-reviewer check the same things. Re-read 2026-11-07; the 10/23 line numbers
-are gone, since 800 commits moved them, and each fact names its function.
+The facts this design moves, checked at `91ad9413`. Paths below are under
+`userland/` unless otherwise stated; function names are search anchors.
 
 - **One Page per role.** `g.page` is on screen; `g.coming.page` waits for
   its sheets; `g.stream.page` is arriving; `g.finishing.page` points at
   one of them (yonder.c, `struct Page` and the anonymous `g`).
   `page_of_doc` and `scripts_for` find a page by comparing against
   exactly these slots, and the loop's deadline scans walk the fixed
-  array `{g.page.scripts, g.stream.scripts, g.coming.page.scripts}` in
-  three places. One window. `g.page` is read 516 times in yonder.c.
+  array `{g.page.scripts, g.stream.scripts, g.coming.page.scripts}`
+  in the deadline/task paths. `g.finishing.page` can alias a Page already
+  in a role: tree visitation must not schedule or free it twice.
 - **One runtime per Page, one context per runtime, one binding per
   runtime.** `ensure_runtime` (scripts.c) makes the runtime at the first
   script; `struct os64_js_runtime` holds one `JSContext`
@@ -186,16 +183,15 @@ are gone, since 800 commits moved them, and each fact names its function.
   `os64_dom_readiness_after` moves readiness for the document in hand;
   a frame's "delay the load event" is one more clause in the same
   `loaded` condition, as § The Page tree says.
-- **Messaging exists for one window.** **Since 10/23:** message.c is
-  P2b's `window.postMessage` to the window itself, written as this design
-  asked — the poster and the target are two parameters that happen to be
-  one binding, the clone (clone.c) is written in the poster's realm and
+- **Messaging exists for one window.** message.c is P2b's
+  `window.postMessage` to the window itself: `post_message` sets
+  `poster = target`. The clone (clone.c) is written in the poster's realm and
   read in the target's, the origin check runs at delivery, and the task
   is one per message, oldest first. clone.c's header says the record is
   no realm's. `MessageChannel` and `MessagePort` landed 11/07: a port's
   messages ride the same queue, a port in a transfer list is refused
-  (its DEBTS row). So F1's "postMessage across realms" is the second
-  realm and nothing else, as hoped. `contentWindow`, `contentDocument`,
+  (its DEBTS row). F1 extends attribution, delivery and lifetime across
+  realms using that machinery. `contentWindow`, `contentDocument`,
   `frameElement` (null), `opener` (null) and `window.open` (absent:
   DEBTS.md's frames row) are where 10/23 left them.
 - **Still open from 0e:** P3a (`window.name`, `open` with a target,
@@ -204,13 +200,49 @@ are gone, since 800 commits moved them, and each fact names its function.
   named access is absent"). The sentences § What the open slices do now
   gives them still bind whoever builds them, before or after F1.
 
+- **Runtime state is more than a context.** `libjs/runtime/runtime.c`
+  keeps one context, script host, module loader, rejection registry,
+  console state and active outcome. `libdom/core.c`'s `d_context` compares
+  the caller with that one context, and `d_callback` uses it too. F1 must
+  separate runtime-wide state from realm-specific state and audit the
+  binding entry points, not just permit a second `JS_NewContext`.
+- **Retirement destroys the engine.** `apps/yonder/scripts.c`'s `retire`
+  drops modules, drains the DOM, destroys the runtime and frees or retains
+  the binding. `yonder_scripts_depart` calls it. `page_departs` addresses
+  the root. None is a child-realm teardown operation as it stands.
+- **Extra documents share an arena.** `libdom/implementation.c` makes
+  windowless documents in the binding's existing libhtml arena;
+  `document_take` changes node-document bookkeeping there. `node.c`'s
+  `d_node` rejects a node not owned by `dom->document`. That is not
+  adoption between independently allocated frame documents.
+- **Wrappers and native bytes have owners.** `DValue` is strongly retained
+  by the binding; its sparse fields are in `DValueMore` (`internal.h`).
+  `kept.c`'s XHR/Blob bodies retain a `dom` pointer and can be released
+  from an engine finalizer. `os64_dom_free` frees those owners under the
+  existing engine-before-binding teardown contract. Sharing an engine
+  requires a new lifetime proof, not an earlier call to that free.
+- **Web Animations A is integrated.** `webanimation.c` supplies the
+  document timeline and script effects; `animation.c` samples effects
+  before rAF callbacks. `yonder.c`'s `animation_next` and `script_turn`
+  address the shown root. Layout reads effects through `page_script_effects`;
+  `tree_free` calls `yonder_scripts_tree_gone`. `scripts.c` can retain a
+  drained binding while a layout tree still borrows its effects.
+- **Memory policy and image ownership are already substantial.**
+  `yonder_page_memory_split` supplies tree/cascade/DOM ceilings;
+  `MEMORY_CENSUS.md` records owner accounts. Image I2/I3 share source
+  selection and display ownership between markup and Canvas. Frames must
+  preserve those accounts and providers, with the child viewport used
+  for responsive image selection, rather than reintroduce native copies.
+- **The context menu exists.** `context_menus_make`/`context_open` provide
+  link, picture and download actions. The three frame-specific actions
+  described below still need implementation and frame-aware hit results.
+
 ## The Page tree (yonder)
 
 **The struct.** `Page` gains `parent` (the Page whose document holds the
 frame element; NULL at a root), `frame` (the `iframe` node this Page
 fills; NULL at a root), `first_child`/`next_sibling` (its frames, in tree
-order), a `name` (the browsing context's name, the `name` attribute at
-birth and `window.name` after; this is where P3a's `name` lives), the
+order), a reference to its stable browsing context, the
 `sandbox` flags in force, and a `Stream *stream` of its own (the
 navigation arriving for this frame, if one is). `g.stream`'s fields that
 describe an arriving page (`parser`, `serial`, `timing`, the mailbox's
@@ -225,13 +257,33 @@ Page in hand, never `g.page`**. `g.page` means "the root the window
 shows", and code that means "the page this node belongs to" asks
 `page_of_doc`, which walks the trees.
 
+**Context identity is not a Page address.** Pages are copied and replaced
+by the existing navigation paths (`arrive_now`, `stream_finish`). A
+browsing context owns its stable WindowProxy and target name, with a
+reference to its active Page; replacing the document changes that
+reference, not the proxy identity. Retained old documents cannot become
+the new document merely because a Page slot was reused. Resource deliveries
+carry the owning document/load identity; check it before attaching a late
+picture, font, script or response. Preserve the existing serial checks
+while extending their lookup to the tree.
+
+**Origin is document state.** Store the committed origin (tuple or opaque
+identity), URL, base URL and relevant navigation policy separately.
+`about:blank` and `srcdoc` can inherit an origin without having their
+parent's URL; sandboxing can make an HTTPS document opaque. URL parsing
+alone, as used by several existing callers, cannot answer these cases.
+Audit fetch, storage, cookies, messaging, secure-context checks and proxy
+access against that state; redirects must not preserve an obsolete
+origin. Ancestor security affects secure-context eligibility too.
+
 **Birth: a frame exists the moment its element is in a document.** When
 an `iframe` element is inserted into a document that has a browsing
 context (the parser's insertion, or a script's `appendChild`), yonder
 makes its Page at once with an `about:blank` document (an empty
 `html`/`head`/`body` from libhtml, no fetch), whose origin is the
-creator document's origin and whose `referrer` is the creator's URL, as
-the standard's initial about:blank. This is synchronous because pages
+creator document's origin unless sandboxing requires an opaque one, and
+whose referrer/base policy comes from its creator. This is synchronous
+because pages
 depend on it: `iframe.contentDocument.write(...)` right after
 `appendChild` is how old libraries and most ad code build a frame. The
 Page is cheap; the REALM is not made until something needs it (the
@@ -244,9 +296,10 @@ reaches it through the mutation core's insertion verbs, the same place
 RELAYOUT.md's 5a change log is written.
 
 **Load: `src` is a navigation of the frame.** A frame with a non-empty
-`src` starts a load when its element is inserted, and again whenever
-`src` is set to a different value (the standard's "process the iframe
-attributes"). The load is a navigation through the pool exactly as the
+`src` starts a load when its element is inserted. Attribute changes follow
+HTML's processing rules, including reassigning `src`, removing it and
+`srcdoc` taking precedence; a changed-string test is not that algorithm.
+The load is a navigation through the pool as the
 window's is (`start_trip`'s judgement, `way_judge`, the mixed-content
 rule against the frame's own document and the top-level page both: an
 `http:` frame in an `https:` page is blocked, as browsers do), with these
@@ -267,23 +320,31 @@ frame-only steps once the head arrives:
   `scripting` off, the per-page switch); without `allow-same-origin` its
   origin is opaque (`request_origin` already makes one from a serial);
   without `allow-forms` a form inside it does not submit; without
-  `allow-top-navigation` (and its `-by-user-activation` variant, treated
-  as the plain one) a `_top` target or `top.location` assignment from
-  inside is refused; without `allow-popups` nothing changes, since
+  an allowed top-navigation path a `_top` target or `top.location`
+  assignment from inside is refused. `allow-top-navigation-by-user-activation`
+  requires a real transient user-activation check; it must not grant
+  unconditional navigation. Without `allow-popups` nothing changes, since
   popups are blocked anyway. Flags the slice cannot mean (`allow-modals`,
   `allow-pointer-lock`, `allow-presentation`, `allow-orientation-lock`)
-  parse and do nothing, named in DIVERGENCES. The flags are read when the
-  navigation starts, not when the attribute changes, as the standard
-  says.
+  cannot grant an unimplemented capability. Inherited restrictions and
+  the element's restrictions determine the new document's active flags;
+  changing the attribute does not unsandbox the loaded document. F3's
+  implementation checks HTML's flag propagation and navigation rules.
+  Before F3, F2 refuses sandboxed frame loads rather than loading their
+  content with the restrictions ignored.
 - **`srcdoc`** is a document from a string: a stream fed from memory, no
-  request, origin the parent's. That mechanism is also the cure
-  DECLINED.md names for a `javascript:` link's string result, and this is
+  request, with the parent's origin unless the sandbox makes it opaque,
+  and the inherited base URL used for relative references. That mechanism
+  is also the cure DECLINED.md names for a `javascript:` link's string
+  result, and this is
   where it is built (cut F3).
 - **Nested depth and count are bounded**: a frame inside a frame inside a
   frame past depth 8, or a tree past 64 frames, gets an empty document
   and a `FAILED frame too-many` line. Pages that recurse into themselves
-  exist; the bound is the only defence against them and is stated in
-  one constant.
+  exist; depth and live-count limits supplement allocation budgets and
+  are stated in named constants. Count initial blank and loading frames,
+  not just completed ones. Retained departed documents remain charged
+  even after their active frame slots are released.
 
 **The load event waits for the frames.** A document's `load` fires only
 when its own sub-resources and every child frame's `load` have fired or
@@ -292,18 +353,21 @@ after its document's. The condition yonder's `loaded` already computes
 gains one clause: no child frame still loading. A frame that is refused,
 over the bound, or whose fetch failed counts as finished.
 
-**Departure.** Three doors, one rule: the Page is marked departing, and
-`page_departs` for it runs at the end of the current task (the loop's
-turn, after the task that set the mark and its microtask checkpoint).
+**Departure.** Three doors, one cleanup rule: the Page is marked departing,
+and destructive cleanup runs after the current task and its microtask
+checkpoint. Observable removal/context changes are not deferred merely
+to make reclamation easier; test immediate reads after `iframe.remove()`.
 The doors are the element's removal from its document (the mutation
 core's removal verbs and the parser's own), the frame's navigation (the
 new document replaces the old on arrival, as the window's does), and the
-parent's departure, which departs its children first, depth-first, so no
-child outlives the document that holds its element. Departure drops the
-frame's stream, drains its binding (timers, listeners, requests, storage
-commit, as `page_departs` does for the window), retires its realm, frees
-its layout, pictures and sheets, and leaves the document to the rule in
-§ What this settles 7. A frame departing while its own script is on the
+parent's departure, which deactivates its children first, depth-first;
+retained backing may outlive the active document tree. Departure drops the
+frame's stream and cancels its tasks and requests. It detaches host
+providers and releases display resources in their ownership order,
+including layout trees' borrowed animation effects. It retains the
+backing needed by surviving JS/native objects (§ Retained ownership).
+It must not call today's `retire` unchanged: that destroys the shared
+runtime. A frame departing while its own script is on the
 stack is the case the end-of-task rule exists for; the harness carries it
 (a frame removing itself from a click handler, and from a timer).
 
@@ -316,10 +380,9 @@ moved, is laid out with that size as its viewport and its own zoom
 inherited from the window; `css_view` for a frame is the frame's size, so
 media queries inside it answer for the frame (that is what the nine
 excluded `cssom-view` pages measure). The order is depth-first after the
-parent, so a frame's frame follows. RELAYOUT.md's memo is per Page and
-needs nothing more: a frame is not part of its parent's tree, and a
-parent change that did not resize the box leaves the frame's layout
-alone.
+parent, so a frame's frame follows. Reuse RELAYOUT.md's per-Page memo
+with the child viewport/environment. A parent change that does not alter
+the child's layout inputs need not rebuild the child's layout.
 
 **Paint and hit testing.** The parent's paint reaches the frame box and,
 instead of today's label, paints the child: `yonder_paint` for the
@@ -345,8 +408,9 @@ one fact line `frames: <n> loaded, <m> refused` is added. `iframe` leaves
 `diag_elements`' nothing-list; `frame` stays on it. With `keep_pages` on,
 a frame's bytes are kept beside the page as a sub-resource of kind
 `frame` with its address, so a kept page replays with its frames answered
-from disk through the same reader; REPLAY.md's grammar gains that one
-kind and nothing else. A frame refused by the server is recorded, not
+from disk through the same reader. The replay grammar also needs the
+ownership/generation metadata described in § The oracle. A frame refused
+by the server is recorded, not
 kept.
 
 **Target names.** A link or form inside a frame with `target=_parent` or
@@ -357,7 +421,7 @@ tree (nearest first, then the whole tree) navigates that frame;
 `_self`, `_parent`, `_top` or a frame's name is the same navigation ask
 (P3a already leans this way); anything else answers `null`.
 
-**The right-click menu** (YONDER_HONEY_DO.md § 5, not built; its verbs are
+**The right-click menu** (YONDER_HONEY_DO.md § 5, built; its verbs are
 chosen by what is under the pointer) gains three verbs when the pointer
 is over a frame: **Open frame here** (the window navigates to the
 frame's current address, the frame's document becoming the page),
@@ -366,14 +430,82 @@ and **Copy frame address**. Over a link inside a frame the link's verbs
 come first and the frame's after. This is the door Chris asked for on
 2026-10-23: a way to the page that is IN the frame that is not a click,
 because once frames are real a click inside one is the frame's own.
-**These three verbs need no frames, only the menu**: today's stand-in
-box already follows the frame's address on a click (paint.h's `frame`
-contract, libpage's link), and the menu's `element_at` answers an
-`iframe` as it answers a link, so they land with the menu's first slice,
-whenever that is built, and keep working unchanged when F2 replaces the
-box with the document. A frame whose `src` a script sets later has no
-address until that script runs, and no verb can help it; that is the
-script's problem and the record says which script.
+These frame-specific verbs are F2 work on the existing menu. Hit testing
+must return the owning Page as well as the node, so a link inside a child
+uses the child's URL and policy. An initial blank or `srcdoc` document
+has no independent fetchable address: opening its URL alone does not
+reproduce its content or inherited security context. Offer address verbs
+only when their action is meaningful; do not substitute the parent's URL.
+
+## Scheduling and animation
+
+Frames share the window thread for script, DOM, layout and painting.
+Fetching and decoding keep using the existing worker services. No frame
+owns a second timer thread or rendering loop. The host selects runnable
+documents fairly, preserves task ordering within each source and performs
+the shared runtime's microtask checkpoints at the specified boundaries.
+A child that keeps posting messages must not starve its siblings or the
+next rendering opportunity. A long synchronous call can still delay the
+tree; Workers are the separate execution facility, not an iframe flag.
+
+Extend the deadline scan and `script_turn` beyond the fixed root hosts:
+include timers, posted messages, script/load deliveries, view steps,
+observers, Web Animations, rAF, CSS motion and animated pictures. Take a
+stable rendering-opportunity snapshot; callbacks can navigate, remove or
+insert frames. New documents do not slip into an already collected batch,
+and retired documents are checked again before dispatch. Sample time from
+one monotonic clock and translate through the document's timing origin;
+do not equate independently navigated documents' `performance.now()` values.
+Keep Web Animations sampling before that document's rAF callbacks, and
+preserve the existing microtask checkpoints and paint acknowledgement.
+
+Layout/paint and Canvas damage use the owning Page and its viewport,
+scroll, clipping and transforms. A dirty child does not require rebuilding
+an unchanged parent's layout. Window occlusion and document visibility
+need distinct treatment: a CSS-hidden iframe is not automatically a
+`document.hidden` transition. Carry the existing hidden-motion policy
+through the tree and test hide/show, nested frames and navigation while
+an animation callback runs. Pin borrowed effect data until
+`yonder_scripts_tree_gone` releases the corresponding layout tree.
+
+## Retained ownership
+
+F1 needs an explicit ownership table before independent realm retirement
+is enabled: runtime/cluster; context and global; binding and wrapper
+registry; document arena; host providers; and native payloads retained by
+JS objects. Name the strong references, the point host activity stops,
+and the point each allocation can actually be reclaimed. Today's
+engine-before-binding teardown is the baseline to preserve for the root,
+not a child-teardown recipe.
+
+The table must cover nodes and listeners, custom-element callbacks,
+Range/Selection, Canvas objects, XHR/Blob/ArrayBuffer backing (`kept.c`),
+queued clones, and layout's borrowed Web Animation effects. A parent
+holding a child-created object must not leave its finalizer pointing into
+a freed binding. Keeping the whole retired binding until the runtime
+dies is a possible conservative implementation, but then repeated frame
+navigation retains memory: account for it, bound it, and state the limit
+in the implementation PR. Do not claim last-reference reclamation without
+implementing how the strong wrapper registry releases those references.
+
+Cross-arena adoption is additional work in libhtml and libdom. Current
+`createHTMLDocument`/DOMParser nodes inhabit the creator's arena, and
+`d_node` checks that arena's ownership. F1 must define how a frame's node
+can move without copying its JS identity, changing an existing wrapper's
+prototype, losing listeners/custom-element state, or freeing its original
+backing too soon. Document ownership and wrapper creation realm are
+different facts. Prove adoption both ways, destination mutation, and
+departure of either document; merely changing `DValue.document` is not
+an implementation.
+
+Memory limits apply to the frame tree as well as individual documents.
+The shared engine heap remains one account. Establish aggregate admission
+for tree, cascade, DOM, pictures, Canvas and kept bodies using the existing
+owner counters and census; creating a frame must not multiply the root's
+full allowances unchecked. Local limits may remain subdivisions. The F2
+brief names the aggregate ceilings and refusal behavior before code, with
+tests for many frames and repeated navigation retaining old objects.
+Worker budgets remain a separate part of WORKERS.md.
 
 ## Realms (libjs)
 
@@ -383,13 +515,11 @@ library and nothing else": `os64_js_realm_create(runtime, outcome)`
 returns a realm handle wrapping a new `JSContext` in the runtime (the
 intrinsics installed as the primary's are), and `os64_js_realm_retire
 (runtime, realm)` marks it retired: no task of its own runs again, its
-pending jobs are dropped at the next pump, and the context is released
-(`JS_FreeContext` is a reference drop; functions made in the realm hold
-it, so the context's memory goes when the last of them does, which is
-the engine's own rule and needs nothing from us). The primary context
-stays the runtime's first realm, so nothing that exists today changes
-shape. `os64_js_run` and the timer and event entry points take a realm;
-the existing calls pass the primary.
+pending jobs are prevented from entering script, and the context is released
+(`JS_FreeContext` drops an engine reference; it does not keep the native
+binding or arena alive for us). The primary context remains available
+through the existing single-document API. Realm-aware run, timer and
+event entry points extend it; compatibility wrappers select the primary.
 
 **`this` (the next patch in the series; 0018 at the revision, after the
 two 0017s).** `OP_push_this` substitutes `ctx->global_obj` for
@@ -399,8 +529,22 @@ object, read there instead, and set by `JS_SetThisSubstitute(ctx, v)`.
 The binding sets it to the window proxy; `JS_EvalThis` already lets a
 top-level script's `this` be chosen, and `globalThis` is a plain property
 the binding overwrites. The patch is one field, one read, one setter,
-with the comment naming the frame design; series mechanics as the
-series' latest.
+with the comment naming the frame design; select the patch number from
+the series at implementation, not from this design's dated number.
+This identifies one engine change, not proof that a one-field patch
+implements WindowProxy. Test global declarations, eval, sloppy `this`,
+borrowed accessors/methods, descriptors and prototype/extensibility traps;
+identify any missing engine hooks before enabling the proxy.
+
+**Context-sensitive services.** The library owns the runtime/context
+opaque slots. Its realm API must expose the correct context while
+preserving those slots, class-ID synchronization and the single-thread
+contract. Module-loader callbacks are installed per runtime but receive a
+`JSContext`; route them to that realm's module map and import map. Route
+script attribution, rejection reporting, console state and output to the
+proper host too. `d_context`, `d_binding` and `d_callback` must distinguish
+the calling realm from the object/provider's owning document; replacing
+one equality test with "same runtime" does not establish authorization.
 
 **Budgets and outcomes.** The memory limit, the job queue and the stack
 limit stay the runtime's. The task budget stays per run. The sticky
@@ -414,12 +558,21 @@ handler and is what every embedder's timeout relies on.
 The libjs owner confirms it on the harness with a case that interrupts a
 realm mid-allocation and mid-call and then runs the primary; or the
 split is not made and the row says so.
+Cross-realm synchronous calls keep the enclosing task's deadline rather
+than obtaining a fresh budget at each boundary. Specify which documents
+are retired when an interrupted call stack crosses realms, and prove
+that the surviving hosts cannot re-enter a failed execution environment.
 
 **Promise jobs** are the runtime's one queue and run in order whatever
 realm queued them, which is the standard's "one event loop per agent".
-A job of a retired realm is dropped by the pump (the realm's mark is
-checked before each job runs; the engine's `JS_ExecutePendingJob` reports
-the job's context).
+A job of a retired realm must be filtered before it executes.
+`JS_ExecutePendingJob` reports the context of the job it executes; checking
+that output afterward is too late. F1 must provide a pre-execution
+selection/filter hook or remove that realm's queued jobs safely in the
+engine port, with tests for mixed live/retired jobs and their order. A
+promise retained by another realm also needs an explicit settlement and
+callback-lifetime test. Do not destroy the shared runtime to discard one
+document's queue.
 
 ## The cluster and the window proxy (libdom)
 
@@ -431,9 +584,9 @@ its binding, and the list of departed documents waiting on their
 wrappers. `os64_dom_create` takes the cluster's runtime and a realm and
 makes one binding per document, as today's does for the page: its own
 `window` (the global), `document`, `location`, `history`, `navigator`,
-timers, listeners, requests, storage areas, providers. Everything in
-`struct os64_dom` is already per document except the class ids, which is
-why the cut is clean.
+timers, listeners, requests, storage areas, providers. The fields are
+largely per binding already, but class registration, context validation,
+host attribution and retained ownership still require the changes above.
 
 **A wrapper is made in the realm of its node's document.** `DValue`
 already tags the node's document; the lookup becomes "the document's
@@ -441,27 +594,27 @@ binding, through the cluster", not "the binding in hand". So when the
 parent's script walks `iframe.contentDocument.body.children`, the
 wrappers it receives are the child's, with the child's prototypes, and
 `child.contentDocument.body instanceof HTMLElement` is false in the
-parent and true in the child, as in a browser. The nodes themselves are
-one tree per document in one arena per document; adoption across
-documents (`adoptNode`, an `appendChild` from another document, which
-P1-Db builds) moves the node between arenas by the verb libhtml already
-has for a document of its own, and the wrapper's document tag moves with
-it.
+parent and true in the child, as in a browser. The node's owning document
+can change after wrapper creation: adoption preserves an existing
+wrapper's identity and prototype. Its arena, document bookkeeping and
+lifetime follow § Retained ownership; the current windowless-document
+adoption path does not move across arenas.
 
 **The window proxy** is a class with exotic methods (the shape patch 0008's
 global-miss hook and storage.c's legacy-platform objects already use):
-one instance per browsing context, held by the frame's Page and by the
-root, surviving every navigation of that context. Its target is the
+one instance per stable browsing context, surviving document replacement
+within that context. Its target is the
 current document's binding; it forwards get, set, has, delete,
 define and own-keys to that binding's global when the asking realm's
 document is same-origin with the target's, and answers the cross-origin
-list (§ What this settles 4) otherwise, throwing `SecurityError` through
-the binding's DOMException for the rest. The asking realm is
-`JS_GetRuntime`'s current context at the call, which the engine passes
-to every exotic method. Indexed properties `0..length-1` and the frames'
-names resolve to the child contexts' proxies, same-origin or not
-(`length`, `frames[i]` and `frames.name` are on the cross-origin list);
-the named lookup for everything else is P3c's. `window`, `self`,
+algorithms (§ What this settles 4) otherwise. The caller is resolved from
+the engine's execution context at the operation, with borrowed methods,
+getters and callbacks tested across realms. `JS_GetRuntime` returns a
+runtime, not a "current context"; the realm bridge must preserve HTML's
+current/incumbent settings where each API requires them. Indexed children
+are accessible across origins; named lookup follows the same-origin
+Window named-access rules and is not another cross-origin grant.
+The named lookup for everything else is P3c's. `window`, `self`,
 `globalThis`, `frames` read through the proxy answer the proxy; `top`
 and `parent` answer the ancestors' proxies; `frameElement` answers the
 element when the parent's document is same-origin and `null` otherwise;
@@ -471,9 +624,10 @@ place today's core.c installs the global as its own `window`, `self`,
 `context_answer` answers `top`, `parent`, `length` and `frameElement`
 for a frame's context as it answers them for a root today.
 
-**`location` across origins** is a second small exotic object: `href`
-settable, `replace` callable, nothing readable, everything else
-`SecurityError`; the assignment is a navigation ask of that context, from
+**`location` across origins** follows HTML's Location exotic methods:
+`href` settable and `replace` callable, with the specified descriptor,
+enumeration and fallback behavior; its URL is not readable. The
+assignment is a navigation ask of that context, from
 the asking document, subject to the target's sandbox when it is a `_top`
 ask from inside.
 
@@ -498,20 +652,28 @@ whose origin must equal the target document's origin at delivery time,
 or the message is dropped without an error; the delivery is a task in
 the target document's queue dispatching a `MessageEvent` at its window
 with `data`, `origin` (the caller's serialised origin), `source` (the
-caller's proxy), `lastEventId` empty and `ports` empty. P2b built exactly this with the
-target the caller (message.c `post_message`: poster and target are two
-parameters, the origin check runs in the task, one task per message), so
-this slice adds the second realm and nothing else.
+caller's proxy), `lastEventId` empty and `ports` empty. P2b has the clone
+and queued delivery with the target also the caller (`post_message`
+sets `poster = target`). F1 must derive the real poster and retain the
+right origin, source proxy and receiving document across navigation.
+Opaque-origin equality uses the opaque-origin token, not two serialized
+`"null"` strings. Test navigation and departure between posting and
+delivery; the source does not acquire the target's privileges.
 
-**The `storage` event** (P3a's `onstorage`, deferred by 1a) fires at
-every same-origin document in the tree other than the one that wrote,
-on the write, because the stores are in-process; the cross-window half
-stays the file-watch 1a deferred.
+**The `storage` event** is queued for other eligible documents sharing
+the storage area; it is not a synchronous callback in the writing task.
+Same-origin frames share the top-level context's sessionStorage, while
+localStorage follows its origin key. Reuse the window's `yonder_storage_t`
+provider and make changes visible coherently before the next reader,
+including a synchronous same-origin cross-frame call in the same task.
+The existing per-binding maps commit at settle points, so shared
+in-process storage needs explicit synchronization, not just event firing.
+No-op writes emit no event. The cross-window event half remains deferred.
 
 ## What the open slices do now
 
-Written 10/23 as one sentence a builder could obey, so the frame slice
-would land on a tree shaped for it. Re-read 11/07: what each did.
+Source reconciliation at `91ad9413`; these are integration obligations,
+not a claim that the remaining changes are one-line extensions.
 
 - **0e P1-W — DONE as asked.** `frameElement`, `length`, `top`, `parent`,
   `origin`, `isSecureContext`, `originAgentCluster` are answered by
@@ -519,11 +681,12 @@ would land on a tree shaped for it. Re-read 11/07: what each did.
   installed as a constant; its comment names this section. F1 teaches
   that function a frame's context.
 - **0e P2b — DONE as asked.** message.c's `MessageEvent` and message task
-  take the poster and the target as two windows; clone.c's record is no
-  realm's. F1 passes a second binding.
+  have separate poster/target roles, presently the same binding;
+  clone.c's record is runtime-owned. F1 supplies caller attribution,
+  the second binding and their lifetime rules.
 - **0e P3a — NOT LANDED.** When it is: `window.name` lives on the browsing
-  context (the Page's `name`), and `open` with `_self`/`_parent`/`_top`
-  is a navigation ask that takes a target context. DEBTS: "`window.name`
+  context's name, and `open` with `_self`/`_parent`/`_top`
+  is a navigation ask that takes a stable target context. DEBTS: "`window.name`
   and `Node.baseURI` are absent".
 - **0e P3c — NOT LANDED.** When it is: named access on the window
   resolves frames by name first (the standard's order: the child
@@ -533,8 +696,9 @@ would land on a tree shaped for it. Re-read 11/07: what each did.
 - **Slice 3 (modules) — LANDED, map per host.** `struct yonder_modules`
   hangs off the page's script host with the runtime, the import map and
   the record's compile totals. A frame's realm needs a module map of its
-  own (the standard's is per realm) and `import.meta.url` of its
-  document: F1 makes `yonder_modules` per Page, which it nearly is.
+  own and `import.meta.url` of its module. The host already owns its map;
+  F1 makes the shared runtime's loader select that host by realm, rather
+  than letting the last installed loader own all documents' imports.
 - **RELAYOUT 5b/5c — LANDED as asked.** The cascade and the memo are per
   Page; a frame's box is replaced with no intrinsic size.
 - **WIRE.md PR 1 — LANDED.** `Sec-Fetch-*` are sent per request kind
@@ -542,17 +706,40 @@ would land on a tree shaped for it. Re-read 11/07: what each did.
   `-Site` from the initiator document and no `-User`, one more kind.
 - **WIRE.md PR 2 and the SameSite row — the sentence stands.** A request
   carries its "site for cookies", the top-level page's site, beside its
-  URL from the day the SameSite row is paid; until then cookies go by
-  destination as today, and frames are why the field exists.
+  URL from the day the SameSite row is paid. Derivation must include the
+  ancestor chain: the top-level site alone is insufficient for a child
+  under a cross-site ancestor. Until then cookies follow the existing
+  destination policy, with this gap explicitly retained in DEBTS.
 - **Shadow DOM, Range, load events — landed after the list and touched
   it.** Focus records `(node, document)` already; a Range is one
   document's and never crosses; a document's `load` is owed through
-  `os64_dom_readiness_after` for the document in hand. None needs a
-  change for frames; § What the tree is today says where each helps.
+  `os64_dom_readiness_after` for the document in hand. These are useful
+  seams, but host routing, child load blockers, cross-realm wrappers and
+  lifetime tests are still frame work.
 - **Every yonder change from now on.** The Page in hand, never `g.page`,
-  and no new file-level static that is really a page's. (516 `g.page`
-  reads in yonder.c at the revision; F2 is where they are paid, and no
-  slice before it should add one.)
+  and no new file-level static that is really a page's. Root-specific
+  browser chrome may deliberately use `g.page`; document operations must
+  receive or resolve their owner. F2 audits both categories.
+
+## HTTP/2 coordination
+
+H2.2 places a shared connection admission queue beneath fetch: HTTP/1
+requests for the same pool key queue behind the six-connection limit;
+the later H2 transport multiplexes streams under its own limits. A
+frame uses the existing fetch/pool path and owns its request lifetime,
+not a private connection pool. Queued requests count as pending, and
+cancelling a frame removes its queued/in-flight work without cancelling
+a sibling's shared connection. Test many same-host frames when H2.2 is
+available. F1/F2 do not depend on HTTP/2 protocol support.
+
+If frame or Worker work needs a thread to wait for another, use H2.0's
+`os64/bell.h` once landed. Its one-waiter/many-ringers notification wakes
+a consumer to inspect its synchronized queue; rings are not payloads or
+message counts. Keep payload ownership, cancellation and teardown in the
+queue protocol. Do not introduce a new pipe-based wake for that use.
+The window's existing GUI/ticker notification path need not be replaced
+just to implement frames. WORKERS.md's pipe-backed waits must be reconciled
+with the landed bell API when its implementation brief is cut.
 
 ## Workers
 
@@ -565,10 +752,11 @@ at three points, stated here so neither doc bends the other:
   `Worker` constructor runs in a realm; the worker it makes is owned by
   that realm's Page (its origin, its base URL, its CSP when there is one),
   listed on that Page, and terminated when that Page departs — a frame's
-  departure ends the frame's workers and leaves the parent's alone. Until
-  F2, every Page is a root and the list is the window's.
-- **A worker is no realm.** It is a runtime on another thread; nothing in
-  § Realms applies to it, and the cluster never sees it. The clone's
+  departure ends the frame's workers and leaves the parent's alone.
+  Carry the document identity, not just the window identity, in the
+  worker's fetch relay and queued delivery.
+- **A worker has a separate runtime.** Its own realm executes on its
+  worker thread; it does not join the frame tree's runtime/cluster. The clone's
   packed form (W1) is what crosses, so a message to a worker is bytes and
   a message to a frame is the record — the same writer, two readers.
 - **A port's transfer** to a frame or to a worker is W3 and the same
@@ -577,18 +765,22 @@ at three points, stated here so neither doc bends the other:
 
 ## The oracle
 
-web-platform-tests at the runner's pin (`a699fb16`), served by the runner
-at its two sites (a frame's load is a page fetch the runner already
-answers; a cross-origin frame is the alternate site). Directories to add
-to `tools/wpt_fetch.sh`, each with its REQUIRED set named file by file in
-the PR from the directory's contents and read by Fable, and its baseline:
+web-platform-tests at the runner's pin (`a699fb16` at this revision).
+Use the runner's two origins and extend its fixture serving to child
+document requests. Audit redirects, response headers, dynamically served
+resources and HTTPS needs per test; a local file mapping is not proof of
+those wire behaviors. The directories below are the target set; the
+window-object and messaging subsets are already fetched. Add missing
+directories to `tools/wpt_fetch.sh`. Each implementation PR names its
+REQUIRED files from the pinned checkout, records a fresh baseline and
+has Fable read that selection:
 
 - `html/browsers/origin/cross-origin-objects/` — the cross-origin list,
-  property by property, with the exceptions; `cross-origin-objects.html`
-  is required whole. This is the test of ruling 4 and the one the
-  reviewer reads first.
+  property by property, with the exceptions. Select the complete security
+  cases from the pin; this is the test of ruling 4 that the reviewer
+  reads first.
 - `html/browsers/the-window-object/` — the indexed and named frames
-  (`window-indexed-properties.html` required), `self-et-al` across
+  and their property descriptors, `self-et-al` across
   frames, `frameElement`.
 - `html/browsers/windows/` — browsing-context names, nesting, `top`,
   `parent`, the initial about:blank.
@@ -599,49 +791,84 @@ the PR from the directory's contents and read by Fable, and its baseline:
 - `html/browsers/browsing-the-web/navigating-across-documents/` — the
   frame navigations; the pages that need `window.open` excluded by name.
 
-Lifted from the existing exclusions when their cut lands: the nine
-`css/cssom-view` pages (F2), `dom/nodes`' 488 frame-document failures
-(F1 and F2), fetch's `multi-globals` and `response-clone-iframe` (F1),
-`webstorage`'s `storage` event pages (F3). The runner's headless window
-makes frames the way yonder does, so nothing in the runner changes but
-the exclusion lists and the fetch list.
+Revisit the frame exclusions in `css/cssom-view` and `dom/nodes`, fetch's
+`multi-globals` and `response-clone-iframe`, and `webstorage` event pages.
+The old counts (nine view pages, 488 node failures) are historical, not
+this refresh's measurements. A two-realm DOM harness can test F1 without
+visible frames; WPT pages that create real iframe elements also need the
+host integration from F2. Do not claim those passes at F1 merely because
+the binding can construct a second realm.
+
+The WPT, scripted and replay hosts include Yonder's loop, but their fake
+wire, completion conditions and root-only observations still need frame
+coverage. Record child URL, parent/document identity and load generation
+in retained resources, so two frames using the same URL or navigating
+repeatedly replay unambiguously. Update record grammar/parsers, fixtures
+and backward compatibility together; this is more than an exclusion edit.
 
 The host harnesses: the DOM host gains a two-document runtime (one
 cluster, two realms, two bindings, no layout, no network) and proves the
 proxy's forwarding, the cross-origin list with a mutant per property, the
 wrapper-per-document rule, `postMessage` across realms with the clone,
-and the retired-realm rules (a job of a retired realm never runs; a
-departed document's arena outlives its binding while a wrapper lives and
-is freed by the last finalizer, under the sanitizers, with a mutant that
-frees early). The scripted-page host gains frames: the about:blank at
+and the retired-realm rules (a job of a retired realm never runs; the
+ownership model retains backing while reachable objects need it and
+reclaims it at its documented boundary). Exercise retained Blob bytes,
+Canvas objects, functions and adopted nodes, not just `contentDocument`.
+Use ASan/UBSan with leak checking enabled, including the supported
+outside-sandbox run if sandbox attachment is denied. The scripted-page
+host gains frames: the about:blank at
 insertion, `contentDocument.write` into it, `src` loads answered from
 the harness's fake wire, the load delay, the depth and count bound, the
 server's refusal, each sandbox flag with a mutant, a frame removing
 itself from its own handler and from a timer, the layout-after-parent
 order with a viewport-driven media query, hit testing through the box,
-and the record's folded counts. The replay host replays a kept page with
-one kept frame.
+and the record's folded counts. Add simultaneous parent/child animation,
+child-only damage, stale network arrivals, aggregate-memory refusal,
+repeated frame creation/removal, and fairness under a busy sibling. The
+replay host covers nested/repeated-URL frames and navigation, including
+an old corpus record with no frame resources.
 
 ## The cut
 
 | Cut | Builds | Oracle | Owner |
 |---|---|---|---|
-| F1 | realms in libjs (the API, the `this` patch, the outcome split with its proof); the cluster, the binding per document, wrappers per document, the window proxy and the cross-origin list, the location proxy, `HTMLIFrameElement`'s members, `postMessage` across realms | the DOM host's two-document cases; `cross-origin-objects`, `the-window-object`, `webmessaging` without ports; fetch's lifted exclusions | Opus; **Fable reads** the proxy's gate and the realm and wrapper lifetimes before Codex; the libjs owner confirms the interrupt soundness |
-| F2 | the Page tree in yonder: birth at insertion, the stream per frame, `src` loads, the server's refusal, the bound, the load delay, departure at task end, layout after the parent, paint clipped, hit testing, scrolling, focus, target names, the record and the kept frame, `MISSING element iframe` retired (the right-click verbs are the menu's, before or after this) | the scripted-page host's frame cases; `the-iframe-element` (less `srcdoc` and `sandbox`), `windows`, `navigating-across-documents`; the nine `cssom-view` pages and `dom/nodes`' frame failures lifted; QEMU `make run-net` loading a page with a same-origin and a cross-origin frame | Opus; **Fable reads** the departure order and the task-end rule before Codex |
+| F1 | realms and realm-aware services in libjs; pre-execution job filtering; the cluster, cross-arena ownership/adoption, context validation, WindowProxy and Location security, cross-realm messaging; independent retirement only after its proof | two-document host cases, retained-object and adoption tests, interrupt/failure injection; WPT subsets runnable without the F2 host | Builder assigned per PR; **Fable reads** security and lifetimes; libjs owner confirms interrupt soundness; Codex review |
+| F2 | stable browsing contexts and Page trees; per-frame navigation and response policy; shared scheduling/animation; aggregate admission; layout, paint, input, menus, diagnostics/replay; refuse sandboxed and unsupported srcdoc loads until F3 | host cases and newly runnable frame WPT files; mixed-origin/nested frames, animation and navigation in QEMU and on the P5 | Builder assigned per PR; **Fable reads** departure and scheduling; Codex review |
 | F3 | the stream fed from memory (`srcdoc`, and the `javascript:` string result DECLINED.md names); `sandbox`'s flags; the `storage` event across the tree | `the-iframe-element`'s `srcdoc` and `sandbox` pages; `webstorage`'s event pages | Opus; Chris |
 
-F1 is libjs and libdom and touches no layout; F2 is yonder and needs F1
-for a frame that runs script but lays out and paints a scriptless frame
-without it, so the two may be built side by side off one branch and land
-in order. Each is a PR to `userland` with the three passes, and Codex for
-F1 and F2 (a security gate and a lifetime rule are what the budget is
-for). Each PR states its WPT counts before and after, the tally's
+F1/F2/F3 are dependency stages, not three mandatory large branches. F1
+also touches libhtml ownership and the script host, even before F2 changes
+visible frame layout. Suggested reviewable cuts are:
+
+1. Realm API and runtime-service routing, preserving the existing
+   single-document entry points and behavior.
+2. Binding/arena ownership, cross-document adoption and retirement proofs
+   in a two-document harness.
+3. WindowProxy/Location gates and cross-realm messaging; enable them only
+   with the complete security and lifetime contract.
+4. Host Page/context routing, then visible frame loading, rendering/input
+   and replay in coherent increments. No shipped intermediate step may
+   run a frame while silently ignoring its sandbox or framing policy.
+5. F3's srcdoc, sandbox and coherent storage/event behavior.
+
+Each cut is a short-lived PR intended for `userland`; a preparatory cut
+can land without exposing incomplete frames. While the checkpoint's
+comparison is frozen, leave `userland` and the comparison refs unchanged:
+stack a dependent branch/PR on its predecessor. After the checkpoint,
+land in dependency order and retarget the remaining PRs to `userland`,
+checking their diffs and inherited claims after each merge forward.
+No long-lived iframe integration branch is required. The builder writes
+the concrete ownership/budget decisions and test set before its cut;
+this refresh does not claim those outstanding proofs are completed.
+
+Each PR states its applicable WPT counts before and after, the tally's
 `iframe` count against the records, the corpus count, and for F2 the P5
 on the Tier 1 acceptance pages beside Chrome, by outcome and not by name.
 MODERN_WEB.md gains the as-built sections; DEBTS.md's frames row ("No
 frames: an `iframe` has no document, and there is no `window.open`") is
-struck when F2 lands and the rows § What this settles 9 names are written
-with F1.
+split when F2 lands: embedded documents can be paid without marking
+`window.open`, deferred sandbox/srcdoc behavior or joint session history
+as implemented. Keep the remaining rows and explicit divergences visible.
 
 ## Rulings
 
@@ -658,7 +885,10 @@ the row reopens and this section says why.
    GUI window per `open`, which is the honey-do's "new window before
    tabs" and a design about windows, not frames.
 
-Everything else here is web semantics, decided and told.
+The 2026-11-09 workflow ruling is short-lived, independently mergeable
+cuts, stacked while the checkpoint comparison is frozen. Ownership and
+aggregate-budget details called out above require implementation briefs
+and proof; they are not silently settled by this document's older claims.
 
 
 ## Risks named
@@ -668,17 +898,27 @@ Everything else here is web semantics, decided and told.
   fixtures before and after; the budget is a few percent, and if it is
   more, the fix is caching the forward's target per call site, not
   exposing the global.
-- **Realm retirement while functions live.** A parent that kept a
-  frame's function and calls it after the frame departed runs code
-  whose document is gone. The binding's verbs on a departed document
-  answer as `createHTMLDocument`'s windowless documents do today (no
-  window, no location, no network, no timers), so the call fails
-  honestly rather than touching freed memory; the harness carries it.
-- **Adoption across arenas.** A node moved between documents is the
-  verb libhtml has for documents of its own, now used across Pages that
-  are freed at different times; the departed-document rule is what keeps
-  the arena alive, and the mutant that frees it early is the proof.
+- **Realm retirement while objects live.** A retained function can enter
+  its creation realm after its frame leaves. Retain valid backing and
+  define which host activity is disabled; existing windowless documents
+  are not a substitute for this lifecycle. Tests must distinguish memory
+  safety, continued access to detached objects, and any deliberate
+  departure-policy divergence.
+- **Adoption across arenas.** The existing same-arena operation is not
+  the required implementation. F1's ownership proof is a dependency of
+  shipping frame documents that can exchange nodes.
 - **The bound.** Depth 8 and 64 frames are chosen for the Tier 1
-  acceptance pages and the corpus's heaviest pages (146 `iframe` lines
-  across 41 sites, none near either); the constants say why, and the P5
-  says whether they are right.
+  acceptance pages using the original census (146 `iframe` lines across
+  41 sites). Recheck those assumptions in F2; active frame count alone
+  does not bound memory retained by departed documents.
+
+## Source references for the implementation briefs
+
+- [HTML agents and agent clusters](https://html.spec.whatwg.org/multipage/webappapis.html#agents-and-agent-clusters)
+- [HTML WindowProxy and cross-origin operations](https://html.spec.whatwg.org/multipage/nav-history-apis.html#crossoriginproperties-(-o-))
+- [HTML iframe processing and sandbox](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#the-iframe-element)
+- [QuickJS runtime/context and class contracts](https://bellard.org/quickjs/quickjs.html#Runtime-and-contexts)
+
+Standards describe observable behavior; the source map above describes
+what Yonder has built. A proposed API or a listed oracle is not evidence
+that its behavior already exists or passes.
