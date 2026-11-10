@@ -26,6 +26,7 @@ typedef struct {
         os64_tls_policy_reason_t policy_reason;
         int upstream_error;
         uint16_t version;
+        bool resumed;      // the handshake was a resumed one (OS64_TLS_RESUMED)
     } error;
     bool encrypted, silent;
     bool have_lookahead;

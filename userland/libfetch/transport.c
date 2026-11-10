@@ -98,7 +98,11 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
         remember(io, state.status);
         if (!live(state.status)) goto fail;
-        if (state.flags & OS64_TLS_HANDSHAKE_DONE) { io->error.version = state.version; return true; }
+        if (state.flags & OS64_TLS_HANDSHAKE_DONE) {
+            io->error.version = state.version;
+            io->error.resumed = (state.flags & OS64_TLS_RESUMED) != 0;
+            return true;
+        }
         remember(io, os64_tls_transport_step(io->tls, wait));
         if (!live(io->error.status)) goto fail;
     }

@@ -1,6 +1,7 @@
 #include "client_engine.h"
 #include "client_profile.h"
 #include "tls13_engine.h"
+#include "session_cache.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 
@@ -20,7 +21,32 @@ struct os64_tls_engine {
     tls_status terminal;
     int upstream_error;
     bool handshake, closing, close_started, eof, aborted;
+    // Resumption (TLS 1.3, session.port nonzero): the session taken from the
+    // cache to offer, the one the engine assembles arriving tickets in, and
+    // what files them.
+    tls13_session offer, arriving;
+    struct {
+        uint16_t port;
+        const void *trust;
+        bool (*retain)(const void *trust);
+        void (*release)(const void *trust);
+        uint64_t (*now_ms)(void *context);
+        void *context;
+    } session;
 };
+
+static tls_session_key session_key(const os64_tls_engine *c)
+{
+    return (tls_session_key){c->hostname, c->session.port, c->session.trust,
+                             c->session.retain, c->session.release};
+}
+// The engine's `received`: a ticket arrived on an authenticated connection.
+static void session_received(void *context, const tls13_session *session, uint32_t lifetime)
+{
+    os64_tls_engine *c = context;
+    tls_session_key key = session_key(c);
+    os64_tls_session_put(&key, session, lifetime, c->session.now_ms(c->session.context));
+}
 
 #ifdef OS64_TLS13_TEST
 void *os64_tls_engine_test_context(os64_tls_engine *c)
@@ -189,7 +215,22 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
         if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) {
             br_ssl_engine_inject_entropy(&c->engine.bear.client.eng, seed, sizeof seed);
             if (!br_ssl_client_reset(&c->engine.bear.client, c->hostname, 0)) init_error = engine_error(c);
-        } else init_error = tls13_init(&c->engine.tls13,c->validator,c->hostname,c->alpn,cfg->alpn_count,seed);
+        } else {
+            tls13_resumption resumption = {0};
+            if (cfg->session.port && cfg->session.now_ms) {
+                c->session.port = cfg->session.port; c->session.trust = cfg->session.trust;
+                c->session.retain = cfg->session.retain; c->session.release = cfg->session.release;
+                c->session.now_ms = cfg->session.now_ms; c->session.context = cfg->session.context;
+                tls_session_key key = session_key(c);
+                resumption.advertise = true;
+                if (os64_tls_session_take(&key, c->session.now_ms(c->session.context), &c->offer))
+                    resumption.offer = &c->offer;
+                resumption.arriving = &c->arriving;
+                resumption.received = session_received;
+                resumption.context = c;
+            }
+            init_error = tls13_init(&c->engine.tls13,c->validator,c->hostname,c->alpn,cfg->alpn_count,seed,&resumption);
+        }
     }
     wipe(seed, sizeof seed);
     if (result != TLS_OK) {
@@ -227,6 +268,8 @@ tls_state os64_tls_engine_state(os64_tls_engine *c)
     if (c->validator_reason) result.policy_reason = c->validator_reason(c->validator);
     if (c->handshake) {
         result.flags |= TLS_HANDSHAKE_DONE;
+        if (c->protocol == OS64_TLS_PROTOCOL_DEFAULT && tls13_resumed(&c->engine.tls13))
+            result.flags |= OS64_TLS_RESUMED;
         result.alpn = c->protocol != OS64_TLS_PROTOCOL_DEFAULT ?
             br_ssl_engine_get_selected_protocol(&c->engine.bear.client.eng) : tls13_selected_protocol(&c->engine.tls13);
     }

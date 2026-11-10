@@ -37,7 +37,7 @@ void os64_tls_trust_free(os64_tls_trust *store)
     for (size_t i = 0; i < store->count; i++) os64_free(store->storage[i]);
     os64_free(store);
 }
-static bool retain(os64_tls_trust *store)
+bool os64_tls_trust_retain(os64_tls_trust *store)
 {
     unsigned refs = __atomic_load_n(&store->references, __ATOMIC_RELAXED);
     do {
@@ -201,7 +201,7 @@ static tls_status create(void *context, const char *hostname, uint32_t days,
     policy_validator *v = os64_malloc(sizeof *v);
     if (!v) return TLS_NO_MEMORY;
     os64_memset(v, 0, sizeof *v);
-    if (!retain(store)) { os64_free(v); return TLS_LIMIT; }
+    if (!os64_tls_trust_retain(store)) { os64_free(v); return TLS_LIMIT; }
     v->trust = store; v->vtable = &policy_vtable;
     os64_memcpy(v->hostname, hostname, os64_strlen(hostname) + 1);
     minimal_init(&v->minimal, store->anchors, store->count, days, seconds);

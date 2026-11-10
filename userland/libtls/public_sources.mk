@@ -6,6 +6,7 @@ LIBTLS_CORE_SOURCES := \
     libtls/port/client_engine.c \
     libtls/port/client_profile.c \
     libtls/port/runtime.c \
+    libtls/port/session_cache.c \
     libtls/port/tls13_schedule.c \
     libtls/port/tls13_record.c \
     libtls/port/tls13_handshake.c \

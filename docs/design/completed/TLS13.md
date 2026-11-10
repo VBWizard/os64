@@ -202,8 +202,13 @@ An explicit allowlist, as TLS.md requires. The ClientHello:
   connection's DRBG. Two shares cost ~100 bytes and make a key_share
   HelloRetryRequest unlikely from any real server, since every 1.3 server
   supports x25519; a cookie-only HRR remains possible and is handled.
+- When the caller gives leave to resume (a nonzero `port` in the config;
+  § Resumption): `psk_key_exchange_modes` (45) with `psk_dhe_ke` alone, on
+  every such hello, and `pre_shared_key` (41), last, when a kept session is
+  offered. A config with no port sends neither, and a `pre_shared_key` in
+  a ServerHello that answers no offer is refused like any other.
 - Not offered, and therefore refused if the server sends them anyway:
-  `pre_shared_key`, `psk_key_exchange_modes`, `early_data`,
+  `early_data`,
   `post_handshake_auth`, `status_request`, `signed_certificate_timestamp`,
   `compress_certificate`, `record_size_limit`, `max_fragment_length`,
   `encrypted_client_hello`, `padding`. A server extension we did not offer
@@ -220,7 +225,7 @@ is `BR_ERR_X509_FORBIDDEN_KEY_USAGE`.
 
 Deliberately absent, booked as one DEBTS row ("TLS 1.3 engine boundaries",
 in the shape of the existing "SSH implementation boundaries" section):
-session resumption and PSK (tickets are consumed and discarded), 0-RTT,
+0-RTT and external PSKs (resumption is in: § Resumption),
 client certificates (a `CertificateRequest` is answered with an EMPTY
 `Certificate` message — the conformant reply of a client with nothing to
 show; if the server then alerts, that is the failure, and TLS.md's "no retry
@@ -386,8 +391,9 @@ verify_data  = HMAC(finished_key, Transcript-Hash(up to the message before Finis
 next_traffic_secret = Expand-Label(traffic_secret, "traffic upd", "", Hash.len)   (KeyUpdate)
 ```
 
-`exporter_master_secret` and `resumption_master_secret` are not derived: no
-consumer asks for exporters and we keep no tickets. The ECDHE shared secret
+`exporter_master_secret` is not derived: no consumer asks for exporters.
+`resumption_master_secret` is, at the client's Finished, when tickets are
+to be kept (§ Resumption), and not otherwise. The ECDHE shared secret
 is the x25519 output (32 bytes; an all-zero result is fatal, RFC 7748 § 6.1)
 or the x-coordinate of the P-256 product (bytes 1..32 of Bear's uncompressed
 point). Bear's `br_ec_c25519_m31.mul` clamps the scalar itself and takes it
@@ -515,8 +521,9 @@ last two (RFC 8446 § 5.1; Quinn, finding 7):
    install the client APPLICATION write key. `handshake` is now complete:
    `SENDAPP` and `RECVAPP` may be set, exactly as Bear's engine sets them.
 9. **Post-handshake messages**, any time after step 8, always encrypted:
-   `NewSessionTicket` — framed and DISCARDED (stream-discarded, since a
-   ticket may be large; nothing is stored); `KeyUpdate(update_requested |
+   `NewSessionTicket` — framed as a stream (a ticket may be large), and
+   kept when the caller gave leave to resume and it fits a session
+   (§ Resumption), discarded otherwise; `KeyUpdate(update_requested |
    update_not_requested)` — derive the server's next read secret and reset
    its sequence number; if `update_requested`, we MUST send our own
    `KeyUpdate(update_not_requested)` under the CURRENT write key and then
@@ -546,6 +553,96 @@ NewSessionTicket are the two streamed messages and have no engine cap of
 their own (the validator bounds the one, the other is discarded as it
 arrives). The wrapper's 1 MiB pre-handshake ciphertext cap stays and
 applies unchanged.
+
+## Resumption (HTTP2.md H2.1, 2026-11-10, Fable)
+
+A server that has authenticated itself may hand the client tickets, and a
+ticket offered in a later hello lets that handshake skip the certificate
+chain and its signatures: the two sides are authenticated by having been
+authenticated before. Ruling 6 below said no; Chris's 2026-11-09 ruling to
+run the HTTP/2 arc reversed it.
+
+**Who decides what.** The engine (`tls13_engine.h` § Resumption) neither
+stores a session nor reads a clock. Its owner hands it one to offer and is
+handed each one that arrives. The owner is the client wrapper
+(`client_engine.c`), and what it keeps them in is the process's session
+cache (`port/session_cache.c`).
+
+**Leave to resume is the config's `port`.** Nonzero: this connection may
+resume and its tickets are kept. Zero, which is what a zeroed config says:
+the hello is the one this document describes above, and tickets are
+consumed and discarded. TLS 1.3 alone: the Bear 1.2 clients never resume.
+
+**The key is what the earlier belief rested on**: the hostname as the
+config normalises it, the port, and the trust store's identity. A session
+earned under one store is never offered under another, and an entry holds
+its own reference on its store, so no other store can come to live at that
+address while the entry names it. Thirty-two sessions in all, two a key
+(what one connection's worth of tickets usually is), least recently kept
+out first.
+
+**A session is offered once.** Taking one for an offer removes it, so two
+connections cannot be tied together by the ticket they showed (RFC 8446
+C.4); the server's new tickets refill the key. One is never offered past
+its lifetime, which is the server's `ticket_lifetime` held to the RFC's
+seven days, told by `os64_micros` (a clock that does not jump when the
+wall clock is set).
+
+**The hello.** `psk_key_exchange_modes` with `psk_dhe_ke` alone goes on
+every hello that may resume, session or no session: it is how a server
+learns that a ticket would be of use, and BoringSSL and GnuTLS issue none
+to a hello without it. `psk_dhe_ke` means the key exchange is still done,
+so a resumed connection has forward secrecy, and no 0-RTT is possible.
+`pre_shared_key` goes last, with one identity and its binder: an HMAC,
+under a key derived from the PSK, over the transcript so far and the hello
+truncated at the end of the identities. The hello is built whole with the
+binder's bytes reserved, so every length before them is already final.
+
+**The answer.** A ServerHello carrying `pre_shared_key` with identity 0
+accepts: the early secret is the PSK's, EncryptedExtensions is followed by
+the server's Finished, and a Certificate, CertificateRequest or
+CertificateVerify there is an unexpected message. Any other identity, or a
+suite whose hash is not the session's, is `TLS13_ERR_PSK`
+(`illegal_parameter`). No `pre_shared_key` declines, and the same
+handshake goes on as a full one. A `pre_shared_key` that answers no offer
+is an extension we did not offer.
+
+**HelloRetryRequest.** The second hello offers the session again, with a
+binder over the new transcript, when the suite the retry fixed hashes as
+the session did; otherwise it drops the offer, and what the second hello
+did not offer the ServerHello may not accept. The reported age is the
+first hello's: the engine has no clock, the two hellos are one round trip
+apart, and with no 0-RTT a server has nothing to protect with the age.
+
+**Tickets.** `resumption_master_secret` is derived at the client's
+Finished when there is somewhere to put tickets, and kept until the
+connection ends. Each ticket's PSK is `Expand-Label(resumption_master,
+"resumption", ticket_nonce, Hash.len)`. A ticket longer than
+`TLS13_TICKET_MAX` (2 KiB) or with a lifetime of zero is read to its end
+and not kept, and counted (`tickets_dropped`).
+
+**What the caller sees.** `OS64_TLS_RESUMED` in the state's flags beside
+`HANDSHAKE_DONE`; `os64_tls_sessions_drop()` empties the cache. libfetch
+passes the peer's port on every direct https dial, reports
+`detail.tls_resumed`, and yonder's record and `os64get -v` say "resumed".
+
+**Proof** (`tools/test_tls13_engine_host.py`, against OpenSSL in process,
+under ASan and UBSan): the first hello to a key carries 45 and no 41, and
+a hello with no port carries neither, checked on the hello's bytes; two
+tickets kept, the next handshake resumed with no Certificate or
+CertificateVerify seen, fed a byte at a time; each ticket offered once,
+and a server that issues none leaves the cache empty; a ticket offered one
+second inside its lifetime and dropped one second past it; port and trust
+as separate keys, and a kept session holding its store alive; a ticket
+another server context cannot open, and one of another hash, declined
+into a full handshake; an oversize ticket not kept; resumed across
+HelloRetryRequest, and the offer dropped when the retry fixes another
+hash; one bit of the binder wrong and the server refuses with
+`illegal_parameter`; an identity never offered, a suite of another hash,
+an acceptance of nothing offered, and a Certificate after an acceptance,
+each refused. The fuzz loop offers a planted session in one case of four,
+splices `pre_shared_key` answers into the ServerHello, and keeps the
+tickets its deep cases mutate.
 
 ## Close, EOF, abort — the wrapper's semantics, kept
 
@@ -735,8 +832,10 @@ modern one.
    trivially testable; two key shares make it rare.
 5. Named groups are a table with x25519, P-256 and P-384 today; the
    post-quantum hybrid is a row for a later arc, not a hook designed now.
-6. No resumption, no 0-RTT, no client certificates, no exporters, no
-   send-side padding — the DEBTS row names them.
+6. No 0-RTT, no client certificates, no exporters, no send-side padding —
+   the DEBTS row names them. ("No resumption" stood here from 2026-10-09
+   until Chris's 2026-11-09 ruling to run the HTTP/2 arc, whose H2.1 is
+   § Resumption.)
 
 ## S1, as built
 
@@ -783,7 +882,7 @@ harness compares the RFC's six extracts, 39 expansions, 17 wire records,
 four Finished values and two ECDH exchanges. It reconstructs the transcript
 from complete handshake messages, including the HRR synthetic message.
 The RFC's exporter/resumption calculations are fixture checks of generic
-HKDF helpers; no production exporter or resumption path is added.
+HKDF helpers; this slice adds no production exporter or resumption path.
 
 Independent expectations from Python `hashlib`/`hmac` and `cryptography`
 cover SHA-256/SHA-384 schedules, all three AEADs, and X25519/P-256/P-384,

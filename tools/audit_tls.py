@@ -28,7 +28,9 @@ assert re.search(r'Type:\s+DYN\b', command('x86_64-elf-readelf', '-h', LIBRARY))
 imports = {line.split()[-1] for line in command('x86_64-elf-nm', '-D', '-u', LIBRARY).splitlines()}
 assert imports == {'os64_malloc', 'os64_free', 'os64_memcpy', 'os64_memmove', 'os64_memset',
                    'os64_strlen', 'os64_open', 'os64_read', 'os64_close', 'os64_time',
-                   'os64_conf_find', 'os64_slurp', 'os64_ticks', 'os64_read_for', 'os64_write_for'}, imports
+                   'os64_conf_find', 'os64_slurp', 'os64_ticks', 'os64_read_for', 'os64_write_for',
+                   # the session cache: its key's hostname, its lock, its clock
+                   'os64_streq', 'os64_strcopy', 'os64_yield', 'os64_micros'}, imports
 for binary, dependencies in ((LIBRARY, ['libos64.so']), (FIXTURE, ['libtls.so', 'libos64.so']),
                              (TRANSPORT_PROBE, ['libtls.so', 'libos64.so']),
                              (USERLAND / 'bin/libfetch.so', ['libtls.so', 'libgzip.so', 'libos64.so']),

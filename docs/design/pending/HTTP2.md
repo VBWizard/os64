@@ -919,6 +919,74 @@ resumed, against one host that sends tickets (micros around the dial in
 os64get `-v`), and the connection count unchanged on WIRE.md's blog page
 with its arrival time, before and after.
 
+#### H2.1, as built (2026-11-10, Fable)
+
+TLS13.md § Resumption is the record of what the engine does and of its
+proof; this is where the build departs from the brief above, or says more.
+
+- **The engine keeps nothing and reads no clock.** The brief put the
+  keeping of a ticket's fields in the engine and the cache beside it. The
+  engine (`tls13_resumption`, tls13_engine.h) is handed one session to
+  offer and hands back each one that arrives; the client wrapper owns
+  both, and the cache (`port/session_cache.c`) is the wrapper's. That
+  keeps the engine a thing the harness drives with no platform behind it.
+- **`OS64_TLS_RESUMED` is a flag, not a field.** The state's `flags`
+  already said what a connection is; the struct did not have to grow.
+- **The key's trust is an identity with a hold.** The cache is given a
+  pointer it compares and never looks into, and a retain/release pair it
+  calls once per entry; libtls passes the trust store and its own
+  reference count. The cache therefore has no trust-store code in it and
+  links into every harness that has the client engine.
+- **The second hello reports the first hello's age.** The brief had a
+  HelloRetryRequest's second hello recompute `obfuscated_ticket_age`. The
+  engine has no clock, the two hellos are a round trip apart, and with no
+  0-RTT a server has nothing to protect with the age; the binder, which
+  is what matters, is recomputed over the new transcript.
+- **A second hello drops an offer the retry made unusable.** When the
+  HelloRetryRequest fixes a suite whose hash is not the session's, the
+  session is not offered again, and a ServerHello may not accept what the
+  hello it answers did not offer.
+- **Lifetimes.** Zero is the server's "discard at once" and is not kept;
+  more than seven days is held to seven. `TLS13_ERR_PSK`
+  (`illegal_parameter`) is the engine's word for an acceptance it may not
+  honour: an identity it did not offer, or a suite of another hash.
+- **The clock is `os64_micros`**, which does not jump when the wall clock
+  is set: a session's age and its lifetime are both told by it.
+- **A redundant test left out of the cache.** "The clock has gone back"
+  needs no clause: the age is an unsigned difference, and a clock behind
+  the keeping reads as an age no lifetime reaches. A mutant that removed
+  the clause was not caught because nothing had changed; the clause went.
+- **The server that declines is another context, not a restarted
+  process.** The harness runs OpenSSL in process, so "restart it, so its
+  ticket key changes" is a second `SSL_CTX`, whose keys cannot open the
+  first one's tickets.
+- **libfetch.** Every direct https dial passes the peer's port. A fetch on
+  a kept connection reports that connection's own handshake, so
+  `tls_resumed` says how the connection was made, not whether this fetch
+  made it. `/tests/resumeprobe` is the hand probe: it opens one address
+  several times on connections of its own and says which resumed.
+- **A debt booked on the way** (DEBTS, beside "TLS 1.3 engine
+  boundaries"): the hello is still os64's own and a fingerprint tells it
+  from a browser's. Chris asked on 2026-11-10 whether it could ride this
+  slice; it is its own design, under the rule that a hello never
+  advertises what the client cannot honour or safely ignore.
+- **Proof beyond the engine harness.** The four TLS host suites and the
+  thirteen fetch, libway and os64get ones pass with the cache linked in;
+  the library's export audit passes with one new export and four new
+  imports; the fuzz loop ran 11,138 cases in two minutes with no
+  sanitizer finding. Thirty-seven hand mutants
+  (`tools/test_tls13_resumption_mutants.py`), every one caught, after a
+  first run that missed two: nothing had fed a ticket split across
+  records, so the code that reassembles one could be broken unseen.
+- **Measured in the guest** (QEMU under TCG, e1000 on slirp, one public
+  https site, `resumeprobe ... 4`): the first open, a full handshake,
+  407 ms; the three after it, each resumed on a connection of its own,
+  124, 140 and 125 ms. The first figure includes the name lookup, and TCG
+  overstates what the signature checks cost, so the P5 is the number to
+  trust. **Not measured:** WIRE.md's blog page before and after, which the
+  brief asked for. Resumption changes no connection count, and that
+  page's arrival time under TCG is its scripts'.
+
 ### H2.2 — Connections as shared objects, and the cap
 
 **What.** § 2.2's ownership model, built for h1 alone so it reviews on its

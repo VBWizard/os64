@@ -13630,8 +13630,9 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
         yonder_diag_fact(fresh.diag, "bytes", bytes);
         if (g.stream.head.tls_version) {
-            yonder_diag_head_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
-                g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2");
+            yonder_diag_head_fact(fresh.diag, "TLS", g.stream.head.tls_version != 0x0304 ?
+                (g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2") :
+                g.stream.head.tls_resumed ? "1.3 (resumed)" : "1.3");
         }
         // The server's answer, for every page from the network (0 when its
         // protocol has none), which a replay requires rather than assumes.
