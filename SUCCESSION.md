@@ -84,8 +84,11 @@ The durable rules live in the model-side memory directory (MEMORY.md there is
 the index) — but memory is machine-local, so the ones that must never be lost
 are restated here:
 
-- **He tests before you commit. Always.** Never `git commit` without his
-  green light. Never push unasked.
+- **Commit locally as the work wants; he tests what you push.** A local
+  commit is yours to make. A push and its PR are the hand-off: that is when
+  he boots it, usually on the P5, and nothing merges before he has. (The
+  rule here was "never `git commit` without his green light" until
+  2026-11-04, when he retired it.)
 - **Direction is his; execution is yours.** When he says "let's do features"
   without naming one, present the board and let him pick. Fixes and direct
   follow-ons don't need a menu.
@@ -100,7 +103,8 @@ are restated here:
   first OS. Gate it if you must. Never remove it. 🍩
 - Comments are generous and explain intent; never strip existing ones. All
   asm is Intel syntax, kernel and fixtures alike. Verification runs are
-  windowed QEMU (he likes to watch) with serial to a scratchpad log.
+  headless QEMU with serial to a scratchpad log (VERIFICATION.md § Headless
+  QEMU); a window is for when you are showing him something.
 
 ## Failure fingerprints (symptom → cause, earned 2026-07-18 alone)
 
@@ -130,7 +134,9 @@ It was always 'I'm done, go test'. Your way is huge. You are accountable for
 making sure your changes work."* So: never end a slice at "it compiles."
 Boot it, type into it, read what came back. Here is the entire art.
 
-**Launch** (windowed — Chris likes to watch; headless only if he asks):
+**Launch** (as written this opens a window, which is right for a demo; for
+your own verification add `-display none`, or use VERIFICATION.md's blessed
+headless invocation, which also copies the disk images first):
 
 ```bash
 SCRATCH=<your scratchpad>
