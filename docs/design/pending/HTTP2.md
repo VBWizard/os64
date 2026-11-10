@@ -654,8 +654,9 @@ DEBTS § libfetch when H2.5 lands, and none is a hook designed now.
 | **H2.1** Session resumption | TLS 1.3 tickets kept and offered; a resumed handshake skips the chain | Yes, on its own: every reconnect is cheaper | nothing | Codex (TLS) |
 | **H2.2** Connections as shared objects, and the cap | `fetch_conn_t` with a count; the per-key queue in front of the dial (§ 2.2) | Yes, on its own: six per host, like Chrome | H2.0 | Codex (concurrency) |
 | **H2.3** Framing and HPACK | Pure libraries with host tests and vectors | No | nothing | in-house |
-| **H2.4** The connection | State machine, streams, flow control, the reader thread (§ 2.3, § 2.5, § 2.6), against a scripted peer | No (ALPN still offers h1 alone) | H2.0, H2.2, H2.3 | Codex (concurrency) |
-| **H2.5** The switch | ALPN offers h2; the request and reply models (§ 2.7); the greeting per preset (§ 2.9); captures; QEMU and P5 proof | YES — this is the arc | H2.4, C1, C2 | Codex, then Chris on the P5 |
+| **H2.4** The connection | State machine, streams, flow control, the reader thread (§ 2.3, § 2.5, § 2.6), alone against a scripted peer | No (nothing calls it) | H2.0, H2.2, H2.3 | Codex (concurrency) |
+| **H2.6** Fetches on the connection | fetch.c and the pool join it: § 2.2's h2 clauses, the retry rules, the words; a guest probe | No (ALPN still offers h1 alone) | H2.4, Q4 | Codex (concurrency) |
+| **H2.5** The switch | ALPN offers h2; the preset half of the request model (§ 2.7); the greeting per preset (§ 2.9); captures; QEMU and P5 proof | YES — this is the arc | H2.6, C1, C2 | Codex, then Chris on the P5 |
 
 H2.1 and H2.3 touch nothing the others touch and can run beside anything.
 H2.0 goes before H2.2 because the cap's wait parks on a bell. Only H2.5 changes what the wire sees, so only H2.5 needs
@@ -663,11 +664,12 @@ Chris's P5 pass before merge; H2.1 and H2.2 change the wire's SHAPE (fewer
 handshakes, fewer connections) without changing a byte of a request, and
 get the QEMU `make run-net` page load every wire-facing slice gets.
 
-Briefs for H2.0 through H2.3 follow in full. H2.4 and H2.5 have their
+Briefs for H2.0 through H2.4 follow in full. H2.6 and H2.5 have their
 contracts above and get their briefs when their turn comes, written
-against the tree as it stands then — H2.4's shape depends on what H2.2
-became after its round, and H2.5's on the captures. Writing them now
-would be writing a comment that goes stale before it is read.
+against the tree as it stands then: H2.6's shape depends on what H2.4
+became after its round, and H2.5's on the captures. (H2.6 is numbered
+after H2.5 because it was split from H2.4 once the tracker's rows were
+laid down; it is built before it.)
 
 ## 4. The briefs
 
@@ -1389,35 +1391,247 @@ or says more than it did:
   (the output of eleven other implementations' encoders), 36,990 blocks
   and 430,305 fields, every one decoded to the fields the corpus lists.
 
-### H2.4 — The connection (brief when its turn comes)
+### H2.4 — The connection
 
-Contracts: § 2.2 (which connection a fetch takes, now with the h2
-clauses; the remembered-h2 table; death fanned out), § 2.3 (the reader
-thread and its slices; the engine under the lock; the out queue and its
-drainer; `dying`, and the reader as the socket's only closer), § 2.5 (every way a
-stream and a connection end), § 2.6 (windows and buffers). The brief adds:
-the connection object's fields and locks named; how the reader hands a
-frame to a stream (the stream's buffer and its bell); the settings
-exchange (ours sent in the preface, the peer's applied: max concurrent
-streams, initial window, max frame size, header table size — and
-`ENABLE_PUSH` ignored since we never receive pushes we did not forbid);
-the scripted h2 peer in tools/test_fetch_host.c (frames as bytes, released
-request by request as `peer_answers` releases h1 replies today) and its
-cases — two streams interleaved, a stream reset mid-body, GOAWAY above and
-below a stream, a window exhausted and refilled, a connection dying under
-three streams, cancellation of one of three, a head over the limit, a
-PUSH_PROMISE, a frame-size violation, the idle close, a take racing the
-idle close, a connection condemned from outside ending within a slice
-with its socket closed once and by the reader, a socket that stops
-taking bytes (two senders queued behind it, the reader still delivering
-frames, then death at the write patience), a cancelled fetch's reset
-reaching the wire after it left, enough cancelled streams to spend the
-connection window were their bytes not credited, a stream going silent
-on a silent connection and the next fetch dialling instead of joining it
-— under the
-sanitizers with real threads. Still unreachable: `dial` offers `http/1.1`
-alone until H2.5. The brief is written against the tree after H2.2's
-round, by Fable.
+**What.** `userland/libfetch/h2_conn.c/.h`: one HTTP/2 connection as an
+object, with its reader thread, its streams, its windows and its one way
+of dying. It is the first caller of h2_frame and h2_hpack. Nothing in
+fetch.c calls it in this slice: it is proved alone, against a scripted
+peer, with real threads under the sanitizers. Joining it to fetches (the
+pool's h2 clauses, the retry rules, the error words) is H2.6, split from
+this slice by Q4; `dial` offers `http/1.1` alone until H2.5 either way.
+
+Contracts: § 2.3 (the reader and its slices; the engine under the lock;
+the out queue and its drainer; `dying`, and the reader as the socket's
+only closer), § 2.4 (a ring is made under the lock its owner withdraws
+the bell under), § 2.5 (every way a stream and a connection end), § 2.6
+(windows and buffers), § 2.7 (the head limit).
+
+**The first question of the code, answered: the wrapper hands its engine
+over.** `os64_tls_transport` (libtls/transport.c) is a struct of the
+engine (`os64_tls_client *`), the socket, and two ciphertext buffers. The
+dial stays the wrapper's to the end of the handshake, and libtls gains
+one verb:
+
+    os64_tls_status_t os64_tls_transport_release(os64_tls_transport *transport,
+        os64_tls_client **client, int32_t *handle, void *unread, size_t room, size_t *unread_len);
+
+Legal once the handshake is done, with nothing closing and no ciphertext
+of its own still to send (it flushes first, under the caller's patience,
+and refuses if that does not empty it). It hands back the engine, the
+socket, and whatever ciphertext it had read and not yet fed (the server's
+SETTINGS may ride in the same segment as its Finished), wipes and frees
+the wrapper, and closes nothing. On refusal the wrapper is intact and the
+caller closes it as it would have. Building the connection on the engine
+API from the first byte was set aside: it is the handshake loop, its
+deadline and its resumption plumbing written a second time.
+
+**Sizes and times, each with its reason.**
+
+| Name | Value | Why |
+|---|---|---|
+| `H2_READER_SLICE_MS` | 500 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, and it costs two wakes a second for each h2 connection, 32 at the pool's sixteen. A second doubles the linger; a quarter doubles the wakes for a delay nobody sees. |
+| `H2_WRITE_PATIENCE_MS` | 30000 | How long the socket may refuse the queue's head before the connection dies: `FETCH_IDLE_MS_DEFAULT`, since the bytes are every stream's and no one fetch's deadline is theirs. |
+| `H2_OUT_DATA_MARK` | 256 KiB | Past this much queued ciphertext a sender with DATA parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the uploader and not by memory. |
+| `H2_OUT_CONTROL_MOST` | 1 MiB | Past this much queued, the frames a PEER makes us owe (PING and SETTINGS acks, resets, credits) end the connection with ENHANCE_YOUR_CALM. A peer that floods pings at a socket it will not read is otherwise a way to grow the queue without bound. |
+| `H2_STREAMS_MOST` | 64 | The stream table's size, a task's handle count: a fetch holds a bell, so no task has more fetches than handles. The peer's MAX_CONCURRENT_STREAMS lowers it. |
+| `H2_BLOCK_MOST` | 256 KiB | The reassembler's room: the hard cap on one compressed field block, past which the connection ends (ENHANCE_YOUR_CALM). Four times the head limit below, so a head merely too large is the stream's problem and only an abusive one is the connection's. |
+| `H2_HEAD_MOST` | 64 KiB | The decoded head a stream keeps (`YONDER_FETCH_HEAD_MAX`'s figure, now libfetch's for h2). Past it the block is still decoded, the stream is reset with ENHANCE_YOUR_CALM, and its fetch ends UNSUPPORTED (§ 2.7). RFC 9113 § 10.5.1 asks only that the block be processed, which it is. |
+
+A connection costs about 400 KiB before any body arrives: the decoder's
+table and scratch at a 65,536-byte advertised size (the presets'), the
+encoder's at 4,096 (its ceiling here, whatever a peer allows; § 2.9 does
+not match the encoder's choices), the reassembler's room, and the reader's
+1 MiB of stack address space, of which it touches a few pages. Body
+buffers grow on demand to what is unread, and the CONNECTION window bounds
+their sum: at Chrome's 15 MiB, sixteen connections whose every server
+floods and whose every fetch has stopped reading hold 240 MiB, and a
+connection whose fetches are reading holds a frame or two. (Q2, ruled:
+the windows are the preset's.)
+
+**Two objects, one lock, one count.**
+
+`h2_conn_t` holds: the engine and the socket; the out queue (a list of
+16 KiB blocks, its byte counts for data and for control, the `draining`
+flag, and when its head was first refused); the stream table; the next
+stream id; what the peer set (max streams, initial window, max frame
+size, header table size) and whether it has acknowledged ours; the two
+connection windows; the HPACK encoder; `dying` with its reason, `goaway`
+with the last stream id, `quiet` (§ 2.5's silent connection: no new
+stream); a count of frames received; and `holds`.
+
+`h2_stream_t` holds: its id; its fetch's bell; the final head as decoded
+bytes, or that it was refused; the body buffer; the two stream windows
+and the bytes consumed since the last WINDOW_UPDATE; whether each side
+has ended; and how it ended, when it did not end well (the peer's reset
+and its code, the connection's death and its reason, a GOAWAY that never
+processed it, a head we refused).
+
+- **The connection lock** guards all of the above. It is held for engine
+  calls and bookkeeping and never across a syscall that can block. A bell
+  is rung under it, which is what lets a fetch withdraw its bell under it
+  (§ 2.4).
+- **What the reader owns alone, with no lock:** its read buffer, the
+  frame it is assembling, the reassembler, and the HPACK DECODER. Only
+  the reader decodes, so a block is decoded outside the lock into the
+  reader's own list, and the lock is taken to hand the result to a
+  stream. The lock is therefore held for a delivery and not for a decode.
+- **Lock order: the pool's, then a connection's.** Never the pool's while
+  holding a connection's. The reader takes the pool's lock for the idle
+  verdict and to tell the pool of a death or of room; it holds no
+  connection lock when it does.
+- **`holds` is the object's life**: one for the pool's table while the
+  connection is listed, one for the reader while it runs, one for each
+  stream. It is counted atomically and whoever takes it to zero frees the
+  engine, the queue and the object. A stream is freed by its fetch and by
+  nobody else: the reader marks a stream ended and rings; it never frees
+  one. So a fetch's stream pointer is good until that fetch closes it,
+  and the connection under it is good for as long.
+
+**The reader, pass by pass.**
+
+1. Read the socket for at most a slice, with no lock held.
+2. With bytes: take the lock, feed the engine, move plaintext to the
+   reader's buffer and whatever ciphertext the engine now owes (a
+   KeyUpdate reply, an alert) to the out queue, let the lock go.
+3. Cut whole frames from the buffer. `h2_frame_header_check` judges a
+   header before its payload is waited for. Each frame goes through
+   `h2_frame_parse` and the reassembler; a complete block through the
+   decoder; then the lock is taken and the frame is delivered (below).
+4. Drain the out queue with no patience (§ 2.3), if nobody is draining.
+5. With or without bytes, look around: is the connection dying; has the
+   queue's head been refused for longer than the write patience; has the
+   connection idled out (the pool's verdict, under the pool's lock).
+6. Dying, and nobody draining: close the socket, end every stream that
+   has not ended, tell the pool, drop the reader's hold, and exit.
+
+A read of zero bytes is the peer's FIN and an error is a transport
+failure: both are step 6 with their reason.
+
+**What each frame does on delivery.** A stream id we never opened, or an
+even one, is the connection's PROTOCOL_ERROR wherever a stream is needed.
+"Closed" below is a stream we opened that has since been closed or reset.
+
+| Frame | On an open stream | On a closed stream |
+|---|---|---|
+| DATA | Charged to both receive windows by its whole payload; past either window is FLOW_CONTROL_ERROR (the stream's, or the connection's). The body bytes are appended and the bell rung; padding is credited at once, having no reader. END_STREAM ends the peer's side. | Charged to the connection's window and credited straight back (§ 2.6). |
+| HEADERS | Judged by `h2_head_check`. A 1xx head is dropped and the wait goes on. The final head is kept and the bell rung. A second head is trailers: it must end the stream, and its fields are dropped. A head that breaks a rule resets the stream (PROTOCOL_ERROR) and ends its fetch BAD_HEAD; one past `H2_HEAD_MOST` resets it (ENHANCE_YOUR_CALM), UNSUPPORTED. | Decoded, since the table must see it, and dropped. |
+| RST_STREAM | The stream ends with the peer's code; the bell is rung. | Ignored. |
+| WINDOW_UPDATE | Added to the stream's send window (or the connection's, on stream 0) and every sender waiting on it is rung. Past 2^31 - 1 is FLOW_CONTROL_ERROR, the stream's or the connection's. | Ignored. |
+| SETTINGS | Each value judged by `h2_setting_check`, then applied: the header table size to the encoder; the initial window as a difference to every stream's send window, which may go negative and may not pass 2^31 - 1; max frame size and max streams as they are. Then our acknowledgement is queued. The peer's acknowledgement of ours tells the decoder (`h2_hpack_decoder_settings_acked`). | |
+| PING | An acknowledgement is queued; an acknowledgement received is dropped. | |
+| GOAWAY | No new stream. Streams above its last id end as never processed (§ 2.5: retried whatever their method). With an error code it is the connection's death. | |
+| PUSH_PROMISE | The connection's PROTOCOL_ERROR (§ 2.10). | |
+| PRIORITY, unknown | Dropped. | |
+
+The server's first frame must be SETTINGS (RFC 9113 § 3.4); anything else
+is PROTOCOL_ERROR. A connection error we raise queues GOAWAY with the
+code, sets `dying`, and is the death of step 6.
+
+**What a fetch's thread calls** (H2.6's fetch.c; the harness now). Every
+wait takes the pool's wait shape from H2.2 (a bell, a patience, a
+cancellation predicate) and looks up as that does, so a cancellation is
+noticed within `FETCH_POOL_LOOK_MS`.
+
+- `h2_conn_adopt(engine, socket, unread, greeting, hooks)`: queues the
+  preface, the greeting's SETTINGS and its WINDOW_UPDATE, starts the
+  reader, and returns the connection holding the pool's hold. The
+  greeting is a parameter (H2.5 supplies each preset's); `hooks` are the
+  pool's three calls: the idle verdict, "this connection has room", "this
+  connection is dead".
+- `h2_conn_room(conn)`: not dying, no GOAWAY, not quiet, and streams under
+  the lesser of the peer's limit and `H2_STREAMS_MOST`.
+- `h2_stream_open(conn, fields, count, ends, bell, &stream)`: under the
+  lock, takes the next id, encodes, writes HEADERS, queues; then drains.
+  Refused when the connection has no room, with which reason.
+- `h2_stream_send(stream, bytes, len, ends, wait)`: DATA, cut to the
+  peer's frame size and to both send windows; parks on the bell for
+  window, and for the queue when it is past `H2_OUT_DATA_MARK`.
+- `h2_stream_head(stream, wait, emit, ctx)`: waits for the final head and
+  hands its fields over in wire order.
+- `h2_stream_read(stream, buffer, room, wait)`: bytes; 0 at the peer's
+  END_STREAM; negative when the stream ended otherwise or the wait did.
+  After consuming, it sends the stream's WINDOW_UPDATE at half the stream
+  window and the connection's at half of its own.
+- `h2_stream_close(stream)`: takes the bell out under the lock; if either
+  side had not ended, queues RST_STREAM(CANCEL) and drains with no
+  patience; credits what is unread to the connection; frees the stream
+  and drops its hold. Never waits.
+- `h2_stream_ended(stream)`: how it ended, the error code and whose it
+  was, for the detail and the reason sentence (§ 2.8).
+- `h2_conn_condemn(conn)`, `h2_conn_release(conn)`: the pool's, for
+  eviction and for dropping its hold.
+
+A wait that runs out of patience ends SILENT; if no frame of any kind
+reached the connection while it waited, the connection is marked `quiet`
+(§ 2.5).
+
+**How `fetch_pool_drain` waits for the readers** (§ 2.3 left it here):
+it condemns each h2 connection and parks on a bell that the "dead" hook
+rings, under the pool's lock, as each reader leaves; it has waited for
+them all within a slice, or within the write patience when a drainer is
+blocked. Only harnesses drain. The hook is this slice's; the pool's side
+of it is H2.6's.
+
+**Not in this slice, and where each is.** SETTINGS_TIMEOUT (we never end
+a connection because a peer was slow to acknowledge; a DEBTS row with
+H2.5's). A GOAWAY of our own on an idle close (the socket is closed; a
+row). Everything of § 2.10.
+
+**Proof.** `tools/test_h2_conn_host.sh`, the pool harness's shape: ASan
+and UBSan, then TSan, real threads. The far end is `tools/h2_peer.c`, a
+scripted server over an in-memory socket whose reads can be made to stall:
+
+- **The engine stand-in numbers its records.** Each plaintext write
+  becomes a record with a sequence number, and the peer refuses a record
+  out of order, repeated or cut. That is what makes the out queue's one
+  rule (records reach the wire whole and in the engine's order)
+  something a test can fail.
+- **Cases**, each observing the peer's side and the fetch's: the
+  greeting byte for byte; two streams interleaved; a stream reset
+  mid-body; GOAWAY above and below a stream; a window exhausted and
+  refilled, the stream's and the connection's; an initial-window change
+  that takes a stream's send window negative; a connection dying under
+  three streams; cancellation of one of three; a head over the limit; a
+  block over the hard cap; a PUSH_PROMISE; a frame-size violation; a
+  first frame that is not SETTINGS; interim heads and trailers; DATA and
+  HEADERS for a closed stream, credited and decoded; padding credited;
+  enough cancelled streams to spend the connection window were their
+  bytes not credited; a socket that stops taking bytes (two senders
+  queued behind it, the reader still delivering, then death at the write
+  patience); a cancelled fetch's reset reaching the wire after it left;
+  a flood of pings at a stalled socket ending the connection; a
+  connection condemned from outside ending within a slice with its
+  socket closed once and by the reader; ciphertext handed over at
+  adoption; ciphertext the engine owes after a feed; a stream going
+  silent on a silent connection marking it quiet, and on a busy one not;
+  eight threads opening, sending, reading and cancelling against a peer
+  that answers at random, with every record in order at the end and
+  every hold returned.
+- **The harness ends itself**, as test_h2_host.c does: at its fiftieth
+  failed check and after its alarm.
+- libtls's transport harness gains the release verb's cases: refused
+  mid-handshake and while closing, unread ciphertext handed back whole,
+  the wrapper intact after a refusal.
+- Mutants once at the end, through `tools/mutants_parallel.py`.
+- No QEMU: nothing here is reachable in the guest. The first guest proof
+  is H2.6's probe.
+
+### H2.6 — Fetches on the connection (brief when H2.4 has landed)
+
+Split from H2.4 by Q4. fetch.c's `acquire` gains § 2.2's h2 clauses (a
+live connection with room first; the remembered-h2 table; a dial in
+flight waited for); the pool's `fetch_conn_t` gains a connection's users
+and the hooks above; the request model renders to a field list (§ 2.7,
+the half that does not depend on a preset); the retry rules of § 2.5 and
+the words of § 2.8; the scripted peer joins tools/test_fetch_host.c beside
+the h1 one, with the cases that need a fetch (a take racing the idle
+close; the next fetch dialling past a quiet connection; REFUSED_STREAM
+and an unprocessed GOAWAY retried). And `/tests/h2probe`, built from
+libfetch's sources so it can ask for h2 while `dial` does not: one real
+h2 server fetched in QEMU, which is the first time the reader's slices,
+the bell and a detached thread meet the real kernel. The brief is
+Fable's, written against the tree after H2.4's round.
 
 ### H2.5 — The switch (brief when its turn comes)
 
@@ -1469,7 +1683,7 @@ BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
 one-line pointer here. Each slice's "as built" lands under its brief
 above, by its builder, in its PR.
 
-## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris on 2026-11-09, for the leans)
+## 7. Questions (each is a `Q` row in the tracker; Q1 to Q3 ruled by Chris on 2026-11-09, for the leans)
 
 - **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
   handle per bell, a small kernel slice with a Codex round; Fable's lean),
@@ -1488,3 +1702,10 @@ above, by its builder, in its PR.
   condemned connection ends up to a slice late; Fable's lean), or a
   kernel verb that hangs a connection up without closing its handle
   (prompt; new kernel surface with a Codex round of its own).
+- **Q4 — H2.4 as one slice or two.** The connection built and proved
+  alone, then joined to fetches in a second slice (H2.6; two PRs, two
+  Codex rounds, each reading one kind of problem: the connection's own
+  concurrency, then its meeting with the pool and the retry rules;
+  Fable's lean), or one slice as § 3 first had it (one PR and one round,
+  on what would be the largest diff of the arc, with the pool's changes
+  and the connection's reviewed together). OPEN.
