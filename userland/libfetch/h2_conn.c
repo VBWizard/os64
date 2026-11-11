@@ -517,6 +517,9 @@ static void on_settings(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
         }
         return;
     }
+    // A frame may state a setting more than once, and the last stands: what
+    // the pool is told is judged on the limit the whole frame leaves.
+    uint32_t streams_before = c->peer_max_streams;
     for (uint32_t i = 0; i < h2_settings_count(f); i++) {
         h2_setting_t setting = h2_settings_at(f, i);
         h2_fault_t fault;
@@ -529,7 +532,6 @@ static void on_settings(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
             h2_hpack_encoder_peer_table_size(&c->encoder, setting.value);
             break;
         case H2_SETTING_MAX_CONCURRENT_STREAMS:
-            *more_room = setting.value > c->peer_max_streams;
             c->peer_max_streams = setting.value;
             break;
         case H2_SETTING_INITIAL_WINDOW_SIZE: {
@@ -568,6 +570,7 @@ static void on_settings(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
             break;              // a setting we do not know (§ 6.5.2: ignored)
         }
     }
+    *more_room = c->peer_max_streams > streams_before;
     c->peer_settings_seen = true;
     size_t n = h2_write_settings_ack(c->scratch, sizeof(c->scratch));
     emit_owed(c, c->scratch, n);
@@ -640,7 +643,12 @@ static void deliver(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
             break;
         }
         s->send_window += f->value;
-        if (s->send_window > WINDOW_MOST)
+        // § 6.9.1: the stream's error or the connection's. A stream whose
+        // response is whole and whose request is still going up has an
+        // ending a reset would not change, so there it is the connection's.
+        if (s->send_window > WINDOW_MOST && s->ending.how == H2_END_CLEAN && !s->sent_end && !s->peer_reset)
+            conn_error(c, H2_ERR_FLOW_CONTROL);
+        else if (s->send_window > WINDOW_MOST)
             reset_stream(c, s, H2_ERR_FLOW_CONTROL, H2_END_FLOW);
         ring(s);
         break;
@@ -804,6 +812,13 @@ static void on_frame(h2_conn_t *c, const h2_frame_header_t *header, const uint8_
             conn_error(c, H2_ERR_PROTOCOL);
     } else if (frame.kind == H2_FRAME_PUSH_PROMISE)
         conn_error(c, H2_ERR_PROTOCOL);     // § 2.10: we asked for none and take none
+    else if (frame.kind == H2_FRAME_HEADERS || frame.kind == H2_FRAME_DATA) {
+        // A frame of a response has arrived, whatever comes of it: a head
+        // whose CONTINUATION never comes is still a server that answered.
+        h2_stream_t *s = find(c, header->stream);
+        if (s != NULL)
+            s->ending.any_seen = true;
+    }
     bool stop = c->dying || !parsed;
     os64_lock_release(&c->lock);
     if (stop)

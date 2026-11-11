@@ -1673,6 +1673,54 @@ static void wake_cases(void)
     fetch_done(&a);
     finish(dead);
 
+    // A HEAD WHOSE CONTINUATION NEVER COMES is still a server that
+    // answered: the stream ends with the connection, and says a frame of a
+    // response was seen, which is what forbids trying the request again.
+    dead = atomic_load(&dead_calls);
+    begin();
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/half") == H2_OK && server_request("/half") == 1);
+    static const uint8_t kHalf[1] = {0x88};
+    peer_send_frame(H2_FRAME_HEADERS, 0, 1, kHalf, 1);
+    nap_ms(100);
+    peer_hang_up();
+    CHECK(fetch_head(&a) == H2_ENDED);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CONN_DEAD && h2_stream_ended(a.stream).any_seen &&
+          !h2_stream_ended(a.stream).head_seen);
+    fetch_done(&a);
+    finish_dead(dead);
+
+    // ONE SETTINGS FRAME THAT STATES THE STREAM LIMIT TWICE, up to three
+    // and then down to two, leaves room where there was none, and the pool
+    // is told.
+    dead = atomic_load(&dead_calls);
+    static const h2_setting_t kOneStream[] = {{H2_SETTING_MAX_CONCURRENT_STREAMS, 1}};
+    begin_with(&kGreeting, kOneStream, 1);
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/x") == H2_OK && server_request("/x") == 1 && !h2_conn_room(conn));
+    int rooms = atomic_load(&room_calls);
+    static const h2_setting_t kThreeThenTwo[] = {{H2_SETTING_MAX_CONCURRENT_STREAMS, 3},
+                                                 {H2_SETTING_MAX_CONCURRENT_STREAMS, 2}};
+    peer_send_settings(kThreeThenTwo, 2);
+    for (int i = 0; i < 400 && atomic_load(&room_calls) == rooms; i++)
+        nap_ms(5);
+    CHECK(atomic_load(&room_calls) == rooms + 1 && h2_conn_room(conn));
+    fetch_done(&a);
+
+    // A WINDOW PAST 2^31 - 1 FOR A STREAM WHOSE ANSWER IS WHOLE and whose
+    // request is still going up: no reset would change how that stream
+    // ended, so it is the connection's error.
+    fetch_init(&a, 3000);
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    uint32_t up = server_request("/up");
+    server_reply(up, "413", NULL, true);
+    CHECK(fetch_head(&a) == H2_OK);
+    peer_send_window(up, 0x7fffffff - 65535);
+    peer_send_window(up, 1);
+    CHECK(server_sees_goaway(H2_ERR_FLOW_CONTROL));
+    fetch_done(&a);
+    finish_dead(dead);
+
     // A SIGNAL DOES NOT START THE WRITE PATIENCE AGAIN. A write that moved
     // nothing is interrupted twenty seconds in, twice: the second leaves
     // forty seconds without a byte taken, and that is the end.
