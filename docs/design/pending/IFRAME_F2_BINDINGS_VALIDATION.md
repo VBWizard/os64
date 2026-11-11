@@ -1,6 +1,6 @@
 # F.2b — binding implementation record
 
-Work in progress against `0a1c6afb`, which merged F.2a (#537) after a clean
+Draft [#539](https://github.com/VBWizard/os64/pull/539), in progress against `0a1c6afb`, which merged F.2a (#537) after a clean
 Codex review of `8e29c9dd`. The accepted scope remains
 [IFRAME_F2_OWNERSHIP.md](IFRAME_F2_OWNERSHIP.md). This record does not mark
 F.2 complete or claim that cross-binding adoption is implemented.
