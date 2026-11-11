@@ -228,6 +228,9 @@ static void *start(void *x)
     return NULL;
 }
 
+static atomic_uint thread_head_start_ms;
+void peer_thread_head_start(unsigned ms) { atomic_store(&thread_head_start_ms, ms); }
+
 int64_t os64_thread(int64_t (*fn)(void *), void *arg)
 {
     pthread_t t;
@@ -236,6 +239,13 @@ int64_t os64_thread(int64_t (*fn)(void *), void *arg)
     if (pthread_create(&t, NULL, start, s) != 0)
         return -1;
     pthread_detach(t);
+    // A head start for the new thread, when a case wants what it does first
+    // to be over before its maker goes on.
+    unsigned ahead = atomic_load(&thread_head_start_ms);
+    if (ahead != 0) {
+        struct timespec nap = {.tv_sec = ahead / 1000u, .tv_nsec = (long)(ahead % 1000u) * 1000000L};
+        nanosleep(&nap, NULL);
+    }
     return THREAD_HANDLE;
 }
 
@@ -404,6 +414,54 @@ int peer_open(void)
 }
 
 void peer_use(int index) { W = &wires[index]; }
+int peer_index_of(int32_t socket) { return socket - SOCKET_FIRST; }
+
+unsigned peer_sockets_open(void)
+{
+    unsigned n = 0;
+    pthread_mutex_lock(&mu);
+    for (int i = 0; i < PEER_WIRES; i++)
+        n += wires[i].open && wires[i].closes == 0;
+    pthread_mutex_unlock(&mu);
+    return n;
+}
+
+bool peer_readable(int32_t socket, uint64_t timeout_ms)
+{
+    struct wire *w = wire_of(socket);
+    struct timespec end;
+    until(&end, timeout_ms);
+    pthread_mutex_lock(&mu);
+    while (w->to_client.at == w->to_client.len && !w->hung_up)
+        if (pthread_cond_timedwait(&moved, &mu, &end) != 0)
+            break;
+    bool ready = w->to_client.at != w->to_client.len || w->hung_up;
+    pthread_mutex_unlock(&mu);
+    return ready;
+}
+
+size_t peer_raw_take(void *out, size_t room, int timeout_ms)
+{
+    struct timespec end;
+    until(&end, (uint64_t)timeout_ms);
+    pthread_mutex_lock(&mu);
+    while (W->to_server.at == W->to_server.len)
+        if (pthread_cond_timedwait(&moved, &mu, &end) != 0)
+            break;
+    size_t n = W->to_server.len - W->to_server.at < room ? W->to_server.len - W->to_server.at : room;
+    memcpy(out, W->to_server.bytes + W->to_server.at, n);
+    W->to_server.at += n;
+    pthread_mutex_unlock(&mu);
+    return n;
+}
+
+void peer_raw_say(const void *bytes, size_t len)
+{
+    pthread_mutex_lock(&mu);
+    put(&W->to_client, bytes, len);
+    pthread_cond_broadcast(&moved);
+    pthread_mutex_unlock(&mu);
+}
 os64_tls_client *peer_engine(int index) { return &wires[index].engine; }
 int32_t peer_socket(int index) { return SOCKET_FIRST + index; }
 

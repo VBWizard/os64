@@ -36,6 +36,19 @@ void peer_forget_all(void);
 void peer_use(int index);
 os64_tls_client *peer_engine(int index);
 int32_t peer_socket(int index);
+int peer_index_of(int32_t socket);
+// How many sockets are open now: opened, and not yet closed by the client.
+unsigned peer_sockets_open(void);
+// os64_thread returns this long after it started the thread.
+void peer_thread_head_start(unsigned ms);
+
+// A CONNECTION THAT IS NOT HTTP/2: the same socket with no records on it,
+// for a harness whose HTTP/1.1 goes over the same wires. Whether the client
+// can read now (or the server hung up), within `timeout_ms`; the client's
+// bytes as the server reads them, waiting for the first; the server's bytes.
+bool peer_readable(int32_t socket, uint64_t timeout_ms);
+size_t peer_raw_take(void *out, size_t room, int timeout_ms);
+void peer_raw_say(const void *bytes, size_t len);
 // The socket was closed once, the engine freed, no record was left cut, and
 // no record arrived out of order. False names nothing; the case's CHECK does.
 bool peer_end(void);
