@@ -1764,7 +1764,7 @@ checks in nine groups of cases. The peer's stand-in for the TLS engine
 numbers its records and refuses a second thread inside it, so the out
 queue's order and the one-lock rule are things a case can fail; its
 clock is the host's plus what a case skips, so thirty seconds of write
-patience take no time. `tools/test_h2_conn_mutants.py` is 121 deliberate
+patience take no time. `tools/test_h2_conn_mutants.py` is 124 deliberate
 breaks, one rule each. The first run through `tools/mutants_parallel.py`,
 of the 102 written before the cold read, caught 82; the other twenty
 were eight that did not compile as written and twelve the harness
@@ -1832,6 +1832,19 @@ Its second round found four:
   that is interrupted having moved nothing stamps the refusal as a
   timeout does, so the thirty seconds are counted from the first attempt
   that moved nothing.
+
+Its third found three:
+
+- **`any_seen` is set when a HEADERS or DATA frame for the stream
+  arrives**, not when its head has been decoded: a head whose
+  CONTINUATION never comes is still a server that answered, and the
+  retry rule's "before any byte" must say so.
+- **The pool is told of room by the limit a whole SETTINGS frame
+  leaves**, so a frame that states MAX_CONCURRENT_STREAMS twice is
+  judged once.
+- **A window past 2^31 - 1 for a stream whose answer is whole and whose
+  request is still going up is the connection's error.** RFC 9113
+  § 6.9.1 allows either; a reset would not change how that stream ended.
 No QEMU and no P5 pass: nothing here is reachable in the guest.
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
