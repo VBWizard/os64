@@ -154,6 +154,10 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
 // no GOAWAY, has not gone quiet, has fewer streams than the peer and
 // H2_STREAMS_MOST allow, and has a stream id left to give.
 bool h2_conn_room(h2_conn_t *conn);
+// Whether the server ended it with a GOAWAY that said HTTP_1_1_REQUIRED: a
+// fact of the connection, there to be asked whether or not the asker had a
+// stream on it when the GOAWAY came.
+bool h2_conn_wants_h1(h2_conn_t *conn);
 // How many streams it has now, how many bytes wait in its out queue, and
 // how many bytes its streams' receive buffers are allocated to hold.
 uint32_t h2_conn_streams(h2_conn_t *conn);

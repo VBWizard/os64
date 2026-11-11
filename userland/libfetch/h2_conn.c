@@ -103,6 +103,7 @@ struct h2_conn {
     uint8_t scratch[H2_FRAME_HEADER_LEN + OUR_FRAME];   // one small frame or one DATA frame, under the lock
 
     bool dying, dead, goaway, quiet;
+    bool wants_h1;                  // a GOAWAY said HTTP_1_1_REQUIRED
     uint32_t goaway_last;
     uint32_t die_code;              // the error code that ended it, when one did
     uint64_t frames_in;
@@ -627,6 +628,7 @@ static void deliver(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
     case H2_FRAME_GOAWAY:
         c->goaway = true;
         c->goaway_last = f->last_stream;
+        c->wants_h1 = c->wants_h1 || f->value == H2_ERR_HTTP_1_1_REQUIRED;
         for (uint32_t i = 0; i < H2_STREAMS_MOST; i++) {
             s = c->streams[i];
             if (s != NULL && s->id > f->last_stream && !over(s)) {
@@ -1102,6 +1104,14 @@ bool h2_conn_room(h2_conn_t *c)
     bool room = room_locked(c);
     os64_lock_release(&c->lock);
     return room;
+}
+
+bool h2_conn_wants_h1(h2_conn_t *c)
+{
+    os64_lock_acquire(&c->lock);
+    bool wants = c->wants_h1;
+    os64_lock_release(&c->lock);
+    return wants;
 }
 
 uint32_t h2_conn_streams(h2_conn_t *c)

@@ -1157,6 +1157,14 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
         // this fetch DIALLED is a new connection every time, so that is
         // bounded here: a second such refusal is the server's answer.
         bool dialled = !f->reused;
+        // ...unless it has no room because the server ended it requiring
+        // HTTP/1.1, before this fetch had a stream to hear that on: the
+        // server is remembered so, and the next ask dials HTTP/1.1.
+        if (h2_conn_wants_h1(f->h2) && !fetch_pool_h1_required(key)) {
+            fetch_pool_require_h1(f->conn);
+            leave_h2(f);
+            continue;
+        }
         leave_h2(f);
         if (dialled && ++own_refusals == 2) {
             f->detail.h2 = true;

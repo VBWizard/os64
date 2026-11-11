@@ -159,6 +159,7 @@ static struct {
     atomic_int refuse;                 // this many dials fail
     int handshake_ms;                  // how long its handshake takes
     bool resumes;                      // its handshakes say they resumed a kept session
+    bool h1_at_once;                   // its HTTP/2 server's first word after SETTINGS is GOAWAY(HTTP_1_1_REQUIRED)
 } hosts[8];
 static int nhosts;
 
@@ -214,10 +215,19 @@ static void serve_h2(dial_t *d)
     int at = host_at(d->host);
     uint32_t most = at >= 0 ? hosts[at].max_streams : 0;
     peer_use(d->wire);
-    if (!peer_preface(3000))
-        return;
     h2_setting_t limit = {H2_SETTING_MAX_CONCURRENT_STREAMS, most};
-    peer_send_settings(&limit, most != 0 ? 1 : 0);
+    if (at >= 0 && hosts[at].h1_at_once) {
+        // Said without waiting to hear the client at all, so that a client
+        // whose reader runs first has heard it before it asks for a stream.
+        peer_send_settings(&limit, 0);
+        peer_send_goaway(0, H2_ERR_HTTP_1_1_REQUIRED);
+        if (!peer_preface(3000))
+            return;
+    } else {
+        if (!peer_preface(3000))
+            return;
+        peer_send_settings(&limit, most != 0 ? 1 : 0);
+    }
     while (!atomic_load(&stopping) && peer_closes() == 0) {
         if (atomic_load(&release_held) && nheld != 0) {
             for (int i = 0; i < nheld; i++)
@@ -1965,6 +1975,32 @@ static void wants_h1_cases(void)
     }
 }
 
+// ...AND SAID BEFORE ANY REQUEST: the server's first word on the connection
+// is GOAWAY(HTTP_1_1_REQUIRED), heard before this fetch has a stream (the
+// connection's reader is given a head start, so the stream is asked for
+// after it). The fetch still ends whole, over HTTP/1.1, and the server is
+// remembered.
+static void wants_h1_at_once_cases(void)
+{
+    static job_t j;
+    begin();
+    int host = host_says("atonce.test", "h2", 0);
+    hosts[host].h1_at_once = true;
+    peer_thread_head_start(150);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://atonce.test/page");
+    JOB_OK(&j);
+    CHECK(!j.http2 && j.body_len == sizeof(kPage) - 1 && h2_dials() == 1 && atomic_load(&ndials) == 2);
+    CHECK(atomic_load(&dials[0].requests) == 0);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://atonce.test/page");
+    JOB_OK(&j);
+    CHECK(!j.http2 && h2_dials() == 1);
+    peer_thread_head_start(0);
+    settle();
+}
+
 // net.conf says `http2 = off` (this process was started so): no fetch
 // offers HTTP/2, whoever it asks as.
 static void switch_off_cases(void)
@@ -2108,6 +2144,7 @@ int main(void)
         difference_cases();
         http1_cases();
         wants_h1_cases();
+        wants_h1_at_once_cases();
     }
     if (atomic_load(&failures) != 0) {
         fprintf(stderr, "test_fetch_h2_host: %d of %d checks failed\n", atomic_load(&failures), atomic_load(&checks));

@@ -22,6 +22,7 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
 bool h2_greeting_ok(const h2_greeting_t *greeting) { (void)greeting; return true; }
 bool h2_conn_room(h2_conn_t *conn) { (void)conn; abort(); }
 void h2_conn_condemn(h2_conn_t *conn) { (void)conn; abort(); }
+bool h2_conn_wants_h1(h2_conn_t *conn) { (void)conn; abort(); }
 size_t h2_conn_queued(h2_conn_t *conn) { (void)conn; abort(); }
 size_t h2_conn_buffered(h2_conn_t *conn) { (void)conn; abort(); }
 void h2_conn_release(h2_conn_t *conn) { (void)conn; abort(); }
