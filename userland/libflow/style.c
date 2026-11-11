@@ -4343,11 +4343,30 @@ static int32_t script_effects_of(const Ctx *c, const os64_html_node_t *n,
     return k > 0 && *out != NULL ? k : 0;
 }
 
-// An element's animations at the layout's time: unless its display is
-// none, for each name whose @keyframes exist, every keyframe's declarations and the longhands they
+// `n` among the styles' animated nodes, which the ticks and the parts walk.
+// False on no memory.
+static bool list_animated(FStyles *st, const os64_html_node_t *n)
+{
+    if (st->nanimated == st->cap_animated) {
+        int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
+        const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
+        if (more == NULL)
+            return false;
+        st->animated = more;
+        st->cap_animated = cap;
+    }
+    st->animated[st->nanimated++] = n;
+    return true;
+}
+
+// An element's animations at the layout's time — or, `which` naming one,
+// its ::before's or ::after's, read from the pseudo-element's winners and
+// kept on the timeline as the element's (f_timeline_element): unless its
+// display is none, for each name whose @keyframes exist, every keyframe's declarations and the longhands they
 // set but where an `!important` winner holds, and the name's record on the
-// timeline; after them each of a script's effects on it, read the same
-// way and on its own clock; then the element's style at `now`, each
+// timeline; after them each of a script's effects on it (an element's:
+// a script aims none at a pseudo-element here), read the same way and on
+// its own clock; then the element's style at `now`, each
 // keyframe resolved
 // where it is mixed (keyframe_resolved), and what its animations make it
 // (flow_style_t.animating). `sp` is the element's Spec before `finish`.
@@ -4355,7 +4374,7 @@ static int32_t script_effects_of(const Ctx *c, const os64_html_node_t *n,
 // computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
 // url() is read against the sheet its @keyframes rule was written in, as a
 // winner's is against its own. False on no memory.
-static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+static bool animate(Ctx *c, const os64_html_node_t *n, garb_pseudo_t which, Spec *sp, const Spec *ua,
                     const flow_style_t *parent, bool item, bool root, FMotion **out)
 {
     *out = NULL;
@@ -4365,13 +4384,15 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     int32_t count = tl != NULL && c->env->cascade != NULL && sp->s.display != FLOW_DISPLAY_NONE
                   ? f_animations(&sp->s) : 0;
     const garb_effect_t *const *fx = NULL;
-    int32_t nfx = script_effects_of(c, n, &fx);
+    int32_t nfx = which == GARB_PSEUDO_NONE ? script_effects_of(c, n, &fx) : 0;
     if (count == 0 && nfx == 0)
         return true;
     FProps important;
     os64_memset(&important, 0, sizeof(important));
     const garb_style_t none_st = {NULL, NULL, NULL, 0};
-    garb_style_t st = c->env->cascade != NULL ? garb_style_for(c->env->cascade, n) : none_st;
+    garb_style_t st = c->env->cascade == NULL       ? none_st
+                    : which == GARB_PSEUDO_NONE     ? garb_style_for(c->env->cascade, n)
+                                                    : garb_style_for_pseudo(c->env->cascade, n, which);
     for (int32_t i = 0; st.important != NULL && i < st.n; i++)
         if (st.important[i])
             f_props_add(&important, st.sets[i].prop);
@@ -4477,7 +4498,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         return true;
     m->in_place = f_motion_in_place(m);
     double now = (double)c->env->now_ms;
-    if (m->ncss > 0 && !f_timeline_element(tl, n, m, now))
+    if (m->ncss > 0 && !f_timeline_element(tl, n, which, m, now))
         return false;
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
@@ -4638,7 +4659,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // timeline drops what no layout styles. A script's effects go on
         // (Web Animations 1 applies an effect to its target's computed
         // style whatever is rendered), so animate lays them alone.
-        if (!animate(c, n, &sp, &ua, parent, item, root, &motion))
+        if (!animate(c, n, GARB_PSEUDO_NONE, &sp, &ua, parent, item, root, &motion))
             return NULL;
     }
     if (motion == NULL && !copied)
@@ -4650,18 +4671,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
                              f_style_equal(&old->style, &out->style));
     out->subtree_steady = out->steady;
     out->reuse_safe = untouched && ancestry && out->steady;
-    if (motion != NULL) {
-        FStyles *st = c->out;
-        if (st->nanimated == st->cap_animated) {
-            int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
-            const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
-            if (more == NULL)
-                return NULL;
-            st->animated = more;
-            st->cap_animated = cap;
-        }
-        st->animated[st->nanimated++] = n;
-    }
+    if (motion != NULL && !list_animated(c->out, n))
+        return NULL;
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
                           (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
                            up->lays_out_items);
@@ -5046,6 +5057,13 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     char *text = content_text(c, el, content, quotes, &len, &failed);
     if (text == NULL)
         return !failed;
+    // Its animations, once it is sure to be made (content the budget cut
+    // makes none, and starts nothing on the timeline), which leave its
+    // style computed; none, and it is finished as an element's is, once its
+    // node is made.
+    FMotion *motion = NULL;
+    if (!animate(c, el, which, &sp, &ua, &of->style, of->lays_out_items, false, &motion))
+        return false;
     os64_html_node_t *node = f_arena_alloc(&c->out->arena, sizeof(*node));
     os64_html_node_t *words = f_arena_alloc(&c->out->arena, sizeof(*words));
     FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
@@ -5063,8 +5081,12 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     words->text_len = len;
     words->parent = node;
     node->first_child = node->last_child = len > 0 ? words : NULL;
-    finish(c, &sp, &of->style, of->lays_out_items, false);
+    if (motion == NULL)
+        finish(c, &sp, &of->style, of->lays_out_items, false);
+    else if (!list_animated(c->out, node))
+        return false;
     out->style = sp.s;
+    out->motion = motion;
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display);
     out->link = of->link;
     out->lists = of->lists;
@@ -5074,7 +5096,8 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     out->quotes = quotes;
     out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
     out->fixed_anchor = f_contains_fixed(&sp.s) ? node : of->fixed_anchor;
-    out->transparent = sp.s.opacity == 0 || of->transparent;
+    // As an element's: an opacity an animation moves is the painter's.
+    out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) || of->transparent;
     out->taken = sp.taken;
     taken_from(of, &sp.taken);
     out->decoration = sp.s.text_decoration;

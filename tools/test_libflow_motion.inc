@@ -43,7 +43,7 @@ static flow_timeline_t *motion_meet(const os64_html_document_t *doc, const os64_
 {
     flow_timeline_t *none = flow_timeline_new(doc);
     flow_timeline_t *t = none != NULL ? f_timeline_begin(none) : NULL;
-    *ok = t != NULL && f_timeline_element(t, n, m, now) && f_timeline_end(t, true);
+    *ok = t != NULL && f_timeline_element(t, n, GARB_PSEUDO_NONE, m, now) && f_timeline_end(t, true);
     flow_timeline_free(none);
     return t;
 }
@@ -1474,7 +1474,7 @@ static bool timeline_layout(flow_timeline_t **shown, double now, bool complete, 
     flow_timeline_t *t = f_timeline_begin(*shown);
     bool ok = t != NULL;
     for (int i = 0; ok && i < count; i++)
-        ok = f_timeline_element(t, meets[i].n, meets[i].m, now);
+        ok = f_timeline_element(t, meets[i].n, GARB_PSEUDO_NONE, meets[i].m, now);
     if (!ok || !f_timeline_end(t, complete)) {
         flow_timeline_free(t);
         return false;
@@ -1585,7 +1585,7 @@ static void motion_timeline_cases(void)
     ok = timeline_layout(&ut, 40000, true, 1, (Meet[]){{z, &uone}});
     ua[0].timing.paused = true;
     flow_timeline_t *unshown = f_timeline_begin(ut);
-    ok = ok && unshown != NULL && f_timeline_element(unshown, z, &utwo, 40500) &&
+    ok = ok && unshown != NULL && f_timeline_element(unshown, z, GARB_PSEUDO_NONE, &utwo, 40500) &&
          f_timeline_end(unshown, false);
     flow_timeline_free(unshown);
     ua[0].timing.paused = false;
@@ -1654,8 +1654,8 @@ static void motion_timeline_cases(void)
     int32_t kept_records = f_timeline_records(tl), kept_elements = f_timeline_elements(tl);
     u.timing.paused = true;
     flow_timeline_t *failed = f_timeline_begin(tl);
-    ok = ok && failed != NULL && f_timeline_element(failed, y, &pausing, 18200) &&
-         f_timeline_element(failed, x, &a_and_b, 18200) && f_timeline_element(failed, z, &one, 18200);
+    ok = ok && failed != NULL && f_timeline_element(failed, y, GARB_PSEUDO_NONE, &pausing, 18200) &&
+         f_timeline_element(failed, x, GARB_PSEUDO_NONE, &a_and_b, 18200) && f_timeline_element(failed, z, GARB_PSEUDO_NONE, &one, 18200);
     bool grew = f_timeline_records(failed) == kept_records + 2;
     flow_timeline_free(failed);
     u.timing.paused = false;
@@ -4664,9 +4664,129 @@ static void motion_css_api_cases(void)
     moving_close(&m);
 }
 
+// The style of `id`'s ::before or ::after (`which`) as the layout made it:
+// its element's styles name its node (FStyled.pseudo).
+static const flow_style_t *moving_pseudo_style(const Moving *m, const char *id, garb_pseudo_t which)
+{
+    const os64_html_node_t *el = motion_find(m->p.doc->document, id);
+    const FStyled *of = el != NULL && m->tree != NULL ? f_style_of(f_tree_styles(m->tree), el) : NULL;
+    const os64_html_node_t *node = of != NULL ? of->pseudo[which == GARB_PSEUDO_BEFORE ? 0 : 1] : NULL;
+    const FStyled *st = node != NULL ? f_style_of(f_tree_styles(m->tree), node) : NULL;
+    return st != NULL ? &st->style : NULL;
+}
+
+// A pseudo-element's CSS animations (DEBTS.md's row, paid by slice C):
+// they run on its own winners, keep their records on the element's, live
+// through every layout as the element does, and stay out of what a
+// script's CSSAnimations see.
+static void motion_pseudo_cases(void)
+{
+    Moving m;
+    moving_open(&m, MOTION_STYLE "#k::before,#k::after{content:'x';display:inline-block;width:10px}"
+                "#k::before{animation-name:fade;" AT("0.25") "}"
+                "#k::after{animation-name:fade;" AT("0.75") "}"
+                "@keyframes fade{from{opacity:0}to{opacity:1}}</style><div id=k>y</div>", 1000);
+    const flow_style_t *before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    const flow_style_t *after = moving_pseudo_style(&m, "k", GARB_PSEUDO_AFTER);
+    expect("motion: a ::before's animation moves it", before != NULL && before->opacity == 250,
+           NULL);
+    expect("motion: an ::after's too, on its own timing", after != NULL && after->opacity == 750,
+           NULL);
+    const flow_style_t *own = moving_style(&m, "k");
+    expect("motion: the element itself is left as it is", own != NULL && own->opacity == 1000, NULL);
+    expect("motion: each keeps a record of its own on the timeline", f_timeline_records(m.tl) == 2, NULL);
+    expect("motion: and a script's CSSAnimations see neither", flow_timeline_size(m.tl) == 0, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;"
+                "animation:fade 1s linear}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                "<div id=k>y</div>", 1000);
+    moving_again(&m, 1500);
+    before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    expect("motion: a running ::before's clock lives through a layout, its node made anew",
+           before != NULL && before->opacity == 500, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k,#k::before,#z{animation:fade 1s linear}#k::before{content:'x';"
+                "display:inline-block;width:10px}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                "<div id=k>y</div><div id=z>w</div>", 1000);
+    flow_css_animation_t a = {0}, b = {0}, past = {0};
+    bool listed = f_timeline_records(m.tl) == 3 && flow_timeline_size(m.tl) == 2 && flow_timeline_at(m.tl, 0, &a) &&
+                  flow_timeline_at(m.tl, 1, &b) && !flow_timeline_at(m.tl, 2, &past);
+    expect("motion: an element's and its ::before's of one name are two records, and a script sees the "
+           "elements' alone, in their order",
+           listed && a.node == motion_find(m.p.doc->document, "k") && b.node == motion_find(m.p.doc->document, "z"),
+           NULL);
+    moving_close(&m);
+
+    // A spinner: a ::before turned in place, which ticks between layouts,
+    // each tick's value the layout's at the same time.
+    static const char kSpin[] = MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;"
+                                "height:10px;animation:spin 1s linear infinite}"
+                                "@keyframes spin{to{transform:rotate(360deg)}}</style><div id=k>y</div>";
+    const flow_point_t o = {0, 0};
+    Moving lay;
+    moving_open_for(&m, kSpin, 1000, true);
+    expect("tick: a ::before turned in place is due for a tick",
+           flow_motion_tick_due(m.tree, kTickView, o) == 1000, NULL);
+    bool moved = false;
+    TickMarks marks = {.n = 0};
+    bool ticked = flow_motion_tick(m.tree, 1250, o, tick_mark, &marks, &moved);
+    bool grouped = marks.n > 0;
+    for (int32_t i = 0; i < marks.n; i++)
+        grouped = grouped && marks.box[i]->pseudo == GARB_PSEUDO_BEFORE && marks.box[i]->kind != FLOW_BOX_TEXT;
+    expect("tick: the turn is marked as the ::before's group, as an element's is", grouped, NULL);
+    moving_open(&lay, kSpin, 1000);
+    moving_again(&lay, 1250);
+    before = moving_pseudo_style(&m, "k", GARB_PSEUDO_BEFORE);
+    const flow_style_t *laid = moving_pseudo_style(&lay, "k", GARB_PSEUDO_BEFORE);
+    expect("tick: and a tick turns it as a layout would, its frame filled again",
+           ticked && moved && before != NULL && laid != NULL && f_styles_same(before, laid), NULL);
+    moving_close(&lay);
+    moving_close(&m);
+
+    // A colour in place makes no stacked box, so its pseudo-element is seen
+    // by its own boxes alone.
+    moving_open_for(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;height:10px;"
+                    "animation:tint 1s linear infinite}@keyframes tint{to{background-color:red}}</style>"
+                    "<div id=k>y</div>", 1000, true);
+    expect("tick: a ::before tinted in place is due for a tick, seen by its own boxes",
+           flow_motion_tick_due(m.tree, kTickView, o) == 1000, NULL);
+    moving_close(&m);
+
+    // A fade in from nothing: the layout at its start must not leave the
+    // pseudo-element's boxes unpainted, since ticks raise it from there.
+    moving_open_for(&m, MOTION_STYLE "#k::before{content:'x';display:inline-block;width:10px;height:10px;"
+                    "animation:fade 1s linear}@keyframes fade{from{opacity:0}to{opacity:1}}</style>"
+                    "<div id=k>y</div>", 1000, true);
+    int32_t pseudo_boxes = 0, painted = 0;
+    for (const flow_box_t *b = flow_root(m.tree); b != NULL;) {
+        if (b->pseudo == GARB_PSEUDO_BEFORE) {
+            pseudo_boxes++;
+            painted += !b->unpainted;
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != NULL && b->next == NULL)
+            b = b->parent;
+        b = b != NULL ? b->next : NULL;
+    }
+    expect("tick: a ::before fading in from 0 is painted, the painter judging its opacity",
+           pseudo_boxes > 0 && painted == pseudo_boxes, NULL);
+    moving_close(&m);
+
+    moving_open(&m, MOTION_STYLE "#k::before{content:'x';display:none;animation:fade 1s linear}"
+                "@keyframes fade{from{opacity:0}to{opacity:1}}</style><div id=k>y</div>", 1000);
+    expect("motion: a ::before that displays nothing starts nothing", f_timeline_records(m.tl) == 0, NULL);
+    moving_close(&m);
+}
+
 static void motion_cases(void)
 {
     motion_css_api_cases();
+    motion_pseudo_cases();
     motion_batch_a_cases();
     motion_easing_cases();
     motion_chrome_cases();
