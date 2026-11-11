@@ -27,6 +27,8 @@
 // What we cut our own frames to: the size every peer takes.
 #define OUR_FRAME      H2_FRAME_SIZE_LEAST
 #define FIELDS_MOST    512u
+// The most a stream's receive buffer keeps once it has been read empty.
+#define BUF_KEEP       (64u * 1024u)
 // The largest frame, and the largest header table, a greeting may promise to
 // take: each is memory this connection sets aside the moment it is adopted.
 #define GREETING_MOST  (1024u * 1024u)
@@ -43,7 +45,8 @@ struct h2_stream {
     uint32_t id;
     os64_bell_t *bell;              // the fetch's; rung under the connection's lock, taken away under it
     bool sent_end, got_end;         // each side's END_STREAM
-    bool bodiless;                  // the response's content-length is not a promise of DATA
+    bool bodiless;                  // the request was a HEAD: its response has no content
+    bool no_content;                // the final head's verdict: bodiless, or a 204 or 304
     bool peer_reset;                // the peer reset it, before or after its END_STREAM
     h2_ending_t ending;
     // The final head: its bytes, and the fields that point into them.
@@ -428,8 +431,16 @@ static void drain_as(h2_conn_t *c, bool patient, bool last)
                 ring_door(c);
             continue;
         }
-        if (wrote == OS64_INTERRUPTED && patient)
-            continue;           // a signal is the fetch's news; the bytes are everybody's
+        if (wrote == OS64_INTERRUPTED && patient) {
+            // A signal is the fetch's news; the bytes are everybody's. The
+            // patience is counted from the first attempt that moved nothing,
+            // so a signal does not start it again.
+            if (!c->refused) {
+                c->refused = true;
+                c->refused_at = now;
+            }
+            continue;
+        }
         if (wrote == OS64_ERR_TIMEOUT || wrote == OS64_INTERRUPTED) {
             if (!c->refused) {
                 c->refused = true;
@@ -478,7 +489,7 @@ static void on_data(h2_conn_t *c, const h2_frame_t *f)
         return;
     }
     s->body_seen += f->data_len;
-    if (s->has_length && s->body_seen > s->length) {
+    if ((s->no_content && f->data_len != 0) || (s->has_length && s->body_seen > s->length)) {
         reset_stream(c, s, H2_ERR_PROTOCOL, H2_END_BAD_LENGTH);
         credit_conn(c, f->flow_len);
         return;
@@ -740,8 +751,10 @@ static void on_block(h2_conn_t *c)
                 fields[i].name = bytes + (c->head_fields[i].name - c->head_buf);
                 fields[i].value = bytes + (c->head_fields[i].value - c->head_buf);
             }
-            // A HEAD's answer and a 304 carry no content whatever they say.
-            if (has_length && !s->bodiless && status != 304) {
+            // A HEAD's answer, a 204 and a 304 carry no content, whatever
+            // length they state (RFC 9110 § 6.4.1).
+            s->no_content = s->bodiless || status == 204 || status == 304;
+            if (has_length && !s->no_content) {
                 s->has_length = true;
                 s->length = length;
             }
@@ -872,6 +885,11 @@ static void take_in(h2_conn_t *c, const uint8_t *cipher, size_t len)
             die(c, H2_ERR_NO_ERROR);
         else
             pump(c);            // what the engine owes for what it was fed
+        // What the engine owes of its own accord (a KeyUpdate's answer) is
+        // the peer's doing too, and has the same ceiling as a frame it
+        // makes us owe.
+        if (c->out_bytes > (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST)
+            die(c, H2_ERR_ENHANCE_YOUR_CALM);
         // Fed nothing and gave nothing with input still in hand: the engine
         // is waiting on a frame larger than the room one may have.
         if (!moved && fed < len && !eof)
@@ -1065,6 +1083,17 @@ uint32_t h2_conn_streams(h2_conn_t *c)
     uint32_t count = c->stream_count;
     os64_lock_release(&c->lock);
     return count;
+}
+
+size_t h2_conn_buffered(h2_conn_t *c)
+{
+    os64_lock_acquire(&c->lock);
+    size_t held = 0;
+    for (uint32_t i = 0; i < H2_STREAMS_MOST; i++)
+        if (c->streams[i] != NULL)
+            held += c->streams[i]->room;
+    os64_lock_release(&c->lock);
+    return held;
 }
 
 size_t h2_conn_queued(h2_conn_t *c)
@@ -1292,11 +1321,23 @@ int64_t h2_stream_read(h2_stream_t *s, void *buffer, size_t room, h2_wait_t *wai
             uint32_t n = have < room ? have : (uint32_t)room;
             os64_memcpy(buffer, s->buf + s->at, n);
             s->at += n;
-            if (s->at == s->len)
+            // A buffer read to its end is given back when it grew large:
+            // the window its bytes held is the peer's again, and the memory
+            // would otherwise be held twice over, here and by whichever
+            // stream the peer fills next.
+            uint8_t *spent = NULL;
+            if (s->at == s->len) {
                 s->at = s->len = 0;
+                if (s->room > BUF_KEEP) {
+                    spent = s->buf;
+                    s->buf = NULL;
+                    s->room = 0;
+                }
+            }
             credit_stream(c, s, n);
             credit_conn(c, n);
             os64_lock_release(&c->lock);
+            os64_free(spent);
             drain(c, false);
             return n;
         }

@@ -100,7 +100,7 @@ typedef enum {
     H2_END_CONN_DEAD,       // the connection died under it; `code` is the GOAWAY's or ours, when one was the cause
     H2_END_BAD_HEAD,        // we reset it: its head broke RFC 9113 § 8.2
     H2_END_HEAD_TOO_LARGE,  // we reset it: its head is past H2_HEAD_MOST
-    H2_END_BAD_LENGTH,      // we reset it: its body is not its content-length
+    H2_END_BAD_LENGTH,      // we reset it: its body is not its content-length, or it had one it may not have
     H2_END_FLOW,            // we reset it: it sent past its window, or gave ours more than 2^31 - 1
     H2_END_BAD_FRAME,       // we reset it: a frame for it broke a rule RFC 9113 makes the stream's; `code` says which
 } h2_end_t;
@@ -129,17 +129,20 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
 // no GOAWAY, has not gone quiet, has fewer streams than the peer and
 // H2_STREAMS_MOST allow, and has a stream id left to give.
 bool h2_conn_room(h2_conn_t *conn);
-// How many streams it has now, and how many bytes wait in its out queue.
+// How many streams it has now, how many bytes wait in its out queue, and
+// how many bytes its streams' receive buffers are allocated to hold.
 uint32_t h2_conn_streams(h2_conn_t *conn);
 size_t h2_conn_queued(h2_conn_t *conn);
+size_t h2_conn_buffered(h2_conn_t *conn);
 // End it: no new stream, and the reader closes it within a slice.
 void h2_conn_condemn(h2_conn_t *conn);
 // Let the adopter's hold go.
 void h2_conn_release(h2_conn_t *conn);
 
 // A new stream: the request's fields as its HEADERS, with END_STREAM when
-// `ends` (no body follows). `bodiless` says the response carries no content
-// whatever its content-length says (a HEAD). Waits, under `wait`, while the
+// `ends` (no body follows). `bodiless` says the request is a HEAD: its
+// response states a length and carries no content. Content on such a
+// response, or on a 204 or a 304, resets the stream (H2_END_BAD_LENGTH). Waits, under `wait`, while the
 // out queue is past its mark. On H2_OK `*stream` is the caller's to close.
 h2_result_t h2_stream_open(h2_conn_t *conn, const h2_field_t *fields, size_t count, bool ends, bool bodiless,
                            h2_wait_t *wait, h2_stream_t **stream);

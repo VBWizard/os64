@@ -33,6 +33,7 @@ static pthread_cond_t moved = PTHREAD_COND_INITIALIZER;
 static run_t to_server, to_client, server_plain;
 static bool stalled, hung_up, records_bad;
 static size_t write_most;
+static unsigned write_interrupts;
 static unsigned closes, owed;
 static uint32_t server_in_seq, server_out_seq;
 static _Atomic uint64_t skipped_ms;
@@ -149,6 +150,13 @@ int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t tim
     pthread_mutex_lock(&mu);
     if (closes != 0)
         abort();                // a write to a socket that was closed
+    // A signal, twenty seconds into a write that moved nothing.
+    if (stalled && timeout_ms != 0 && write_interrupts != 0) {
+        write_interrupts--;
+        atomic_fetch_add(&skipped_ms, 20000);
+        pthread_mutex_unlock(&mu);
+        return OS64_INTERRUPTED;
+    }
     // Stalled: wait out the patience by the case's clock, which it may skip.
     for (;;) {
         os64_ticks(&now);
@@ -327,6 +335,7 @@ void peer_begin(os64_tls_client **out_engine, int32_t *socket)
     to_server.at = to_server.len = to_client.at = to_client.len = server_plain.at = server_plain.len = 0;
     stalled = hung_up = records_bad = false;
     write_most = 0;
+    write_interrupts = 0;
     closes = owed = 0;
     server_in_seq = server_out_seq = 0;
     memset(&engine, 0, sizeof(engine));
@@ -405,6 +414,13 @@ void peer_write_cap(size_t most)
 {
     pthread_mutex_lock(&mu);
     write_most = most;
+    pthread_mutex_unlock(&mu);
+}
+
+void peer_interrupt_writes(unsigned times)
+{
+    pthread_mutex_lock(&mu);
+    write_interrupts = times;
     pthread_mutex_unlock(&mu);
 }
 

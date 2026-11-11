@@ -1593,6 +1593,87 @@ static void wake_cases(void)
     CHECK(h2_conn_queued(conn) <= (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST + 4096);
     fetch_done(&a);
     finish_dead(dead);
+
+    // And for what the ENGINE owes of its own accord: a KeyUpdate asked for
+    // over and over, at a socket that takes no answer.
+    dead = atomic_load(&dead_calls);
+    begin();
+    peer_stall(true);
+    for (int i = 0; i < 400000 && atomic_load(&dead_calls) == dead; i++) {
+        peer_send_engine_owes();
+        if (i % 2000 == 1999)
+            nap_ms(20);
+    }
+    CHECK(died_within(dead, 5000));
+    CHECK(h2_conn_queued(conn) <= (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST + 8192);
+    finish_dead(dead);
+
+    // A RESPONSE THAT MAY HAVE NO CONTENT AND HAS SOME: a HEAD's, and a
+    // 204's. The stream is reset and nothing of it is read. An empty DATA
+    // frame that ends such a stream is how it is meant to end.
+    dead = atomic_load(&dead_calls);
+    begin();
+    h2_field_t head_request[] = {F(":method", "HEAD"), F(":scheme", "https"), F(":path", "/h"), F(":authority", "a.test")};
+    fetch_init(&a, 3000);
+    CHECK(h2_stream_open(conn, head_request, 4, true, true, &a.wait, &a.stream) == H2_OK && server_request("/h") == 1);
+    server_reply(1, "200", NULL, false);
+    peer_send_data(1, "not empty", 9, true);
+    CHECK(server_sees_rst(1, H2_ERR_PROTOCOL));
+    CHECK(fetch_head(&a) == H2_OK && read_all(&a, out, sizeof(out), &got) == -(int64_t)H2_ENDED && got == 0);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_BAD_LENGTH);
+    fetch_done(&a);
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/204") == H2_OK && server_request("/204") == 3);
+    server_reply(3, "204", NULL, false);
+    peer_send_data(3, "x", 1, true);
+    CHECK(server_sees_rst(3, H2_ERR_PROTOCOL) && fetch_head(&a) == H2_OK);
+    CHECK(read_all(&a, out, sizeof(out), &got) == -(int64_t)H2_ENDED && got == 0);
+    fetch_done(&a);
+    fetch_init(&a, 3000);
+    CHECK(h2_stream_open(conn, head_request, 4, true, true, &a.wait, &a.stream) == H2_OK && server_request("/h") == 5);
+    server_reply(5, "200", NULL, false);
+    peer_send_data(5, "", 0, true);
+    CHECK(fetch_head(&a) == H2_OK && read_all(&a, out, sizeof(out), &got) == 0 && got == 0);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
+    fetch_done(&a);
+
+    // A BUFFER READ EMPTY IS GIVEN BACK when it had grown: a stream that
+    // took 60,000 bytes and has had them all read holds none of that
+    // memory while it waits for more.
+    static char sixty[60000];
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/buf") == H2_OK && server_request("/buf") == 7);
+    server_reply(7, "200", NULL, false);
+    CHECK(fetch_head(&a) == H2_OK);
+    for (size_t at = 0; at < sizeof(sixty) * 2; at += 15000)
+        peer_send_data(7, sixty, 15000, false);
+    static char taken[120000];
+    for (got = 0; got < sizeof(taken);) {
+        int64_t n = h2_stream_read(a.stream, taken + got, sizeof(taken) - got, &a.wait);
+        CHECK(n > 0);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    CHECK(h2_conn_buffered(conn) <= 64u * 1024u);
+    fetch_done(&a);
+    finish(dead);
+
+    // A SIGNAL DOES NOT START THE WRITE PATIENCE AGAIN. A write that moved
+    // nothing is interrupted twenty seconds in, twice: the second leaves
+    // forty seconds without a byte taken, and that is the end.
+    dead = atomic_load(&dead_calls);
+    begin();
+    peer_stall(true);
+    peer_interrupt_writes(3);
+    opener_t waiting = {.path = "/signalled"};
+    fetch_init(&waiting.f, 3000);
+    pthread_create(&t, NULL, opener, &waiting);
+    CHECK(died_within(dead, 2000));
+    peer_stall(false);
+    pthread_join(t, NULL);
+    fetch_done(&waiting.f);
+    finish_dead(dead);
 }
 
 // ── Many fetches at once ────────────────────────────────────────────────
