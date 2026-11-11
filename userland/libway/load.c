@@ -540,6 +540,8 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;
     out->head.tls_resumed = detail->tls_resumed;
+    out->head.http2 = head->http2;
+    out->head.h2_stream = head->http2 ? detail->h2_stream : 0;
     os64_strcopy(out->asked, sizeof(out->asked), url);
     return true;
 }
