@@ -55,7 +55,14 @@ static atomic_int dead_calls, room_calls;
 static atomic_bool idle_answer;
 static void hook_dead(void *ctx, h2_conn_t *c) { (void)ctx; (void)c; atomic_fetch_add(&dead_calls, 1); }
 static void hook_room(void *ctx, h2_conn_t *c) { (void)ctx; (void)c; atomic_fetch_add(&room_calls, 1); }
-static bool hook_idle(void *ctx, h2_conn_t *c) { (void)ctx; (void)c; return atomic_load(&idle_answer); }
+static atomic_int idle_calls;
+static bool hook_idle(void *ctx, h2_conn_t *c)
+{
+    (void)ctx;
+    (void)c;
+    atomic_fetch_add(&idle_calls, 1);
+    return atomic_load(&idle_answer);
+}
 static const h2_conn_hooks_t kHooks = {.idle_out = hook_idle, .room = hook_room, .dead = hook_dead};
 
 // A greeting with a stream window of 65,535 and a connection window of the
@@ -498,12 +505,42 @@ static void window_cases(void)
     CHECK(h2_stream_read(a.stream, out, 400, &a.wait) == 400);      // under half: nothing said
     CHECK(h2_stream_read(a.stream, out, 200, &a.wait) == 200);      // 600 of 1,000: said
     CHECK(server_sees_window(1, 600));
+    // What was said back is window again: 600 more arrive and are read, and
+    // with the 400 that were waiting they are said back in their turn.
+    peer_send_data(1, big, 600, false);
+    CHECK(h2_stream_read(a.stream, out, 400, &a.wait) == 400);
+    CHECK(h2_stream_read(a.stream, out, 600, &a.wait) == 600);
+    CHECK(server_sees_window(1, 1000));
     // One byte past the stream's window is the stream's error, and the
     // connection goes on.
-    peer_send_data(1, big, 601, false);
+    peer_send_data(1, big, 1001, false);
     CHECK(server_sees_rst(1, H2_ERR_FLOW_CONTROL));
-    CHECK(read_all(&a, out, sizeof(out), &got) == -(int64_t)H2_ENDED && got == 400);
+    CHECK(read_all(&a, out, sizeof(out), &got) == -(int64_t)H2_ENDED && got == 0);
     CHECK(h2_stream_ended(a.stream).how == H2_END_FLOW && h2_conn_room(conn));
+    fetch_done(&a);
+    finish(dead);
+
+    // A body longer than both windows arrives whole, since each is given
+    // back as it is read: 70,000 bytes through 65,535.
+    dead = atomic_load(&dead_calls);
+    begin();
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/long") == H2_OK && server_request("/long") == 1);
+    server_reply(1, "200", NULL, false);
+    for (size_t at = 0; at < 40000; at += 10000)
+        peer_send_data(1, big, 10000, false);
+    CHECK(fetch_head(&a) == H2_OK);
+    for (got = 0; got < 40000;) {
+        int64_t n = h2_stream_read(a.stream, out, 40000 - got, &a.wait);
+        CHECK(n > 0);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    for (size_t at = 40000; at < 70000; at += 10000)
+        peer_send_data(1, big, 10000, at == 60000);
+    CHECK(read_all(&a, out, sizeof(out), &got) == 0 && got == 30000);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
     fetch_done(&a);
     finish(dead);
 
@@ -821,6 +858,7 @@ static void error_cases(void)
         {"a window for a stream never opened", H2_FRAME_WINDOW_UPDATE, 0, 9, 4, H2_ERR_PROTOCOL},
         {"a window of nothing for the connection", H2_FRAME_WINDOW_UPDATE, 0, 0, 4, H2_ERR_PROTOCOL},
         {"a block that does not decode", H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, 1, 1, H2_ERR_COMPRESSION},
+        {"a head for a stream never opened", H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, 9, 1, H2_ERR_PROTOCOL},
     };
     static uint8_t payload[16385];
     for (size_t i = 0; i < sizeof(kBad) / sizeof(kBad[0]); i++) {
@@ -834,6 +872,8 @@ static void error_cases(void)
             payload[3] = 1;
         if (kBad[i].code == H2_ERR_COMPRESSION)
             payload[0] = 0x80;              // index 0
+        else if (kBad[i].type == H2_FRAME_HEADERS)
+            payload[0] = 0x88;              // ":status: 200", a block that decodes
         peer_send_frame(kBad[i].type, kBad[i].flags, kBad[i].stream, payload, kBad[i].len);
         if (!server_sees_goaway(kBad[i].code)) {
             fprintf(stderr, "no GOAWAY %u for %s\n", (unsigned)kBad[i].code, kBad[i].what);
@@ -1000,17 +1040,22 @@ static void queue_cases(void)
     fetch_done(&second.f);
     CHECK(peer_records_sound());
 
+    // A PING is answered with its own eight bytes. This one's answer is
+    // refused by a stalled socket when the reader offers it, and goes when
+    // the stall ends.
+    peer_stall(true);
+    peer_send_ping();
+    nap_ms(200);
+    peer_stall(false);
+    CHECK(peer_frame_of(H2_FRAME_PING, &h, &payload, 2000) && (h.flags & H2_FLAG_ACK) && h.length == 8 &&
+          memcmp(payload, "pingping", 8) == 0);
+
     // A stall that ended is forgotten: thirty seconds later the connection
     // is not blamed for it.
     int alive = atomic_load(&dead_calls);
     peer_clock_skip(H2_WRITE_PATIENCE_MS + 1);
     nap_ms(H2_READER_SLICE_MS + 100);
     CHECK(atomic_load(&dead_calls) == alive && h2_conn_room(conn));
-
-    // A PING is answered with its own eight bytes.
-    peer_send_ping();
-    CHECK(peer_frame_of(H2_FRAME_PING, &h, &payload, 2000) && (h.flags & H2_FLAG_ACK) && h.length == 8 &&
-          memcmp(payload, "pingping", 8) == 0);
 
     // What a fetch leaves UNREAD in its buffer is credited to the
     // connection when it goes: 40,000 bytes nobody will read.
@@ -1262,6 +1307,145 @@ static void wait_cases(void)
     finish(dead);
 }
 
+// ── What wakes a wait, and what a dying connection still does ───────────
+
+typedef struct {
+    void (*say)(void);
+    long after_ms;
+} later_t;
+
+// The server's next word, said from another thread once the case's own is
+// waiting for it.
+static void *later(void *x)
+{
+    later_t *l = x;
+    nap_ms(l->after_ms);
+    l->say();
+    return NULL;
+}
+
+static void say_window(void)
+{
+    static const h2_setting_t kHundred[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 100}};
+    peer_send_settings(kHundred, 1);
+}
+static void say_head(void) { server_reply(1, "200", NULL, false); }
+static void say_data(void) { peer_send_data(1, "late", 4, true); }
+
+typedef struct {
+    uint32_t stream;
+    fetch_t *f;
+} nudge_t;
+
+// A WINDOW_UPDATE for the stream every 30 ms for a second and a half: each
+// rings its fetch, and none is what the fetch waits for. Then the fetch is
+// cancelled, which ends a wait that did not end by its patience.
+static void *nudger(void *x)
+{
+    nudge_t *n = x;
+    for (int i = 0; i < 50; i++) {
+        peer_send_window(n->stream, 1);
+        nap_ms(30);
+    }
+    atomic_store(&n->f->cancelled, true);
+    return NULL;
+}
+
+static void wake_cases(void)
+{
+    int dead = atomic_load(&dead_calls);
+    fetch_t a;
+    pthread_t t;
+    char out[64];
+    size_t sent;
+    h2_frame_header_t h;
+    const uint8_t *payload;
+
+    // A WAIT IS WOKEN BY WHAT IT WAITS FOR. Each patience here is shorter
+    // than H2_LOOK_MS, so no wait looks up by itself: the send is woken by
+    // the window the server's SETTINGS give, the head's wait by the head,
+    // the read by the bytes.
+    static const h2_setting_t kTen[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 10}};
+    begin_with(&kGreeting, kTen, 1);
+    fetch_init(&a, 900);
+    h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
+    later_t l = {say_window, 100};
+    pthread_create(&t, NULL, later, &l);
+    CHECK(h2_stream_send(a.stream, "0123456789abcdefghijklmno", 25, true, &a.wait, &sent) == H2_OK && sent == 25);
+    pthread_join(t, NULL);
+    l.say = say_head;
+    pthread_create(&t, NULL, later, &l);
+    CHECK(fetch_head(&a) == H2_OK);
+    pthread_join(t, NULL);
+    l.say = say_data;
+    pthread_create(&t, NULL, later, &l);
+    CHECK(h2_stream_read(a.stream, out, sizeof(out), &a.wait) == 4 && memcmp(out, "late", 4) == 0);
+    pthread_join(t, NULL);
+    fetch_done(&a);
+
+    // RUNG AGAIN AND AGAIN FOR NOTHING IT WANTS, a wait still ends at its
+    // patience, and the connection that kept ringing it is not quiet.
+    fetch_init(&a, 300);
+    CHECK(fetch_get(&a, conn, "/nudged") == H2_OK);
+    nudge_t nudge = {.stream = server_request("/nudged"), .f = &a};
+    pthread_create(&t, NULL, nudger, &nudge);
+    CHECK(fetch_head(&a) == H2_SILENT && h2_conn_room(conn));
+    pthread_join(t, NULL);
+
+    // THE POOL IS NOT ASKED about a connection that has a stream, and is
+    // asked every slice about one that has none.
+    int asked = atomic_load(&idle_calls);
+    nap_ms(2 * H2_READER_SLICE_MS + 200);
+    CHECK(atomic_load(&idle_calls) == asked);
+    fetch_done(&a);
+    CHECK(server_sees_rst(nudge.stream, H2_ERR_CANCEL));
+    nap_ms(2 * H2_READER_SLICE_MS + 200);
+    CHECK(atomic_load(&idle_calls) > asked);
+
+    // A CONDEMNED CONNECTION SENDS NOTHING MORE: a fetch that leaves its
+    // stream after the connection was condemned owes the server no reset.
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/gone") == H2_OK && server_request("/gone") != 0);
+    h2_conn_condemn(conn);
+    fetch_done(&a);
+    CHECK(!peer_frame_of(H2_FRAME_RST_STREAM, &h, &payload, 800));
+    finish(dead);
+
+    // A HEAD OF MANY FIELDS, none of them large, is over the limit by their
+    // sum: a hundred of a thousand bytes.
+    dead = atomic_load(&dead_calls);
+    begin();
+    static char wide[1001];
+    memset(wide, 'w', sizeof(wide) - 1);
+    h2_field_t many_fields[101];
+    many_fields[0] = F(":status", "200");
+    for (int i = 1; i <= 100; i++)
+        many_fields[i] = F("x-wide", wide);
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/wide") == H2_OK && server_request("/wide") == 1);
+    peer_send_headers(1, many_fields, 101, false);
+    CHECK(server_sees_rst(1, H2_ERR_ENHANCE_YOUR_CALM) && fetch_head(&a) == H2_ENDED);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_HEAD_TOO_LARGE && h2_conn_room(conn));
+    fetch_done(&a);
+
+    // THE READER DOES NOT CLOSE THE SOCKET UNDER A WRITE. A thread is inside
+    // a write the stalled socket will not take when the connection is
+    // condemned: the socket stays open until that write comes back.
+    peer_stall(true);
+    opener_t stuck = {.path = "/stuck"};
+    fetch_init(&stuck.f, 3000);
+    pthread_create(&t, NULL, opener, &stuck);
+    nap_ms(100);
+    h2_conn_condemn(conn);
+    nap_ms(H2_READER_SLICE_MS + 300);
+    CHECK(peer_closes() == 0 && atomic_load(&dead_calls) == dead);
+    peer_stall(false);
+    pthread_join(t, NULL);
+    fetch_done(&stuck.f);
+    finish_dead(dead);
+}
+
 // ── Many fetches at once ────────────────────────────────────────────────
 
 #define STRESS_THREADS 8
@@ -1396,6 +1580,7 @@ int main(void)
     error_cases();
     queue_cases();
     wait_cases();
+    wake_cases();
     many_cases();
     if (atomic_load(&failures) != 0) {
         fprintf(stderr, "test_h2_conn_host: %d of %d checks failed\n", atomic_load(&failures), atomic_load(&checks));
