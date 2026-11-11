@@ -70,6 +70,7 @@ struct yonder_diag {
     // it went (claim_ours). 0 before the claim.
     uint64_t nonce;
     int64_t began_us;
+    uint64_t marks[YONDER_DIAG_MARKS];
     Table missing, failed, facts;
     // The facts that are the head's (Line.head): they have room of their
     // own, so they are counted apart from the ordinary facts' quota.
@@ -396,6 +397,20 @@ uint32_t yonder_diag_seq(const yonder_diag_t *d)
 int64_t yonder_diag_began(const yonder_diag_t *d)
 {
     return d != NULL ? d->began_us : 0;
+}
+
+void yonder_diag_marks_set(yonder_diag_t *d, const uint64_t marks[YONDER_DIAG_MARKS])
+{
+    if (d != NULL)
+        os64_memcpy(d->marks, marks, sizeof(d->marks));
+}
+
+void yonder_diag_marks(const yonder_diag_t *d, uint64_t marks[YONDER_DIAG_MARKS])
+{
+    if (d != NULL)
+        os64_memcpy(marks, d->marks, sizeof(d->marks));
+    else
+        os64_memset(marks, 0, sizeof(uint64_t) * YONDER_DIAG_MARKS);
 }
 
 static uint32_t saturating(uint32_t a, uint32_t b)
