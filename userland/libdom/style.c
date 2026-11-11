@@ -77,6 +77,7 @@ static int parse(os64_dom_t *dom, JSContext *ctx, const char *s, size_t n,
 static JSValue read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                      const char *name, bool priority)
 {
+    dom = d_owner(dom,node);
     const os64_html_attr_t *attr = os64_html_attr(node,"style");
     const char *text = attr != NULL ? attr->value : "";
     size_t len = os64_strlen(text), first = 0, last = 0;
@@ -113,6 +114,7 @@ static JSValue write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
               (name[i]>='A' && name[i]<='Z') || (i && name[i]>='0' && name[i]<='9'))) return JS_UNDEFINED;
     bool important = equal(priority,os64_strlen(priority),"important");
     if (*priority && !important && value_len != 0) return JS_UNDEFINED;
+    dom = d_owner(dom,node);
     const os64_html_attr_t *attr = os64_html_attr(node,"style");
     const char *old = attr != NULL ? attr->value : "";
     size_t old_len = os64_strlen(old);
@@ -171,7 +173,8 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc,
     const os64_html_node_t *node = entry->target;
     if (magic == S_TEXT) {
         if (!set) {
-            const os64_html_attr_t *attr = os64_html_attr(node,"style");
+            dom = d_owner(dom,node);
+    const os64_html_attr_t *attr = os64_html_attr(node,"style");
             const char *text = attr != NULL ? attr->value : "";
             size_t length = os64_strlen(text);
             if (length > STYLE_MAX) return d_error(ctx,"QuotaExceededError","Inline style text quota exceeded");
@@ -219,6 +222,10 @@ JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
     const os64_html_node_t *node = d_node(dom,ctx,self);
     if (node == NULL) return JS_EXCEPTION;
     DValue *owner = d_find(dom,node);
+    dom = owner->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (ctx == NULL) return JS_EXCEPTION;
     if (d_more_peek(owner)->style != NULL) return JS_DupValue(ctx,d_more_peek(owner)->style->value);
     DValueMore *more = d_more(dom,ctx,owner);
     if (more == NULL) return JS_EXCEPTION;

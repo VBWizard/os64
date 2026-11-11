@@ -266,7 +266,7 @@ static void substring(const os64_html_node_t *n, uint32_t offset, uint32_t count
 static int replace_data(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n, uint32_t offset,
                         uint32_t count)
 {
-    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)n, offset, count, "", 0);
+    int64_t status = os64_page_node_replace_data(d_owner(dom, n)->state, (os64_html_node_t *)n, offset, count, "", 0);
     return status < 0 ? throw_status(ctx, status) : 0;
 }
 
@@ -281,7 +281,7 @@ static int clone_cut(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n,
     const char *bytes;
     size_t len;
     substring(n, offset, count, &bytes, &len);
-    int64_t status = c != NULL ? os64_page_node_set_text(dom->state, (os64_html_node_t *)c, bytes, len)
+    int64_t status = c != NULL ? os64_page_node_set_text(d_owner(dom, c)->state, (os64_html_node_t *)c, bytes, len)
                                : OS64_HTML_BAD_ARGUMENT;
     int done = status < 0 ? throw_status(ctx, status) : d_tree_change(dom, ctx, D_APPEND, parent, c, NULL);
     JS_FreeValue(ctx, copy);
@@ -334,14 +334,12 @@ static void collapse_point(const Bounds *b, const os64_html_node_t **node, uint3
  * standard's live subrange is read once, at its start). */
 static JSValue contents(os64_dom_t *dom, JSContext *ctx, DRange *r, const Bounds *b, bool clone)
 {
+    dom = d_owner(dom, b->start);
     const os64_html_node_t *document = d_node_document(dom, b->start);
     int64_t status = OS64_HTML_OK;
     os64_html_node_t *made = os64_html_create_fragment(dom->document, &status);
     if (made == NULL) return d_html_error(ctx, status);
-    /* The wrapper first: d_made_in records the document on the node's
-     * wrapper, and a node with none keeps no record. */
-    JSValue fragment = d_wrap(dom, ctx, made);
-    if (!JS_IsException(fragment)) d_made_in(dom, made, document);
+    JSValue fragment = d_wrap_in(dom, ctx, made, document);
     if (JS_IsException(fragment) || (b->start == b->end && b->start_offset == b->end_offset)) return fragment;
     /* A subrange's points were read before a clone ran page code that may
      * have moved one; points in two trees hold nothing to take. */
@@ -535,14 +533,14 @@ static int insert_node(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_ht
      * element or fragment a Text has for a parent (only a document's rules
      * hang on where among its children a node goes). */
     int64_t status = OS64_HTML_OK;
-    if (start->kind == OS64_HTML_TEXT && (status = os64_html_may_insert(dom->document, parent, node)) < 0)
+    if (start->kind == OS64_HTML_TEXT && (status = os64_html_may_insert(d_owner(dom, parent)->document, parent, node)) < 0)
         return throw_status(ctx, status);
     os64_html_hold(dom->document, node);
     os64_html_hold(dom->document, parent);
     int failed = 0;
     if (start->kind == OS64_HTML_TEXT) {
         os64_html_node_t *tail = NULL;
-        status = os64_page_node_split_text(dom->state, (os64_html_node_t *)start, b.start_offset, &tail);
+        status = os64_page_node_split_text(d_owner(dom, start)->state, (os64_html_node_t *)start, b.start_offset, &tail);
         if (status < 0) {
             failed = throw_status(ctx, status);
         } else {
@@ -675,6 +673,7 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
 {
     Bounds b = bounds_of(r);
     const os64_html_node_t *node = b.start, *element = NULL;
+    dom = d_owner(dom, node);
     if (node->kind == OS64_HTML_ELEMENT)
         element = node;
     else if ((node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT) && node->parent != NULL &&
@@ -696,12 +695,9 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
     os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, element, markup->data, markup->length,
                                                           d_scripting(dom, node), &status);
     if (fragment == NULL) return d_html_error(ctx, status);
-    /* Wrapped first, so d_made_in has a wrapper to record the document
-     * on; then a defined custom element in it is upgraded before the
-     * fragment is handed back, as a clone's is. */
-    JSValue wrapped = d_wrap(dom, ctx, fragment);
+    /* Initialize native ownership before exposing or upgrading the fragment. */
+    JSValue wrapped = d_wrap_in(dom, ctx, fragment, document);
     if (JS_IsException(wrapped)) return wrapped;
-    d_made_in(dom, fragment, document);
     if (d_custom_upgrade_new(dom, ctx, fragment) < 0) {
         JS_FreeValue(ctx, wrapped);
         return JS_EXCEPTION;

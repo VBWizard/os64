@@ -71,6 +71,23 @@ static void t_ownership_groups(void)
         os64_html_unpin(borrower,pin);
         check(!os64_html_remove(owner,text), "cross-pin mutable text reclaimed");
     }
+    HNode *record = os64_html_create_document(a, &status);
+    check(record && !os64_html_document_keep(a, record), "host Document record retained until arena teardown");
+    HNode *inert = os64_html_create_document(a, &status);
+    check(inert && !os64_html_document_keep(a, inert) &&
+          !os64_html_document_templates(a, record, inert), "retained template document association");
+    HNode *detached = os64_html_create_text(a, "detached", 8, &status);
+    check(detached && !os64_html_adopt(a, record, detached), "unwrapped node names retained Document");
+    os64_html_hold(a, detached);
+    size_t nodes = a->node_count;
+    for (size_t i = 0; i < 1000; ++i) {
+        HNode *child = os64_html_create_element(a, OS64_HTML_NS_HTML, "div", &status);
+        check(child && !os64_html_insert(a, record, child, NULL) && !os64_html_remove(a, child),
+              "retained Document permits child reclamation");
+    }
+    check(a->node_count == nodes && os64_html_node_document(detached) == record &&
+          os64_html_node_owner(detached) == a, "record retention keeps identity without pinning churn");
+    os64_html_release(a, detached);
     printf("ownership stalled pin: %zu turns, B %zu -> %zu -> %zu bytes; group peak %zu\n",
            turns, before, stalled, b->arena_bytes, os64_html_group_peak(g));
     os64_html_group_free(g);
@@ -190,13 +207,13 @@ static void t_ownership_templates(void)
     HNode *held_fragment = os64_html_create_fragment(b,NULL);
     os64_html_hold(b,held_fragment);
     check(!os64_html_insert(b,held_fragment,os64_html_create_text(b,"fragment",8,NULL),NULL) &&
-          !os64_html_insert(b,div,held_fragment,NULL) && os64_html_node_document(held_fragment) == ib,
-          "consumed fragment keeps destination node document");
+          !os64_html_insert(b,div,held_fragment,NULL) && os64_html_node_document(held_fragment) == b->document,
+          "consumed fragment keeps original node document");
     os64_html_release(b,held_fragment);
     held_fragment = os64_html_create_fragment(b,NULL);
     os64_html_hold(b,held_fragment);
-    check(!os64_html_insert(b,div,held_fragment,NULL) && os64_html_node_document(held_fragment) == ib,
-          "empty fragment adopts into windowless document");
+    check(!os64_html_insert(b,div,held_fragment,NULL) && os64_html_node_document(held_fragment) == b->document,
+          "empty fragment keeps original node document");
     os64_html_release(b,held_fragment);
     HNode *shadow_host = os64_html_create_element(b,OS64_HTML_NS_HTML,"div",NULL);
     HNode *shadow = os64_html_attach_shadow(b,shadow_host,OS64_HTML_SHADOW_OPEN,NULL);

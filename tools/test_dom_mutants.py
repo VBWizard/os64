@@ -10,13 +10,16 @@ import pathlib
 import shlex
 import subprocess
 import tempfile
+import resource
 
 parser=argparse.ArgumentParser()
 parser.add_argument('objects',type=pathlib.Path)
 parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5a-mutants'))
 parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
 parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
+parser.add_argument('--realms',action='store_true',help='run F2 cluster ownership mutants')
 parser.add_argument('--only',default='',help='run only the mutants whose names hold this text')
+parser.add_argument('--probe',default='',help='select an existing host probe, e.g. --probe=--clone')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True,exist_ok=True)
@@ -24,7 +27,7 @@ args.logs.mkdir(parents=True,exist_ok=True)
 # replacement expectations derived from the library's implementation.
 mutants=[
  ('clone-state-routing','node','os64_page_node_clone(dom->state, node, deep != 0, &status)','os64_html_clone(dom->document, node, deep != 0, &status)'),
- ('character-data-state-routing','content','os64_page_node_set_text(dom->state, (os64_html_node_t *)node, string.data, string.length)','os64_html_set_text(dom->document, (os64_html_node_t *)node, string.data, string.length)'),
+ ('character-data-state-routing', 'content', 'os64_page_node_set_text(d_owner(dom, node)->state, (os64_html_node_t *)node, string.data, string.length)', 'os64_html_set_text(d_owner(dom, node)->document, (os64_html_node_t *)node, string.data, string.length)'),
  ('clone-checked-dirty','page-state','fresh->on_dirty = old != NULL && old->on_dirty;','fresh->on_dirty = false;'),
  ('clone-clean-textarea','page-state','fresh->text_clean = textarea && !dirty;','fresh->text_clean = false;'),
  ('clone-template-descendants','page-state','if (source->template_contents != NULL && target->template_contents != NULL &&','if (false && source->template_contents != NULL && target->template_contents != NULL &&'),
@@ -34,8 +37,8 @@ mutants=[
  ('text-element-property','node','return D_PROTO_CHARACTER_DATA;','return D_PROTO_ELEMENT;'),
 
  ('wrapper-identity','node','if (entry != NULL) return JS_DupValue(ctx, entry->value);','if (entry != NULL && false) return JS_DupValue(ctx, entry->value);'),
- ('closed-callback','core','if (dom == NULL || dom->closed) {','if (dom == NULL) {'),
- ('binding-quota','core','if (total > dom->options.max_bytes - dom->bytes) return NULL;','if (false && total > dom->options.max_bytes - dom->bytes) return NULL;'),
+ ('closed-callback', 'core', 'if (dom == NULL || dom->closed || (dom->cluster && (dom->cluster->poisoned || dom->cluster->drained))) {', 'if (dom == NULL) {'),
+ ('binding-quota', 'core', 'if (total > dom->options.max_bytes - dom->bytes ||', 'if ((false && total > dom->options.max_bytes - dom->bytes) ||'),
  ('html-quota-name','core','else if (status <= OS64_HTML_TOO_LARGE && status >= OS64_HTML_WORK_EXHAUSTED)','else if (false && status <= OS64_HTML_TOO_LARGE && status >= OS64_HTML_WORK_EXHAUSTED)'),
  ('state-quota-name','core','status == -OS64_PAGE_REASON_NO_MEMORY ? "QuotaExceededError" : "TypeError"','status == -OS64_PAGE_REASON_NO_MEMORY ? "TypeError" : "TypeError"'),
  ('same-child-collection','collection','if (query != NULL) return JS_DupValue(ctx, query->entry->value);','if (query != NULL && false) return JS_DupValue(ctx, query->entry->value);'),
@@ -45,8 +48,8 @@ mutants=[
  ('numeric-enumeration','collection','desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0);','desc->flags = JS_PROP_CONFIGURABLE;'),
  ('nul-conversion','content','if (c == 0) {','if (c == 0 && false) {'),
  ('surrogate-conversion','content','} else if (c == 0xed && i + 2 < length &&','} else if (c == 0xee && i + 2 < length &&'),
- ('attribute-state-routing','attr','os64_page_node_set_attr(dom->state, node, name, value, length, remove)','(remove ? os64_html_remove_attr(dom->document, (os64_html_node_t *)node, name) : os64_html_set_attr(dom->document, (os64_html_node_t *)node, name, value, length))'),
- ('structural-state-routing','node','return os64_page_node_insert(dom->state, parent, node, before);','return os64_html_insert(dom->document, parent, node, before);'),
+ ('attribute-state-routing', 'attr', 'os64_page_node_set_attr(d_owner(dom, node)->state, node, name, value, length, remove)', '(remove ? os64_html_remove_attr(d_owner(dom, node)->document, (os64_html_node_t *)node, name) : os64_html_set_attr(d_owner(dom, node)->document, (os64_html_node_t *)node, name, value, length))'),
+ ('structural-state-routing', 'node', 'int64_t status = os64_page_node_insert(dom->state, parent, node, before);', 'int64_t status = os64_html_insert(dom->document, parent, node, before);'),
  ('registry-drain','core','dom->retained = 0;','dom->retained += 0;'),
  ('fragment-scripting-mode','content','string.length, d_scripting(dom, node), &status);','string.length, true, &status);'),
  ('numeric-readonly-hook','collection','return JS_DefineProperty(ctx, query->dom->index_guard->value, atom,','return JS_DefineProperty(ctx, object, atom,'),
@@ -73,9 +76,9 @@ mutants=[
  ('impl-same-object','implementation','if (entry->implementation != NULL) return JS_DupValue(ctx, entry->implementation->value);','if (false) return JS_DupValue(ctx, entry->implementation->value);'),
  ('impl-title-only-when-given','implementation','bool titled = argc > 0 && !JS_IsUndefined(argv[0]);','bool titled = argc > 0;'),
  ('impl-doctype-name-rule','implementation',"if (c == '\\0' || c == '>' || c == ' '","if (c == '\\0' || c == ' '"),
- ('impl-owner-record-read','implementation','return entry != NULL && entry->document != NULL ? entry->document : window_document(dom);','return ((void)entry, window_document(dom));'),
- ('impl-leaving-records','implementation','    if (entry == NULL) return;\n    const os64_html_node_t *document = d_node_document(dom, node);','    if (entry != NULL || entry == NULL) return;\n    const os64_html_node_t *document = d_node_document(dom, node);'),
- ('impl-made-in-records','implementation','if (entry != NULL) entry->document = document != window_document(dom) ? document : NULL;','(void)entry; (void)document;'),
+ ('impl-owner-record-read', 'implementation', 'return os64_html_node_document(node);', 'return node->kind == OS64_HTML_DOCUMENT ? node : window_document(dom);'),
+ ('impl-adoption-document', 'implementation', 'int64_t status = os64_page_node_adopt(dom->state, (os64_html_node_t *)document, (os64_html_node_t *)node);', 'int64_t status = OS64_HTML_OK;'),
+ ('impl-made-in-records', 'implementation', 'if (os64_html_node_document(node) != document)', 'if (false && os64_html_node_document(node) != document)'),
  ('impl-scripting-per-document','implementation','return dom->options.scripting && d_window_document(dom, node);','return ((void)node, dom->options.scripting);'),
  ('impl-xml-keeps-case','node','if (type == D_DOCUMENT_HTML) d_fold(string.data);','d_fold(string.data);'),
  ('impl-control-type-default','node','return JS_NewString(ctx, keywords == kInput ? "text" : "submit");','return JS_NewString(ctx, "submit");'),
@@ -99,7 +102,7 @@ mutants=[
  ('attr-detached-at-door','attr','if (rec != NULL) detach(dom, rec, kept, kept_length);','d_free(dom, kept);'),
  ('attr-last-value-kept','attr','if (rec != NULL) detach(dom, rec, kept, kept_length);','if (rec != NULL) { d_free(dom, kept); detach(dom, rec, NULL, 0); }'),
  ('attr-removal-refused-whole','attr','if (a != NULL && kept == NULL) return OS64_HTML_NO_MEMORY;','(void)0;'),
- ('attr-detached-document','attr','rec->document = document != window_document(dom) ? document : NULL;\n    rec->entry->target = NULL;','rec->document = NULL;\n    rec->entry->target = NULL;'),
+ ('attr-detached-document', 'attr', 'rec->document = document;\n    rec->entry->target = NULL;', 'rec->document = ((void)document, NULL);\n    rec->entry->target = NULL;'),
  ('attr-in-use','attr','if (at != NULL && at != element)\n        return d_error(ctx, "InUseAttributeError"','if (false)\n        return d_error(ctx, "InUseAttributeError"'),
  ('attr-own-element-answers-itself','attr','if (at == element) return JS_DupValue(ctx, value);','if (at == element) return JS_NULL;'),
  ('attr-replaced-detached','attr','if (gone != NULL) detach(dom, gone, kept, kept_length);','d_free(dom, kept);'),
@@ -165,7 +168,7 @@ if args.events:
       ('silent-without-listeners','event','    if (!os64_dom_listens(dom, ev->type)) return OS64_JS_OK;\n','\n'),
       ('attribute-count-version','event','if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;','if (dom->attribute_scanned) return dom->attribute_mask;'),
       ('report-folded','event','    if (outcome->status == OS64_JS_OK && dom->report.status != OS64_JS_OK) {\n        *outcome = dom->report;','    if (false) {\n        *outcome = dom->report;'),
-      ('listener-drain','event','            if (!JS_IsUndefined(listener->callback)) JS_FreeValueRT(dom->engine, listener->callback);\n            listener->callback = JS_UNDEFINED;','            listener->callback = JS_UNDEFINED;'),
+      ('listener-drain', 'event', '            set_callback(dom, listener, JS_UNDEFINED);', '            listener->callback = JS_UNDEFINED;'),
       ('timer-order','timer','((*link)->due == timer->due && (*link)->id < timer->id)','((*link)->due == timer->due && (*link)->id > timer->id)'),
       ('timer-negative-zero','timer','    if (delay < 0) delay = 0;\n','\n'),
       ('timer-cap','timer','if (dom->timer_count >= OS64_DOM_TIMERS_MAX','if (dom->timer_count > OS64_DOM_TIMERS_MAX'),
@@ -187,12 +190,37 @@ if args.events:
       ('module-not-classic','window','if (i == 6) return OS64_DOM_SCRIPT_MODULE;','if (i == 6) return OS64_DOM_SCRIPT_CLASSIC;'),
       ('connected-once','window','if (d_script_mark(dom, script) == 1) dom->options.script_connected','if (d_script_mark(dom, script) >= 0) dom->options.script_connected'),
       ('innerhtml-born-started','content','if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;\n        else if','if (false) status = OS64_HTML_NO_MEMORY;\n        else if'),
-      ('clone-carries-started','node','if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0)','if (copy != NULL)'),
+      ('clone-carries-started', 'node', 'if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0 &&', 'if (copy != NULL &&'),
       ('script-attribute-slot','node','} else if (d_handler_attribute_set(dom, ctx, node, name.data) < 0) {','} else if (false) {'),
       ('script-mixins-connect','node',"    if (status >= 0) d_script_connected(dom, scripts, found);","    (void)0;"),
     ]
+if args.realms:
+    mutants=[
+      ('realm-from-current-document','node','uint8_t slot = os64_html_node_creation_realm(node);','uint8_t slot = os64_html_node_creation_realm(os64_html_node_document(node));'),
+      ('receiver-uses-method-owner','geometry','    dom = d_owner(dom, element);','    (void)element;'),
+      ('binding-local-wrapper-cache','node','DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;\n    for (DValue *entry', 'DValue **table = dom->buckets;\n    for (DValue *entry'),
+      ('release-to-caller-ledger','core','    dom = block->owner;','    (void)block->owner;'),
+      ('destination-custom-definition','custom','if (recorded || element->ce == OS64_HTML_CE_CUSTOM) return recorded;','if (!dom->cluster && (recorded || element->ce == OS64_HTML_CE_CUSTOM)) return recorded;'),
+      ('child-timer-primary-task','timer','os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, held,','os64_js_call(dom->runtime, OS64_JS_ABI_ID, held,'),
+      ('child-report-primary-task','report','os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->report_fire->value,','os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->report_fire->value,'),
+      ('aggregate-dom-cap-ignored','core','(dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)','(false && dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)'),
+    ]
+
+# Runtime output is bounded independently of compiler object sizes. Never read
+# a mutant's unbounded log into memory; a timeout/signal alone is not a catch.
+def child_limits():
+    resource.setrlimit(resource.RLIMIT_FSIZE, (8*1024*1024, 8*1024*1024))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+run_mode=args.probe or ('--realms' if args.realms else '--reclaim' if args.reclaim else '--events' if args.events else '--mutants')
+if args.realms or args.probe:
+    baseline=args.objects/'sanitized-core-probe'
+    with (args.logs/'baseline.log').open('w') as log:
+        result=subprocess.run([str(baseline),run_mode],stdout=log,stderr=log,timeout=45,preexec_fn=child_limits)
+    if result.returncode: raise SystemExit('host baseline failed; no mutants run')
+
 flags=['-O2','-g','-std=gnu11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-fno-tree-loop-distribute-patterns','-fno-stack-protector','-DOS64_JS_TARGET','-fsanitize=address,undefined','-fno-sanitize-recover=all']
-for directory in ['libmath/include','libjs/port','libjs/include','libdom/include','libdom','libgarb/include','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
+for directory in ['libway/include','libsvg/include','libcanvas/include','libdraw2d/include','libpng/include','libxml/include','libmath/include','libjs/port','libjs/include','libdom/include','libdom','libgarb/include','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
     flags+=['-I'+str(root/'userland'/directory)]
 flags+=['-I'+str(root/'abi/include'),'-isystem',str(root/'userland/obj/js/upstream')]
 flags+=['-Dd_alloc=dom_host_private_alloc','-Dos64_malloc=dom_host_malloc','-Dos64_calloc=dom_host_calloc','-Dos64_realloc=dom_host_realloc','-Dos64_free=dom_host_free','-Dos64_malloc_size=dom_host_malloc_size']
@@ -224,11 +252,16 @@ with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
             result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
             if result.returncode: print(f'LINK ERROR {name}');continue
             compiled+=1
-            try: result=subprocess.run([str(binary),'--reclaim' if args.reclaim else '--events' if args.events else '--mutants'],stdout=log,stderr=log,timeout=45)
+            try: result=subprocess.run([str(binary),run_mode],stdout=log,stderr=log,timeout=45,preexec_fn=child_limits)
             except subprocess.TimeoutExpired:
                 print(f'TIMEOUT {name} (not counted)');continue
-            if result.returncode:
-                caught+=1;print(f'CAUGHT {name}')
-            else: print(f'SURVIVED {name}')
+            log.flush()
+            with (args.logs/f'{name}.log').open('rb') as evidence:
+                excerpt=evidence.read(128*1024).decode('utf-8', errors='replace')
+            recognized=result.returncode and any(mark in excerpt for mark in
+                ['FAIL:', 'ERROR: AddressSanitizer', 'runtime error:'])
+            if recognized:
+                caught+=1;print(f'CAUGHT {name}',flush=True)
+            else: print(f'NOT CAUGHT {name} (exit {result.returncode})',flush=True)
 print(f'DOM mutants: {caught} caught / {compiled} compiling / {len(mutants)} proposed; logs {args.logs}')
 raise SystemExit(0 if caught==compiled==len(mutants) else 1)

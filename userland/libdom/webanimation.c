@@ -295,6 +295,14 @@ static bool wa_relevant(DWaAnimation *a)
     return a->rate > 0 ? k.phase == GARB_PHASE_BEFORE : a->rate < 0 && k.phase == GARB_PHASE_AFTER;
 }
 
+/* Any member's layout may read an effect created in another realm. */
+static void index_dirty(os64_dom_t *dom)
+{
+    size_t n = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < n; ++i)
+        (dom->cluster ? dom->cluster->members[i] : dom)->wa_index_stale = true;
+}
+
 /* The clock as libflow reads it (garb_effect_t): held at the hold time, or
  * running from the start on the face's clock at the rate. An idle one,
  * whose current time is unresolved, is handed to no layout
@@ -304,7 +312,7 @@ static bool wa_relevant(DWaAnimation *a)
  * idle asks for (wa_changed). */
 static void wa_publish(DWaAnimation *a)
 {
-    a->dom->wa_index_stale = true;
+    index_dirty(a->dom);
     DWaData *d = wa_data(a);
     if (d == NULL) return;
     garb_effect_t *fx = &d->fx;
@@ -350,7 +358,7 @@ static void wa_changed(DWaAnimation *a)
         return;
     }
     wa_publish(a);
-    if (wa_target(a) != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)wa_target(a));
+    if (wa_target(a) != NULL) (void)os64_html_touch(d_owner(a->dom, wa_target(a))->document, (os64_html_node_t *)wa_target(a));
 }
 
 /* After a change the clock does not show — the effect's keyframes, timing
@@ -816,7 +824,7 @@ static void data_free(os64_dom_t *dom, DWaData *d)
 static void data_bury(os64_dom_t *dom, DWaData *d)
 {
     if (d == NULL) return;
-    d->died = dom->wa_generation;
+    d->died = dom->cluster ? dom->cluster->effect_generation : dom->wa_generation;
     d->next = dom->wa_dead;
     dom->wa_dead = d;
 }
@@ -1790,7 +1798,7 @@ static void unlink_animation(os64_dom_t *dom, DWaAnimation *a)
     else dom->wa_last = a->prev;
     a->prev = a->next = NULL;
     dom->wa_count--;
-    dom->wa_index_stale = true;
+    index_dirty(dom);
 }
 
 /* An animation goes with the garbage once nothing holds it: neither a
@@ -1835,7 +1843,9 @@ static void animation_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 static DWaAnimation *effect_owner(DWaEffect *e)
 {
     if (e == NULL || e->owner == 0 || e->dom == NULL) return NULL;
-    for (DWaAnimation *a = e->dom->wa_first; a != NULL; a = a->next)
+    size_t n = e->dom->cluster ? e->dom->cluster->count : 1;
+    for (size_t i = 0; i < n; ++i)
+    for (DWaAnimation *a = (e->dom->cluster ? e->dom->cluster->members[i] : e->dom)->wa_first; a; a = a->next)
         if (a->serial == e->owner) return wa_fx(a) == e ? a : NULL;
     return NULL;
 }
@@ -1854,7 +1864,7 @@ static void set_effect(JSContext *ctx, DWaAnimation *a, JSValueConst effect)
     if (previous != NULL) set_effect(ctx, previous, JS_NULL);
     if (old != NULL) {
         old->owner = 0;
-        if (old->element != NULL) (void)os64_html_touch(a->dom->document, (os64_html_node_t *)old->element);
+        if (old->element != NULL) (void)os64_html_touch(d_owner(a->dom, old->element)->document, (os64_html_node_t *)old->element);
     }
     JSValue was = a->effect;
     a->effect = e != NULL ? JS_DupValue(ctx, effect) : JS_NULL;
@@ -1888,13 +1898,13 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     a->ready = a->ready_resolve = a->ready_reject = JS_UNDEFINED;
     a->finished = a->finished_resolve = a->finished_reject = JS_UNDEFINED;
     JS_SetOpaque(object, a);
-    a->serial = ++dom->wa_serial;
+    a->serial = dom->cluster ? ++dom->cluster->animation_serial : ++dom->wa_serial;
     a->prev = dom->wa_last;
     if (dom->wa_last != NULL) dom->wa_last->next = a;
     else dom->wa_first = a;
     dom->wa_last = a;
     dom->wa_count++;
-    dom->wa_index_stale = true;
+    index_dirty(dom);
     /* A new animation's ready promise is resolved, its finished one
      * pending (an animation's initial state, § 4.4.7 and § 4.4.11). */
     if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
@@ -2196,6 +2206,7 @@ static JSValue effect_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     DWaEffect *e = fx_state(self);
     if (e == NULL) return JS_ThrowTypeError(ctx, "Expected a KeyframeEffect");
     if (e->dom == NULL || e->data == NULL) return JS_UNDEFINED;
+    dom = e->dom;
     switch (magic) {
     case E_TARGET: {
         if (!set) return e->element != NULL ? d_wrap(dom, ctx, e->element) : JS_NULL;
@@ -2207,7 +2218,7 @@ static JSValue effect_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         }
         if (element == e->element) return JS_UNDEFINED;
         if (e->element != NULL) {
-            (void)os64_html_touch(dom->document, (os64_html_node_t *)e->element);
+            (void)os64_html_touch(d_owner(dom, e->element)->document, (os64_html_node_t *)e->element);
             os64_html_release(dom->document, e->element);
         }
         if (element != NULL) os64_html_hold(dom->document, element);
@@ -2378,6 +2389,7 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     DWaAnimation *a = wa_state(self);
     if (a == NULL) return JS_ThrowTypeError(ctx, "Expected an Animation");
     if (a->dom == NULL) return JS_UNDEFINED;
+    dom = a->dom;
     int r = 0;
     switch (magic) {
     case A_ID:
@@ -2587,7 +2599,7 @@ static void css_push(DWaAnimation *a)
     /* False only when the host's animation went: the next step finds that. */
     if (dom->wa_css.drive(dom->wa_css.opaque, a->css_id, paused, canceled, start, paused ? a->held : 0, a->rate) &&
         wa_target(a) != NULL)
-        (void)os64_html_touch(dom->document, (os64_html_node_t *)wa_target(a));
+        (void)os64_html_touch(d_owner(dom, wa_target(a))->document, (os64_html_node_t *)wa_target(a));
 }
 
 /* A procedure a CSS animation's style asked for, whose throw (a backwards
@@ -3298,9 +3310,12 @@ static void index_rebuild(os64_dom_t *dom)
     dom->wa_index_fx = NULL;
     dom->wa_index_n = 0;
     dom->wa_index_stale = false;
-    size_t n = 0;
-    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next)
-        n += wa_applies(a);
+    size_t n = 0, members = dom->cluster ? dom->cluster->count : 1;
+    DWaAnimation *heads[D_REALMS];
+    for (size_t i = 0; i < members; ++i) {
+        heads[i] = (dom->cluster ? dom->cluster->members[i] : dom)->wa_first;
+        for (DWaAnimation *a = heads[i]; a; a = a->next) n += wa_applies(a);
+    }
     if (n == 0) return;
     dom->wa_index_nodes = d_alloc(dom, n * sizeof(*dom->wa_index_nodes));
     dom->wa_index_fx = d_alloc(dom, n * sizeof(*dom->wa_index_fx));
@@ -3309,11 +3324,17 @@ static void index_rebuild(os64_dom_t *dom)
         d_free(dom, dom->wa_index_fx);
         dom->wa_index_nodes = NULL;
         dom->wa_index_fx = NULL;
-        dom->wa_index_stale = true;
+        index_dirty(dom);
         return;
     }
     size_t k = 0;
-    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
+    for (;;) {
+        size_t first = members;
+        for (size_t i = 0; i < members; ++i)
+            if (heads[i] && (first == members || heads[i]->serial < heads[first]->serial)) first = i;
+        if (first == members) break;
+        DWaAnimation *a = heads[first];
+        heads[first] = a->next;
         if (!wa_applies(a)) continue;
         const os64_html_node_t *target = wa_target(a);
         /* Insertion by element; the list's order keeps each element's
@@ -3334,7 +3355,8 @@ static void index_rebuild(os64_dom_t *dom)
 int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node, const struct garb_effect *const **out)
 {
     *out = NULL;
-    if (dom == NULL || dom->wa_count == 0) return 0;
+    if (dom == NULL || d_owner(dom, node) != dom) return 0;
+    if (!dom->cluster && dom->wa_count == 0) return 0;
     if (dom->wa_index_stale) index_rebuild(dom);
     size_t lo = 0, hi = dom->wa_index_n;
     while (lo < hi) {
@@ -3351,10 +3373,13 @@ int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node, c
 
 uint64_t os64_dom_effects_mark(os64_dom_t *dom)
 {
-    return dom != NULL ? ++dom->wa_generation : 0;
+    if (!dom) return 0;
+    uint64_t mark = dom->cluster ? ++dom->cluster->effect_generation : ++dom->wa_generation;
+    if (mark < dom->wa_borrowed_floor) dom->wa_borrowed_floor = mark;
+    return mark;
 }
 
-void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest)
+static void effects_release_native(os64_dom_t *dom, uint64_t oldest)
 {
     if (dom == NULL) return;
     for (DWaData **at = &dom->wa_dead; *at != NULL;) {
@@ -3366,6 +3391,20 @@ void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest)
             at = &d->next;
         }
     }
+}
+
+/* A source layout can still read data after the target moves. Retire data
+ * against the oldest borrowing host in the cluster, not its current owner. */
+void os64_dom_effects_release(os64_dom_t *dom, uint64_t oldest)
+{
+    if (!dom) return;
+    dom->wa_borrowed_floor = oldest;
+    if (!dom->cluster) { effects_release_native(dom, oldest); return; }
+    for (size_t i = 0; i < dom->cluster->count; ++i)
+        if (dom->cluster->members[i]->wa_borrowed_floor < oldest)
+            oldest = dom->cluster->members[i]->wa_borrowed_floor;
+    for (size_t i = 0; i < dom->cluster->count; ++i)
+        effects_release_native(dom->cluster->members[i], oldest);
 }
 
 bool os64_dom_effects_held(const os64_dom_t *dom)
@@ -3416,7 +3455,7 @@ void d_web_animations_drain(os64_dom_t *dom)
 
 void d_web_animations_free(os64_dom_t *dom)
 {
-    os64_dom_effects_release(dom, UINT64_MAX);
+    effects_release_native(dom, UINT64_MAX);
     d_free(dom, dom->wa_index_nodes);
     d_free(dom, dom->wa_index_fx);
     dom->wa_index_nodes = NULL;

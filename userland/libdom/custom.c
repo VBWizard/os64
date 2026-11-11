@@ -42,6 +42,7 @@ enum { R_UPGRADE = CB_COUNT };
 
 typedef struct DDefinition {
     struct DDefinition *next, *hash_next;
+    os64_dom_t *dom;
     char *name;
     DValue *constructor, *prototype, *callbacks[CB_COUNT];
     /* The script each was handed over from (d_callback_script): whose
@@ -63,6 +64,7 @@ typedef struct DDefinition {
 
 typedef struct DReaction {
     struct DReaction *next;
+    DDefinition *definition; /* the definition selected when the reaction was queued */
     uint8_t kind;
     /* attributeChangedCallback: local name, old value, new value and
      * namespace, NULL for null, all in this record's one block. */
@@ -92,41 +94,60 @@ typedef struct DWaiting {
     DValue *promise, *resolve;
 } DWaiting;
 
-struct DCustomState {
-    DMutationConsumer mutations;
-    DValue *registry;
-    JSClassID class_id;
-    DDefinition *definitions, *last_definition, *by_name[D_CUSTOM_BUCKETS];
+/* One reactions stack and backup queue for the runtime's DOM cluster.
+ * Registries, definitions and constructors remain per binding. */
+struct DCustomAgent {
+    os64_dom_t *owner;
     DCustom *records[D_CUSTOM_BUCKETS];
-    /* The reaction stack, one element queue per [CEReactions] frame, and
-     * the backup element queue with its "processing" flag (requested). */
     DElementQueue *stack;
     size_t depth, stack_cap;
     DElementQueue backup;
-    bool requested, owed, defining;
-    /* Reactions the listener could not record for want of memory, reported
-     * as one QuotaExceededError at the next processing. */
+    bool requested, owed;
     uint64_t lost;
-    /* Nodes define's candidate walks visited, for the page's record. */
+    DAdopting *adopting;
+};
+
+struct DCustomState {
+    struct DCustomAgent *agent;
+    DValue *registry;
+    JSClassID class_id;
+    DDefinition *definitions, *last_definition, *by_name[D_CUSTOM_BUCKETS];
+    bool defining;
     uint64_t visits;
     DWaiting *waiting;
-    /* The last removal-only record's run and the document it left, read by
-     * the insertion that follows it in the same verb (a move is two
-     * records, told at one version), and compared by address alone: a
-     * removed node may be reclaimed before any later record. */
-    const os64_html_node_t *moving;
-    size_t moving_count;
-    uint64_t moving_version;
-    const os64_html_node_t *moving_document;
-    /* What os64_dom_reactions_run calls inside its task. */
     DValue *runner;
-    /* What install made of each [CEReactions] row (D_CE_WRAPPED and the
-     * rest), and how many members it wrapped, for the DOM host. */
     uint8_t *row_states;
     size_t wrapped;
 };
 
-static int registry_mark;
+static struct DCustomAgent *agent_for(os64_dom_t *dom)
+{
+    return dom->cluster ? dom->cluster->custom_agent : dom->custom ? dom->custom->agent : NULL;
+}
+
+void d_adopting_begin(os64_dom_t *dom, DAdopting *scope, const os64_html_node_t *node,
+                       const os64_html_node_t *parent)
+{
+    os64_memset(scope, 0, sizeof(*scope));
+    struct DCustomAgent *agent = agent_for(dom);
+    if (!agent) return;
+    scope->previous = agent->adopting;
+    agent->adopting = scope;
+    if (!node || !parent) return;
+    scope->from = os64_html_node_document(node);
+    scope->to = os64_html_node_document(parent);
+    scope->first = node->kind == OS64_HTML_FRAGMENT ? node->first_child : node;
+    scope->count = node->kind == OS64_HTML_FRAGMENT ? 0 : 1;
+    if (node->kind == OS64_HTML_FRAGMENT)
+        for (const os64_html_node_t *n = node->first_child; n; n = n->next) scope->count++;
+}
+
+void d_adopting_end(os64_dom_t *dom, DAdopting *scope)
+{
+    struct DCustomAgent *agent = agent_for(dom);
+    if (agent) agent->adopting = scope->previous;
+}
+
 
 static size_t name_bucket(const char *name)
 {
@@ -157,16 +178,18 @@ static DDefinition *definition_named(const struct DCustomState *s, const char *n
     return NULL;
 }
 
-/* The definition an element of the window's registry would have: an HTML
- * element with a valid custom name, defined. No scoped registries and no
- * undefine, so the name alone finds it. */
+/* Upgraded elements retain their actual definition. Plain candidates use
+ * the registry of their current Document, independently of wrapper realm. */
 static DDefinition *definition_for(os64_dom_t *dom, const os64_html_node_t *element)
 {
-    struct DCustomState *s = dom->custom;
-    if (s == NULL || s->definitions == NULL || element->kind != OS64_HTML_ELEMENT ||
-        element->ns != OS64_HTML_NS_HTML || element->tag != OS64_HTML_TAG_UNKNOWN)
-        return NULL;
-    return definition_named(s, element->name);
+    if (element->kind != OS64_HTML_ELEMENT || element->ns != OS64_HTML_NS_HTML ||
+        element->tag != OS64_HTML_TAG_UNKNOWN) return NULL;
+    DValue *entry = d_find(dom, element);
+    DDefinition *recorded = entry ? d_more_peek(entry)->custom_definition : NULL;
+    if (recorded || element->ce == OS64_HTML_CE_CUSTOM) return recorded;
+    os64_dom_t *owner = d_owner(dom, element);
+    struct DCustomState *s = owner->custom;
+    return s ? definition_named(s, element->name) : NULL;
 }
 
 /* Whether `element`'s definition lists "shadow" in disabledFeatures, which
@@ -197,7 +220,7 @@ static DCustom *record_of(os64_dom_t *dom, const os64_html_node_t *element, bool
 {
     struct DCustomState *s = dom->custom;
     size_t at = node_bucket(element);
-    for (DCustom *r = s->records[at]; r != NULL; r = r->hash_next)
+    for (DCustom *r = s->agent->records[at]; r != NULL; r = r->hash_next)
         if (r->element == element) return r;
     if (!make) return NULL;
     DCustom *r = d_alloc_kind(dom, sizeof(*r), OS64_DOM_MEM_CUSTOM);
@@ -205,8 +228,8 @@ static DCustom *record_of(os64_dom_t *dom, const os64_html_node_t *element, bool
     os64_memset(r, 0, sizeof(*r));
     r->element = element;
     os64_html_hold(dom->document, element);
-    r->hash_next = s->records[at];
-    s->records[at] = r;
+    r->hash_next = s->agent->records[at];
+    s->agent->records[at] = r;
     return r;
 }
 
@@ -222,7 +245,7 @@ static void reaction_free(os64_dom_t *dom, DReaction *reaction)
 static void record_settle(os64_dom_t *dom, DCustom *r)
 {
     if (r->queued != 0 || r->constructing || r->first != NULL) return;
-    DCustom **link = &dom->custom->records[node_bucket(r->element)];
+    DCustom **link = &dom->custom->agent->records[node_bucket(r->element)];
     while (*link != r) link = &(*link)->hash_next;
     *link = r->hash_next;
     os64_html_release(dom->document, r->element);
@@ -256,29 +279,29 @@ static void request_backup(os64_dom_t *dom)
         os64_js_outcome_t outcome;
         JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
         if (ctx != NULL && JS_EnqueueJob(ctx, backup_job, 0, NULL) == 0) {
-            s->owed = false;
+            s->agent->owed = false;
             return;
         }
         if (ctx != NULL && JS_HasException(ctx) && d_exception_catchable(ctx))
             JS_FreeValue(ctx, JS_GetException(ctx));
     }
-    s->owed = true;
+    s->agent->owed = true;
 }
 
 /* HTML's "enqueue an element on the appropriate element queue". */
 static void enqueue_element(os64_dom_t *dom, DCustom *r)
 {
     struct DCustomState *s = dom->custom;
-    if (s->depth != 0) {
-        if (!queue_push(dom, &s->stack[s->depth - 1], r)) s->lost++;
+    if (s->agent->depth != 0) {
+        if (!queue_push(dom, &s->agent->stack[s->agent->depth - 1], r)) s->agent->lost++;
         return;
     }
-    if (!queue_push(dom, &s->backup, r)) {
-        s->lost++;
+    if (!queue_push(dom, &s->agent->backup, r)) {
+        s->agent->lost++;
         return;
     }
-    if (!s->requested || (s->owed && os64_js_turn_open(dom->runtime))) {
-        s->requested = true;
+    if (!s->agent->requested || (s->agent->owed && os64_js_turn_open(dom->runtime))) {
+        s->agent->requested = true;
         request_backup(dom);
     }
 }
@@ -296,11 +319,12 @@ static void enqueue(os64_dom_t *dom, const os64_html_node_t *element, int kind, 
     DCustom *r = reaction != NULL ? record_of(dom, element, true) : NULL;
     if (r == NULL) {
         d_free(dom, reaction);
-        dom->custom->lost++;
+        dom->custom->agent->lost++;
         return;
     }
     os64_memset(reaction, 0, sizeof(*reaction));
     reaction->kind = (uint8_t)kind;
+    reaction->definition = definition_for(dom, element);
     char *at = (char *)(reaction + 1);
     for (int i = 0; strings != NULL && i < 4; i++)
         if (strings[i] != NULL) {
@@ -347,21 +371,6 @@ static const os64_html_node_t *window_document(const os64_dom_t *dom)
     return dom->document->document;
 }
 
-/* The document an inserted run came from: the one the removal just before
- * it in the same verb named (a move, a drained fragment), else the one
- * the node's record keeps as a root (d_leaving, d_made_in), the window's
- * for none. */
-static const os64_html_node_t *came_from(os64_dom_t *dom, const os64_html_change_t *c,
-                                         const os64_html_node_t *node)
-{
-    const struct DCustomState *s = dom->custom;
-    if (s->moving != NULL && s->moving_version == c->version && s->moving == c->added &&
-        s->moving_count == c->nadded)
-        return s->moving_document;
-    DValue *entry = d_find(dom, node);
-    return entry != NULL && entry->document != NULL ? entry->document : window_document(dom);
-}
-
 static void attribute_changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
     const os64_html_node_t *element = c->target;
@@ -376,7 +385,7 @@ static void attribute_changed(os64_dom_t *dom, const os64_html_change_t *c)
     if (c->attr_old != NULL) {
         char *into = c->attr_old_len < sizeof(old) ? old : (long_old = d_alloc_kind(dom, c->attr_old_len + 1, OS64_DOM_MEM_CUSTOM));
         if (into == NULL) {
-            dom->custom->lost++;
+            dom->custom->agent->lost++;
             return;
         }
         os64_memcpy(into, c->attr_old, c->attr_old_len);
@@ -400,23 +409,16 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
                     if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
                         enqueue_callback(dom, at, CB_DISCONNECTED, NULL, NULL);
         }
-        /* A removal alone begins a move (a node leaving its parent, a
-         * fragment drained); a replace's removed node goes nowhere, and must
-         * not hide where the node it brings in came from. */
-        if (dom->documents != 0 && c->nadded == 0) {
-            s->moving = c->removed;
-            s->moving_count = c->nremoved;
-            s->moving_version = c->version;
-            s->moving_document = d_node_document(dom, c->target);
-        }
     }
     if (c->nadded == 0) return;
     bool connected = d_connected(c->target);
-    const os64_html_node_t *document = dom->documents != 0 ? d_node_document(dom, c->target) : NULL;
+    const os64_html_node_t *document = d_node_document(dom, c->target);
+    const DAdopting *adopting = s->agent->adopting;
     const os64_html_node_t *n = c->added;
     for (size_t i = 0; i < c->nadded && n != NULL; i++, n = n->next) {
         /* A node from another document is adopted before it is connected. */
-        const os64_html_node_t *from = document != NULL ? came_from(dom, c, n) : NULL;
+        const os64_html_node_t *from = adopting && adopting->first == c->added &&
+            adopting->count == c->nadded && adopting->to == document ? adopting->from : NULL;
         if (from != NULL && from != document) {
             const os64_html_node_t *documents[2] = {from, document};
             for (const os64_html_node_t *at = n; at != NULL; at = os64_html_shadow_including_next(n, at))
@@ -430,14 +432,14 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
             else try_upgrade(dom, at);
         }
     }
-    s->moving = NULL;
-    s->moving_count = 0;
 }
 
-static void changed(os64_dom_t *dom, const os64_html_change_t *c)
+void d_custom_changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
-    /* No definitions, no work: a page that defines nothing walks nothing. */
-    if (dom->custom == NULL || dom->custom->definitions == NULL) return;
+    struct DCustomAgent *agent = agent_for(dom);
+    if (!agent) return;
+    if (!dom->custom) dom = agent->owner;
+    if (!dom->cluster && !dom->custom->definitions) return;
     if (c->kind == OS64_HTML_CHANGE_ATTR) attribute_changed(dom, c);
     else if (c->kind == OS64_HTML_CHANGE_CHILDREN) children_changed(dom, c);
 }
@@ -464,15 +466,21 @@ static void remember_failure(os64_dom_t *dom, JSContext *ctx, DDefinition *d, JS
 }
 
 /* HTML's "upgrade an element". */
-static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
+static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
 {
     const os64_html_node_t *element = r->element;
-    DDefinition *d = definition_for(dom, element);
     if (element->ce != OS64_HTML_CE_PLAIN || d == NULL) return 0;
+    dom = d->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (!ctx) return -1;
     /* The wrapper first, so one made now is HTMLElement's and not the
      * failed state's HTMLUnknownElement (d_node_kind). */
     JSValue self = d_wrap(dom, ctx, element);
     if (JS_IsException(self)) return report(dom, ctx, d->constructor_script);
+    DValueMore *more = d_more(dom, ctx, d_find(dom, element));
+    if (!more) { JS_FreeValue(ctx, self); return report(dom, ctx, d->constructor_script); }
+    more->custom_definition = d;
     /* Room on the construction stack before anything is marked or queued:
      * an upgrade the binding cannot afford leaves the element waiting with
      * nothing queued for it, and is reported. */
@@ -489,7 +497,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
         d->stack = stack;
         d->stack_cap = cap;
     }
-    os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_FAILED);
+    os64_html_set_ce(d_owner(dom, element)->document, (os64_html_node_t *)element, OS64_HTML_CE_FAILED);
     for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next) {
         const char *strings[4] = {d_attr_local(a->name, a->ns), NULL, a->value, a->ns};
         enqueue_callback(dom, element, CB_ATTRIBUTE, strings, NULL);
@@ -517,7 +525,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
     JS_FreeValue(ctx, result);
     JS_FreeValue(ctx, self);
     if (same) {
-        os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_CUSTOM);
+        os64_html_set_ce(d_owner(dom, element)->document, (os64_html_node_t *)element, OS64_HTML_CE_CUSTOM);
         return 0;
     }
     /* Failed: what it queued for itself goes with it. */
@@ -539,6 +547,10 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
 {
     DDefinition *d = definition_for(dom, r->element);
     if (d == NULL || d->callbacks[reaction->kind] == NULL) return 0;
+    dom = d->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (!ctx) return -1;
     uint32_t script = d->scripts[reaction->kind];
     JSValue self = d_wrap(dom, ctx, r->element);
     if (JS_IsException(self)) return report(dom, ctx, script);
@@ -577,7 +589,7 @@ static int invoke_record(os64_dom_t *dom, JSContext *ctx, DCustom *r)
         DReaction *reaction = r->first;
         r->first = reaction->next;
         if (r->first == NULL) r->last = NULL;
-        int status = reaction->kind == R_UPGRADE ? upgrade(dom, ctx, r) : callback(dom, ctx, r, reaction);
+        int status = reaction->kind == R_UPGRADE ? upgrade(dom, ctx, r, reaction->definition) : callback(dom, ctx, r, reaction);
         reaction_free(dom, reaction);
         if (status < 0) return -1;
     }
@@ -589,11 +601,11 @@ static int invoke_record(os64_dom_t *dom, JSContext *ctx, DCustom *r)
 static void report_lost(os64_dom_t *dom, JSContext *ctx)
 {
     struct DCustomState *s = dom->custom;
-    if (s->lost == 0) return;
+    if (s->agent->lost == 0) return;
     char text[96];
     os64_snprintf(text, sizeof(text), "%llu custom element reactions were lost: the DOM quota was exceeded",
-                  (unsigned long long)s->lost);
-    s->lost = 0;
+                  (unsigned long long)s->agent->lost);
+    s->agent->lost = 0;
     d_error(ctx, "QuotaExceededError", text);
     if (d_exception_catchable(ctx)) {
         JSValue error = JS_GetException(ctx);
@@ -627,9 +639,9 @@ static int invoke_queue(os64_dom_t *dom, JSContext *ctx, DElementQueue *q)
 static int process_backup(os64_dom_t *dom, JSContext *ctx)
 {
     struct DCustomState *s = dom->custom;
-    int status = invoke_queue(dom, ctx, &s->backup);
-    s->requested = false;
-    s->owed = false;
+    int status = invoke_queue(dom, ctx, &s->agent->backup);
+    s->agent->requested = false;
+    s->agent->owed = false;
     return status;
 }
 
@@ -640,7 +652,7 @@ static JSValue backup_job(JSContext *ctx, int argc, JSValueConst *argv)
     (void)argc; (void)argv;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL || dom->custom == NULL) return JS_UNDEFINED;
-    if (!dom->custom->requested || dom->custom->owed) return JS_UNDEFINED;
+    if (!dom->custom->agent->requested || dom->custom->agent->owed) return JS_UNDEFINED;
     return process_backup(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
@@ -652,7 +664,7 @@ static JSValue run_owed(JSContext *ctx, JSValueConst self, int argc, JSValueCons
     if (dom == NULL) return JS_EXCEPTION;
     /* The backup queue, then the mutation observers' notify, each when it
      * is owed: the order they would have been queued as microtasks. */
-    if (dom->custom != NULL && dom->custom->owed && process_backup(dom, ctx) < 0) return JS_EXCEPTION;
+    if (dom->custom != NULL && dom->custom->agent->owed && process_backup(dom, ctx) < 0) return JS_EXCEPTION;
     return d_observers_notify_owed(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
@@ -661,20 +673,20 @@ static JSValue run_owed(JSContext *ctx, JSValueConst self, int argc, JSValueCons
 int d_reactions_push(os64_dom_t *dom, JSContext *ctx)
 {
     struct DCustomState *s = dom->custom;
-    if (s == NULL) return 0;
-    if (s->depth == s->stack_cap) {
-        size_t cap = s->stack_cap != 0 ? s->stack_cap * 2 : 8;
+    if (s == NULL || s->agent == NULL) return 0;
+    if (s->agent->depth == s->agent->stack_cap) {
+        size_t cap = s->agent->stack_cap != 0 ? s->agent->stack_cap * 2 : 8;
         DElementQueue *stack = d_alloc_kind(dom, cap * sizeof(*stack), OS64_DOM_MEM_CUSTOM);
         if (stack == NULL) {
             d_error(ctx, "QuotaExceededError", "Custom element reaction stack quota exceeded");
             return -1;
         }
-        if (s->depth != 0) os64_memcpy(stack, s->stack, s->depth * sizeof(*stack));
-        d_free(dom, s->stack);
-        s->stack = stack;
-        s->stack_cap = cap;
+        if (s->agent->depth != 0) os64_memcpy(stack, s->agent->stack, s->agent->depth * sizeof(*stack));
+        d_free(dom, s->agent->stack);
+        s->agent->stack = stack;
+        s->agent->stack_cap = cap;
     }
-    os64_memset(&s->stack[s->depth++], 0, sizeof(DElementQueue));
+    os64_memset(&s->agent->stack[s->agent->depth++], 0, sizeof(DElementQueue));
     return 0;
 }
 
@@ -691,13 +703,13 @@ static void queue_release(os64_dom_t *dom, DElementQueue *q)
 int d_reactions_pop(os64_dom_t *dom, JSContext *ctx)
 {
     struct DCustomState *s = dom->custom;
-    if (s == NULL || s->depth == 0) return 0;
+    if (s == NULL || s->agent == NULL || s->agent->depth == 0) return 0;
     /* Popped before it runs, as the standard pops it: what its reactions
      * cause goes to the queue below, or the backup queue. */
-    DElementQueue q = s->stack[--s->depth];
+    DElementQueue q = s->agent->stack[--s->agent->depth];
     /* Most wrapped calls queue nothing: an empty queue, with nothing lost
      * to report, has nothing to run and nothing to let go of. */
-    if (q.count == 0 && s->lost == 0) {
+    if (q.count == 0 && s->agent->lost == 0) {
         d_free(dom, q.items);
         return 0;
     }
@@ -742,8 +754,13 @@ JSValue d_html_element_constructor(JSContext *ctx, JSValueConst new_target, int 
         os64_html_node_t *element = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, d->name, &status);
         if (element == NULL) result = d_html_error(ctx, status);
         else {
-            os64_html_set_ce(dom->document, element, OS64_HTML_CE_CUSTOM);
             result = d_wrap_constructed(dom, ctx, element, prototype);
+            DValueMore *more = !JS_IsException(result) ? d_more(dom, ctx, d_find(dom, element)) : NULL;
+            if (!more && !JS_IsException(result)) { JS_FreeValue(ctx, result); result = JS_EXCEPTION; }
+            if (more) {
+                more->custom_definition = d;
+                os64_html_set_ce(dom->document, element, OS64_HTML_CE_CUSTOM);
+            }
         }
     } else if (d->stack[d->depth - 1] == NULL) {
         result = d_error(ctx, "InvalidStateError", "This custom element was already constructed");
@@ -834,7 +851,9 @@ int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
 void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,
                       const os64_html_node_t *to)
 {
-    if (dom->custom == NULL || dom->custom->definitions == NULL) return;
+    struct DCustomAgent *agent = agent_for(dom);
+    if (!agent) return;
+    if (!dom->custom) dom = agent->owner;
     const os64_html_node_t *documents[2] = {from, to};
     for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
         if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
@@ -1048,6 +1067,7 @@ static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const cha
         return NULL;
     }
     os64_memset(d, 0, sizeof(*d));
+    d->dom = dom;
     d->name = copy_text(dom, name);
     d->constructor_script = d_callback_script(dom, ctx, constructor);
     bool ok = d->name != NULL && d->constructor_script != D_SCRIPT_FAILED;
@@ -1241,8 +1261,11 @@ static JSValue registry_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     struct DCustomState *s = dom->custom;
-    if (JS_GetOpaque(self, s->class_id) != &registry_mark)
+    os64_dom_t *owner = s ? JS_GetOpaque(self, s->class_id) : NULL;
+    if (!d_same_cluster(dom, owner) || owner->custom == NULL)
         return JS_ThrowTypeError(ctx, "Expected a CustomElementRegistry");
+    dom = owner;
+    s = dom->custom;
     switch (magic) {
     case M_DEFINE: {
         if (d_reactions_push(dom, ctx) < 0) return JS_EXCEPTION;
@@ -1520,8 +1543,8 @@ size_t d_reactions_wrapped(const os64_dom_t *dom)
 
 /* The custom elements row (modern.c): CustomElementRegistry, an Illegal
  * constructor; window.customElements, [SameObject]; the [CEReactions]
- * wrappers over the members the rows before it made; and a mutation consumer, so
- * everything here exists only with the Modern Web switch on. The
+ * wrappers over the members the rows before it made. Registries are per realm;
+ * the cluster shares their reaction dispatcher. The
  * HTMLElement constructor is the interfaces row's, which answers Illegal
  * constructor until a definition names its new.target. */
 int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
@@ -1535,6 +1558,13 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     struct DCustomState *s = dom->custom;
     os64_memset(s, 0, sizeof(*s));
+    s->agent = dom->cluster ? dom->cluster->custom_agent : NULL;
+    if (!s->agent) {
+        s->agent = d_alloc_kind(dom, sizeof(*s->agent), OS64_DOM_MEM_CUSTOM);
+        if (!s->agent) { d_error(ctx, "QuotaExceededError", "Custom reaction queue quota exceeded"); return -1; }
+        s->agent->owner = dom;
+        if (dom->cluster) dom->cluster->custom_agent = s->agent;
+    }
     s->class_id = os64_js_class_id(&slot);
     JSValue prototype;
     if (d_interface_class(dom, ctx, global, s->class_id, &registry_class, &prototype) < 0) return -1;
@@ -1549,13 +1579,12 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValue registry = JS_NewObjectClass(ctx, (int)s->class_id);
     s->registry = d_retain(dom, ctx, registry);
     if (s->registry == NULL) return -1;
-    JS_SetOpaque(registry, &registry_mark);
+    JS_SetOpaque(registry, dom);
     s->runner = d_retain(dom, ctx, JS_NewCFunction(ctx, run_owed, "customElementReactions", 0));
     if (s->runner == NULL ||
         d_held_getter(dom, ctx, global, "customElements", registry, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
     if (reactions_wrap(dom, ctx, global) < 0) return -1;
-    d_mutation_register(dom, &s->mutations, changed);
     return 0;
 }
 
@@ -1564,13 +1593,20 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 bool os64_dom_reactions_owed(const os64_dom_t *dom)
 {
     return dom != NULL && !dom->closed &&
-           ((dom->custom != NULL && dom->custom->owed) || d_observers_owed(dom));
+           (((dom->cluster ? dom->cluster->custom_agent :
+               dom->custom ? dom->custom->agent : NULL) != NULL &&
+             (dom->cluster ? dom->cluster->custom_agent : dom->custom->agent)->owed) || d_observers_owed(dom));
 }
 
 bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || !os64_dom_reactions_owed(dom)) return false;
+    /* A member without modern interfaces can cause another member's observer
+     * or custom reaction. Enter the installed dispatcher's realm in that case. */
+    if (dom->custom == NULL && dom->cluster && dom->cluster->custom_agent)
+        dom = dom->cluster->custom_agent->owner;
+    if (dom->custom == NULL || dom->custom->runner == NULL) return false;
     static const char kTask[] = "custom element reactions";
     if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, kTask, outcome) != OS64_JS_OK) return false;
     /* One call, so the wrapper bounds and reports it as any task's call;
@@ -1605,18 +1641,31 @@ void d_custom_free(os64_dom_t *dom)
 {
     struct DCustomState *s = dom->custom;
     if (s == NULL) return;
-    for (size_t i = 0; i < D_CUSTOM_BUCKETS; i++)
-        for (DCustom *r = s->records[i]; r != NULL;) {
-            DCustom *next = r->hash_next;
-            while (r->first != NULL) {
-                DReaction *after = r->first->next;
-                reaction_free(dom, r->first);
-                r->first = after;
+    struct DCustomAgent *agent = s->agent;
+    if (agent) {
+        for (size_t i = 0; i < D_CUSTOM_BUCKETS; i++)
+            for (DCustom *r = agent->records[i]; r != NULL;) {
+                DCustom *next = r->hash_next;
+                while (r->first != NULL) {
+                    DReaction *after = r->first->next;
+                    reaction_free(dom, r->first);
+                    r->first = after;
+                }
+                os64_html_release(dom->document, r->element);
+                d_free(dom, r);
+                r = next;
             }
-            os64_html_release(dom->document, r->element);
-            d_free(dom, r);
-            r = next;
+        for (size_t i = 0; i < agent->depth; i++) d_free(dom, agent->stack[i].items);
+        d_free(dom, agent->stack);
+        d_free(dom, agent->backup.items);
+        if (dom->cluster) {
+            dom->cluster->custom_agent = NULL;
+            for (size_t i = 0; i < dom->cluster->count; ++i)
+                if (dom->cluster->members[i]->custom) dom->cluster->members[i]->custom->agent = NULL;
         }
+        d_free(dom, agent);
+        s->agent = NULL;
+    }
     for (DDefinition *d = s->definitions; d != NULL;) {
         DDefinition *next = d->next;
         d_strings_free(dom, d->observed, d->observed_count);
@@ -1632,9 +1681,6 @@ void d_custom_free(os64_dom_t *dom)
         d_free(dom, w);
         w = next;
     }
-    for (size_t i = 0; i < s->depth; i++) d_free(dom, s->stack[i].items);
-    d_free(dom, s->stack);
-    d_free(dom, s->backup.items);
     d_free(dom, s->row_states);
     d_free(dom, s);
     dom->custom = NULL;

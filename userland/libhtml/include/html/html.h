@@ -148,6 +148,8 @@ void os64_html_document_free(os64_html_document_t *doc);
  * admitted documents. Failed admission changes neither ownership nor budget. */
 typedef struct os64_html_group os64_html_group_t;
 os64_html_group_t *os64_html_group_create(size_t max_bytes);
+/* Non-mutating admission preflight; valid until membership/borrowers change. */
+int64_t os64_html_group_check(os64_html_group_t *group, os64_html_document_t *doc);
 int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
                             uint8_t creation_realm);
 void os64_html_group_free(os64_html_group_t *group);
@@ -156,6 +158,11 @@ size_t os64_html_group_peak(const os64_html_group_t *group);
 /* Logical mutation owner and physical lifetime membership are separate. */
 os64_html_document_t *os64_html_node_owner(const os64_html_node_t *node);
 bool os64_html_same_group(const os64_html_document_t *a, const os64_html_document_t *b);
+/* Keep a Document root until arena/group destruction, without a snapshot pin.
+ * Its attached subtree stays live; detached children still reclaim normally.
+ * This irreversible lifetime promotion is for host-owned Document records
+ * named by native metadata. It consumes no external node hold. */
+int64_t os64_html_document_keep(os64_html_document_t *doc, os64_html_node_t *document);
 /* Associate a pre-created inert template Document with a Document in this
  * arena. The association is fixed; nested templates reuse the inert record.
  * Call before exposing template document identity. Existing contents are

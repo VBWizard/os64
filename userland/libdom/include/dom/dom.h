@@ -381,6 +381,29 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
 
+/* Explicit clusters own admitted document/state pairs through root teardown.
+ * Create and admit while the runtime is idle, before exposing the new realm.
+ * Admission refusal leaves ownership with the caller. Once consumed is true,
+ * even a NULL binding belongs to the cluster: failure poisons the cluster,
+ * drains it and requires engine destruction. Never free a member separately.
+ * Drain the cluster, destroy the runtime, release layout borrowers, then free
+ * the cluster. Provider opaque storage must survive through drain. */
+typedef struct os64_dom_cluster os64_dom_cluster_t;
+typedef struct {
+    size_t html_bytes, page_bytes, dom_bytes, kept_bytes, canvas_bytes;
+} os64_dom_cluster_limits_t;
+typedef struct {
+    os64_dom_t *binding;
+    bool consumed;
+} os64_dom_admission_t;
+os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+void os64_dom_cluster_drain(os64_dom_cluster_t *);
+void os64_dom_cluster_free(os64_dom_cluster_t *);
+os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);
+
 /* Owner-thread browser identity provider, borrowed text for the getter call.
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
@@ -977,7 +1000,10 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
  * (effects_mark answers it) and RELEASES, whenever trees go, everything
  * buried before the oldest generation still held: the keyframes of an
  * effect that was collected, or that setKeyframes gave new ones, are freed
- * by release, never sooner, and every one by os64_dom_free. */
+ * by release, and remaining data at native binding/cluster free. Explicit
+ * clusters share generations and retain retired data until the oldest borrowing
+ * host advances. Release with UINT64_MAX when that host has no trees left;
+ * all hosts must release their trees before cluster_free. */
 struct garb_effect;
 int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node,
                                 const struct garb_effect *const **out);

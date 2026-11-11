@@ -125,7 +125,7 @@ static int match(void *opaque, const char *pattern, const char *value, size_t le
 static int flags_of(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, uint32_t *flags)
 {
     Matching m = {dom, ctx, false};
-    int64_t status = os64_page_node_validity(dom->state, node, match, &m, flags);
+    int64_t status = os64_page_node_validity(d_owner(dom, node)->state, node, match, &m, flags);
     if (m.failed) return -1;
     if (status < 0) { d_page_error(ctx, status); return -1; }
     return 0;
@@ -136,7 +136,7 @@ static int flags_of(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *nod
 static int invalid(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, uint32_t *flags)
 {
     bool will = false;
-    int64_t status = os64_page_node_will_validate(dom->state, node, &will);
+    int64_t status = os64_page_node_will_validate(d_owner(dom, node)->state, node, &will);
     if (status < 0) { d_page_error(ctx, status); return -1; }
     *flags = 0;
     if (!will) return 0;
@@ -163,7 +163,7 @@ static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     uint32_t flags = 0;
     if (flags_of(dom, ctx, node, &flags) < 0) return -1;
     if (dom->options.activate == NULL || !d_window_document(dom, node)) return 0;
-    int64_t status = os64_page_node_validation_message(dom->state, node, flags, dom->reported_message,
+    int64_t status = os64_page_node_validation_message(d_owner(dom, node)->state, node, flags, dom->reported_message,
                                                        sizeof(dom->reported_message));
     if (status < 0) { d_page_error(ctx, status); return -1; }
     dom->reported = node;
@@ -264,13 +264,14 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, this_value);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     if (magic == M_FORM_CHECK || magic == M_FORM_REPORT) {
         if (!html(node, OS64_HTML_TAG_FORM)) return JS_ThrowTypeError(ctx, "Illegal invocation");
         int valid = d_form_validate(dom, ctx, node, magic == M_FORM_REPORT);
         return valid < 0 ? JS_EXCEPTION : JS_NewBool(ctx, valid > 0);
     }
     bool kind = false;
-    int64_t status = os64_page_node_will_validate(dom->state, node, &kind);
+    int64_t status = os64_page_node_will_validate(d_owner(dom, node)->state, node, &kind);
     if (status < 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
     uint32_t flags = 0;
     switch (magic) {
@@ -285,11 +286,11 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
             /* The custom message whole, as it was set, however long. */
             const char *custom = "";
             size_t length = 0;
-            status = os64_page_node_custom_validity(dom->state, node, &custom, &length);
+            status = os64_page_node_custom_validity(d_owner(dom, node)->state, node, &custom, &length);
             return status < 0 ? d_page_error(ctx, status) : JS_NewStringLen(ctx, custom, length);
         }
         char message[256];
-        status = os64_page_node_validation_message(dom->state, node, flags, message, sizeof(message));
+        status = os64_page_node_validation_message(d_owner(dom, node)->state, node, flags, message, sizeof(message));
         return status < 0 ? d_page_error(ctx, status) : JS_NewString(ctx, message);
     }
     case M_CHECK: case M_REPORT: {
@@ -304,7 +305,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing validity message");
         DString text = {0};
         if (!d_string(dom, ctx, argv[0], &text)) return JS_EXCEPTION;
-        status = os64_page_node_set_custom_validity(dom->state, node, text.data, text.length);
+        status = os64_page_node_set_custom_validity(d_owner(dom, node)->state, node, text.data, text.length);
         d_string_free(dom, &text);
         return status < 0 ? d_page_error(ctx, status) : JS_UNDEFINED;
     }

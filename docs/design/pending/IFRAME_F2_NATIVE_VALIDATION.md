@@ -135,7 +135,15 @@ model release; aggregate peak is **63,922 bytes**. Retry succeeds. The final
 live value remains charged; retired copies reclaim. F.8 must account for
 these cross-document retention costs.
 
-## Remaining F.2 acceptance
+## F.2b integration correction
+
+[F.2b](IFRAME_F2_BINDINGS_VALIDATION.md) corrects the fragment assumptions in
+this native checkpoint: insertion moves the children while preserving the
+fragment's own Document, including an empty fragment. Template contents can
+be explicitly adopted; an actual ShadowRoot cannot. The binding integration
+updates those native paths and their assertions against the pinned WPT cases.
+
+## Remaining F.2 acceptance at this native checkpoint
 
 F.2b must supply cluster-wide wrapper identity, creation-realm prototypes,
 operation routing, stable custom definitions, shared reactions/observers,

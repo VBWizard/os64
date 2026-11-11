@@ -153,11 +153,11 @@ static JSValue option_member(JSContext *ctx, JSValueConst this_value, int argc, 
         if (set) {
             int on = JS_ToBool(ctx, value);
             if (on < 0) return JS_EXCEPTION;
-            int64_t status = os64_page_node_set_option_selected(dom->state, self, on != 0);
+            int64_t status = os64_page_node_set_option_selected(d_owner(dom, self)->state, self, on != 0);
             return status < 0 ? page_error(ctx, status) : JS_UNDEFINED;
         }
         bool on = false;
-        int64_t status = os64_page_node_option_selected(dom->state, self, &on);
+        int64_t status = os64_page_node_option_selected(d_owner(dom, self)->state, self, &on);
         return status < 0 ? page_error(ctx, status) : JS_NewBool(ctx, on);
     }
     case O_DEFAULT_SELECTED:
@@ -271,7 +271,6 @@ static JSValue options_length_set(os64_dom_t *dom, JSContext *ctx, const os64_ht
         int64_t status;
         os64_html_node_t *option = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "option", &status);
         if (option == NULL) return d_html_error(ctx, status);
-        d_made_in(dom, option, d_node_document(dom, select));
         if (d_tree_change(dom, ctx, D_APPEND, select, option, NULL) < 0) return JS_EXCEPTION;
     }
     return JS_UNDEFINED;
@@ -298,7 +297,6 @@ int d_options_set_index(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
             int64_t status;
             os64_html_node_t *empty = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "option", &status);
             if (empty == NULL) { d_html_error(ctx, status); return -1; }
-            d_made_in(dom, empty, d_node_document(dom, select));
             if (d_tree_change(dom, ctx, D_APPEND, select, empty, NULL) < 0) return -1;
         }
         return d_tree_change(dom, ctx, D_APPEND, select, option, NULL);
@@ -391,11 +389,11 @@ static JSValue select_member(JSContext *ctx, JSValueConst this_value, int argc, 
         if (set) {
             int32_t index;
             if (JS_ToInt32(ctx, &index, value) < 0) return JS_EXCEPTION;
-            int64_t status = os64_page_node_set_selected_index(dom->state, select, index);
+            int64_t status = os64_page_node_set_selected_index(d_owner(dom, select)->state, select, index);
             return status < 0 ? page_error(ctx, status) : JS_UNDEFINED;
         }
         int32_t index = -1;
-        int64_t status = os64_page_node_selected_index(dom->state, select, &index);
+        int64_t status = os64_page_node_selected_index(d_owner(dom, select)->state, select, &index);
         return status < 0 ? page_error(ctx, status) : JS_NewInt32(ctx, index);
     }
     default: return JS_ThrowTypeError(ctx, "Unknown select member");
@@ -435,7 +433,7 @@ static JSValue option_factory(JSContext *ctx, JSValueConst new_target, int argc,
                 status = d_set_attr(dom, option, "value", value.data != NULL ? value.data : "", value.length, false);
             if (status >= 0 && default_selected) status = d_set_attr(dom, option, "selected", "", 0, false);
             if (status >= 0) {
-                int64_t page = os64_page_node_init_option_selected(dom->state, option, selected != 0);
+                int64_t page = os64_page_node_init_option_selected(d_owner(dom, option)->state, option, selected != 0);
                 result = page < 0 ? page_error(ctx, page) : d_wrap_constructed(dom, ctx, option, prototype);
             } else
                 result = d_html_error(ctx, status);

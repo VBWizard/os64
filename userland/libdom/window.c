@@ -559,10 +559,10 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
     bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
     *saved = (DActivation){.checkable = (radio || checkbox) && !disabled(node), .checkbox = checkbox};
     if (!saved->checkable) return 0;
-    int64_t status = os64_page_node_checked(dom->state, node, &saved->was);
-    if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &saved->was_indeterminate);
-    if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !saved->was);
-    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
+    int64_t status = os64_page_node_checked(d_owner(dom, node)->state, node, &saved->was);
+    if (status >= 0) status = os64_page_node_indeterminate(d_owner(dom, node)->state, node, &saved->was_indeterminate);
+    if (status >= 0) status = os64_page_node_set_checked(d_owner(dom, node)->state, node, radio ? true : !saved->was);
+    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, false);
     if (status < 0) { d_page_error(ctx, status); return -1; }
     return 0;
 }
@@ -574,11 +574,11 @@ int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
         bool now = false;
         int result = 1;
         if (canceled) {
-            int64_t status = os64_page_node_set_checked(dom->state, node, saved->was);
+            int64_t status = os64_page_node_set_checked(d_owner(dom, node)->state, node, saved->was);
             if (status >= 0 && saved->checkbox)
-                status = os64_page_node_set_indeterminate(dom->state, node, saved->was_indeterminate);
+                status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, saved->was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
-        } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != saved->was) {
+        } else if (os64_page_node_checked(d_owner(dom, node)->state, node, &now) >= 0 && now != saved->was) {
             /* HTML's checkbox and radio activation: input is composed,
              * change is not. */
             JSValue input = d_event_new(dom, ctx, "input", true, false, false);
@@ -662,6 +662,7 @@ static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Expected an element");
+    dom = d_owner(dom, node);
     /* requestSubmit(submitter) (HTML § 4.10.3): a submitter given is a
      * submit button this form owns, and the submission is its. */
     if (magic == A_REQUEST_SUBMIT && argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {

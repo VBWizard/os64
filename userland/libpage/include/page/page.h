@@ -41,6 +41,10 @@ typedef struct os64_page_state os64_page_state_t;
  * records, scratch transactions and retained cross-document value bytes. */
 typedef struct os64_page_state_group os64_page_state_group_t;
 os64_page_state_group_t *os64_page_state_group_create(size_t max_bytes);
+/* Ledger/borrower preflight, before joining the corresponding HTML arena.
+ * Does not check HTML membership: group_add checks that after HTML admission.
+ * Valid until state, borrowers or group membership change. */
+bool os64_page_state_group_check(os64_page_state_group_t *group, os64_page_state_t *state);
 bool os64_page_state_group_add(os64_page_state_group_t *group, os64_page_state_t *state);
 void os64_page_state_group_free(os64_page_state_group_t *group);
 size_t os64_page_state_group_bytes(const os64_page_state_group_t *group);

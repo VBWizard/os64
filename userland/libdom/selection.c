@@ -77,7 +77,7 @@ static int select_queue(os64_dom_t *dom, JSContext *ctx, JSValueConst element, c
 {
     uint32_t now_start, now_end;
     os64_page_direction_t now_direction;
-    if (os64_page_node_selection(dom->state, node, &now_start, &now_end, &now_direction) != 0 ||
+    if (os64_page_node_selection(d_owner(dom, node)->state, node, &now_start, &now_end, &now_direction) != 0 ||
         (now_start == start && now_end == end && now_direction == direction))
         return 0;
     JSValue fn_data[2] = {dom->anchor->value, (JSValue)element};
@@ -97,7 +97,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     if (self == NULL) return JS_EXCEPTION;
     uint32_t start, end;
     os64_page_direction_t direction;
-    int64_t read = os64_page_node_selection(dom->state, self, &start, &end, &direction);
+    int64_t read = os64_page_node_selection(d_owner(dom, self)->state, self, &start, &end, &direction);
     if (read == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
     bool has = read == 0;
     if (!set && magic != X_SET_RANGE && magic != X_SELECT) {
@@ -124,7 +124,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
             named = true;
         }
     }
-    read = os64_page_node_selection(dom->state, self, &start, &end, &direction);
+    read = os64_page_node_selection(d_owner(dom, self)->state, self, &start, &end, &direction);
     if (read == -OS64_PAGE_REASON_NO_MEMORY) {
         d_string_free(dom, &name);
         return no_room(ctx);
@@ -146,7 +146,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     default: start = 0; end = UINT32_MAX; direction = OS64_PAGE_DIRECTION_NONE; break;
     }
     d_string_free(dom, &name);
-    int64_t status = os64_page_node_set_selection(dom->state, self, start, end, direction);
+    int64_t status = os64_page_node_set_selection(d_owner(dom, self)->state, self, start, end, direction);
     if (status == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
     if (status < 0) return no_selection(ctx);
     return select_queue(dom, ctx, this_value, self, was_start, was_end, was_direction) < 0 ? JS_EXCEPTION
@@ -220,10 +220,10 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
     /* Every conversion is done, so the control is read as it stands. */
     uint32_t sel_start, sel_end;
     os64_page_direction_t direction;
-    int64_t read = os64_page_node_selection(dom->state, self, &sel_start, &sel_end, &direction);
+    int64_t read = os64_page_node_selection(d_owner(dom, self)->state, self, &sel_start, &sel_end, &direction);
     const char *value = NULL;
     size_t value_len = 0;
-    if (read == 0) read = os64_page_node_value(dom->state, self, &value, &value_len);
+    if (read == 0) read = os64_page_node_value(d_owner(dom, self)->state, self, &value, &value_len);
     if (read < 0) {
         JS_FreeCString(ctx, added);
         return read == -OS64_PAGE_REASON_NO_MEMORY ? no_room(ctx) : no_selection(ctx);
@@ -251,14 +251,14 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
     made[made_len] = '\0';
     uint32_t new_end = start + d_utf16_length(added, added_len);
     JS_FreeCString(ctx, added);
-    int64_t set = os64_page_node_set_value(dom->state, self, made, made_len);
+    int64_t set = os64_page_node_set_value(d_owner(dom, self)->state, self, made, made_len);
     js_free(ctx, made);
     if (set < 0) return set == -OS64_PAGE_REASON_NO_MEMORY ? no_room(ctx) : no_selection(ctx);
     /* What the closing "set the selection range" compares with: the
      * selection as the new value left it. */
     uint32_t was_start = 0, was_end = 0;
     os64_page_direction_t was_direction = OS64_PAGE_DIRECTION_NONE;
-    (void)os64_page_node_selection(dom->state, self, &was_start, &was_end, &was_direction);
+    (void)os64_page_node_selection(d_owner(dom, self)->state, self, &was_start, &was_end, &was_direction);
     switch (mode) {
     case M_SELECT: sel_start = start; sel_end = new_end; break;
     case M_START: sel_start = sel_end = start; break;
@@ -274,7 +274,7 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
         break;
     }
     }
-    int64_t status = os64_page_node_set_selection(dom->state, self, sel_start, sel_end, OS64_PAGE_DIRECTION_NONE);
+    int64_t status = os64_page_node_set_selection(d_owner(dom, self)->state, self, sel_start, sel_end, OS64_PAGE_DIRECTION_NONE);
     if (status == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
     if (status < 0) return no_selection(ctx);
     return select_queue(dom, ctx, this_value, self, was_start, was_end, was_direction) < 0 ? JS_EXCEPTION

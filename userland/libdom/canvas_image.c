@@ -45,9 +45,11 @@ JSValue d_image_dimension(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t 
 {
     /* Texture images created with new Image() need no layout: absent or
      * invalid dimension attributes fall back to the loaded image size. */
+    dom=d_owner(dom,node);
     uint32_t value;
     if(image_attribute_size(os64_html_attr(node,height?"height":"width"),&value))
         return JS_NewUint32(ctx,value);
+    dom=d_owner(dom,node);
     os64_dom_image_view_t view;
     os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
     value=status==OS64_DOM_IMAGE_READY?image_dimension(&view,height):0;
@@ -66,7 +68,10 @@ bool os64_dom_image_event(os64_dom_t *dom,const os64_html_node_t **node,bool *fa
 {
     if(!dom||dom->closed||!dom->options.modern||!dom->image_provider.acquire)return false;
     if(dom->image_provider.update)dom->image_provider.update(dom->image_provider.opaque);
-    for(DValue *e=dom->values;e;e=e->next) {
+    size_t members=dom->cluster?dom->cluster->count:1;
+    for(size_t i=0;i<members;++i)
+    for(DValue *e=(dom->cluster?dom->cluster->members[i]:dom)->values;e;e=e->next) {
+        if(e->node && d_owner(dom,e->node)!=dom)continue;
         if(!e->node||e->node->ns!=OS64_HTML_NS_HTML||e->node->tag!=OS64_HTML_TAG_IMG)continue;
         os64_dom_image_view_t view;
         os64_dom_image_status_t status=image_acquire(dom,e->node,false,&view);
@@ -103,6 +108,7 @@ static JSValue image_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
         const os64_html_attr_t *cors=os64_html_attr(node,"crossorigin");
         return !cors?JS_NULL:JS_NewString(ctx,os64_streq_nocase(cors->value,"use-credentials")?"use-credentials":"anonymous");
     }
+    dom=d_owner(dom,node);
     os64_dom_image_view_t view;
     os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
     if(magic==I_CURRENT) {
@@ -168,7 +174,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     if(magic==I_SMOOTH||magic==I_QUALITY) {
         bool enabled=false;unsigned quality=0;bool valid=true;
@@ -198,6 +205,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     unsigned count=argc>=9?8:argc>=5?4:2;double v[8];
     for(unsigned i=0;i<count;++i)if(JS_ToFloat64(ctx,&v[i],argv[i+1])<0)return JS_EXCEPTION;
     for(unsigned i=0;i<count;++i)if(!isfinite(v[i]))return JS_UNDEFINED;
+    os64_dom_t *source_owner=d_owner(dom,source_node);
     os64_dom_image_view_t image={0};bool borrowed=false;
     if(source_node->tag==OS64_HTML_TAG_CANVAS) {
         DValue *source=d_find(dom,source_node);
@@ -208,9 +216,9 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
         image.surface=(draw2d_surface_t){(void *)bitmap.pixels,bitmap.width,bitmap.height,bitmap.stride,bitmap.capacity,DRAW2D_ARGB8_PREMULTIPLIED};
         image.origin_clean=canvas_origin_clean(d_more_peek(source)->canvas);
     } else {
-        os64_dom_image_status_t status=image_acquire(dom,source_node,true,&image);borrowed=true;
+        os64_dom_image_status_t status=image_acquire(source_owner,source_node,true,&image);borrowed=true;
         if(status!=OS64_DOM_IMAGE_READY) {
-            image_release(dom,&image);
+            image_release(source_owner,&image);
             return status==OS64_DOM_IMAGE_PENDING?JS_UNDEFINED:
                 d_error(ctx,status==OS64_DOM_IMAGE_REFUSED?"QuotaExceededError":"InvalidStateError","Image source is unavailable");
         }
@@ -222,7 +230,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     if(count==8){sx=v[0]*density;sy=v[1]*density;sw=v[2]*density;sh=v[3]*density;dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
     d_canvas_sync(e);
     canvas_status_t status=d_more_peek(e)->canvas?canvas_draw_image(d_more_peek(e)->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
-    if(borrowed)image_release(dom,&image);
+    if(borrowed)image_release(source_owner,&image);
     return d_canvas_result(ctx,status);
 }
 int d_canvas_images_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototype)

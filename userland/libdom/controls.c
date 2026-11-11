@@ -180,6 +180,7 @@ static JSValue base_url_value(os64_dom_t *dom, JSContext *ctx, const os64_html_n
 
 JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row)
 {
+    dom = d_owner(dom, node);
     const os64_html_attr_t *attr = os64_html_attr(node, row->attribute);
     switch (row->kind) {
     case K_BOOLEAN: return JS_NewBool(ctx, attr != NULL);
@@ -449,7 +450,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         if (kind != TA) return JS_ThrowTypeError(ctx, "Illegal invocation");
         const char *text;
         size_t length;
-        int64_t status = os64_page_node_value(dom->state, node, &text, &length);
+        int64_t status = os64_page_node_value(d_owner(dom, node)->state, node, &text, &length);
         return status < 0 ? d_page_error(ctx, status) : JS_NewUint32(ctx, d_utf16_length(text, length));
     }
     case M_INDETERMINATE: {
@@ -459,8 +460,8 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         if (set) {
             int boolean = JS_ToBool(ctx, value);
             if (boolean < 0) return JS_EXCEPTION;
-            status = os64_page_node_set_indeterminate(dom->state, node, boolean != 0);
-        } else status = os64_page_node_indeterminate(dom->state, node, &on);
+            status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, boolean != 0);
+        } else status = os64_page_node_indeterminate(d_owner(dom, node)->state, node, &on);
         return status < 0 ? d_page_error(ctx, status) : set ? JS_UNDEFINED : JS_NewBool(ctx, on);
     }
     case M_AUTOCOMPLETE: {
@@ -489,7 +490,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         bool applies = false;
         int64_t status = 0;
         if (!set) {
-            status = os64_page_node_value_as(dom->state, node, as, &number, &applies);
+            status = os64_page_node_value_as(d_owner(dom, node)->state, node, as, &number, &applies);
             if (status < 0) return d_page_error(ctx, status);
             if (as == OS64_PAGE_AS_NUMBER) return JS_NewFloat64(ctx, number);
             /* A time value past a Date's 8.64e15 ms (late in the year
@@ -511,7 +512,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
              * a TypeError. */
             bool empty = JS_IsNull(value) || JS_IsUndefined(value);
             if (!empty && !JS_IsObject(value)) return JS_ThrowTypeError(ctx, "valueAsDate takes a Date or null");
-            status = os64_page_node_value_as(dom->state, node, as, &number, &applies);
+            status = os64_page_node_value_as(d_owner(dom, node)->state, node, as, &number, &applies);
             if (status < 0) return d_page_error(ctx, status);
             if (!applies) return d_error(ctx, "InvalidStateError", "valueAsDate does not apply to this input");
             number = __builtin_nan("");
@@ -523,7 +524,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
                 if (converted < 0) return JS_EXCEPTION;
             }
         }
-        status = os64_page_node_set_value_as(dom->state, node, as, number, &applies);
+        status = os64_page_node_set_value_as(d_owner(dom, node)->state, node, as, number, &applies);
         if (status < 0) return d_page_error(ctx, status);
         return applies ? JS_UNDEFINED : d_error(ctx, "InvalidStateError", "valueAsNumber does not apply to this input");
     }
@@ -533,7 +534,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         int32_t n = 1;
         if (argc > 0 && !JS_IsUndefined(argv[0]) && JS_ToInt32(ctx, &n, argv[0]) < 0) return JS_EXCEPTION;
         bool applies = false;
-        int64_t status = os64_page_node_step(dom->state, node, n, magic == M_STEP_DOWN, &applies);
+        int64_t status = os64_page_node_step(d_owner(dom, node)->state, node, n, magic == M_STEP_DOWN, &applies);
         if (status < 0) return d_page_error(ctx, status);
         return applies ? JS_UNDEFINED
                        : d_error(ctx, "InvalidStateError", "This input has no allowed value step to step by");

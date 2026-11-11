@@ -17,11 +17,14 @@ os64_geometry_status_t d_canvas_allocate(void *opaque, size_t size, void **out)
     *out = NULL;
     if (size > SIZE_MAX - sizeof(CanvasAllocation)) return OS64_GEOMETRY_LIMIT;
     size_t total = size + sizeof(CanvasAllocation);
-    if (total > CANVAS_PAGE_BYTES - dom->canvas_bytes) return OS64_GEOMETRY_LIMIT;
+    if (total > CANVAS_PAGE_BYTES - dom->canvas_bytes ||
+        (dom->cluster && total > dom->cluster->limits.canvas_bytes - dom->cluster->canvas_bytes))
+        return OS64_GEOMETRY_LIMIT;
     CanvasAllocation *p = os64_malloc(total);
     if (!p) return OS64_GEOMETRY_NO_MEMORY;
     p->bytes = total;
     dom->canvas_bytes += total;
+    if (dom->cluster) dom->cluster->canvas_bytes += total;
     *out = p + 1;
     return OS64_GEOMETRY_OK;
 }
@@ -32,6 +35,7 @@ void d_canvas_release(void *opaque, void *pointer, size_t size)
     os64_dom_t *dom = opaque;
     CanvasAllocation *p = (CanvasAllocation *)pointer - 1;
     dom->canvas_bytes -= p->bytes;
+    if (dom->cluster) dom->cluster->canvas_bytes -= p->bytes;
     os64_free(p);
 }
 static uint32_t dimension(const os64_html_node_t *node, const char *name, uint32_t fallback)
@@ -192,7 +196,7 @@ static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValue
     if(!dom)return JS_EXCEPTION;
     if(magic==3) {
         DValue *g=JS_GetOpaque(self,dom->gradient_class);
-        if(!g||g->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasGradient");
+        if(!g||!d_same_cluster(g->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasGradient");
         if(argc<2)return JS_ThrowTypeError(ctx,"addColorStop requires offset and color");
         double offset;if(JS_ToFloat64(ctx,&offset,argv[0])<0)return JS_EXCEPTION;
         if(!isfinite(offset))return JS_ThrowTypeError(ctx,"Gradient offset must be finite");
@@ -207,7 +211,8 @@ static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValue
         return d_canvas_result(ctx,canvas_gradient_add_stop(d_more_peek(g)->canvas_gradient,offset,argb));
     }
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     unsigned count=magic==0?4:magic==1?6:3;
     if(argc<(int)count)return JS_ThrowTypeError(ctx,"Gradient requires coordinates");
     double v[6];for(unsigned i=0;i<count;++i) {
@@ -231,7 +236,7 @@ static int gradients_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,
 {
     dom->gradient_class=os64_js_class_id(&gradient_slot);
     const JSClassDef definition={.class_name="CanvasGradient"};
-    if(JS_NewClass(dom->engine,dom->gradient_class,&definition)<0)return -1;
+    if (!JS_IsRegisteredClass(dom->engine, dom->gradient_class) && JS_NewClass(dom->engine, dom->gradient_class, &definition) < 0)return -1;
     JSValue proto=JS_NewObject(ctx);if(!d_retain(dom,ctx,proto))return -1;
     JS_SetClassProto(ctx,dom->gradient_class,JS_DupValue(ctx,proto));
     JSValue constructor=d_interface_new(ctx,"CanvasGradient",0,NULL,proto,JS_UNDEFINED);
@@ -249,7 +254,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (!dom) return JS_EXCEPTION;
     DValue *e = JS_GetOpaque(self, dom->canvas_class);
-    if (!e || e->dom != dom) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");
+    if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");
     bool set = magic & D_SET;
     magic &= ~D_SET;
     if (magic == C_CANVAS) return JS_DupValue(ctx, e->value);
@@ -258,7 +263,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         if (set) {
             if (magic == C_FILL || magic == C_STROKE || magic == C_SHADOW_COLOR) {
                 DValue *gradient=argc?JS_GetOpaque(argv[0],dom->gradient_class):NULL;
-                if(magic!=C_SHADOW_COLOR&&gradient&&gradient->dom==dom) {
+                if(magic!=C_SHADOW_COLOR&&gradient&&d_same_cluster(gradient->dom, dom)) {
                     d_canvas_sync(e);
                     return d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_gradient(d_more_peek(e)->canvas,d_more_peek(gradient)->canvas_gradient,magic==C_STROKE)):JS_UNDEFINED;
                 }
@@ -374,7 +379,7 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     dom->canvas_class = os64_js_class_id(&canvas_slot);
     const JSClassDef definition = {.class_name = "CanvasRenderingContext2D"};
-    if (JS_NewClass(dom->engine, dom->canvas_class, &definition) < 0) return -1;
+    if (!JS_IsRegisteredClass(dom->engine, dom->canvas_class) && JS_NewClass(dom->engine, dom->canvas_class, &definition) < 0) return -1;
     JSValue prototype = JS_NewObject(ctx);
     if (!d_retain(dom, ctx, prototype)) return -1;
     JS_SetClassProto(ctx, dom->canvas_class, JS_DupValue(ctx, prototype));
@@ -417,13 +422,17 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
     if(!dom || dom->closed || !visit)return;
-    for(DValue *e=dom->values;e;e=e->next) {
+    size_t count = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < count; ++i) {
+        os64_dom_t *storage = dom->cluster ? dom->cluster->members[i] : dom;
+        for(DValue *e=storage->values;e;e=e->next) {
         if(!d_more_peek(e)->canvas_object || !d_in_window_tree(dom,e->node))continue;
         if(d_more_peek(e)->canvas_reset_pending){visit(opaque,e->node,0,0,NULL);continue;}
         draw2d_damage_t damage;canvas_bitmap_t bitmap;
         if(d_more_peek(e)->canvas && canvas_damage(d_more_peek(e)->canvas,&damage)==CANVAS_OK &&
            damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK)
             visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
+    }
     }
 }
 void os64_dom_canvas_painted(os64_dom_t *dom, const os64_html_node_t *node)

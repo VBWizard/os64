@@ -1,12 +1,13 @@
 #include "internal.h"
+#include "os64/proc.h"
 
-/* A block's header is one word: its charged size in the low 56 bits and its
- * kind in the top byte, so the census costs a block nothing. */
-typedef struct { size_t word; } DBlock;
+/* Allocation ownership survives cross-document operations. The packed word
+ * stores the charged size and census kind; the owner releases that charge. */
+typedef struct { size_t word; os64_dom_t *owner; } DBlock;
 #define D_BLOCK_KIND_SHIFT 56
 #define D_BLOCK_SIZE_MASK (((size_t)1 << D_BLOCK_KIND_SHIFT) - 1)
 _Static_assert(OS64_DOM_MEM_KINDS <= 256, "a block's kind is its header's top byte");
-static JSClassID anchor_slot, node_slot, collection_slot, style_slot, token_slot, map_slot;
+static JSClassID cluster_slot, anchor_slot, node_slot, collection_slot, style_slot, token_slot, map_slot;
 
 static const char *const kMemKindNames[OS64_DOM_MEM_KINDS] = {
     [OS64_DOM_MEM_OTHER] = "other", [OS64_DOM_MEM_WRAPPER] = "wrapper", [OS64_DOM_MEM_RETAINED] = "retained",
@@ -22,10 +23,13 @@ void *d_alloc_kind(os64_dom_t *dom, size_t size, os64_dom_mem_kind_t kind)
     if ((unsigned)kind >= OS64_DOM_MEM_KINDS) kind = OS64_DOM_MEM_OTHER;
     if (size > D_BLOCK_SIZE_MASK - sizeof(DBlock)) return NULL;
     size_t total = sizeof(DBlock) + size;
-    if (total > dom->options.max_bytes - dom->bytes) return NULL;
+    if (total > dom->options.max_bytes - dom->bytes ||
+        (dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)) return NULL;
     DBlock *block = os64_malloc(total);
     if (block == NULL) return NULL;
     block->word = total | (size_t)kind << D_BLOCK_KIND_SHIFT;
+    block->owner = dom;
+    if (dom->cluster) dom->cluster->bytes += total;
     dom->bytes += total;
     os64_dom_mem_t *m = &dom->memory[kind];
     m->bytes += total;
@@ -44,7 +48,9 @@ void d_free(os64_dom_t *dom, void *ptr)
 {
     if (ptr == NULL) return;
     DBlock *block = (DBlock *)ptr - 1;
+    dom = block->owner;
     size_t total = block->word & D_BLOCK_SIZE_MASK;
+    if (dom->cluster) dom->cluster->bytes -= total;
     os64_dom_mem_t *m = &dom->memory[block->word >> D_BLOCK_KIND_SHIFT];
     dom->bytes -= total;
     m->bytes -= total;
@@ -131,11 +137,18 @@ JSValue d_page_error(JSContext *ctx, int64_t status)
 
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
 {
-    if (dom == NULL || dom->closed) {
+    if (dom == NULL || dom->closed || (dom->cluster && (dom->cluster->poisoned || dom->cluster->drained))) {
         d_error(ctx, "InvalidStateError", "DOM binding is closed");
         return false;
     }
     os64_js_outcome_t outcome;
+    if (dom->cluster) {
+        os64_js_realm_t *realm = os64_js_realm_from_context(dom->runtime, ctx, abi, &outcome);
+        for (size_t i = 0; realm && i < dom->cluster->count; ++i)
+            if (dom->cluster->members[i]->realm == realm && !dom->cluster->members[i]->closed) return true;
+        d_error(ctx, "InvalidStateError", "Context is not a usable cluster member");
+        return false;
+    }
     if (os64_js_realm_context(dom->realm, abi, &outcome) != ctx) {
         d_error(ctx, "InvalidStateError", "DOM runtime is unavailable");
         return false;
@@ -186,6 +199,7 @@ DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
         return NULL;
     }
     entry->value = value;
+    entry->dom = dom;
     entry->next = dom->values;
     dom->values = entry;
     dom->retained++;
@@ -197,7 +211,7 @@ const DValueMore d_no_more;
 DValueMore *d_more(os64_dom_t *dom, JSContext *ctx, DValue *entry)
 {
     if (entry->more != NULL) return entry->more;
-    entry->more = d_alloc_kind(dom, sizeof(*entry->more), OS64_DOM_MEM_EXTRA);
+    entry->more = d_alloc_kind(entry->dom != NULL ? entry->dom : dom, sizeof(*entry->more), OS64_DOM_MEM_EXTRA);
     if (entry->more == NULL && ctx != NULL) d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded");
     return entry->more;
 }
@@ -403,15 +417,101 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     return realm != NULL ? d_create_in_realm(runtime, realm, document, state, options, outcome) : NULL;
 }
 
+static os64_dom_t *create_binding(os64_js_runtime_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *,
+    os64_js_outcome_t *, os64_dom_cluster_t *, bool *);
+
 os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+{
+    return create_binding(runtime, realm, document, state, options, outcome, NULL, NULL);
+}
+
+os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_js_realm_t *realm,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+{
+    os64_dom_admission_t admission = {0};
+    if (!outcome) return admission;
+    if (!cluster) { outcome->status = OS64_JS_BAD_ARGUMENT; return admission; }
+    admission.binding = create_binding(cluster->runtime, realm, document, state,
+        options, outcome, cluster, &admission.consumed);
+    return admission;
+}
+
+os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (!outcome) return NULL;
+    os64_js_realm_t *primary = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, outcome);
+    JSContext *ctx = os64_js_realm_context(primary, OS64_JS_ABI_ID, outcome);
+    if (!ctx) return NULL;
+    JSRuntime *engine = JS_GetRuntime(ctx);
+    JSClassID id = os64_js_class_id(&cluster_slot);
+    if (!limits || limits->dom_bytes < sizeof(os64_dom_cluster_t) ||
+        JS_IsRegisteredClass(engine, id) ||
+        JS_IsRegisteredClass(engine, os64_js_class_id(&anchor_slot))) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return NULL;
+    }
+    os64_dom_cluster_t *cluster = os64_calloc(1, sizeof(*cluster));
+    if (!cluster) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
+    cluster->runtime = runtime;
+    cluster->limits = *limits;
+    cluster->bytes = sizeof(*cluster);
+    cluster->html = os64_html_group_create(limits->html_bytes);
+    cluster->page = os64_page_state_group_create(limits->page_bytes);
+    if (!cluster->html || !cluster->page) {
+        outcome->status = OS64_JS_HOST_FAILURE;
+        goto fail;
+    }
+    if (os64_js_realm_task_begin(primary, OS64_JS_ABI_ID, "DOM cluster", outcome) != OS64_JS_OK) goto fail;
+    /* Registration claims this runtime without using libjs's opaque slots
+     * or storing a native pointer in an engine object. */
+    const JSClassDef definition = {.class_name = "DOMCluster"};
+    int registered = JS_NewClass(engine, id, &definition);
+    if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) goto fail;
+    if (registered < 0) { outcome->status = OS64_JS_HOST_FAILURE; goto fail; }
+    return cluster;
+fail:
+    os64_page_state_group_free(cluster->page);
+    os64_html_group_free(cluster->html);
+    os64_free(cluster);
+    return NULL;
+}
+
+static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
                               os64_html_document_t *document, os64_page_state_t *state,
-                              const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+                              const os64_dom_options_t *options, os64_js_outcome_t *outcome,
+                              os64_dom_cluster_t *cluster, bool *consumed)
 {
     if (outcome == NULL) return NULL;
     JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
     if (ctx == NULL) return NULL;
     if (os64_js_realm_from_context(runtime, ctx, OS64_JS_ABI_ID, outcome) != realm) return NULL;
     if (document == NULL || state == NULL || os64_page_state_document(state) != document) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return NULL;
+    }
+    if (cluster) {
+        if (cluster->poisoned || cluster->drained || cluster->count == D_REALMS) {
+            outcome->status = OS64_JS_BAD_ARGUMENT;
+            return NULL;
+        }
+        for (size_t i = 0; i < cluster->count; ++i)
+            if (cluster->members[i]->realm == realm) {
+                outcome->status = OS64_JS_BAD_ARGUMENT;
+                return NULL;
+            }
+        if (os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
+            !os64_page_state_group_check(cluster->page, state) ||
+            sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes) {
+            outcome->status = OS64_JS_HOST_FAILURE;
+            return NULL;
+        }
+    } else if (JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&anchor_slot)) ||
+               JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&cluster_slot))) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return NULL;
     }
@@ -424,6 +524,11 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     if (dom == NULL) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
     dom->runtime = runtime;
     dom->realm = realm;
+    dom->cluster = cluster;
+    dom->wa_borrowed_floor = UINT64_MAX;
+    /* A cluster member can adopt targets whose effects predate its admission. */
+    dom->wa_index_stale = true;
+    dom->observers = cluster ? cluster->observers : NULL;
     dom->engine = JS_GetRuntime(ctx);
     dom->document = document;
     dom->state = state;
@@ -436,10 +541,19 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     dom->style_class = os64_js_class_id(&style_slot);
     dom->token_class = os64_js_class_id(&token_slot);
     dom->map_class = os64_js_class_id(&map_slot);
-    if (JS_IsRegisteredClass(dom->engine, dom->anchor_class)) {
-        outcome->status = OS64_JS_BAD_ARGUMENT;
-        os64_free(dom);
-        return NULL;
+    if (cluster) {
+        /* Both ledgers were preflighted and no script has run since then.
+         * Admission itself allocates nothing; ownership changes as one pair. */
+        if (os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+            os64_free(dom);
+            return NULL;
+        }
+        if (os64_html_group_add(cluster->html, document, (uint8_t)cluster->count) != OS64_HTML_OK ||
+            !os64_page_state_group_add(cluster->page, state))
+            os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+        cluster->members[cluster->count++] = dom;
+        cluster->bytes += sizeof(*dom);
+        *consumed = true;
     }
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
     const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
@@ -453,12 +567,12 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     const JSClassDef collection_definition = {
         .class_name = "HTMLCollection", .finalizer = clear_opaque, .exotic = &d_collection_exotic
     };
-    if (JS_NewClass(dom->engine, dom->anchor_class, &anchor_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->node_class, &node_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->collection_class, &collection_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->style_class, &style_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->token_class, &token_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->map_class, &map_definition) < 0) goto fail;
+    if ((!JS_IsRegisteredClass(dom->engine, dom->anchor_class) && JS_NewClass(dom->engine, dom->anchor_class, &anchor_definition) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, dom->node_class) && JS_NewClass(dom->engine, dom->node_class, &node_definition) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, dom->collection_class) && JS_NewClass(dom->engine, dom->collection_class, &collection_definition) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, dom->style_class) && JS_NewClass(dom->engine, dom->style_class, &style_definition) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, dom->token_class) && JS_NewClass(dom->engine, dom->token_class, &token_definition) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, dom->map_class) && JS_NewClass(dom->engine, dom->map_class, &map_definition) < 0)) goto fail;
     JSValue anchor = JS_NewObjectClass(ctx, dom->anchor_class);
     if (JS_IsException(anchor)) goto fail;
     JS_SetOpaque(anchor, dom);
@@ -473,7 +587,7 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     if (JS_PreventExtensions(ctx, guard) < 0) { JS_FreeValue(ctx, guard); goto fail; }
     dom->index_guard = d_retain(dom, ctx, guard);
     if (dom->index_guard == NULL) goto fail;
-    if (d_node_install(dom, ctx) < 0) goto fail;
+    if (d_document_templates(dom, ctx, document->document) < 0 || d_node_install(dom, ctx) < 0) goto fail;
     JSValue collection_prototype = JS_NewObject(ctx);
     if (JS_IsException(collection_prototype)) goto fail;
     if (d_collection_install(dom, ctx, collection_prototype) < 0) {
@@ -482,7 +596,7 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     }
     JS_SetClassProto(ctx, dom->collection_class, collection_prototype);
     if (d_static_list_install(dom, ctx) < 0 || d_mixin_install(dom, ctx) < 0) goto fail;
-    if (selected.modern) d_mutation_start(dom);
+    if (selected.modern || cluster) d_mutation_start(dom);
     if (selected.url != NULL) {
         size_t size = os64_strlen(selected.url) + 1;
         dom->url = d_alloc(dom, size);
@@ -521,9 +635,25 @@ os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm
     /* Last: from here the runtime hands the binding its script's failures
      * (report.c), which a binding that failed to be made never sees. */
     if (installed < 0 || !d_report_host(dom)) goto fail;
+    if (cluster) {
+        if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) {
+            cluster->poisoned = true;
+            os64_dom_cluster_drain(cluster);
+            return NULL;
+        }
+    }
     outcome->status = OS64_JS_OK;
     return dom;
 fail:
+    if (cluster) {
+        construction_error(ctx, outcome);
+        os64_js_outcome_t ended;
+        os64_js_status_t status = os64_js_task_end(runtime, OS64_JS_ABI_ID, &ended);
+        if (status != OS64_JS_OK) *outcome = ended;
+        cluster->poisoned = true;
+        os64_dom_cluster_drain(cluster);
+        return NULL;
+    }
     /* Partially installed functions may outlive construction. Clear their
      * anchor before releasing native storage; the host retires this runtime.
      * Only the binding's own classes carry an opaque slot: JS_SetOpaque writes
@@ -540,7 +670,7 @@ fail:
     return NULL;
 }
 
-void os64_dom_drain(os64_dom_t *dom)
+static void binding_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
@@ -570,7 +700,7 @@ void os64_dom_drain(os64_dom_t *dom)
     dom->retained = 0;
 }
 
-void os64_dom_free(os64_dom_t *dom)
+static void binding_free(os64_dom_t *dom)
 {
     if (dom == NULL) return;
     /* The public teardown order drains before engine destruction. No engine
@@ -614,7 +744,51 @@ void os64_dom_free(os64_dom_t *dom)
         d_free(dom, entry);
         entry = next;
     }
-    os64_free(dom);
+    if (dom->cluster) dom->cluster->bytes -= sizeof(*dom);
+    else os64_free(dom);
+}
+
+void os64_dom_drain(os64_dom_t *dom)
+{
+    if (dom && dom->cluster) return;
+    binding_drain(dom);
+}
+
+void os64_dom_free(os64_dom_t *dom)
+{
+    if (dom && dom->cluster) return;
+    binding_free(dom);
+}
+
+void os64_dom_cluster_drain(os64_dom_cluster_t *cluster)
+{
+    if (!cluster || cluster->drained) return;
+    cluster->drained = true;
+    /* Close every entry door before releasing callbacks in any member. */
+    for (size_t i = 0; i < cluster->count; ++i)
+        d_mutation_stop(cluster->members[i]);
+    for (size_t i = 0; i < cluster->count; ++i)
+        binding_drain(cluster->members[i]);
+}
+
+void os64_dom_cluster_free(os64_dom_cluster_t *cluster)
+{
+    if (!cluster) return;
+    /* A later member may release storage charged to an earlier member.
+     * Keep all ledger descriptors until the native sweeps are finished. */
+    for (size_t i = 0; i < cluster->count; ++i) binding_free(cluster->members[i]);
+    for (size_t i = 0; i < cluster->count; ++i) os64_free(cluster->members[i]);
+    os64_page_state_group_free(cluster->page);
+    os64_html_group_free(cluster->html);
+    os64_free(cluster);
+}
+
+os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *cluster)
+{
+    if (!cluster) return (os64_dom_cluster_limits_t){0};
+    return (os64_dom_cluster_limits_t){os64_html_group_bytes(cluster->html),
+        os64_page_state_group_bytes(cluster->page), cluster->bytes,
+        cluster->kept_bytes, cluster->canvas_bytes};
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }

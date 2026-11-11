@@ -38,6 +38,7 @@ static bool budget(os64_dom_t *dom, JSContext *ctx)
 
 bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, os64_dom_geometry_t *out)
 {
+    dom = d_owner(dom, element);
     os64_memset(out, 0, sizeof(*out));
     // Foreign elements share the Element prototype but their geometry is
     // outside the HTML provider contract: the empty snapshot.

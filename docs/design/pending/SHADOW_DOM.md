@@ -745,7 +745,7 @@ leaves it.
 | yonder scripts.c `run_item` | is the script's element connected | CROSSES: the other half of `d_script_*` (A.2) |
 | yonder svg.c `yonder_svg_contains` | does an inline `svg`'s chain end at the document; what the icon inherits through | CROSSES for reaching the document (D2a: the chain steps from a shadow root to its host, so an icon inside a component is no longer refused). FLAT for what it inherits (D3): a slotted `svg` takes `color` from the wrapper around its slot, which the chain reaches only by the flat tree |
 | yonder svg.c `resource_transform` | `transform: inherit` | FLAT: inheritance |
-| libdom attr.c `detach`, `attr_document`, `attr_member`; implementation.c `d_window_document`, `d_leaving`, `document_take`; mixin.c `text_member`, `d_base_uri`; options.c `options_length_set`, `d_options_set_index` (each through `d_node_document`) | an Attr's or a node's document | CROSSES, riding `d_node_document` (A.1) |
+| libdom attr.c `detach`, `attr_document`, `attr_member`; implementation.c `d_window_document`, `d_made_in`, `document_take`; mixin.c `text_member`, `d_base_uri`; options.c `options_length_set`, `d_options_set_index` (each through `d_node_document`) | an Attr's or a node's document | CROSSES, riding `d_node_document` (A.1) |
 | libdom mixin.c `mixin_method`: `contains` | is the argument a descendant | STOPS (DOM's `contains` is per tree) |
 | libdom mixin.c `mixin_method`: `getRootNode` | the node's root | STOPS without `composed`, CROSSES with `{composed: true}`: the option is read and ignored today; D2b makes it count |
 | libdom node.c `d_node_clone` | `cloneNode` | CROSSES only into a `clonable` root, as libhtml's clone (A.2) |

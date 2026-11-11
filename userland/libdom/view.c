@@ -277,6 +277,7 @@ static const char *snapshot_value(const os64_dom_t *dom, int32_t prop, size_t *l
  * Detached canvases and hosts without a provider use the specified fallback. */
 JSValue d_computed_property(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t *node,int32_t prop,const char *fallback)
 {
+    dom=d_owner(dom,node);
     if(!d_in_window_tree(dom,node)||!dom->computed)return JS_NewString(ctx,fallback);
     int made=snapshot_of(dom,ctx,node);if(made<0)return JS_EXCEPTION;
     size_t length=0;const char *text=made?snapshot_value(dom,prop,&length):"";
@@ -477,12 +478,13 @@ static bool computed_empty(os64_dom_t *dom, JSContext *ctx, const DComputed *c)
 {
     if (c->empty) return true;
     const os64_html_node_t *node = d_node(dom, ctx, c->element);
-    return node == NULL || !d_in_window_tree(dom, node);
+    return node == NULL || !d_in_window_tree(d_owner(dom, node), node);
 }
 
 static JSValue computed_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, int32_t prop)
 {
     if (computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
+    dom = d_owner(dom, d_node(dom, ctx, c->element));
     if (dom->computed == NULL)
         return d_error(ctx, "InvalidStateError", "No style provider is installed");
     const os64_html_node_t *node = d_node(dom, ctx, c->element);
@@ -549,6 +551,7 @@ static JSValue position_value(os64_dom_t *dom, JSContext *ctx, const char *const
 static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, const DShort *s)
 {
     if (s->n == 0 || computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
+    dom = d_owner(dom, d_node(dom, ctx, c->element));
     if (dom->computed == NULL)
         return d_error(ctx, "InvalidStateError", "No style provider is installed");
     const os64_html_node_t *node = d_node(dom, ctx, c->element);
@@ -709,7 +712,7 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->computed_class = os64_js_class_id(&computed_slot);
     const JSClassDef definition = {.class_name = "CSSStyleDeclaration", .finalizer = computed_finalizer,
                                    .gc_mark = computed_mark};
-    if (JS_NewClass(dom->engine, dom->computed_class, &definition) < 0) return -1;
+    if (!JS_IsRegisteredClass(dom->engine, dom->computed_class) && JS_NewClass(dom->engine, dom->computed_class, &definition) < 0) return -1;
     /* A computed declaration and an element's style are one interface,
      * CSSStyleDeclaration (CSSOM), whose interface object names the style
      * object's prototype: the computed one inherits it, shadowing every
@@ -1319,7 +1322,7 @@ int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     dom->media_class = os64_js_class_id(&media_slot);
     const JSClassDef definition = {.class_name = "MediaQueryList", .finalizer = media_finalizer};
-    if (JS_NewClass(dom->engine, dom->media_class, &definition) < 0) return -1;
+    if (!JS_IsRegisteredClass(dom->engine, dom->media_class) && JS_NewClass(dom->engine, dom->media_class, &definition) < 0) return -1;
     JSValue prototype = JS_NewObject(ctx);
     dom->media_prototype = d_retain(dom, ctx, prototype);
     if (dom->media_prototype == NULL) return -1;
