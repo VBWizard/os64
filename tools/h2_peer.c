@@ -220,7 +220,8 @@ static bool engine_owes(os64_tls_client *c, uint8_t kind, const void *payload, s
     if (sizeof(c->out) - c->out_len < REC_HEAD + len)
         return false;
     record(c->out + c->out_len, kind, c->out_seq++, len);
-    memcpy(c->out + c->out_len + REC_HEAD, payload, len);
+    if (len != 0)
+        memcpy(c->out + c->out_len + REC_HEAD, payload, len);
     c->out_len += REC_HEAD + len;
     return true;
 }
