@@ -72,6 +72,7 @@ typedef enum {
     R_OPEN,             // the head, and the stream left open with nothing after it
     R_ECHO,             // the request's body back, once it has all come
     R_REFUSE_ONCE_HELD, // RST_STREAM(REFUSED_STREAM) the first time; then the head, and no body
+    R_UNENDED,          // the head and the whole body, and the stream left open after it
 } route_kind_t;
 
 typedef struct {
@@ -267,6 +268,11 @@ static void serve_h2(dial_t *d)
             break;
         case R_OPEN:
             send_reply_h2(h.stream, r, true);
+            break;
+        case R_UNENDED:
+            send_reply_h2(h.stream, r, true);
+            for (size_t at = 0; at < r->body_len; at += 9000)
+                peer_send_data(h.stream, r->body + at, r->body_len - at < 9000 ? r->body_len - at : 9000, false);
             break;
         case R_ECHO:
             echo_stream = h.stream;
@@ -1128,7 +1134,10 @@ static void leaving_cases(void)
     begin();
     route("/page", R_REPLY, "200", kPage);
     route("/held", R_HELD, "200", NULL);
-    route_t *big = route("/big", R_REPLY, "200", NULL);
+    // (Its stream is left open after its bytes, so that a fetch which leaves
+    // it has left a stream neither side finished, however fast the bytes
+    // came: that is what makes the resets below certain.)
+    route_t *big = route("/big", R_UNENDED, "200", NULL);
     static uint8_t lots[60000];
     memset(lots, 'b', sizeof(lots));
     big->body = lots;
