@@ -70,15 +70,19 @@ static void fetch_one(outcome_t *o)
     }
     const os64_fetch_head_t *head = os64_fetch_head(f);
     o->http = head != NULL ? head->status : 0;
-    static _Thread_local uint8_t buf[16384];
+    // On the heap: each fetch runs on a thread of its own, and os64 has no
+    // thread-local storage to give each a buffer.
+    enum { ROOM = 16384 };
+    uint8_t *buf = os64_malloc(ROOM);
     for (;;) {
-        int64_t n = os64_fetch_read(f, buf, sizeof(buf));
+        int64_t n = buf != NULL ? os64_fetch_read(f, buf, ROOM) : -1;
         if (n <= 0)
             break;
         for (int64_t i = 0; i < n; i++)
             o->sum = o->sum * 31u + buf[i];
         o->bytes += (uint64_t)n;
     }
+    os64_free(buf);
     o->micros = os64_micros() - before;
     o->status = os64_fetch_status(f);
     os64_strcopy(o->reason, sizeof(o->reason), os64_fetch_reason(f));
