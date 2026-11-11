@@ -1216,6 +1216,25 @@ static void pool_cases(void)
     CHECK(j.ended == OS64_FETCH_OK && atomic_load(&ndials) == 2 && atomic_load(&dials[1].requests) == 1);
     settle();
 
+    // A TAKE WHILE A CONNECTION IS BEING ADOPTED: the dialler holds it, its
+    // reader is starting (held back here), and it is nobody else's yet. A
+    // second fetch to a key not yet known to speak h2 dials its own.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    peer_thread_head_start(200);
+    memset(&j, 0, sizeof(j));
+    memset(&k, 0, sizeof(k));
+    job_start(&j, "https://adopting.test/page");
+    nap_ms(70);
+    job_start(&k, "https://adopting.test/page");
+    job_join(&j);
+    job_join(&k);
+    peer_thread_head_start(0);
+    JOB_OK(&j);
+    JOB_OK(&k);
+    CHECK(atomic_load(&ndials) == 2);
+    settle();
+
     // A SERVER WHOSE EVERY NEW CONNECTION ENDS AS IT BEGINS: the dialler is
     // refused a stream on the connection it dialled, dials once more, and
     // the second such refusal is the answer. It does not dial for ever.
