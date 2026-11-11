@@ -196,6 +196,14 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round5-scroll-owner', 'view', '    dom = d_owner(dom, element);\n    int owner = scroll_owner(dom, ctx, element);', '    int owner = scroll_owner(dom, ctx, element);'),
+      ('round5-activation-after-owner', 'window', '                       const DActivation *saved)\n{\n    dom = d_owner(dom, node);', '                       const DActivation *saved)\n{'),
+      ('round5-submit-after-owner', 'window', '    dom = d_owner(dom, form);\n    if (valid > 0 && result > 0', '    if (valid > 0 && result > 0'),
+      ('round5-submit-after-connected', 'window', 'valid > 0 && result > 0 && d_window_document(dom, form) && d_connected(form)', 'valid > 0 && result > 0 && d_window_document(dom, form)'),
+      ('round5-notify-owner', 'window', 'static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)\n{\n    dom = d_owner(dom, node);', 'static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)\n{'),
+      ('round5-replacement-current-target', 'webanimation', 'd_in_window_tree(d_owner(a->dom, wa_target(a)), wa_target(a)) && wa_data(a) != NULL &&', 'd_in_window_tree(a->dom, wa_target(a)) && wa_data(a) != NULL &&'),
+      ('round5-replacement-order', 'webanimation', 'heads[i]->serial < heads[first]->serial', 'heads[i]->serial > heads[first]->serial'),
+      ('round5-replacement-cluster', 'webanimation', 'size_t n = 0, members = animation_heads(dom, heads);\n    for (DWaAnimation *a; (a = animation_next(heads, members)) != NULL;) n += wa_replaceable(a);', 'size_t n = 0, members = 1; heads[0] = dom->wa_first;\n    for (DWaAnimation *a; (a = animation_next(heads, members)) != NULL;) n += wa_replaceable(a);'),
       ('round4-gradient-registry', 'canvas', 'os64_dom_t *owner = dom->cluster ? dom->cluster->members[i] : dom;', 'os64_dom_t *owner = dom;'),
       ('round4-click-guard', 'window', 'os64_dom_t *guard = d_creation_owner(dom, node);', 'os64_dom_t *guard = dom;'),
       ('round4-submit-guard', 'window', 'os64_dom_t *guard = d_creation_owner(dom, form);', 'os64_dom_t *guard = dom;'),

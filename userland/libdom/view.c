@@ -938,6 +938,7 @@ static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc
     } else if (scroll_options(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &has_x, &x, &has_y, &y) < 0) {
         return JS_EXCEPTION;
     }
+    dom = d_owner(dom, element);
     int owner = scroll_owner(dom, ctx, element);
     if (owner < 0) return JS_EXCEPTION;
     if (owner == SCROLLS_NOTHING) return JS_UNDEFINED;

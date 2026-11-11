@@ -2981,7 +2981,7 @@ void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_
 }
 
 /* Each binding keeps its creation-ordered records. Merge their heads by the
- * cluster serial so queries and layout see the same composite order. */
+ * cluster serial so queries, layout and replacement use the same composite order. */
 static size_t animation_heads(os64_dom_t *dom, DWaAnimation **heads)
 {
     size_t members = dom->cluster ? dom->cluster->count : 1;
@@ -3186,14 +3186,15 @@ static bool wa_busy(os64_dom_t *dom)
     return false;
 }
 
-/* § 5.5, Replacing animations: replaceable is finished, filling, of a
- * target in the document, on the document's timeline, and not removed; a
- * CSSAnimation never is (CSS Animations 2: one with an owning element is
- * not, and one without has no keyframes here to replace anything). */
+/* § 5.5, Replacing animations: replaceable is finished, filling, has a
+ * target connected to its current window document, has a document timeline,
+ * and is not removed. A CSSAnimation never is (CSS Animations 2: one with
+ * an owning element is not, and one without has no keyframes here to replace
+ * anything). */
 static bool wa_replaceable(DWaAnimation *a)
 {
     return !a->css && a->replace != WA_REMOVED && !a->no_timeline && wa_target(a) != NULL &&
-           d_in_window_tree(a->dom, wa_target(a)) && wa_data(a) != NULL &&
+           d_in_window_tree(d_owner(a->dom, wa_target(a)), wa_target(a)) && wa_data(a) != NULL &&
            play_state(a) == WA_FINISHED && wa_clock(a).in_effect;
 }
 
@@ -3205,35 +3206,40 @@ static bool wa_replaceable(DWaAnimation *a)
 static void remove_replaced(JSContext *ctx, os64_dom_t *dom)
 {
     dom->wa_replace_check = false;
-    size_t n = 0;
-    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) n += wa_replaceable(a);
+    DWaAnimation *heads[D_REALMS];
+    size_t n = 0, members = animation_heads(dom, heads);
+    for (DWaAnimation *a; (a = animation_next(heads, members)) != NULL;) n += wa_replaceable(a);
     if (n < 2) return;
-    DWaAnimation **v = js_malloc(ctx, n * sizeof(*v));
+    JSValue *v = js_malloc(ctx, n * sizeof(*v));
     if (v == NULL) return;
+    /* Allocation may collect unheld records. Rebuild the heads, then hold
+     * the candidates from sibling bindings through removal and event queuing. */
+    animation_heads(dom, heads);
     size_t k = 0;
-    for (DWaAnimation *a = dom->wa_first; a != NULL && k < n; a = a->next)
-        if (wa_replaceable(a)) v[k++] = a;
+    for (DWaAnimation *a; k < n && (a = animation_next(heads, members)) != NULL;)
+        if (wa_replaceable(a)) v[k++] = JS_DupValue(ctx, a->target.value);
     for (size_t i = 0; i < k; i++) {
-        DWaAnimation *a = v[i];
+        DWaAnimation *a = wa_state(v[i]);
         if (a->replace != WA_ACTIVE) continue;
         DWaData *d = wa_data(a);
         /* One that sets nothing is covered by any later one of its target. */
         bool covered = d->nprops > 0;
-        for (size_t j = i + 1; !covered && j < k; j++) covered = wa_target(v[j]) == wa_target(a);
+        for (size_t j = i + 1; !covered && j < k; j++) covered = wa_target(wa_state(v[j])) == wa_target(a);
         for (int32_t p = 0; covered && d->nprops > 0 && p < d->nprops; p++) {
             bool found = false;
             for (size_t j = i + 1; !found && j < k; j++) {
-                if (wa_target(v[j]) != wa_target(a)) continue;
-                DWaData *later = wa_data(v[j]);
+                if (wa_target(wa_state(v[j])) != wa_target(a)) continue;
+                DWaData *later = wa_data(wa_state(v[j]));
                 for (int32_t q = 0; !found && q < later->nprops; q++) found = later->props[q] == d->props[p];
             }
             covered = found;
         }
         if (!covered) continue;
         a->replace = WA_REMOVED;
-        queue_event(ctx, a, "remove", current_time(a), wa_now(dom), wa_now(dom));
+        queue_event(ctx, a, "remove", current_time(a), wa_now(a->dom), wa_now(a->dom));
         wa_restyle(a);
     }
+    for (size_t i = 0; i < k; i++) JS_FreeValue(ctx, v[i]);
     js_free(ctx, v);
 }
 

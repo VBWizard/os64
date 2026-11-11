@@ -215,6 +215,50 @@ entry paths, borrowed dispatch, window registration order and handler
 compilation context. The target consumer and libraries link. No new guest or
 P5 run is claimed; the earlier campaign's source qualifications remain below.
 
+## Review round 5
+
+All three findings on `65b6faf5` were reproduced under both teardown policies.
+They expose remaining single-binding assumptions in current-document services,
+post-listener activation and animation replacement.
+
+Element scroll methods and position setters resolve the current binding after
+argument conversion. Regressions cover scroll/scrollTo/scrollBy, both position
+setters, borrowed methods, adoption in dictionary getters and numeric conversion,
+read/write agreement at destination providers, and a windowless target.
+
+Post-click activation resolves the target again after listeners. The sibling
+path audit also found and fixed post-submit navigation and post-reset host
+notification: their listeners can adopt the form too. A submit listener that
+disconnects its form cannot produce a navigation request. Tests cover link and
+button adoption, script-dispatched MouseEvent activation, cancellation,
+windowless refusal, form adoption during submit/reset and disconnected refusal.
+The creation-owned reentry guards remain intact.
+
+Automatic animation replacement merges the cluster's creation-ordered lists
+using the same serial order as discovery and layout. Eligibility checks the
+target's current window document while animation timelines and event queues
+remain with their creation bindings. The candidate snapshot retains JS values
+across removal and event queuing and rebuilds traversal heads after allocation.
+The eligibility comment now distinguishes target connectivity from timeline
+ownership. Tests cover C/A/B creation order, property coverage split across two
+later effects, removal-event realm, persisted and detached exclusions, and
+layout/discovery dropping the removed effect. Remaining list walks were checked:
+CSS-host identity, timeline updates, hold release and teardown are local-owner
+operations; queries, layout, effect-owner publication and replacement traverse
+the cluster where needed.
+
+Both final realm matrices pass 476 checks. The complete shipping-engine DOM
+suite passes 44,043 checks and 3,883 allocation sweep points. Instrumented
+suites pass: scrolling 305; window/activation 820; events 1,020; Web Animations
+675. Animation replacement's update step fails each of 4 shipping / 24
+instrumented allocation points in turn, with clean teardown; the earlier
+11 instrumented animation-query cuts still pass. Eight review mutants compile
+and fail assertions, covering scroll ownership, post-click activation,
+post-submit ownership/connectivity, reset notification, replacement scope,
+eligibility and composite order. ASan/UBSan and LeakSanitizer remain enabled.
+The target consumer and libraries link. No new guest/P5 run is claimed; the
+earlier campaign's source qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

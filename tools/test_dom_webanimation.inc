@@ -1104,6 +1104,43 @@ static void wa_query_refusals(void)
     printf("Animation query allocation cuts: %zu\n", cuts);
 }
 
+/* Replacement holds a candidate snapshot while queuing removal events.
+ * Refuse update-step allocations to check cleanup of partially built work. */
+static void wa_replacement_refusals(void)
+{
+    size_t cuts = 0;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    for (size_t cut = 0; cut <= cuts; ++cut) {
+        p2b_ms = 1000; p2b_us = 1000000;
+        DomFixture f = fixture_new(&options);
+        if (!fixture_ready(&f)) break;
+        p2b_script(&f,
+            "globalThis.removals=0;globalThis.old=document.getElementById('box').animate({opacity:[0,1]},{duration:10,fill:'forwards'});"
+            "old.finish();old.onremove=()=>removals++;"
+            "globalThis.later=document.getElementById('box').animate({opacity:[1,0]},{duration:10,fill:'forwards'});later.finish();",
+            "animation replacement: populate before allocation refusals");
+        p2b_advance(20);
+        size_t start = attempts;
+        if (cut != 0) fail_at = start + cut;
+        os64_js_outcome_t out;
+        bool ran = os64_dom_web_animations_update(f.binding, p2b_ms, &out);
+        fail_at = 0;
+        size_t reached = attempts - start;
+        check(ran, "animation replacement: update attempted");
+        if (cut == 0) {
+            cuts = reached;
+            check(out.status == OS64_JS_OK, "animation replacement: positive update");
+            p2b_script(&f, "assert(old.replaceState==='removed'&&removals===1&&later.replaceState==='active')",
+                       "animation replacement: positive baseline");
+        } else {
+            dom_sweeps++;
+            check(reached >= cut, "animation replacement: refusal point reached");
+        }
+        fixture_free(&f);
+    }
+    printf("Animation replacement allocation cuts: %zu\n", cuts);
+}
+
 static void dom_webanimation_cases(void)
 {
     wa_composite();
@@ -1120,4 +1157,5 @@ static void dom_webanimation_cases(void)
     wa_css_pending();
     wa_css_take_over();
     wa_query_refusals();
+    wa_replacement_refusals();
 }

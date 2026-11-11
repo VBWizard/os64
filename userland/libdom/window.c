@@ -483,6 +483,7 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
  * § Classic browser scripting). */
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
+    dom = d_owner(dom, node);
     if (dom->options.activate != NULL && d_window_document(dom, node))
         dom->options.activate(dom->options.host_opaque, node, what);
 }
@@ -518,7 +519,9 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
     int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
     guard->submitting = self.next;
-    if (valid > 0 && result > 0) {
+    /* The submit listener can adopt or disconnect the form. */
+    dom = d_owner(dom, form);
+    if (valid > 0 && result > 0 && d_window_document(dom, form) && d_connected(form)) {
         d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
         dom->navigation.user_activated = native;
     }
@@ -571,6 +574,7 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
                        const DActivation *saved)
 {
+    dom = d_owner(dom, node);
     if (saved->checkable) {
         bool now = false;
         int result = 1;

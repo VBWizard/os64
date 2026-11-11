@@ -125,14 +125,16 @@ static void dom_realm_cases(void)
 typedef struct {
     os64_html_document_t *document;
     int32_t width;
-    unsigned calls, damages;
+    unsigned calls, damages, scrolls, resets;
+    double scroll_x, scroll_y;
 } ClusterProvider;
 static bool cluster_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
 {
     ClusterProvider *provider = opaque;
     check(os64_html_node_owner(node) == provider->document, "cluster provider: current document owns receiver");
     provider->calls++;
-    *out = (os64_dom_geometry_t){.offset_width = provider->width, .boxed = true};
+    *out = (os64_dom_geometry_t){.offset_width = provider->width, .boxed = true,
+        .scroll_left = (int32_t)provider->scroll_x, .scroll_top = (int32_t)provider->scroll_y};
     return true;
 }
 static bool cluster_computed(void *opaque, const os64_html_node_t *node, os64_dom_computed_t *out)
@@ -161,6 +163,41 @@ static void cluster_damage(void *opaque, const os64_html_node_t *node, uint32_t 
     ClusterProvider *provider = opaque;
     check(os64_html_node_owner(node) == provider->document, "cluster damage: destination host receives pixels");
     provider->damages++;
+}
+
+static bool cluster_scroll(void *opaque, const os64_html_node_t *node, double x, double y, bool by,
+                           os64_dom_geometry_stats_t *cost)
+{
+    (void)cost;
+    ClusterProvider *p = opaque;
+    check(os64_html_node_owner(node) == p->document, "cluster scroll: destination provider owns target");
+    p->scrolls++;
+    if (!isnan(x)) p->scroll_x = by ? p->scroll_x + x : x;
+    if (!isnan(y)) p->scroll_y = by ? p->scroll_y + y : y;
+    return true;
+}
+
+static void cluster_activate(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what)
+{
+    ClusterProvider *p = opaque;
+    check(os64_html_node_owner(node) == p->document, "cluster activation: destination provider owns target");
+    if (what == OS64_DOM_ACTIVATE_RESET) p->resets++;
+}
+
+static void cluster_navigation(os64_dom_t **bindings, ClusterProvider *providers, int destination,
+                               os64_dom_navigation_kind_t kind, const char *label)
+{
+    for (int i = 0; i < 3; ++i) {
+        os64_dom_navigation_t ask;
+        bool asked = os64_dom_take_navigation(bindings[i], &ask);
+        check(asked == (i == destination) && (!asked || ask.kind == kind), label);
+        if (ask.node) {
+            check(os64_html_node_owner(ask.node) == providers[i].document,
+                  "cluster navigation: request belongs to current document");
+            os64_html_release(providers[i].document, ask.node);
+        }
+        if (ask.submitter) os64_html_release(providers[i].document, ask.submitter);
+    }
 }
 
 static unsigned cluster_started;
@@ -197,6 +234,8 @@ static void dom_cluster_cases(void)
                                                    i == 1 ? "https://b.example/" : "https://c.example/");
             options.ranges = options.shadow_trees = true;
             options.script_connected = cluster_script_connected;
+            options.activate = cluster_activate;
+            options.host_opaque = &providers[i];
             if (i == 2) f.document->quirks = OS64_HTML_QUIRKS;
             os64_dom_admission_t result = os64_dom_create_in_realm(cluster, realms[i], f.document, f.state, &options, &out);
             check(result.binding && result.consumed && out.status == OS64_JS_OK, "cluster: independent DOM installed");
@@ -208,6 +247,8 @@ static void dom_cluster_cases(void)
                 os64_dom_set_computed(bindings[i], cluster_computed, &providers[i]);
                 os64_dom_image_provider_t images = {.opaque = &providers[i], .acquire = cluster_image};
                 os64_dom_set_images(bindings[i], &images);
+                os64_dom_view_provider_t view = {.opaque = &providers[i], .scroll_element = cluster_scroll};
+                os64_dom_set_view(bindings[i], &view);
             }
             if (!result.consumed) { os64_page_state_free(f.state); os64_html_document_free(f.document); }
             if (!result.binding) break;
@@ -447,6 +488,104 @@ static void dom_cluster_cases(void)
                 "finally{C.document.body.removeAttribute('ononline');C.document.body.removeAttribute('onoffline');"
                 "C.ononline=null;C.onoffline=null}",
                 "cluster round4: untouched window slots and borrowed handler compilation use target realm");
+            realm_script(realms[0],
+                "globalThis.scrollMoved=document.createElement('div');B.document.body.appendChild(scrollMoved);"
+                "scrollMoved.scroll(1,2);assert(scrollMoved.scrollLeft===1&&scrollMoved.scrollTop===2,'scroll in B');"
+                "scrollMoved.scrollTo({left:3,top:4});scrollMoved.scrollBy(5,6);"
+                "assert(scrollMoved.scrollLeft===8&&scrollMoved.scrollTop===10,'scrollTo and scrollBy in B');"
+                "scrollMoved.scrollLeft=12;scrollMoved.scrollTop=14;"
+                "assert(scrollMoved.scrollLeft===12&&scrollMoved.scrollTop===14,'position setters in B');"
+                "B.Element.prototype.scrollTo.call(scrollMoved,{get left(){C.document.body.appendChild(scrollMoved);return 21},top:22});"
+                "assert(scrollMoved.scrollLeft===21&&scrollMoved.scrollTop===22,'options conversion moves to C');"
+                "scrollMoved.scrollTop={valueOf(){B.document.body.appendChild(scrollMoved);return 24}};"
+                "assert(scrollMoved.scrollLeft===12&&scrollMoved.scrollTop===24,'setter conversion moves back to B');"
+                "scrollMoved.scrollBy({valueOf(){C.document.body.appendChild(scrollMoved);return 2}},3);"
+                "assert(scrollMoved.scrollLeft===23&&scrollMoved.scrollTop===25,'numeric conversion moves to C');"
+                "globalThis.scrollInert=document.implementation.createHTMLDocument();scrollInert.adoptNode(scrollMoved);scrollMoved.scroll(90,91);",
+                "cluster round5: scrolling follows current document after conversion");
+            realm_script(realms[0],
+                "globalThis.activationLink=document.createElement('a');activationLink.href='next';document.body.appendChild(activationLink);"
+                "activationLink.onclick=()=>B.document.body.appendChild(activationLink);activationLink.click();",
+                "cluster round5: link moves during click");
+            cluster_navigation(bindings, providers, 1, OS64_DOM_NAVIGATE_FOLLOW,
+                               "cluster round5: moved link navigates destination");
+            realm_script(realms[0],
+                "activationLink.onclick=e=>{C.document.body.appendChild(activationLink);e.preventDefault()};activationLink.click();",
+                "cluster round5: canceled moved link");
+            cluster_navigation(bindings, providers, -1, OS64_DOM_NAVIGATE_NONE,
+                               "cluster round5: canceled click does not navigate");
+            realm_script(realms[0],
+                "activationLink.onclick=()=>B.document.body.appendChild(activationLink);"
+                "C.EventTarget.prototype.dispatchEvent.call(activationLink,new A.MouseEvent('click',{bubbles:true,cancelable:true}));",
+                "cluster round5: script-dispatched click uses post-listener document");
+            cluster_navigation(bindings, providers, 1, OS64_DOM_NAVIGATE_FOLLOW,
+                               "cluster round5: dispatched click navigates destination");
+            realm_script(realms[0],
+                "activationLink.onclick=()=>scrollInert.adoptNode(activationLink);activationLink.click();",
+                "cluster round5: click moves link into windowless document");
+            cluster_navigation(bindings, providers, -1, OS64_DOM_NAVIGATE_NONE,
+                               "cluster round5: windowless activation cannot navigate");
+            realm_script(realms[0],
+                "globalThis.activationForm=B.document.createElement('form');B.document.body.appendChild(activationForm);"
+                "globalThis.activationButton=document.createElement('button');document.body.appendChild(activationButton);"
+                "globalThis.activationSubmits=0;activationForm.onsubmit=()=>activationSubmits++;"
+                "activationButton.onclick=()=>activationForm.appendChild(activationButton);activationButton.click();"
+                "assert(activationSubmits===1,'moved button submits destination form');",
+                "cluster round5: submit button moves during click");
+            cluster_navigation(bindings, providers, 1, OS64_DOM_NAVIGATE_SUBMIT,
+                               "cluster round5: moved button requests destination submission");
+            realm_script(realms[0],
+                "activationForm.onsubmit=()=>C.document.body.appendChild(activationForm);activationForm.requestSubmit();",
+                "cluster round5: form moves during submit listener");
+            cluster_navigation(bindings, providers, 2, OS64_DOM_NAVIGATE_SUBMIT,
+                               "cluster round5: submission follows post-listener document");
+            realm_script(realms[0],
+                "activationForm.onsubmit=()=>activationForm.remove();activationForm.requestSubmit();",
+                "cluster round5: submit listener disconnects form");
+            cluster_navigation(bindings, providers, -1, OS64_DOM_NAVIGATE_NONE,
+                               "cluster round5: disconnected form cannot navigate after submit listener");
+            unsigned resets_before = providers[1].resets;
+            realm_script(realms[0],
+                "activationForm.onreset=()=>B.document.body.appendChild(activationForm);activationForm.reset();",
+                "cluster round5: form moves during reset listener");
+            check(providers[1].resets == resets_before + 1, "cluster round5: reset notifies post-listener provider");
+            realm_script(realms[0],
+                "activationForm.remove();activationLink.remove();"
+                "globalThis.replacementTarget=C.document.createElement('div');replacementTarget.id='round5-replacement';C.document.body.appendChild(replacementTarget);"
+                "globalThis.makeFinished=(w,target,props)=>{let a=new w.Animation(new w.KeyframeEffect(target,props,{duration:10,fill:'forwards'}));a.finish();return a};"
+                "globalThis.replacedOld=makeFinished(C,replacementTarget,{opacity:[0,1],color:['red','blue']});"
+                "B.document.body.appendChild(replacementTarget);"
+                "globalThis.replacedOpacity=makeFinished(A,replacementTarget,{opacity:[1,0]});"
+                "globalThis.replacedColor=makeFinished(B,replacementTarget,{color:['blue','red']});"
+                "globalThis.replacementEvents=[];replacedOld.onremove=e=>replacementEvents.push(e instanceof C.AnimationPlaybackEvent&&window.event===e);"
+                "globalThis.persistedOld=makeFinished(C,replacementTarget,{left:['0px','1px']});persistedOld.persist();"
+                "globalThis.persistedLater=makeFinished(A,replacementTarget,{left:['1px','2px']});"
+                "globalThis.detachedTarget=document.createElement('div');"
+                "globalThis.detachedOld=makeFinished(A,detachedTarget,{opacity:[0,1]});"
+                "globalThis.detachedLater=makeFinished(B,detachedTarget,{opacity:[1,0]});",
+                "cluster round5: cross-binding replacement uses composite order and property union");
+            for (size_t step = 0; step < 2; ++step) {
+                p2b_advance(20);
+                const size_t order[] = {1, 2, 0};
+                for (size_t j = 0; j < 3; ++j) {
+                    size_t i = order[j];
+                    if (os64_dom_web_animations_next(bindings[i]) <= p2b_ms)
+                        check(os64_dom_web_animations_update(bindings[i], p2b_ms, &out) && out.status == OS64_JS_OK,
+                              "cluster round5: replacement and removal events update in their owning bindings");
+                }
+            }
+            const struct garb_effect *const *replacement_effects = NULL;
+            check(os64_dom_script_effects(bindings[1], native_id(providers[1].document->document, "round5-replacement"),
+                &replacement_effects) == 4, "cluster round5: layout omits removed cross-binding effect");
+            realm_script(realms[0],
+                "assert(replacedOld.replaceState==='removed'&&replacementEvents.join()==='true','cross-binding removal event');"
+                "assert(replacedOpacity.replaceState==='active'&&replacedColor.replaceState==='active','later partial effects retained');"
+                "assert(persistedOld.replaceState==='persisted'&&persistedLater.replaceState==='active','persisted effect retained');"
+                "assert(detachedOld.replaceState==='active'&&detachedLater.replaceState==='active','detached effects not replaced');"
+                "assert(!B.document.getAnimations().includes(replacedOld)&&replacementTarget.getAnimations().includes(replacedColor),'discovery excludes removed effect');"
+                "for(let a of [replacedOld,replacedOpacity,replacedColor,persistedOld,persistedLater,detachedOld,detachedLater])a.cancel();"
+                "replacementTarget.remove();",
+                "cluster round5: replacement removes only covered active effects and preserves callback realm");
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"
