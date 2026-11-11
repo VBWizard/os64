@@ -2460,8 +2460,11 @@ depend on it exclusively, and on 0 when there is none. With a script
 (220) open, then a sheet (256) opened after it, a picture (183) depends
 on the script by Chromium's rule and on the sheet by the other. Capture
 C3 is that page, with responses large enough to still be arriving, and
-the connection applies whichever rule C3 shows; the host case for it is
-the same three streams in that order. Which streams Chrome itself
+it shows Chromium's rule: the script (stream 3, 220) and the sheet
+(stream 5, 256) each depended on 0, the first picture (183) on stream 3
+while stream 5 was open and newer, and the second picture on the first.
+The connection applies that rule, and the host case for it is the same
+streams in that order. Which streams Chrome itself
 counted as still open at each instant is its own bookkeeping and is not
 matched.
 
