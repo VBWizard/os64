@@ -1517,6 +1517,16 @@ int main(int argc, char **argv)
     // test_libflow_percent_height_mutants.py.
     bool origin = argc == 2 && strcmp(argv[1], "--origin") == 0;
     bool percent = argc == 2 && strcmp(argv[1], "--percent-height") == 0;
+    // `--script-effects`: test_libflow_script.inc's cases alone, a script's
+    // effects and their composite, for test_web_animations_mutants.py.
+    bool scripted = argc == 2 && strcmp(argv[1], "--script-effects") == 0;
+    if (scripted) {
+        text_setup();
+        script_effect_cases();
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures, live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     if (origin || percent || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
         text_setup();
         if (origin) {

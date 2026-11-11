@@ -105,6 +105,10 @@ typedef struct {
     os64_dom_image_provider_t images;
     os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
+    // The page's CSS animations as its scripts see them (CSSAnimation and
+    // the CSS animation events; dom.h), with their own opaque. Zeroed,
+    // getAnimations answers the page's script animations alone.
+    os64_dom_css_animations_t css_animations;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with
     // `modern` off, a module script or an import map at all) are written

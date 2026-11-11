@@ -4414,6 +4414,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             FKeyframe *f = &an->frames[j];
             f->offset = kf[j].offset;
             f->has_easing = kf[j].easing != NULL && garb_easing_of(kf[j].easing, &f->easing);
+            f->composite = GARB_COMPOSITE_REPLACE;
             f->decls = kf[j].sets;
             f->ndecls = kf[j].nsets;
             f->sheet = kf[j].sheet;
@@ -4440,6 +4441,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         FAnimation *an = &anims[m->nanims];
         os64_memset(an, 0, sizeof(*an));
         an->script = x;
+        an->iteration_accumulate = x->iteration_accumulate;
         an->timing.duration_ms = x->timing.duration_ms;
         an->timing.delay_ms = x->timing.delay_ms;
         an->timing.iterations = x->timing.iterations;
@@ -4455,6 +4457,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             f->offset = x->frames[j].offset;
             f->has_easing = x->frames[j].has_easing;
             f->easing = x->frames[j].easing;
+            f->composite = x->frames[j].composite;
             f->decls = x->frames[j].sets;
             f->ndecls = x->frames[j].nsets;
             f->sheet = -1;

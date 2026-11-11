@@ -4552,8 +4552,121 @@ static void motion_batch_a_cases(void)
     moving_close(&m);
 }
 
+// `style` as element `id`'s style attribute, the cascade brought up to
+// date, or built again where it refuses an update (garb_cascade_update:
+// an arena renewed, say), the tree that may borrow from it freed first.
+static void moving_restyle(Moving *m, const char *id, const char *style)
+{
+    os64_html_set_attr(m->p.doc, (os64_html_node_t *)motion_find(m->p.doc->document, id), "style", style,
+                       strlen(style));
+    if (garb_cascade_update(m->p.cascade))
+        return;
+    garb_sheet_in_t sheets[16];
+    for (int32_t i = 0; i < m->p.n; i++)
+        sheets[i] = (garb_sheet_in_t){.sheet = &m->p.sheets[i]};
+    garb_cascade_t *fresh = garb_cascade(sheets, m->p.n, m->p.doc, garb_cascade_env(m->p.cascade));
+    flow_free(m->tree);
+    m->tree = NULL;
+    garb_cascade_free(m->p.cascade);
+    m->p.cascade = fresh;
+    m->p.env.cascade = fresh;
+}
+
+// The timeline as a script's CSSAnimation reads and drives it
+// (flow_timeline_at, flow_timeline_drive): ids the same through layouts,
+// the timing as the style gave it, animation-play-state moving the clock
+// of an animation no script drives and only reported for one a script
+// does, and a driven clock paused, running at another rate either way,
+// and canceled.
+static void motion_css_api_cases(void)
+{
+    Moving m;
+    moving_open(&m, "<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+                    "#a{animation:slide 1s linear}#b{animation:slide 2s 0.5s 3 alternate both paused}</style>"
+                    "<div id=a>a</div><div id=b>b</div>", 1000);
+    flow_css_animation_t a, b;
+    bool both = flow_timeline_size(m.tl) == 2 && flow_timeline_at(m.tl, 0, &a) && flow_timeline_at(m.tl, 1, &b);
+    expect("css api: each running animation is listed, in order", both, NULL);
+    expect("css api: the first, as its style gave it",
+           both && a.node == motion_find(m.p.doc->document, "a") && a.name_len == 5 && memcmp(a.name, "slide", 5) == 0 &&
+               a.place == 0 && a.clock.start_ms == 1000 && a.clock.rate == 1 && !a.clock.paused &&
+               !a.clock.canceled && !a.style_paused && !a.scripted && a.duration_ms == 1000 && a.iterations == 1,
+           NULL);
+    expect("css api: the second, paused, with its timing",
+           both && b.clock.paused && b.style_paused && b.duration_ms == 2000 && b.delay_ms == 500 &&
+               b.iterations == 3 && b.direction == GARB_DIRECTION_ALTERNATE && b.fill == GARB_FILL_BOTH, NULL);
+    expect("css api: ids are their own", both && a.id != 0 && b.id != 0 && a.id != b.id, NULL);
+    uint64_t ida = a.id, idb = b.id;
+    moving_again(&m, 1500);
+    expect("css api: an id lives through a layout",
+           flow_timeline_at(m.tl, 0, &a) && flow_timeline_at(m.tl, 1, &b) && a.id == ida && b.id == idb, NULL);
+    flow_css_clock_t held = {.paused = true, .hold_ms = 600, .rate = 1};
+    expect("css api: a script drives an id", flow_timeline_drive(m.tl, ida, &held), NULL);
+    moving_again(&m, 2000);
+    const flow_style_t *st = moving_style(&m, "a");
+    expect("css api: a driven clock holds through a layout",
+           flow_timeline_at(m.tl, 0, &a) && a.scripted && a.clock.paused && a.clock.hold_ms == 600 && st != NULL &&
+               st->margin[FLOW_LEFT].value == 60 * 64, NULL);
+    // animation-play-state changes: reported, the driven clock left alone.
+    moving_restyle(&m, "a", "animation-play-state:paused");
+    moving_again(&m, 2100);
+    moving_restyle(&m, "a", "animation-play-state:running");
+    moving_again(&m, 2200);
+    expect("css api: a driven clock is left alone by animation-play-state, which is reported",
+           flow_timeline_at(m.tl, 0, &a) && a.id == ida && a.clock.paused && a.clock.hold_ms == 600 &&
+               !a.style_paused, NULL);
+    moving_restyle(&m, "b", "animation-play-state:running");
+    moving_again(&m, 2300);
+    expect("css api: animation-play-state moves the clock no script drives",
+           flow_timeline_at(m.tl, 1, &b) && b.id == idb && !b.clock.paused && !b.style_paused &&
+               b.clock.start_ms == 2300, NULL);
+    // Twice as fast from local time 0 at 2100: 400 at 2300.
+    flow_css_clock_t fast = {.start_ms = 2100, .rate = 2};
+    expect("css api: a driven clock runs at its rate", flow_timeline_drive(m.tl, ida, &fast), NULL);
+    moving_again(&m, 2300);
+    st = moving_style(&m, "a");
+    expect("css api: at its rate", st != NULL && st->margin[FLOW_LEFT].value == 40 * 64, NULL);
+    os64_gui_rect_t view = {0, 0, 800, 600};
+    expect("css api: a clock at another rate is due at once",
+           flow_motion_due(m.tree, view, (flow_point_t){0, 0}) <= 2300, NULL);
+    // Backwards, local time 1000 at 2300: 800 at 2500.
+    flow_css_clock_t back = {.start_ms = 3300, .rate = -1};
+    expect("css api: a driven clock runs backwards", flow_timeline_drive(m.tl, ida, &back), NULL);
+    moving_again(&m, 2500);
+    st = moving_style(&m, "a");
+    expect("css api: backwards", st != NULL && st->margin[FLOW_LEFT].value == 80 * 64, NULL);
+    expect("css api: a clock running backwards is due at once",
+           flow_motion_due(m.tree, view, (flow_point_t){0, 0}) <= 2500, NULL);
+    // Backwards at its end, local time 1000: on its active side, drawn.
+    flow_css_clock_t end = {.start_ms = 3500, .rate = -1};
+    flow_timeline_drive(m.tl, ida, &end);
+    moving_again(&m, 2500);
+    st = moving_style(&m, "a");
+    expect("css api: backwards at its end, its last value", st != NULL && st->margin[FLOW_LEFT].value == 100 * 64,
+           NULL);
+    // Canceled, though its clock would show 50px.
+    flow_css_clock_t gone = {.canceled = true, .paused = true, .hold_ms = 500, .rate = 1};
+    expect("css api: a script cancels", flow_timeline_drive(m.tl, ida, &gone), NULL);
+    moving_again(&m, 2600);
+    st = moving_style(&m, "a");
+    expect("css api: a canceled one applies nothing and stays listed",
+           st != NULL && st->margin[FLOW_LEFT].value == 0 && flow_timeline_at(m.tl, 0, &a) && a.id == ida &&
+               a.clock.canceled, NULL);
+    expect("css api: no animation has an unknown id", !flow_timeline_drive(m.tl, 9999, &held), NULL);
+    moving_close(&m);
+    // Listed in the order the list names them, not by name.
+    moving_open(&m, "<!doctype html><style>@keyframes zeta{to{margin-left:1px}}@keyframes alpha{to{margin-top:1px}}"
+                    "#z{animation:zeta 1s,alpha 1s}</style><div id=z>z</div>", 1000);
+    flow_css_animation_t first;
+    expect("css api: in animation-name's order",
+           flow_timeline_at(m.tl, 0, &first) && first.name_len == 4 && memcmp(first.name, "zeta", 4) == 0 &&
+               first.place == 0, NULL);
+    moving_close(&m);
+}
+
 static void motion_cases(void)
 {
+    motion_css_api_cases();
     motion_batch_a_cases();
     motion_easing_cases();
     motion_chrome_cases();

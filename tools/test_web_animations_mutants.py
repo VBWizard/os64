@@ -5,7 +5,8 @@ events and holds, keyframe and timing processing, the effects it
 publishes, KeyframeEffect as an object of its own, the removal of
 replaced animations and commitStyles; yonder's keeping of a binding a tree may still read, and the
 scripts a measured layout reads; libflow's script effects under
-`display: none`. A mutant is CAUGHT when one of its harnesses fails, MISSED
+`display: none`; B2's composite add and accumulate, CSSAnimation driving
+libflow's record, and the CSS animation events. A mutant is CAUGHT when one of its harnesses fails, MISSED
 when they all pass, which means a test is missing and gets written. A build
 failure is neither.
 
@@ -34,6 +35,9 @@ STYLE_C = 'userland/libflow/style.c'
 DOM = 'tools/test_dom_host.sh --web-animations'
 YON = 'tools/test_yonder_scripts_host.sh'
 FLOW = 'tools/test_libflow_host.sh'
+FLOW_FX = 'tools/test_libflow_host.sh --script-effects'
+FLOW_MOTION = 'tools/test_libflow_host.sh --motion'
+MOTION_C = 'userland/libflow/motion.c'
 
 mutants = [
     # ── The state machine ───────────────────────────────────────────────
@@ -193,8 +197,11 @@ mutants = [
     ('running-is-replaceable', WA_C,
      '           play_state(a) == WA_FINISHED && wa_clock(a).in_effect;', '           wa_clock(a).in_effect;', [DOM]),
     ('removed-not-in-get-animations', WA_C,
-     '        if (target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;',
-     '        if (target == NULL || !wa_relevant(a)) continue;', [DOM]),
+     '        if (a->css_id != 0 || target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;',
+     '        if (a->css_id != 0 || target == NULL || !wa_relevant(a)) continue;', [DOM]),
+    ('css-listed-twice', WA_C,
+     '        if (a->css_id != 0 || target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;',
+     '        if (target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;', [DOM]),
     ('persist-does-not-restyle', WA_C,
      '            a->replace = WA_PERSISTED;\n            wa_restyle(a);', '            a->replace = WA_PERSISTED;', [DOM]),
     ('commit-writes-nothing', WA_C,
@@ -222,6 +229,116 @@ mutants = [
     ('no-timeline-keeps-stepping', WA_C, '        if (a->no_timeline) continue;\n        if (a->pending_play', '        if (a->pending_play', [DOM]),
     ('target-set-not-republished', WA_C,
      '        e->element = element;\n        effect_changed(ctx, e, false);', '        e->element = element;', [DOM]),
+    # ── B2: composite add and accumulate, iterationComposite ───────────
+    ('composite-auto-is-replace', WA_C,
+     'd->kept[i].composite == WA_COMPOSITE_AUTO ? e->composite : d->kept[i].composite;',
+     'd->kept[i].composite == WA_COMPOSITE_AUTO ? WA_COMPOSITE_REPLACE : d->kept[i].composite;', [DOM]),
+    ('iteration-composite-ignored', WA_C,
+     'd->fx.iteration_accumulate = e->iteration_composite == WA_COMPOSITE_ACCUMULATE;',
+     'd->fx.iteration_accumulate = false;', [DOM]),
+    ('rotations-not-composed', MOTION_C,
+     '    } else if (u->fn == FLOW_FN_ROTATE && v->fn == FLOW_FN_ROTATE && !accumulate) {',
+     '    } else if (u->fn == FLOW_FN_ROTATE && v->fn == FLOW_FN_ROTATE && !accumulate && false) {', [FLOW_FX]),
+    ('adding-ends-mask-underneath', MOTION_C,
+     'if (!s.implicit && !e.implicit && an->frames[s.frame].composite == GARB_COMPOSITE_REPLACE &&\n'
+     '                an->frames[e.frame].composite == GARB_COMPOSITE_REPLACE)',
+     'if (!s.implicit && !e.implicit)', [FLOW_FX]),
+    ('accumulate-first-pass-overridden', MOTION_C, 'e.frame, resolved_first(p) ? NULL : look->out);',
+     'e.frame, look->out);', [FLOW_FX]),
+    ('css-cancel-elapsed-stale', WA_C,
+     '            css_queue(dom, first, "animationcancel", seen_active_at(first, now), wa_now(dom));',
+     '            css_queue(dom, first, "animationcancel", seen_active_at(first, first->start), wa_now(dom));', [DOM]),
+    ('add-is-accumulate', MOTION_C, 'op == GARB_COMPOSITE_ACCUMULATE, look->alloc, look->ctx);',
+     'true, look->alloc, look->ctx);', [FLOW_FX]),
+    ('composite-not-applied', MOTION_C, '                    if (op != GARB_COMPOSITE_REPLACE)\n                        (void)add_prop(',
+     '                    if (false)\n                        (void)add_prop(', [FLOW_FX]),
+    ('iterations-not-accumulated', MOTION_C, '                    if (last != NULL)\n                        accumulate_onto(',
+     '                    if (false)\n                        accumulate_onto(', [FLOW_FX]),
+    ('accumulate-after-composite', MOTION_C,
+     '                    if (last != NULL)\n                        accumulate_onto((garb_prop_t)p, &met[end], last, k.iteration, look);\n'
+     '                    if (op != GARB_COMPOSITE_REPLACE)\n                        (void)add_prop((garb_prop_t)p, &under, &met[end], &met[end],\n'
+     '                                       op == GARB_COMPOSITE_ACCUMULATE, look->alloc, look->ctx);',
+     '                    if (op != GARB_COMPOSITE_REPLACE)\n                        (void)add_prop((garb_prop_t)p, &under, &met[end], &met[end],\n'
+     '                                       op == GARB_COMPOSITE_ACCUMULATE, look->alloc, look->ctx);\n'
+     '                    if (last != NULL)\n                        accumulate_onto((garb_prop_t)p, &met[end], last, k.iteration, look);', [FLOW_FX]),
+    ('accumulate-once', MOTION_C, '    for (double n = fmin(floor(iterations), 0x1p62); n >= 1; n = floor(n / 2)) {',
+     '    for (double n = fmin(floor(iterations), 1); n >= 1; n = floor(n / 2)) {', [FLOW_FX]),
+    ('accumulate-capped', MOTION_C, '    for (double n = fmin(floor(iterations), 0x1p62); n >= 1; n = floor(n / 2)) {',
+     '    for (double n = fmin(floor(iterations), 1000); n >= 1; n = floor(n / 2)) {', [FLOW_FX]),
+    ('accumulate-implicit-underlying', MOTION_C, '    if (e.implicit)\n        return NULL;\n', '', [FLOW_FX]),
+    ('implicit-end-not-accumulated', MOTION_C, '                    if (last == NULL && op == GARB_COMPOSITE_REPLACE)\n                        continue;',
+     '                    if (op == GARB_COMPOSITE_REPLACE && (last == NULL || f->implicit))\n                        continue;', [FLOW_FX]),
+    ('added-current-kept', MOTION_C, '                        look->out->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;\n', '', [FLOW_FX]),
+    ('colour-clamped-before-mix', MOTION_C, '        w.c[i] += n * x.c[i];', '        w.c[i] = fmin(w.c[i] + n * x.c[i], 255 * 255);', [FLOW_FX]),
+    ('colour-not-accumulated', MOTION_C, '                        if (last != NULL && !isnan(k.iteration))\n',
+     '                        if (false)\n', [FLOW_FX]),
+    ('colour-not-composited', MOTION_C, '                        if (op != GARB_COMPOSITE_REPLACE)\n                            w[end] = wide_add(w[end], u, 1);',
+     '                        if (op != GARB_COMPOSITE_REPLACE && false)\n                            w[end] = wide_add(w[end], u, 1);', [FLOW_FX]),
+    ('implicit-accumulates-onto-under', MOTION_C, '                    if (last != NULL && f->implicit) {\n',
+     '                    if (last != NULL && f->implicit && false) {\n', [FLOW_FX]),
+    ('implicit-unadded-kind-takes-final', MOTION_C,
+     '                        if (!add_prop((garb_prop_t)p, &under, &met[end], &met[end], false, look->alloc, look->ctx))\n                            met[end] = *f->style;\n',
+     '                        (void)add_prop((garb_prop_t)p, &under, &met[end], &met[end], false, look->alloc, look->ctx);\n', [FLOW_FX]),
+    ('records-in-name-order', MOTION_C, '    names = tmp;\n    bool ok = true;', '    bool ok = true;', [FLOW_MOTION]),
+    ('scale-add-adds', MOTION_C, '            one->a[i] = u->a[i] * v->a[i];', '            one->a[i] = u->a[i] + v->a[i];',
+     [FLOW_FX]),
+    ('accumulate-unpaired-concatenates', MOTION_C, '    if (accumulate && !pairwise) {', '    if (false) {', [FLOW_FX]),
+    ('script-frames-drop-iteration-accumulate', STYLE_C, '        an->iteration_accumulate = x->iteration_accumulate;',
+     '        an->iteration_accumulate = false;', [FLOW_FX]),
+    # ── B2: CSS animations a script drives ──────────────────────────────
+    ('drive-not-scripted', MOTION_C, '        r->scripted = true;\n', '', [FLOW_MOTION]),
+    ('scripted-not-carried', MOTION_C, '        r->scripted = was->scripted;\n', '', [FLOW_MOTION]),
+    ('record-rate-ignored', MOTION_C, '    return r->paused ? r->hold : (now - r->start) * r->rate;',
+     '    return r->paused ? r->hold : now - r->start;', [FLOW_MOTION]),
+    ('record-backwards-ignored', MOTION_C, 'local_time(an->record, now), an->record->rate < 0);',
+     'local_time(an->record, now), false);', [FLOW_MOTION]),
+    ('canceled-applies', MOTION_C, '    return (an->record != NULL && !an->record->canceled) || an->script != NULL;',
+     '    return an->record != NULL || an->script != NULL;', [FLOW_MOTION]),
+    ('canceled-not-carried', MOTION_C, '        r->canceled = was->canceled;\n', '', [FLOW_MOTION]),
+    ('css-push-skipped', WA_C, '    if (a->css) {\n        css_push(a);\n        return;', '    if (a->css) {\n        if (false) css_push(a);\n        return;', [DOM]),
+    ('css-push-pause-as-running', WA_C, '    bool paused = !isnan(a->held), canceled = !paused && isnan(a->start);',
+     '    bool paused = false, canceled = isnan(a->held) && isnan(a->start);', [DOM]),
+    ('css-wrapper-not-kept', WA_C, '    if (a->css_id != 0) return true;\n', '', [DOM]),
+    ('css-play-state-ignored', WA_C, '    if (r->style_paused != a->css_style_paused) {', '    if (false) {', [DOM]),
+    ('css-timing-not-pulled', WA_C, '        a->css_timing = t;\n        d->fx.timing = t;', '        a->css_timing = t;', [DOM]),
+    ('css-vanish-ignored', WA_C, '        if (a != NULL && a->css_id != 0) css_vanish(ctx, a);', '        if (a != NULL && a->css_id != 0 && false) css_vanish(ctx, a);', [DOM]),
+    ('css-new-not-pending', WA_C, '    } else if (!r->canceled && r->start_ms > now) {', '    } else if (false && r->start_ms > now) {', [DOM]),
+    ('css-step-before-pending', WA_C,
+     '            held[n++] = JS_DupValue(ctx, a->target.value);\n        for (size_t i = 0; i < n; i++) {',
+     '            held[n++] = JS_DupValue(ctx, a->target.value);\n'
+     '        if (ctx != NULL) css_step(ctx, dom, (double)now, since);\n        for (size_t i = 0; i < n; i++) {', [DOM]),
+    # ── B2: the CSS animation events ────────────────────────────────────
+    ('css-events-skip-end-with-start', WA_C,
+     '        css_queue(dom, s, "animationstart", from, css_when(dom, s, delay + from));\n'
+     '        css_queue(dom, s, "animationend", to, css_when(dom, s, delay + to));\n    } else if (was == CSS_ACTIVE && phase == CSS_BEFORE)',
+     '        css_queue(dom, s, "animationstart", from, css_when(dom, s, delay + from));\n'
+     '    } else if (was == CSS_ACTIVE && phase == CSS_BEFORE)', [DOM]),
+    ('css-iteration-elapsed-count', WA_C,
+     '        double at = (k.iteration < s->iteration ? k.iteration + 1 : k.iteration) * s->timing.duration_ms;',
+     '        double at = (k.iteration < s->iteration ? k.iteration + 1 : k.iteration);', [DOM]),
+    ('css-iteration-back-uses-new-start', WA_C,
+     '        double at = (k.iteration < s->iteration ? k.iteration + 1 : k.iteration) * s->timing.duration_ms;',
+     '        double at = k.iteration * s->timing.duration_ms;', [DOM]),
+    ('css-cancel-on-vanish-skipped', WA_C,
+     '            css_queue(dom, first, "animationcancel", seen_active_at(first, now), wa_now(dom));\n', '', [DOM]),
+    ('css-cancels-reversed', WA_C, '(first == NULL || s->place < first->place)) first = s;',
+     '(first == NULL || s->place > first->place)) first = s;', [DOM]),
+    ('css-place-not-kept', WA_C, '    s->pass = dom->wa_css_pass;\n    s->place = place;', '    s->pass = dom->wa_css_pass;\n    (void)place;', [DOM]),
+    ('css-events-unsorted', WA_C, '        while (*at != NULL && !(event_when(e) < event_when(*at))) at = &(*at)->next;',
+     '        while (*at != NULL && (event_when(e), true)) at = &(*at)->next;', [DOM]),
+    ('css-events-do-not-bubble', WA_C, "dom->wa_css_event_prototype->value, e->type, true,",
+     "dom->wa_css_event_prototype->value, e->type, false,", [DOM]),
+    ('css-due-no-boundary', WA_C, '    if (local < delay) b = delay;', '    if (local < delay) b = INFINITY;', [DOM]),
+    ('css-due-ignores-listener', WA_C, '    if (listening != dom->wa_css_listening) return 0;\n', '', [DOM]),
+    ('css-seed-loud', WA_C, 'css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);',
+     'css_events(dom, &r, i, now, false && seeding && r.start_ms <= since, pending);', [DOM]),
+    ('css-seed-paused-quiet', WA_C, 'css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);',
+     'css_events(dom, &r, i, now, seeding && (r.paused || r.start_ms <= since), pending);', [DOM]),
+    ('css-events-while-pending', WA_C, '    s->place = place;\n    if (pending) return;', '    s->place = place;\n    (void)pending;', [DOM]),
+    ('css-seed-everything', WA_C, 'css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);',
+     'css_events(dom, &r, i, now, seeding && (true || r.start_ms <= since), pending);', [DOM]),
+    ('css-due-from-now', WA_C, 'seen_next(&dom->wa_seen[i], (double)dom->wa_last_step)',
+     'seen_next(&dom->wa_seen[i], (double)dom->options.now_ms(dom->options.host_opaque))', [DOM]),
 ]
 
 caught, missed, unbuilt = [], [], []
