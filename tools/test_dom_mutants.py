@@ -196,6 +196,12 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round9-intersection-root-owner', 'intersection', '    dom = d_owner(dom, o->root);\n    if (!d_window_document(dom, o->root)) return NULL;', '    if (!d_window_document(dom, o->root)) return NULL;'),
+      ('round9-intersection-provider', 'intersection', 'owner->intersections_provider != NULL &&\n            owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost)', 'dom->intersections_provider != NULL &&\n            dom->intersections_provider(dom->intersections_opaque, s->batch + groups[i].at, count, &cost)'),
+      ('round9-intersection-viewport', 'intersection', 'if (owner->view.read != NULL) owner->view.read(owner->view.opaque, &view);', 'if (dom->view.read != NULL) dom->view.read(dom->view.opaque, &view);'),
+      ('round9-intersection-target-document', 'intersection', 'if (d_window_document(owner, t->node))\n                    s->batch[n++]', 'if (true)\n                    s->batch[n++]'),
+      ('round9-intersection-source-provider', 'intersection', 'if (s->observed == 0) return false;\n    s->undone = true;', 'if (s->observed == 0 || dom->intersections_provider == NULL) return false;\n    s->undone = true;'),
+      ('round9-intersection-retry', 'intersection', '(s->observed != 0 && s->undone) || s->owed != 0', 's->owed != 0'),
       ('round8-view-owner', 'mixin', '    dom = owner->dom;\n    os64_js_outcome_t access;', '    os64_js_outcome_t access;'),
       ('round8-view-context', 'mixin', '    os64_js_outcome_t access;\n    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);\n    if (ctx == NULL) return JS_EXCEPTION;', '    (void)0;'),
       ('round8-sheet-document', 'adopted', 'd_node_document(dom, root) != sheet->dom->document->document', 'd_node_document(dom, root) != dom->document->document'),

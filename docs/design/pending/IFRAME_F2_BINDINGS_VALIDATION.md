@@ -359,6 +359,32 @@ partitioning and the obsolete local-provider prerequisite. ASan/UBSan and
 LeakSanitizer remain enabled. The target consumer and libraries link. No new
 guest/P5 run is claimed; earlier campaign source qualifications remain below.
 
+## Review round 9
+
+The explicit-intersection-root finding on `b4aa723b` was reproduced. An
+explicit root now selects its current document's provider and viewport; an
+implicit root retains the observer's window. Pairs whose targets belong to a
+different document are not passed to that provider. Measurement batches group
+by root document, then observations are committed in observer/target order
+after the required providers answer. Registry, callback/entry realm, timestamps
+and delay state remain with the observer. A missing/refusing provider or batch
+allocation failure keeps the update owed; disconnecting drains that obligation.
+The root eligibility, provider and host stepping comments now describe these
+separate ownership rules.
+
+Regressions create explicit roots measured in B/C/B order, including an explicit
+Document root, and compare them with an implicit A root. They verify destination
+viewports, threshold ratios, callback order/prototypes, one batch per provider,
+adoption of an element-root subtree from B to C, target/root document mismatch,
+refusal after an earlier provider answered, missing-provider recovery and final
+disconnection. Both realm matrices pass 678 checks. The complete shipping-engine
+DOM suite passes 44,245 checks and 3,883 allocation sweep points. The instrumented
+intersection suite passes 409 checks, including allocation sweeps. Six mutants compile and
+fail assertions: root owner, provider, viewport, target-document filtering,
+local-provider prerequisite and retry obligation. ASan/UBSan and LeakSanitizer
+remain enabled. The target consumer and libraries link. No new guest/P5 run is
+claimed; earlier campaign source qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

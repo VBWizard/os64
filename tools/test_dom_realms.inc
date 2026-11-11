@@ -125,8 +125,8 @@ static void dom_realm_cases(void)
 typedef struct {
     os64_html_document_t *document;
     int32_t width;
-    unsigned calls, damages, scrolls, resets, reports, resize_calls;
-    bool resize_refuse;
+    unsigned calls, damages, scrolls, resets, reports, resize_calls, intersection_calls;
+    bool resize_refuse, intersection_refuse;
     double scroll_x, scroll_y;
 } ClusterProvider;
 static bool cluster_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
@@ -151,6 +151,32 @@ static bool cluster_resizes(void *opaque, os64_dom_resize_t *items, size_t count
         items[i].boxed = true;
         items[i].content[0] = items[i].border[0] = items[i].device[0] = p->width;
         items[i].content[1] = items[i].border[1] = items[i].device[1] = 5;
+    }
+    return true;
+}
+static void cluster_view(void *opaque, os64_dom_view_t *out)
+{
+    ClusterProvider *p = opaque;
+    *out = (os64_dom_view_t){.width = p->width, .height = 10};
+}
+static bool cluster_intersections(void *opaque, os64_dom_intersection_t *items, size_t count,
+                                 os64_dom_geometry_stats_t *cost)
+{
+    ClusterProvider *p = opaque;
+    p->intersection_calls++;
+    cost->elapsed_us = 1;
+    if (p->intersection_refuse) return false;
+    for (size_t i = 0; i < count; i++) {
+        check(os64_html_node_owner(items[i].target) == p->document &&
+              (items[i].root == NULL || os64_html_node_owner(items[i].root) == p->document),
+              "cluster intersection: root document provider owns the measured pair");
+        items[i].boxed = items[i].contained = items[i].root_boxed = true;
+        items[i].rect[2] = 100;
+        items[i].rect[3] = 10;
+        items[i].clip[0] = items[i].clip[1] = -OS64_DOM_UNCLIPPED;
+        items[i].clip[2] = items[i].clip[3] = OS64_DOM_UNCLIPPED;
+        items[i].root_rect[2] = p->width / 2.0;
+        items[i].root_rect[3] = 10;
     }
     return true;
 }
@@ -835,6 +861,51 @@ static void dom_cluster_cases(void)
             realm_script(realms[0], "assert(resizeRows.join()==='100');routedResize.disconnect();resizeFirst.remove();resizeSecond.remove();resizeThird.remove();",
                 "cluster round8: resize routing follows subsequent adoption");
             providers[1].width = 101;
+            providers[1].width = 60;
+            providers[2].width = 180;
+            for (size_t i = 1; i < 3; i++) {
+                os64_dom_set_intersections(bindings[i], cluster_intersections, &providers[i]);
+                os64_dom_view_provider_t view = {.read = cluster_view, .opaque = &providers[i], .scroll_element = cluster_scroll};
+                os64_dom_set_view(bindings[i], &view);
+            }
+            realm_script(realms[0],
+                "globalThis.intersectionRoot=document.createElement('div');globalThis.intersectionTarget=document.createElement('div');intersectionRoot.appendChild(intersectionTarget);document.body.appendChild(intersectionRoot);"
+                "globalThis.intersectionRows=[];globalThis.explicitIntersection=new IntersectionObserver(es=>{assert(es.every(e=>e instanceof A.IntersectionObserverEntry));intersectionRows.push(['element',es[0].intersectionRatio,es[0].rootBounds.width])},{root:intersectionRoot,threshold:[.25,.5,.75]});explicitIntersection.observe(intersectionTarget);"
+                "globalThis.otherIntersectionRoot=C.document.createElement('div');globalThis.otherIntersectionTarget=C.document.createElement('div');otherIntersectionRoot.appendChild(otherIntersectionTarget);C.document.body.appendChild(otherIntersectionRoot);"
+                "globalThis.otherIntersection=new IntersectionObserver(es=>intersectionRows.push(['other',es[0].intersectionRatio,es[0].rootBounds.width]),{root:otherIntersectionRoot,threshold:[.25,.5,.75]});otherIntersection.observe(otherIntersectionTarget);"
+                "globalThis.intersectionFixed=B.document.createElement('div');B.document.body.appendChild(intersectionFixed);"
+                "globalThis.documentIntersection=new IntersectionObserver(es=>intersectionRows.push(['document',es[0].intersectionRatio,es[0].rootBounds.width]),{root:B.document,threshold:[.25,.5,.75]});documentIntersection.observe(intersectionTarget);documentIntersection.observe(intersectionFixed);"
+                "globalThis.implicitIntersection=new IntersectionObserver(es=>intersectionRows.push(['implicit',es[0].isIntersecting]));implicitIntersection.observe(intersectionTarget);"
+                "B.document.body.appendChild(intersectionRoot);",
+                "cluster round9: explicit element and document roots select sibling measurement");
+            check(os64_dom_intersections_update(bindings[0]) &&
+                  os64_dom_intersections_fire(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "cluster round9: sibling roots deliver without observer-local provider");
+            realm_script(realms[0],
+                "assert(JSON.stringify(intersectionRows)===JSON.stringify([['element',.3,30],['other',.9,90],['document',.6,60],['implicit',false]]),'root measurements and observer order');intersectionRows=[];",
+                "cluster round9: explicit roots use destination viewport and implicit root stays in A");
+            check(providers[1].intersection_calls == 1 && providers[2].intersection_calls == 1,
+                  "cluster round9: roots share one batch per measurement document");
+            realm_script(realms[0], "C.document.body.appendChild(intersectionRoot);",
+                "cluster round9: explicit root subtree moves again");
+            providers[2].intersection_refuse = true;
+            check(!os64_dom_intersections_update(bindings[0]) && os64_dom_intersections_owed(bindings[0]) &&
+                  !os64_dom_intersections_due(bindings[0]), "cluster round9: refused provider leaves measurements owed");
+            providers[2].intersection_refuse = false;
+            os64_dom_set_intersections(bindings[2], NULL, NULL);
+            check(!os64_dom_intersections_update(bindings[0]) && os64_dom_intersections_owed(bindings[0]),
+                  "cluster round9: absent destination provider leaves measurements owed");
+            os64_dom_set_intersections(bindings[2], cluster_intersections, &providers[2]);
+            check(os64_dom_intersections_update(bindings[0]) &&
+                  os64_dom_intersections_fire(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "cluster round9: destination provider recovers");
+            realm_script(realms[0],
+                "assert(JSON.stringify(intersectionRows)===JSON.stringify([['element',.9,90],['document',0,0]]),'moved explicit root and mismatched document root');intersectionRows=[];"
+                "explicitIntersection.disconnect();otherIntersection.disconnect();documentIntersection.disconnect();implicitIntersection.disconnect();intersectionRoot.remove();otherIntersectionRoot.remove();intersectionFixed.remove();",
+                "cluster round9: explicit root follows adoption while document root remains fixed");
+            check(!os64_dom_intersections_owed(bindings[0]), "cluster round9: disconnect drains owed measurements");
+            providers[1].width = 101;
+            providers[2].width = 102;
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"

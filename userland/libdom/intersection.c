@@ -7,8 +7,8 @@
  * The binding keeps the observers, their targets and their entries, and does
  * the standard's arithmetic; the host answers the geometry. At its
  * rendering step the host calls os64_dom_intersections_update, which hands
- * it every observed (target, root) pair in one batch and runs "update
- * intersection observations" over the answers: the root intersection
+ * each measurement document its observed (target, root) pairs in one batch
+ * and runs "update intersection observations" over the answers: the root intersection
  * rectangle grown by rootMargin, the target's box cut by the clips between
  * it and the root and then by that rectangle, edge-inclusively, the ratio,
  * the threshold index, and an entry wherever the index or the intersecting
@@ -92,6 +92,8 @@ struct DIntersections {
     /* The budget refused the last step its batch, and the loss is said; a
      * step refused again before one is had says nothing more. */
     bool starved;
+    /* A required measurement provider or batch allocation refused. */
+    bool undone;
     /* When, on the host's clock (options.now_ms), the first target the
      * last step passed over for its observer's `delay` may be observed:
      * the step is owed then whatever moves. UINT64_MAX for none. */
@@ -235,7 +237,7 @@ bool os64_dom_intersections_owed(const os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed || dom->intersections == NULL) return false;
     const struct DIntersections *s = dom->intersections;
-    return s->owed != 0 || (s->delayed_due != UINT64_MAX && host_now(dom) >= s->delayed_due);
+    return (s->observed != 0 && s->undone) || s->owed != 0 || (s->delayed_due != UINT64_MAX && host_now(dom) >= s->delayed_due);
 }
 
 bool os64_dom_intersections_due(const os64_dom_t *dom)
@@ -280,17 +282,18 @@ static void root_bounds(const DIObserver *o, const double plain[4], double out[4
     out[B] = plain[B] + grow[2];
 }
 
-/* What the host is asked about the observer's root: NULL for the viewport
- * (no root, or the window's document); the element otherwise. False when
- * no target can meet it, a root in another document. */
-static bool host_root(os64_dom_t *dom, const DIObserver *o, const os64_html_node_t **out)
+/* The measurement binding and host root: the implicit root keeps the
+ * observer's window; an explicit root follows its current document. A
+ * windowless document cannot supply a viewport. `out` is NULL for the
+ * viewport, or the explicit element. */
+static os64_dom_t *host_root(os64_dom_t *dom, const DIObserver *o, const os64_html_node_t **out)
 {
     *out = NULL;
-    if (o->root == NULL) return true;
-    if (!d_window_document(dom, o->root)) return false;
-    if (o->root->kind == OS64_HTML_DOCUMENT) return true;
-    *out = o->root;
-    return true;
+    if (o->root == NULL) return dom;
+    dom = d_owner(dom, o->root);
+    if (!d_window_document(dom, o->root)) return NULL;
+    if (o->root->kind != OS64_HTML_DOCUMENT) *out = o->root;
+    return dom;
 }
 
 static void queue_entry(os64_dom_t *dom, DIObserver *o, const DTarget *t, double time, const double root[4],
@@ -390,8 +393,9 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
     struct DIntersections *s = dom != NULL && !dom->closed ? dom->intersections : NULL;
     if (s == NULL) return false;
     sweep(dom);
-    if (s->observed == 0 || dom->intersections_provider == NULL) return false;
-    /* The batch: one item for each target whose root it can meet. */
+    if (s->observed == 0) return false;
+    s->undone = true;
+    /* The batch: pairs grouped by the root's measurement document. */
     if (s->batch_cap < s->observed) {
         os64_dom_intersection_t *grown = d_alloc_kind(dom, s->observed * sizeof(*grown), OS64_DOM_MEM_INTERSECTION);
         if (grown == NULL) {
@@ -412,31 +416,56 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         s->batch_cap = s->observed;
     }
     s->starved = false;
+    struct {
+        os64_dom_t *owner;
+        size_t at;
+        double viewport[4];
+    } groups[D_REALMS] = {0};
+    size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
     size_t n = 0;
-    for (DIObserver *o = s->observers; o != NULL; o = o->next) {
-        const os64_html_node_t *root;
-        if (o->dead || !host_root(dom, o, &root)) continue;
-        for (DTarget *t = o->targets; t != NULL; t = t->next)
-            s->batch[n++] = (os64_dom_intersection_t){.target = t->node, .root = root};
+    for (size_t i = 0; i < members; i++) {
+        os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        groups[i].owner = owner;
+        groups[i].at = n;
+        for (DIObserver *o = s->observers; o != NULL; o = o->next) {
+            const os64_html_node_t *root;
+            if (o->dead || host_root(dom, o, &root) != owner) continue;
+            for (DTarget *t = o->targets; t != NULL; t = t->next)
+                if (d_window_document(owner, t->node))
+                    s->batch[n++] = (os64_dom_intersection_t){.target = t->node, .root = root};
+        }
+        size_t count = n - groups[i].at;
+        if (count == 0) continue;
+        os64_dom_geometry_stats_t cost = {0};
+        bool answered = owner->intersections_provider != NULL &&
+            owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost);
+        owner->geometry_stats.layouts += cost.layouts;
+        owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!answered) return false;
+        os64_dom_view_t view = {0};
+        if (owner->view.read != NULL) owner->view.read(owner->view.opaque, &view);
+        groups[i].viewport[2] = view.width;
+        groups[i].viewport[3] = view.height;
     }
-    os64_dom_geometry_stats_t cost = {0};
-    bool answered = n == 0 || dom->intersections_provider(dom->intersections_opaque, s->batch, n, &cost);
-    dom->geometry_stats.layouts += cost.layouts;
-    dom->geometry_stats.elapsed_us += cost.elapsed_us;
-    if (!answered) return false;
-    os64_dom_view_t view = {0};
-    if (dom->view.read != NULL) dom->view.read(dom->view.opaque, &view);
-    const double viewport[4] = {0, 0, view.width, view.height};
+    /* Providers run no script: roots and target order are stable across
+     * gathering and this original-order walk. Commit observations after
+     * every required provider has answered, so refusal advances no target. */
+    s->undone = false;
     double time = d_performance_now(dom);
     s->delayed_due = UINT64_MAX;
     bool queued = false;
-    size_t at = 0;
+    const double empty_viewport[4] = {0};
     for (DIObserver *o = s->observers; o != NULL; o = o->next) {
         const os64_html_node_t *root;
         if (o->dead) continue;
-        bool asked = host_root(dom, o, &root);
-        for (DTarget *t = o->targets; t != NULL; t = t->next)
-            queued = observe_one(dom, o, t, asked ? &s->batch[at++] : NULL, viewport, time) || queued;
+        os64_dom_t *owner = host_root(dom, o, &root);
+        size_t i = 0;
+        while (i < members && groups[i].owner != owner) i++;
+        const double *viewport = i < members ? groups[i].viewport : empty_viewport;
+        for (DTarget *t = o->targets; t != NULL; t = t->next) {
+            bool asked = i < members && d_window_document(owner, t->node);
+            queued = observe_one(dom, o, t, asked ? &s->batch[groups[i].at++] : NULL, viewport, time) || queued;
+        }
         hold_update(dom, NULL, o);
     }
     if (queued) s->queued = true;

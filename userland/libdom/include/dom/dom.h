@@ -1064,8 +1064,9 @@ void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
  * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the
  * observers and does the standard's arithmetic; the host answers the
- * geometry, every observed pair in ONE call, from the layout it is about to
- * paint. Every rectangle is left, top, right, bottom in CSS pixels in the
+ * geometry in one batch per measurement document, from its current layout.
+ * An explicit root selects its current document; an implicit root keeps the
+ * observer's window. Every rectangle is left, top, right, bottom in CSS pixels in the
  * viewport's coordinates: getBoundingClientRect's space. */
 typedef struct {
     /* In: an element of the binding's document, and the observer's root:
@@ -1102,28 +1103,30 @@ typedef struct {
  * as the geometry provider's. */
 typedef bool (*os64_dom_intersections_provider_t)(void *opaque, os64_dom_intersection_t *items, size_t count,
                                                  os64_dom_geometry_stats_t *cost);
-/* Install/replace outside callbacks; NULL removes it, and the binding then
- * runs no step. */
+/* Install/replace outside callbacks; NULL removes this document's provider.
+ * A step needing its measurements then waits without updating observations. */
 void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque);
 /* How many targets the page's observers observe: 0, and the host need not
  * watch for movement at all. */
 size_t os64_dom_intersections_observed(const os64_dom_t *dom);
 /* Whether a step is owed whether or not anything moved: a target waits for
  * its first observation, or the last step passed one over for its
- * observer's `delay` and that delay has run (options.now_ms's clock). And
+ * observer's `delay` and that delay has run (options.now_ms's clock), or a
+ * required provider or batch allocation refused. And
  * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
  * rendering step, after the animation frame callbacks and the layout they
  * asked for, when something an observation reads may have moved (a
- * layout, a scroll, a resize) or one is owed. It asks the provider once
- * and queues an entry for each target whose threshold index or
+ * layout, a scroll, a resize) or one is owed. A cluster host must step an
+ * observer when its explicit root's document changes geometry too. It asks
+ * each required provider once and queues an entry for each target whose threshold index or
  * intersecting state changed; it runs no script. True when the delivery
  * task is due after it, the first step the DOM budget refuses its batch
  * among them (the task reports the observations lost); false when nothing
- * is, when the provider refused the batch (the step observed nothing, and
- * is owed again as it was), and when the budget refuses the batch again
+ * is, when a required provider is absent or refused (no observation changes
+ * and the step stays owed), and when the budget refuses the batch again
  * before a step has had one. */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
