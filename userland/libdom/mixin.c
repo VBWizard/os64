@@ -851,6 +851,10 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 {
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_EXCEPTION;
     DValueMore *more = d_more(dom, ctx, owner);
     if (more == NULL) return JS_EXCEPTION;
     DValue **slot = view == VIEW_CLASS_LIST ? &more->class_list : view == VIEW_REL_LIST ? &more->rel_list

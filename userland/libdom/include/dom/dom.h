@@ -1127,9 +1127,9 @@ uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
  * before a step has had one. */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
- * the binding keeps the observers, the host answers every observed target's
- * sizes in one call from a layout it makes current, in CSS pixels but for
- * `device`. Unlike the intersection batch, this provider MAY lay the page
+ * the binding keeps the observers; each target's current-document provider
+ * answers its batch in one call from a layout it makes current, in CSS pixels
+ * but for `device`. Unlike the intersection batch, this provider MAY lay the page
  * out: its second round must see what the first round's callbacks changed. */
 typedef struct {
     /* In: an element of the binding's document. */
@@ -1157,9 +1157,10 @@ bool os64_dom_resizes_owed(const os64_dom_t *dom);
  * until nothing is active; then the loop error, an ErrorEvent at window,
  * when an observation was passed over. The host calls it in its rendering
  * step after the animation frame callbacks and before the intersection
- * step, when it laid the page out since the last or one is owed. True
- * when a task ran, its outcome filled; false when nothing had moved, or the
- * provider refused. */
+ * step, when a target document was laid out since the last or one is owed.
+ * A cluster host must also step observers whose targets changed in a sibling.
+ * True when a task ran, its outcome filled; false when nothing had moved,
+ * or a required provider is absent or refused. */
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
  * task: each observer with entries, in the order the page made them,

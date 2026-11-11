@@ -322,6 +322,43 @@ errors. ASan/UBSan and LeakSanitizer remain enabled. The target consumer and
 libraries link. No new guest/P5 run is claimed; earlier campaign source
 qualifications remain below.
 
+## Review round 8
+
+All three findings on `e7ee4ac7` were accepted. Cached classList, relList,
+htmlFor and dataset views allocate in the node wrapper's creation binding and
+realm. Tests first access them from B after adoption from A, borrow a C getter,
+and retain their identities and current-document mutations after another move.
+
+Constructed-sheet adoption compares the root's current document with the
+sheet's constructor document. Assignment, push and defineProperty reject a
+foreign sheet without changing the existing list. The sibling audit also
+corrects borrowed replace/replaceSync allocation ownership, adopted-array
+creation ownership, and invalidation of a moved shadow root. Replacement scans
+cluster adoption records while text charges remain with the sheet owner;
+root invalidation uses the root's current document. Tests verify host versions,
+text charging, observable-array prototypes and a moved root using a sheet
+constructed in its destination document.
+
+Resize gathering partitions targets by current document, calls each required
+provider once per gather and records its geometry costs there. Target order,
+registry ownership and callback/entry realm remain with the observer. No batch
+is broadcast until every required provider answers; refusal or absence leaves
+work owed. Flattened depth uses the target's current document. Tests cover B/C/B
+target ordering, multiple targets per batch, an observer with no local provider,
+missing and refusing destination providers, recovery, and subsequent adoption
+back to A. The provider and stepping comments now describe cross-document
+measurement; integrated frame scheduling remains outside this foundation.
+
+Both realm matrices pass 640 checks. The complete shipping-engine DOM suite
+passes 44,207 checks and 3,883 allocation sweep points. Instrumented suites
+pass: shadow and
+adopted stylesheets 135; ResizeObserver 1,309, including its allocation sweeps.
+Nine mutants compile and fail assertions for view owner/context, sheet document,
+array owner, text charge owner, adoption scanning, array invalidation, resize
+partitioning and the obsolete local-provider prerequisite. ASan/UBSan and
+LeakSanitizer remain enabled. The target consumer and libraries link. No new
+guest/P5 run is claimed; earlier campaign source qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

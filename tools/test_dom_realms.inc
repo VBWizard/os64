@@ -125,7 +125,8 @@ static void dom_realm_cases(void)
 typedef struct {
     os64_html_document_t *document;
     int32_t width;
-    unsigned calls, damages, scrolls, resets, reports;
+    unsigned calls, damages, scrolls, resets, reports, resize_calls;
+    bool resize_refuse;
     double scroll_x, scroll_y;
 } ClusterProvider;
 static bool cluster_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
@@ -135,6 +136,22 @@ static bool cluster_geometry(void *opaque, const os64_html_node_t *node, os64_do
     provider->calls++;
     *out = (os64_dom_geometry_t){.offset_width = provider->width, .boxed = true,
         .scroll_left = (int32_t)provider->scroll_x, .scroll_top = (int32_t)provider->scroll_y};
+    return true;
+}
+static bool cluster_resizes(void *opaque, os64_dom_resize_t *items, size_t count,
+                            os64_dom_geometry_stats_t *cost)
+{
+    ClusterProvider *p = opaque;
+    p->resize_calls++;
+    cost->layouts = 1;
+    if (p->resize_refuse) return false;
+    for (size_t i = 0; i < count; i++) {
+        check(os64_html_node_owner(items[i].target) == p->document,
+              "cluster resize: current document provider owns each target");
+        items[i].boxed = true;
+        items[i].content[0] = items[i].border[0] = items[i].device[0] = p->width;
+        items[i].content[1] = items[i].border[1] = items[i].device[1] = 5;
+    }
     return true;
 }
 static bool cluster_computed(void *opaque, const os64_html_node_t *node, os64_dom_computed_t *out)
@@ -736,6 +753,88 @@ static void dom_cluster_cases(void)
                   "cluster round7: B delivers buffered performance task");
             realm_script(realms[0], "assert(performanceDelivered,'buffered delivery uses owner list prototype');bufferedPerformance.disconnect();",
                 "cluster round7: performance delivery keeps owner realm");
+            realm_script(realms[0],
+                "globalThis.viewLink=document.createElement('link');viewLink.id='round8-link';B.document.body.appendChild(viewLink);"
+                "globalThis.viewOutput=document.createElement('output');viewOutput.id='round8-output';B.document.body.appendChild(viewOutput);",
+                "cluster round8: move elements before cached view allocation");
+            realm_script(realms[1],
+                "globalThis.tokenView=document.getElementById('round8-link').classList;"
+                "globalThis.relView=A.viewLink.relList;globalThis.dataView=A.viewLink.dataset;globalThis.forView=A.viewOutput.htmlFor;"
+                "assert(tokenView instanceof A.DOMTokenList,'class token creation realm');assert(relView instanceof A.DOMTokenList,'rel token creation realm');assert(forView instanceof A.DOMTokenList,'for token creation realm');"
+                "assert(dataView instanceof A.DOMStringMap,'dataset creation realm');"
+                "tokenView.add('b');relView.add('next');dataView.route='b';forView.add('field');",
+                "cluster round8: token and dataset views keep element creation realm");
+            realm_script(realms[0],
+                "C.document.body.appendChild(viewLink);C.document.body.appendChild(viewOutput);"
+                "assert(viewLink.classList===B.tokenView&&viewLink.relList===B.relView&&viewLink.dataset===B.dataView&&viewOutput.htmlFor===B.forView);"
+                "B.tokenView.add('c');B.dataView.route='c';assert(viewLink.className==='b c'&&viewLink.getAttribute('data-route')==='c');"
+                "globalThis.freshView=document.createElement('div');C.document.body.appendChild(freshView);"
+                "assert(Object.getOwnPropertyDescriptor(C.Element.prototype,'classList').get.call(freshView) instanceof A.DOMTokenList,'borrowed first getter');",
+                "cluster round8: cached views keep identity and mutate current document");
+            realm_script(realms[0],
+                "globalThis.foreignSheet=new CSSStyleSheet();globalThis.ownSheet=new B.CSSStyleSheet();ownSheet.replaceSync('p{}');"
+                "globalThis.bSheets=Object.getOwnPropertyDescriptor(A.Document.prototype,'adoptedStyleSheets').get.call(B.document);"
+                "assert(bSheets instanceof B.Array,'adopted array creation realm');"
+                "B.document.adoptedStyleSheets=[ownSheet];"
+                "for(const attempt of [()=>B.document.adoptedStyleSheets=[foreignSheet],()=>bSheets.push(foreignSheet),()=>Object.defineProperty(bSheets,'0',{value:foreignSheet})]){"
+                "let refused=false;try{attempt()}catch(e){refused=e.name==='NotAllowedError'}assert(refused,'foreign constructor document refused');assert(bSheets.length===1&&bSheets[0]===ownSheet)}",
+                "cluster round8: constructed sheets cannot cross documents through array mutation");
+            uint64_t sheet_version = os64_html_version(providers[1].document);
+            size_t sheet_bytes = os64_dom_bytes(bindings[1]);
+            realm_script(realms[0], "A.CSSStyleSheet.prototype.replaceSync.call(ownSheet,'q'.repeat(4096));",
+                "cluster round8: borrowed replacement uses sheet owner");
+            check(os64_html_version(providers[1].document) > sheet_version,
+                  "cluster round8: borrowed sheet replacement invalidates destination");
+            check(os64_dom_bytes(bindings[1]) > sheet_bytes + 4000,
+                  "cluster round8: borrowed sheet text is charged to constructor binding");
+            realm_script(realms[0],
+                "globalThis.sheetHost=document.createElement('div');globalThis.sheetRoot=sheetHost.attachShadow({mode:'open'});"
+                "B.document.body.appendChild(sheetHost);sheetRoot.adoptedStyleSheets=[ownSheet];B.document.adoptedStyleSheets=[];",
+                "cluster round8: moved shadow root accepts its current document's sheet");
+            sheet_version = os64_html_version(providers[1].document);
+            realm_script(realms[0], "ownSheet.replaceSync('span{}');",
+                "cluster round8: sheet replacement finds moved shadow root");
+            check(os64_html_version(providers[1].document) > sheet_version,
+                  "cluster round8: moved shadow adoption invalidates current document");
+            sheet_version = os64_html_version(providers[1].document);
+            realm_script(realms[0], "sheetRoot.adoptedStyleSheets=[];",
+                "cluster round8: clear adopted sheets");
+            check(os64_html_version(providers[1].document) > sheet_version,
+                  "cluster round8: moved adoption array invalidates current document");
+            for (size_t i = 1; i < 3; i++) os64_dom_set_resizes(bindings[i], cluster_resizes, &providers[i]);
+            realm_script(realms[0],
+                "globalThis.resizeFirst=document.createElement('div');globalThis.resizeSecond=document.createElement('div');globalThis.resizeThird=document.createElement('div');"
+                "B.document.body.appendChild(resizeFirst);C.document.body.appendChild(resizeSecond);B.document.body.appendChild(resizeThird);"
+                "globalThis.resizeRows=[];globalThis.routedResize=new ResizeObserver(es=>{assert(es.every(e=>e instanceof A.ResizeObserverEntry));resizeRows.push(es.map(e=>e.contentRect.width).join(','))});"
+                "routedResize.observe(resizeFirst);routedResize.observe(resizeSecond);routedResize.observe(resizeThird);",
+                "cluster round8: one observer measures targets in two sibling documents");
+            check(os64_dom_resizes_step(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "cluster round8: owner without provider delivers sibling measurements");
+            realm_script(realms[0], "assert(resizeRows.join()==='101,102,101','sibling provider sizes in observer order');resizeRows=[];",
+                "cluster round8: resize callback retains owner realm and target order");
+            check(providers[1].resize_calls == 2 && providers[2].resize_calls == 2,
+                  "cluster round8: one provider batch per document and gather");
+            os64_dom_set_resizes(bindings[2], NULL, NULL);
+            check(!os64_dom_resizes_step(bindings[0], &out) && os64_dom_resizes_owed(bindings[0]),
+                  "cluster round8: missing destination provider leaves observation owed");
+            os64_dom_set_resizes(bindings[2], cluster_resizes, &providers[2]);
+            providers[2].resize_refuse = true;
+            providers[1].width = 104;
+            check(!os64_dom_resizes_step(bindings[0], &out) && os64_dom_resizes_owed(bindings[0]),
+                  "cluster round8: refused destination leaves observation owed");
+            realm_script(realms[0], "assert(resizeRows.length===0,'no partial measurement delivery');",
+                "cluster round8: destination refusal publishes no partial batch");
+            providers[2].resize_refuse = false;
+            check(os64_dom_resizes_step(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "cluster round8: destination recovers and delivers changed size");
+            realm_script(realms[0], "assert(resizeRows.join()==='104,104');resizeRows=[];document.body.appendChild(resizeFirst);",
+                "cluster round8: resize target returns to observer document");
+            os64_dom_set_resizes(bindings[0], cluster_resizes, &providers[0]);
+            check(os64_dom_resizes_step(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "cluster round8: returned target uses original provider");
+            realm_script(realms[0], "assert(resizeRows.join()==='100');routedResize.disconnect();resizeFirst.remove();resizeSecond.remove();resizeThird.remove();",
+                "cluster round8: resize routing follows subsequent adoption");
+            providers[1].width = 101;
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"

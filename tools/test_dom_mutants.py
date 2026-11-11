@@ -196,6 +196,15 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round8-view-owner', 'mixin', '    dom = owner->dom;\n    os64_js_outcome_t access;', '    os64_js_outcome_t access;'),
+      ('round8-view-context', 'mixin', '    os64_js_outcome_t access;\n    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);\n    if (ctx == NULL) return JS_EXCEPTION;', '    (void)0;'),
+      ('round8-sheet-document', 'adopted', 'd_node_document(dom, root) != sheet->dom->document->document', 'd_node_document(dom, root) != dom->document->document'),
+      ('round8-sheet-array-owner', 'adopted', '    dom = owner->dom;\n    os64_js_outcome_t access;', '    os64_js_outcome_t access;'),
+      ('round8-sheet-copy-owner', 'adopted', '    dom = entry->dom;\n    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;', '    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;'),
+      ('round8-sheet-adoption-scan', 'adopted', 'size_t members = dom->cluster != NULL ? dom->cluster->count : 1;', 'size_t members = 1;'),
+      ('round8-sheet-array-touch', 'adopted', 'os64_html_touch(d_owner(dom, root)->document, (os64_html_node_t *)root)', 'os64_html_touch(dom->document, (os64_html_node_t *)root)'),
+      ('round8-resize-partition', 'resize', 'os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;', 'os64_dom_t *owner = dom;'),
+      ('round8-resize-source-provider', 'resize', 'if (out == NULL || s == NULL) return false;', 'if (out == NULL || s == NULL || dom->resizes_provider == NULL) return false;'),
       ('round7-report-owner', 'validity', 'static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)\n{\n    dom = d_owner(dom, node);', 'static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)\n{'),
       ('round7-selection-owner', 'selection', '    dom = d_owner(dom, node);\n    uint32_t now_start, now_end;', '    uint32_t now_start, now_end;'),
       ('round7-resize-owner', 'resize', '    dom = o->dom;\n    struct DResizes *s = dom->resizes;', '    struct DResizes *s = dom->resizes;'),
