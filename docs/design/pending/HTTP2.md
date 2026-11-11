@@ -2680,7 +2680,9 @@ What the build made of the brief, and where it left it.
   on for every program now, and IIS answers this way for its Windows
   sign-in). A stream reset, or a connection ended, with `HTTP_1_1_REQUIRED`
   before the head (a GOAWAY that took up no stream among them: Codex's
-  round 1) is remembered of the server's key
+  round 1; and one heard before the fetch has a stream at all, which the
+  connection keeps as `h2_conn_wants_h1` for a fetch it then has no room
+  for: round 2) is remembered of the server's key
   (`fetch_pool_require_h1`), and the request goes again; that try and
   every later fetch to the key dial HTTP/1.1 (`hop_http1` in `acquire`),
   for as long as the pool remembers the key.
@@ -2727,7 +2729,7 @@ refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
 two HTTP/2-only lines and their place, what is refused. The wire counters
 (#547) are counted on the HTTP/2 path at the same places.
 
-**Mutants.** `tools/test_fetch_h2_mutants.py` (124) and
+**Mutants.** `tools/test_fetch_h2_mutants.py` (125) and
 `tools/test_h2_conn_mutants.py` (140), through `tools/mutants_parallel.py`:
 the full run, before the cold read, caught 248 of 253. Three did not
 build and were rewritten; two were missed and each got a case (a
