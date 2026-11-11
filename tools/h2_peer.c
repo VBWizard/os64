@@ -631,6 +631,14 @@ void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len)
     pthread_mutex_unlock(&mu);
 }
 
+void peer_engine_holds_settings(const h2_setting_t *settings, uint32_t count)
+{
+    pthread_mutex_lock(&mu);
+    engine.plain_len += settings_frame(settings, count, engine.plain + engine.plain_len,
+                                       sizeof(engine.plain) - engine.plain_len);
+    pthread_mutex_unlock(&mu);
+}
+
 void peer_send_engine_owes(void)
 {
     uint8_t head[REC_HEAD];

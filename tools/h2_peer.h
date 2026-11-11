@@ -68,6 +68,9 @@ void peer_send_ping(void);
 void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len);
 // A record that makes the client's engine owe one of its own (a KeyUpdate).
 void peer_send_engine_owes(void);
+// The server's SETTINGS as plaintext the engine already holds: decrypted
+// during the handshake, before the connection is adopted.
+void peer_engine_holds_settings(const h2_setting_t *settings, uint32_t count);
 // The server's bytes as records, not sent: for h2_conn_adopt's `unread`.
 size_t peer_records_of_settings(const h2_setting_t *settings, uint32_t count, uint8_t *out, size_t room);
 

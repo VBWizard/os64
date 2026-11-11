@@ -253,16 +253,17 @@ static bool emit(h2_conn_t *c, const uint8_t *frames, size_t len)
     return true;
 }
 
-// A frame a PEER made us owe: an acknowledgement, a reset of its stream.
-// A peer that makes us owe them faster than its socket takes them is ended,
-// since nothing else bounds what it can make the queue hold.
-static void emit_owed(h2_conn_t *c, const uint8_t *frame, size_t len)
+// A frame a PEER made us owe: an acknowledgement, a reset of its stream, a
+// window given back for bytes it sent. A peer that makes us owe them faster
+// than its socket takes them is ended, since nothing else bounds what it
+// can make the queue hold. False when the frame did not go.
+static bool emit_owed(h2_conn_t *c, const uint8_t *frame, size_t len)
 {
     if (c->out_bytes > (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST) {
         die(c, H2_ERR_ENHANCE_YOUR_CALM);
-        return;
+        return false;
     }
-    emit(c, frame, len);
+    return emit(c, frame, len);
 }
 
 // A connection error of ours: GOAWAY with the code, and the end.
@@ -309,7 +310,7 @@ static void credit_conn(h2_conn_t *c, uint64_t bytes)
         return;
     uint32_t increment = c->recv_credit > H2_STREAM_MOST ? H2_STREAM_MOST : (uint32_t)c->recv_credit;
     size_t n = h2_write_window_update(c->scratch, sizeof(c->scratch), 0, increment);
-    if (emit(c, c->scratch, n)) {
+    if (emit_owed(c, c->scratch, n)) {
         c->recv_window += increment;
         c->recv_credit -= increment;
     }
@@ -322,7 +323,7 @@ static void credit_stream(h2_conn_t *c, h2_stream_t *s, uint32_t bytes)
     if (s->got_end || over(s) || s->credit == 0 || (int64_t)s->credit < c->our_initial_window / 2)
         return;
     size_t n = h2_write_window_update(c->scratch, sizeof(c->scratch), s->id, s->credit);
-    if (emit(c, c->scratch, n)) {
+    if (emit_owed(c, c->scratch, n)) {
         s->recv_window += s->credit;
         s->credit = 0;
     }
@@ -527,7 +528,10 @@ static void on_settings(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
             c->peer_initial_window = setting.value;
             for (uint32_t k = 0; k < H2_STREAMS_MOST; k++) {
                 h2_stream_t *s = c->streams[k];
-                if (s == NULL)
+                // A stream that will send no more keeps its slot until its
+                // fetch leaves, and has no window to judge.
+                if (s == NULL || s->sent_end || s->peer_reset ||
+                    (s->ending.how != H2_END_NOT_YET && s->ending.how != H2_END_CLEAN))
                     continue;
                 s->send_window += change;
                 if (s->send_window > WINDOW_MOST) {
@@ -707,7 +711,24 @@ static void on_block(h2_conn_t *c)
         unsigned status = (unsigned)(digits[0] - '0') * 100 + (unsigned)(digits[1] - '0') * 10 +
                           (unsigned)(digits[2] - '0');
         s->ending.any_seen = true;
-        if (status < 200) {
+        // Syntax and range are h2_head_check's: each content-length is a
+        // number. Two that differ are no length at all (RFC 9110 § 8.6).
+        bool has_length = false, lengths_differ = false;
+        uint64_t length = 0;
+        for (uint32_t i = 0; i < c->head_count; i++) {
+            const h2_field_t *field = &c->head_fields[i];
+            if (!is_named(field, "content-length"))
+                continue;
+            uint64_t n = 0;
+            for (uint32_t k = 0; k < field->value_len; k++)
+                n = n * 10 + (uint64_t)(field->value[k] - '0');
+            lengths_differ = lengths_differ || (has_length && n != length);
+            has_length = true;
+            length = n;
+        }
+        if (lengths_differ)
+            reset_stream(c, s, H2_ERR_PROTOCOL, H2_END_BAD_HEAD);
+        else if (status < 200) {
             // An interim head: dropped, and the wait goes on. It may not end
             // the stream, and 101 has no meaning in HTTP/2 (§ 8.6).
             if (ends || status == 101)
@@ -718,14 +739,11 @@ static void on_block(h2_conn_t *c)
                 fields[i] = c->head_fields[i];
                 fields[i].name = bytes + (c->head_fields[i].name - c->head_buf);
                 fields[i].value = bytes + (c->head_fields[i].value - c->head_buf);
-                if (is_named(&fields[i], "content-length") && !s->bodiless && status != 304) {
-                    // Syntax and range are h2_head_check's; it is a number.
-                    uint64_t n = 0;
-                    for (uint32_t k = 0; k < fields[i].value_len; k++)
-                        n = n * 10 + (uint64_t)(fields[i].value[k] - '0');
-                    s->has_length = true;
-                    s->length = n;
-                }
+            }
+            // A HEAD's answer and a 304 carry no content whatever they say.
+            if (has_length && !s->bodiless && status != 304) {
+                s->has_length = true;
+                s->length = length;
             }
             s->head = bytes;
             s->fields = fields;
@@ -875,8 +893,9 @@ static int64_t reader(void *arg)
 {
     h2_conn_t *c = arg;
     uint8_t cipher[4096];
-    if (c->unread_len != 0)
-        take_in(c, c->unread, c->unread_len);
+    // What came with the handshake: ciphertext not yet fed, and plaintext the
+    // engine already holds, which no later read of the socket would bring.
+    take_in(c, c->unread, c->unread_len);
     for (;;) {
         os64_lock_acquire(&c->lock);
         bool leave = c->dying && !c->draining;
@@ -961,11 +980,14 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
     sound = sound && c->our_max_frame <= GREETING_MOST && c->our_table <= GREETING_MOST &&
             (uint64_t)65535 + greeting->window_increment <= H2_STREAM_MOST;
     uint32_t table_room = c->our_table > H2_HPACK_TABLE_DEFAULT ? c->our_table : H2_HPACK_TABLE_DEFAULT;
+    // One literal field at a time passes through the scratch, and a field
+    // may be as large as a head, whatever the table holds.
+    uint32_t scratch_room = table_room > H2_HEAD_MOST ? table_room : H2_HEAD_MOST;
     if (sound) {
         c->plain_room = H2_FRAME_HEADER_LEN + c->our_max_frame;
         c->encoder_store = os64_malloc(H2_HPACK_STORAGE(H2_HPACK_TABLE_DEFAULT));
         c->decoder_store = os64_malloc(H2_HPACK_STORAGE(table_room));
-        c->decoder_scratch = os64_malloc(table_room);
+        c->decoder_scratch = os64_malloc(scratch_room);
         c->plain = os64_malloc(c->plain_room);
         c->block_room = os64_malloc(H2_BLOCK_MOST);
         c->head_buf = os64_malloc(H2_HEAD_MOST);
@@ -975,7 +997,7 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
                 h2_hpack_encoder_init(&c->encoder, c->encoder_store, H2_HPACK_STORAGE(H2_HPACK_TABLE_DEFAULT),
                                       H2_HPACK_TABLE_DEFAULT) &&
                 h2_hpack_decoder_init(&c->decoder, c->decoder_store, H2_HPACK_STORAGE(table_room),
-                                      c->decoder_scratch, table_room, c->our_table);
+                                      c->decoder_scratch, scratch_room, c->our_table);
     }
     uint8_t *hello = sound ? os64_malloc(H2_PREFACE_LEN + H2_FRAME_HEADER_LEN * 2 + greeting->count * 6 + 4) : NULL;
     if (hello != NULL) {

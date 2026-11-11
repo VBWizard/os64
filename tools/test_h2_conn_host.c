@@ -1504,6 +1504,92 @@ static void wake_cases(void)
     CHECK(server_sees_goaway(H2_ERR_PROTOCOL));
     fetch_done(&a);
     finish_dead(dead);
+
+    // PLAINTEXT THE ENGINE ALREADY HOLDS when the connection is adopted (the
+    // server's SETTINGS, decrypted with its Finished) is read at once: no
+    // later read of the socket would bring it.
+    dead = atomic_load(&dead_calls);
+    os64_tls_client *engine;
+    int32_t socket;
+    peer_begin(&engine, &socket);
+    peer_engine_holds_settings(NULL, 0);
+    conn = h2_conn_adopt(engine, socket, NULL, 0, &kGreeting, &kHooks);
+    CHECK(conn != NULL && peer_preface(2000));
+    CHECK(peer_frame_of(H2_FRAME_SETTINGS, &h, &payload, 2000) && !(h.flags & H2_FLAG_ACK));
+    CHECK(peer_frame_of(H2_FRAME_SETTINGS, &h, &payload, 2000) && (h.flags & H2_FLAG_ACK));
+
+    // A FIELD LARGER THAN THE HEADER TABLE is a field all the same: the
+    // table bounds what is indexed, the head limit what is taken.
+    static char longer[5001];
+    memset(longer, 'l', sizeof(longer) - 1);
+    h2_field_t long_head[] = {F(":status", "200"), F("x-long", longer)};
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/long") == H2_OK && server_request("/long") == 1);
+    peer_send_headers(1, long_head, 2, true);
+    CHECK(fetch_head(&a) == H2_OK && h2_stream_ended(a.stream).how == H2_END_CLEAN);
+
+    // CONTENT-LENGTH TWICE: the same number is one length, and two numbers
+    // are a head that says nothing true.
+    fetch_t b;
+    h2_field_t same[] = {F(":status", "200"), F("content-length", "3"), F("content-length", "3")};
+    h2_field_t differ[] = {F(":status", "200"), F("content-length", "10"), F("content-length", "3")};
+    fetch_init(&b, 3000);
+    CHECK(fetch_get(&b, conn, "/same") == H2_OK && server_request("/same") == 3);
+    peer_send_headers(3, same, 3, false);
+    peer_send_data(3, "abc", 3, true);
+    CHECK(fetch_head(&b) == H2_OK && read_all(&b, out, sizeof(out), &got) == 0 && got == 3);
+    fetch_done(&b);
+    fetch_init(&b, 3000);
+    CHECK(fetch_get(&b, conn, "/differ") == H2_OK && server_request("/differ") == 5);
+    peer_send_headers(5, differ, 3, false);
+    CHECK(server_sees_rst(5, H2_ERR_PROTOCOL) && fetch_head(&b) == H2_ENDED);
+    CHECK(h2_stream_ended(b.stream).how == H2_END_BAD_HEAD);
+    fetch_done(&b);
+
+    // THE INITIAL WINDOW CHANGES with a stream that has sent its last still
+    // in its fetch's hands: stream 1's window, at the most a window may be,
+    // is nobody's any more, and one byte more for every stream is no error.
+    peer_send_window(1, 0x7fffffff - 65535);
+    static const h2_setting_t kOneMore[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 65536}};
+    peer_send_settings(kOneMore, 1);
+    fetch_init(&b, 3000);
+    CHECK(fetch_get(&b, conn, "/still") == H2_OK && server_request("/still") == 7);
+    server_reply(7, "200", "here", true);
+    CHECK(fetch_head(&b) == H2_OK && read_all(&b, out, sizeof(out), &got) == 0 && got == 4);
+    fetch_done(&b);
+    fetch_done(&a);
+    // For a stream still sending it is the error RFC 9113 § 6.9.2 says.
+    fetch_init(&a, 3000);
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 9);
+    peer_send_window(9, 0x7fffffff - 65536);
+    static const h2_setting_t kTwoMore[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 65537}};
+    peer_send_settings(kTwoMore, 1);
+    CHECK(server_sees_goaway(H2_ERR_FLOW_CONTROL));
+    fetch_done(&a);
+    finish_dead(dead);
+
+    // WINDOW GIVEN BACK FOR PADDING, AT A SOCKET THAT TAKES NOTHING: every
+    // padded frame of a stream whose window is one byte owes a
+    // WINDOW_UPDATE, and the queue's ceiling ends the connection as it does
+    // for any other frame a server makes us owe.
+    dead = atomic_load(&dead_calls);
+    static const h2_setting_t kOneByte[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 1}};
+    static const h2_greeting_t kOneByteGreeting = {.settings = kOneByte, .count = 1, .window_increment = 0};
+    begin_with(&kOneByteGreeting, NULL, 0);
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/pad") == H2_OK && server_request("/pad") == 1);
+    server_reply(1, "200", NULL, false);
+    CHECK(fetch_head(&a) == H2_OK);
+    peer_stall(true);
+    static const uint8_t kNoPadding[1] = {0};       // a pad length of nothing: one byte of flow, none of body
+    for (int i = 0; i < 200000 && atomic_load(&dead_calls) == dead; i++) {
+        peer_send_frame(H2_FRAME_DATA, H2_FLAG_PADDED, 1, kNoPadding, 1);
+        if (i % 2000 == 1999)
+            nap_ms(20);
+    }
+    CHECK(died_within(dead, 5000));
+    fetch_done(&a);
+    finish_dead(dead);
 }
 
 // ── Many fetches at once ────────────────────────────────────────────────
