@@ -38,6 +38,7 @@ FLOW = 'tools/test_libflow_host.sh'
 FLOW_FX = 'tools/test_libflow_host.sh --script-effects'
 FLOW_MOTION = 'tools/test_libflow_host.sh --motion'
 MOTION_C = 'userland/libflow/motion.c'
+FLOW_C = 'userland/libflow/flow.c'
 
 mutants = [
     # ── The state machine ───────────────────────────────────────────────
@@ -339,6 +340,33 @@ mutants = [
      'css_events(dom, &r, i, now, seeding && (true || r.start_ms <= since), pending);', [DOM]),
     ('css-due-from-now', WA_C, 'seen_next(&dom->wa_seen[i], (double)dom->wa_last_step)',
      'seen_next(&dom->wa_seen[i], (double)dom->options.now_ms(dom->options.host_opaque))', [DOM]),
+    # ── C: a pseudo-element's CSS animations ────────────────────────────
+    ('pseudo-not-animated', STYLE_C,
+     '    if (!animate(c, el, which, &sp, &ua, &of->style, of->lays_out_items, false, &motion))\n        return false;\n',
+     '', [FLOW_MOTION]),
+    ('pseudo-records-seen-by-scripts', MOTION_C, '    return t != NULL ? t->n - t->npseudo : 0;',
+     '    return t != NULL ? t->n : 0;', [FLOW_MOTION]),
+    ('pseudo-records-not-skipped', MOTION_C, '    for (int32_t k = 0; t->npseudo > 0 && k <= at; k++)',
+     '    for (int32_t k = 0; false && k <= at; k++)', [FLOW_MOTION]),
+    ('pseudo-records-under-the-element', MOTION_C, '    return head == NULL || f_map_put(&t->by_node[pseudo], n, head);',
+     '    return head == NULL || f_map_put(&t->by_node[0], n, head);', [FLOW_MOTION]),
+    ('pseudo-boxes-the-element', FLOW_C, '    if (b->node == NULL || b->pseudo == GARB_PSEUDO_NONE)\n        return b->node;',
+     '    if (true)\n        return b->node;', [FLOW_MOTION]),
+    ('pseudo-first-box-unkeyed', FLOW_C, '    if (pseudo != GARB_PSEUDO_NONE && f_map_get(&bd->t->first, own) == NULL &&',
+     '    if (false && f_map_get(&bd->t->first, own) == NULL &&', [FLOW_MOTION]),
+    ('pseudo-group-the-element', FLOW_C, "        const os64_html_node_t *by = l->part == PART_OPEN ? box_styled_node(st, l->box) : NULL;",
+     "        const os64_html_node_t *by = l->part == PART_OPEN && l->box->pseudo == GARB_PSEUDO_NONE ? l->box->node : NULL;",
+     [FLOW_MOTION]),
+    ('pseudo-faded-unpainted', STYLE_C,
+     '    out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) || of->transparent;',
+     '    out->transparent = sp.s.opacity == 0 || of->transparent;', [FLOW_MOTION]),
+    # ── C: a script takes the play state over ───────────────────────────
+    ('take-over-not-by-play', WA_C, '    if (magic == A_PLAY || magic == A_PAUSE ||', '    if (magic == A_PAUSE ||', [DOM]),
+    ('take-over-not-by-pause', WA_C, '    if (magic == A_PLAY || magic == A_PAUSE ||', '    if (magic == A_PLAY ||', [DOM]),
+    ('take-over-by-any-reverse', WA_C, '(magic == A_REVERSE && flipped)', '(magic == A_REVERSE)', [DOM]),
+    ('take-over-by-any-start', WA_C, '(magic == A_START && set && flipped)', '(magic == A_START && set)', [DOM]),
+    ('take-over-not-by-start', WA_C, '(magic == A_START && set && flipped)', '(false && set && flipped)', [DOM]),
+    ('take-over-ignored', WA_C, '    if (restyled && !a->css_overridden) {', '    if (restyled) {', [DOM]),
 ]
 
 caught, missed, unbuilt = [], [], []

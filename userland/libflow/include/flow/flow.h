@@ -1329,8 +1329,9 @@ typedef struct {
     bool paused, canceled;
     double start_ms, hold_ms, rate;
 } flow_css_clock_t;
-// The timeline's CSS animations, a canceled one included, for a script's
-// CSSAnimation objects (WEB_ANIMATIONS.md § 3): in its order, which is composite
+// The timeline's CSS animations of elements, a canceled one included, for a
+// script's CSSAnimation objects (WEB_ANIMATIONS.md § 3) — a pseudo-element's
+// run and are left out (DEBTS.md): in its order, which is composite
 // order — elements as their layout met them, each element's by its
 // animation-name list — each with an id the same through every layout it
 // lives through, its element, its name (the timeline's bytes, good while
@@ -1382,8 +1383,10 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
 // flow_motion_due's, but their phase edges are, which a tick never
 // crosses: one waits for the layout. A time already gone is due at once.
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
-// One element the page's animations run on, for a record that says what
-// keeps a page moving (flow_motion_entries): its first box (NULL for none),
+// One element the page's animations run on — or its ::before or ::after,
+// named by the element and `pseudo` (a garb_pseudo_t, 0 for the element's
+// own), as a box names it — for a record that says what keeps a page
+// moving (flow_motion_entries): its first box (NULL for none),
 // whether it or anything inside it has a box (`drawn`), whether `view`
 // shows it, whether its animations repaint only where it draws
 // (`in_place`) and tick (`ticks`), whether flow_motion_due asks its own
@@ -1396,6 +1399,7 @@ uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flo
 // element it otherwise passes by, is not said here.
 typedef struct {
     const os64_html_node_t *node;
+    uint8_t pseudo;
     const flow_box_t *box;
     bool drawn, seen, in_place, ticks, counted;
     flow_name_t name;

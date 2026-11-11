@@ -82,7 +82,7 @@ struct flow_tree {
     FLayout *layout;
     FArena arena;           // the public boxes
     flow_box_t *root;
-    FMap first;             // node -> its first public box
+    FMap first;             // node -> its first public box; a pseudo-element's node -> its first box
     const flow_box_t **images, **controls, **positioned, **stacked;
     int32_t nimages, ncontrols, npositioned, nstacked;
     int32_t cap_images, cap_controls, cap_positioned, cap_stacked;
@@ -304,6 +304,14 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
         if (is_picture(node))
             push_list(bd, &bd->t->images, &bd->t->nimages, &bd->t->cap_images, b);
     }
+    // A pseudo-element's own node is the key to its first box, which the
+    // motion asks after when the pseudo-element animates (motion_seen); no
+    // node from outside libflow can name it.
+    const os64_html_node_t *own = styled_by != NULL && styled_by->kind == OS64_HTML_TEXT ? styled_by->parent
+                                                                                       : styled_by;
+    if (pseudo != GARB_PSEUDO_NONE && f_map_get(&bd->t->first, own) == NULL &&
+        !f_map_put(&bd->t->first, own, b))
+        bd->failed = true;
     return b;
 }
 
@@ -1994,9 +2002,20 @@ static bool stack_build(flow_tree_t *t)
     return ok;
 }
 
-// The tree's ticking elements (FTick), each with every box it makes, found
-// in one walk of the tree, and its group's OPEN in one of the layers. False
-// on no memory.
+// The node whose style box `b` draws: its element's, or, for a box a
+// pseudo-element made, the pseudo-element's node (FStyled.pseudo), which an
+// animation of the pseudo-element is listed by.
+static const os64_html_node_t *box_styled_node(const FStyles *st, const flow_box_t *b)
+{
+    if (b->node == NULL || b->pseudo == GARB_PSEUDO_NONE)
+        return b->node;
+    const FStyled *of = f_style_of(st, b->node);
+    return of != NULL ? of->pseudo[b->pseudo == GARB_PSEUDO_BEFORE ? 0 : 1] : NULL;
+}
+
+// The tree's ticking elements and pseudo-elements (FTick), each with every
+// box it makes, found in one walk of the tree, and its group's OPEN in one
+// of the layers. False on no memory.
 static bool ticking_build(flow_tree_t *t)
 {
     FStyles *st = t->styles;
@@ -2028,7 +2047,8 @@ static bool ticking_build(flow_tree_t *t)
     for (int pass = 0; ok && pass < 2 && t->root != NULL; pass++) {
         flow_box_t *b = t->root;
         while (b != NULL) {
-            FTick *e = b->node != NULL ? f_map_get(&of, b->node) : NULL;
+            const os64_html_node_t *by = box_styled_node(st, b);
+            FTick *e = by != NULL ? f_map_get(&of, by) : NULL;
             if (e != NULL && pass == 0)
                 e->nboxes++;
             else if (e != NULL)
@@ -2052,9 +2072,9 @@ static bool ticking_build(flow_tree_t *t)
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
         // A group a pseudo-element's box opens names its originating element
-        // (flow_box_t.pseudo) and is not that element's.
-        FTick *e = l->part == PART_OPEN && l->box->node != NULL && l->box->pseudo == GARB_PSEUDO_NONE
-                       ? f_map_get(&of, l->box->node) : NULL;
+        // (flow_box_t.pseudo) and is the pseudo-element's, not that element's.
+        const os64_html_node_t *by = l->part == PART_OPEN ? box_styled_node(st, l->box) : NULL;
+        FTick *e = by != NULL ? f_map_get(&of, by) : NULL;
         if (e != NULL && e->open < 0)
             e->open = k;
     }
@@ -2540,7 +2560,10 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
     for (int32_t i = 0; i < styles->nanimated && i < cap; i++) {
         const os64_html_node_t *n = styles->animated[i];
         const FStyled *st = f_style_of(styles, n);
-        flow_motion_entry_t e = {.node = n, .box = f_map_get(&tree->first, n), .layout_due = FLOW_NEVER,
+        garb_pseudo_t pseudo = f_pseudo_of(n);
+        flow_motion_entry_t e = {.node = pseudo != GARB_PSEUDO_NONE ? f_pseudo_origin(n) : n,
+                                 .pseudo = (uint8_t)pseudo, .box = f_map_get(&tree->first, n),
+                                 .layout_due = FLOW_NEVER,
                                  .tick_due = FLOW_NEVER};
         e.drawn = motion_drawn(tree, n);
         if (st != NULL && st->motion != NULL) {

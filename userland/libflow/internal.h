@@ -485,12 +485,15 @@ double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext 
 // memory — and it ends: a complete layout keeps only what it matched, an
 // incomplete one carries every record it did not match on as it was. The
 // new timeline is the tree's (FStyles.timeline) until the face shows the
-// tree (flow_timeline_commit), and `from` must live until it ends.
+// tree (flow_timeline_commit), and `from` must live until it ends. A
+// pseudo-element's animations are matched to the records of its element
+// and `pseudo`, never to its node's, which each layout makes anew.
 flow_timeline_t *f_timeline_begin(const flow_timeline_t *from);
-bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, garb_pseudo_t pseudo, FMotion *m,
+                        double now);
 bool f_timeline_end(flow_timeline_t *t, bool complete);
 // How many records the timeline keeps, each holding its element; and how
-// many elements its map names.
+// many elements and pseudo-elements its maps name.
 int32_t f_timeline_records(const flow_timeline_t *t);
 int32_t f_timeline_elements(const flow_timeline_t *t);
 // A transform function's matrix, made from its primitive and arguments
@@ -629,7 +632,9 @@ typedef struct {
     FArena arena;
     FMap map;               // element node -> FStyled
     size_t lists_left;      // of F_STYLE_LISTS_BUDGET
-    // The elements an animation runs on, in document order (FStyled.motion).
+    // The elements an animation runs on, in document order (FStyled.motion),
+    // and the pseudo-elements: each one's node, which every layout makes
+    // anew, so two layouts' lists hold different nodes for it.
     const os64_html_node_t **animated;
     int32_t nanimated, cap_animated;
     // The timeline this layout builds when the environment hands it one

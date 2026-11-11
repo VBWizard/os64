@@ -64,11 +64,14 @@ static garb_clock_t clock_at(const flow_animation_t *a, double local, bool backw
 
 // ── The timeline ────────────────────────────────────────────────────────
 
-// One CSS animation: its element and name, and its clock — while it is
-// paused, the local time it holds, else when its local time was 0 and how
-// fast it runs.
+// One CSS animation: its element (and its ::before or ::after, when the
+// pseudo-element's style animates: the element is what lives from layout to
+// layout, and the pseudo-element is made anew each time) and name, and its
+// clock — while it is paused, the local time it holds, else when its local
+// time was 0 and how fast it runs.
 struct FRecord {
     const os64_html_node_t *node;
+    garb_pseudo_t pseudo;       // GARB_PSEUDO_NONE for the element's own
     double start;               // on the face's clock, ms
     double hold;                // paused: how far it had run
     double rate;                // 1, unless a script's CSSAnimation set another
@@ -100,7 +103,10 @@ struct flow_timeline {
     const os64_html_document_t *doc;
     FRecord **records;
     int32_t n, cap;
-    FMap by_node;               // node -> its first record
+    int32_t npseudo;            // the records a pseudo-element's style made
+    // node -> its first record: the element's own, its ::before's, its
+    // ::after's, by garb_pseudo_t.
+    FMap by_node[GARB_PSEUDO_AFTER + 1];
     const flow_timeline_t *from;
     bool *met;                  // which of `from`'s records a name took
     uint64_t next_id;           // the last record id given, carried on from `from`
@@ -124,7 +130,8 @@ void flow_timeline_free(flow_timeline_t *t)
     }
     os64_free(t->records);
     os64_free(t->met);
-    f_map_free(&t->by_node);
+    for (int k = 0; k <= GARB_PSEUDO_AFTER; k++)
+        f_map_free(&t->by_node[k]);
     os64_free(t);
 }
 
@@ -133,16 +140,22 @@ int32_t f_timeline_records(const flow_timeline_t *t)
     return t != NULL ? t->n : 0;
 }
 
+// What a script sees leaves out a pseudo-element's records (DEBTS.md: a
+// CSSAnimation of one wants its pseudoElement, and its events theirs).
 int32_t flow_timeline_size(const flow_timeline_t *t)
 {
-    return t != NULL ? t->n : 0;
+    return t != NULL ? t->n - t->npseudo : 0;
 }
 
 bool flow_timeline_at(const flow_timeline_t *t, int32_t i, flow_css_animation_t *out)
 {
-    if (t == NULL || i < 0 || i >= t->n)
+    if (t == NULL || i < 0 || i >= t->n - t->npseudo)
         return false;
-    const FRecord *r = t->records[i];
+    int32_t at = i;
+    for (int32_t k = 0; t->npseudo > 0 && k <= at; k++)
+        if (t->records[k]->pseudo != GARB_PSEUDO_NONE)
+            at++;
+    const FRecord *r = t->records[at];
     *out = (flow_css_animation_t){.id = r->id, .node = r->node, .name = r->name, .name_len = r->len,
                                   .place = r->place,
                                   .clock = {.paused = r->paused, .canceled = r->canceled, .start_ms = r->start,
@@ -172,7 +185,10 @@ bool flow_timeline_drive(flow_timeline_t *t, uint64_t id, const flow_css_clock_t
 
 int32_t f_timeline_elements(const flow_timeline_t *t)
 {
-    return t != NULL ? (int32_t)t->by_node.count : 0;
+    int32_t n = 0;
+    for (int k = 0; t != NULL && k <= GARB_PSEUDO_AFTER; k++)
+        n += (int32_t)t->by_node[k].count;
+    return n;
 }
 
 flow_timeline_t *f_timeline_begin(const flow_timeline_t *from)
@@ -189,10 +205,11 @@ flow_timeline_t *f_timeline_begin(const flow_timeline_t *from)
     return t;
 }
 
-// A record of `n` named `name`, holding `n`, with the times of `was` when
-// it carries one on and none when it starts; NULL on no memory.
-static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const char *name, uint32_t len,
-                           const FRecord *was)
+// A record of `n` (or its pseudo-element `pseudo`) named `name`, holding
+// `n`, with the times of `was` when it carries one on and none when it
+// starts; NULL on no memory.
+static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, garb_pseudo_t pseudo,
+                           const char *name, uint32_t len, const FRecord *was)
 {
     if (t->n == t->cap) {
         int32_t grown = t->cap > 0 ? t->cap * 2 : 16;
@@ -208,6 +225,7 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const 
     os64_memcpy(r->name, name, len);
     r->len = len;
     r->node = n;
+    r->pseudo = pseudo;
     r->index = t->n;
     if (was != NULL) {
         r->start = was->start;
@@ -228,6 +246,7 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const 
         r->rate = 1;
     }
     os64_html_hold(t->doc, n);
+    t->npseudo += pseudo != GARB_PSEUDO_NONE;
     t->records[t->n++] = r;
     return r;
 }
@@ -323,7 +342,8 @@ static void sort_named(Named *v, Named *tmp, int32_t n)
     os64_memcpy(v, tmp, (size_t)n * sizeof(*v));
 }
 
-bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now)
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, garb_pseudo_t pseudo, FMotion *m,
+                        double now)
 {
     // Its records on the timeline the page shows and its names now, each
     // sorted by name and then by place: Animations 1 § 2 matches from the
@@ -331,7 +351,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     // name, which is then one walk down both lists from their ends —
     // however many names a page writes, none is compared with every record.
     int32_t nold = 0;
-    for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
+    for (const FRecord *r = f_map_get(&t->from->by_node[pseudo], n); r != NULL; r = r->next)
         nold++;
     int32_t total = nold + m->ncss;
     Named few[32], *buf = few;
@@ -340,7 +360,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         return false;
     Named *old = buf, *names = buf + nold, *tmp = buf + total;
     int32_t k = 0;
-    for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
+    for (const FRecord *r = f_map_get(&t->from->by_node[pseudo], n); r != NULL; r = r->next)
         old[k++] = (Named){r->name, r->len, r->place, r};
     for (int32_t i = 0; i < m->ncss; i++)
         names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
@@ -369,7 +389,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     for (int32_t b = 0; ok && b < m->ncss; b++) {
         FAnimation *an = &m->anims[names[b].order];
         const FRecord *was = names[b].record;
-        FRecord *r = record_add(t, n, an->timing.name.text, an->timing.name.len, was);
+        FRecord *r = record_add(t, n, pseudo, an->timing.name.text, an->timing.name.len, was);
         if (r == NULL) {
             ok = false;
             break;
@@ -407,7 +427,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         m->anims[i].record->next = head;
         head = m->anims[i].record;
     }
-    return head == NULL || f_map_put(&t->by_node, n, head);
+    return head == NULL || f_map_put(&t->by_node[pseudo], n, head);
 }
 
 bool f_timeline_end(flow_timeline_t *t, bool complete)
@@ -423,12 +443,12 @@ bool f_timeline_end(flow_timeline_t *t, bool complete)
         const FRecord *was = t->from->records[i];
         if (t->met[i])
             continue;
-        FRecord *r = record_add(t, was->node, was->name, was->len, was);
+        FRecord *r = record_add(t, was->node, was->pseudo, was->name, was->len, was);
         ok = r != NULL;
         if (ok) {
             r->place = was->place;
-            r->next = f_map_get(&t->by_node, was->node);
-            ok = f_map_put(&t->by_node, was->node, r);
+            r->next = f_map_get(&t->by_node[was->pseudo], was->node);
+            ok = f_map_put(&t->by_node[was->pseudo], was->node, r);
         }
     }
     os64_free(t->met);
