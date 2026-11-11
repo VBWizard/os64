@@ -6,11 +6,11 @@
 // Each spelled as that browser spells it; a site that checks the number
 // more closely can be handed another in the field. Chrome and Firefox as on
 // Windows 10 and 11, which both report NT 10.0: their strings and their
-// lines are what Chrome and Firefox 158 sent a local listener in
+// lines are what Chrome 156 and Firefox 158 sent a local listener in
 // October 2026, byte for byte, header names in their own case (the W1
 // capture files: WIRE.md § 1 as built names each); Chrome's string and
-// client hints are the ones Chrome 157 sent in November 2026 (HTTP2.md
-// § 4 H2.5, capture C1). Chrome sends no
+// client hints alone are the ones Chrome 157 sent in November 2026
+// (HTTP2.md § 4 H2.5, capture C1). Chrome sends no
 // Priority over HTTP/1.1, and asks every cache to revalidate on the
 // browser's Reload; Firefox sends a Priority on every request, and its rows
 // are the ones it sent for each destination asked (no font was, so a font

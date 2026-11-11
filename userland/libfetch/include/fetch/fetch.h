@@ -258,7 +258,8 @@ typedef struct {
 typedef enum {
     OS64_FETCH_H2_PRIORITY_NONE = 0,    // a request's HEADERS states no priority
     OS64_FETCH_H2_PRIORITY_FLAT,        // each depends on stream 0, not exclusively: Firefox
-    // Each depends, exclusively, on an earlier stream still open: of those
+    // Each depends, exclusively, on an earlier stream its fetch has not yet
+    // closed: of those
     // at least as heavy, the lightest, and of those the newest: Chrome.
     OS64_FETCH_H2_PRIORITY_CHAINED,
 } os64_fetch_h2_priority_t;

@@ -134,6 +134,13 @@ typedef struct {
     uint32_t reset_code;
 } h2_ending_t;
 
+// Whether a connection can say `greeting`: at most 64 settings, each value
+// in the range RFC 9113 § 6.5.2 gives it, a frame size and a header table
+// this will hold, an odd first stream, and no receive window, the
+// connection's or a stream's, past 2^31 - 1. h2_conn_adopt refuses one that
+// is not.
+bool h2_greeting_ok(const h2_greeting_t *greeting);
+
 // Take over a TLS engine whose handshake is done and its socket (libtls's
 // os64_tls_transport_release), with the ciphertext that came with them;
 // plaintext the engine already holds is read first too.

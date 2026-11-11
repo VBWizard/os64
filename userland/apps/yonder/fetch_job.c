@@ -688,6 +688,11 @@ static void opt_base(os64_fetch_options_t *opt, Hop *h, yonder_fetch_job_t *job,
     opt->order = way_identity_order(job->identity, &m);
     opt->keep_alive = way_identity_keep_alive(job->identity);
     way_identity_h2(job->identity, m.dest, &opt->h2, &opt->h2_weight, &opt->h2_priority, &opt->http1);
+    // A Priority the page's own headers carry is the request's: the
+    // browser's is added only where there is none, over HTTP/2 as over
+    // HTTP/1.1 (page_sets).
+    if (!h->preflight && (h->page_given & WAY_GIVEN_PRIORITY))
+        opt->h2_priority = NULL;
     opt->user_agent = job->agent;
     opt->max_body = max_body;
     opt->cancelled = hop_cancelled;

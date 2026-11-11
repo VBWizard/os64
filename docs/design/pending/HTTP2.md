@@ -2660,7 +2660,8 @@ What the build made of the brief, and where it left it.
   `chained_parent` is Chromium's rule as capture C3 shows it. A stream's
   receive window is the SETTINGS' and the increment together
   (`our_stream_window`), and its credit is given back at half of that. A
-  frame for a stream below the first is a frame for an idle stream.
+  frame for a stream below the first is a frame for one this client never
+  opened, and the connection's error.
 - **The pool** (Quinn's finding): `same_say` compares two says value for
   value, and `fetch_pool_take` shares an HTTP/2 connection, or waits on a
   dial in flight, only for a fetch whose say is the same. A record keeps
@@ -2670,11 +2671,27 @@ What the build made of the brief, and where it left it.
   and the builder's own re-read found it forgetting hosts that speak
   HTTP/2.
 - **A greeting is judged at open**, before any dial: at most eight
-  settings, and a pseudo-header order that is the four letters once each
-  (`http_h2_pseudo_ok`, shared with the renderer). What HTTP/2 itself
+  settings, a pseudo-header order that is the four letters once each
+  (`http_h2_pseudo_ok`, shared with the renderer), and what HTTP/2 itself
   forbids of one (an even first stream, a window past 2^31 - 1, a
-  setting's value out of range) is the connection's to refuse, at
-  adoption, and that fetch ends DIAL_FAILED with the reason.
+  setting's value out of range), by the connection's own judgement
+  (`h2_greeting_ok`, which adoption asks too).
+- **A server that requires HTTP/1.1** (the cold read's finding: HTTP/2 is
+  on for every program now, and IIS answers this way for its Windows
+  sign-in). A stream reset or a connection ended with `HTTP_1_1_REQUIRED`
+  before the head is remembered of the server's key
+  (`fetch_pool_require_h1`), and the request goes again; that try and
+  every later fetch to the key dial HTTP/1.1 (`hop_http1` in `acquire`),
+  for as long as the pool remembers the key.
+- **A page's own Priority stands.** Under a preset that adds a Priority
+  over HTTP/2, a request whose page headers carry one sends the page's
+  alone (`opt_base`, fetch_job.c), as over HTTP/1.1.
+- **net.conf's switch is kept only when the file was read or is absent.**
+  A read that failed otherwise leaves the question open for the next
+  fetch.
+- **An HTTP/1.1 connection is anyone's**, whatever ALPN its dial offered:
+  a costume may ride one a browser preset dialled, and the other way
+  round. The TLS handshake is not matched (§ 2.9); booked in DEBTS.
 - **libway and yonder.** `way_identity_t` carries the greeting, a weight
   and an HTTP/2-only Priority for each destination, and `http1`;
   `way_identity_h2` gives a destination with none the fetch row's.

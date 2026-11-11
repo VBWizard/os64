@@ -223,6 +223,12 @@ void fetch_pool_dialled_h2(fetch_conn_t *conn, h2_conn_t *h2, uint16_t tls_versi
 // The HTTP/2 connection a fetch holding `conn` opens its stream on; NULL
 // for an HTTP/1.1 connection.
 h2_conn_t *fetch_pool_h2(fetch_conn_t *conn);
+// The server behind `conn` answered a request with HTTP_1_1_REQUIRED (RFC
+// 9113 § 7): its key is asked over HTTP/1.1 from here on, for as long as the
+// key is remembered, and fetch_pool_h1_required says so to a fetch about to
+// ask for a connection to it. Per process, like everything remembered.
+void fetch_pool_require_h1(fetch_conn_t *conn);
+bool fetch_pool_h1_required(const fetch_pool_key_t *key);
 void fetch_pool_tls_facts(fetch_conn_t *conn, uint16_t *version, bool *resumed);
 
 // Give a connection in use back. HTTP/1.1: to be kept, with its transport,

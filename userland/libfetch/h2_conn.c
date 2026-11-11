@@ -294,7 +294,8 @@ static h2_stream_t *find(h2_conn_t *c, uint32_t id)
     return NULL;
 }
 
-// A stream we opened at some time: odd, and below the next id to give out.
+// A stream we opened at some time: odd, at or above the first id this
+// connection gave out, and below the next.
 static bool was_ours(const h2_conn_t *c, uint32_t id)
 {
     return (id & 1u) != 0 && id >= c->first_id && id < c->next_id;
@@ -1008,11 +1009,9 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
     c->our_max_frame = H2_FRAME_SIZE_LEAST;
     c->our_table = H2_HPACK_TABLE_DEFAULT;
     c->our_initial_window = 65535;
-    bool sound = unread_len <= sizeof(c->unread) && greeting->count <= 64;
+    bool sound = unread_len <= sizeof(c->unread) && h2_greeting_ok(greeting);
     for (uint32_t i = 0; sound && i < greeting->count; i++) {
-        h2_fault_t fault;
         h2_setting_t setting = greeting->settings[i];
-        sound = h2_setting_check(setting, &fault);
         if (setting.identifier == H2_SETTING_MAX_FRAME_SIZE)
             c->our_max_frame = setting.value;
         else if (setting.identifier == H2_SETTING_INITIAL_WINDOW_SIZE)
@@ -1021,10 +1020,6 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
             c->our_table = setting.value;
     }
     uint32_t first = greeting->first_stream != 0 ? greeting->first_stream : 1;
-    sound = sound && c->our_max_frame <= GREETING_MOST && c->our_table <= GREETING_MOST &&
-            (uint64_t)65535 + greeting->window_increment <= H2_STREAM_MOST &&
-            (uint64_t)c->our_initial_window + greeting->stream_increment <= H2_STREAM_MOST &&
-            (first & 1u) != 0 && first <= H2_STREAM_MOST;
     uint32_t table_room = c->our_table > H2_HPACK_TABLE_DEFAULT ? c->our_table : H2_HPACK_TABLE_DEFAULT;
     // One literal field at a time passes through the scratch, and a field
     // may be as large as a head, whatever the table holds.
@@ -1195,6 +1190,30 @@ static h2_result_t park(h2_conn_t *c, h2_wait_t *w, waiting_t *st)
     if (rung == 1 || rung == OS64_INTERRUPTED || (rung == OS64_ERR_TIMEOUT && look))
         return H2_OK;
     return rung == OS64_ERR_TIMEOUT ? silent(c, st) : H2_FAILED;
+}
+
+bool h2_greeting_ok(const h2_greeting_t *greeting)
+{
+    if (greeting->count > 64)
+        return false;
+    uint32_t frame = H2_FRAME_SIZE_LEAST, table = H2_HPACK_TABLE_DEFAULT;
+    uint64_t initial = 65535;
+    for (uint32_t i = 0; i < greeting->count; i++) {
+        h2_fault_t fault;
+        h2_setting_t setting = greeting->settings[i];
+        if (!h2_setting_check(setting, &fault))
+            return false;
+        if (setting.identifier == H2_SETTING_MAX_FRAME_SIZE)
+            frame = setting.value;
+        else if (setting.identifier == H2_SETTING_INITIAL_WINDOW_SIZE)
+            initial = setting.value;
+        else if (setting.identifier == H2_SETTING_HEADER_TABLE_SIZE)
+            table = setting.value;
+    }
+    uint32_t first = greeting->first_stream != 0 ? greeting->first_stream : 1;
+    return frame <= GREETING_MOST && table <= GREETING_MOST &&
+           (uint64_t)65535 + greeting->window_increment <= H2_STREAM_MOST &&
+           initial + greeting->stream_increment <= H2_STREAM_MOST && (first & 1u) != 0 && first <= H2_STREAM_MOST;
 }
 
 // ── Streams, from the fetch's side ──────────────────────────────────────

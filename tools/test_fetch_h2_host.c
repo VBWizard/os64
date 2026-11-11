@@ -76,6 +76,8 @@ typedef enum {
     R_ECHO,             // the request's body back, once it has all come
     R_REFUSE_ONCE_HELD, // RST_STREAM(REFUSED_STREAM) the first time; then the head, and no body
     R_UNENDED,          // the head and the whole body, and the stream left open after it
+    R_WANTS_H1,         // over HTTP/2, RST_STREAM(HTTP_1_1_REQUIRED); over HTTP/1.1, the reply
+    R_WANTS_H1_GOAWAY,  // ...the same, said as the connection's GOAWAY
 } route_kind_t;
 
 typedef struct {
@@ -331,6 +333,14 @@ static void serve_h2(dial_t *d)
         case R_CANCEL:
             peer_send_rst(h.stream, H2_ERR_CANCEL);
             break;
+        case R_WANTS_H1:
+            peer_send_rst(h.stream, H2_ERR_HTTP_1_1_REQUIRED);
+            break;
+        case R_WANTS_H1_GOAWAY:
+            peer_send_goaway(h.stream, H2_ERR_HTTP_1_1_REQUIRED);
+            nap_ms(50);
+            peer_hang_up();
+            return;
         case R_OPEN:
             send_reply_h2(h.stream, r, true);
             break;
@@ -1650,10 +1660,15 @@ static void greeting_cases(void)
         static const os64_fetch_h2_t kNine = {.count = 9};
         static const os64_fetch_h2_t kThree = {.count = 0, .pseudo = "map"};
         static const os64_fetch_h2_t kTwice = {.count = 0, .pseudo = "mmas"};
-        const os64_fetch_h2_t *const bad[3] = {&kNine, &kThree, &kTwice};
+        // What HTTP/2 itself forbids: an even first stream, a stream window
+        // past 2^31 - 1, a setting out of its range (ENABLE_PUSH 2).
+        static const os64_fetch_h2_t kEven = {.count = 0, .first_stream = 2};
+        static const os64_fetch_h2_t kWide = {.settings = {{4, 0x7fffffffu}}, .count = 1, .stream_increment = 1};
+        static const os64_fetch_h2_t kPush = {.settings = {{2, 2}}, .count = 1};
+        const os64_fetch_h2_t *const bad[6] = {&kNine, &kThree, &kTwice, &kEven, &kWide, &kPush};
         begin();
         route("/page", R_REPLY, "200", kPage);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 6; i++) {
             memset(&j, 0, sizeof(j));
             j.opt.h2 = bad[i];
             job_go(&j, "https://bad.test/page");
@@ -1916,6 +1931,37 @@ static void http1_cases(void)
     settle();
 }
 
+// A SERVER THAT REQUIRES HTTP/1.1 for what was asked (RFC 9113 § 7,
+// HTTP_1_1_REQUIRED) is asked again over HTTP/1.1, whatever the method, and
+// is remembered: the next fetch to it dials no HTTP/2 at all.
+static void wants_h1_cases(void)
+{
+    static job_t j;
+    const struct { const char *host, *url; route_kind_t kind; } kWays[2] = {
+        {"wants1.test", "https://wants1.test/signin", R_WANTS_H1},
+        {"wants2.test", "https://wants2.test/signin", R_WANTS_H1_GOAWAY},
+    };
+    for (int w = 0; w < 2; w++) {
+        begin();
+        route("/signin", kWays[w].kind, "200", kPage);
+        memset(&j, 0, sizeof(j));
+        j.opt.method = OS64_FETCH_METHOD_POST;      // not a request the retry rule would send twice by itself
+        j.opt.body = "name=a";
+        j.opt.body_len = 6;
+        job_go(&j, kWays[w].url);
+        JOB_OK(&j);
+        CHECK(!j.http2 && j.body_len == sizeof(kPage) - 1 && atomic_load(&ndials) == 2 && h2_dials() == 1);
+        CHECK(atomic_load(&dials[0].requests) == 1 && atomic_load(&dials[1].requests) == 1 &&
+              strcmp(dials[1].alpn, "http/1.1") == 0);
+        // The next: no HTTP/2 dial, and no request to the HTTP/2 server.
+        memset(&j, 0, sizeof(j));
+        job_go(&j, kWays[w].url);
+        JOB_OK(&j);
+        CHECK(!j.http2 && h2_dials() == 1 && atomic_load(&dials[0].requests) == 1 && requests_seen() == 3);
+        settle();
+    }
+}
+
 // net.conf says `http2 = off` (this process was started so): no fetch
 // offers HTTP/2, whoever it asks as.
 static void switch_off_cases(void)
@@ -2058,6 +2104,7 @@ int main(void)
         identity_cases();
         difference_cases();
         http1_cases();
+        wants_h1_cases();
     }
     if (atomic_load(&failures) != 0) {
         fprintf(stderr, "test_fetch_h2_host: %d of %d checks failed\n", atomic_load(&failures), atomic_load(&checks));

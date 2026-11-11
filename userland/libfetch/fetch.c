@@ -69,11 +69,14 @@ static bool h2_switched_off(void)
     uint32_t state = __atomic_load_n(&s_h2_switch, __ATOMIC_ACQUIRE);
     if (state == 0) {
         bool off = false;
-        os64_conf_find_read("net.conf", h2_switch_line, &off, NULL, 0);
+        int64_t read = os64_conf_find_read("net.conf", h2_switch_line, &off, NULL, 0);
         state = off ? 2 : 1;
-        // Two first fetches at once read the same file and store the same
-        // answer.
-        __atomic_store_n(&s_h2_switch, state, __ATOMIC_RELEASE);
+        // Kept when the file was read or there is none. A read that failed
+        // some other way is not an answer: this fetch offers HTTP/2, and
+        // the next one asks again. (Two first fetches at once read the same
+        // file and store the same answer.)
+        if (read >= 0 || read == OS64_CONF_NO_FILE)
+            __atomic_store_n(&s_h2_switch, state, __ATOMIC_RELEASE);
     }
     return state == 2;
 }
@@ -164,6 +167,9 @@ struct os64_fetch {
     // lets a Secure cookie be kept. A fact of the hop, since a fetch that
     // joins an HTTP/2 connection opens no transport to read it from.
     bool              hop_encrypted;
+    // This hop speaks HTTP/1.1 alone: the fetch does (`say.http1`), or the
+    // hop's server has said it requires it (fetch_pool_h1_required).
+    bool              hop_http1;
     http_request_extras_t hop_request;  // the hop's request as composed, for the renderer its connection needs
     // What this fetch parks on when every connection to its peer is in use
     // (pool.h): none until its first wait, closed with the fetch.
@@ -821,10 +827,14 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                               .cancelled = cancel_predicate, .cancel_ctx = f};
     f->detail.why[0] = '\0';
     bool waited = false;
+    // Who is asking, for this hop: the fetch, speaking HTTP/1.1 alone where
+    // this server has required it of an earlier request.
+    fetch_pool_say_t say = f->say;
+    say.http1 = f->hop_http1 = f->say.http1 || fetch_pool_h1_required(key);
     for (;;) {
         fetch_transport_t io;
         fetch_conn_t *conn = NULL;
-        fetch_pool_take_t took = fetch_pool_take(key, &f->say, idle_most, fresh, &wait, &conn, &io);
+        fetch_pool_take_t took = fetch_pool_take(key, &say, idle_most, fresh, &wait, &conn, &io);
         // Time spent waiting for a connection, whatever came of the wait: a
         // fetch that waited is counted once, however many times it asked.
         if (wait.waited_ms != 0) {
@@ -908,8 +918,7 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                 fetch_pool_gone(conn);
                 f->detail.dial = OS64_NET_ERR_NO_RESOURCES;
                 os64_snprintf(f->detail.why, sizeof(f->detail.why),
-                              "an HTTP/2 connection could not be started (memory, a thread, or a greeting "
-                              "HTTP/2 does not allow)");
+                              "an HTTP/2 connection could not be started (memory or a thread)");
                 return OS64_FETCH_DIAL_FAILED;
             }
             counted(&s_counts.connections_h2, 1);
@@ -1327,6 +1336,16 @@ static os64_fetch_status_t h2_before_head(os64_fetch_t *f, h2_result_t r, bool *
     else {
         h2_ending_t e = h2_stream_ended(f->h2_stream);
         h2_note_ending(f);
+        // HTTP_1_1_REQUIRED (RFC 9113 § 7), on the stream or as the
+        // connection's last word: the server will answer this over
+        // HTTP/1.1 and not over this. It is remembered of the server, and
+        // the request, which it has not acted on, goes again; the second
+        // try and every later fetch to it dial HTTP/1.1 (acquire).
+        if ((e.how == H2_END_PEER_RESET || e.how == H2_END_CONN_DEAD) && e.code == H2_ERR_HTTP_1_1_REQUIRED &&
+            !e.head_seen && f->conn != NULL) {
+            fetch_pool_require_h1(f->conn);
+            *again = true;
+        } else
         switch (e.how) {
         case H2_END_UNPROCESSED:
             // RFC 9113 § 6.8: the server did not process it, whatever it was.
@@ -1450,13 +1469,13 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
         return OS64_FETCH_REQUEST_FAILED;
     }
 
-    // HTTP/2 is offered ahead of HTTP/1.1 on an encrypted hop unless this
-    // fetch speaks HTTP/1.1 alone (its caller's `http1`, or net.conf's
-    // switch), and the server's pick is the connection's protocol for life
-    // (HTTP2.md § 2.1). The first name alone is skipped where h2 is not
-    // spoken: the TLS 1.2 fallback, below.
+    // HTTP/2 is offered ahead of HTTP/1.1 on an encrypted hop unless the
+    // hop speaks HTTP/1.1 alone (the caller's `http1`, net.conf's switch,
+    // or a server that required it), and the server's pick is the
+    // connection's protocol for life (HTTP2.md § 2.1). The first name alone
+    // is skipped where h2 is not spoken: the TLS 1.2 fallback, below.
     static const os64_tls_name_t kAlpn[] = {{"h2", 2}, {"http/1.1", 8}};
-    bool offer_h2 = encrypted && !f->say.http1;
+    bool offer_h2 = encrypted && !f->hop_http1;
     os64_tls_config_t config = {
         .hostname = {f->current.host, os64_strlen(f->current.host)},
         .alpn = offer_h2 ? kAlpn : kAlpn + 1, .alpn_count = offer_h2 ? 2 : 1, .trust = f->trust,
@@ -1946,26 +1965,35 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     // and a dial can use it after the caller's copy is gone.
     const os64_fetch_h2_t *greeting = opt != NULL && opt->h2 != NULL ? opt->h2 : &kOwnGreeting;
     const char *pseudo = greeting->pseudo != NULL ? greeting->pseudo : "masp";
-    if (greeting->count > OS64_FETCH_H2_SETTINGS_MAX || !http_h2_pseudo_ok(pseudo)) {
-        os64_strcopy(f->detail.why, sizeof(f->detail.why), "the HTTP/2 greeting asked for is not one this can send");
-        f->status = OS64_FETCH_REQUEST_FAILED;
-        return f;
-    }
-    for (uint32_t i = 0; i < greeting->count; i++)
+    bool sendable = greeting->count <= OS64_FETCH_H2_SETTINGS_MAX && http_h2_pseudo_ok(pseudo);
+    for (uint32_t i = 0; sendable && i < greeting->count; i++)
         f->say.settings[i] = (h2_setting_t){.identifier = greeting->settings[i].id,
                                             .value = greeting->settings[i].value};
-    f->say.count = greeting->count;
+    f->say.count = sendable ? greeting->count : 0;
     f->say.window_increment = greeting->window_increment;
     f->say.first_stream = greeting->first_stream != 0 ? greeting->first_stream : 1;
     f->say.stream_increment = greeting->stream_increment;
     f->say.priority = (h2_priority_mode_t)greeting->priority;
+    // ...and one HTTP/2 forbids (an even first stream, a window past
+    // 2^31 - 1, a setting's value out of its range) is refused here too,
+    // by the connection's own judgement of it, and not after a handshake
+    // with the first server that happens to speak HTTP/2.
+    h2_greeting_t would = {.settings = f->say.settings, .count = f->say.count,
+                           .window_increment = f->say.window_increment, .first_stream = f->say.first_stream,
+                           .stream_increment = f->say.stream_increment, .priority = f->say.priority};
+    if (!sendable || !h2_greeting_ok(&would)) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), "the HTTP/2 greeting asked for is not one this can send");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
     f->say.http1 = (opt != NULL && opt->http1) || h2_switched_off();
     os64_strcopy(f->h2_pseudo, sizeof(f->h2_pseudo), pseudo);
     f->h2_te_trailers = greeting->te_trailers;
 
-    // ...and one that holds a byte a header cannot is refused HERE, before a
-    // dial: a header composed from page content is a header an attacker
-    // composes, and the refusal must not cost a connection to find out.
+    // ...and one that holds a byte a header cannot is refused before a dial
+    // (these here, the HTTP/2 Priority when the hop's request is composed):
+    // a header composed from page content is a header an attacker composes,
+    // and the refusal must not cost a connection to find out.
     http_request_extras_t extras = {
         .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
         .accept        = f->accept_given ? f->accept : NULL,

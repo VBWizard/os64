@@ -18,6 +18,8 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
     (void)engine; (void)socket; (void)unread; (void)unread_len; (void)greeting; (void)hooks;
     abort();
 }
+// Every fetch has its greeting judged as it opens, whatever it then speaks.
+bool h2_greeting_ok(const h2_greeting_t *greeting) { (void)greeting; return true; }
 bool h2_conn_room(h2_conn_t *conn) { (void)conn; abort(); }
 void h2_conn_condemn(h2_conn_t *conn) { (void)conn; abort(); }
 size_t h2_conn_queued(h2_conn_t *conn) { (void)conn; abort(); }

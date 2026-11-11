@@ -47,6 +47,10 @@ static uint64_t s_order;
 static struct {
     fetch_pool_key_t key;
     bool used, h2;
+    // The key's server answered a request over HTTP/2 with
+    // HTTP_1_1_REQUIRED: it is asked over HTTP/1.1 from then on
+    // (fetch_pool_h1_required).
+    bool h1_required;
     uint64_t written;
 } s_remembered[REMEMBERED];
 static uint64_t s_written;
@@ -69,9 +73,13 @@ static void remember(const fetch_pool_key_t *key, bool h2)
         if (!s_remembered[i].used || (s_remembered[at].used && s_remembered[i].written < s_remembered[at].written))
             at = i;
     }
+    // What the same key said of HTTP/1.1 stays said; a slot taken from
+    // another key starts clean.
+    bool same = s_remembered[at].used && same_key(&s_remembered[at].key, key);
     s_remembered[at].key = *key;
     s_remembered[at].used = true;
     s_remembered[at].h2 = h2;
+    s_remembered[at].h1_required = same && s_remembered[at].h1_required;
     s_remembered[at].written = ++s_written;
 }
 
@@ -93,6 +101,27 @@ static bool same_say(const fetch_pool_say_t *a, const fetch_pool_say_t *b)
         if (a->settings[i].identifier != b->settings[i].identifier || a->settings[i].value != b->settings[i].value)
             return false;
     return true;
+}
+
+void fetch_pool_require_h1(fetch_conn_t *conn)
+{
+    os64_lock_acquire(&s_lock);
+    remember(&conn->key, false);
+    for (size_t i = 0; i < REMEMBERED; i++)
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, &conn->key))
+            s_remembered[i].h1_required = true;
+    os64_lock_release(&s_lock);
+}
+
+bool fetch_pool_h1_required(const fetch_pool_key_t *key)
+{
+    bool required = false;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < REMEMBERED; i++)
+        if (s_remembered[i].used && same_key(&s_remembered[i].key, key))
+            required = s_remembered[i].h1_required;
+    os64_lock_release(&s_lock);
+    return required;
 }
 
 static bool clock_now(os64_ticks_t *now)
@@ -426,9 +455,11 @@ void fetch_pool_dialled(fetch_conn_t *conn)
     conn->refs = 1;
     if (conn->key.tls) {
         // Not h2: fetches waiting on this dial's verdict dial for themselves.
-        // The answer is the server's only when HTTP/2 was offered: a dial
-        // that offered HTTP/1.1 alone heard nothing about what the host
-        // speaks, and leaves what is remembered of it as it was.
+        // A fetch that speaks HTTP/1.1 alone offered nothing else, so its
+        // dial heard nothing about what the host speaks and leaves what is
+        // remembered of it as it was. (A dial under the TLS 1.2 fallback
+        // offers HTTP/1.1 alone too, and is remembered: this client and
+        // that host have no HTTP/2 between them.)
         if (!conn->say.http1)
             remember(&conn->key, false);
         ring_waiters();
