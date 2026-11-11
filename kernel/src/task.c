@@ -202,6 +202,28 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 	return true;
 }
 
+// Offer `code` as the task's exit code. The code is the FIRST death's:
+// once a thread has claimed the teardown (`tearingDown`), no later death
+// may rewrite what the parent will collect.
+//
+// The later deaths are the task's own doing. Teardown marks every sibling
+// with SIGKILL, and each one dies at its next boundary through the same
+// ladder a real kill takes, which would stamp 137 over the code main
+// returned; a sibling that faults or calls exit in that stretch would
+// stamp its own. All of them are consequences of an exit that has
+// already been decided.
+//
+// A read and a store, with no lock, and that is enough: the claim is made
+// BEFORE the siblings are marked, so a thread dying of the mark always
+// reads the claim. Two threads that each decide to die before either has
+// claimed are a real race between two deaths, and either code is a true
+// answer.
+void task_offer_exit_code(task_t* task, uint64_t code)
+{
+	if (task != NULL && !__atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE))
+		task->retVal = code;
+}
+
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
 //
 // This is the single control point Chris asked for: every route to a task's
@@ -1320,9 +1342,9 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
-	// task->retVal was already written by task_exit_with_retval (asm) before
-	// any C code ran or any stack switch occurred.  We just propagate it to
-	// thread->retVal here.
+	// task->retVal was offered by whichever road led here, before this call
+	// (task_offer_exit_code; task_exit_with_retval in asm).  We just
+	// propagate it to thread->retVal here.
 	//
 	// `exiting`, NOT `exited` — and this ordering is the whole fix (2026-08-09,
 	// Chris ran it to ground). `exited` is what the scheduler's take-off-CPU

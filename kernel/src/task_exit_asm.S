@@ -10,7 +10,9 @@
 // Called when a task's thread returns via 'ret'.  The x86-64 ABI leaves the
 // return value in RAX.  We walk CLS -> currentThread -> ownerTask and store
 // RAX directly into task->retVal before any C function call can clobber it,
-// then fall through into the normal task_exit path.
+// then fall through into the normal task_exit path. The store is skipped
+// when a thread has already claimed the task's teardown: the exit code is
+// the first death's (task_offer_exit_code, task.c, is the same rule in C).
 .globl task_exit_with_retval
 .type  task_exit_with_retval, @function
 task_exit_with_retval:
@@ -19,8 +21,10 @@ task_exit_with_retval:
     mov  rax, gs:[0]                                // rax = CLS self-pointer
     mov  rax, [rax + CLS_CURRENTTHREAD_OFFSET]      // rax = currentThread
     mov  rax, [rax + THREAD_OWNERTASK_OFFSET]       // rax = ownerTask (task_t*)
+    cmp  byte ptr [rax + TASK_TEARINGDOWN_OFFSET], 0
+    jne  1f                                         // a teardown is claimed: its code stands
     mov  [rax + TASK_RETVAL_OFFSET], rcx            // task->retVal = return value
-    sti
+1:  sti
     jmp  task_exit
 
 // void call_in_kernel_context(void (*func)(void*), void *arg)

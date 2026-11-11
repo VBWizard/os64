@@ -1088,7 +1088,9 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 }
 
 // exit(code) — terminate the calling task.  arg0 becomes the task's retVal
-// (harvested by task_wait / the test harness).  Everything after the retVal
+// (harvested by task_wait / the test harness) unless another thread has
+// already claimed the task's teardown, whose code then stands
+// (task_offer_exit_code).  Everything after the retVal
 // store is task_exit()'s problem: it switches to the per-core kernel interrupt
 // stack and kKernelPML4 itself, marks task+thread exited, and yields away for
 // good — which is why this entry runs with needs_cr3_switch=false (the
@@ -1104,10 +1106,7 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
-	if (task)
-	{
-		task->retVal = arg0;
-	}
+	task_offer_exit_code(task, arg0);
 
 	task_exit();
 	__builtin_unreachable();
@@ -1217,9 +1216,9 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 
 	if (task != NULL)
 	{
-		task->retVal = code;
-		printd(DEBUG_TASK, "%s: task %s terminating (exit %lu)\n",
-			why, task->exename, task->retVal);
+		task_offer_exit_code(task, code);
+		printd(DEBUG_TASK, "%s: a thread of task %s terminating (the signal's exit code is %lu)\n",
+			why, task->exename, code);
 	}
 
 	task_exit();
@@ -1238,7 +1237,7 @@ static void raise_sigpipe_and_die(task_t *task)
 		// All threads: SIGPIPE's default action is to terminate the TASK,
 		// so every thread has to learn it, not just the first one.
 		task_signal_all_threads(task, SIGPIPE);
-		task->retVal = SIGNALS_EXIT_SIGPIPE;
+		task_offer_exit_code(task, SIGNALS_EXIT_SIGPIPE);
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
 	}

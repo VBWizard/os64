@@ -102,6 +102,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/argsize",         NULL, 0xA2650000,  0,          "128 KiB spawn arguments arrive whole; too long, too many and too much are refused by name" },
     { "/tests/pipeexit",        NULL, 0x91E00000,  0,          "32 default-SIGPIPE exits preserve status 141" },
     { "/tests/spawnreap",       NULL, 0x5A9E0000,  0,          "128 short-lived children with concurrent sibling reap" },
+    { "/tests/exitcode",        NULL, 0xE817C000,  0,          "a program ending with live threads reports its own exit code; a killed one reports 137" },
     { "/tests/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },
     { "/tests/jssupporttest",   NULL, 0x4A535550,  0,          "libos64: live allocation capacity and unsigned-byte string/search semantics" },
     { "/tests/arenatest",       NULL, 0xA2E7A000,  0,          "arenas: alignment, growth, limits, zeroing, frame reuse and heap integrity" },

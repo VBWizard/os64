@@ -661,7 +661,7 @@ void user_exception_kill(exception_context_t *ctx)
 
 	exception_wire_unlock();
 
-	task->retVal = EXIT_CPU_EXCEPTION_BASE + ctx->vector;
+	task_offer_exit_code(task, EXIT_CPU_EXCEPTION_BASE + ctx->vector);
 	task_exit();
 	__builtin_unreachable();
 }
@@ -903,7 +903,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	// Report told — free the wire BEFORE task_exit, which never returns.
 	exception_wire_unlock();
 
-	task->retVal = SIGNALS_EXIT_SIGSEGV;
+	task_offer_exit_code(task, SIGNALS_EXIT_SIGSEGV);
 	task_exit();
 	__builtin_unreachable();
 }

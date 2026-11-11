@@ -497,4 +497,5 @@
 	// single control point for "exit means exit" — see the implementation
 	// for why marking alone is not enough on a tickless boot.
 	void task_terminate_sibling_threads(task_t* task, thread_t* self);
+	void task_offer_exit_code(task_t* task, uint64_t code);   // kept only until a thread claims the teardown
 	#endif
