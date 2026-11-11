@@ -264,12 +264,12 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
         }
     }
     if (ran) *ran = true;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "pointer input", out) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, "pointer input", out) != OS64_JS_OK) {
         d_pointer_drain(dom); p->draining = true; return out->status;
     }
     p->running = true;
     os64_js_outcome_t access;
-    Packet q = {.dom = dom, .ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access),
+    Packet q = {.dom = dom, .ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access),
                 .out = out, .event = s->event, .action = action, .opaque = opaque};
     const os64_html_node_t *target = NULL;
     bool captured = false;

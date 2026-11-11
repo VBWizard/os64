@@ -761,7 +761,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 dom->listener_calls++;
                 dom->invoking = listener;
                 dom->invoking_entry = entry;
-                os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->invoke->value, entry->value, 2, args,
+                os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->invoke->value, entry->value, 2, args,
                              NULL, &call);
                 dom->invoking = NULL;
                 dom->invoking_entry = NULL;
@@ -1265,12 +1265,12 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%s event", type);
     os64_js_outcome_t begin;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
         *outcome = begin;
         return outcome->status;
     }
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx == NULL) return d_task_finish(dom, outcome);
     JSValue object = make(dom, ctx, arg);
     if (JS_IsException(object)) { discard(ctx); return d_task_finish(dom, outcome); }

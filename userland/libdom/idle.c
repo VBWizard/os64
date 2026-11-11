@@ -330,15 +330,15 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#idle-%u", (int)(sizeof(name) - 24),
                   dom->url != NULL ? dom->url : "about:blank", handle);
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
         os64_js_outcome_t access, call;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         JSValue deadline = ctx != NULL ? deadline_new(ctx, dom->idle_start_us, false) : JS_EXCEPTION;
         if (!JS_IsException(deadline)) {
             /* What the callback throws is its script's (report.c). */
             dom->idle_running = true;
             DScripts before = d_script_enter(dom, script);
-            os64_js_call(dom->runtime, OS64_JS_ABI_ID, callback, dom->window->value, 1, &deadline, NULL, &call);
+            os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, dom->window->value, 1, &deadline, NULL, &call);
             d_script_leave(dom, &before, true);
             dom->idle_running = false;
             JS_FreeValue(ctx, deadline);

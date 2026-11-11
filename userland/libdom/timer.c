@@ -256,10 +256,10 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         os64_strcopy(outcome->source_name, sizeof(outcome->source_name), name);
     } else if (!JS_IsUndefined(held)) {
         os64_js_outcome_t call;
-        if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+        if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
             /* What the callback throws is its script's (report.c). */
             DScripts before = d_script_enter(dom, script);
-            os64_js_call(dom->runtime, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+            os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
             d_script_leave(dom, &before, true);
             fold(outcome, &call);
             /* Its exception is reported before the checkpoint after it,
@@ -275,7 +275,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         char engine_name[32];
         if (!os64_dom_script_name(dom, NULL, engine_name, sizeof(engine_name)))
             os64_strcopy(engine_name, sizeof(engine_name), "os64-script:0");
-        os64_js_run(dom->runtime, source, source_length, engine_name, outcome);
+        os64_js_realm_run(dom->realm, source, source_length, engine_name, outcome);
         /* A string that threw leaves the jobs it queued: `run` drains only
          * after a source that finishes, and the binding is this run's host
          * (CONTRACT.md § Results). Until they run every later task is

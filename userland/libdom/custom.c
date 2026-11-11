@@ -254,7 +254,7 @@ static void request_backup(os64_dom_t *dom)
     struct DCustomState *s = dom->custom;
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
         if (ctx != NULL && JS_EnqueueJob(ctx, backup_job, 0, NULL) == 0) {
             s->owed = false;
             return;
@@ -1572,11 +1572,11 @@ bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome)
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || !os64_dom_reactions_owed(dom)) return false;
     static const char kTask[] = "custom element reactions";
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, kTask, outcome) != OS64_JS_OK) return false;
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, kTask, outcome) != OS64_JS_OK) return false;
     /* One call, so the wrapper bounds and reports it as any task's call;
      * the reactions inside it are the binding's own raw calls. */
     os64_js_outcome_t call;
-    os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->custom->runner->value, dom->window->value, 0, NULL, NULL,
+    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->custom->runner->value, dom->window->value, 0, NULL, NULL,
                  &call);
     d_outcome_fold(outcome, &call);
     if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);

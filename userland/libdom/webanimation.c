@@ -3208,9 +3208,9 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
     os64_snprintf(name, sizeof(name), "%.*s#web-animations", (int)(sizeof(name) - 20),
                   dom->url ? dom->url : "about:blank");
     dom->wa_running = true;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each animation held for the step, so none is collected while
          * the step walks them, whatever a listener does. */

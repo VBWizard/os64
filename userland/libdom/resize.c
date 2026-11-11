@@ -361,7 +361,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
                 DScripts before = d_script_enter(dom, o->script);
-                os64_js_call(dom->runtime, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
                 d_script_leave(dom, &before, true);
                 d_outcome_fold(out, &call);
                 if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
@@ -412,9 +412,9 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#resize-observer", (int)(sizeof(name) - 20),
                   dom->url != NULL ? dom->url : "about:blank");
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each round's depth is deeper than the last's shallowest, and a
          * tree is finitely deep: the loop ends. */

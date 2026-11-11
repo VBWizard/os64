@@ -494,7 +494,7 @@ void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const
                               void *opaque)
 {
     os64_js_outcome_t outcome;
-    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome)
+    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome)
                                                  : NULL;
     if (ctx != NULL)
         JS_SetGlobalMissHandler(ctx, heard, opaque);

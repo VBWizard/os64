@@ -550,9 +550,9 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#intersection-observer", (int)(sizeof(name) - 24),
                   dom->url != NULL ? dom->url : "about:blank");
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         if (ctx == NULL) d_outcome_fold(out, &access);
         if (ctx != NULL) report_lost(dom, ctx);
         /* The observers made by a callback meanwhile wait for the next
@@ -579,7 +579,7 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                 } else {
                     JSValue args[2] = {records, self};
                     DScripts before = d_script_enter(dom, o->script);
-                    os64_js_call(dom->runtime, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
                     d_script_leave(dom, &before, true);
                     d_outcome_fold(out, &call);
                     if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);

@@ -1415,9 +1415,9 @@ void d_performance_loaded(os64_dom_t *dom, os64_js_outcome_t *outcome)
         if (o != NULL && (o->kinds & (1u << K_NAVIGATION)) != 0) wanted = true;
     }
     if (!wanted) return;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "navigation timing", outcome) != OS64_JS_OK) return;
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, "navigation timing", outcome) != OS64_JS_OK) return;
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx != NULL && (queue_room(dom, ctx, K_NAVIGATION) < 0 ||
                         queue_entry(dom, ctx, dom->navigation_entry->value, K_NAVIGATION) < 0))
         report_pending(dom, ctx, D_SCRIPT_PAGE);

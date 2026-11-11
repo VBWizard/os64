@@ -358,8 +358,14 @@ void d_pointer_drain(os64_dom_t *);
 int d_event_in_task(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_dom_event_t *,
                     bool *, os64_js_outcome_t *);
 
+/* Installation in an explicit realm; the caller keeps the document/state.
+ * Runtime class registration refuses duplicate binding installation. */
+os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
 struct os64_dom {
     os64_js_runtime_t *runtime;
+    os64_js_realm_t *realm;
     JSRuntime *engine;
     os64_html_document_t *document;
     os64_page_state_t *state;

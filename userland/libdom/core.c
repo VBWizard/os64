@@ -136,7 +136,7 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
         return false;
     }
     os64_js_outcome_t outcome;
-    if (os64_js_context(dom->runtime, abi, &outcome) != ctx) {
+    if (os64_js_realm_context(dom->realm, abi, &outcome) != ctx) {
         d_error(ctx, "InvalidStateError", "DOM runtime is unavailable");
         return false;
     }
@@ -155,7 +155,7 @@ bool d_exception_catchable(JSContext *ctx)
      * whether the runtime has failed. */
     os64_js_outcome_t probe;
     os64_js_status_t status = os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &probe);
-    if (status == OS64_JS_BAD_ARGUMENT) return os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) != NULL;
+    if (status == OS64_JS_BAD_ARGUMENT) return os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &probe) != NULL;
     return status == OS64_JS_OK;
 }
 
@@ -399,8 +399,18 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
                             os64_js_outcome_t *outcome)
 {
     if (outcome == NULL) return NULL;
-    JSContext *ctx = os64_js_context(runtime, OS64_JS_ABI_ID, outcome);
+    os64_js_realm_t *realm = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, outcome);
+    return realm != NULL ? d_create_in_realm(runtime, realm, document, state, options, outcome) : NULL;
+}
+
+os64_dom_t *d_create_in_realm(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+                              os64_html_document_t *document, os64_page_state_t *state,
+                              const os64_dom_options_t *options, os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return NULL;
+    JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
     if (ctx == NULL) return NULL;
+    if (os64_js_realm_from_context(runtime, ctx, OS64_JS_ABI_ID, outcome) != realm) return NULL;
     if (document == NULL || state == NULL || os64_page_state_document(state) != document) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return NULL;
@@ -413,6 +423,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     os64_dom_t *dom = os64_calloc(1, sizeof(*dom));
     if (dom == NULL) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
     dom->runtime = runtime;
+    dom->realm = realm;
     dom->engine = JS_GetRuntime(ctx);
     dom->document = document;
     dom->state = state;

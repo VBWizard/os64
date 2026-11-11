@@ -80,9 +80,9 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     double timestamp=d_performance_now(dom);
     d_web_animations_sample(dom,timestamp);
     dom->animation_running=true;
-    if(os64_js_task_begin(dom->runtime,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {
+    if(os64_js_realm_task_begin(dom->realm,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx=os64_js_context(dom->runtime,OS64_JS_ABI_ID,&access);
+        JSContext *ctx=os64_js_realm_context(dom->realm,OS64_JS_ABI_ID,&access);
         if(!ctx)d_outcome_fold(out,&access);
         while(ctx&&!dom->closed&&dom->animations&&dom->animations->handle<=last) {
             DAnimation *entry=dom->animations;
@@ -92,7 +92,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
             JSValue arg=JS_NewFloat64(ctx,timestamp);
             os64_js_outcome_t call;
             DScripts before=d_script_enter(dom,script);
-            os64_js_call(dom->runtime,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
+            os64_js_realm_call(dom->realm,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
             d_script_leave(dom,&before,true);
             JS_FreeValueRT(dom->engine,callback);
             d_outcome_fold(out,&call);

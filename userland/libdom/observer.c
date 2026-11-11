@@ -191,7 +191,7 @@ static void request_notify(os64_dom_t *dom)
     s->queued = true;
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
         if (ctx != NULL && JS_EnqueueJob(ctx, notify_job, 0, NULL) == 0) {
             s->owed = false;
             return;

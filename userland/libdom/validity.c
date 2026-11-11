@@ -407,12 +407,12 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
     if (!dom->options.modern || skip) return OS64_JS_OK;
     *ran = true;
     os64_js_outcome_t begin;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "invalid event", &begin) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, "invalid event", &begin) != OS64_JS_OK) {
         *outcome = begin;
         return outcome->status;
     }
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx == NULL) return d_task_finish(dom, outcome);
     /* The form is being submitted (window.c's submit's flag): a submission
      * an invalid listener asks of it does nothing. */
@@ -429,7 +429,7 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
         JS_FreeValue(ctx, JS_GetException(ctx));
         call.status = OS64_JS_FAILED_RUNTIME;
     } else {
-        os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->validate->value, JS_UNDEFINED, 1, &argument, &invalid_form,
+        os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->validate->value, JS_UNDEFINED, 1, &argument, &invalid_form,
                      &call);
         JS_FreeValue(ctx, argument);
     }
