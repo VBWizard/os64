@@ -200,6 +200,16 @@ static void cluster_navigation(os64_dom_t **bindings, ClusterProvider *providers
     }
 }
 
+static void cluster_pointer(os64_dom_t *dom, os64_html_document_t *document, const char *id,
+                            os64_dom_pointer_action_t action, int button, unsigned buttons)
+{
+    os64_dom_pointer_sample_t sample = {.action = action, .hit = native_id(document->document, id),
+        .event = {.button = button, .buttons = buttons}};
+    os64_js_outcome_t out;
+    check(os64_dom_pointer_dispatch(dom, &sample, NULL, NULL, NULL, &out) == OS64_JS_OK,
+          "cluster round6: destination pointer packet completes");
+}
+
 static unsigned cluster_started;
 static void cluster_script_connected(void *opaque, const os64_html_node_t *node)
 {
@@ -586,6 +596,61 @@ static void dom_cluster_cases(void)
                 "for(let a of [replacedOld,replacedOpacity,replacedColor,persistedOld,persistedLater,detachedOld,detachedLater])a.cancel();"
                 "replacementTarget.remove();",
                 "cluster round5: replacement removes only covered active effects and preserves callback realm");
+            realm_script(realms[0],
+                "globalThis.captureNode=document.createElement('div');captureNode.id='round6-capture';B.document.body.appendChild(captureNode);"
+                "globalThis.captureHit=B.document.createElement('div');captureHit.id='round6-hit';B.document.body.appendChild(captureHit);"
+                "globalThis.captureOther=C.document.createElement('div');captureOther.id='round6-other';C.document.body.appendChild(captureOther);"
+                "globalThis.captureEvents=[];captureNode.onpointerdown=e=>{captureNode.setPointerCapture(e.pointerId);"
+                "captureEvents.push(captureNode.hasPointerCapture(e.pointerId)&&window.event===e)};"
+                "captureNode.ongotpointercapture=e=>captureEvents.push('got');captureNode.onlostpointercapture=e=>captureEvents.push('lost');",
+                "cluster round6: adopted pointer capture fixture");
+            cluster_pointer(bindings[1], providers[1].document, "round6-capture", OS64_DOM_POINTER_DOWN, 0, 1);
+            cluster_pointer(bindings[1], providers[1].document, "round6-hit", OS64_DOM_POINTER_MOVE, -1, 1);
+            realm_script(realms[0],
+                "assert(captureEvents.join()==='true,got','destination capture and callback realm');"
+                "C.Element.prototype.releasePointerCapture.call(captureNode,1);assert(!captureNode.hasPointerCapture(1),'borrowed release');",
+                "cluster round6: capture methods use destination pointer state");
+            cluster_pointer(bindings[1], providers[1].document, "round6-hit", OS64_DOM_POINTER_MOVE, -1, 1);
+            cluster_pointer(bindings[2], providers[2].document, "round6-other", OS64_DOM_POINTER_DOWN, 0, 1);
+            realm_script(realms[0],
+                "assert(captureEvents.join()==='true,got,lost','capture released');"
+                "captureNode.setPointerCapture({valueOf(){C.document.body.appendChild(captureNode);return 1}});"
+                "assert(B.Element.prototype.hasPointerCapture.call(captureNode,1),'capture follows ID conversion');"
+                "assert(captureNode.hasPointerCapture({valueOf(){B.document.body.appendChild(captureNode);captureNode.setPointerCapture(1);return 1}}),'has follows ID conversion');"
+                "captureNode.releasePointerCapture({valueOf(){C.document.body.appendChild(captureNode);captureNode.setPointerCapture(1);return 1}});"
+                "assert(!captureNode.hasPointerCapture(1),'release follows ID conversion');"
+                "throws('NotFoundError',()=>captureNode.setPointerCapture(7));captureNode.remove();"
+                "throws('InvalidStateError',()=>captureNode.setPointerCapture(1));",
+                "cluster round6: pointer ID conversions re-resolve adoption");
+            cluster_pointer(bindings[1], providers[1].document, "round6-hit", OS64_DOM_POINTER_UP, 0, 0);
+            cluster_pointer(bindings[2], providers[2].document, "round6-other", OS64_DOM_POINTER_UP, 0, 0);
+            realm_script(realms[0],
+                "globalThis.attrSource=document.createAttributeNS('urn:round6','p:test');attrSource.value='kept';"
+                "globalThis.attrImported=B.document.importNode(attrSource);"
+                "assert(attrImported instanceof B.Attr&&!(attrImported instanceof A.Attr)&&attrImported.ownerDocument===B.document,'import uses B prototype');"
+                "assert(attrImported!==attrSource&&attrImported.name==='p:test'&&attrImported.namespaceURI==='urn:round6'&&attrImported.value==='kept');"
+                "B.document.adoptNode(attrSource);globalThis.attrCopied=attrSource.cloneNode();"
+                "assert(attrSource instanceof A.Attr&&attrCopied instanceof B.Attr&&attrCopied.ownerDocument===B.document,'adopted detached clone');"
+                "globalThis.attrElement=document.createElement('div');attrElement.setAttribute('data-clone','value');"
+                "globalThis.attachedSource=attrElement.getAttributeNode('data-clone');C.document.adoptNode(attrElement);"
+                "globalThis.attachedCopy=B.Attr.prototype.cloneNode.call(attachedSource);"
+                "assert(attachedCopy instanceof C.Attr&&attachedCopy.ownerDocument===C.document&&attachedCopy.ownerElement===null&&attachedCopy.value==='value','attached clone uses C');"
+                "globalThis.attrInert=B.document.implementation.createHTMLDocument();"
+                "assert(attrInert.importNode(attachedSource) instanceof B.Attr,'windowless destination binding');",
+                "cluster round6: cloned Attr ownership and prototypes follow destination");
+            realm_script(realms[0],
+                "globalThis.borrowedAttr=A.Document.prototype.createAttribute.call(C.document,'DATA-X');"
+                "assert(borrowedAttr instanceof C.Attr&&borrowedAttr.ownerDocument===C.document&&borrowedAttr.name==='data-x','borrowed Attr factory');"
+                "globalThis.borrowedNS=B.Document.prototype.createAttributeNS.call(C.document,'urn:round6','p:y');"
+                "assert(borrowedNS instanceof C.Attr&&borrowedNS.prefix==='p','borrowed namespace factory');"
+                "globalThis.viewElement=C.document.createElement('div');viewElement.setAttribute('data-view','x');B.document.adoptNode(viewElement);"
+                "globalThis.viewAttr=A.Element.prototype.getAttributeNode.call(viewElement,'data-view');"
+                "assert(viewAttr instanceof C.Attr&&viewAttr.ownerDocument===B.document,'cached Attr view keeps element creation realm');"
+                "globalThis.viewMap=Object.getOwnPropertyDescriptor(A.Element.prototype,'attributes').get.call(viewElement);"
+                "assert(viewMap instanceof C.NamedNodeMap&&viewMap[0]===viewAttr,'cached map keeps creation realm');"
+                "globalThis.attrChildren=Object.getOwnPropertyDescriptor(A.Attr.prototype,'childNodes').get.call(borrowedAttr);"
+                "assert(attrChildren instanceof C.NodeList,'Attr child list keeps creation realm');",
+                "cluster round6: sibling attribute factories and cached views select creation realm");
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"

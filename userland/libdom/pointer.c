@@ -45,6 +45,7 @@ static JSValue capture_method(JSContext *ctx, JSValueConst self, int argc,
     if (argc < 1) return JS_ThrowTypeError(ctx, "Pointer capture needs an ID");
     int32_t id;
     if (JS_ToInt32(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     DPointer *p = &dom->pointer;
     if (magic == 2) return JS_NewBool(ctx, id == 1 && p->available && p->pending == node);
     if (id != 1 || !p->available) return d_error(ctx, "NotFoundError", "Unknown active pointer");

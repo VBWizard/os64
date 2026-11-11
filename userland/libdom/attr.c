@@ -228,10 +228,14 @@ static void record_remove(os64_dom_t *dom, DAttr *rec)
         }
 }
 
-/* A new Attr, detached, with no value: its record and its object, the
- * object held by the registry. NULL with QuotaExceededError thrown. */
+/* A new Attr, detached, with no value: its record and object belong to
+ * the selected binding, including its prototype. The registry holds the
+ * object. NULL on allocation failure or an unavailable realm. */
 static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)
 {
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return NULL;
     DAttr *rec = d_alloc_kind(dom, sizeof(*rec), OS64_DOM_MEM_ATTR);
     if (rec != NULL) {
         rec->name = copy_bytes(dom, name, os64_strlen(name));
@@ -310,6 +314,7 @@ static void attr_live(os64_dom_t *dom, DAttr *rec)
 static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
                         const os64_html_attr_t *a)
 {
+    dom = d_creation_owner(dom, element);
     DAttr *rec = record_for(dom, element, a);
     if (rec == NULL) {
         rec = attr_make(dom, ctx, a->name, a->ns);
@@ -437,6 +442,7 @@ enum {
 
 static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
 {
+    dom = rec->entry->dom;
     if (rec->child_nodes == NULL) {
         JSValue list = JS_NewObjectProto(ctx, dom->static_list->value);
         if (JS_IsException(list)) return list;
@@ -463,6 +469,7 @@ static const os64_html_node_t *attr_document(os64_dom_t *dom, const DAttr *rec)
  * and value, whose node document is `document`. */
 static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)
 {
+    dom = d_owner(dom, document);
     const os64_html_node_t *element = rec->entry->target;
     const char *value = element != NULL ? rec_attr(rec)->value :
                         rec->value != NULL ? rec->value : "";
@@ -628,6 +635,7 @@ static JSValue attribute_extract(JSContext *ctx, bool has_ns, const DString *ns,
 static JSValue create_attribute(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document,
                                 int magic, int argc, JSValueConst *argv)
 {
+    dom = d_owner(dom, document);
     if (argc < (magic == M_CREATE ? 1 : 2)) return JS_ThrowTypeError(ctx, "Missing attribute name");
     DString ns = {0}, name = {0};
     bool has_ns = magic == M_CREATE_NS && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]);
@@ -847,6 +855,10 @@ static JSValue attributes_of(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     DValue *owner = d_find(dom, element);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
     if (d_more_peek(owner)->attributes != NULL) return JS_DupValue(ctx, d_more_peek(owner)->attributes->value);
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_EXCEPTION;
     DValueMore *more = d_more(dom, ctx, owner);
     if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx, (int)dom->named_map_class);

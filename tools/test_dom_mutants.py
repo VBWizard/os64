@@ -196,6 +196,13 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round6-pointer-owner', 'pointer', '    dom = d_owner(dom, node);\n    DPointer *p = &dom->pointer;', '    DPointer *p = &dom->pointer;'),
+      ('round6-attr-clone-owner', 'attr', 'static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)\n{\n    dom = d_owner(dom, document);', 'static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)\n{'),
+      ('round6-attr-context', 'attr', 'static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)\n{\n    os64_js_outcome_t access;\n    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);\n    if (ctx == NULL) return NULL;', 'static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)\n{'),
+      ('round6-attr-factory-owner', 'attr', '    dom = d_owner(dom, document);\n    if (argc < (magic == M_CREATE ? 1 : 2))', '    if (argc < (magic == M_CREATE ? 1 : 2))'),
+      ('round6-attr-view-owner', 'attr', '    dom = d_creation_owner(dom, element);\n    DAttr *rec = record_for(dom, element, a);', '    DAttr *rec = record_for(dom, element, a);'),
+      ('round6-map-owner', 'attr', '    dom = owner->dom;\n    os64_js_outcome_t access;', '    os64_js_outcome_t access;'),
+      ('round6-attr-child-list', 'attr', 'static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)\n{\n    dom = rec->entry->dom;', 'static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)\n{'),
       ('round5-scroll-owner', 'view', '    dom = d_owner(dom, element);\n    int owner = scroll_owner(dom, ctx, element);', '    int owner = scroll_owner(dom, ctx, element);'),
       ('round5-activation-after-owner', 'window', '                       const DActivation *saved)\n{\n    dom = d_owner(dom, node);', '                       const DActivation *saved)\n{'),
       ('round5-submit-after-owner', 'window', '    dom = d_owner(dom, form);\n    if (valid > 0 && result > 0', '    if (valid > 0 && result > 0'),

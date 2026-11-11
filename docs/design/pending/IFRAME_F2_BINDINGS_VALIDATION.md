@@ -259,6 +259,35 @@ eligibility and composite order. ASan/UBSan and LeakSanitizer remain enabled.
 The target consumer and libraries link. No new guest/P5 run is claimed; the
 earlier campaign's source qualifications remain below.
 
+## Review round 6
+
+Both findings on `e5adab49` were reproduced under both teardown policies.
+Pointer capture selects the element's current binding after converting the
+pointer ID. Tests use native pointer packets in B/C with an A-created element,
+verify got/lost capture and callback current-event state, borrow capture methods,
+and adopt during each capture method's ID conversion. Unknown-pointer and
+unconnected-element refusals remain covered.
+
+Attr cloning selects its destination document binding; the shared Attr
+allocator selects that binding's realm before creating its record and wrapper.
+The related allocation audit also corrects borrowed createAttribute/NS factories
+and first-created cached views: attached Attr and NamedNodeMap views use the
+element's creation binding, while an Attr's empty child list uses the Attr's
+own creation binding. Existing cached objects retain identity. Tests cover
+import, detached/attached clone after adoption, namespace/name/value preservation,
+windowless destinations, borrowed factories and borrowed cached-view accessors.
+The allocator comment no longer incorrectly promises QuotaExceededError for
+engine allocation failure or an unavailable realm.
+
+Both final realm matrices pass 498 checks. The complete shipping-engine DOM
+suite passes 44,065 checks and 3,883 allocation sweep points. Instrumented
+suites pass: pointer 603; attributes 3,426; document operations 2,968. Seven
+mutants compile and fail assertions, separately covering capture ownership,
+clone ownership, Attr allocation context, factory ownership, attached Attr
+views, NamedNodeMap views and Attr child lists. ASan/UBSan and LeakSanitizer
+remain enabled. The target consumer and libraries link. No new guest/P5 run
+is claimed; earlier campaign source qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the
