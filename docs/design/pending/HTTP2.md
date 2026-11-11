@@ -2402,20 +2402,232 @@ once in some twenty runs with a case using a stream whose open had
 failed; it did not recur in twelve runs under load, its helper now
 fails a named check instead of crashing, and its cause is not found.
 
-### H2.5 — The switch (brief when its turn comes)
+### H2.5 — The switch
 
 Contracts: § 2.1 (the offer, and who offers), § 2.7 (one model, two
 renderers; the head's new fact), § 2.8 (the words), § 2.9 (the greeting
-per preset, from captures C1 and C2), § 2.10 (the rows). The brief adds:
-the greeting's representation in `agent.c` and `os64_fetch_options_t`;
-yonder's own greeting, written down with its reasons; what the request
-record shows; the QEMU proof against a local `nghttpd` (`make run-net`,
-the W2 page served over h2, the dump showing one connection carrying it,
-nghttpd's `-v` log showing our greeting byte for byte against the
-preset's capture); DEBTS, DIVERGENCES and BROWSER_DEBTS rows retired and
-added; and Chris's P5 pass against the sites that scored us (by outcome,
-never by name, WIRE.md's rule). This is the slice whose merge waits on
-that pass.
+per preset, from captures C1 and C2), § 2.10 (the rows). Written against
+the tree after H2.6 (#542) and the exit-code fix (#543). This is the
+slice that changes what the wire sees, and the one whose merge waits on
+Chris's P5 pass.
+
+**What it removes, and what it does not.** Over HTTP/1.1 a page's
+requests to one host wait in line for six connections, and each
+connection costs a TCP and a TLS handshake (a resumed one since H2.1).
+Over HTTP/2 they share one connection: the waiting in line goes, and so
+do up to five handshakes per host. That is round trips, so its size on
+the P5 follows the distance to the server and the number of requests a
+page makes to one host. It removes no CPU work: QuickJS, layout and
+decoding cost what they did. A QEMU TCG timing says nothing about the
+saving; the P5 pass and § 5's table do.
+
+#### What the captures say
+
+Each browser loaded one page (a document, a sheet, a script, two
+pictures, one same-origin `fetch`) from a local `nghttpd -v`. The files
+are in `~/os64-opus-kit/h2cap/`, the browser's version in each name.
+C2 was made with Firefox 158 on Linux, driven headless; the W1 set
+already found Firefox's requests the same on either platform apart from
+the platform token in its User-Agent, and nothing in an HTTP/2 greeting
+names a platform.
+
+| | Chrome 157, Windows (C1) | Firefox 158 (C2) |
+|---|---|---|
+| SETTINGS, in order | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 6291456, `MAX_HEADER_LIST_SIZE` 262144 | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 131072, `MAX_FRAME_SIZE` 16384 |
+| Connection WINDOW_UPDATE | 15663105 | 12517377 |
+| First stream id | 1 | 3 |
+| Pseudo-header order | `:method`, `:authority`, `:scheme`, `:path` | `:method`, `:path`, `:authority`, `:scheme` |
+| HEADERS carries a priority | yes: exclusive, weight by kind (document 256, sheet 256, script 220, picture 183, `fetch` 220), depending on an earlier stream (below) | yes: depends on 0, not exclusive, weight by kind (document 42, sheet 22, script 22, picture 12, `fetch` 22) |
+| WINDOW_UPDATE on each new stream | none | 12451840, straight after its HEADERS |
+| PRIORITY frames | none | none |
+| Lines sent over HTTP/2 that HTTP/1.1 lacks | `priority`, last: document `u=0, i`, sheet `u=0`, script `u=1`, picture `u=2, i`, `fetch` `u=1, i` | `te: trailers`, last |
+
+Firefox's `priority` line is the one its preset already sends over
+HTTP/1.1, with the same values. The weights are as `nghttpd` prints
+them, one more than the byte on the wire.
+
+**Chrome's dependencies.** In the capture the document and the sheet
+depend on stream 0, the script on the sheet, the first picture on the
+script, the second picture on the first, and the `fetch`, sent after the
+others had finished, on stream 0 again. C1's requests went out in
+falling order of weight, so it cannot tell "the newest heavier stream"
+from the rule Chromium's source states
+(`Http2PriorityDependencies::PriorityLowerBound`, read 2026-11-11;
+Quinn's finding on this brief's first draft, which had the former): of
+the streams still open whose weight is at least the new one's, take
+those of the LOWEST such weight, and of those the most recently opened;
+depend on it exclusively, and on 0 when there is none. With a script
+(220) open, then a sheet (256) opened after it, a picture (183) depends
+on the script by Chromium's rule and on the sheet by the other. Capture
+C3 is that page, with responses large enough to still be arriving, and
+it shows Chromium's rule: the script (stream 3, 220) and the sheet
+(stream 5, 256) each depended on 0, the first picture (183) on stream 3
+while stream 5 was open and newer, and the second picture on the first.
+The connection applies that rule, and the host case for it is the same
+streams in that order. Which streams Chrome itself
+counted as still open at each instant is its own bookkeeping and is not
+matched.
+
+The capture is of Chrome 157 and the preset says 156. Its string and
+client hints are refreshed from this capture in this slice, since the
+lines are in hand.
+
+#### The greeting's representation
+
+- **`os64_fetch_h2_t`** (fetch.h), what a connection of this caller's
+  says first and how its requests are shaped: the SETTINGS as (id, value)
+  pairs in order, at most eight; the connection's window increment (0
+  sends none); the first stream id (1 or 3); an increment sent as a
+  WINDOW_UPDATE on each new stream after its HEADERS (0 sends none); the
+  pseudo-header order as four letters (`"masp"`, `"mpas"`); and how
+  HEADERS carries a priority: not at all, flat (depending on stream 0,
+  not exclusive: Firefox's), or chained (exclusive, by the rule above:
+  Chrome's). `os64_fetch_options_t`
+  gains `h2`, a pointer to one, borrowed until the fetch is closed.
+  NULL means libfetch's own (below).
+- **Per request**, beside `order`: `h2_weight` (the priority's weight for
+  this request, used when the greeting says HEADERS carries one) and
+  `h2_lines` (whole `Name: value\r\n` lines sent only when the request
+  goes over HTTP/2, placed by `order` like any other line). The caller
+  cannot know the protocol before the dial answers, so it says what the
+  browser adds over HTTP/2 and libfetch decides.
+- **`http1`** in the options: true offers `http/1.1` alone. § 2.1's
+  costumes set it.
+- **`h2_greeting_t`** (h2_conn.h) gains the first stream id, and
+  `h2_stream_open` takes the priority and the stream increment. The
+  connection copies the SETTINGS at adoption, as it does now.
+- **`way_identity_t`** (libway) gains the preset's half: a pointer to its
+  `os64_fetch_h2_t`, a weight for each destination, its HTTP/2-only lines
+  (for Chrome a `priority` value for each destination), and `http1`. A
+  destination the captures do not show (a font, a frame, a worker) takes
+  the `fetch` row's weight and line, and is booked in DEBTS until someone
+  captures it. `agent.c`'s table fills them from the captures;
+  `way_load` passes them down beside `order`.
+- **A connection keeps the greeting it was dialled with, and the pool
+  hands it only to a fetch that would have said the same** (Quinn's
+  finding: closing idle connections on an agent change is not enough,
+  because a connection in use and a dial in flight both outlive it, and
+  the pool prefers an HTTP/2 connection with room). The rule is the
+  pool's, at every place it gives a fetch a connection or a dial to wait
+  on:
+  - An HTTP/2 connection records its greeting. `fetch_pool_take` gives
+    it only to a fetch whose `h2` is equal to it, value for value (two
+    NULLs are equal), and never to a fetch that says `http1`. This holds
+    for a connection that is idle, in use, or being adopted.
+  - A dial in flight records its dialler's `h2` and `http1`. A fetch
+    waits on it only when both are its own; otherwise the dial is not
+    this fetch's to wait for, and it dials for itself under the key's
+    cap as if the other were not there.
+  - The remembered ALPN answer (a host that chose h2) is ignored by an
+    `http1` fetch, which dials as HTTP/1.1 fetches do.
+  - An HTTP/1.1 connection has no greeting and is anyone's, as now.
+  - Connections under an identity nobody asks for any more are not
+    hunted down: they finish their streams and idle out. yonder still
+    closes the idle ones when the agent setting changes, so they go
+    sooner.
+  The pseudo-header order, weight and lines are each request's own and
+  need no rule.
+
+#### libfetch's own greeting
+
+For a caller that passes no `h2` (os64get, wend, a typed agent in
+yonder) and for yonder's own preset: H2.6's numbers stay. `ENABLE_PUSH`
+0, `INITIAL_WINDOW_SIZE` 1 MiB, `MAX_HEADER_LIST_SIZE` 64 KiB (the head
+limit the connection holds itself to); the connection's window raised to
+4 MiB; first stream 1; no priority on HEADERS; no stream increment;
+pseudo-headers `:method`, `:authority`, `:scheme`, `:path`; no added
+lines. These are os64's numbers and claim to be nobody else's: a
+megabyte a stream is what one picture's worth of buffering costs, and
+four for the connection lets four streams fill at once.
+
+A preset's windows are larger (Q2's ruling: match them). What bounds
+memory under a preset is the connection's window, since no more than
+that can be in flight unread across all its streams: about 12 MiB for
+Firefox's and 15 MiB for Chrome's.
+
+#### What a preset is allowed to say
+
+- **`te: trailers`** under the Firefox preset. § 2.7 said TE is not sent
+  at all; the capture shows Firefox sends it on every HTTP/2 request, and
+  the connection reads trailers (H2.4), so the line is true. § 2.7 is
+  amended in this slice's PR: TE is sent only as `trailers`, only where
+  the preset's browser sends it.
+- **`MAX_HEADER_LIST_SIZE`** as the preset's browser states it, when it
+  states one. The connection still resets a head past 64 KiB (§ 2.7). The
+  setting is advice to the server and the reset is the rule; a site whose
+  head is between the two fails as `UNSUPPORTED` with `head`, as now.
+- **`HEADER_TABLE_SIZE`** as stated: the decoder holds a table of that
+  size (H2.4 sized its scratch from it).
+- **Not matched**, as § 2.9 says: the HPACK encoder's indexing choices,
+  and the TLS handshake.
+
+#### The offer
+
+`fetch_h2_offer` is deleted. `dial` offers `h2, http/1.1` on a direct
+https dial that is not the TLS 1.2 fallback and whose options do not say
+`http1`; everything else in § 2.1 is unchanged. `/tests/h2probe` loses
+its use of the flag, its wait for the connection's reader and the
+comment that cites the 137 artifact (#543 paid it), and links
+`libfetch.so` like any program.
+
+#### The head's fact, and the record
+
+`os64_fetch_head_t` gains `http2`: true when the final head came over
+HTTP/2. yonder's request record says `HTTP/2` or `HTTP/1.1` for each
+request, and the stream id beside it. The reason sentences are H2.6's.
+
+#### Proof
+
+- **Host.** For each preset and for libfetch's own greeting, a scripted
+  peer (`tools/h2_peer`) checks every row of the table above against what
+  the connection sent: the SETTINGS in order, the window increment, the
+  first stream id, the priority fields and weight for each kind of
+  request, the stream increment and where it falls, the pseudo-header
+  order, and the HTTP/2-only lines and their place. `http1` offers no h2;
+  a typed agent gets libfetch's own. Chrome's dependency rule on the
+  three streams C3 distinguishes. The identity changing under load: with
+  a response still arriving on one preset's connection, and again with a
+  dial still in flight, a fetch under another preset and a fetch saying
+  `http1` each get a connection of their own, the first fetch finishes
+  whole, and no request rides a connection greeted as someone else. Under
+  ASan/UBSan and TSan with the
+  rest of the HTTP/2 harness. Mutants once at the end, through
+  `tools/mutants_parallel.py`.
+- **QEMU, against `nghttpd -v`.** yonder loads the capture page under
+  each browser preset, on the e1000 and on virtio. The server's log of
+  what we sent is compared with the capture, frame by frame, for every
+  row of the table; the lines of each request are compared by name and
+  order, with the values that are os64's own (Accept, Accept-Encoding)
+  set aside as DIVERGENCES already records. The record shows one
+  connection and `HTTP/2` on every request. `h2probe` passes without its
+  flag.
+- **The measurement** of § 5: connections per page and `arrived after`
+  on the local page, the blog page and the course page, before and after
+  this slice, each a fresh VM under the Chrome preset.
+- **The P5 pass, Chris's.** The sites that scored us, by outcome and
+  never by name; a session of ordinary browsing under each browser
+  preset; `h2probe` against a live site. The merge waits on it.
+
+#### The books
+
+As § 6 lists, in this slice's PR: the DEBTS and DIVERGENCES rows, the
+§ 2.10 rows, WIRE.md's pointer, § 2.7's TE sentence.
+
+#### Out of scope, on purpose
+
+Everything in § 2.10. A greeting for a browser with no capture (Safari's
+preset keeps libfetch's own until someone captures it). PRIORITY and
+PRIORITY_UPDATE frames, which neither capture shows on a page load.
+
+#### The off switch (Q5, ruled)
+
+`http2 = off` in `net.conf`, on the config ladder, read by libfetch once
+per process: every dial then offers `http/1.1` alone. `net.conf` and not
+`yonder.conf` because the choice is the network's and not one program's:
+os64get and wend speak through libfetch too, and one line turns all of
+them. It gives the P5 a before-and-after on one build, which § 5's table
+wants, and a way round a site that breaks. `/sys/conf` shows which file
+answered, as for any reader.
 
 ## 5. Proof, across the arc
 
@@ -2452,7 +2664,7 @@ BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
 one-line pointer here. Each slice's "as built" lands under its brief
 above, by its builder, in its PR.
 
-## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09 and Q4 on 2026-11-10)
+## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09, Q4 on 2026-11-10 and Q5 on 2026-11-11)
 
 - **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
   handle per bell, a small kernel slice with a Codex round; Fable's lean),
@@ -2479,3 +2691,7 @@ above, by its builder, in its PR.
   on what would be the largest diff of the arc, with the pool's changes
   and the connection's reviewed together). RULED by Chris on 2026-11-10:
   two slices. Quinn's read of the brief recommended the same.
+- **Q5 — a way to turn HTTP/2 off without a rebuild.** An `http2 = off`
+  line in `net.conf` on the config ladder, read by libfetch once per
+  process (Fable's lean), or no switch. RULED by Chris on 2026-11-11:
+  yes, in `net.conf` (§ 4 H2.5, The off switch).
