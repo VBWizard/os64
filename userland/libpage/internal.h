@@ -85,6 +85,8 @@ struct PNodeState {
 
 struct os64_page_state {
     os64_html_document_t *doc;
+    struct os64_page_state_group *group;
+    os64_page_state_t *group_next;
     size_t max_bytes, bytes;
     uint64_t version;
     PNodeState **table;
@@ -93,6 +95,14 @@ struct os64_page_state {
     os64_page_t *models;
     bool private_owner;
 };
+
+struct os64_page_state_group {
+    os64_page_state_t *first, *last;
+    size_t bytes, peak, limit;
+    void *retired;
+};
+void p_state_reclaim(os64_page_state_t *state);
+void p_state_cross_snapshot(PNodeState *record);
 
 // New records stay private until commit. A lookup indexes larger pending
 // batches; a replacement live table is reserved when those records need
@@ -110,6 +120,7 @@ typedef struct {
 
 void *p_state_alloc(os64_page_state_t *state, size_t size);
 void p_state_dealloc(os64_page_state_t *state, void *ptr);
+os64_page_state_t *p_state_for_node(const os64_page_state_t *state, const os64_html_node_t *node);
 PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t *node);
 PNodeState *p_reserve_find(const PReserve *reserve, const os64_html_node_t *node);
 PNodeState *p_state_for_control(const os64_page_t *page, int32_t control);

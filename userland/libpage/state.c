@@ -6,40 +6,105 @@
 
 // The allocation header keeps frees exact, including scratch arena blocks.
 // Alignment preserves the allocator's alignment for every returned object.
-typedef union {
-    size_t size;
+typedef union PStateBlock PStateBlock;
+union PStateBlock {
+    struct {
+        size_t size;
+        os64_page_state_t *owner;
+        PStateBlock *next;
+        bool shared;
+    } data;
     max_align_t alignment;
-} PStateBlock;
+};
 
-void *p_state_alloc(os64_page_state_t *state, size_t size)
+static bool group_borrowed(const os64_page_state_group_t *group)
 {
-    if (state == NULL)
-        return os64_malloc(size);
-    if (size > SIZE_MAX - sizeof(PStateBlock))
-        return NULL;
-    size_t total = size + sizeof(PStateBlock);
-    if (total > state->max_bytes - state->bytes)
-        return NULL;
-    PStateBlock *block = os64_malloc(total);
-    if (block == NULL)
-        return NULL;
-    block->size = total;
-    state->bytes += total;
-    return block + 1;
+    for (const os64_page_state_t *s = group->first; s; s = s->group_next)
+        if (s->models) return true;
+    return false;
 }
-
-void p_state_dealloc(os64_page_state_t *state, void *ptr)
+static void state_block_free(PStateBlock *block)
 {
-    if (ptr == NULL)
-        return;
-    if (state == NULL) {
-        os64_free(ptr);
-        return;
-    }
-    PStateBlock *block = (PStateBlock *)ptr - 1;
-    state->bytes -= block->size;
+    os64_page_state_t *owner = block->data.owner;
+    owner->bytes -= block->data.size;
+    if (owner->group) owner->group->bytes -= block->data.size;
     os64_free(block);
 }
+void p_state_reclaim(os64_page_state_t *state)
+{
+    os64_page_state_group_t *g = state->group;
+    if (!g || group_borrowed(g)) return;
+    while (g->retired) {
+        PStateBlock *block = g->retired;
+        g->retired = block->data.next;
+        state_block_free(block);
+    }
+}
+void *p_state_alloc(os64_page_state_t *state, size_t size)
+{
+    if (!state) return os64_malloc(size);
+    if (size > SIZE_MAX - sizeof(PStateBlock)) return NULL;
+    size_t total = size + sizeof(PStateBlock);
+    if (total > state->max_bytes - state->bytes ||
+        (state->group && total > state->group->limit - state->group->bytes)) return NULL;
+    PStateBlock *block = os64_malloc(total);
+    if (!block) return NULL;
+    *block = (PStateBlock){.data = {.size = total, .owner = state}};
+    state->bytes += total;
+    if (state->group) {
+        state->group->bytes += total;
+        if (state->group->bytes > state->group->peak) state->group->peak = state->group->bytes;
+    }
+    return block + 1;
+}
+void p_state_dealloc(os64_page_state_t *state, void *ptr)
+{
+    if (!ptr) return;
+    if (!state) { os64_free(ptr); return; }
+    PStateBlock *block = (PStateBlock *)ptr - 1;
+    os64_page_state_group_t *g = block->data.owner->group;
+    /* Adoption can leave a source snapshot borrowing these value bytes.
+     * Conservatively retain shared values while a group model exists;
+     * scratch and unshared values still reclaim at publication. */
+    if (block->data.shared && g && group_borrowed(g)) {
+        block->data.next = g->retired;
+        g->retired = block;
+    } else state_block_free(block);
+}
+static void state_value_shared(void *ptr)
+{
+    if (ptr) ((PStateBlock *)ptr - 1)->data.shared = true;
+}
+
+void p_state_cross_snapshot(PNodeState *record)
+{
+    if (!record) return;
+    state_value_shared(record->text);
+    state_value_shared(record->cache);
+}
+
+os64_page_state_group_t *os64_page_state_group_create(size_t max_bytes)
+{
+    if (max_bytes < sizeof(os64_page_state_group_t)) return NULL;
+    os64_page_state_group_t *g = os64_calloc(1, sizeof(*g));
+    if (g) { g->bytes = g->peak = sizeof(*g); g->limit = max_bytes; }
+    return g;
+}
+bool os64_page_state_group_add(os64_page_state_group_t *g, os64_page_state_t *state)
+{
+    if (!g || !state || state->group || state->private_owner || state->models ||
+        state->bytes > g->limit - g->bytes) return false;
+    for (os64_page_state_t *s = g->first; s; s = s->group_next)
+        if (s->doc == state->doc || !os64_html_same_group(s->doc, state->doc)) return false;
+    if (g->last) g->last->group_next = state; else g->first = state;
+    g->last = state;
+    state->group = g;
+    g->bytes += state->bytes;
+    if (g->bytes > g->peak) g->peak = g->bytes;
+    return true;
+}
+size_t os64_page_state_group_bytes(const os64_page_state_group_t *g) { return g ? g->bytes : 0; }
+size_t os64_page_state_group_peak(const os64_page_state_group_t *g) { return g ? g->peak : 0; }
 
 os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes)
 {
@@ -59,24 +124,40 @@ os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_
     return state;
 }
 
-void os64_page_state_free(os64_page_state_t *state)
+static void state_clear(os64_page_state_t *state)
 {
-    if (state == NULL)
-        return;
-    if (state->models != NULL)
-        os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
-    PNodeState *edit = state->records;
-    while (edit != NULL) {
-        PNodeState *next = edit->next;
+    while (state->records) {
+        PNodeState *edit = state->records;
+        state->records = edit->next;
         p_state_dealloc(state, edit->text);
         p_state_dealloc(state, edit->cache);
         p_state_dealloc(state, edit->custom);
         os64_html_release(state->doc, edit->node);
         p_state_dealloc(state, edit);
-        edit = next;
     }
     p_state_dealloc(state, state->table);
+}
+void os64_page_state_free(os64_page_state_t *state)
+{
+    if (!state) return;
+    if (state->models || state->group) os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+    state_clear(state);
     os64_free(state);
+}
+void os64_page_state_group_free(os64_page_state_group_t *g)
+{
+    if (!g) return;
+    if (group_borrowed(g)) os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+    if (g->first) p_state_reclaim(g->first);
+    for (os64_page_state_t *s = g->first; s; s = s->group_next) state_clear(s);
+    for (os64_page_state_t *s = g->first, *next; s; s = next) {
+        next = s->group_next;
+        if (s->bytes != sizeof(*s)) os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+        g->bytes -= sizeof(*s);
+        os64_free(s);
+    }
+    if (g->bytes != sizeof(*g)) os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+    os64_free(g);
 }
 
 size_t os64_page_state_bytes(const os64_page_state_t *state)
@@ -118,11 +199,22 @@ PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t 
     return *record_slot(state->table, state->cap, node);
 }
 
+os64_page_state_t *p_state_for_node(const os64_page_state_t *state, const os64_html_node_t *node)
+{
+    os64_html_document_t *doc = os64_html_node_owner(node);
+    if (!state || !doc) return NULL;
+    for (os64_page_state_t *s = state->group ? state->group->first : (os64_page_state_t *)state;
+         s; s = state->group ? s->group_next : NULL)
+        if (s->doc == doc) return s;
+    return NULL;
+}
+
 PNodeState *p_reserve_find(const PReserve *reserve, const os64_html_node_t *node)
 {
-    if (reserve->table != NULL)
-        return *record_slot(reserve->table, reserve->cap, node);
-    PNodeState *edit = p_state_find(reserve->state, node);
+    PNodeState *edit = reserve->table != NULL ? *record_slot(reserve->table, reserve->cap, node)
+                                              : p_state_find(reserve->state, node);
+    if (edit == NULL && reserve->state->group)
+        edit = p_state_find(p_state_for_node(reserve->state, node), node);
     if (edit != NULL)
         return edit;
     if (reserve->pending != NULL)
@@ -284,7 +376,9 @@ void p_reserve_commit(PReserve *reserve)
 
 void p_state_publish(os64_page_state_t *state)
 {
-    for (os64_page_t *page = state->models; page != NULL; page = page->state_next)
+    for (os64_page_state_t *s = state->group ? state->group->first : state;
+         s; s = state->group ? s->group_next : NULL)
+    for (os64_page_t *page = s->models; page != NULL; page = page->state_next)
         if (page->initial_ready)
             for (int32_t i = 0; i < page->ncontrols; i++)
                 p_publish(page, i);
@@ -1434,7 +1528,7 @@ static PAttrStage *attr_stage(PReserve *reserve, PAttrStage **stages,
     stage->before_on = record->on >= 0 && (record->on_dirty || record->on_attr == on_attr) ? record->on != 0 : on_attr;
     if (p_is(node, OS64_HTML_TAG_INPUT) &&
         (p_input_type(node) == OS64_PAGE_INPUT_RADIO || p_input_type(node) == OS64_PAGE_INPUT_CHECKBOX))
-        (void)os64_page_node_checked(reserve->state, node, &stage->before_on);
+        (void)os64_page_node_checked(p_state_for_node(reserve->state, node), node, &stage->before_on);
     stage->before_selected = record->selected >= 0 && (record->selected_dirty || record->selected_attr == selected_attr) ? record->selected != 0 : selected_attr;
     stage->value_staged = false;
     stage->moving = stage->select_trigger = false;
@@ -1987,13 +2081,16 @@ static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
                                PTreeNames *names, PTreeNames *ids)
 {
     bool explicit_owners = os64_html_form_input_count(reserve->state->doc) != 0;
+    for (PTreeRoot *r = roots; r; r = r->next)
+        if (r->node && os64_html_node_owner(r->node) != reserve->state->doc &&
+            os64_html_form_input_count(os64_html_node_owner(r->node))) explicit_owners = true;
     for (PTreeRoot *root = roots; root != NULL; root = root->next)
         for (const os64_html_node_t *top = root->node; top != NULL;
              top = root->siblings ? top->next : NULL)
             for (const os64_html_node_t *at = top; at != NULL; at = tree_next(top, at)) {
                 // HTML resolves form= for a connected element only, a shadow
                 // tree's included: the test is connectedness, which crosses.
-                if (explicit_owners && (os64_html_shadow_including_root(at) == reserve->state->doc->document ||
+                if (explicit_owners && (os64_html_shadow_including_root(at) == os64_html_node_owner(at)->document ||
                     (root->parent != NULL &&
                      os64_html_shadow_including_root(root->parent) == reserve->state->doc->document)) &&
                     !tree_name_add(scratch, ids, p_attr(at, "id"))) return false;
@@ -2241,18 +2338,93 @@ static int64_t text_edit(os64_page_state_t *state, os64_html_node_t *node, const
     return status;
 }
 
-typedef enum { P_TREE_INSERT, P_TREE_REPLACE, P_TREE_REMOVE, P_TREE_CHILDREN } PTreeVerb;
+typedef enum { P_TREE_INSERT, P_TREE_REPLACE, P_TREE_REMOVE, P_TREE_CHILDREN, P_TREE_ADOPT } PTreeVerb;
+
+typedef struct {
+    os64_page_state_t *from, *to;
+    PNodeState **source, **destination;
+    size_t cap;
+} PMigration;
+
+static void migration_abort(PMigration *m)
+{
+    if (!m->from) return;
+    p_state_dealloc(m->from, m->source);
+    p_state_dealloc(m->to, m->destination);
+    m->source = m->destination = NULL;
+}
+static bool migration_prepare(PMigration *m, PReserve *reserve, os64_page_state_t *from)
+{
+    os64_page_state_t *to = reserve->state;
+    if (from == to) return true;
+    m->from = from; m->to = to;
+    if (from->count > SIZE_MAX - to->count ||
+        reserve->count > SIZE_MAX - from->count - to->count) return false;
+    size_t count = from->count + to->count + reserve->count, cap = 16;
+    while (count > cap / 2) {
+        if (cap > SIZE_MAX / 2) return false;
+        cap *= 2;
+    }
+    if (cap > SIZE_MAX / sizeof(PNodeState *)) return false;
+    m->cap = cap;
+    m->source = p_state_alloc(from, cap * sizeof(*m->source));
+    m->destination = p_state_alloc(to, cap * sizeof(*m->destination));
+    if (!m->source || !m->destination) return false;
+    os64_memset(m->source, 0, cap * sizeof(*m->source));
+    os64_memset(m->destination, 0, cap * sizeof(*m->destination));
+    return true;
+}
+static void migration_apply(PMigration *m)
+{
+    if (!m->from) return;
+    os64_page_state_t *from = m->from, *to = m->to;
+    PNodeState *lists[] = {from->records, to->records};
+    from->records = to->records = NULL;
+    from->count = to->count = 0;
+    p_state_dealloc(from, from->table);
+    p_state_dealloc(to, to->table);
+    from->table = m->source; to->table = m->destination;
+    from->cap = to->cap = m->cap;
+    m->source = m->destination = NULL;
+    for (size_t i = 0; i < 2; i++)
+        for (PNodeState *r = lists[i], *next; r; r = next) {
+            next = r->next;
+            os64_page_state_t *owner = os64_html_owns_node(to->doc, r->node) ? to : from;
+            if ((i == 0 && owner == to) || (i == 1 && owner == from)) {
+                state_value_shared(r->text);
+                state_value_shared(r->cache);
+                state_value_shared(r->custom);
+                r->cache_version = 0;
+                r->text_version = os64_html_version(owner->doc);
+            }
+            r->next = owner->records;
+            owner->records = r;
+            *record_slot(owner->table, owner->cap, r->node) = r;
+            owner->count++;
+        }
+    p_state_changed(from);
+    p_state_changed(to);
+}
 
 static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
                            const os64_html_node_t *parent, const os64_html_node_t *node,
                            const os64_html_node_t *reference)
 {
     if (state == NULL || (parent != NULL && !os64_html_owns_node(state->doc, parent)) ||
-        (node != NULL && !os64_html_owns_node(state->doc, node)) ||
+        (node != NULL && !p_state_for_node(state, node)) ||
         (reference != NULL && !os64_html_owns_node(state->doc, reference)))
         return OS64_HTML_BAD_ARGUMENT;
     if (verb == P_TREE_REMOVE && node == NULL)
         return OS64_HTML_BAD_ARGUMENT;
+    os64_page_state_t *source = node ? p_state_for_node(state, node) : state;
+    if (verb == P_TREE_REMOVE && source != state) return OS64_HTML_BAD_ARGUMENT;
+    if (verb == P_TREE_ADOPT) {
+        int64_t why = os64_html_may_adopt(state->doc, parent, node);
+        if (why) return why;
+    } else if (verb == P_TREE_INSERT || verb == P_TREE_REPLACE) {
+        int64_t why = os64_html_validate_insert(state->doc, parent, node, reference, verb == P_TREE_REPLACE);
+        if (why) return why;
+    }
     if ((verb == P_TREE_INSERT || verb == P_TREE_REPLACE) && (parent == NULL || node == NULL))
         return OS64_HTML_BAD_ARGUMENT;
     if (verb == P_TREE_CHILDREN && (parent == NULL ||
@@ -2261,21 +2433,22 @@ static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
         return OS64_HTML_BAD_ARGUMENT;
     if (verb == P_TREE_REMOVE && node->parent == NULL)
         return os64_html_remove(state->doc, (os64_html_node_t *)node);
-    if ((verb == P_TREE_INSERT && node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL) ||
-        (verb == P_TREE_REPLACE && node == reference))
+    if (source == state && ((verb == P_TREE_INSERT && node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL) ||
+        (verb == P_TREE_REPLACE && node == reference)))
         return verb == P_TREE_INSERT ? os64_html_insert(state->doc, (os64_html_node_t *)parent,
             (os64_html_node_t *)node, (os64_html_node_t *)reference) :
             os64_html_replace(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node,
                               (os64_html_node_t *)reference);
-    if (verb == P_TREE_CHILDREN && parent->first_child == NULL &&
+    if (source == state && verb == P_TREE_CHILDREN && parent->first_child == NULL &&
         (node == NULL || (node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL)))
         return node != NULL ? os64_html_insert(state->doc, (os64_html_node_t *)parent,
             (os64_html_node_t *)node, NULL) : OS64_HTML_OK;
+    PMigration migration = {0};
     PReserve reserve = {.state = state};
     PArena scratch = {.budget = state};
     PAttrStage *stages = NULL;
     PTreeRoot roots[3] = {
-        {.node = node, .parent = verb != P_TREE_REMOVE ? parent : NULL, .next = &roots[1]},
+        {.node = node, .parent = verb != P_TREE_REMOVE && verb != P_TREE_ADOPT ? parent : NULL, .next = &roots[1]},
         {.node = verb == P_TREE_REPLACE ? reference : NULL, .next = &roots[2]},
         {.node = verb == P_TREE_CHILDREN ? parent->first_child : NULL, .siblings = true}
     };
@@ -2294,15 +2467,18 @@ static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
     const os64_html_node_t *parents[] = {parent, node != NULL ? node->parent : NULL,
         verb == P_TREE_REPLACE && reference != NULL ? reference->parent : NULL};
     for (size_t i = 0; i < 3; i++) {
-        const PNodeState *edit = parents[i] != NULL ? p_state_find(state, parents[i]) : NULL;
+        const PNodeState *edit = parents[i] != NULL ? p_state_find(p_state_for_node(state, parents[i]), parents[i]) : NULL;
         if (edit != NULL && edit->text_clean && attr_stage(&reserve, &stages, parents[i]) == NULL)
             goto no_memory;
         tree_plan_textarea(&reserve, parents[i]);
     }
     const os64_html_node_t *old_first = verb == P_TREE_CHILDREN ? parent->first_child : NULL;
+    if (!migration_prepare(&migration, &reserve, source)) goto no_memory;
     uint64_t version = os64_html_version(state->doc);
     int64_t status;
-    if (verb == P_TREE_REMOVE)
+    if (verb == P_TREE_ADOPT)
+        status = os64_html_adopt(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node);
+    else if (verb == P_TREE_REMOVE)
         status = os64_html_remove(state->doc, (os64_html_node_t *)node);
     else if (verb == P_TREE_REPLACE)
         status = os64_html_replace(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node,
@@ -2316,6 +2492,7 @@ static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
         attr_stages_free(state, stages);
         p_reserve_abort(&reserve);
         p_arena_free(&scratch);
+        migration_abort(&migration);
         return status;
     }
     if (verb == P_TREE_CHILDREN)
@@ -2326,21 +2503,30 @@ static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
             (void)os64_html_remove(state->doc, (os64_html_node_t *)at);
             at = next;
         }
-    if (version == os64_html_version(state->doc)) {
+    if (version == os64_html_version(state->doc) && source == state) {
         attr_stages_free(state, stages);
         p_reserve_abort(&reserve);
     } else {
-        tree_plan_normalize(&reserve, stages);
         p_reserve_commit(&reserve);
+        migration_apply(&migration);
+        tree_plan_normalize(&reserve, stages);
         tree_plan_publish(state, stages);
     }
     p_arena_free(&scratch);
+    migration_abort(&migration);
     return OS64_HTML_OK;
 no_memory:
     attr_stages_free(state, stages);
     p_reserve_abort(&reserve);
     p_arena_free(&scratch);
+    migration_abort(&migration);
     return OS64_HTML_NO_MEMORY;
+}
+
+int64_t os64_page_node_adopt(os64_page_state_t *state, os64_html_node_t *document,
+                             os64_html_node_t *node)
+{
+    return tree_change(state, P_TREE_ADOPT, document, node, NULL);
 }
 
 int64_t os64_page_node_insert(os64_page_state_t *state, os64_html_node_t *parent,
@@ -2389,13 +2575,13 @@ static bool clone_pair(PArena *scratch, PClonePair ***tail,
     return true;
 }
 
-os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
+os64_html_node_t *os64_page_node_import(os64_page_state_t *state, const os64_page_state_t *from,
                                        const os64_html_node_t *node, bool deep,
                                        int64_t *status)
 {
     int64_t why = OS64_HTML_BAD_ARGUMENT;
     os64_html_node_t *copy = NULL;
-    if (state == NULL || !os64_html_owns_node(state->doc, node) ||
+    if (state == NULL || from == NULL || !os64_html_owns_node(from->doc, node) ||
         node->kind == OS64_HTML_DOCUMENT)
         goto done;
     copy = os64_html_clone(state->doc, node, deep, &why);
@@ -2411,13 +2597,13 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
         if (input || textarea) {
             if (!p_reserve_node(&reserve, target)) goto no_memory;
             PNodeState *fresh = p_reserve_find(&reserve, target);
-            const PNodeState *old = p_state_find(state, source);
+            const PNodeState *old = p_state_find(from, source);
             os64_page_input_t type = input ? p_input_type(source) : OS64_PAGE_INPUT_NONE;
             os64_page_element_t element = input ? OS64_PAGE_EL_INPUT : OS64_PAGE_EL_TEXTAREA;
             if (input) {
-                bool checked = checked_raw(state, source);
+                bool checked = checked_raw(from, source);
                 if (type == OS64_PAGE_INPUT_RADIO)
-                    (void)os64_page_node_checked(state, source, &checked);
+                    (void)os64_page_node_checked((os64_page_state_t *)from, source, &checked);
                 fresh->on = checked ? 1 : 0;
                 fresh->on_dirty = old != NULL && old->on_dirty;
                 fresh->on_attr = p_has_attr(target, "checked");
@@ -2489,4 +2675,10 @@ no_memory:
 done:
     if (status != NULL) *status = why;
     return copy;
+}
+
+os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
+                                       const os64_html_node_t *node, bool deep, int64_t *status)
+{
+    return os64_page_node_import(state, state, node, deep, status);
 }
