@@ -100,4 +100,4 @@ H2.6.9,"Mutants once at the end, through the capped runner",H2.6.7,done,#542,"78
 H2.6.10,"One cold read, as-built section",H2.6.9,done,#542,"Opus: an unbounded redial, stale detail, long names unheard, and six comments; each fixed"
 H2.6.11,"Codex round",H2.6.10,done,#542,"round 3 clean; round 1 found an upload waiting under a whole response, round 2 a timing-dependent test"
 C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,done,#544,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
-C2,"Capture Firefox on Windows the same way",,done,#544,"Chris's; Firefox builds a priority tree and Chrome does not"
+C2,"Capture Firefox on Windows the same way",,done,#544,"Chris's; Firefox builds a priority tree and Chrome does not. Made with Firefox 158 on Linux, headless, by Fable: an HTTP/2 greeting names no platform"
