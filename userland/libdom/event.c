@@ -604,14 +604,13 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
  * the window's. */
 static JSValue slot_value(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
-    /* Refresh can turn a compiled slot into an uncompiled one. Resolve the
-     * current Document before refresh so changed native text compiles there. */
-    if (entry->node) {
-        dom = d_owner(dom, entry->node);
-        os64_js_outcome_t outcome;
-        ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-        if (!ctx) return JS_EXCEPTION;
-    }
+    /* Refresh can replace a callback from another realm with native text.
+     * The target's binding selects both the attribute and its compilation
+     * context; an existing compiled function keeps its own realm. */
+    dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (!ctx) return JS_EXCEPTION;
     if (slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
     if (slot->handler == D_SLOT_UNCOMPILED && entry != dom->window && entry->node != NULL &&
         !d_window_document(dom, entry->node))
@@ -785,8 +784,8 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
             /* What the listener throws is its script's (report.c's MUTED
              * ERRORS), whichever call it is reported from. */
             os64_dom_t *callback_dom = listener->callback_owner;
-            if (slot && listener->handler == D_SLOT_UNCOMPILED && entry->node)
-                callback_dom = d_owner(dom, entry->node);
+            if (slot && listener->handler == D_SLOT_UNCOMPILED)
+                callback_dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
             os64_js_outcome_t context_out;
             JSContext *callback_ctx = os64_js_realm_context(callback_dom->realm, OS64_JS_ABI_ID, &context_out);
             if (!callback_ctx) { JS_FreeValue(d->ctx, callback); result = -1; break; }
@@ -1419,11 +1418,12 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
      * rather than send it a second time beside the person's. */
     bool submitting = node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
         node->tag == OS64_HTML_TAG_FORM && os64_strcmp(ev->type, "submit") == 0;
-    struct DClicking self = {node, dom->submitting};
-    if (submitting) dom->submitting = &self;
+    os64_dom_t *guard = submitting ? d_creation_owner(dom, node) : dom;
+    struct DClicking self = {node, guard->submitting};
+    if (submitting) guard->submitting = &self;
     if (os64_dom_listens(dom, ev->type))
         d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
-    if (submitting) dom->submitting = self.next;
+    if (submitting) guard->submitting = self.next;
     /* The window's load has run: the navigation timing entry is queued
      * (performance.c), unless the dispatch left the runtime stopping. */
     if (node == NULL && os64_strcmp(ev->type, "load") == 0 && !sticky(outcome->status)) {
@@ -1584,8 +1584,10 @@ static os64_dom_t *callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst 
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
                                 JSValueConst *argv, int magic)
 {
+    os64_dom_t *registration = dom;
     DValue *entry;
     if (target_entry(dom, ctx, self, magic != M_REMOVE, &entry) < 0) return JS_EXCEPTION;
+    if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
     if (magic == M_DISPATCH) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "dispatchEvent needs an event");
         DEvent *event = event_of(dom, ctx, argv[0]);
@@ -1607,6 +1609,8 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
     if (listener_options(ctx, argc, argv, &capture, &once) < 0) return JS_EXCEPTION;
     DString type = {0};
     if (!d_string(dom, ctx, argv[0], &type)) return JS_EXCEPTION;
+    /* Listener option getters and type conversion can adopt the target. */
+    if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
     DListener *found = NULL;
     for (DListener *listener = entry != NULL ? entry->listeners : NULL; listener != NULL; listener = listener->next)
         if (listener->handler == D_LISTENER && !listener->removed && listener->capture == capture &&
@@ -1621,7 +1625,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
                 d_string_free(dom, &type);
                 return JS_EXCEPTION;
             }
-        os64_dom_t *owner = callback_owner(dom, ctx, argv[1]);
+        os64_dom_t *owner = callback_owner(registration, ctx, argv[1]);
         uint32_t script = owner ? d_callback_script(owner, ctx, argv[1]) : D_SCRIPT_FAILED;
         DListener *listener = script == D_SCRIPT_FAILED ? NULL : listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;

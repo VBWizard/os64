@@ -179,6 +179,42 @@ compile and are caught, including the sibling handler-attribute entry point.
 The updated target consumer and libraries link. No new guest/hardware run is
 claimed; the earlier campaign's source qualifications still apply below.
 
+## Review round 4
+
+All three findings on `61ebe6fd` were reproduced under both teardown policies.
+Canvas fill/stroke getters search the cluster's retained registries for the
+native gradient's wrapper. Strict identity survives cross-realm assignment,
+borrowed accessors, save/restore and adoption. This preserves the existing
+retention model; the linear lookup performance debt remains open.
+
+Click-in-progress flags use the node's immutable creation binding, so adoption
+inside a listener cannot bypass the active flag. The sibling form-submission
+flag follows the same rule in script submission, host submit delivery and host
+constraint validation. Tests cover A-to-B-to-C moves, borrowed methods, another
+element's nested click, already-adopted forms entering through the host, and
+subsequent calls after the guards clear. Document services still use the
+current binding.
+
+EventTarget methods select the receiver's binding before classifying window
+versus plain targets, and refresh node ownership after listener argument
+conversion. Attribute lookup, registration order and compilation use the
+target's binding; function callbacks retain their own realm and object
+listeners retain their registration binding. A native attribute replacing an
+older foreign callback also enters the target realm before compilation. Tests
+cover untouched body attributes, existing window slots, borrowed dispatch,
+add/remove methods and handler getters, callback current-event state and
+attribute-before-listener order. The old slot-refresh comment was incomplete:
+it accounted for node adoption but omitted window handlers and foreign contexts.
+
+Both final realm matrices pass 350 checks. The complete shipping-engine DOM
+suite passes 43,866 checks and 3,879 allocation sweep points. Instrumented
+suites pass: events 1,020; reporting 4,523; Canvas 548; window/activation 820.
+ASan, UBSan and LeakSanitizer remain enabled. Eight focused mutants compile and
+fail the intended assertions: gradient lookup, click flag, the three submission
+entry paths, borrowed dispatch, window registration order and handler
+compilation context. The target consumer and libraries link. No new guest or
+P5 run is claimed; the earlier campaign's source qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

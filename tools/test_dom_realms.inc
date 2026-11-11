@@ -349,6 +349,105 @@ static void dom_cluster_cases(void)
                 "C.onload=null;",
                 "cluster round3: adopted body and frameset reflect destination window handlers");
             realm_script(realms[0],
+                "globalThis.paintCanvas=document.createElement('canvas');globalThis.paint=paintCanvas.getContext('2d');"
+                "globalThis.paintPeer=B.document.createElement('canvas').getContext('2d');"
+                "globalThis.peerGradient=paintPeer.createLinearGradient(0,0,10,10);peerGradient.addColorStop(0,'red');"
+                "paint.fillStyle=peerGradient;paint.strokeStyle=peerGradient;"
+                "assert(paint.fillStyle===peerGradient&&paint.strokeStyle===peerGradient,'cross-realm gradient identity');"
+                "globalThis.styleGet=Object.getOwnPropertyDescriptor(C.CanvasRenderingContext2D.prototype,'fillStyle').get;"
+                "assert(styleGet.call(paint)===peerGradient,'borrowed style getter');"
+                "paint.fillStyle.addColorStop(1,'blue');paint.save();paint.fillStyle='green';paint.strokeStyle='red';"
+                "paint.restore();C.document.adoptNode(paintCanvas);"
+                "assert(paint.fillStyle===peerGradient&&paint.strokeStyle===peerGradient&&styleGet.call(paint)===peerGradient,'saved gradient survives adoption');",
+                "cluster round4: gradient getters preserve sibling wrapper identity");
+            realm_script(realms[0],
+                "globalThis.clickNode=document.createElement('div');globalThis.otherClick=document.createElement('div');"
+                "globalThis.clickCount=0;globalThis.otherClicks=0;"
+                "otherClick.addEventListener('click',()=>otherClicks++);"
+                "clickNode.addEventListener('click',()=>{clickCount++;if(clickCount<3){"
+                "B.document.adoptNode(clickNode);clickNode.click();C.document.adoptNode(clickNode);"
+                "B.HTMLElement.prototype.click.call(clickNode);otherClick.click()}});"
+                "clickNode.click();assert(clickCount===1&&otherClicks===1,'adoption preserves active click guard');"
+                "clickNode.click();assert(clickCount===2&&otherClicks===2,'guard clears after dispatch');",
+                "cluster round4: recursive click stays guarded across document adoption");
+            realm_script(realms[0],
+                "globalThis.submitForm=document.createElement('form');document.body.appendChild(submitForm);"
+                "globalThis.submitCount=0;submitForm.addEventListener('submit',e=>{e.preventDefault();submitCount++;"
+                "if(submitCount<3){B.document.body.appendChild(submitForm);submitForm.requestSubmit();"
+                "C.document.body.appendChild(submitForm);B.HTMLFormElement.prototype.requestSubmit.call(submitForm)}});"
+                "submitForm.requestSubmit();assert(submitCount===1,'adoption preserves submission guard');"
+                "submitForm.requestSubmit();assert(submitCount===2,'submission guard clears');submitForm.remove();",
+                "cluster round4: recursive form submission stays guarded across adoption");
+            realm_script(realms[0],
+                "globalThis.hostForm=document.createElement('form');hostForm.id='round4-host-form';B.document.body.appendChild(hostForm);"
+                "globalThis.hostSubmits=0;hostForm.addEventListener('submit',e=>{e.preventDefault();hostSubmits++;"
+                "if(hostSubmits<3){C.document.body.appendChild(hostForm);hostForm.requestSubmit()}});"
+                "globalThis.invalidForm=document.createElement('form');invalidForm.id='round4-invalid-form';"
+                "invalidForm.innerHTML='<input required>';B.document.body.appendChild(invalidForm);"
+                "globalThis.invalidCalls=0;invalidForm.firstChild.addEventListener('invalid',()=>{invalidCalls++;"
+                "if(invalidCalls<3){C.document.body.appendChild(invalidForm);invalidForm.requestSubmit()}});",
+                "cluster round4: prepare host submission and validation adoption");
+            os64_dom_event_t submit_event = {.type = "submit", .bubbles = true, .cancelable = true};
+            bool submit_prevented = false, form_valid = true, validation_ran = false;
+            check(os64_dom_dispatch(bindings[1], native_id(providers[1].document->document, "round4-host-form"),
+                &submit_event, &submit_prevented, &out) == OS64_JS_OK && submit_prevented,
+                "cluster round4: host submission can adopt and cancel");
+            check(os64_dom_form_validate(bindings[1], native_id(providers[1].document->document, "round4-invalid-form"),
+                NULL, &form_valid, &validation_ran, &out) == OS64_JS_OK && validation_ran && !form_valid,
+                "cluster round4: host validation can adopt invalid form");
+            realm_script(realms[0],
+                "assert(hostSubmits===1&&invalidCalls===1,'host entry guards survive adoption');"
+                "hostForm.requestSubmit();invalidForm.requestSubmit();"
+                "assert(hostSubmits===2&&invalidCalls===2,'host entry guards clear');hostForm.remove();invalidForm.remove();",
+                "cluster round4: host submission and validation share stable form guard");
+            realm_script(realms[0], "B.document.body.id='round4-body';globalThis.borrowedLoads=[];",
+                "cluster round4: prepare native window handler fixtures");
+            check(os64_html_set_attr(providers[1].document,
+                native_id(providers[1].document->document, "round4-body"), "onload",
+                "A.borrowedLoads.push(window===B)", strlen("A.borrowedLoads.push(window===B)")) == OS64_HTML_OK,
+                "cluster round4: native body load attribute installed without a handler getter");
+            realm_script(realms[0],
+                "try{A.EventTarget.prototype.dispatchEvent.call(B,new C.Event('load'));"
+                "assert(borrowedLoads.join()==='true','borrowed dispatch discovers B body handler: '+borrowedLoads.join());"
+                "globalThis.compiledLoad=B.onload;assert(compiledLoad instanceof B.Function,'handler compiles in B');"
+                "A.EventTarget.prototype.dispatchEvent.call(B,new C.Event('load'));"
+                "assert(borrowedLoads.join()==='true,true'&&B.onload===compiledLoad,'borrowed dispatch preserves compiled slot')}"
+                "finally{B.document.body.removeAttribute('onload');B.onload=null}",
+                "cluster round4: borrowed window dispatch uses receiver binding");
+            check(os64_html_set_attr(providers[1].document,
+                native_id(providers[1].document->document, "round4-body"), "onhashchange",
+                "A.borrowedLoads.push(window===B)", strlen("A.borrowedLoads.push(window===B)")) == OS64_HTML_OK,
+                "cluster round4: native body hashchange attribute installed before borrowed registration");
+            realm_script(realms[0],
+                "globalThis.borrowedListener=e=>borrowedLoads.push(window.event===e?'listener':'wrong realm');"
+                "try{borrowedLoads.length=0;A.EventTarget.prototype.addEventListener.call(B,'hashchange',borrowedListener);"
+                "C.EventTarget.prototype.dispatchEvent.call(B,new A.Event('hashchange'));"
+                "assert(borrowedLoads.join()==='true,listener','body attribute precedes A callback on B window');"
+                "C.EventTarget.prototype.removeEventListener.call(B,'hashchange',borrowedListener);borrowedLoads.length=0;"
+                "B.dispatchEvent(new A.Event('hashchange'));assert(borrowedLoads.join()==='true','borrowed removal')}"
+                "finally{B.document.body.removeAttribute('onhashchange');B.onhashchange=null;B.removeEventListener('hashchange',borrowedListener)}",
+                "cluster round4: borrowed window registration preserves handler order and callback realm");
+            realm_script(realms[0], "C.document.body.id='round4-other-body';borrowedLoads.length=0;",
+                "cluster round4: prepare untouched window handler slots");
+            const char *other_handler = "A.borrowedLoads.push(window===C&&window.event===event)";
+            const char *handler_names[] = {"ononline", "onoffline"};
+            for (size_t i = 0; i < 2; ++i)
+                check(os64_html_set_attr(providers[2].document,
+                    native_id(providers[2].document->document, "round4-other-body"), handler_names[i],
+                    other_handler, strlen(other_handler)) == OS64_HTML_OK,
+                    "cluster round4: untouched native window handler installed");
+            realm_script(realms[0],
+                "try{A.EventTarget.prototype.dispatchEvent.call(C,new B.Event('online'));"
+                "assert(borrowedLoads.join()==='true','untouched body handler discovered');"
+                "let p=A;while(p&&!Object.getOwnPropertyDescriptor(p,'onoffline'))p=Object.getPrototypeOf(p);"
+                "let get=Object.getOwnPropertyDescriptor(p,'onoffline').get;"
+                "assert(get.call(C) instanceof C.Function,'borrowed handler getter compiles in target realm');"
+                "A.EventTarget.prototype.dispatchEvent.call(C,new B.Event('offline'));"
+                "assert(borrowedLoads.join()==='true,true','compiled handler retains target realm')}"
+                "finally{C.document.body.removeAttribute('ononline');C.document.body.removeAttribute('onoffline');"
+                "C.ononline=null;C.onoffline=null}",
+                "cluster round4: untouched window slots and borrowed handler compilation use target realm");
+            realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"
                 "assert(retainedOptions[0] instanceof B.HTMLOptionElement,'select.length uses B');"

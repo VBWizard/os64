@@ -417,8 +417,9 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
     if (ctx == NULL) return d_task_finish(dom, outcome);
     /* The form is being submitted (window.c's submit's flag): a submission
      * an invalid listener asks of it does nothing. */
-    struct DClicking self = {form, dom->submitting};
-    dom->submitting = &self;
+    os64_dom_t *guard = d_creation_owner(dom, form);
+    struct DClicking self = {form, guard->submitting};
+    guard->submitting = &self;
     /* Through the wrapper's own call, so the pattern's matching and the
      * invalid listeners run under the task's budget, as a script's
      * checkValidity() runs them: geometry and deadlines need one. */
@@ -434,7 +435,7 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
                      &call);
         JS_FreeValue(ctx, argument);
     }
-    dom->submitting = self.next;
+    guard->submitting = self.next;
     d_outcome_fold(outcome, &call);
     /* A validation the binding could not finish stops nothing: the
      * model's judge still validates the submission (yonder asks it unless

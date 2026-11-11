@@ -508,15 +508,16 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     /* HTML's firing-submission-events flag: a submission asked from inside
      * this form's own invalid or submit listener does nothing, rather than
      * validating and firing again until the engine's stack gives out. */
-    for (const struct DClicking *at = dom->submitting; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, form);
+    for (const struct DClicking *at = guard->submitting; at != NULL; at = at->next)
         if (at->node == form) return 1;
-    struct DClicking self = {form, dom->submitting};
-    dom->submitting = &self;
+    struct DClicking self = {form, guard->submitting};
+    guard->submitting = &self;
     bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
         os64_html_attr(form, "novalidate") != NULL;
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
     int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
-    dom->submitting = self.next;
+    guard->submitting = self.next;
     if (valid > 0 && result > 0) {
         d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
         dom->navigation.user_activated = native;
@@ -630,12 +631,13 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
 static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     if (disabled(node)) return 1;
-    for (const struct DClicking *at = dom->clicking; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, node);
+    for (const struct DClicking *at = guard->clicking; at != NULL; at = at->next)
         if (at->node == node) return 1;
-    struct DClicking self = {node, dom->clicking};
-    dom->clicking = &self;
+    struct DClicking self = {node, guard->clicking};
+    guard->clicking = &self;
     int result = click_activate(dom, ctx, node);
-    dom->clicking = self.next;
+    guard->clicking = self.next;
     return result;
 }
 

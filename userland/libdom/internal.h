@@ -524,7 +524,9 @@ struct os64_dom {
     uint32_t timer_id, timer_nesting;
     /* HTML's click-in-progress flags, one link per element.click() on the
      * C stack (window.c); and a form's firing-submission-events flags, one
-     * link per form whose validation or submit event is running. */
+     * link per form whose validation or submit event is running. These
+     * chains belong to the nodes' creation binding so adoption cannot
+     * bypass an active flag. */
     const struct DClicking *clicking, *submitting;
     DScript *scripts[64];
     char *url;

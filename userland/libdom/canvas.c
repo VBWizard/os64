@@ -288,8 +288,14 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         if (d_more_peek(e)->canvas) canvas_state(d_more_peek(e)->canvas, &state);
         if (magic == C_ALPHA) return JS_NewFloat64(ctx, state.global_alpha);
         canvas_gradient_t *gradient=magic==C_SHADOW_COLOR?NULL:magic==C_STROKE?state.stroke_gradient:state.fill_gradient;
-        if(gradient)for(DValue *held=dom->values;held;held=held->next)
-            if(d_more_peek(held)->canvas_gradient==gradient)return JS_DupValue(ctx,held->value);
+        if (gradient) {
+            size_t members = dom->cluster ? dom->cluster->count : 1;
+            for (size_t i = 0; i < members; ++i) {
+                os64_dom_t *owner = dom->cluster ? dom->cluster->members[i] : dom;
+                for (DValue *held = owner->values; held; held = held->next)
+                    if (d_more_peek(held)->canvas_gradient == gradient) return JS_DupValue(ctx, held->value);
+            }
+        }
         char text[80]; uint32_t p = magic == C_SHADOW_COLOR ? state.shadow_argb : magic == C_STROKE ? state.stroke_argb : state.fill_argb;
         double paint_alpha = magic == C_SHADOW_COLOR ? state.shadow_alpha : magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
         if (paint_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);

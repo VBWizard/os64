@@ -196,6 +196,14 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round4-gradient-registry', 'canvas', 'os64_dom_t *owner = dom->cluster ? dom->cluster->members[i] : dom;', 'os64_dom_t *owner = dom;'),
+      ('round4-click-guard', 'window', 'os64_dom_t *guard = d_creation_owner(dom, node);', 'os64_dom_t *guard = dom;'),
+      ('round4-submit-guard', 'window', 'os64_dom_t *guard = d_creation_owner(dom, form);', 'os64_dom_t *guard = dom;'),
+      ('round4-host-submit-guard', 'event', 'os64_dom_t *guard = submitting ? d_creation_owner(dom, node) : dom;', 'os64_dom_t *guard = dom;'),
+      ('round4-host-validation-guard', 'validity', 'os64_dom_t *guard = d_creation_owner(dom, form);', 'os64_dom_t *guard = dom;'),
+      ('round4-event-receiver', 'event', '    if (entry != NULL) dom = entry->node ? d_owner(dom, entry->node) : entry->dom;\n    if (magic == M_DISPATCH) {', '    if (magic == M_DISPATCH) {'),
+      ('round4-window-registration', 'event', 'for (int kind = 0; entry == dom->window && kind < D_EVENT_COUNT; kind++)', 'for (int kind = 0; entry == registration->window && kind < D_EVENT_COUNT; kind++)'),
+      ('round4-window-compilation', 'event', '    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);\n    if (!ctx) return JS_EXCEPTION;\n    if (slot_refresh', '    if (entry->node) ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);\n    if (!ctx) return JS_EXCEPTION;\n    if (slot_refresh'),
       ('round3-base-uri-owner','mixin','JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)\n{\n    dom = d_owner(dom, self);', 'JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)\n{'),
       ('round3-rendered-owner','webanimation','static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)\n{\n    dom = d_owner(dom, target);', 'static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)\n{'),
       ('round3-handler-receiver','event','    dom = entry->node != NULL ? d_owner(dom, entry->node) : entry->dom;', '    (void)entry->dom;'),
