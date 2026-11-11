@@ -444,6 +444,7 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_rebuild.inc"
 #include "test_libpage_attrs.inc"
 #include "test_libpage_tree.inc"
+#include "test_libpage_ownership.inc"
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
@@ -630,7 +631,9 @@ int main(int argc, char **argv)
     bool rebuild_only = argc > 1 && strcmp(argv[1], "--rebuild") == 0;
     bool attrs_only = argc > 1 && strcmp(argv[1], "--attrs-only") == 0;
     bool tree_only = argc > 1 && strcmp(argv[1], "--tree-only") == 0;
-    if (numeric_boundary) {
+    if (argc > 1 && strcmp(argv[1], "--ownership") == 0) {
+        test_libpage_ownership();
+    } else if (numeric_boundary) {
         // Focused range regressions; the default suite also checks the
         // independent decimal oracle and conversion boundaries.
         value_case("H10", "numeric boundary: default step rounds midpoint upward",
@@ -653,6 +656,7 @@ int main(int argc, char **argv)
         rebuild_contract();
         test_libpage_attrs();
         test_libpage_tree();
+        test_libpage_ownership();
         number_cases();
         boundary_cases();
         navigation_cases();

@@ -1412,6 +1412,7 @@ void os64_page_free(os64_page_t *page)
             at = &(*at)->state_next;
         if (*at == page)
             *at = page->state_next;
+        p_state_reclaim(state);
         if (state->models == NULL && state->private_owner)
             os64_page_state_free(state);
     }
@@ -1569,7 +1570,7 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 PNodeState *p_state_for_control(const os64_page_t *page, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page, control);
-    return c != NULL ? p_state_find(page->state, c->node) : NULL;
+    return c != NULL ? p_state_find(p_state_for_node(page->state, c->node), c->node) : NULL;
 }
 
 // The public options pointer is const, but the page owns mutable storage.
@@ -1577,7 +1578,8 @@ PNodeState *p_state_for_control(const os64_page_t *page, int32_t control)
 void p_publish(os64_page_t *page, int32_t control)
 {
     os64_page_control_t *c = &page->controls[control];
-    const PNodeState *edit = p_state_find(page->state, c->node);
+    PNodeState *edit = p_state_find(p_state_for_node(page->state, c->node), c->node);
+    if (page->doc != os64_html_node_owner(c->node)) p_state_cross_snapshot(edit);
     const PInitial *initial = &page->initial[control];
     c->value = initial->value;
     c->value_len = initial->value_len;
@@ -1590,7 +1592,7 @@ void p_publish(os64_page_t *page, int32_t control)
         c->value = edit->text;
         c->value_len = edit->text_len;
     } else if (edit != NULL && edit->cache != NULL &&
-               edit->cache_version == os64_html_version(page->doc)) {
+               edit->cache_version == os64_html_version(os64_html_node_owner(c->node))) {
         c->value = edit->cache;
         c->value_len = edit->cache_len;
     }
@@ -1605,7 +1607,7 @@ void p_publish(os64_page_t *page, int32_t control)
     c->indeterminate = edit != NULL && edit->indeterminate;
     for (int32_t i = 0; i < c->noptions; i++) {
         bool selected = p_has_attr(c->options[i].node, "selected");
-        const PNodeState *option = p_state_find(page->state, c->options[i].node);
+        const PNodeState *option = p_state_find(p_state_for_node(page->state, c->options[i].node), c->options[i].node);
         if (option != NULL && option->selected >= 0)
             selected = option->selected != 0;
         ((os64_page_option_t *)c->options)[i].selected = selected;

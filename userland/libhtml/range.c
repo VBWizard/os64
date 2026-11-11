@@ -29,6 +29,26 @@ struct os64_html_range {
     struct os64_html_range *prev, *next;
 };
 
+static void register_in(os64_html_range_t *r, HDoc *to)
+{
+    HDoc *from = r->doc;
+    if (from == to) return;
+    if (r->prev) r->prev->next = r->next; else from->ranges = r->next;
+    if (r->next) r->next->prev = r->prev;
+    r->doc = to;
+    r->prev = NULL;
+    r->next = to->ranges;
+    if (to->ranges) to->ranges->prev = r;
+    to->ranges = r;
+}
+void d_ranges_adopted(HDoc *from, HDoc *to)
+{
+    for (os64_html_range_t *r = from->ranges, *next; r; r = next) {
+        next = r->next;
+        if (d_node_document_owner(r->node[0]) == to) register_in(r, to);
+    }
+}
+
 /* ── UTF-16 over UTF-8 ───────────────────────────────────────────────── */
 
 uint32_t h_utf16_length(const char *s, size_t n)
@@ -99,12 +119,14 @@ uint32_t os64_html_node_length(const HNode *n)
 
 static void hold(HDoc *d, HNode *n)
 {
+    d = h_meta(n)->allocation_owner;
     d_ref(d, n, false, true);
     d->held++;
 }
 
 static void drop(HDoc *d, HNode *n)
 {
+    d = h_meta(n)->allocation_owner;
     d_ref(d, n, false, false);
     d->held--;
 }
@@ -158,7 +180,8 @@ void os64_html_range_free(os64_html_range_t *r)
 
 int64_t os64_html_range_set(os64_html_range_t *r, int which, os64_html_node_t *node, uint32_t offset)
 {
-    if (r == NULL || (which != 0 && which != 1) || !os64_html_owns_node(&r->doc->pub, node))
+    if (r == NULL || !node || (which != 0 && which != 1) ||
+        !d_group_contains(r->doc, h_meta(node)->allocation_owner))
         return OS64_HTML_BAD_ARGUMENT;
     if (node->kind == OS64_HTML_DOCTYPE)
         return OS64_HTML_INVALID_NODE_TYPE;
@@ -166,6 +189,13 @@ int64_t os64_html_range_set(os64_html_range_t *r, int which, os64_html_node_t *n
         return OS64_HTML_INDEX_SIZE;
     if (character_data(node))
         offset = snap(node->text, node->text_len, offset);
+    HDoc *owner = d_node_document_owner(node);
+    if (owner != r->doc) {
+        /* A cross-document boundary changes the range's root. Collapse the
+         * other boundary before transferring its mutation registration. */
+        point(r->doc, r, 1 - which, node, offset);
+        register_in(r, owner);
+    }
     point(r->doc, r, which, node, offset);
     d_collect(r->doc);
     return OS64_HTML_OK;

@@ -245,10 +245,46 @@ static void review_regressions(void)
     os64_serial_log("pagetest: PASS D3 review sparse defaults and shared option walk");
 }
 
+static os64_html_document_t *ownership_document(const char *markup)
+{
+    os64_html_parser_t *parser = os64_html_parser_new(NULL);
+    require(parser && !os64_html_parser_feed(parser,markup,os64_strlen(markup)), "ownership parse");
+    os64_html_document_t *doc = os64_html_parser_finish(parser);
+    require(doc && !doc->refusal, "ownership document");
+    return doc;
+}
+static void ownership(void)
+{
+    os64_html_document_t *a = ownership_document("<body><input value=markup>"),
+        *b = ownership_document("<body>");
+    os64_html_group_t *html = os64_html_group_create(4u * 1024u * 1024u);
+    require(html && !os64_html_group_add(html,a,1) && !os64_html_group_add(html,b,2), "ownership arenas");
+    os64_page_state_t *sa = os64_page_state_create(a,0), *sb = os64_page_state_create(b,0);
+    os64_page_state_group_t *states = os64_page_state_group_create(1024u * 1024u);
+    require(sa && sb && states && os64_page_state_group_add(states,sa) &&
+        os64_page_state_group_add(states,sb), "ownership states");
+    os64_html_node_t *input = a->body->first_child;
+    require(!os64_page_node_set_value(sa,input,"typed",5) &&
+        !os64_page_node_set_selection(sa,input,1,4,OS64_PAGE_DIRECTION_BACKWARD), "ownership dirty state");
+    os64_page_t *old = os64_page_build(a,"https://host/page",NULL,sa);
+    const char *borrowed = NULL, *value = NULL; size_t len = 0;
+    require(old && !os64_page_incomplete(old) && !os64_page_node_value(sa,input,&borrowed,&len), "ownership source snapshot");
+    require(!os64_page_node_insert(sb,b->body,input,NULL) &&
+        !os64_page_node_value(sb,input,&value,&len) && len == 5 && os64_streq(value,"typed"), "ownership moved value");
+    uint32_t start, end; os64_page_direction_t direction;
+    require(!os64_page_node_selection(sb,input,&start,&end,&direction) && start == 1 && end == 4 &&
+        direction == OS64_PAGE_DIRECTION_BACKWARD, "ownership moved selection");
+    require(!os64_page_node_set_value(sb,input,"destination",11) && os64_streq(borrowed,"typed"), "ownership retained source bytes");
+    os64_page_free(old);
+    os64_page_state_group_free(states);
+    os64_html_group_free(html);
+    os64_serial_log("pagetest: PASS F2 control migration and retained source snapshot");
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();navigation();reference_edges();network_targets();rebuild();review_regressions();
+    numeric();state();navigation();reference_edges();network_targets();rebuild();review_regressions();ownership();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");

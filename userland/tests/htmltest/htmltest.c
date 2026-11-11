@@ -389,6 +389,31 @@ static void attribute_batches(void)
     os64_html_document_free(doc);
 }
 
+static void ownership_groups(void)
+{
+    os64_html_document_t *a = parsed("<body><div>original</div>"),
+        *b = parsed("<body>"), *c = parsed("<body>");
+    os64_html_group_t *group = os64_html_group_create(4u * 1024u * 1024u);
+    require(group && !os64_html_group_add(group,a,1) && !os64_html_group_add(group,b,2) &&
+        !os64_html_group_add(group,c,3), "ownership group admission");
+    os64_html_node_t *node = a->body->first_child;
+    os64_html_hold(a,node);
+    require(!os64_html_insert(b,b->body,node,NULL), "ownership first adoption");
+    const char *markup = "<p>made in B</p>";
+    os64_html_node_t *fragment = os64_html_parse_fragment(b,node,markup,os64_strlen(markup),false,NULL);
+    require(fragment && fragment->first_child, "ownership fragment creation");
+    os64_html_node_t *descendant = fragment->first_child;
+    require(!os64_html_insert(b,node,fragment,NULL) && !os64_html_insert(c,c->body,node,NULL),
+        "ownership mixed subtree adoption");
+    require(os64_html_node_creation_realm(node) == 1 && os64_html_node_creation_realm(descendant) == 2 &&
+        os64_html_node_document(node) == c->document && os64_html_node_document(descendant) == c->document,
+        "ownership three-realm metadata");
+    require(!os64_html_remove(c,node), "ownership detached mixed subtree");
+    os64_html_release(b,node);
+    os64_html_group_free(group);
+    os64_serial_log("htmltest: PASS F2 native three-document adoption (realm keys 1/2/3)");
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && os64_streq(argv[1], "pinned")) {
@@ -435,6 +460,7 @@ int main(int argc, char **argv)
     fragments();
     attribute_batches();
     reclamation();
+    ownership_groups();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);

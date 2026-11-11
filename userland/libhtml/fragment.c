@@ -15,7 +15,8 @@ static void answer(int64_t *status, int64_t why)
 }
 static HDoc *isolated(HDoc *owner, size_t budget, int64_t *why)
 {
-    if (budget < sizeof(HDoc)) {
+    if (budget < sizeof(HDoc) ||
+        (owner->charge_group && sizeof(HDoc) > owner->charge_group->limit - owner->charge_group->bytes)) {
         *why = OS64_HTML_ARENA_EXHAUSTED;
         return NULL;
     }
@@ -25,6 +26,14 @@ static HDoc *isolated(HDoc *owner, size_t budget, int64_t *why)
         return NULL;
     }
     d->budget = budget;
+    d->charge_group = owner->charge_group;
+    if (d->charge_group) {
+        d->charge_group->bytes += sizeof(*d);
+        if (d->charge_group->bytes > d->charge_group->peak)
+            d->charge_group->peak = d->charge_group->bytes;
+    }
+    d->creation_realm = owner->creation_realm;
+    d->node_document = owner->node_document ? owner->node_document : &owner->root;
     d->id = owner->id;
     d->version = owner->version;
     d->max_depth = owner->max_depth;
@@ -228,6 +237,7 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     HNode *out = NULL;
     if (!temp)
         goto done;
+    temp->node_document = (HNode *)os64_html_node_document(context);
     /* A kept root is a document's of its own, parsed in no-quirks mode
      * whatever the owner's (a quirks page nests a table in a paragraph). */
     if (keep_root)
@@ -308,6 +318,7 @@ parsed:
     stage = isolated(owner, remaining - temp->pub.arena_bytes, &why);
     if (!stage)
         goto done;
+    stage->node_document = temp->node_document;
     os64_html_parser_t copier = {0};
     copier.d = stage;
     copier.opt.max_work = max_work;
@@ -324,6 +335,7 @@ parsed:
     peak += owner->pub.arena_bytes;
     if (peak > owner->pub.peak_arena_bytes)
         owner->pub.peak_arena_bytes = peak;
+    d_document_walk(out, stage->node_document);
     d_transfer_blocks(owner, stage);
 done:
     if (stage)

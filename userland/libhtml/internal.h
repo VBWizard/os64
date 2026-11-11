@@ -15,6 +15,7 @@ typedef struct {
 } HBuf;
 typedef struct HBlock HBlock;
 typedef struct HChange HChange;
+typedef struct HDoc HDoc;
 /* An open-addressed table of shadow roots' slot assignments (shadow.c),
  * `cap` zero or a power of two. */
 typedef struct {
@@ -26,12 +27,15 @@ typedef struct {
 typedef struct {
     size_t word;
     uint32_t holds;
-    uint16_t flags, parser_refs;
+    uint8_t flags, creation_realm;
+    uint16_t parser_refs;
+    HDoc *allocation_owner;
+    HNode *document;
     size_t unit_holds; /* sum of native and parser references in a pending unit */
     uint64_t stamp;
     HNode *pending_next, *pending_prev, *live_prev, *live_next;
     /* The fragment parser's index for a node it made (fragment.c), and the
-     * node's serial: a number no other node of its document had before
+     * node's serial: a number no other node of its allocation arena had before
      * it (HDoc.serials), so a node and a later one at the same address
      * are told apart (shadow.c's reported assignments). */
     uint32_t ordinal, serial;
@@ -42,12 +46,16 @@ typedef struct {
 #define H_NODE_QUEUED 8u
 #define H_NODE_RETIRED 16u /* unheld candidate with its retirement stamp fixed */
 #define H_NODE_WAIT 64u    /* queued for an older snapshot to leave */
-#define H_NODE_FRESH 32u   /* detachment just completed at the mutation version */
+#define H_NODE_FRESH 32u   /* detachment completed at the storage epoch */
 static inline HMeta *h_meta(const HNode *n) { return (HMeta *)(n + 1); }
-/* Snapshots that borrow from the tree, each by the version it was built at. */
+/* Snapshot slots record storage epochs; document revisions stay local. */
 #define H_PINS 16
-typedef struct {
+struct HDoc {
     os64_html_document_t pub;
+    struct os64_html_group *group, *charge_group;
+    HDoc *group_next;
+    HNode *node_document;
+    uint8_t creation_realm;
     HBlock *blocks;
     size_t budget;
     unsigned char *permanent;
@@ -57,25 +65,22 @@ typedef struct {
     HMeta root_meta;
     HNode html;
     HMeta html_meta;
-    /* What each node of this document carries in `document_id`, and no other
-     * document's does (h_document_serial). Nodes and strings are document
-     * owned; unheld removed subtrees are reclaimable after snapshot pins
-     * permit it, and replaced strings retire on the same document's ledger.
-     * A verb must distinguish its document's nodes from another's. Never
-     * zero, which is what a node nobody stamped carries. */
+    /* Nonzero allocation identity stamped into document_id. Adoption keeps
+     * this mark and the physical ledger; mutable node-document metadata
+     * determines which document's mutation services apply. */
     uint32_t id;
     /* Set by a verb that moves a node. A parser still building the document
      * reads it: the tree is then no longer what its stack of open elements
      * says it is, so it stops relying on the stack for what a link needs to
      * be true (tree.c, attach). */
     bool disturbed;
-    /* How many of `pins` are held, so that the parser's every character need
-     * not look through them when none is. */
+    /* Number of occupied snapshot slots in this arena. */
     uint8_t pinned;
     /* DOM.md, the mutation core. `version` moves whenever a verb changes
      * what a reader can see, and once in each call of a parser that parses
-     * anything. It is never zero, so a zero pin is a free slot.
-     * `retired` holds replaced blocks a pinned snapshot may still point at. */
+     * anything. Pins store the separate group epoch (the local revision for
+     * an ungrouped arena); zero marks a free slot. `retired` holds this
+     * arena's replaced blocks that a group snapshot may still point at. */
     uint64_t version;
     uint64_t pins[H_PINS];
     os64_html_pin_t pin_handles[H_PINS];    /* what os64_html_pin answered for each held slot */
@@ -113,12 +118,38 @@ typedef struct {
     /* The document's live ranges (range.c), or NULL: a mutation with none
      * tests this one pointer and runs no range step. */
     struct os64_html_range *ranges;
-} HDoc;
+};
+/* A group coordinates retention, not document mutation notifications. The
+ * first member owns the detached-unit queues; physical ledgers stay separate. */
+struct os64_html_group {
+    HDoc *first, *last;
+    size_t bytes, peak, limit;
+    uint64_t epoch;
+};
+static inline HDoc *d_lifetime(HDoc *d) { return d->group ? d->group->first : d; }
+static inline uint64_t d_epoch(const HDoc *d) { return d->group ? d->group->epoch : d->version; }
+static inline bool d_group_contains(const HDoc *d, const HDoc *other)
+{
+    return d == other || (d->group && d->group == other->group);
+}
+static inline HDoc *d_node_document_owner(const HNode *n)
+{
+    HDoc *arena = h_meta(n)->allocation_owner;
+    /* Fragment staging keeps a private ledger until transfer, even though
+     * its published nodes already name the destination document. */
+    if (arena->node_document) return arena;
+    return h_meta(n->kind == OS64_HTML_DOCUMENT ? n : h_meta(n)->document)->allocation_owner;
+}
+void d_ranges_adopted(HDoc *from, HDoc *to);
+void d_document_walk(HNode *root, HNode *document);
+void d_version_advance(HDoc *d);
+bool d_pinned_below(const HDoc *d, uint64_t epoch);
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
                "an embedded node's private word must sit where h_word looks for it");
 
-/* The private word after a node: a TEXT, COMMENT or PI buffer capacity (zero
+/* The private word after a node: a DOCUMENT's associated inert template
+ * document; a TEXT, COMMENT or PI buffer capacity (zero
  * when its bytes are a literal or lie in a permanent chunk, so are never
  * freed alone); an ELEMENT's flags; the owner of a FRAGMENT that is a
  * template's contents or a shadow root (dom.c's `host`). */
@@ -366,7 +397,7 @@ void d_ranges_merged(HDoc *d, HNode *into, HNode *current, uint32_t length);
 uint32_t h_utf16_length(const char *s, size_t n);
 size_t h_utf16_byte(const char *s, size_t n, uint32_t unit);
 void d_fatal(const char *sentence);
-size_t d_owned_bytes(const HNode *node);
+size_t d_owned_bytes(const HDoc *owner, const HNode *node);
 size_t d_pending_bytes(const HDoc *d);
 bool d_form_input(const HNode *node);
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
@@ -375,7 +406,7 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
 void h_fragment_start(os64_html_parser_t *p);
 /* Give up a ledger block something may have borrowed: freed at once when no
  * pinned snapshot is older than the change that replaced it, else kept
- * until the last such pin lets go. Call it after bumping `version`. */
+ * until the last such pin lets go. Call it after d_version_advance. */
 void d_retire(HDoc *d, void *ptr);
 /* One more character on a TEXT node, which a snapshot taken between two
  * calls of the parser may be reading (core.c). */

@@ -3149,9 +3149,17 @@ static void t_reclaim_rules(void)
 }
 #include "test_html_changes.inc"
 #include "test_html_ranges.inc"
+#include "test_html_ownership.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--ownership")) {
+        t_ownership_groups();
+        t_ownership_adoption();
+        t_ownership_templates();
+        printf("html ownership: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
 #ifdef HTML_RECLAIM_TEST
     if (argc == 2 && !strcmp(argv[1], "--reclaim-cost")) {
         t_reclaim_cost();
@@ -3195,6 +3203,9 @@ int main(int argc, char **argv)
         return checks_failed ? 1 : 0;
     }
     if (!(argc == 2 && !strcmp(argv[1], "--random"))) {
+        t_ownership_groups();
+        t_ownership_adoption();
+        t_ownership_templates();
         t_validity();
         t_structure();
         t_templates();

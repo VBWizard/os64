@@ -35,12 +35,25 @@ typedef struct os64_page_state os64_page_state_t;
 #define OS64_PAGE_STATE_DEFAULT_MAX_BYTES ((size_t)16 * 1024 * 1024)
 #define OS64_PAGE_FATAL_EXIT 0x50414745
 
+/* A state group owns its admitted states until group teardown, before the
+ * corresponding HTML group is freed. States must share an HTML lifetime
+ * group; admit them before borrowing models. The cap includes states,
+ * records, scratch transactions and retained cross-document value bytes. */
+typedef struct os64_page_state_group os64_page_state_group_t;
+os64_page_state_group_t *os64_page_state_group_create(size_t max_bytes);
+bool os64_page_state_group_add(os64_page_state_group_t *group, os64_page_state_t *state);
+void os64_page_state_group_free(os64_page_state_group_t *group);
+size_t os64_page_state_group_bytes(const os64_page_state_group_t *group);
+size_t os64_page_state_group_peak(const os64_page_state_group_t *group);
+
 // State belongs to one document, including nodes not connected to its tree.
 // The cap includes its header, records, cached values and operation scratch.
 // Builds retain sparse normalized defaults where they differ from markup;
 // script assignments can spend the cap on records for their whole group.
 // Zero selects the default cap. NULL means no memory (or no document).
-// Freeing explicit state with models still borrowing it ends the program
+// Grouped records may migrate logically while their allocations stay charged
+// to the original state. Shared value bytes retire until group models leave.
+// Freeing grouped state individually, or state with models borrowing it, ends the program
 // with OS64_PAGE_FATAL_EXIT. State holds its persistent and reserved node keys;
 // it does not pin snapshot strings in the document.
 os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes);
@@ -577,12 +590,17 @@ int64_t os64_page_node_set_attr_ns(os64_page_state_t *state, const os64_html_nod
  * normalize the radio/select effects of each move without changing dirty
  * flags. Reservations precede tree mutation; refusal preserves both tree
  * and control state. State allocation refusals answer OS64_HTML_NO_MEMORY.
- * Calls are serialized with the document's other operations.
+ * Calls are serialized with the group's other operations. Cross-document
+ * insertion/adoption requires source and destination states in the same
+ * state group and migrates dirty records before publishing to model readers.
  * replace_children accepts an ELEMENT or FRAGMENT parent and a detached,
  * freshly prepared replacement node/fragment (NULL: empty). It reserves
  * once, inserts before the original children, then removes those children;
  * the successful tree commit cannot be followed by a state allocation
  * refusal. Detached preparation belongs to the caller's document budget. */
+/* Explicit adoption uses the same state transaction as insertion. */
+int64_t os64_page_node_adopt(os64_page_state_t *state, os64_html_node_t *document,
+                             os64_html_node_t *node);
 int64_t os64_page_node_insert(os64_page_state_t *state, os64_html_node_t *parent,
                               os64_html_node_t *node, os64_html_node_t *before);
 int64_t os64_page_node_replace(os64_page_state_t *state, os64_html_node_t *parent,
@@ -591,7 +609,8 @@ int64_t os64_page_node_remove(os64_page_state_t *state, os64_html_node_t *node);
 int64_t os64_page_node_replace_children(os64_page_state_t *state, os64_html_node_t *parent,
                                         os64_html_node_t *replacement);
 
-// Clone an owned non-DOCUMENT node into the same document, detached, with INPUT current
+// Clone an owned non-DOCUMENT node into the same document, or import from an
+// explicit source state into the destination. The detached result has INPUT current
 // value/checkedness and their dirty flags, and TEXTAREA current value/dirty
 // flag. Other control state starts from cloned markup. Deep cloning includes
 // descendant and template-content controls. Status uses HTML codes; a state
@@ -599,6 +618,9 @@ int64_t os64_page_node_replace_children(os64_page_state_t *state, os64_html_node
 // published values and both revisions; detached HTML preparation may remain
 // charged to the document. Cloning does not change either revision. Status
 // may be NULL; a failed call returns NULL.
+os64_html_node_t *os64_page_node_import(os64_page_state_t *destination,
+                                        const os64_page_state_t *source,
+                                        const os64_html_node_t *node, bool deep, int64_t *status);
 os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
                                        const os64_html_node_t *node, bool deep,
                                        int64_t *status);

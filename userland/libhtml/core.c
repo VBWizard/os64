@@ -6,16 +6,17 @@
  * Charging capacity and headers makes the arena limit a retained-memory bound,
  * rather than a count of requested payload bytes. Growth charges both blocks
  * while copying; the returned document reports its peak as well as live cost.
- * `stamp` is a version of the document. On a live block, which sits on the
- * document's `blocks` list, it is the version the block was made at; on a
- * retired one, which sits on `retired`, the version of the change that
- * replaced it. The node tag identifies individually reclaimable fragment
- * bodies; padding keeps payloads 16-byte aligned. */
+ * `stamp` is a storage epoch. On a live block, which sits on its allocation
+ * owner's `blocks` list, it is the epoch the block was made at; on a retired
+ * one, which sits on `retired`, the epoch of the change that replaced it.
+ * The node tag identifies individually reclaimable fragment bodies; the
+ * header keeps payloads 16-byte aligned. */
 struct HBlock {
     HBlock *prev, *next;
     size_t size;
     uint64_t stamp;
-    uint64_t node, padding;
+    uint64_t node;
+    HDoc *owner;
 };
 static const char *const tag_names[] = {
 #include "tags.inc"
@@ -99,7 +100,8 @@ void h_error(os64_html_parser_t *p, const char *name)
 void *d_alloc(HDoc *d, size_t size, int64_t *why)
 {
     if (size > SIZE_MAX - sizeof(HBlock) ||
-        size + sizeof(HBlock) > d->budget - d->pub.arena_bytes) {
+        size + sizeof(HBlock) > d->budget - d->pub.arena_bytes ||
+        (d->charge_group && size + sizeof(HBlock) > d->charge_group->limit - d->charge_group->bytes)) {
         *why = OS64_HTML_ARENA_EXHAUSTED;
         return NULL;
     }
@@ -109,14 +111,19 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why)
         return NULL;
     }
     b->size = sizeof(*b) + size;
-    b->stamp = d->version;
-    b->node = b->padding = 0;
+    b->stamp = d_epoch(d);
+    b->node = 0;
+    b->owner = d;
     b->prev = NULL;
     b->next = d->blocks;
     if (b->next)
         b->next->prev = b;
     d->blocks = b;
     d->pub.arena_bytes += b->size;
+    if (d->charge_group) {
+        d->charge_group->bytes += b->size;
+        if (d->charge_group->bytes > d->charge_group->peak) d->charge_group->peak = d->charge_group->bytes;
+    }
     if (d->pub.arena_bytes > d->pub.peak_arena_bytes)
         d->pub.peak_arena_bytes = d->pub.arena_bytes;
     unsigned char *out = (unsigned char *)(b + 1);
@@ -140,7 +147,8 @@ void d_transfer_blocks(HDoc *to, HDoc *from)
     if (!tail)
         return;
     for (HBlock *b = tail; b; b = b->next) {
-        b->stamp = to->version;
+        b->stamp = d_epoch(to);
+        b->owner = to;
         tail = b;
     }
     tail->next = to->blocks;
@@ -149,6 +157,8 @@ void d_transfer_blocks(HDoc *to, HDoc *from)
     to->blocks = from->blocks;
     from->blocks = NULL;
     if (from->live_nodes) {
+        for (HNode *n = from->live_nodes; n; n = h_meta(n)->live_next)
+            h_meta(n)->allocation_owner = to;
         HNode *last = from->live_nodes;
         while (h_meta(last)->live_next)
             last = h_meta(last)->live_next;
@@ -189,28 +199,33 @@ void h_free(HDoc *d, void *ptr)
     if (!ptr)
         return;
     HBlock *b = (HBlock *)ptr - 1;
+    /* An adopted node may combine its original body with newer attributes
+     * or text allocated by its destination. Each block names its ledger. */
+    d = b->owner;
     block_unlink(&d->blocks, b);
+    if (d->charge_group) d->charge_group->bytes -= b->size;
     d->pub.arena_bytes -= b->size;
     os64_free(b);
 }
 
 /* ── Pins and retirement (DOM.md § The mutation core) ────────────────────
  *
- * A snapshot built at version P borrowed what the tree held at P. A block
- * replaced by the change that made version R was in the tree at every
- * version below R, so a pin below R may still point at it and a pin at R or
- * later cannot. */
-static bool pinned_below(const HDoc *d, uint64_t version)
+ * A pin records the storage epoch when it borrowed the tree. A block
+ * retired at epoch R may still be borrowed by an older pin in any member
+ * arena. Document-local revisions remain independent for change readers. */
+bool d_pinned_below(const HDoc *d, uint64_t epoch)
 {
-    for (size_t i = 0; i < H_PINS; i++)
-        if (d->pins[i] && d->pins[i] < version)
-            return true;
+    for (const HDoc *m = d->group ? d->group->first : d; m;
+         m = d->group ? m->group_next : NULL)
+        for (size_t i = 0; i < H_PINS; i++)
+            if (m->pins[i] && m->pins[i] < epoch) return true;
     return false;
 }
 static void retired_free(HDoc *d, HBlock *b)
 {
     block_unlink(&d->retired, b);
     d->retired_bytes -= b->size;
+    if (d->charge_group) d->charge_group->bytes -= b->size;
     d->pub.arena_bytes -= b->size;
     os64_free(b);
 }
@@ -218,7 +233,7 @@ void d_retire(HDoc *d, void *ptr)
 {
     if (!ptr)
         return;
-    if (!pinned_below(d, d->version)) {
+    if (!d_pinned_below(d, d_epoch(d))) {
         h_free(d, ptr);
         return;
     }
@@ -226,8 +241,9 @@ void d_retire(HDoc *d, void *ptr)
      * make replaced bytes free. Its links are the block's own, so retiring
      * allocates nothing and cannot fail. */
     HBlock *b = (HBlock *)ptr - 1;
+    d = b->owner;
     block_unlink(&d->blocks, b);
-    b->stamp = d->version;
+    b->stamp = d_epoch(d);
     b->prev = NULL;
     b->next = d->retired;
     if (b->next)
@@ -239,17 +255,18 @@ static void reclaim(HDoc *d)
 {
     for (HBlock *b = d->retired, *next; b; b = next) {
         next = b->next;
-        if (!pinned_below(d, b->stamp))
+        if (!d_pinned_below(d, b->stamp))
             retired_free(d, b);
     }
 }
-/* Whether a snapshot may be pointing at a live block made at version `born`:
+/* Whether a snapshot may be pointing at a live block made at epoch `born`:
  * a pin taken before the block existed cannot be. */
 static bool pinned_since(const HDoc *d, uint64_t born)
 {
-    for (size_t i = 0; i < H_PINS; i++)
-        if (d->pins[i] >= born && d->pins[i])
-            return true;
+    for (const HDoc *m = d->group ? d->group->first : d; m;
+         m = d->group ? m->group_next : NULL)
+        for (size_t i = 0; i < H_PINS; i++)
+            if (m->pins[i] >= born && m->pins[i]) return true;
     return false;
 }
 /* Lifetime misuse ends the program rather than freeing identities or bytes
@@ -259,11 +276,110 @@ static void fatal(const char *sentence)
     os64_write(2, sentence, h_len(sentence));
     os64_exit((int32_t)OS64_HTML_FATAL_EXIT);
 }
+void d_version_advance(HDoc *d)
+{
+    if (d->version == UINT64_MAX || (d->group && d->group->epoch == UINT64_MAX))
+        fatal("libhtml: mutation epoch exhausted\n");
+    d->version++;
+    if (d->group) d->group->epoch++;
+}
+
+os64_html_group_t *os64_html_group_create(size_t max_bytes)
+{
+    if (max_bytes < sizeof(os64_html_group_t)) return NULL;
+    os64_html_group_t *group = os64_calloc(1, sizeof(*group));
+    if (group) {
+        group->bytes = group->peak = sizeof(*group);
+        group->limit = max_bytes;
+        group->epoch = 1;
+    }
+    return group;
+}
+
+static void queue_join(HNode **head, HNode *other)
+{
+    if (!other) return;
+    HNode *tail = other;
+    while (h_meta(tail)->pending_next) tail = h_meta(tail)->pending_next;
+    h_meta(tail)->pending_next = *head;
+    if (*head) h_meta(*head)->pending_prev = tail;
+    *head = other;
+}
+
+int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
+                            uint8_t creation_realm)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!group || !d || d->group || d->charge_group || d->parser ||
+        (group->first && (d->held || d->pinned || d->readers || d->ranges)))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (d->pub.arena_bytes > group->limit - group->bytes)
+        return OS64_HTML_ARENA_EXHAUSTED;
+    if (group->epoch == UINT64_MAX) return OS64_HTML_BAD_ARGUMENT;
+    if (!group->first) {
+        group->first = d;
+        group->epoch = d->version;
+    } else {
+        group->epoch++;
+        for (HBlock *b = d->blocks; b; b = b->next) b->stamp = group->epoch;
+        for (HBlock *b = d->retired; b; b = b->next) b->stamp = group->epoch;
+        for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
+            h_meta(n)->stamp = group->epoch;
+        queue_join(&group->first->pending_nodes, d->pending_nodes);
+        queue_join(&group->first->waiting_nodes, d->waiting_nodes);
+        group->first->pending_units += d->pending_units;
+        d->pending_nodes = d->waiting_nodes = NULL;
+        d->pending_units = 0;
+        group->last->group_next = d;
+    }
+    group->last = d;
+    d->group = d->charge_group = group;
+    d->creation_realm = creation_realm;
+    for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
+        h_meta(n)->creation_realm = creation_realm;
+    group->bytes += d->pub.arena_bytes;
+    if (group->bytes > group->peak) group->peak = group->bytes;
+    return OS64_HTML_OK;
+}
+
+size_t os64_html_group_bytes(const os64_html_group_t *group) { return group ? group->bytes : 0; }
+size_t os64_html_group_peak(const os64_html_group_t *group) { return group ? group->peak : 0; }
+os64_html_document_t *os64_html_node_owner(const HNode *node)
+{
+    return node ? &d_node_document_owner(node)->pub : NULL;
+}
+bool os64_html_same_group(const os64_html_document_t *a, const os64_html_document_t *b)
+{
+    return a && b && d_group_contains((const HDoc *)a, (const HDoc *)b);
+}
+uint8_t os64_html_node_creation_realm(const HNode *node) { return node ? h_meta(node)->creation_realm : 0; }
+const HNode *os64_html_node_document(const HNode *node)
+{
+    return node ? (node->kind == OS64_HTML_DOCUMENT ? node : h_meta(node)->document) : NULL;
+}
+void os64_html_group_free(os64_html_group_t *group)
+{
+    if (!group) return;
+    for (HDoc *d = group->first; d; d = d->group_next)
+        if (d->held || d->pinned || d->readers || d->ranges || d->parser)
+            fatal("libhtml: group freed with live borrowers\n");
+    for (HDoc *d = group->first, *next; d; d = next) {
+        next = d->group_next;
+        d->group = NULL;
+        os64_html_document_free(&d->pub);
+    }
+    if (group->bytes != sizeof(*group)) fatal("libhtml: group accounting mismatch\n");
+    os64_free(group);
+}
+
 void d_node_register(HDoc *d, HNode *n, uint32_t flags)
 {
     HMeta *m = h_meta(n);
     n->xml_document = d->pub.is_xml;
     m->flags = flags;
+    m->creation_realm = d->creation_realm;
+    m->allocation_owner = d;
+    m->document = d->node_document ? d->node_document : &d->root;
     m->live_next = d->live_nodes;
     if (d->live_nodes)
         h_meta(d->live_nodes)->live_prev = n;
@@ -291,9 +407,9 @@ HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
 void d_fatal(const char *sentence) { fatal(sentence); }
 void os64_html_hold(const os64_html_document_t *doc, const HNode *node)
 {
-    if (!os64_html_owns_node(doc, node))
-        fatal("libhtml: hold of a node not owned by the document\n");
-    HDoc *d = (HDoc *)doc;
+    if (!doc || !node || !d_group_contains((const HDoc *)doc, h_meta(node)->allocation_owner))
+        fatal("libhtml: hold of a node outside the lifetime group\n");
+    HDoc *d = h_meta(node)->allocation_owner;
     if (d->held == SIZE_MAX)
         fatal("libhtml: document hold count overflow\n");
     d_ref(d, node, false, true);
@@ -301,22 +417,24 @@ void os64_html_hold(const os64_html_document_t *doc, const HNode *node)
 }
 void os64_html_release(const os64_html_document_t *doc, const HNode *node)
 {
-    if (!os64_html_owns_node(doc, node) || !h_meta(node)->holds || !((HDoc *)doc)->held)
+    if (!doc || !node || !d_group_contains((const HDoc *)doc, h_meta(node)->allocation_owner) ||
+        !h_meta(node)->holds || !h_meta(node)->allocation_owner->held)
         fatal("libhtml: release of a node that is not held\n");
-    HDoc *d = (HDoc *)doc;
+    HDoc *d = h_meta(node)->allocation_owner;
     d_ref(d, node, false, false);
     d->held--;
     d_collect(d);
 }
-size_t d_owned_bytes(const HNode *n)
+size_t d_owned_bytes(const HDoc *owner, const HNode *n)
 {
-    size_t size = (h_meta(n)->flags & H_NODE_PACKED) ? ((HBlock *)n - 1)->size : 0;
+    size_t size = (h_meta(n)->flags & H_NODE_PACKED) && h_meta(n)->allocation_owner == owner
+                    ? ((HBlock *)n - 1)->size : 0;
     if ((n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT || n->kind == OS64_HTML_PI) &&
         *h_word(n))
-        size += ((HBlock *)n->text - 1)->size;
+        if (((HBlock *)n->text - 1)->owner == owner) size += ((HBlock *)n->text - 1)->size;
     if (n->kind == OS64_HTML_ELEMENT && (*h_word(n) & H_ATTRS_PRIVATE))
         for (const HAttr *a = n->attrs; a; a = a->next)
-            size += ((HBlock *)a - 1)->size;
+            if (((HBlock *)a - 1)->owner == owner) size += ((HBlock *)a - 1)->size;
     return size;
 }
 uint64_t os64_html_version(const os64_html_document_t *doc)
@@ -339,7 +457,8 @@ size_t os64_html_form_input_count(const os64_html_document_t *doc)
 }
 bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node)
 {
-    return doc && node && node->document_id == ((const HDoc *)doc)->id;
+    return doc && node && (node->kind == OS64_HTML_DOCUMENT ? node : h_meta(node)->document)->document_id
+        == ((const HDoc *)doc)->id;
 }
 /* A handle is its slot and a serial number no other pin in the program has
  * had, so one that was let go already, or that belongs to another document,
@@ -356,7 +475,7 @@ os64_html_pin_t os64_html_pin(const os64_html_document_t *doc)
         return 0;
     for (size_t i = 0; i < H_PINS; i++)
         if (!d->pins[i]) {
-            d->pins[i] = d->version;
+            d->pins[i] = d_epoch(d);
             d->pinned++;
             d->pin_handles[i] = __atomic_add_fetch(&pin_serial, 1, __ATOMIC_RELAXED) * H_PINS + i;
             return d->pin_handles[i];
@@ -373,7 +492,8 @@ void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
         fatal("libhtml: unpin of a pin that is not held\n");
     d->pins[slot] = 0;
     d->pinned--;
-    reclaim(d);
+    for (HDoc *m = d->group ? d->group->first : d; m;
+         m = d->group ? m->group_next : NULL) reclaim(m);
     d_unpin_collect(d);
 }
 size_t os64_html_retired_bytes(const os64_html_document_t *doc)
@@ -501,7 +621,7 @@ bool h_buf_put(os64_html_parser_t *p, HBuf *b, uint32_t c)
 }
 /* DOM.md's "grow in place". A text node's bytes are a block of the node's
  * own once its private word holds a capacity, and the tree can be read
- * between two calls of the parser. A snapshot built then pinned a version no
+ * between two calls of the parser. A snapshot built then pinned an epoch no
  * older than the block and may be pointing into it, so the block is not
  * written to and not freed: the text moves to a block of its own first, and
  * the old one is retired. A pin older than the block never saw it, and the
@@ -511,7 +631,7 @@ bool h_text_put(os64_html_parser_t *p, HNode *n, uint32_t c)
 {
     HDoc *d = p->d;
     size_t *cap = h_word(n);
-    if (*cap && d->pinned && pinned_since(d, ((HBlock *)n->text - 1)->stamp)) {
+    if (*cap && pinned_since(d, ((HBlock *)n->text - 1)->stamp)) {
         char *own = h_alloc(p, *cap);
         if (!own)
             return false;
@@ -637,6 +757,9 @@ void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n)
  * range step: the caller ran it. */
 void h_link(HDoc *d, HNode *parent, HNode *before, HNode *n)
 {
+    HNode *document = parent == &d->root && d->node_document ? d->node_document
+                        : (HNode *)os64_html_node_document(parent);
+    if (h_meta(n)->document != document) d_document_walk(n, document);
     d_linking(d, parent, n);
     n->parent = parent;
     n->next = before;
@@ -728,6 +851,8 @@ void os64_html_document_free(os64_html_document_t *doc)
     if (!doc)
         return;
     HDoc *d = (HDoc *)doc;
+    if (d->group)
+        fatal("libhtml: group owns this document\n");
     if (d->readers)
         fatal("libhtml: a document was freed while change readers still owned it\n");
     if (d->held)
@@ -739,6 +864,7 @@ void os64_html_document_free(os64_html_document_t *doc)
         retired_free(d, d->retired);
     while (d->blocks)
         h_free(d, d->blocks + 1);
+    if (d->charge_group) d->charge_group->bytes -= sizeof(*d);
     os64_free(d);
 }
 void os64_html_parser_destroy(os64_html_parser_t *p)
@@ -893,7 +1019,7 @@ void h_moving(os64_html_parser_t *p)
 {
     if (!p->moved) {
         p->moved = true;
-        p->d->version++;
+        d_version_advance(p->d);
     }
 }
 static void hold_free(os64_html_parser_t *p)
