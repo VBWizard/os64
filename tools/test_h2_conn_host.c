@@ -1204,6 +1204,130 @@ static void wait_cases(void)
     finish(dead);
 }
 
+// ── Many fetches at once ────────────────────────────────────────────────
+
+#define STRESS_THREADS 8
+#define STRESS_ROUNDS 150
+static atomic_bool serving;
+static atomic_int served, server_resets;
+
+// What "/<n>" answers: n * 37 mod 3000 bytes, the i-th being n + i.
+static size_t answer_len(unsigned n) { return (size_t)(n * 37u % 3000u); }
+
+// The server for the many: every request is answered whole, or reset, at
+// random, in frames of random sizes.
+static void *responder(void *x)
+{
+    (void)x;
+    unsigned seed = 12345;
+    static uint8_t body[3000];
+    while (atomic_load(&serving)) {
+        h2_frame_header_t h;
+        const uint8_t *payload;
+        const h2_field_t *fields;
+        size_t count;
+        if (!peer_frame(&h, &payload, 50) || h.type != H2_FRAME_HEADERS)
+            continue;
+        CHECK(peer_decode(payload, h.length, &fields, &count) && count == 4);
+        unsigned n = (unsigned)strtoul((const char *)fields[2].value + 1, NULL, 10);
+        size_t len = answer_len(n);
+        seed = seed * 1103515245u + 12345u;
+        if ((seed >> 16) % 10 == 0) {
+            peer_send_rst(h.stream, H2_ERR_INTERNAL);
+            atomic_fetch_add(&server_resets, 1);
+            continue;
+        }
+        char length[16];
+        snprintf(length, sizeof(length), "%zu", len);
+        h2_field_t head[] = {F(":status", "200"), F("content-length", length)};
+        peer_send_headers(h.stream, head, 2, len == 0);
+        for (size_t i = 0; i < len; i++)
+            body[i] = (uint8_t)(n + i);
+        for (size_t at = 0; at < len;) {
+            seed = seed * 1103515245u + 12345u;
+            size_t piece = 1 + (seed >> 16) % 1200;
+            if (piece > len - at)
+                piece = len - at;
+            peer_send_data(h.stream, body + at, piece, at + piece == len);
+            at += piece;
+        }
+        atomic_fetch_add(&served, 1);
+    }
+    return NULL;
+}
+
+static atomic_int whole, reset_seen, left_early;
+
+static void *many(void *arg)
+{
+    unsigned me = (unsigned)(uintptr_t)arg, seed = me * 7919u;
+    static _Thread_local uint8_t got[3000];
+    for (unsigned round = 0; round < STRESS_ROUNDS; round++) {
+        unsigned n = me * 1000u + round;
+        char path[16];
+        snprintf(path, sizeof(path), "/%u", n);
+        fetch_t f;
+        fetch_init(&f, 20000);
+        CHECK(fetch_get(&f, conn, path) == H2_OK);
+        seed = seed * 1103515245u + 12345u;
+        if ((seed >> 16) % 7 == 0) {
+            atomic_fetch_add(&left_early, 1);       // leaves before a byte of the answer
+            fetch_done(&f);
+            continue;
+        }
+        h2_result_t head = fetch_head(&f);
+        if (head == H2_ENDED) {
+            CHECK(h2_stream_ended(f.stream).how == H2_END_PEER_RESET);
+            atomic_fetch_add(&reset_seen, 1);
+            fetch_done(&f);
+            continue;
+        }
+        CHECK(head == H2_OK);
+        size_t len = 0;
+        int64_t r;
+        seed = seed * 1103515245u + 12345u;
+        size_t most = (seed >> 16) % 5 == 0 ? 100 : sizeof(got);     // some leave part way through
+        while (len < most && (r = h2_stream_read(f.stream, got + len, most - len, &f.wait)) > 0)
+            len += (size_t)r;
+        bool right = true;
+        for (size_t i = 0; i < len; i++)
+            right = right && got[i] == (uint8_t)(n + i);
+        CHECK(right);
+        if (most == sizeof(got)) {
+            CHECK(len == answer_len(n) && h2_stream_ended(f.stream).how == H2_END_CLEAN);
+            atomic_fetch_add(&whole, 1);
+        }
+        fetch_done(&f);
+    }
+    return NULL;
+}
+
+static void many_cases(void)
+{
+    int dead = atomic_load(&dead_calls);
+    // Windows the server need not count: this case is about the threads.
+    static const h2_setting_t kWide[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 1u << 30}};
+    static const h2_greeting_t kWideGreeting = {.settings = kWide, .count = 1, .window_increment = 1u << 30};
+    begin_with(&kWideGreeting, NULL, 0);
+    pthread_t server, t[STRESS_THREADS];
+    atomic_store(&serving, true);
+    pthread_create(&server, NULL, responder, NULL);
+    for (uintptr_t i = 0; i < STRESS_THREADS; i++)
+        pthread_create(&t[i], NULL, many, (void *)(i + 1));
+    for (int i = 0; i < STRESS_THREADS; i++)
+        pthread_join(t[i], NULL);
+    for (int i = 0; i < 400 && atomic_load(&served) + atomic_load(&server_resets) < STRESS_THREADS * STRESS_ROUNDS; i++)
+        nap_ms(5);
+    atomic_store(&serving, false);
+    pthread_join(server, NULL);
+    // Every request reached the server, each kind of ending happened, the
+    // connection is still good, and it holds no stream.
+    CHECK(atomic_load(&served) + atomic_load(&server_resets) == STRESS_THREADS * STRESS_ROUNDS);
+    CHECK(atomic_load(&whole) > 100 && atomic_load(&reset_seen) > 10 && atomic_load(&left_early) > 50);
+    CHECK(h2_conn_room(conn) && h2_conn_streams(conn) == 0 && peer_records_sound());
+    finish(dead);
+}
+
 int main(void)
 {
     alarm(SECONDS_MOST);
@@ -1214,6 +1338,7 @@ int main(void)
     error_cases();
     queue_cases();
     wait_cases();
+    many_cases();
     if (atomic_load(&failures) != 0) {
         fprintf(stderr, "test_h2_conn_host: %d of %d checks failed\n", atomic_load(&failures), atomic_load(&checks));
         return 1;
