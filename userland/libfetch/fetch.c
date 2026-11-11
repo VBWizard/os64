@@ -78,6 +78,21 @@ static bool h2_switched_off(void)
     return state == 2;
 }
 
+// WHAT THIS PROCESS'S FETCHES HAVE COST THE WIRE, since it started
+// (os64_fetch_counts). Each is added to where the thing happens, by
+// whichever thread a fetch runs on, so each is atomic and no two are read
+// at one instant: a caller that subtracts two readings gets what happened
+// between them, give or take a fetch that was in the middle of something.
+static struct {
+    uint64_t connections_h1, connections_h2, handshakes, handshakes_resumed;
+    uint64_t requests_h1, requests_h2, waits, wait_ms;
+} s_counts;
+
+static void counted(uint64_t *which, uint64_t by)
+{
+    __atomic_fetch_add(which, by, __ATOMIC_RELAXED);
+}
+
 struct os64_fetch {
     os64_fetch_options_t opt;
     char user_agent[OS64_FETCH_AGENT_MAX];
@@ -805,10 +820,19 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
     fetch_pool_wait_t wait = {.bell = &f->bell, .patience_ms = FETCH_POOL_WAIT_MS,
                               .cancelled = cancel_predicate, .cancel_ctx = f};
     f->detail.why[0] = '\0';
+    bool waited = false;
     for (;;) {
         fetch_transport_t io;
         fetch_conn_t *conn = NULL;
-        switch (fetch_pool_take(key, &f->say, idle_most, fresh, &wait, &conn, &io)) {
+        fetch_pool_take_t took = fetch_pool_take(key, &f->say, idle_most, fresh, &wait, &conn, &io);
+        // Time spent waiting for a connection, whatever came of the wait: a
+        // fetch that waited is counted once, however many times it asked.
+        if (wait.waited_ms != 0) {
+            counted(&s_counts.waits, waited ? 0 : 1);
+            counted(&s_counts.wait_ms, wait.waited_ms);
+            waited = true;
+        }
+        switch (took) {
         case FETCH_POOL_SHARED:
             // A live HTTP/2 connection with room: this fetch's stream is
             // opened on it (exchange_h2), and no dial is made on this hop.
@@ -841,8 +865,13 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                 fetch_pool_gone(conn);      // dial closed what it opened
                 return dialled;
             }
+            if (encrypted) {
+                counted(&s_counts.handshakes, 1);
+                counted(&s_counts.handshakes_resumed, f->detail.tls_resumed ? 1 : 0);
+            }
             const char *alpn = fetch_transport_alpn(&f->io);
             if (alpn == NULL || !os64_streq(alpn, "h2")) {
+                counted(&s_counts.connections_h1, 1);
                 fetch_pool_dialled(conn);
                 f->conn = conn;
                 return OS64_FETCH_OK;
@@ -883,6 +912,7 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                               "HTTP/2 does not allow)");
                 return OS64_FETCH_DIAL_FAILED;
             }
+            counted(&s_counts.connections_h2, 1);
             fetch_pool_dialled_h2(conn, h2, version, resumed);
             f->conn = conn;
             f->h2 = h2;
@@ -1134,6 +1164,7 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     os64_memset(&f->head.keep, 0, sizeof(f->head.keep));
     size_t head_sent = 0, body_sent = 0;
     bool head_done = false, body_done = !sends_body(f) || !f->opt.body_len;
+    bool head_counted = false;
     unsigned interim = 0;
     http_head_result_t hrc;
     for (;;) {
@@ -1144,6 +1175,13 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
             if (!head_done) {
                 written = fetch_transport_write(&f->io, request, os64_strlen(request), &head_sent);
                 head_done = written == FETCH_WRITE_DONE;
+                // A request is sent once its head has gone whole, whichever
+                // way the write then answered: a server that replies as the
+                // last byte lands makes the write say RESPONSE, not DONE.
+                if (!head_counted && head_sent == os64_strlen(request)) {
+                    head_counted = true;
+                    counted(&s_counts.requests_h1, 1);
+                }
             }
             if (written == FETCH_WRITE_DONE && !body_done) {
                 written = fetch_transport_write(&f->io, f->opt.body, f->opt.body_len, &body_sent);
@@ -1361,6 +1399,7 @@ static os64_fetch_status_t exchange_h2(os64_fetch_t *f, bool *again, bool *no_ro
     }
     if (r != H2_OK)
         return h2_before_head(f, r, again);
+    counted(&s_counts.requests_h2, 1);
 
     // The upload. A server that answered and wants no more of it (H2_STOP)
     // has not failed the request: what it said is read below.
@@ -2267,4 +2306,16 @@ void os64_fetch_close(os64_fetch_t *f)
 void os64_fetch_forget_idle(void)
 {
     fetch_pool_drain();
+}
+
+void os64_fetch_counts(os64_fetch_counts_t *out)
+{
+    out->connections_h1 = __atomic_load_n(&s_counts.connections_h1, __ATOMIC_RELAXED);
+    out->connections_h2 = __atomic_load_n(&s_counts.connections_h2, __ATOMIC_RELAXED);
+    out->handshakes = __atomic_load_n(&s_counts.handshakes, __ATOMIC_RELAXED);
+    out->handshakes_resumed = __atomic_load_n(&s_counts.handshakes_resumed, __ATOMIC_RELAXED);
+    out->requests_h1 = __atomic_load_n(&s_counts.requests_h1, __ATOMIC_RELAXED);
+    out->requests_h2 = __atomic_load_n(&s_counts.requests_h2, __ATOMIC_RELAXED);
+    out->waits = __atomic_load_n(&s_counts.waits, __ATOMIC_RELAXED);
+    out->wait_ms = __atomic_load_n(&s_counts.wait_ms, __ATOMIC_RELAXED);
 }

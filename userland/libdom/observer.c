@@ -78,8 +78,7 @@ typedef struct DRegistration {
 
 struct DObservers {
     JSClassID observer_class, record_class;
-    /* Every observer the page made, in the order it made them: the
-     * standard's "mutation observers", which notify walks. */
+    /* Cluster-wide creation order, independent of the observed document. */
     DObserver *observers, *observers_last;
     DRegistration *registrations[D_OBSERVER_BUCKETS];
     size_t count;
@@ -91,7 +90,6 @@ struct DObservers {
     /* Records the listener could not keep for want of memory, reported at
      * the next notify. */
     uint64_t lost;
-    DValue *record_prototype;
 };
 
 static JSClassID observer_slot, record_slot;
@@ -191,7 +189,7 @@ static void request_notify(os64_dom_t *dom)
     s->queued = true;
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
         if (ctx != NULL && JS_EnqueueJob(ctx, notify_job, 0, NULL) == 0) {
             s->owed = false;
             return;
@@ -295,7 +293,7 @@ void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *c)
                 o->found_old = true;
         }
     for (DObserver *o = found; o != NULL; o = o->found_next) {
-        DMutation *m = mutation_new(dom, c, type, o->found_old);
+        DMutation *m = mutation_new(o->dom, c, type, o->found_old);
         if (m == NULL) {
             s->lost++;
             continue;
@@ -322,7 +320,7 @@ static void registration_release(os64_dom_t *dom, DRegistration *r)
     if (--o->registrations == 0 && o->held) {
         /* Observing nothing: the object may go with the garbage. */
         o->held = false;
-        dom->observers_held--;
+        o->dom->observers_held--;
         JS_FreeValueRT(dom->engine, o->object);
     }
 }
@@ -410,8 +408,7 @@ static JSValue string_or_null(JSContext *ctx, const char *s)
 
 static JSValue record_object(os64_dom_t *dom, JSContext *ctx, const DMutation *m)
 {
-    JSValue object = JS_NewObjectProtoClass(ctx, dom->observers->record_prototype->value,
-                                            dom->observers->record_class);
+    JSValue object = JS_NewObjectClass(ctx, dom->observers->record_class);
     if (JS_IsException(object)) return object;
     DRecordObject *r = js_mallocz(ctx, sizeof(*r));
     if (r == NULL) {
@@ -529,37 +526,46 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
     s->owed = false;
     report_lost(dom, ctx);
     DSlotSignals signals = {dom, NULL, 0, 0, false};
-    if (dom->options.shadow_trees) (void)os64_html_slot_changes(dom->document, slot_signal, &signals);
+    if (dom->cluster) {
+        for (size_t i = 0; i < dom->cluster->count; ++i) {
+            os64_dom_t *member = dom->cluster->members[i];
+            if (member->options.shadow_trees) (void)os64_html_slot_changes(member->document, slot_signal, &signals);
+        }
+    } else if (dom->options.shadow_trees) (void)os64_html_slot_changes(dom->document, slot_signal, &signals);
     DObserver *last = s->observers_last;
     int status = 0;
     for (DObserver *o = s->observers; o != NULL && status == 0;) {
         DObserver *next = o == last ? NULL : o->next;
+        os64_dom_t *owner = o->dom;
+        os64_js_outcome_t outcome;
+        JSContext *callback_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
+        if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
-        JSValue records = take_records(dom, ctx, o);
+        JSValue records = take_records(owner, callback_ctx, o);
         registrations_drop(dom, transient_for, o);
         if (JS_IsException(records)) {
-            if (!d_exception_catchable(ctx)) status = -1;
+            if (!d_exception_catchable(callback_ctx)) status = -1;
             else {
-                JSValue error = JS_GetException(ctx);
-                d_report(dom, ctx, error);
-                JS_FreeValue(ctx, error);
+                JSValue error = JS_GetException(callback_ctx);
+                d_report(owner, callback_ctx, error);
+                JS_FreeValue(callback_ctx, error);
             }
-        } else if (any && JS_IsObject(o->object) && JS_IsFunction(ctx, o->callback)) {
+        } else if (any && JS_IsObject(o->object) && JS_IsFunction(callback_ctx, o->callback)) {
             JSValue args[2] = {records, o->object};
-            DScripts before = d_script_enter(dom, o->script);
-            JSValue result = JS_Call(ctx, o->callback, o->object, 2, args);
-            d_script_leave(dom, &before, false);
+            DScripts before = d_script_enter(owner, o->script);
+            JSValue result = JS_Call(callback_ctx, o->callback, o->object, 2, args);
+            d_script_leave(owner, &before, false);
             if (JS_IsException(result)) {
-                if (!d_exception_catchable(ctx)) status = -1;
+                if (!d_exception_catchable(callback_ctx)) status = -1;
                 else {
-                    JSValue error = JS_GetException(ctx);
-                    d_report_as(dom, ctx, error, o->script);
-                    JS_FreeValue(ctx, error);
+                    JSValue error = JS_GetException(callback_ctx);
+                    d_report_as(owner, callback_ctx, error, o->script);
+                    JS_FreeValue(callback_ctx, error);
                 }
             }
-            JS_FreeValue(ctx, result);
+            JS_FreeValue(callback_ctx, result);
         }
-        JS_FreeValue(ctx, records);
+        JS_FreeValue(callback_ctx, records);
         o = next;
     }
     if (signals.lost && status == 0) {
@@ -568,10 +574,16 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
     }
     for (size_t i = 0; i < signals.n; i++) {
         if (status == 0) {
-            JSValue event = d_event_new(dom, ctx, "slotchange", true, false, true);
-            if (JS_IsException(event) || d_dispatch(dom, ctx, event, signals.slots[i]) < 0)
-                status = signal_failed(dom, ctx);
-            JS_FreeValue(ctx, event);
+            os64_dom_t *owner = d_owner(dom, signals.slots[i]);
+            os64_js_outcome_t outcome;
+            JSContext *event_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
+            if (!event_ctx) status = -1;
+            else {
+                JSValue event = d_event_new(owner, event_ctx, "slotchange", true, false, true);
+                if (JS_IsException(event) || d_dispatch(owner, event_ctx, event, signals.slots[i]) < 0)
+                    status = signal_failed(owner, event_ctx);
+                JS_FreeValue(event_ctx, event);
+            }
         }
         os64_html_release(dom->document, signals.slots[i]);
     }
@@ -747,7 +759,7 @@ static JSValue observe(os64_dom_t *dom, JSContext *ctx, DObserver *o, int argc, 
     s->count++;
     if (o->registrations++ == 0 && !o->held) {
         o->held = true;
-        dom->observers_held++;
+        o->dom->observers_held++;
         JS_DupValue(ctx, o->object);
     }
     return JS_UNDEFINED;
@@ -762,6 +774,8 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     if (dom == NULL) return JS_EXCEPTION;
     DObserver *o = observer_of(dom, self);
     if (o == NULL) return JS_ThrowTypeError(ctx, "Expected a MutationObserver");
+    dom = o->dom;
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     switch (magic) {
     case M_OBSERVE: return observe(dom, ctx, o, argc, argv);
     case M_DISCONNECT:
@@ -793,12 +807,15 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                                             .gc_mark = observer_mark};
     static const JSClassDef record_def = {.class_name = "MutationRecord", .finalizer = record_finalizer,
                                           .gc_mark = record_mark};
-    struct DObservers *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_MUTATION);
-    if (s == NULL) {
-        d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded");
-        return -1;
+    struct DObservers *s = dom->cluster ? dom->cluster->observers : NULL;
+    if (!s) {
+        s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_MUTATION);
+        if (!s) { d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded"); return -1; }
+        if (dom->cluster) {
+            dom->cluster->observers = s;
+            for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = s;
+        }
     }
-    os64_memset(s, 0, sizeof(*s));
     dom->observers = s;
     s->observer_class = os64_js_class_id(&observer_slot);
     s->record_class = os64_js_class_id(&record_slot);
@@ -807,10 +824,10 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         (!JS_IsRegisteredClass(dom->engine, s->record_class) && JS_NewClass(dom->engine, s->record_class, &record_def) < 0))
         return -1;
     DValue *observer = d_retain(dom, ctx, JS_NewObject(ctx));
-    s->record_prototype = observer != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
-    if (s->record_prototype == NULL) return -1;
+    DValue *record_prototype = observer != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
+    if (record_prototype == NULL) return -1;
     JS_SetClassProto(ctx, s->observer_class, JS_DupValue(ctx, observer->value));
-    JS_SetClassProto(ctx, s->record_class, JS_DupValue(ctx, s->record_prototype->value));
+    JS_SetClassProto(ctx, s->record_class, JS_DupValue(ctx, record_prototype->value));
     static const struct { const char *name; int magic, argc; } kMethods[] = {
         {"observe", M_OBSERVE, 1}, {"disconnect", M_DISCONNECT, 0}, {"takeRecords", M_TAKE, 0},
     };
@@ -821,14 +838,14 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const char *const kFields[] = {"type", "target", "addedNodes", "removedNodes", "previousSibling",
                                           "nextSibling", "attributeName", "attributeNamespace", "oldValue"};
     for (int i = 0; i < 9; i++)
-        if (d_accessor(dom, ctx, s->record_prototype->value, kFields[i], record_member, i, false) < 0) return -1;
+        if (d_accessor(dom, ctx, record_prototype->value, kFields[i], record_member, i, false) < 0) return -1;
     JSValue observer_interface = d_interface_new(ctx, "MutationObserver", 1, observer_constructor, observer->value,
                                                  JS_UNDEFINED);
     if (JS_IsException(observer_interface) ||
         JS_DefinePropertyValueStr(ctx, global, "MutationObserver", observer_interface,
                                   JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
-    JSValue record_interface = d_interface_new(ctx, "MutationRecord", 0, NULL, s->record_prototype->value,
+    JSValue record_interface = d_interface_new(ctx, "MutationRecord", 0, NULL, record_prototype->value,
                                                JS_UNDEFINED);
     if (JS_IsException(record_interface) ||
         JS_DefinePropertyValueStr(ctx, global, "MutationRecord", record_interface,
@@ -847,6 +864,7 @@ void d_observers_drain(os64_dom_t *dom)
     for (DObserver *o = s->observers; o != NULL; o = o->next)
         if (o->held) {
             o->held = false;
+            o->dom->observers_held--;
             JS_FreeValueRT(dom->engine, o->object);
         }
     dom->observers_held = 0;
@@ -869,6 +887,10 @@ void d_observers_free(os64_dom_t *dom)
         s->observers = o->next;
         queue_clear(dom, o);
         d_free(dom, o);
+    }
+    if (dom->cluster) {
+        dom->cluster->observers = NULL;
+        for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = NULL;
     }
     d_free(dom, s);
     dom->observers = NULL;

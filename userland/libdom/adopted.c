@@ -124,6 +124,8 @@ static JSValue replace_text(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
 {
     DValue *entry = constructed_of(ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
+    dom = entry->dom;
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     size_t length = 0;
     const char *given = JS_ToCStringLen(ctx, &length, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (given == NULL) return JS_EXCEPTION;
@@ -140,8 +142,13 @@ static JSValue replace_text(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
     text->text = copy;
     text->length = length;
     text->generation++;
-    for (struct DAdopted *a = dom->adoptions; a != NULL; a = a->next)
-        if (holds(a, entry)) (void)os64_html_touch(dom->document, (os64_html_node_t *)a->root);
+    size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
+    for (size_t i = 0; i < members; i++) {
+        os64_dom_t *binding = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        for (struct DAdopted *a = binding->adoptions; a != NULL; a = a->next)
+            if (holds(a, entry))
+                (void)os64_html_touch(d_owner(dom, a->root)->document, (os64_html_node_t *)a->root);
+    }
     return JS_UNDEFINED;
 }
 
@@ -187,10 +194,11 @@ static JSValue adopt_check(JSContext *ctx, JSValueConst self, int argc, JSValueC
     (void)self;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL || argc < 3) return JS_EXCEPTION;
-    if (constructed_of(ctx, argv[1]) == NULL) return JS_EXCEPTION;
+    DValue *sheet = constructed_of(ctx, argv[1]);
+    if (sheet == NULL) return JS_EXCEPTION;
     const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
     if (root == NULL) return JS_EXCEPTION;
-    if (d_node_document(dom, root) != dom->document->document)
+    if (d_node_document(dom, root) != sheet->dom->document->document)
         return d_error(ctx, "NotAllowedError", "A sheet is adopted only in the document it was made for");
     /* The list's room for the length the array will have, taken now, while
      * a refusal still leaves the array as it was: `changed` then never has
@@ -239,7 +247,7 @@ static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValu
         if (sheet == NULL || d_more_peek(sheet)->constructed == NULL || list->n == list->cap) continue;
         list->sheets[list->n++] = sheet;
     }
-    (void)os64_html_touch(dom->document, (os64_html_node_t *)root);
+    (void)os64_html_touch(d_owner(dom, root)->document, (os64_html_node_t *)root);
     return JS_UNDEFINED;
 }
 
@@ -294,6 +302,13 @@ static struct DAdopted *adopted_of(os64_dom_t *dom, JSContext *ctx, const os64_h
     if (owner == NULL) {
         JS_FreeValue(ctx, wrapper);
         JS_ThrowTypeError(ctx, "Missing node wrapper");
+        return NULL;
+    }
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) {
+        JS_FreeValueRT(dom->engine, wrapper);
         return NULL;
     }
     if (d_more_peek(owner)->adopted != NULL) {

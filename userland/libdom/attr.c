@@ -172,6 +172,7 @@ static size_t rec_slot(const os64_dom_t *dom, const DAttr *rec)
 
 static DAttr *record_of(os64_dom_t *dom, const os64_html_node_t *element, const char *ns, const char *local)
 {
+    dom = d_creation_owner(dom, element);
     for (DAttr *rec = dom->attr_table[record_slot(dom, element, ns, local)]; rec != NULL; rec = rec->hash_next) {
         s_steps++;
         if (rec->entry->target == element && ns_equal(rec->ns, ns) &&
@@ -189,6 +190,7 @@ static DAttr *record_for(os64_dom_t *dom, const os64_html_node_t *element, const
 
 static void record_add(os64_dom_t *dom, DAttr *rec)
 {
+    dom = d_creation_owner(dom, rec->entry->target);
     if (dom->attr_attached >= dom->attr_capacity * 2) {
         size_t capacity = dom->attr_capacity * 2;
         DAttr **table = capacity <= SIZE_MAX / sizeof(*table) ? d_alloc_kind(dom, capacity * sizeof(*table), OS64_DOM_MEM_ATTR) : NULL;
@@ -215,6 +217,7 @@ static void record_add(os64_dom_t *dom, DAttr *rec)
 
 static void record_remove(os64_dom_t *dom, DAttr *rec)
 {
+    dom = d_creation_owner(dom, rec->entry->target);
     for (DAttr **at = &dom->attr_table[rec_slot(dom, rec)]; *at != NULL;
          at = &(*at)->hash_next)
         if (*at == rec) {
@@ -225,10 +228,14 @@ static void record_remove(os64_dom_t *dom, DAttr *rec)
         }
 }
 
-/* A new Attr, detached, with no value: its record and its object, the
- * object held by the registry. NULL with QuotaExceededError thrown. */
+/* A new Attr, detached, with no value: its record and object belong to
+ * the selected binding, including its prototype. The registry holds the
+ * object. NULL on allocation failure or an unavailable realm. */
 static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)
 {
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return NULL;
     DAttr *rec = d_alloc_kind(dom, sizeof(*rec), OS64_DOM_MEM_ATTR);
     if (rec != NULL) {
         rec->name = copy_bytes(dom, name, os64_strlen(name));
@@ -275,7 +282,7 @@ static void detach(os64_dom_t *dom, DAttr *rec, char *value, size_t length)
     record_remove(dom, rec);
     const os64_html_node_t *element = rec->entry->target;
     const os64_html_node_t *document = d_node_document(dom, element);
-    rec->document = document != window_document(dom) ? document : NULL;
+    rec->document = document;
     rec->entry->target = NULL;
     os64_html_release(dom->document, element);
     d_free(dom, rec->value);
@@ -307,6 +314,7 @@ static void attr_live(os64_dom_t *dom, DAttr *rec)
 static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
                         const os64_html_attr_t *a)
 {
+    dom = d_creation_owner(dom, element);
     DAttr *rec = record_for(dom, element, a);
     if (rec == NULL) {
         rec = attr_make(dom, ctx, a->name, a->ns);
@@ -328,8 +336,8 @@ static int64_t door(os64_dom_t *dom, const os64_html_node_t *node, const os64_ht
     size_t kept_length = rec != NULL ? os64_strlen(a->value) : 0;
     char *kept = rec != NULL ? copy_bytes(dom, a->value, kept_length) : NULL;
     if (rec != NULL && kept == NULL) return OS64_HTML_NO_MEMORY;
-    int64_t status = by_ns ? os64_page_node_set_attr_ns(dom->state, node, ns, name, value, length, remove)
-                           : os64_page_node_set_attr(dom->state, node, name, value, length, remove);
+    int64_t status = by_ns ? os64_page_node_set_attr_ns(d_owner(dom, node)->state, node, ns, name, value, length, remove)
+                           : os64_page_node_set_attr(d_owner(dom, node)->state, node, name, value, length, remove);
     if (status < 0) {
         d_free(dom, kept);
         return status;
@@ -434,6 +442,7 @@ enum {
 
 static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
 {
+    dom = rec->entry->dom;
     if (rec->child_nodes == NULL) {
         JSValue list = JS_NewObjectProto(ctx, dom->static_list->value);
         if (JS_IsException(list)) return list;
@@ -453,13 +462,14 @@ static const os64_html_node_t *attr_document(os64_dom_t *dom, const DAttr *rec)
 {
     const os64_html_node_t *element = rec->entry->target;
     if (element != NULL) return d_node_document(dom, element);
-    return rec->document != NULL ? rec->document : window_document(dom);
+    return rec->document != NULL ? rec->document : window_document(rec->entry->dom);
 }
 
 /* DOM § 4.4, "clone a node": a detached Attr of the same name, namespace
  * and value, whose node document is `document`. */
 static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)
 {
+    dom = d_owner(dom, document);
     const os64_html_node_t *element = rec->entry->target;
     const char *value = element != NULL ? rec_attr(rec)->value :
                         rec->value != NULL ? rec->value : "";
@@ -470,7 +480,7 @@ static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os6
     if (made == NULL) { d_free(dom, copy); return JS_EXCEPTION; }
     made->value = copy;
     made->length = length;
-    made->document = document != window_document(dom) ? document : NULL;
+    made->document = document;
     return JS_DupValue(ctx, made->entry->value);
 }
 
@@ -493,7 +503,7 @@ int d_attr_adopt(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64
         int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, NULL, 0, true);
         if (status < 0) { d_html_error(ctx, status); return -1; }
     }
-    rec->document = document != window_document(dom) ? document : NULL;
+    rec->document = document;
     return 0;
 }
 
@@ -544,7 +554,7 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     case A_OWNER_DOCUMENT: return d_wrap(dom, ctx, attr_document(dom, rec));
     case A_BASE_URI:
         return d_base_uri(dom, ctx, element != NULL ? element :
-                                    rec->document != NULL ? rec->document : window_document(dom));
+                                    rec->document != NULL ? rec->document : window_document(rec->entry->dom));
     case A_CHILD_NODES: return empty_child_nodes(dom, ctx, rec);
     case A_CONNECTED: case A_HAS_CHILDREN: return JS_FALSE;
     /* No children, so no text to join. */
@@ -625,6 +635,7 @@ static JSValue attribute_extract(JSContext *ctx, bool has_ns, const DString *ns,
 static JSValue create_attribute(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document,
                                 int magic, int argc, JSValueConst *argv)
 {
+    dom = d_owner(dom, document);
     if (argc < (magic == M_CREATE ? 1 : 2)) return JS_ThrowTypeError(ctx, "Missing attribute name");
     DString ns = {0}, name = {0};
     bool has_ns = magic == M_CREATE_NS && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]);
@@ -646,7 +657,7 @@ static JSValue create_attribute(os64_dom_t *dom, JSContext *ctx, const os64_html
     d_string_free(dom, &name);
     d_string_free(dom, &ns);
     if (rec == NULL) return JS_EXCEPTION;
-    rec->document = document != window_document(dom) ? document : NULL;
+    rec->document = document;
     return JS_DupValue(ctx, rec->entry->value);
 }
 
@@ -844,6 +855,10 @@ static JSValue attributes_of(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     DValue *owner = d_find(dom, element);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
     if (d_more_peek(owner)->attributes != NULL) return JS_DupValue(ctx, d_more_peek(owner)->attributes->value);
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_EXCEPTION;
     DValueMore *more = d_more(dom, ctx, owner);
     if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx, (int)dom->named_map_class);
@@ -898,11 +913,12 @@ static DValue *map_receiver(JSContext *ctx, JSValueConst object)
  * trusted across page code: every use asks again, and the array is made
  * again when the answer is no. It is charged to the binding's budget; with
  * no room for it, the list is walked as it is. */
-static bool cursor_good(const os64_dom_t *dom, const os64_html_node_t *element)
+static bool cursor_good(os64_dom_t *dom, const os64_html_node_t *element)
 {
     const struct DAttrCursor *c = &dom->attr_cursor;
     return c->element == element && c->head == element->attrs &&
-           c->version == os64_html_version(dom->document) &&
+           c->document == os64_html_node_owner(element) &&
+           c->version == os64_html_version(c->document) &&
            (c->count == 0 || c->list[c->count - 1]->next == NULL);
 }
 
@@ -936,7 +952,8 @@ static bool cursor_for(os64_dom_t *dom, const os64_html_node_t *element)
     c->found = 0;
     c->element = element;
     c->head = element->attrs;
-    c->version = os64_html_version(dom->document);
+    c->document = os64_html_node_owner(element);
+    c->version = os64_html_version(c->document);
     return true;
 }
 

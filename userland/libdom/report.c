@@ -345,13 +345,13 @@ bool d_report_host(os64_dom_t *dom)
         return false;
     const os64_js_script_host_t host = {dom, host_exception, host_handled, host_rejected};
     os64_js_outcome_t outcome;
-    return os64_js_set_script_host(dom->runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK;
+    return os64_js_realm_set_script_host(dom->realm, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK;
 }
 
 void d_report_drain(os64_dom_t *dom)
 {
     os64_js_outcome_t outcome;
-    (void)os64_js_set_script_host(dom->runtime, OS64_JS_ABI_ID, NULL, &outcome);
+    (void)os64_js_realm_set_script_host(dom->realm, OS64_JS_ABI_ID, NULL, &outcome);
     while (dom->errors != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, true, NULL));
     while (dom->handled != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, false, NULL));
 }
@@ -588,7 +588,7 @@ static bool fire_event(os64_dom_t *dom, JSValue event, os64_js_outcome_t *outcom
 {
     bool cancelled = false;
     os64_js_outcome_t call;
-    os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->report_fire->value, JS_UNDEFINED, 1, &event, &cancelled, &call);
+    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->report_fire->value, JS_UNDEFINED, 1, &event, &cancelled, &call);
     fold(outcome, &call);
     return cancelled;
 }
@@ -629,7 +629,7 @@ void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_
 void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     while (dom->errors != NULL) {
         uint32_t script;
         JSValue error = pending_pop(dom, true, &script);
@@ -683,7 +683,7 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
                       os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     bool cancelled = false, muted = script_muted(dom, script);
     if (ctx != NULL && muted && !remember_muted(dom, ctx, promise)) dom->muted_forgotten = true;
     if (ctx != NULL && !muted && dom->options.modern && dom->rejection_event_prototype != NULL &&
@@ -729,7 +729,7 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
 static void handled_fire(os64_dom_t *dom, struct DPending *due, struct DPending *last, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     while (due != NULL) {
         if (JS_IsJobPending(dom->engine)) {
             last->next = dom->handled;
@@ -786,7 +786,7 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
         JSValue promise, reason;
         uint32_t script;
         while (!sticky(outcome->status) &&
-               os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason, &script)) {
+               os64_js_realm_take_rejection(dom->realm, OS64_JS_ABI_ID, &promise, &reason, &script)) {
             owed = true;
             unhandled(dom, promise, reason, point.source_name, script, outcome);
         }
@@ -826,12 +826,12 @@ void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outco
 {
     JSValue promise, reason;
     uint32_t script;
-    bool taken = os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason, &script);
+    bool taken = os64_js_realm_take_rejection(dom->realm, OS64_JS_ABI_ID, &promise, &reason, &script);
     if (!taken && dom->errors == NULL && dom->handled == NULL) return;
     /* The bracket's failures go after the script's own, so a rejection
      * after a script that threw is told to the host (options.failed). */
     os64_js_outcome_t begin, task = *outcome;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
         if (taken) {
             JS_FreeValueRT(dom->engine, promise);
             JS_FreeValueRT(dom->engine, reason);

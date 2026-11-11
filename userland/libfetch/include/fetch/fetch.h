@@ -431,6 +431,27 @@ void os64_fetch_forget_idle(void);
 // `http1`, or the line `http2 = off` is in net.conf on the config search
 // path, which is read once per process and turns it off for every fetch.
 
+// WHAT THIS PROCESS'S FETCHES HAVE COST THE WIRE since it started, every
+// fetch of every caller in it together. For a caller that wants to know
+// what one piece of work cost: read before, read after, subtract. The
+// numbers are not taken at one instant, so a fetch in the middle of
+// something as they are read may be in some and not yet in others.
+typedef struct {
+    // Connections made: dials whose handshake, if any, finished, by what
+    // the connection then spoke.
+    uint64_t connections_h1, connections_h2;
+    // TLS handshakes finished, and how many of them resumed a session kept
+    // from an earlier connection (no certificate chain sent or checked).
+    uint64_t handshakes, handshakes_resumed;
+    // Requests sent, by what carried them. One a fetch sent again (a
+    // retry, a redirect followed) is counted each time.
+    uint64_t requests_h1, requests_h2;
+    // Fetches that had to wait for a connection because every one they
+    // could use was busy or being dialled, and the time they waited in all.
+    uint64_t waits, wait_ms;
+} os64_fetch_counts_t;
+void os64_fetch_counts(os64_fetch_counts_t *out);
+
 // ── The calls ───────────────────────────────────────────────────────────
 
 // Dial, follow redirects, read the head. Returns NULL for no memory ONLY;

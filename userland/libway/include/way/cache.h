@@ -196,6 +196,10 @@ typedef struct {
     uint64_t stored;
 } way_cache_stats_t;
 void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out);
+// What this one has served, alone: `hits`, `confirmed` and `stale` as
+// above, read without looking at the directory, for a caller that asks
+// often. Any out may be NULL.
+void way_cache_served(way_cache_t *cache, uint64_t *hits, uint64_t *confirmed, uint64_t *stale);
 const char *way_cache_dir(way_cache_t *cache);
 
 // Removes every entry, and every companion. How many entries went.

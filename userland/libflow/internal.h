@@ -941,6 +941,18 @@ struct FBox {
     // children's resolve against. Neither holds until `def_known`.
     bool def_known;
     int64_t cb_h, def_h;
+    // A box with a ratio and no height of its own: the content height its
+    // ratio gives it from its width, held to its limits, which block()
+    // finds once the width is known and before the content is laid out
+    // (-1 from seed_heights until then, for any other box, and for a flex
+    // or grid item whose container may yet give it another height,
+    // height_set_later). Definite (CSS Sizing 4: a size the ratio transfers
+    // from a definite one is), so its children's percentages and its flex
+    // lines and grid tracks resolve against it. Where its automatic
+    // minimum, its content's height, is more, a flex or grid container
+    // takes that height (ratio_grown) and places its items against it once
+    // more; a block grows to it at its end.
+    int64_t ratio_h;
     // A flex item's width and left margin, as its container decided them
     // before laying it out (FLEX.md), which block() takes as given; its
     // line, counted from the first — a row's placing it again reads that,

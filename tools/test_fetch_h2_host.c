@@ -155,6 +155,7 @@ static struct {
     atomic_int hang_up_at_handshake;   // this many dials are hung up on as their handshake ends
     atomic_int refuse;                 // this many dials fail
     int handshake_ms;                  // how long its handshake takes
+    bool resumes;                      // its handshakes say they resumed a kept session
 } hosts[8];
 static int nhosts;
 
@@ -529,7 +530,7 @@ struct os64_tls_transport {
     int32_t handle;
     const char *alpn;
     os64_tls_status_t status;
-    bool closing;
+    bool closing, resumed;
 };
 static atomic_int tls_made, tls_freed, tls_released;
 static os64_tls_trust *const kTrust = (os64_tls_trust *)"trust";
@@ -550,6 +551,7 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     t->handle = h;
     t->alpn = offered ? answer : "http/1.1";
     t->status = OS64_TLS_OK;
+    t->resumed = at >= 0 && hosts[at].resumes;
     d->alpn = t->alpn;
     atomic_store(&d->tls, true);
     atomic_fetch_add(&tls_made, 1);
@@ -565,6 +567,8 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 {
     unsigned flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN;
+    if (t->resumed)
+        flags |= OS64_TLS_RESUMED;
     if (t->status == OS64_TLS_OK && peer_readable(t->handle, 0))
         flags |= OS64_TLS_RECV_PLAIN;
     return (os64_tls_state_t){.status = t->status, .flags = flags, .alpn = t->alpn, .version = 0x0304};
@@ -1931,6 +1935,113 @@ static void switch_off_cases(void)
     settle();
 }
 
+// ── What the fetches cost the wire (os64_fetch_counts) ──────────────────
+
+// What the counters have moved by since `then`, which is brought up to now.
+static os64_fetch_counts_t since(os64_fetch_counts_t *then)
+{
+    os64_fetch_counts_t now, by;
+    os64_fetch_counts(&now);
+    by = (os64_fetch_counts_t){
+        .connections_h1 = now.connections_h1 - then->connections_h1,
+        .connections_h2 = now.connections_h2 - then->connections_h2,
+        .handshakes = now.handshakes - then->handshakes,
+        .handshakes_resumed = now.handshakes_resumed - then->handshakes_resumed,
+        .requests_h1 = now.requests_h1 - then->requests_h1,
+        .requests_h2 = now.requests_h2 - then->requests_h2,
+        .waits = now.waits - then->waits,
+        .wait_ms = now.wait_ms - then->wait_ms,
+    };
+    *then = now;
+    return by;
+}
+
+static bool counted(os64_fetch_counts_t by, uint64_t c1, uint64_t c2, uint64_t hs, uint64_t resumed, uint64_t r1,
+                    uint64_t r2, uint64_t waits)
+{
+    bool same = by.connections_h1 == c1 && by.connections_h2 == c2 && by.handshakes == hs &&
+                by.handshakes_resumed == resumed && by.requests_h1 == r1 && by.requests_h2 == r2 && by.waits == waits;
+    if (!same)
+        fprintf(stderr, "counts moved by: connections %lu h1 %lu h2, handshakes %lu (%lu resumed), requests %lu h1 "
+                "%lu h2, %lu waits of %lu ms\n", (unsigned long)by.connections_h1, (unsigned long)by.connections_h2,
+                (unsigned long)by.handshakes, (unsigned long)by.handshakes_resumed, (unsigned long)by.requests_h1,
+                (unsigned long)by.requests_h2, (unsigned long)by.waits, (unsigned long)by.wait_ms);
+    return same && (waits != 0) == (by.wait_ms != 0);
+}
+
+static void counts_cases(void)
+{
+    static job_t j, held, second;
+    os64_fetch_counts_t then;
+    os64_fetch_counts(&then);
+
+    // HTTP/2: the first fetch makes a connection (one handshake) and sends
+    // a request; the second sends a request and makes nothing.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count2.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 1, 1, 0, 0, 1, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count2.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 0, 0, 0, 0, 1, 0));
+    settle();
+
+    // HTTP/1.1 under TLS, on a host whose handshakes resume: the same, by
+    // its own counters, and the handshake is counted as resumed. A plain
+    // http fetch makes a connection and no handshake.
+    begin();
+    int h1 = host_says("count1.test", "http/1.1", 0);
+    hosts[h1].resumes = true;
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count1.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 1, 0, 1, 1, 1, 0, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count1.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 0, 0, 0, 1, 0, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "http://plain.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 1, 0, 0, 0, 1, 0, 0));
+    settle();
+
+    // A FETCH THAT WAITS: the host is remembered as HTTP/2 and its
+    // handshake is slow, so a second fetch waits for the first's dial. One
+    // connection, two requests, one fetch that waited, and for some time.
+    begin();
+    int slow = host_says("countw.test", "h2", 0);
+    route("/page", R_REPLY, "200", kPage);
+    route("/held", R_HELD, "200", NULL);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://countw.test/page");
+    JOB_OK(&j);
+    fetch_pool_drain();
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    since(&then);
+    hosts[slow].handshake_ms = 200;
+    memset(&held, 0, sizeof(held));
+    memset(&second, 0, sizeof(second));
+    held.keep_open = true;
+    job_start(&held, "https://countw.test/held");
+    for (int i = 0; i < 200 && atomic_load(&ndials) < 2; i++)
+        nap_ms(2);
+    job_go(&second, "https://countw.test/page");
+    job_join(&held);
+    JOB_OK(&second);
+    CHECK(counted(since(&then), 0, 1, 1, 0, 0, 2, 1));
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
+    settle();
+}
+
 int main(void)
 {
     alarm(SECONDS_MOST);
@@ -1942,6 +2053,7 @@ int main(void)
         retry_cases();
         leaving_cases();
         pool_cases();
+        counts_cases();
         greeting_cases();
         identity_cases();
         difference_cases();

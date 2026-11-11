@@ -1305,8 +1305,15 @@ the style object and WPT all see it go with the switch.
   the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
   each column and is as tall as it is wide). A written `stretch` still
   stretches it down. Intrinsic widths follow a given height through the
-  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
-  box is booked.
+  ratio. The height a ratio gives a box from its width is definite
+  (`FBox.ratio_h`, found once the width is known and before the content
+  is laid out): a child's percentage height, a flex container's lines and
+  a grid's tracks resolve against it. Where the box's automatic minimum,
+  its content's height, is more, it is that tall instead — a flex or grid
+  container places its items again against it. A flex or grid item whose
+  container may yet stretch or flex it has none, as a stretched size is
+  not definite (FLEX.md, decision 1). A table's inner boxes take none,
+  as § 4.1 says, and a table's own box is booked.
 
 The two grammar laxities WPT exposed in passing are fixed too: a radial
 gradient's `at` is a full `<position>`, and each of `text-indent`'s
@@ -1658,11 +1665,10 @@ link yonder refused.
   parsed). It is freed with the page and charged to its caps; a change in
   it moves the page's version, so yonder rebuilds the page's model after
   that task.
-- **Which document a node belongs to** is the document its tree hangs
-  from; a detached tree's root's wrapper records the one it was made in,
-  copied from or last taken out of (`DValue.document`, written by
-  `d_made_in` and `d_leaving`). `ownerDocument` was the window's for every
-  node before.
+- **Which document a node belongs to** is native metadata, including for
+  detached roots that have never had a wrapper. Iframe F.2 separates this
+  mutable node document from physical allocation owner and immutable creation
+  realm. Adoption updates the former; wrapper lookup uses the latter.
 - **A document with no window**: `location` is null (assigning throws),
   it is cookie-averse, `write`/`writeln`/`open` throw InvalidStateError
   (a write would otherwise have reached the page's own parser), a link, a
@@ -1696,8 +1702,8 @@ link yonder refused.
 | Seam | What it is now |
 |---|---|
 | `os64_html_create_document`, `os64_html_create_doctype` | libhtml's: a second DOCUMENT node and a doctype in `doc`'s arena and mark; never inserted, charged until `doc` is freed |
-| `d_node_document`, `d_window_document` | the node's document (its tree's DOCUMENT root, else its root's record, else the window's), and whether that is the window's; while no document of its own exists, every node is the window's and neither walks |
-| `d_made_in`, `d_leaving` | the record written as a node is made or copied, and as a binding verb (`d_remove`, `d_replace`, `d_replace_content`) takes it out; only a wrapped node keeps one |
+| `d_node_document`, `d_window_document` | the native node-document record, and whether it is this binding's window Document |
+| `d_made_in`, `d_wrap_in` | establish a new node's native Document before exposing its wrapper; native adoption maintains it on later moves |
 | `d_connected`, `d_in_window_tree` | DOM's connected (isConnected, a `form` attribute's lookup, the controls and names collections), and the window's tree (a script's start) |
 | `d_scripting` | the page's scripting, for a node of the window's document: innerHTML's parse and serialization, insertAdjacentHTML's parse |
 | `yonder_scripts_address` | a `javascript:` link's code queued as a classic script (`MODE_ADDRESS`, no element) |

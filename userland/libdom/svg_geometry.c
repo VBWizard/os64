@@ -37,6 +37,7 @@ static JSValue contains(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     if(!d_svg_geometry_node(n))return JS_ThrowTypeError(ctx,"Expected SVG geometry");
     double p[4];if(d_point_dictionary(ctx,argc?argv[0]:JS_UNDEFINED,p)<0)return JS_EXCEPTION;
     if(!isfinite(p[0])||!isfinite(p[1]))return JS_FALSE;
+    dom=d_owner(dom,n);
     if(!dom->svg_hit)return d_error(ctx,"InvalidStateError","No SVG geometry provider");
     if(cancelled(dom))return d_error(ctx,"InvalidStateError","SVG query requires a live script budget");
     os64_geometry_memory_t memory={dom,d_canvas_allocate,d_canvas_release};

@@ -90,12 +90,19 @@ os64_page_state_group_t *os64_page_state_group_create(size_t max_bytes)
     if (g) { g->bytes = g->peak = sizeof(*g); g->limit = max_bytes; }
     return g;
 }
-bool os64_page_state_group_add(os64_page_state_group_t *g, os64_page_state_t *state)
+bool os64_page_state_group_check(os64_page_state_group_t *g, os64_page_state_t *state)
 {
     if (!g || !state || state->group || state->private_owner || state->models ||
         state->bytes > g->limit - g->bytes) return false;
     for (os64_page_state_t *s = g->first; s; s = s->group_next)
-        if (s->doc == state->doc || !os64_html_same_group(s->doc, state->doc)) return false;
+        if (s->doc == state->doc) return false;
+    return true;
+}
+bool os64_page_state_group_add(os64_page_state_group_t *g, os64_page_state_t *state)
+{
+    if (!os64_page_state_group_check(g, state)) return false;
+    for (os64_page_state_t *s = g->first; s; s = s->group_next)
+        if (!os64_html_same_group(s->doc, state->doc)) return false;
     if (g->last) g->last->group_next = state; else g->first = state;
     g->last = state;
     state->group = g;

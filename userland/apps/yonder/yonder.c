@@ -2790,9 +2790,67 @@ static void diag_cookies_short(yonder_diag_t *d, const way_cookies_short_t *s)
     yonder_diag_failed_most(d, "cookies", message, (uint32_t)s->left);
 }
 
+// What libfetch's counters and the cache's read, in the order the record
+// keeps them as its marks.
+static void wire_read(uint64_t v[YONDER_DIAG_MARKS])
+{
+    v[8] = v[9] = v[10] = 0;
+    if (g.cache != NULL)
+        way_cache_served(g.cache, &v[8], &v[9], &v[10]);
+    os64_fetch_counts_t c;
+    os64_fetch_counts(&c);
+    v[0] = c.connections_h1;
+    v[1] = c.connections_h2;
+    v[2] = c.handshakes;
+    v[3] = c.handshakes_resumed;
+    v[4] = c.requests_h1;
+    v[5] = c.requests_h2;
+    v[6] = c.waits;
+    v[7] = c.wait_ms;
+}
+_Static_assert(YONDER_DIAG_MARKS == 11, "the record keeps one mark for each number read here");
+
+// WHAT THE LOAD HAS COST THE WIRE SO FAR, and what the cache spared it:
+// libfetch's counters and the cache's now, less what they read when the
+// load began (diag_begin). They count every fetch this yonder made in that
+// time, which is this page's and, where another page was still loading
+// beside it, that one's too. Nothing here is the page's content, so a
+// replay does not compare it.
+static void diag_wire(yonder_diag_t *d)
+{
+    if (d == NULL)
+        return;
+    uint64_t then[YONDER_DIAG_MARKS], now[YONDER_DIAG_MARKS];
+    yonder_diag_marks(d, then);
+    wire_read(now);
+    for (int i = 0; i < YONDER_DIAG_MARKS; i++)
+        now[i] -= then[i];
+    char v[160];
+    os64_snprintf(v, sizeof(v), "%lu made (%lu HTTP/1.1, %lu HTTP/2)", (unsigned long)(now[0] + now[1]),
+                  (unsigned long)now[0], (unsigned long)now[1]);
+    yonder_diag_fact(d, "wire connections", v);
+    os64_snprintf(v, sizeof(v), "%lu (%lu resumed)", (unsigned long)now[2], (unsigned long)now[3]);
+    yonder_diag_fact(d, "wire TLS handshakes", v);
+    os64_snprintf(v, sizeof(v), "%lu sent (%lu HTTP/1.1, %lu HTTP/2)", (unsigned long)(now[4] + now[5]),
+                  (unsigned long)now[4], (unsigned long)now[5]);
+    yonder_diag_fact(d, "wire requests", v);
+    os64_snprintf(v, sizeof(v), "%lu fetches waited for a connection, %lu ms in all", (unsigned long)now[6],
+                  (unsigned long)now[7]);
+    yonder_diag_fact(d, "wire waits", v);
+    // An answer the cache gave whole cost the wire nothing, and one it
+    // confirmed cost a request and no body: a load to be measured against
+    // another needs these to be the same in both.
+    os64_snprintf(v, sizeof(v), "%lu answered whole, %lu confirmed by the server, %lu served stale",
+                  (unsigned long)now[8], (unsigned long)now[9], (unsigned long)now[10]);
+    yonder_diag_fact(d, "wire cache", v);
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    uint64_t marks[YONDER_DIAG_MARKS];
+    wire_read(marks);
+    yonder_diag_marks_set(d, marks);
     // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
     // (REPLAY.md § 3): the agent first; the clock and its zone (the agent,
     // the cookies, the clock and the zone are what make a record version
@@ -3536,6 +3594,7 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
+    diag_wire(d);
     diag_census(p, false);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
@@ -3659,6 +3718,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    diag_wire(p->diag);
     diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
                   (unsigned long)laid_ms);

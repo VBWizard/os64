@@ -53,6 +53,7 @@ static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         return JS_NewString(ctx, node->name != NULL ? node->name : "");
     }
     if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Creation requires a document");
+    dom = d_owner(dom, node);
     int needed = magic == C_PI ? 2 : 1;
     if (argc < needed) return JS_ThrowTypeError(ctx, "Missing argument");
     /* The arguments converted first, in order, as WebIDL converts them. */
@@ -88,9 +89,7 @@ static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     d_string_free(dom, &second);
     if (!JS_IsUndefined(result)) return result;
     if (made == NULL) return d_html_error(ctx, status);
-    /* Wrapped first, so d_made_in has a wrapper to record the document on. */
-    JSValue value = d_wrap(dom, ctx, made);
-    if (!JS_IsException(value)) d_made_in(dom, made, node);
+    JSValue value = d_wrap_in(dom, ctx, made, node);
     return value;
 }
 

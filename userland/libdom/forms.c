@@ -124,6 +124,7 @@ static JSValue forms_member(JSContext *ctx, JSValueConst this_value, int argc, J
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, this_value);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;

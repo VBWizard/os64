@@ -58,6 +58,7 @@ static JSValue from_point(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     }
     const os64_html_node_t *few[64], **out = few;
     size_t count = 0;
+    dom = d_owner(dom, root);
     bool window = os64_html_shadow_including_root(root) == dom->document->document;
     if (window && dom->hit != NULL) {
         /* Each ask's cost is its own and both are charged: the first is the

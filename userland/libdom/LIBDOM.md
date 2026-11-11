@@ -12,33 +12,51 @@ adds `document.write`, which is the host's parser's (§ `document.write`).
 
 ## Ownership and calls
 
-`include/dom/dom.h` is the public native contract. Creation borrows a fresh,
-idle runtime, a finished document and that document's page state. One binding
-belongs to one runtime. The host grants console output separately through
-`os64_js_install_output`; the binding grants no filesystem or network access.
+`include/dom/dom.h` is the public native contract. The legacy constructor
+borrows a fresh idle runtime, a finished document and its page state. It
+installs one binding in the primary realm. Explicit clusters admit up to 65
+bindings in distinct libjs realms of one runtime and own their admitted
+documents/states. The host grants console output separately; bindings grant
+no filesystem or network access. Yonder uses the legacy constructor.
 
-Callbacks capture a private anchor object through function data. Runtime and
-context opaque slots belong to libjs and are untouched. Binding translation
-units check their compiled-in ABI identity before entering the engine. Class
-IDs come from `os64_js_class_id` and are registered in each runtime.
+Callbacks capture a private anchor through function data. Runtime and context
+opaque slots belong to libjs. Class definitions are registered per runtime;
+prototypes, constructors and anchors are installed per realm. Callbacks check
+context membership and retain their defining binding. Receiver operations
+resolve the node's current document separately, including after conversions
+that can run script. Nested calls share the enclosing runtime task budget.
 
-The wrapper table maps native node identities to strongly held engine values.
-Looking up a node returns its existing wrapper, retaining expandos across GC,
-detachment, reinsertion and model rebuilds. The host drains every value held
-by C through the binding registry. Engine-owned properties and function data
-follow the engine's reference graph. Finalizers clear engine opaque pointers;
-the native ledger owns native storage.
+The cluster wrapper cache maps a native node to one strongly retained JS
+object. Native creation metadata selects its prototype realm even when its
+first wrapper is made after adoption. Moving nodes preserves wrapper identity,
+listeners, custom definitions and physical allocation charges. Control state
+moves transactionally; geometry, document, image, style and damage services
+use the current document. Mutation observers share one creation-order registry;
+custom elements share one reaction stack and backup queue. Definitions remain
+per realm. Aggregate HTML, page, DOM, kept-body and Canvas caps supplement the
+existing local caps; counters include headers and retained backing.
 
-Retire the page and its queued work before calling `os64_dom_drain` outside
-JavaScript. Drain is idempotent and also works after a sticky libjs failure.
-Then destroy the runtime, free the binding's native ledger, release models
-and control state, and finally free the document. Native data survives engine
-finalizers. A failed constructor can leave partial engine registration; it
-clears native opaque pointers and retained values, and the host destroys that
-runtime without evaluating more source. The idle custom installer cannot
-distinguish engine-cap exhaustion from host allocation failure; it consumes
-the pending exception and reports construction failure. Evaluation's limit
-classification belongs to the guarded libjs operation.
+For an explicit admission, `consumed == false` leaves document/state ownership
+with the caller. Once installation begins, failure consumes them, poisons the
+cluster and drains its bindings. Destroy the shared runtime and free the
+cluster; child-only rollback and independent retirement are not implemented.
+Public individual drain/free calls do nothing for explicit-cluster members.
+
+Stop host deliveries, drain the cluster, destroy its runtime once, release
+layout borrowers, then free the cluster. Native records and allocation-owner
+descriptors survive finalizers and all native sweeps. Document records remain
+arena-owned while detached nodes may name them; this does not pin ordinary
+fragment churn. Retired animation data uses a shared generation and the oldest
+borrowing host. Provider opaque storage must survive through drain.
+
+The legacy sequence remains drain, runtime destruction, native binding free,
+then state/document release; layout borrowers must be gone before native free.
+A failed legacy installation can leave engine registration, so destroy that
+runtime without evaluating further source. Explicit installation runs through
+a guarded realm task. These ownership APIs do not implement an origin gate;
+only the trusted native fixtures exchange raw realm references. See
+[the F.2 contract](../../docs/design/pending/IFRAME_F2_OWNERSHIP.md) and
+[validation](../../docs/design/pending/IFRAME_F2_BINDINGS_VALIDATION.md).
 
 ## Objects and collections
 
@@ -591,14 +609,12 @@ keeps its identity, wrapper, expandos and listeners: that is what
 adoption does here. It is freed with the page and charged to its caps, as
 a fragment is.
 
-**Which document a node belongs to** is the document its tree hangs from;
-a tree that hangs from none remembers the document it was made in, copied
-into, adopted by or last taken out of, on its root's wrapper
-(`DValue.document`, written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
-innerHTML replaced, never handed to a script) says nothing and reads as
-the window's: a script reaches it only through a descendant it held
-before. While no document of its own exists, every node is the window's
-and none of this runs.
+**Which document a node belongs to** comes from native node metadata,
+including detached nodes that have never had wrappers. Adoption changes
+this association and preserves the immutable creation realm. Additional
+Document roots and their inert template Documents stay arena-owned until
+teardown; this uses no snapshot pin and does not prevent detached children
+from reclaiming. The wrapper table supplies stable JavaScript identity.
 
 **`importNode(node, deep)` and `adoptNode(node)`** (Modern Web members of
 Document) are the explicit doors to the same record. importNode is

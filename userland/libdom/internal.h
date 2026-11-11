@@ -219,6 +219,8 @@ typedef struct DValueMore {
     bool output_default_set;
     /* A document's DOMImplementation, made when first asked for. */
     DValue *implementation;
+    /* Stable definition, even after adoption into another registry. */
+    struct DDefinition *custom_definition;
 } DValueMore;
 /* A wrapper, or another engine value the binding holds strongly: the
  * members an entry of any kind is likely to use, among them a node's
@@ -236,11 +238,6 @@ struct DValue {
     /* An Attr's own entry: its record (attr.c). Here and not in the
      * DValueMore because every Attr's entry has one. */
     struct DAttr *attr;
-    /* The document the node was made in, copied from or last taken out of,
-     * when that is not the window's (implementation.c); NULL is the
-     * window's. Read only while the node is the root of a tree no document
-     * holds (d_node_document). */
-    const os64_html_node_t *document;
     /* Made by d_more, freed with the entry; NULL until then. */
     DValueMore *more;
     /* What kind of document a document's entry is (D_DOCUMENT_*). */
@@ -285,6 +282,7 @@ struct DQuery {
     const os64_html_node_t **nodes;
     size_t count;
     uint64_t version;
+    os64_html_document_t *observed_document;
     uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
     /* A NodeList (as_node_list): its entries are reached by index alone,
@@ -298,6 +296,7 @@ struct DQuery {
  * removed record keeps its place until no dispatch can be walking it. */
 struct DListener {
     DListener *next;
+    os64_dom_t *owner, *callback_owner;
     JSValue callback;
     char *type;
     /* Handler slots only: the content attribute's text when last looked at
@@ -358,8 +357,32 @@ void d_pointer_drain(os64_dom_t *);
 int d_event_in_task(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_dom_event_t *,
                     bool *, os64_js_outcome_t *);
 
+/* Installation in an explicit realm; the caller keeps the document/state.
+ * Runtime class registration refuses duplicate binding installation. */
+os64_dom_t *d_create_in_realm(os64_js_runtime_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
+#define D_REALMS 65
+struct os64_dom_cluster {
+    os64_js_runtime_t *runtime;
+    os64_html_group_t *html;
+    os64_page_state_group_t *page;
+    os64_dom_cluster_limits_t limits;
+    size_t bytes, kept_bytes, canvas_bytes, count;
+    os64_dom_t *members[D_REALMS];
+    DValue *buckets[D_BUCKETS];
+    struct DObservers *observers;
+    struct DCustomAgent *custom_agent;
+    size_t dispatching;
+    uint64_t effect_generation, animation_serial;
+    bool sweep_pending;
+    bool poisoned, drained;
+};
+
 struct os64_dom {
     os64_js_runtime_t *runtime;
+    os64_js_realm_t *realm;
+    os64_dom_cluster_t *cluster;
     JSRuntime *engine;
     os64_html_document_t *document;
     os64_page_state_t *state;
@@ -445,6 +468,7 @@ struct os64_dom {
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
     struct DAttrCursor {
+        os64_html_document_t *document;
         const os64_html_node_t *element;
         const os64_html_attr_t *head;
         const os64_html_attr_t **list;
@@ -500,7 +524,9 @@ struct os64_dom {
     uint32_t timer_id, timer_nesting;
     /* HTML's click-in-progress flags, one link per element.click() on the
      * C stack (window.c); and a form's firing-submission-events flags, one
-     * link per form whose validation or submit event is running. */
+     * link per form whose validation or submit event is running. These
+     * chains belong to the nodes' creation binding so adoption cannot
+     * bypass an active flag. */
     const struct DClicking *clicking, *submitting;
     DScript *scripts[64];
     char *url;
@@ -687,6 +713,7 @@ struct os64_dom {
     size_t wa_count;
     struct DWaEffect *wa_fx_first;      /* every KeyframeEffect, for the drain */
     uint64_t wa_serial, wa_generation, wa_last_step;
+    uint64_t wa_borrowed_floor; /* oldest cluster epoch still borrowed by this host */
     double wa_time, wa_face;
     bool wa_sampled, wa_wanted, wa_stepped, wa_running, wa_index_stale;
     bool wa_replace_check;              /* one finished or an effect moved: the next step looks for replaced ones */
@@ -827,6 +854,11 @@ JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * names an Attr when the value is one, which is a Node with no place in the
  * tree. */
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* Current document services, distinct from wrapper allocation/creation owner.
+ * The node must already have passed a brand and cluster-membership check. */
+os64_dom_t *d_owner(os64_dom_t *, const os64_html_node_t *);
+os64_dom_t *d_creation_owner(os64_dom_t *, const os64_html_node_t *);
+bool d_same_cluster(const os64_dom_t *, const os64_dom_t *);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
@@ -1316,9 +1348,7 @@ int d_subtle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSVal
  * DOMImplementation's prototype, which every page has (classic), and the
  * DocumentType members. */
 int d_implementation_classic(os64_dom_t *dom, JSContext *ctx);
-/* A node's node document: a document itself; else the document its tree
- * hangs from; else, for a tree no document holds, the one it was made in
- * or last left (its root's record), the window's when there is none. */
+/* Native current Document, including unwrapped and detached nodes. */
 const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node);
 /* Whether a node's node document is the window's: a node of a document
  * with no window navigates, submits and takes focus nowhere, compiles no
@@ -1328,12 +1358,10 @@ bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
  * scripting, for a node of the window's document. What a fragment parse and
  * a serialization read `noscript` by. */
 bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node);
-/* A verb is about to take `node` out of its tree: its record says which
- * document it leaves, for when it is a root. */
-void d_leaving(os64_dom_t *dom, const os64_html_node_t *node);
-/* A node made for, or copied from a node of, `document`: its record says
- * so, the window's leaving none. */
-void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+/* Initialize a new detached node's native Document before exposure. */
+int64_t d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+JSValue d_wrap_in(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_html_node_t *);
+int d_document_templates(os64_dom_t *, JSContext *, const os64_html_node_t *);
 /* The kind of document `node` is (D_DOCUMENT_*); a node that is no
  * document is the window's kind. */
 int d_document_type(os64_dom_t *dom, const os64_html_node_t *node);
@@ -1939,6 +1967,15 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
  * fragment's (createContextualFragment). 0, or -1 with an exception
  * pending. */
 int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root);
+/* Borrowed native transaction scope; mutations publish without entering JS. */
+typedef struct DAdopting {
+    struct DAdopting *previous;
+    const os64_html_node_t *first, *from, *to;
+    size_t count;
+} DAdopting;
+void d_adopting_begin(os64_dom_t *, DAdopting *, const os64_html_node_t *, const os64_html_node_t *);
+void d_adopting_end(os64_dom_t *, DAdopting *);
+void d_custom_changed(os64_dom_t *, const os64_html_change_t *);
 /* adoptNode moved `root`'s tree from document `from` to `to`: each custom
  * element in it is owed an adoptedCallback. */
 void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,

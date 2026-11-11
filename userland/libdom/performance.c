@@ -395,7 +395,8 @@ enum { O_UNSET, O_SINGLE, O_MULTIPLE };
  * observe()'s options that outlives the call here), its observer type,
  * and whether its next callback is told droppedEntriesCount. */
 typedef struct {
-    JSValue callback;
+    /* The timeline and observer registry belong to the constructor realm. */
+    JSValue anchor, callback;
     JSValue *entries;
     uint32_t count, cap, script;
     uint8_t mode, kinds;
@@ -418,6 +419,7 @@ static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
+    JS_FreeValueRT(rt, o->anchor);
     JS_FreeValueRT(rt, o->callback);
     values_free(rt, o->entries, o->count);
     js_free_rt(rt, o);
@@ -427,6 +429,7 @@ static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
+    JS_MarkValue(rt, o->anchor, mark);
     JS_MarkValue(rt, o->callback, mark);
     for (uint32_t i = 0; i < o->count; i++) JS_MarkValue(rt, o->entries[i], mark);
 }
@@ -1249,6 +1252,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
+    o->anchor = JS_DupValue(ctx, dom->anchor->value);
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
     JS_SetOpaque(object, o);
@@ -1415,9 +1419,9 @@ void d_performance_loaded(os64_dom_t *dom, os64_js_outcome_t *outcome)
         if (o != NULL && (o->kinds & (1u << K_NAVIGATION)) != 0) wanted = true;
     }
     if (!wanted) return;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "navigation timing", outcome) != OS64_JS_OK) return;
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, "navigation timing", outcome) != OS64_JS_OK) return;
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx != NULL && (queue_room(dom, ctx, K_NAVIGATION) < 0 ||
                         queue_entry(dom, ctx, dom->navigation_entry->value, K_NAVIGATION) < 0))
         report_pending(dom, ctx, D_SCRIPT_PAGE);
@@ -1442,6 +1446,8 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
     DObserver *o = JS_GetOpaque(self, os64_js_class_id(&observer_slot));
     if (o == NULL) return JS_ThrowTypeError(ctx, "Expected a PerformanceObserver");
+    dom = d_callback(ctx, &o->anchor, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
     if (magic == O_OBSERVE) return observe(dom, ctx, self, o, argc, argv) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     /* takeRecords() answers the buffer in the order queued; disconnect()
      * empties it, and forgets the types observed. */

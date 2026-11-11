@@ -45,6 +45,8 @@ struct DKept {
 static bool charge(os64_dom_t *dom, size_t n)
 {
     if (n > dom->options.max_body_bytes || dom->body_bytes > dom->options.max_body_bytes - n) return false;
+    if (dom->cluster && n > dom->cluster->limits.kept_bytes - dom->cluster->kept_bytes) return false;
+    if (dom->cluster) dom->cluster->kept_bytes += n;
     dom->body_bytes += n;
     return true;
 }
@@ -52,6 +54,7 @@ static bool charge(os64_dom_t *dom, size_t n)
 static void uncharge(os64_dom_t *dom, size_t n)
 {
     dom->body_bytes -= n;
+    if (dom->cluster) dom->cluster->kept_bytes -= n;
 }
 
 /* Memory for a body, charged: NULL when the bound or the process refuses. */
