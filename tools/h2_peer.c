@@ -587,7 +587,7 @@ bool peer_preface(int timeout_ms)
 
 bool peer_frame(h2_frame_header_t *header, const uint8_t **payload, int timeout_ms)
 {
-    static uint8_t held[1u << 20];
+    static _Thread_local uint8_t held[1u << 20];     // each server thread's own: the payload outlives the lock
     pthread_mutex_lock(&mu);
     bool ok = have(H2_FRAME_HEADER_LEN, timeout_ms);
     if (ok) {

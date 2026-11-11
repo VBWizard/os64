@@ -400,6 +400,7 @@ static int do_fields(void)
                                                  .identity = true};
     static const http_request_extras_t kOneCookie = {.extra_headers = "Cookie: only=one\r\n"};
     static const http_request_extras_t kOddCookie = {.extra_headers = "Cookie: a=1;b=2;  c=3;\r\n"};
+    static const http_request_extras_t kGapCookie = {.extra_headers = "Cookie: a=1;; b=2; ;c=3\r\n"};
     fields_against_text("no extras", "https://example.test/", &kPlain);
     fields_against_text("a NULL extras", "https://example.test/path?q=1", NULL);
     fields_against_text("a browser's", "https://example.test/page", &kBrowser);
@@ -407,6 +408,7 @@ static int do_fields(void)
     fields_against_text("a named method", "https://example.test/thing", &kNamed);
     fields_against_text("one cookie", "https://example.test/", &kOneCookie);
     fields_against_text("cookies oddly spaced", "https://example.test/", &kOddCookie);
+    fields_against_text("cookies with nothing between two semicolons", "https://example.test/", &kGapCookie);
     fields_against_text("a port in the authority", "https://example.test:8443/", &kBrowser);
 
     // Spelled out once, so the comparison above is not the only witness.

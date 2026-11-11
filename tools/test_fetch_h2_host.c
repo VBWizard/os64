@@ -635,6 +635,15 @@ static void *job_run(void *x)
     return NULL;
 }
 
+// A fetch that should have ended whole: when it did not, how it ended.
+#define JOB_OK(j)                                                             \
+    do {                                                                      \
+        if ((j)->ended != OS64_FETCH_OK)                                      \
+            fprintf(stderr, "%s:%d: %s ended %s: %s\n", __FILE__, __LINE__, (j)->url,                 \
+                    os64_fetch_status_name((j)->ended), (j)->reason);        \
+        CHECK((j)->ended == OS64_FETCH_OK);                                   \
+    } while (0)
+
 static void job_start(job_t *j, const char *url)
 {
     j->url = url;
@@ -849,7 +858,7 @@ static void sharing_cases(void)
     atomic_store(&release_held, true);
     for (int i = 0; i < 3; i++) {
         job_read(&jobs[i]);
-        CHECK(jobs[i].ended == OS64_FETCH_OK);
+        JOB_OK(&jobs[i]);
         os64_fetch_close(jobs[i].f);
     }
     settle();
@@ -872,7 +881,7 @@ static void sharing_cases(void)
     atomic_store(&release_held, true);
     for (int i = 0; i < 3; i++) {
         job_read(&jobs[i]);
-        CHECK(jobs[i].ended == OS64_FETCH_OK);
+        JOB_OK(&jobs[i]);
         os64_fetch_close(jobs[i].f);
     }
     settle();
@@ -1028,8 +1037,18 @@ static void retry_cases(void)
     brief->fields[0][1] = "10";
     route("/open204", R_OPEN, "204", NULL);
     route("/held", R_HELD, "200", NULL);
+    route_t *late = route("/408", R_REPLY, "408", "too slow");
+    late->fields[0][0] = "x-seen";
+    late->fields[0][1] = "yes";
     memset(&j, 0, sizeof(j));
     job_go(&j, "https://words.test/warm");
+    // A 408 ON A JOINED CONNECTION is an answer like any other: HTTP/1.1's
+    // "the server timed the idle connection out" has no meaning on a
+    // connection whose reader has watched it the whole time.
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://words.test/408");
+    CHECK(j.ended == OS64_FETCH_OK && j.http_status == 408 && strstr(j.heard, "x-seen: yes") != NULL &&
+          strstr(j.reason, "retried") == NULL && j.body_len == 8);
     memset(&j, 0, sizeof(j));
     job_go(&j, "https://words.test/cancelled");
     CHECK(j.status == OS64_FETCH_REQUEST_FAILED && strstr(j.reason, "the server reset the stream: CANCEL") != NULL &&

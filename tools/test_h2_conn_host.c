@@ -115,6 +115,10 @@ static h2_result_t fetch_get(fetch_t *f, h2_conn_t *c, const char *path)
 static h2_result_t fetch_head(fetch_t *f)
 {
     f->head[0] = '\0';
+    // A stream that was never opened has no head: the case's CHECK says
+    // where, which a crash here would not.
+    if (f->stream == NULL)
+        return H2_FAILED;
     return h2_stream_head(f->stream, &f->wait, note_field, f);
 }
 
