@@ -1764,7 +1764,7 @@ checks in nine groups of cases. The peer's stand-in for the TLS engine
 numbers its records and refuses a second thread inside it, so the out
 queue's order and the one-lock rule are things a case can fail; its
 clock is the host's plus what a case skips, so thirty seconds of write
-patience take no time. `tools/test_h2_conn_mutants.py` is 115 deliberate
+patience take no time. `tools/test_h2_conn_mutants.py` is 121 deliberate
 breaks, one rule each. The first run through `tools/mutants_parallel.py`,
 of the 102 written before the cold read, caught 82; the other twenty
 were eight that did not compile as written and twelve the harness
@@ -1810,6 +1810,28 @@ at least one mutant, all caught:
   its fetch leaves and has no window to overflow.
 - **Two content-lengths that differ** are a malformed head (RFC 9110
   § 8.6), as they are for HTTP/1.1 in `http.c`; two that agree are one.
+
+Its second round found four:
+
+- **What the engine owes of its own accord has the ceiling too.** A
+  KeyUpdate's answer is ciphertext no frame of ours asked for; a peer
+  that asks for them at a socket that takes nothing is ended at the same
+  `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Content where none may be resets the stream** (`H2_END_BAD_LENGTH`):
+  a HEAD's response, a 204 and a 304 (RFC 9110 § 6.4.1). `bodiless` had
+  only excused the content-length; `no_content`, decided at the final
+  head, also refuses DATA that carries a byte. An empty DATA frame with
+  END_STREAM is how such a stream is meant to end.
+- **A receive buffer read empty is freed once it has grown past
+  64 KiB.** The window its bytes held goes back to the peer when they
+  are read, so a buffer kept at its high-water mark is memory held twice
+  over: a server filling each of 64 streams in turn could hold the
+  stream window 64 times against one connection window.
+  `h2_conn_buffered` says what the buffers are allocated to hold.
+- **A signal does not start the write patience again.** A patient write
+  that is interrupted having moved nothing stamps the refusal as a
+  timeout does, so the thirty seconds are counted from the first attempt
+  that moved nothing.
 No QEMU and no P5 pass: nothing here is reachable in the guest.
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
