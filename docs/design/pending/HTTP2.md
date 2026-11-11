@@ -2263,6 +2263,100 @@ The offer in the shipped library, the greeting per preset, the head's
 Spreading streams over duplicate connections, a PING ahead of a request,
 and h2 through a proxy: § 2.10.
 
+#### H2.6, as built (2026-11-11, Fable)
+
+libfetch's pool shares one HTTP/2 connection among fetches, a fetch runs
+on a stream, and `/tests/h2probe` fetches from a real h2 server in the
+guest. The shipped library still offers `http/1.1` alone. Where the build
+departs from the brief, or says more than it did:
+
+- **libfetch.so exports every symbol it defines.** The brief, and the
+  as-built notes of H2.3 and H2.4, said the library hid its symbols; it
+  does not, and those notes are corrected. `fetch_h2_offer` is declared
+  with hidden visibility and is the one symbol the shared library does
+  not export, which is what makes "a program linked against the library
+  cannot turn h2 on" true.
+- **An HTTP/1.1 harness links HTTP/2 stand-ins that abort**
+  (tools/h2_absent.c). The five harnesses that script h1 alone never set
+  the offer, so each stand-in is a call that cannot happen, and their
+  passing is the proof that with the offer off libfetch does nothing of
+  HTTP/2's.
+- **The h2 cases are a harness of their own**, tools/test_fetch_h2_host.sh,
+  and not a second world inside test_fetch_host.c: that harness is one
+  thread with its own clock, and a connection's reader is a thread. Each
+  dial gets a server thread; what a server says is a table of routes; a
+  case is client code. tools/h2_peer.c serves twenty-four connections
+  (its state moved into a wire apiece), and the wire a case speaks for
+  is the calling thread's own.
+- **The dead hook strikes; `fetch_pool_dialled_h2` never restores.** The
+  brief had publication check that the connection was still in the
+  table. As built there is nothing to check: publication only records
+  the `h2` and the facts on a record the dialler holds, and a record the
+  reader struck during adoption stays struck.
+- **The pool gained four small questions**: `fetch_pool_h2` (the
+  connection a fetch opens its stream on), `fetch_pool_tls_facts` (the
+  version and the resumed bit, for a fetch that joined), and for the
+  probe and the harness `fetch_pool_closing` and `fetch_pool_h2_stats`.
+- **`fetch_pool_evict_one` evicts HTTP/1.1 connections alone.** It
+  exists for a dial refused for want of a handle, and an HTTP/2
+  connection's handle is not free until its reader looks.
+- **A lost ring is covered by the look.** A waiter in the pool's queue
+  looks up every second (`FETCH_POOL_LOOK_MS`), so a ring lost at a
+  connection's death or at room gained costs up to a second and no
+  more. No case can tell the two apart without timing a wait, and the
+  mutants that drop those two rings were struck from the set.
+- **A wait for a dial's verdict looks up too.** A fetch waiting on a
+  dial to a key remembered as h2 asks again every second like any
+  waiter, so a dial that answers HTTP/1.1 costs it a ring's delay at
+  most.
+- **`detail.h2` is set whenever the hop that ended the fetch was
+  HTTP/2**, mid-body as well as before the head; the brief listed the
+  field without saying when. A mid-body silence had read its idle limit
+  off a transport the fetch never opened until it was.
+- **Bodiless replies are not waited on.** A HEAD's answer, a 204, a 205
+  and a 304 read as zero bytes at once, as HTTP/1.1's do, whether the
+  server has ended the stream or not; closing the stream resets what
+  the server left open.
+- **The request's fields are capped at 256** (`FETCH_H2_FIELDS`), and
+  their bytes at the size of the text request's buffer. A request past
+  either is the same REQUEST_FAILED sentence as a text request that does
+  not fit.
+- **Every HTTP/2 fetch holds a bell.** Under HTTP/1.1 only a fetch that
+  queued for a connection made one; under HTTP/2 every wait on a stream
+  is on the fetch's bell, so each fetch in flight holds one handle of
+  its task's sixty-four. `h2probe` is capped at sixteen fetches for
+  that: thirty-two, each with a thread's handle too, ran it out.
+- **`h2probe --fixture`** verifies the server against libtls's test root,
+  so a local `nghttpd` holding the fixture certificate (`example.test`)
+  serves it with no change to the guest's store.
+
+Proof. tools/test_fetch_h2_host.sh: 318 checks, under ASan/UBSan and
+under TSan. tools/test_http_host.sh: the text request unchanged for every
+case it had, and the field list checked against the text of the same
+request, line for line. tools/test_fetch_transport_host.sh: the release
+verb. The HTTP/1.1 harnesses (fetch, pool, way, os64get) pass as they
+did. tools/test_fetch_h2_mutants.py: 74 deliberate breaks, all caught;
+the first run caught 56 of 77, and of the rest three were struck as
+above (two lost rings, and `TE`, which the composer never emits), five
+were missed and each got a case or a stronger one, and the others had
+not compiled or had not run. Two faults of the HARNESS were found on
+the way and fixed: `peer_frame` handed every server thread one static
+buffer, which dropped a request about once in ten runs under load, and
+a case that had allowed "one to three" dials now holds the handshake
+open so that it is three.
+
+In the guest, QEMU, headless, against `nghttpd` on the workstation
+through slirp, on the e1000 and on virtio alike:
+
+| Run | Result |
+|---|---|
+| `h2probe --fixture URL 6` | PASS: one HTTP/2 connection carried the first fetch and six at once |
+| `h2probe --cold --fixture URL 6` | PASS: the burst dialled six connections, all HTTP/2 (§ 2.2's first visit) |
+| `h2probe --fixture URL 16` | PASS: one connection, sixteen at once |
+
+Each fetch read the same 240,000 bytes. (Timings under TCG say nothing
+about the P5 and are not recorded.)
+
 ### H2.5 — The switch (brief when its turn comes)
 
 Contracts: § 2.1 (the offer, and who offers), § 2.7 (one model, two

@@ -289,10 +289,12 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
             if (wait_now)
                 waiter_add(wait);
         } else {
-            // A slot to dial in. An idle connection never makes this fetch
-            // wait for one: at the key's cap the key's own (which this fetch
-            // may not take, or it would have above), and with the table
-            // full the least recently kept of any key, is closed for it.
+            // A slot to dial in. An idle connection is closed for one rather
+            // than waited on: at the key's cap the key's own (which this
+            // fetch may not take, or it would have above), and with the
+            // table full the least recently kept of any key. (An HTTP/2 one
+            // so closed still holds its socket until its reader looks, and
+            // the admission below waits for that.)
             size_t slot = FETCH_POOL_TOTAL;
             if (of_key >= FETCH_POOL_PER_KEY) {
                 if (oldest_idle_of_key != FETCH_POOL_TOTAL) {
@@ -320,7 +322,8 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
                 *conn = spare;
                 answer = FETCH_POOL_DIAL;
             } else {
-                // Every connection in the way is in use or being dialled.
+                // Every connection in the way is in use, being dialled, or
+                // an HTTP/2 one closing whose socket is still open.
                 // Registered in the same hold that found it so, so that a
                 // put or a departure either came before (and was seen
                 // above) or rings this bell.

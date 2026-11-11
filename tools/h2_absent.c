@@ -18,6 +18,8 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
 }
 bool h2_conn_room(h2_conn_t *conn) { (void)conn; abort(); }
 void h2_conn_condemn(h2_conn_t *conn) { (void)conn; abort(); }
+size_t h2_conn_queued(h2_conn_t *conn) { (void)conn; abort(); }
+size_t h2_conn_buffered(h2_conn_t *conn) { (void)conn; abort(); }
 void h2_conn_release(h2_conn_t *conn) { (void)conn; abort(); }
 h2_result_t h2_stream_open(h2_conn_t *conn, const h2_field_t *fields, size_t count, bool ends, bool bodiless,
                            h2_wait_t *wait, h2_stream_t **stream)

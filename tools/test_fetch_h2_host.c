@@ -71,6 +71,7 @@ typedef enum {
     R_HUGE_HEAD,        // a head of a hundred fields of a thousand bytes
     R_OPEN,             // the head, and the stream left open with nothing after it
     R_ECHO,             // the request's body back, once it has all come
+    R_REFUSE_ONCE_HELD, // RST_STREAM(REFUSED_STREAM) the first time; then the head, and no body
 } route_kind_t;
 
 typedef struct {
@@ -235,11 +236,12 @@ static void serve_h2(dial_t *d)
         switch (r->kind) {
         case R_REFUSE_ONCE:
         case R_REFUSE:
+        case R_REFUSE_ONCE_HELD:
             if (hit == 0 || r->kind == R_REFUSE) {
                 peer_send_rst(h.stream, H2_ERR_REFUSED_STREAM);
                 break;
             }
-            send_reply_h2(h.stream, r, false);
+            send_reply_h2(h.stream, r, r->kind == R_REFUSE_ONCE_HELD);
             break;
         case R_UNPROCESSED_ONCE:
             if (hit == 0) {
@@ -770,6 +772,9 @@ static void basic_cases(void)
     r->fields[0][1] = "text/html; charset=utf-8";
     r->fields[1][0] = "x-custom";
     r->fields[1][1] = "one value";
+    // A name longer than any the fetch itself reads is an observer's still.
+    r->fields[2][0] = "x-a-field-name-of-seventy-bytes-which-is-longer-than-any-name-this-reads";
+    r->fields[2][1] = "heard";
     r = route("/gzip", R_REPLY, "200", NULL);
     r->body = GZ_HELLO;
     r->body_len = sizeof(GZ_HELLO);
@@ -946,7 +951,9 @@ static void retry_cases(void)
     j.opt = post;
     job_go(&j, "https://retry.test/refused-once");
     CHECK(j.ended == OS64_FETCH_OK && j.body_len == 11 && memcmp(j.body, "second time", 11) == 0);
-    CHECK(strstr(j.reason, "retried once on a fresh connection") != NULL);
+    // (Said without "on a fresh connection": the second try rode the
+    // connection that refused the first.)
+    CHECK(strstr(j.reason, "(retried once)") != NULL);
     CHECK(atomic_load(&ndials) == 1 && atomic_load(&dials[0].requests) == 2);
     // Refused twice is the caller's, in the server's own word.
     memset(&j, 0, sizeof(j));
@@ -1071,6 +1078,17 @@ static void retry_cases(void)
     j.opt.idle_ms = 400;
     job_go(&j, "https://words.test/open204");
     CHECK(j.ended == OS64_FETCH_OK && j.http_status == 204 && j.body_len == 0);
+    // WHAT AN EARLIER TRY LEFT IS NOT THE LATER ONE'S: refused once, the
+    // request goes again and its body then goes silent. The sentence and
+    // the detail say the silence, and nothing of the refusal but that it
+    // was retried.
+    route("/refused-then-silent", R_REFUSE_ONCE_HELD, "200", NULL);
+    memset(&j, 0, sizeof(j));
+    j.opt.idle_ms = 300;
+    job_go(&j, "https://words.test/refused-then-silent");
+    CHECK(j.status == OS64_FETCH_OK && j.ended == OS64_FETCH_SILENT);
+    CHECK(strstr(j.reason, "REFUSED_STREAM") == NULL && strstr(j.reason, "(retried once)") != NULL);
+    CHECK(j.detail.h2 && !j.detail.h2_coded && j.detail.h2_code == 0);
     // SILENT MID-BODY: the head came, the body never does, and the fetch
     // says how long it waited and where.
     memset(&j, 0, sizeof(j));
@@ -1078,7 +1096,9 @@ static void retry_cases(void)
     job_go(&j, "https://words.test/held");
     CHECK(j.status == OS64_FETCH_OK && j.ended == OS64_FETCH_SILENT && j.detail.silent_after_body);
     CHECK(strstr(j.reason, "went silent for 300 ms after 0 bytes") != NULL);
-    CHECK(atomic_load(&ndials) == 1);
+    // (Two dials: the silence before this one left its connection quiet,
+    // and this fetch dialled past it.)
+    CHECK(atomic_load(&ndials) == 2);
     settle();
 }
 
@@ -1194,6 +1214,21 @@ static void pool_cases(void)
     job_go(&j, "https://early.test/page");
     peer_thread_head_start(0);
     CHECK(j.ended == OS64_FETCH_OK && atomic_load(&ndials) == 2 && atomic_load(&dials[1].requests) == 1);
+    settle();
+
+    // A SERVER WHOSE EVERY NEW CONNECTION ENDS AS IT BEGINS: the dialler is
+    // refused a stream on the connection it dialled, dials once more, and
+    // the second such refusal is the answer. It does not dial for ever.
+    begin();
+    at = host_says("never.test", "h2", 0);
+    atomic_store(&hosts[at].hang_up_at_handshake, 8);
+    route("/page", R_REPLY, "200", kPage);
+    peer_thread_head_start(150);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://never.test/page");
+    peer_thread_head_start(0);
+    CHECK(j.status == OS64_FETCH_REQUEST_FAILED && atomic_load(&ndials) == 2 && j.detail.h2);
+    CHECK(strstr(j.reason, "took no request, twice") != NULL);
     settle();
 
     // A QUIET CONNECTION: a stream goes silent on a connection that said
