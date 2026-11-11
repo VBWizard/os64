@@ -9,7 +9,9 @@
 //
 // It makes one fetch first, so the server's ALPN answer is known and its
 // connection is in the pool, then that many more at once (six unless told
-// a number from 1 to 32), each on a thread of its own. It prints each
+// a number from 1 to 16), each on a thread of its own. Sixteen, because
+// each fetch here holds two of this program's sixty-four handles while it
+// runs: its thread's, and the bell an HTTP/2 fetch waits on. It prints each
 // fetch's outcome, its bytes and its time, and then what the pool holds.
 // Exit 0 when every fetch read its body whole, the bodies agree, and one
 // HTTP/2 connection carried them all; 1 when a fetch failed or the bodies
@@ -31,7 +33,7 @@
 #include "../../libfetch/pool.h"
 #include "../../libtls/test/trust_vectors.h"
 
-#define FETCHES_MAX 32
+#define FETCHES_MAX 16
 
 static const char *s_url;
 static os64_tls_trust *s_trust;
