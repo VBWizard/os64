@@ -2664,7 +2664,17 @@ What the build made of the brief, and where it left it.
 - **The pool** (Quinn's finding): `same_say` compares two says value for
   value, and `fetch_pool_take` shares an HTTP/2 connection, or waits on a
   dial in flight, only for a fetch whose say is the same. A record keeps
-  its dialler's say from the moment its slot is reserved.
+  its dialler's say from the moment its slot is reserved. A dial that
+  offered HTTP/1.1 alone leaves what is remembered of its host as it was
+  (`fetch_pool_dialled`): its answer says nothing of what the host speaks,
+  and the builder's own re-read found it forgetting hosts that speak
+  HTTP/2.
+- **A greeting is judged at open**, before any dial: at most eight
+  settings, and a pseudo-header order that is the four letters once each
+  (`http_h2_pseudo_ok`, shared with the renderer). What HTTP/2 itself
+  forbids of one (an even first stream, a window past 2^31 - 1, a
+  setting's value out of range) is the connection's to refuse, at
+  adoption, and that fetch ends DIAL_FAILED with the reason.
 - **libway and yonder.** `way_identity_t` carries the greeting, a weight
   and an HTTP/2-only Priority for each destination, and `http1`;
   `way_identity_h2` gives a destination with none the fetch row's.
@@ -2696,7 +2706,41 @@ beside a live HTTP/2 connection; and, in a process of its own, net.conf's
 switch. `tools/test_h2_conn_host.sh`: the three shapes of opening a
 stream, the stream window and its credit, a greeting the connection
 refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
-two HTTP/2-only lines and their place, what is refused.
+two HTTP/2-only lines and their place, what is refused. The wire counters
+(#547) are counted on the HTTP/2 path at the same places.
+
+**Mutants.** `tools/test_fetch_h2_mutants.py` (116) and
+`tools/test_h2_conn_mutants.py` (140), through `tools/mutants_parallel.py`:
+the full run caught 248 of 253. Three did not build and were rewritten;
+two were missed and each got a case (a greeting with one more setting
+than a held connection's; a third stream of a weight two open streams
+share). Those five and five written after the run were then run alone,
+and each was caught.
+
+**Proof, QEMU** (headless, against `nghttpd -v` with the libtls fixture
+certificate; the logs and the comparison script are in the kit's
+`h2cap/proof/`). yonder loaded the capture page under the Chrome preset
+and under the Firefox preset, each on the e1000 and on virtio: one
+HTTP/2 connection and six streams every time, and no row of the capture
+table differing from that browser's capture (the SETTINGS, the
+connection's window, the first stream, each request's field names in
+order, its priority's weight and exclusive bit, its stream's window, and
+every value but Accept, Accept-Encoding, the host and the User-Agent's
+platform; which earlier stream a chained priority depends on is not
+compared, being a matter of what was still open). Under yonder's own
+preset, libfetch's own greeting. Under Lynx, and under Chrome with
+`http2 = off` in net.conf, the dial offered `http/1.1` alone; that server
+speaks HTTP/2 only and turned them away, so a page loading over HTTP/1.1
+with the switch off is proved on the host and not in the guest. The
+record of the Chrome load: `HTTP: 2 (stream 1)`, one connection made,
+six requests sent over HTTP/2, no fetch waited.
+
+**Not done.** § 5's table on live pages. Connections and waits per page
+are the numbers that mean something, the off switch gives them on one
+build, and a QEMU timing would say nothing of the saving: it is the P5
+pass's to take, from the record's `wire` facts. And a Firefox Reload's
+place for `te` beside `Pragma` and `Cache-Control`, which was not
+captured: `te` follows them here.
 
 ## 5. Proof, across the arc
 
