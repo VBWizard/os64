@@ -139,6 +139,11 @@ yonder_diag_t *yonder_diag_new(const char *url, uint32_t seq, int64_t began_us);
 void yonder_diag_free(yonder_diag_t *d);
 uint32_t yonder_diag_seq(const yonder_diag_t *d);
 int64_t yonder_diag_began(const yonder_diag_t *d);
+// Numbers the caller read when the load began, kept for it as `began_us`
+// is, for the facts that are what happened since (zero until set).
+#define YONDER_DIAG_MARKS 11
+void yonder_diag_marks_set(yonder_diag_t *d, const uint64_t marks[YONDER_DIAG_MARKS]);
+void yonder_diag_marks(const yonder_diag_t *d, uint64_t marks[YONDER_DIAG_MARKS]);
 
 // A MISSING line per kind and name: `times` more asks for it.
 void yonder_diag_missing(yonder_diag_t *d, const char *kind, const char *name, uint32_t times);

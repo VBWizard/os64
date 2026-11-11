@@ -2651,6 +2651,17 @@ answered, as for any reader.
   them; arrival time following on the pages whose wait was connections,
   and not on the one whose wait is QuickJS under TCG. The P5's storefront
   is the figure QEMU cannot stand in for, and Chris reads it.
+- **How it is read.** yonder's record of a page (`diagnostics =` in
+  yonder.conf) carries five `wire` facts beside `arrived after`: the
+  connections the load made and what each spoke, its TLS handshakes and
+  how many resumed, its requests and what carried them, how many fetches
+  waited for a connection and for how long in all, and what the cache
+  answered without the wire. They are libfetch's counters
+  (`os64_fetch_counts`, every fetch in the process) and the cache's, read
+  when the load begins and subtracted each time the record is written, so
+  the last writing of a record has the whole load. A before and an after
+  are comparable when their `wire cache` lines agree: a load the cache
+  answered did not cost what it would have.
 
 ## 6. The books
 
