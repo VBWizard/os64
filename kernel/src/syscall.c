@@ -1089,9 +1089,9 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 // exit(code) — terminate the calling task.  arg0 becomes the task's retVal
 // (harvested by task_wait / the test harness) unless another thread has
-// already claimed the task's teardown, whose code then stands
-// (task_offer_exit_code).  Everything after the retVal
-// store is task_exit()'s problem: it switches to the per-core kernel interrupt
+// already claimed the task's teardown, in which case the code offered
+// before that claim stands (task_offer_exit_code).  Everything after the
+// offer is task_exit()'s problem: it switches to the per-core kernel interrupt
 // stack and kKernelPML4 itself, marks task+thread exited, and yields away for
 // good — which is why this entry runs with needs_cr3_switch=false (the
 // dispatcher's save/restore bookkeeping would never get to run anyway).

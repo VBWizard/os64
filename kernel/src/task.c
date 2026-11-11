@@ -202,26 +202,42 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 	return true;
 }
 
-// Offer `code` as the task's exit code. The code is the FIRST death's:
-// once a thread has claimed the teardown (`tearingDown`), no later death
-// may rewrite what the parent will collect.
+// Offer `code` as the task's exit code. An offer made after a thread has
+// claimed the teardown (`tearingDown`) is refused, so the code the parent
+// collects is the last one offered before the claim.
 //
-// The later deaths are the task's own doing. Teardown marks every sibling
-// with SIGKILL, and each one dies at its next boundary through the same
-// ladder a real kill takes, which would stamp 137 over the code main
-// returned; a sibling that faults or calls exit in that stretch would
-// stamp its own. All of them are consequences of an exit that has
-// already been decided.
+// The deaths that come after the claim are the task's own doing. Teardown
+// marks every sibling with SIGKILL, and each one dies at its next boundary
+// through the same ladder a real kill takes, which would stamp 137 over
+// the code main returned; a sibling that faults or calls exit in that
+// stretch would stamp its own. All of them are consequences of an exit
+// that has already been decided.
 //
-// A read and a store, with no lock, and that is enough: the claim is made
-// BEFORE the siblings are marked, so a thread dying of the mark always
-// reads the claim. Two threads that each decide to die before either has
-// claimed are a real race between two deaths, and either code is a true
-// answer.
+// The claim (task_claim_teardown) and the offer take signalLock, so no
+// offer that read "unclaimed" can store after the claim. The claim comes
+// BEFORE the siblings are marked, so a thread dying of the mark is always
+// refused. Threads that each offer before any has claimed are a real race
+// between deaths, and whichever code stands is a true answer.
 void task_offer_exit_code(task_t* task, uint64_t code)
 {
-	if (task != NULL && !__atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE))
+	if (task == NULL)
+		return;
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
+	if (!task->tearingDown)
 		task->retVal = code;
+	spinlock_release_irqrestore(&task->signalLock, f);
+}
+
+// Claim the task's teardown: true for the one thread that gets it. Under
+// signalLock so that the exit code is settled at the same instant
+// (task_offer_exit_code).
+static bool task_claim_teardown(task_t* task)
+{
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
+	bool won = !task->tearingDown;
+	task->tearingDown = true;
+	spinlock_release_irqrestore(&task->signalLock, f);
+	return won;
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
@@ -1342,9 +1358,9 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
-	// task->retVal was offered by whichever road led here, before this call
-	// (task_offer_exit_code; task_exit_with_retval in asm).  We just
-	// propagate it to thread->retVal here.
+	// Any exit code was offered before this call (task_offer_exit_code); a
+	// road that offers none leaves the task's zero.  We just propagate
+	// task->retVal to thread->retVal here.
 	//
 	// `exiting`, NOT `exited` — and this ordering is the whole fix (2026-08-09,
 	// Chris ran it to ground). `exited` is what the scheduler's take-off-CPU
@@ -1386,7 +1402,7 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// gets corrupted. A thread that finds its task already dead has exactly
 	// one job left: mark itself and get off the CPU.
 	//
-	// AN ATOMIC CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
+	// A CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
 	// above was understood from the day this guard was written; what was
 	// missed is that `exited` is not published until AFTER handle_close_all(),
 	// and task_exit's own comment describes that stretch as one that "may
@@ -1398,12 +1414,12 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// enqueued twice self-links (`child->deadChildNext = child`) and the
 	// undertaker's walk never terminates.
 	//
-	// One exchange decides the owner before any of that can happen. Everyone
+	// One claim, made under signalLock (task_claim_teardown), decides the
+	// owner before any of that can happen, and settles the exit code with it. Everyone
 	// else takes the same road they always did — mark yourself, get off the
 	// CPU — which is exactly what a post-`exited` arrival did before, so the
 	// losing path is not new code, just correctly reached now.
-	if (task != NULL &&
-	    __atomic_exchange_n(&task->tearingDown, true, __ATOMIC_ACQ_REL))
+	if (task != NULL && !task_claim_teardown(task))
 	{
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: thread 0x%08lx arrived while/after %s was being torn down — retiring the thread only\n",

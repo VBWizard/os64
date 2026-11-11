@@ -36,5 +36,4 @@ void asm_offsets(void)
 
     /* task_t (task.h) — used in task_exit_asm.S */
     DEFINE(TASK_RETVAL_OFFSET, offsetof(task_t, retVal));
-    DEFINE(TASK_TEARINGDOWN_OFFSET, offsetof(task_t, tearingDown));
 }

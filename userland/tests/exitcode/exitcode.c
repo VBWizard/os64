@@ -13,7 +13,7 @@
 #define ROUNDS 16
 
 static volatile uint32_t s_started;
-static volatile uint32_t s_stop;   // never set: the siblings end only by being killed
+static volatile uint32_t s_stop;   // set only by a child that was never killed, to end its siblings
 
 static int64_t sleeper(void *arg)
 {
@@ -42,9 +42,14 @@ static int child(const char *how)
     os64_sleep(20);   // long enough for the sleeper to be parked
     if (os64_streq(how, "exit"))
         os64_exit(9);
-    if (os64_streq(how, "wait"))
-        while (!s_stop)
-            os64_sleep(1000);
+    if (os64_streq(how, "wait")) {
+        // Waits to be killed, and gives up by itself if the parent's kill
+        // never arrives, so a failed run leaves no spinner behind it.
+        os64_sleep(10000);
+        s_stop = 1;
+        os64_sleep(100);
+        return 3;
+    }
     return 7;
 }
 
