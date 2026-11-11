@@ -2,7 +2,7 @@ id,task,depends_on,status,done_in,notes
 Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed os64_bell_t in libos64 alone",,ruled,,"RULED 2026-11-09 by Chris: the kernel bell. H2.0 is a kernel slice with a Codex round (HTTP2.md § 2.4, § 4 H2.0)"
 Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,ruled,,"RULED 2026-11-09 by Chris: match the preset's window; max_body stays the real bound (HTTP2.md § 2.6). Applied in H2.5"
 Q3,"How a reader is stopped: slices and a flag with the reader the socket's only closer (Fable's lean) or a kernel hang-up verb",,ruled,,"RULED 2026-11-09 by Chris: the slices; no kernel change (HTTP2.md § 2.3). Applied in H2.4; the verb is a § 2.10 row"
-Q4,"H2.4 as two slices, the connection alone and then fetches on it as H2.6 (Fable's lean), or one slice as first planned",,open,,"Asked 2026-11-10 with the H2.4 brief"
+Q4,"H2.4 as two slices, the connection alone and then fetches on it as H2.6 (Fable's lean), or one slice as first planned",,ruled,,"RULED 2026-11-10 by Chris: two slices (HTTP2.md § 7). Quinn's read of the brief recommended the same"
 
 H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,done,#526,"HTTP2.md § 2.4 and § 4 H2.0 (as built: the owed wake, not pipe.c's claim and sweep); merged 2026-11-10, Codex round 1 clean, P5 passed"
 H2.0.1,"Kernel bell_t: spinlock, rung flag, one parked waiter, pipe.c's park discipline; joins handle.c's pin with a holders count; handle_share refuses it",H2.0,done,#526,"read pipe.c's read path first; the first review question is where it differs"
@@ -55,14 +55,14 @@ H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table
 H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
 H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round 1 found two more, fixed; round 2 clean"
 
-H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,design-review,,"HTTP2.md § 2.3 § 2.4 § 2.5 § 2.6 and § 4 H2.4; nothing calls it until H2.6; brief awaits Chris"
+H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,design-review,,"HTTP2.md § 2.3 § 2.4 § 2.5 § 2.6 and § 4 H2.4; nothing calls it until H2.6; brief read by Chris and Quinn, three findings folded in (#536)"
 H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,done,#536,"adds this slice's rows; the fetch.c half is split out as H2.6 (Q4)"
 H2.4.2,"libtls: os64_tls_transport_release hands the engine, the socket and unread ciphertext over; exports, audit, transport harness cases",H2.4.1,todo,,
 H2.4.3,"h2_conn_t and h2_stream_t: the lock, what the reader owns alone, holds counted atomically; adopt queues preface, greeting SETTINGS and WINDOW_UPDATE",H2.4.2,todo,,
-H2.4.4,"The out queue: ciphertext in the engine's order, one drainer, no lock across a write, drains with no patience for the reader and the cancelled, the DATA mark and the control ceiling",H2.4.3,todo,,
+H2.4.4,"The out queue: ciphertext in the engine's order, one drainer, no lock across a write, drains with no patience for the reader and the cancelled; the mark at the door for DATA and new streams, the control ceiling, one credit outstanding",H2.4.3,todo,,
 H2.4.5,"The reader: slices, feed and cut frames, the reassembler and decoder outside the lock, the look-around, the only closer of the socket",H2.4.4,todo,,
 H2.4.6,"Delivery of every frame type to open and closed streams; the first frame is SETTINGS; settings applied and acknowledged; connection errors as GOAWAY and death",H2.4.5,todo,,
-H2.4.7,"Streams from the fetch's side: open, send under both windows and the mark, head, read with WINDOW_UPDATE at half, close with RST and credit, how it ended",H2.4.5,todo,,
+H2.4.7,"Streams from the fetch's side: open (parks at the mark), send under both windows and the mark, head, read with WINDOW_UPDATE at half, close with RST and credit, how it ended; content-length counted against DATA; a reset after a whole response stops the upload alone",H2.4.5,todo,,
 H2.4.8,"Endings: peer reset, GOAWAY above and below, death fanned out, the quiet connection, condemned from outside, the write patience",H2.4.6,todo,,
 H2.4.9,"tools/h2_peer.c (records numbered, reads that stall) and tools/test_h2_conn_host.sh: every case of the brief, eight threads, ASan/UBSan and TSan; the harness ends itself",H2.4.8,todo,,
 H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,todo,,
@@ -72,7 +72,7 @@ H2.4.12,"Codex round",H2.4.11,todo,,
 H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2,todo,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
 H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,todo,,"adds this slice's rows"
 
-H2.6,"Fetches on the connection: acquire's h2 clauses, the pool's hooks, the field-list renderer, retry rules and words, a guest probe",H2.4,todo,,"HTTP2.md § 4 H2.6; split from H2.4 if Q4 is ruled for two slices, dropped if for one"
+H2.6,"Fetches on the connection: acquire's h2 clauses, the pool's hooks, the field-list renderer, retry rules and words, a guest probe",H2.4,todo,,"HTTP2.md § 4 H2.6; split from H2.4 by Q4's ruling"
 H2.6.1,"Brief, written against the tree after H2.4's round",H2.4,todo,,"adds this slice's rows"
 C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,todo,,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
 C2,"Capture Firefox on Windows the same way",,todo,,"Chris's; Firefox builds a priority tree and Chrome does not"

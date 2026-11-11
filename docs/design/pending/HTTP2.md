@@ -321,10 +321,15 @@ blocked nowhere the reader can see. So:
     the socket has refused for longer than the write patience are the
     same death as a write that outlasted it, and the reader is who
     notices.
-  - **The queue is bounded for DATA alone.** A sender with DATA to send
-    while the queue is past its mark (the brief names it) parks on its
-    bell until the drainer brings it under. HEADERS and the small frames
-    are queued regardless: they are bounded by the streams that exist.
+  - **The queue is bounded at the door, for what can wait.** A sender
+    with DATA, or with a new stream's HEADERS, while the queue is past
+    its mark (the brief names it) parks on its bell until the drainer
+    brings it under. What ends a stream (a reset, a credit) is queued
+    regardless and never waits: it is bounded by the streams that were
+    let in. (Amended 2026-11-10 on Quinn's read of the H2.4 brief: the
+    first wording bounded DATA alone and let HEADERS through, on the
+    ground that live streams bound them, and a stream opened and
+    cancelled frees its slot while its bytes are still owed.)
   A lock held across the write is set aside:
   `os64_lock_t` contenders spin and yield (lock.h), so every sender
   waiting on a stuck socket would burn a CPU for as long as it was stuck,
@@ -655,7 +660,7 @@ DEBTS § libfetch when H2.5 lands, and none is a hook designed now.
 | **H2.2** Connections as shared objects, and the cap | `fetch_conn_t` with a count; the per-key queue in front of the dial (§ 2.2) | Yes, on its own: six per host, like Chrome | H2.0 | Codex (concurrency) |
 | **H2.3** Framing and HPACK | Pure libraries with host tests and vectors | No | nothing | in-house |
 | **H2.4** The connection | State machine, streams, flow control, the reader thread (§ 2.3, § 2.5, § 2.6), alone against a scripted peer | No (nothing calls it) | H2.0, H2.2, H2.3 | Codex (concurrency) |
-| **H2.6** Fetches on the connection | fetch.c and the pool join it: § 2.2's h2 clauses, the retry rules, the words; a guest probe | No (ALPN still offers h1 alone) | H2.4, Q4 | Codex (concurrency) |
+| **H2.6** Fetches on the connection | fetch.c and the pool join it: § 2.2's h2 clauses, the retry rules, the words; a guest probe | No (ALPN still offers h1 alone) | H2.4 | Codex (concurrency) |
 | **H2.5** The switch | ALPN offers h2; the preset half of the request model (§ 2.7); the greeting per preset (§ 2.9); captures; QEMU and P5 proof | YES — this is the arc | H2.6, C1, C2 | Codex, then Chris on the P5 |
 
 H2.1 and H2.3 touch nothing the others touch and can run beside anything.
@@ -1399,7 +1404,7 @@ of dying. It is the first caller of h2_frame and h2_hpack. Nothing in
 fetch.c calls it in this slice: it is proved alone, against a scripted
 peer, with real threads under the sanitizers. Joining it to fetches (the
 pool's h2 clauses, the retry rules, the error words) is H2.6, split from
-this slice by Q4; `dial` offers `http/1.1` alone until H2.5 either way.
+this slice by Q4's ruling; `dial` offers `http/1.1` alone until H2.5 either way.
 
 Contracts: § 2.3 (the reader and its slices; the engine under the lock;
 the out queue and its drainer; `dying`, and the reader as the socket's
@@ -1432,7 +1437,7 @@ deadline and its resumption plumbing written a second time.
 |---|---|---|
 | `H2_READER_SLICE_MS` | 500 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, and it costs two wakes a second for each h2 connection, 32 at the pool's sixteen. A second doubles the linger; a quarter doubles the wakes for a delay nobody sees. |
 | `H2_WRITE_PATIENCE_MS` | 30000 | How long the socket may refuse the queue's head before the connection dies: `FETCH_IDLE_MS_DEFAULT`, since the bytes are every stream's and no one fetch's deadline is theirs. |
-| `H2_OUT_DATA_MARK` | 256 KiB | Past this much queued ciphertext a sender with DATA parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the uploader and not by memory. |
+| `H2_OUT_MARK` | 256 KiB | Past this much queued ciphertext, a sender with DATA or with a new stream to open parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the sender and not by memory. |
 | `H2_OUT_CONTROL_MOST` | 1 MiB | Past this much queued, the frames a PEER makes us owe (PING and SETTINGS acks, resets, credits) end the connection with ENHANCE_YOUR_CALM. A peer that floods pings at a socket it will not read is otherwise a way to grow the queue without bound. |
 | `H2_STREAMS_MOST` | 64 | The stream table's size, a task's handle count: a fetch holds a bell, so no task has more fetches than handles. The peer's MAX_CONCURRENT_STREAMS lowers it. |
 | `H2_BLOCK_MOST` | 256 KiB | The reassembler's room: the hard cap on one compressed field block, past which the connection ends (ENHANCE_YOUR_CALM). Four times the head limit below, so a head merely too large is the stream's problem and only an abusive one is the connection's. |
@@ -1514,9 +1519,9 @@ even one, is the connection's PROTOCOL_ERROR wherever a stream is needed.
 
 | Frame | On an open stream | On a closed stream |
 |---|---|---|
-| DATA | Charged to both receive windows by its whole payload; past either window is FLOW_CONTROL_ERROR (the stream's, or the connection's). The body bytes are appended and the bell rung; padding is credited at once, having no reader. END_STREAM ends the peer's side. | Charged to the connection's window and credited straight back (§ 2.6). |
+| DATA | Charged to both receive windows by its whole payload; past either window is FLOW_CONTROL_ERROR (the stream's, or the connection's). The body bytes are appended and the bell rung; padding is credited at once, having no reader. END_STREAM ends the peer's side. The body's bytes are counted against the head's `content-length`, when it had one (below). | Charged to the connection's window and credited straight back (§ 2.6). |
 | HEADERS | Judged by `h2_head_check`. A 1xx head is dropped and the wait goes on. The final head is kept and the bell rung. A second head is trailers: it must end the stream, and its fields are dropped. A head that breaks a rule resets the stream (PROTOCOL_ERROR) and ends its fetch BAD_HEAD; one past `H2_HEAD_MOST` resets it (ENHANCE_YOUR_CALM), UNSUPPORTED. | Decoded, since the table must see it, and dropped. |
-| RST_STREAM | The stream ends with the peer's code; the bell is rung. | Ignored. |
+| RST_STREAM | Before the peer's END_STREAM: the stream ends with the peer's code, and the bell is rung. AFTER it: the response is whole and stays whole, whatever the code; the reset only stops our sending (below). | Ignored. |
 | WINDOW_UPDATE | Added to the stream's send window (or the connection's, on stream 0) and every sender waiting on it is rung. Past 2^31 - 1 is FLOW_CONTROL_ERROR, the stream's or the connection's. | Ignored. |
 | SETTINGS | Each value judged by `h2_setting_check`, then applied: the header table size to the encoder; the initial window as a difference to every stream's send window, which may go negative and may not pass 2^31 - 1; max frame size and max streams as they are. Then our acknowledgement is queued. The peer's acknowledgement of ours tells the decoder (`h2_hpack_decoder_settings_acked`). | |
 | PING | An acknowledgement is queued; an acknowledgement received is dropped. | |
@@ -1524,9 +1529,47 @@ even one, is the connection's PROTOCOL_ERROR wherever a stream is needed.
 | PUSH_PROMISE | The connection's PROTOCOL_ERROR (§ 2.10). | |
 | PRIORITY, unknown | Dropped. | |
 
+**A response's length is checked, and its end is not always a failure.**
+
+- **`content-length` against DATA** (RFC 9113 § 8.1.1). A stream whose
+  final head carried a `content-length` keeps that number and the count
+  of body bytes delivered, padding left out. A DATA frame that takes the
+  count past it, or an END_STREAM that arrives short of it (on DATA, or
+  on the final HEADERS itself), is a malformed response: the stream is
+  reset with PROTOCOL_ERROR and ends as a truncated body does on h1,
+  BROKE, and never as a successful end. Exempt, because their
+  content-length describes content they do not carry: a stream opened
+  `bodiless`, and a 304. `h2_head_check` judges only that the number
+  parses; the count is the stream's.
+- **A reset after a whole response stops the upload and nothing else**
+  (RFC 9113 § 8.1). A server may answer before it has read the request,
+  and then send RST_STREAM(NO_ERROR) to stop the rest of it. When a reset
+  arrives on a stream whose peer side has ended, the head and the body
+  already delivered are kept and are read to their successful end;
+  `h2_stream_send` answers "stop", so the fetch sends no more
+  (`sent_whole` stays false) and goes to read its response; and no reset
+  of our own is sent for it at close. That holds in whatever order the
+  fetch gets to them: the END_STREAM and the reset may both have arrived
+  before it reads a byte. The code is kept for the detail.
+
 The server's first frame must be SETTINGS (RFC 9113 § 3.4); anything else
 is PROTOCOL_ERROR. A connection error we raise queues GOAWAY with the
 code, sets `dying`, and is the death of step 6.
+
+**The out queue has a ceiling, and here is the sum.** Three kinds of
+bytes enter it. What can wait (DATA, a new stream's HEADERS) parks at
+`H2_OUT_MARK`, so it adds at most the mark and one sender's frame beyond
+it: a block of at most `H2_HEAD_MOST`, or one DATA frame. What a PEER
+makes us owe is counted and ends the connection at `H2_OUT_CONTROL_MOST`.
+What a stream's own life owes without waiting is bounded by the streams
+that were let in: one RST_STREAM at its close, and credits that follow
+what was consumed, of which a stream has one outstanding for itself and
+the connection one for all (a credit not yet in the queue is a number
+that grows, not a second frame). So a stalled socket holds at most the
+mark, a head, the control ceiling, and a reset for each stream admitted
+since it stalled, and no more streams are admitted past the mark. A
+thread that opens and cancels streams against a stalled socket fills the
+queue to the mark and then parks at the door.
 
 **What a fetch's thread calls** (H2.6's fetch.c; the harness now). Every
 wait takes the pool's wait shape from H2.2 (a bell, a patience, a
@@ -1541,12 +1584,16 @@ noticed within `FETCH_POOL_LOOK_MS`.
   connection is dead".
 - `h2_conn_room(conn)`: not dying, no GOAWAY, not quiet, and streams under
   the lesser of the peer's limit and `H2_STREAMS_MOST`.
-- `h2_stream_open(conn, fields, count, ends, bell, &stream)`: under the
-  lock, takes the next id, encodes, writes HEADERS, queues; then drains.
-  Refused when the connection has no room, with which reason.
+- `h2_stream_open(conn, fields, count, ends, bodiless, wait, &stream)`:
+  parks while the queue is past `H2_OUT_MARK`; then, under the lock,
+  takes the next id, encodes, writes HEADERS, queues; then drains.
+  Refused when the connection has no room, with which reason, and when
+  the fields encode past `H2_HEAD_MOST`. `bodiless` says the reply
+  carries no content whatever its content-length says (a HEAD).
 - `h2_stream_send(stream, bytes, len, ends, wait)`: DATA, cut to the
   peer's frame size and to both send windows; parks on the bell for
-  window, and for the queue when it is past `H2_OUT_DATA_MARK`.
+  window, and for the queue when it is past `H2_OUT_MARK`. It answers
+  "stop" when the peer has ended the stream under it (below).
 - `h2_stream_head(stream, wait, emit, ctx)`: waits for the final head and
   hands its fields over in wire order.
 - `h2_stream_read(stream, buffer, room, wait)`: bytes; 0 at the peer's
@@ -1554,9 +1601,9 @@ noticed within `FETCH_POOL_LOOK_MS`.
   After consuming, it sends the stream's WINDOW_UPDATE at half the stream
   window and the connection's at half of its own.
 - `h2_stream_close(stream)`: takes the bell out under the lock; if either
-  side had not ended, queues RST_STREAM(CANCEL) and drains with no
-  patience; credits what is unread to the connection; frees the stream
-  and drops its hold. Never waits.
+  side had not ended and the peer has not reset it, queues
+  RST_STREAM(CANCEL) and drains with no patience; credits what is unread
+  to the connection; frees the stream and drops its hold. Never waits.
 - `h2_stream_ended(stream)`: how it ended, the error code and whose it
   was, for the detail and the reason sentence (§ 2.8).
 - `h2_conn_condemn(conn)`, `h2_conn_release(conn)`: the pool's, for
@@ -1597,7 +1644,15 @@ scripted server over an in-memory socket whose reads can be made to stall:
   first frame that is not SETTINGS; interim heads and trailers; DATA and
   HEADERS for a closed stream, credited and decoded; padding credited;
   enough cancelled streams to spend the connection window were their
-  bytes not credited; a socket that stops taking bytes (two senders
+  bytes not credited; a body short of its content-length, one past it,
+  and a final HEADERS that ends a stream promised ten bytes, each a
+  reset and none a clean end, with a HEAD's and a 304's content-length
+  left alone; a whole response followed by RST_STREAM(NO_ERROR) while
+  the request body is still going, the response read to its end and the
+  upload stopped, with both frames arriving before the fetch reads
+  either; a drainer stalled while another thread opens and cancels
+  streams by the thousand, the queue never past its ceiling and the
+  thread parked at the door; a socket that stops taking bytes (two senders
   queued behind it, the reader still delivering, then death at the write
   patience); a cancelled fetch's reset reaching the wire after it left;
   a flood of pings at a stalled socket ending the connection; a
@@ -1619,7 +1674,7 @@ scripted server over an in-memory socket whose reads can be made to stall:
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
 
-Split from H2.4 by Q4. fetch.c's `acquire` gains § 2.2's h2 clauses (a
+Split from H2.4 by Q4's ruling. fetch.c's `acquire` gains § 2.2's h2 clauses (a
 live connection with room first; the remembered-h2 table; a dial in
 flight waited for); the pool's `fetch_conn_t` gains a connection's users
 and the hooks above; the request model renders to a field list (§ 2.7,
@@ -1683,7 +1738,7 @@ BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
 one-line pointer here. Each slice's "as built" lands under its brief
 above, by its builder, in its PR.
 
-## 7. Questions (each is a `Q` row in the tracker; Q1 to Q3 ruled by Chris on 2026-11-09, for the leans)
+## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09 and Q4 on 2026-11-10)
 
 - **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
   handle per bell, a small kernel slice with a Codex round; Fable's lean),
@@ -1708,4 +1763,5 @@ above, by its builder, in its PR.
   concurrency, then its meeting with the pool and the retry rules;
   Fable's lean), or one slice as § 3 first had it (one PR and one round,
   on what would be the largest diff of the arc, with the pool's changes
-  and the connection's reviewed together). OPEN.
+  and the connection's reviewed together). RULED by Chris on 2026-11-10:
+  two slices. Quinn's read of the brief recommended the same.
