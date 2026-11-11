@@ -1337,16 +1337,17 @@ typedef struct {
     fetch_t *f;
 } nudge_t;
 
-// A WINDOW_UPDATE for the stream every 30 ms for a second and a half: each
-// rings its fetch, and none is what the fetch waits for. Then the fetch is
-// cancelled, which ends a wait that did not end by its patience.
+// The clock jumps past the fetch's patience, between two WINDOW_UPDATEs for
+// its stream: each rings the fetch, and neither is what it waits for. Then
+// the fetch is cancelled, which ends a wait that did not end by its patience.
 static void *nudger(void *x)
 {
     nudge_t *n = x;
-    for (int i = 0; i < 50; i++) {
-        peer_send_window(n->stream, 1);
-        nap_ms(30);
-    }
+    nap_ms(100);
+    peer_send_window(n->stream, 1);
+    peer_clock_skip(6000);
+    peer_send_window(n->stream, 1);
+    nap_ms(400);
     atomic_store(&n->f->cancelled, true);
     return NULL;
 }
@@ -1382,11 +1383,13 @@ static void wake_cases(void)
     pthread_create(&t, NULL, later, &l);
     CHECK(h2_stream_read(a.stream, out, sizeof(out), &a.wait) == 4 && memcmp(out, "late", 4) == 0);
     pthread_join(t, NULL);
+    // Both sides finished the stream: leaving it owes the server no reset.
     fetch_done(&a);
+    CHECK(!peer_frame_of(H2_FRAME_RST_STREAM, &h, &payload, 300));
 
-    // RUNG AGAIN AND AGAIN FOR NOTHING IT WANTS, a wait still ends at its
-    // patience, and the connection that kept ringing it is not quiet.
-    fetch_init(&a, 300);
+    // RUNG FOR NOTHING IT WANTS, with its patience already spent, a wait
+    // ends there; and the connection that rang it is not quiet.
+    fetch_init(&a, 5000);
     CHECK(fetch_get(&a, conn, "/nudged") == H2_OK);
     nudge_t nudge = {.stream = server_request("/nudged"), .f = &a};
     pthread_create(&t, NULL, nudger, &nudge);
