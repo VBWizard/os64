@@ -559,7 +559,10 @@ fields as a LIST: pseudo-headers (`:method`, `:authority`, `:scheme`,
   `Proxy-Connection`, `Transfer-Encoding`, `Upgrade`) are not rendered on
   h2, whatever `keep_alive` says — a preset's `Connection: keep-alive`
   describes its browser's h1 request, and its browser does not send it on
-  h2 either. `TE` is not sent at all.
+  h2 either. `TE` is sent only as `trailers`, the one value HTTP/2
+  allows, and only by a caller whose browser sends it (Firefox does, on
+  every request: capture C2; the connection reads trailers, so the line
+  is true). A caller's own lines cannot hold a TE.
 - **Cookies are crumbled on send and joined on receipt** (RFC 9113
   § 8.2.3): a `Cookie` line is sent as one `cookie` field per
   cookie-pair, as Chrome does, which is what lets HPACK index them

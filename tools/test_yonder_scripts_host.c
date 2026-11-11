@@ -614,6 +614,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 }
 /* A download's fetch rides the fake network, which reads no hooks. */
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
+void os64_fetch_forget_idle(void) {}
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
     if(len>=6 && !memcmp(bytes,"GIF8",4))return image_decode_gif(bytes,len,out);
@@ -1374,7 +1375,7 @@ static void switch_cases(void) {
     strcpy(saved_agent,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/154.0.0.0 Safari/537.36");
     const char *started=starting_agent();
-    check(started!=NULL && strstr(started,"Chrome/156.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
+    check(started!=NULL && strstr(started,"Chrome/157.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
           "agent: a saved Chrome 154 preset starts as today's Chrome preset, its lines with it");
     strcpy(saved_agent,"Mozilla/3.0 (compatible)");
     started=starting_agent();

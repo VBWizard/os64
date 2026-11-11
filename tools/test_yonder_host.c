@@ -2058,8 +2058,11 @@ static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t 
 }
 
 // EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
-// capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
-// Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
+// capture files, raw request bytes Chris's Chrome and Firefox 158 on
+// Windows sent a local listener (WIRE.md § 1 as built names them), with
+// Chrome's string and client hints as Chrome 157 sent them a month later
+// (HTTP2.md § 4 H2.5, capture C1): the lines and their order did not
+// change between the two. Chrome:
 // capture-01-chrome-win-get-root (a typed navigation),
 // capture-25-chrome-win-get-clicked (a link clicked),
 // capture-26-chrome-win-get-clicked (the browser's Reload of it),
@@ -2081,9 +2084,9 @@ static void agent_identity_cases(void)
         return;
     expect_text("identity: Chrome's agent, captured",
                 chrome->agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/156.0.0.0 Safari/537.36");
+                               "Chrome/157.0.0.0 Safari/537.36");
     expect_text("identity: Chrome's client hints, captured", chrome->identity.hints,
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n");
     expect_text("identity: Chrome's language, captured", chrome->identity.language, "en-US,en;q=0.9");
@@ -2128,6 +2131,9 @@ static void agent_identity_cases(void)
     expect("identity: a saved Chrome 154 preset is Chrome's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                                 "Chrome/154.0.0.0 Safari/537.36") == chrome->agent, NULL);
+    expect("identity: a saved Chrome 156 preset is Chrome's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/156.0.0.0 Safari/537.36") == chrome->agent, NULL);
     expect("identity: a saved Firefox 156 preset is Firefox's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0") ==
                firefox->agent, NULL);
@@ -2145,7 +2151,7 @@ static void agent_identity_cases(void)
     expect_text("identity: Chrome, the browser's Reload of a clicked link",
                 reload_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
                 "Cache-Control: max-age=0\r\n"
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2165,7 +2171,7 @@ static void agent_identity_cases(void)
                 "Priority: u=0, i\r\n");
     expect_text("identity: Chrome, an address given",
                 navigation_block(chrome, WAY_BY_BROWSER, NULL, "https://a.test/"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2176,7 +2182,7 @@ static void agent_identity_cases(void)
                 "Accept-Language: en-US,en;q=0.9\r\n");
     expect_text("identity: Chrome, a link clicked",
                 navigation_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2297,14 +2303,14 @@ static void wire_request_cases(void)
     char extra[512];
 
 #define CHROME_HINTS_NAV                                                                       \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
 #define CHROME_UA "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
-                  "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\r\n"
+                  "(KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36\r\n"
 #define CHROME_NAV_ACCEPT "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
 #define CHROME_SUB_HEAD(path, host) "GET " path " HTTP/1.1\r\nHost: " host "\r\nConnection: keep-alive\r\n" \
     "sec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\n"
 #define CHROME_TAIL "Referer: http://localhost:8765/\r\nAccept-Encoding: gzip, identity\r\n" \
                     "Accept-Language: en-US,en;q=0.9\r\n\r\n"
@@ -2372,7 +2378,7 @@ static void wire_request_cases(void)
                 wire_request(chrome, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight", NULL, extra),
                 "PUT /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: keep-alive\r\n"
                 "Content-Length: 0\r\nsec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\nAccept: */*\r\nOrigin: http://localhost:8765\r\n"
                 "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
     snprintf(extra, sizeof(extra), "X-W1: 1\r\n%s%s", ref, origin);

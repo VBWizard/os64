@@ -146,6 +146,7 @@ PY_SUITES = [
     py('test_window_pin_host'),
     py('test_window_size_host'),
     py('test_window_placement_host'),
+    py('test_tracker'),
 ]
 
 # Files in tools/test_* that this script does not run, each with why.
