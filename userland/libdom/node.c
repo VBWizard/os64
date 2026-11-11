@@ -10,9 +10,29 @@ static size_t bucket(const os64_html_node_t *node)
 
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
 {
-    for (DValue *entry = dom->buckets[bucket(node)]; entry != NULL; entry = entry->hash_next)
+    DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
+    for (DValue *entry = table[bucket(node)]; entry != NULL; entry = entry->hash_next)
         if (entry->node == node) return entry;
     return NULL;
+}
+
+os64_dom_t *d_owner(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    if (!dom->cluster || !node) return dom;
+    os64_html_document_t *document = os64_html_node_owner(node);
+    for (size_t i = 0; i < dom->cluster->count; ++i)
+        if (dom->cluster->members[i]->document == document) return dom->cluster->members[i];
+    return NULL;
+}
+
+bool d_same_cluster(const os64_dom_t *a, const os64_dom_t *b)
+{
+    return a && b && (a == b || (a->cluster && a->cluster == b->cluster));
+}
+
+os64_dom_t *d_creation_owner(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return dom->cluster ? dom->cluster->members[os64_html_node_creation_realm(node)] : dom;
 }
 
 /* HTML's element interface for a tag libhtml names (§ 3.2.3.1), as the
@@ -108,22 +128,25 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
     entry->node = node;
     os64_html_hold(dom->document, node);
     size_t slot = bucket(node);
-    entry->hash_next = dom->buckets[slot];
-    dom->buckets[slot] = entry;
+    DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
+    entry->hash_next = table[slot];
+    table[slot] = entry;
     return JS_DupValue(ctx, entry->value);
 }
 
 JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool deep,
                      const os64_html_node_t *document)
 {
+    dom = d_owner(dom, document);
     int64_t status;
     DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
     if (entry == NULL) return JS_EXCEPTION;
-    os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep, &status);
+    os64_dom_t *source = d_owner(dom, node);
+    os64_html_node_t *copy = os64_page_node_import(dom->state, source->state, node, deep, &status);
     /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */
-    if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0) {
+    if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0 &&
+        (status = d_made_in(dom, copy, document)) == OS64_HTML_OK) {
         JSValue made = wrapper_attach(dom, ctx, entry, copy);
-        d_made_in(dom, copy, document);
         /* [CEReactions]: the copy's elements with a definition come back
          * upgraded (custom.c), which asks the document just recorded. */
         if (d_custom_upgrade_new(dom, ctx, copy) < 0) {
@@ -152,6 +175,17 @@ JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node
     if (node == NULL) return JS_NULL;
     DValue *entry = d_find(dom, node);
     if (entry != NULL) return JS_DupValue(ctx, entry->value);
+    if (dom->cluster) {
+        if (!os64_html_same_group(dom->document, os64_html_node_owner(node)))
+            return JS_ThrowTypeError(ctx, "Node is not a member of this cluster");
+        uint8_t slot = os64_html_node_creation_realm(node);
+        if (slot >= dom->cluster->count)
+            return d_error(ctx, "InvalidStateError", "Node creation realm is unavailable");
+        dom = dom->cluster->members[slot];
+        os64_js_outcome_t out;
+        ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &out);
+        if (!ctx) return JS_EXCEPTION;
+    }
     entry = wrapper_prepare(dom, ctx, node, prototype);
     return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
 }
@@ -164,36 +198,44 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
         JS_ThrowTypeError(ctx, "An Attr is a Node with no place in the tree");
         return NULL;
     }
-    if (node == NULL || !os64_html_owns_node(dom->document, node)) {
-        JS_ThrowTypeError(ctx, "Expected a node from this document");
+    if (node == NULL || (entry->dom != dom &&
+        (!dom->cluster || entry->dom->cluster != dom->cluster))) {
+        JS_ThrowTypeError(ctx, "Expected a node from this binding cluster");
         return NULL;
     }
     return node;
 }
 
-/* The binding's tree changes. A node one of them takes out of its tree
- * records first the document it leaves (d_leaving), whether or not the
- * change then happens: the record is read only while the node is a root.
- * Each first frees the dead Range records (d_ranges_sweep), so a dropped
- * range neither pins its nodes nor rides every mutation's range walk. */
+/* Native verbs preflight and migrate state before publishing changes.
+ * The borrowed adoption scope lets reactions queue adoption between source
+ * removal and destination connection, including an unwrapped detached run. */
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
+    dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
-    return os64_page_node_insert(dom->state, parent, node, before);
+    DAdopting scope;
+    d_adopting_begin(dom, &scope, node, parent);
+    int64_t status = os64_page_node_insert(dom->state, parent, node, before);
+    d_adopting_end(dom, &scope);
+    return status;
 }
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node)
 {
+    dom = d_owner(dom, node);
     d_ranges_sweep(dom);
-    d_leaving(dom, node);
-    return os64_page_node_remove(dom->state, node);
+    return os64_page_node_remove(d_owner(dom, node)->state, node);
 }
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old)
 {
+    dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
-    d_leaving(dom, old);
-    return os64_page_node_replace(dom->state, parent, node, old);
+    DAdopting scope;
+    d_adopting_begin(dom, &scope, node, parent);
+    int64_t status = os64_page_node_replace(dom->state, parent, node, old);
+    d_adopting_end(dom, &scope);
+    return status;
 }
 
 /* A tree change a script asked for: D_APPEND/D_INSERT put `child` under
@@ -205,6 +247,7 @@ int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *n
 int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
             const os64_html_node_t *child, const os64_html_node_t *other)
 {
+    dom = d_owner(dom, op == D_REMOVE ? child : parent);
     const os64_html_node_t *few[8], **scripts = few;
     size_t found = 0;
     if (op != D_REMOVE && child != NULL && dom->options.script_connected != NULL) {
@@ -363,6 +406,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
@@ -398,12 +442,12 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
                 d_string_free(dom, &string);
                 return d_error(ctx, "InvalidStateError", "A filename input accepts only an empty value");
             }
-            int64_t status = os64_page_node_set_value(dom->state, node, string.data, string.length);
+            int64_t status = os64_page_node_set_value(d_owner(dom, node)->state, node, string.data, string.length);
             d_string_free(dom, &string);
             return status < 0 ? d_page_error(ctx, status) : JS_UNDEFINED;
         }
         const char *text; size_t length;
-        int64_t status = os64_page_node_value(dom->state, node, &text, &length);
+        int64_t status = os64_page_node_value(d_owner(dom, node)->state, node, &text, &length);
         return status < 0 ? d_page_error(ctx, status) : JS_NewStringLen(ctx, text, length);
     }
     if (magic == D_CHECKED) {
@@ -412,8 +456,8 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         if (set) {
             int boolean = JS_ToBool(ctx, value);
             if (boolean < 0) return JS_EXCEPTION;
-            status = os64_page_node_set_checked(dom->state, node, boolean != 0);
-        } else status = os64_page_node_checked(dom->state, node, &on);
+            status = os64_page_node_set_checked(d_owner(dom, node)->state, node, boolean != 0);
+        } else status = os64_page_node_checked(d_owner(dom, node)->state, node, &on);
         return status < 0 ? d_page_error(ctx, status) : set ? JS_UNDEFINED : JS_NewBool(ctx, on);
     }
     if (magic == D_CONTROL_TYPE) {
@@ -428,8 +472,8 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         int64_t status;
         if (set) {
             if (JS_ToInt32(ctx, &index, value) < 0) return JS_EXCEPTION;
-            status = os64_page_node_set_selected_index(dom->state, node, index);
-        } else status = os64_page_node_selected_index(dom->state, node, &index);
+            status = os64_page_node_set_selected_index(d_owner(dom, node)->state, node, index);
+        } else status = os64_page_node_selected_index(d_owner(dom, node)->state, node, &index);
         return status < 0 ? d_page_error(ctx, status) : set ? JS_UNDEFINED : JS_NewInt32(ctx, index);
     }
     switch (magic) {
@@ -522,6 +566,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     if (magic >= D_GET_ATTR && magic <= D_HAS_ATTR)
         return attribute(dom, ctx, node, argc, argv, magic);
     if (magic == D_HAS_CHILDREN) return JS_NewBool(ctx, node->first_child != NULL);
@@ -642,9 +687,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         os64_html_create_fragment(dom->document, &status);
     d_string_free(dom, &string);
     if (created == NULL) return d_html_error(ctx, status);
-    JSValue value = d_wrap(dom, ctx, created);
-    if (!JS_IsException(value)) d_made_in(dom, created, node);
-    return value;
+    return d_wrap_in(dom, ctx, created, node);
 }
 
 static uint64_t property_prototypes(int magic)

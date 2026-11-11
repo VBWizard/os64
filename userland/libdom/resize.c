@@ -5,8 +5,8 @@
 /* RESIZEOBSERVER (Resize Observer 1, W3C; INTERSECTION_OBSERVER.md § 11).
  *
  * The binding keeps the observers and their targets; the host answers the
- * sizes, every observed target in one call (os64_dom_set_resizes), from a
- * layout it makes current. At its rendering step the host calls
+ * sizes, batching targets by their current document (os64_dom_set_resizes),
+ * from layouts the providers make current. At its rendering step the host calls
  * os64_dom_resizes_step, which is the standard's loop as one task: gather
  * the observations whose observed size moved, deeper than a depth;
  * broadcast them, each observer's callback handed its entries in the order
@@ -169,8 +169,9 @@ bool os64_dom_resizes_owed(const os64_dom_t *dom)
 
 /* The standard's "calculate depth for node": how many nodes from it to the
  * root of its flattened tree, itself included. */
-static size_t node_depth(const os64_dom_t *dom, const os64_html_node_t *node)
+static size_t node_depth(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_owner(dom, node);
     size_t depth = 0;
     for (; node != NULL; node = os64_html_flat_parent(dom->document, node)) depth++;
     return depth;
@@ -186,8 +187,9 @@ static void observed_size(const os64_dom_resize_t *a, uint8_t box, double out[2]
     out[1] = a->boxed ? v[1] : 0;
 }
 
-/* "Gather active resize observations at depth": the provider asked once
- * for every target, each marked active when its observed size moved and it
+/* "Gather active resize observations at depth": each current-document
+ * provider is asked once for its targets. After every batch succeeds, a
+ * target is marked active when its observed size moved and it
  * is deeper than `depth`, skipped when it moved and is not. -1 when the
  * provider refused; else how many are active, and `*skipped` how many were
  * passed over. */
@@ -202,23 +204,34 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
         s->batch = grown;
         s->batch_cap = s->observed;
     }
-    size_t n = 0;
-    for (DRObserver *o = s->observers; o != NULL; o = o->next) {
-        if (o->dead) continue;
-        for (DRTarget *t = o->targets; t != NULL; t = t->next)
-            s->batch[n++] = (os64_dom_resize_t){.target = t->node};
+    size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
+    for (size_t i = 0; i < members; i++) {
+        os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        size_t n = 0;
+        for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+            if (o->dead) continue;
+            for (DRTarget *t = o->targets; t != NULL; t = t->next)
+                if (os64_html_node_owner(t->node) == owner->document)
+                    s->batch[n++] = (os64_dom_resize_t){.target = t->node};
+        }
+        if (n == 0) continue;
+        os64_dom_geometry_stats_t cost = {0};
+        bool answered = owner->resizes_provider != NULL &&
+            owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+        owner->geometry_stats.layouts += cost.layouts;
+        owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!answered) return -1;
+        size_t at = 0;
+        for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+            if (o->dead) continue;
+            for (DRTarget *t = o->targets; t != NULL; t = t->next)
+                if (os64_html_node_owner(t->node) == owner->document) t->now = s->batch[at++];
+        }
     }
-    os64_dom_geometry_stats_t cost = {0};
-    bool answered = n == 0 || dom->resizes_provider(dom->resizes_opaque, s->batch, n, &cost);
-    dom->geometry_stats.layouts += cost.layouts;
-    dom->geometry_stats.elapsed_us += cost.elapsed_us;
-    if (!answered) return -1;
     int64_t active = 0;
-    size_t at = 0;
     for (DRObserver *o = s->observers; o != NULL; o = o->next) {
         if (o->dead) continue;
         for (DRTarget *t = o->targets; t != NULL; t = t->next) {
-            t->now = s->batch[at++];
             double size[2];
             observed_size(&t->now, t->box, size);
             t->active = t->skipped = false;
@@ -361,7 +374,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
                 DScripts before = d_script_enter(dom, o->script);
-                os64_js_call(dom->runtime, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
                 d_script_leave(dom, &before, true);
                 d_outcome_fold(out, &call);
                 if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
@@ -400,7 +413,7 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 {
     if (out != NULL) os64_memset(out, 0, sizeof(*out));
     struct DResizes *s = dom != NULL && !dom->closed ? dom->resizes : NULL;
-    if (out == NULL || s == NULL || dom->resizes_provider == NULL) return false;
+    if (out == NULL || s == NULL) return false;
     sweep(dom);
     if (s->observed == 0) return false;
     size_t skipped;
@@ -412,9 +425,9 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#resize-observer", (int)(sizeof(name) - 20),
                   dom->url != NULL ? dom->url : "about:blank");
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, out) == OS64_JS_OK) {
         os64_js_outcome_t access;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each round's depth is deeper than the last's shallowest, and a
          * tree is finitely deep: the loop ends. */
@@ -538,9 +551,11 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
 {
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
+    DRObserver *o = JS_GetOpaque(self, dom->resizes->observer_class);
+    if (o == NULL || !d_same_cluster(dom, o->dom) || o->dom->closed)
+        return JS_ThrowTypeError(ctx, "Expected a live ResizeObserver in this cluster");
+    dom = o->dom;
     struct DResizes *s = dom->resizes;
-    DRObserver *o = JS_GetOpaque(self, s->observer_class);
-    if (o == NULL) return JS_ThrowTypeError(ctx, "Expected a ResizeObserver");
     if (magic == M_DISCONNECT) {
         while (o->targets != NULL) target_remove(dom, o->targets);
         hold_update(dom, ctx, o);

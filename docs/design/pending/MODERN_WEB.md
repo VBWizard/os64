@@ -1665,11 +1665,10 @@ link yonder refused.
   parsed). It is freed with the page and charged to its caps; a change in
   it moves the page's version, so yonder rebuilds the page's model after
   that task.
-- **Which document a node belongs to** is the document its tree hangs
-  from; a detached tree's root's wrapper records the one it was made in,
-  copied from or last taken out of (`DValue.document`, written by
-  `d_made_in` and `d_leaving`). `ownerDocument` was the window's for every
-  node before.
+- **Which document a node belongs to** is native metadata, including for
+  detached roots that have never had a wrapper. Iframe F.2 separates this
+  mutable node document from physical allocation owner and immutable creation
+  realm. Adoption updates the former; wrapper lookup uses the latter.
 - **A document with no window**: `location` is null (assigning throws),
   it is cookie-averse, `write`/`writeln`/`open` throw InvalidStateError
   (a write would otherwise have reached the page's own parser), a link, a
@@ -1703,8 +1702,8 @@ link yonder refused.
 | Seam | What it is now |
 |---|---|
 | `os64_html_create_document`, `os64_html_create_doctype` | libhtml's: a second DOCUMENT node and a doctype in `doc`'s arena and mark; never inserted, charged until `doc` is freed |
-| `d_node_document`, `d_window_document` | the node's document (its tree's DOCUMENT root, else its root's record, else the window's), and whether that is the window's; while no document of its own exists, every node is the window's and neither walks |
-| `d_made_in`, `d_leaving` | the record written as a node is made or copied, and as a binding verb (`d_remove`, `d_replace`, `d_replace_content`) takes it out; only a wrapped node keeps one |
+| `d_node_document`, `d_window_document` | the native node-document record, and whether it is this binding's window Document |
+| `d_made_in`, `d_wrap_in` | establish a new node's native Document before exposing its wrapper; native adoption maintains it on later moves |
 | `d_connected`, `d_in_window_tree` | DOM's connected (isConnected, a `form` attribute's lookup, the controls and names collections), and the window's tree (a script's start) |
 | `d_scripting` | the page's scripting, for a node of the window's document: innerHTML's parse and serialization, insertAdjacentHTML's parse |
 | `yonder_scripts_address` | a `javascript:` link's code queued as a classic script (`MODE_ADDRESS`, no element) |

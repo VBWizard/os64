@@ -143,17 +143,16 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     return result;
 }
 
-/* Every child is taken out, so each records first the document it leaves,
- * the parent's, as d_remove's node does. */
+/* libhtml retains current-document metadata when children become detached. */
 int64_t d_replace_content(os64_dom_t *dom, os64_html_node_t *parent,
                            os64_html_node_t *replacement)
 {
-    if (dom->documents != 0) {
-        const os64_html_node_t *document = d_node_document(dom, parent);
-        for (const os64_html_node_t *child = parent->first_child; child != NULL; child = child->next)
-            d_made_in(dom, child, document);
-    }
-    return os64_page_node_replace_children(dom->state, parent, replacement);
+    dom = d_owner(dom, parent);
+    DAdopting scope;
+    d_adopting_begin(dom, &scope, replacement, parent);
+    int64_t status = os64_page_node_replace_children(dom->state, parent, replacement);
+    d_adopting_end(dom, &scope);
+    return status;
 }
 
 JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
@@ -179,6 +178,7 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     bool converted = d_string(dom, ctx, value, &string);
     JS_FreeValue(ctx, empty);
     if (!converted) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     int64_t status = OS64_HTML_OK;
     if (property == D_NODE_VALUE && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT &&
         node->kind != OS64_HTML_PI) {
@@ -195,7 +195,7 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         else if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?
                                           node->template_contents : (os64_html_node_t *)node, fragment);
     } else if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT || node->kind == OS64_HTML_PI)
-        status = os64_page_node_set_text(dom->state, (os64_html_node_t *)node, string.data, string.length);
+        status = os64_page_node_set_text(d_owner(dom, node)->state, (os64_html_node_t *)node, string.data, string.length);
     else if (node->kind == OS64_HTML_ELEMENT || node->kind == OS64_HTML_FRAGMENT) {
         os64_html_node_t *replacement = NULL;
         if (string.length != 0)

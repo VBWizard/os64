@@ -106,7 +106,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
     if (query->kind >= D_QUERY_TBODIES) return table_member(query, node);
-    if (query->kind == D_QUERY_CLASSES) return has_classes(query->dom, node, query->named);
+    if (query->kind == D_QUERY_CLASSES) return has_classes(d_owner(query->dom, query->root), node, query->named);
     if (query->kind == D_QUERY_NAME) {
         const os64_html_attr_t *name = node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML
             ? os64_html_attr(node, "name") : NULL;
@@ -117,7 +117,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
     if (query->kind == D_QUERY_OPTIONS) return true;
     if (query->kind == D_QUERY_SELECTED_OPTIONS) {
         bool on = false;
-        return os64_page_node_option_selected(query->dom->state, node, &on) == 0 && on;
+        return os64_page_node_option_selected(d_owner(query->dom, node)->state, node, &on) == 0 && on;
     }
     if (query->kind == D_QUERY_LABELS) return d_label_control(node) == query->owner;
     if (query->kind == D_QUERY_SHEETS) return os64_page_names_sheet(node);
@@ -155,9 +155,11 @@ static bool refresh(DQuery *query, JSContext *ctx)
             query->version = 0;
         }
     }
-    uint64_t version = os64_html_version(query->dom->document);
-    uint64_t state_version = query->kind == D_QUERY_SELECTED_OPTIONS ? os64_page_state_version(query->dom->state) : 0;
-    if (query->version == version && query->state_version == state_version) return true;
+    os64_dom_t *owner = d_owner(query->dom, query->root);
+    uint64_t version = os64_html_version(owner->document);
+    uint64_t state_version = query->kind == D_QUERY_SELECTED_OPTIONS ? os64_page_state_version(owner->state) : 0;
+    if (query->observed_document == owner->document && query->version == version &&
+        query->state_version == state_version) return true;
     size_t count = 0;
     for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
         if (matches(query, at)) count++;
@@ -177,6 +179,7 @@ static bool refresh(DQuery *query, JSContext *ctx)
     size_t old_count = query->count;
     query->nodes = nodes;
     query->count = count;
+    query->observed_document = owner->document;
     query->version = version;
     query->state_version = state_version;
     for (size_t i = 0; i < old_count; i++)
@@ -246,6 +249,10 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     DValue *entry = d_find(dom, root);
     if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    dom = entry->dom;
+    os64_js_outcome_t outcome;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (ctx == NULL) return JS_EXCEPTION;
     DQuery *query = elements ? d_more_peek(entry)->children : entry->child_nodes;
     if (query != NULL) return JS_DupValue(ctx, query->entry->value);
     DValueMore *more = elements ? d_more(dom, ctx, entry) : NULL;
@@ -832,7 +839,7 @@ static JSValue radio_value(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (!is_radio(node)) continue;
         const char *text;
         size_t length;
-        int64_t status = os64_page_node_value(dom->state, node, &text, &length);
+        int64_t status = os64_page_node_value(d_owner(dom, node)->state, node, &text, &length);
         if (status < 0) {
             JS_FreeValue(ctx, result);
             result = d_page_error(ctx, status);
@@ -841,12 +848,12 @@ static JSValue radio_value(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (set) {
             if (length != wanted.length || os64_memcmp(text, wanted.data != NULL ? wanted.data : "", length) != 0)
                 continue;
-            status = os64_page_node_set_checked(dom->state, node, true);
+            status = os64_page_node_set_checked(d_owner(dom, node)->state, node, true);
             if (status < 0) result = d_page_error(ctx, status);
             break;
         }
         bool on = false;
-        if (os64_page_node_checked(dom->state, node, &on) == 0 && on) {
+        if (os64_page_node_checked(d_owner(dom, node)->state, node, &on) == 0 && on) {
             JS_FreeValue(ctx, result);
             result = JS_NewStringLen(ctx, text, length);
             break;

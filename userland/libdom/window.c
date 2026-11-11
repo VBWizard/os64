@@ -483,6 +483,7 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
  * § Classic browser scripting). */
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
+    dom = d_owner(dom, node);
     if (dom->options.activate != NULL && d_window_document(dom, node))
         dom->options.activate(dom->options.host_opaque, node, what);
 }
@@ -508,16 +509,19 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     /* HTML's firing-submission-events flag: a submission asked from inside
      * this form's own invalid or submit listener does nothing, rather than
      * validating and firing again until the engine's stack gives out. */
-    for (const struct DClicking *at = dom->submitting; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, form);
+    for (const struct DClicking *at = guard->submitting; at != NULL; at = at->next)
         if (at->node == form) return 1;
-    struct DClicking self = {form, dom->submitting};
-    dom->submitting = &self;
+    struct DClicking self = {form, guard->submitting};
+    guard->submitting = &self;
     bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
         os64_html_attr(form, "novalidate") != NULL;
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
     int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
-    dom->submitting = self.next;
-    if (valid > 0 && result > 0) {
+    guard->submitting = self.next;
+    /* The submit listener can adopt or disconnect the form. */
+    dom = d_owner(dom, form);
+    if (valid > 0 && result > 0 && d_window_document(dom, form) && d_connected(form)) {
         d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
         dom->navigation.user_activated = native;
     }
@@ -559,10 +563,10 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
     bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
     *saved = (DActivation){.checkable = (radio || checkbox) && !disabled(node), .checkbox = checkbox};
     if (!saved->checkable) return 0;
-    int64_t status = os64_page_node_checked(dom->state, node, &saved->was);
-    if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &saved->was_indeterminate);
-    if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !saved->was);
-    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
+    int64_t status = os64_page_node_checked(d_owner(dom, node)->state, node, &saved->was);
+    if (status >= 0) status = os64_page_node_indeterminate(d_owner(dom, node)->state, node, &saved->was_indeterminate);
+    if (status >= 0) status = os64_page_node_set_checked(d_owner(dom, node)->state, node, radio ? true : !saved->was);
+    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, false);
     if (status < 0) { d_page_error(ctx, status); return -1; }
     return 0;
 }
@@ -570,15 +574,16 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
                        const DActivation *saved)
 {
+    dom = d_owner(dom, node);
     if (saved->checkable) {
         bool now = false;
         int result = 1;
         if (canceled) {
-            int64_t status = os64_page_node_set_checked(dom->state, node, saved->was);
+            int64_t status = os64_page_node_set_checked(d_owner(dom, node)->state, node, saved->was);
             if (status >= 0 && saved->checkbox)
-                status = os64_page_node_set_indeterminate(dom->state, node, saved->was_indeterminate);
+                status = os64_page_node_set_indeterminate(d_owner(dom, node)->state, node, saved->was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
-        } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != saved->was) {
+        } else if (os64_page_node_checked(d_owner(dom, node)->state, node, &now) >= 0 && now != saved->was) {
             /* HTML's checkbox and radio activation: input is composed,
              * change is not. */
             JSValue input = d_event_new(dom, ctx, "input", true, false, false);
@@ -630,12 +635,13 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
 static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     if (disabled(node)) return 1;
-    for (const struct DClicking *at = dom->clicking; at != NULL; at = at->next)
+    os64_dom_t *guard = d_creation_owner(dom, node);
+    for (const struct DClicking *at = guard->clicking; at != NULL; at = at->next)
         if (at->node == node) return 1;
-    struct DClicking self = {node, dom->clicking};
-    dom->clicking = &self;
+    struct DClicking self = {node, guard->clicking};
+    guard->clicking = &self;
     int result = click_activate(dom, ctx, node);
-    dom->clicking = self.next;
+    guard->clicking = self.next;
     return result;
 }
 
@@ -662,6 +668,7 @@ static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Expected an element");
+    dom = d_owner(dom, node);
     /* requestSubmit(submitter) (HTML § 4.10.3): a submitter given is a
      * submit button this form owns, and the submission is its. */
     if (magic == A_REQUEST_SUBMIT && argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
@@ -1657,16 +1664,19 @@ static size_t script_bucket(const os64_html_node_t *node)
     return ((key >> 4) ^ (key >> 12)) % (sizeof(((os64_dom_t *)0)->scripts) / sizeof(DScript *));
 }
 
-static bool script_marked(const os64_dom_t *dom, const os64_html_node_t *node)
+static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     for (const DScript *mark = dom->scripts[script_bucket(node)]; mark != NULL; mark = mark->next)
         if (mark->node == node) return true;
     return false;
 }
 
-/* ALREADY STARTED, kept as a held node so the identity outlives a removal. */
+/* ALREADY STARTED belongs to node identity. Its immutable creation binding
+ * keeps the mark and native hold across adoption, including clone lookups. */
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     if (script_marked(dom, node)) return 0;
     DScript *mark = d_alloc(dom, sizeof(*mark));
     if (mark == NULL) return -1;

@@ -306,8 +306,7 @@ static void queue_join(HNode **head, HNode *other)
     *head = other;
 }
 
-int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
-                            uint8_t creation_realm)
+int64_t os64_html_group_check(os64_html_group_t *group, os64_html_document_t *doc)
 {
     HDoc *d = (HDoc *)doc;
     if (!group || !d || d->group || d->charge_group || d->parser ||
@@ -316,6 +315,15 @@ int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
     if (d->pub.arena_bytes > group->limit - group->bytes)
         return OS64_HTML_ARENA_EXHAUSTED;
     if (group->epoch == UINT64_MAX) return OS64_HTML_BAD_ARGUMENT;
+    return OS64_HTML_OK;
+}
+
+int64_t os64_html_group_add(os64_html_group_t *group, os64_html_document_t *doc,
+                            uint8_t creation_realm)
+{
+    int64_t status = os64_html_group_check(group, doc);
+    if (status != OS64_HTML_OK) return status;
+    HDoc *d = (HDoc *)doc;
     if (!group->first) {
         group->first = d;
         group->epoch = d->version;

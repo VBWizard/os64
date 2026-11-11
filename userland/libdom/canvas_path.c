@@ -38,7 +38,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);
     if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     JSValueConst value=argc?argv[0]:JS_UNDEFINED;
     if(magic>=P_WIDTH && magic!=P_DASH_SET && magic!=P_DASH_GET) {
@@ -98,7 +99,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     DValue *path=NULL;
     if(magic==P_FILL||magic==P_CLIP||magic==P_STROKE) {
         path=argc?JS_GetOpaque(argv[0],dom->path2d_class):NULL;
-        if(path&&path->dom!=dom)return JS_ThrowTypeError(ctx,"Path2D belongs to another document");
+        if(path&&!d_same_cluster(path->dom, dom))return JS_ThrowTypeError(ctx,"Path2D belongs to another document");
         if(path)value=argc>1?argv[1]:JS_UNDEFINED;
         if(magic==P_STROKE&&argc&&!JS_IsUndefined(argv[0])&&!path)
             return JS_ThrowTypeError(ctx,"Expected a Path2D");

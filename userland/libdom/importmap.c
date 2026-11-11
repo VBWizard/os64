@@ -175,14 +175,14 @@ os64_js_status_t os64_dom_import_map(os64_dom_t *dom, const char *name, const ch
         return outcome->status;
     }
     struct DImportParse parse = {text, length, walk};
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
         os64_js_outcome_t access, call;
-        JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+        JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
         JSValue function = ctx != NULL ? JS_NewCFunctionData(ctx, import_map_parse, 0, 0, 1, &dom->anchor->value)
                                        : JS_EXCEPTION;
         if (!JS_IsException(function)) {
             dom->import_parse = &parse;
-            os64_js_call(dom->runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL, NULL, &call);
+            os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL, NULL, &call);
             dom->import_parse = NULL;
             JS_FreeValue(ctx, function);
             /* What it threw is the window's error event at the task's

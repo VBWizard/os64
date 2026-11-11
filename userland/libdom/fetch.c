@@ -2311,7 +2311,7 @@ static JSValue response_from_network(os64_dom_t *dom, JSContext *ctx, const os64
 static void settle(os64_dom_t *dom, JSValueConst function, JSValue value, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t call;
-    os64_js_call(dom->runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 1, &value, NULL, &call);
+    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, function, JS_UNDEFINED, 1, &value, NULL, &call);
     d_outcome_fold(outcome, &call);
 }
 
@@ -2692,12 +2692,12 @@ static os64_js_status_t request_step(os64_dom_t *dom, uint32_t token, int step, 
         (step == STEP_PIECE && length == 0))
         return OS64_JS_OK;
     os64_js_outcome_t begin;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "fetch", &begin) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, "fetch", &begin) != OS64_JS_OK) {
         *outcome = begin;
         return outcome->status;
     }
     os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
     if (ctx != NULL) {
         bool whole = step == STEP_WHOLE || (step == STEP_HEAD && (!response->ok || !response->has_body));
         if (step == STEP_HEAD && !whole) request->headed = true;

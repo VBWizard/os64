@@ -112,3 +112,16 @@ $(LIBDOM_GEOMETRY_TEST_ELF): $(LIBDOM_GEOMETRY_TEST_OBJ) $(OBJ)/apps/yonder/geom
 .PHONY: dom-geometry-test
 dom-geometry-test: $(LIBDOM_GEOMETRY_TEST_ELF)
 -include $(LIBDOM_GEOMETRY_TEST_OBJ:.o=.d)
+
+# Three actual JS realms sharing a DOM cluster, in the reserved fixture slot.
+LIBDOM_REALMS_TEST_OBJ := $(OBJ)/dom/realms-test.o
+LIBDOM_REALMS_TEST_ELF := $(OBJ)/dom/realms-test
+$(LIBDOM_REALMS_TEST_OBJ): libdom/tests/realms.c libdom/tests/realm_cases.h \
+    libdom/include/dom/dom.h $(LIBJS_GENERATED)/.prepared libdom/library.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBDOM_CFLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBDOM_REALMS_TEST_ELF): $(LIBDOM_REALMS_TEST_OBJ) $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
+.PHONY: dom-realms-test
+dom-realms-test: $(LIBDOM_REALMS_TEST_ELF)

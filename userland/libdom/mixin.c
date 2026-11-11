@@ -113,6 +113,7 @@ static int change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
     const os64_html_node_t *parent = magic == D_APPEND_NODES || magic == D_PREPEND ||
         magic == D_REPLACE_CHILDREN ? self : self->parent;
     if (parent == NULL) return 0;
+    dom = d_owner(dom, parent);
     if (magic == D_REPLACE_CHILDREN) {
         /* A document's children are not replaced: the window's keeps its
          * <html> element (libhtml's rule; LIBDOM.md § The classic methods),
@@ -293,9 +294,9 @@ static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_
             JS_ThrowTypeError(ctx, "insertAdjacentElement takes an element");
             element = NULL;
         }
-        if (element != NULL) result = adjacent_steps(dom, ctx, self, magic, &word, element, NULL);
+        if (element != NULL) result = adjacent_steps(d_owner(dom, self), ctx, self, magic, &word, element, NULL);
     } else if (d_string(dom, ctx, argv[1], &text)) {
-        result = adjacent_steps(dom, ctx, self, magic, &word, NULL, &text);
+        result = adjacent_steps(d_owner(dom, self), ctx, self, magic, &word, NULL, &text);
     }
     d_string_free(dom, &text);
     d_string_free(dom, &word);
@@ -376,21 +377,12 @@ int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
     return truth;
 }
 
-/* normalize() (DOM § 4.4): libhtml's verb (os64_html_normalize), which
- * removes the descendants' empty Text nodes and merges each run of Text
- * siblings into its first in the standard's order, moving live ranges as it
- * goes (RANGE.md § 4). Merging keeps every parent's text, so no control's
- * value changes (os64_page_node_normalize). Each Text it may take out — an
- * empty one, or one after a Text sibling — records the document it leaves
- * first, as d_remove does; the record is read only while the node is a
- * root, so one kept in its tree is unharmed by it. */
+/* normalize() preserves native node-document metadata while removing empty
+ * Text nodes and merging siblings; libpage also updates control state. */
 static JSValue normalize(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
-    for (const os64_html_node_t *at = dom->documents != 0 ? self->first_child : NULL; at != NULL;
-         at = d_walk_next(self, at))
-        if (at->kind == OS64_HTML_TEXT && (at->text_len == 0 || (at->prev && at->prev->kind == OS64_HTML_TEXT)))
-            d_leaving(dom, at);
-    int64_t status = os64_page_node_normalize(dom->state, (os64_html_node_t *)self);
+    dom = d_owner(dom, self);
+    int64_t status = os64_page_node_normalize(d_owner(dom, self)->state, (os64_html_node_t *)self);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
 
@@ -401,6 +393,7 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     switch (magic) {
     case D_APPEND_NODES: case D_PREPEND: case D_REPLACE_CHILDREN:
     case D_BEFORE: case D_AFTER: case D_REPLACE_WITH: case D_REMOVE_SELF:
@@ -497,6 +490,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (magic == R_CONNECTED) return JS_NewBool(ctx, d_connected(self));
@@ -857,6 +851,10 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 {
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    dom = owner->dom;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_EXCEPTION;
     DValueMore *more = d_more(dom, ctx, owner);
     if (more == NULL) return JS_EXCEPTION;
     DValue **slot = view == VIEW_CLASS_LIST ? &more->class_list : view == VIEW_REL_LIST ? &more->rel_list
@@ -1182,6 +1180,7 @@ static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, in
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (self->kind != OS64_HTML_TEXT && self->kind != OS64_HTML_COMMENT && self->kind != OS64_HTML_PI)
         return JS_ThrowTypeError(ctx, "CharacterData member requires a character-data node");
     if (magic == C_LENGTH) return JS_NewUint32(ctx, os64_html_node_length(self));
@@ -1212,7 +1211,7 @@ static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, in
                                             : os64_html_utf16_byte(self->text, self->text_len, offset + count);
         return JS_NewStringLen(ctx, self->text + from, to - from);
     }
-    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)self, offset, count,
+    int64_t status = os64_page_node_replace_data(d_owner(dom, self)->state, (os64_html_node_t *)self, offset, count,
                                                  string.data, string.length);
     d_string_free(dom, &string);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
@@ -1234,6 +1233,7 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     }
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (self->kind != OS64_HTML_TEXT) return JS_ThrowTypeError(ctx, "Text member requires a text node");
     if (magic == T_WHOLE_TEXT) {
         /* The data of the contiguous Text nodes it is among (DOM § 4.11),
@@ -1261,12 +1261,9 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
      * inside a surrogate pair snapped down to the pair's start. The new
      * node belongs to this node's document. */
     os64_html_node_t *tail = NULL;
-    int64_t status = os64_page_node_split_text(dom->state, (os64_html_node_t *)self, offset, &tail);
+    int64_t status = os64_page_node_split_text(d_owner(dom, self)->state, (os64_html_node_t *)self, offset, &tail);
     if (status < 0) return d_html_error(ctx, status);
-    /* Wrapped first: d_made_in records the document on the wrapper, which
-     * a parentless node's tail needs to keep its ownerDocument. */
-    JSValue wrapped = d_wrap(dom, ctx, tail);
-    if (!JS_IsException(wrapped)) d_made_in(dom, tail, d_node_document(dom, self));
+    JSValue wrapped = d_wrap_in(dom, ctx, tail, d_node_document(dom, self));
     return wrapped;
 }
 
@@ -1282,6 +1279,7 @@ static JSValue template_content(JSContext *ctx, JSValueConst this_value, int arg
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (!is_html(self, OS64_HTML_TAG_TEMPLATE) || self->template_contents == NULL)
         return JS_ThrowTypeError(ctx, "content requires a template");
     return d_wrap(dom, ctx, self->template_contents);
@@ -1300,6 +1298,7 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *self = d_node(dom, ctx, this_value);
     if (self == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, self);
     if (!is_element(self)) return JS_ThrowTypeError(ctx, "An element's name requires an element");
     const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix
                                                                              : os64_html_namespace_uri(self);
@@ -1312,6 +1311,7 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
  * own, so about:blank is its fallback, and a base in it still counts. */
 JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
+    dom = d_owner(dom, self);
     bool window = d_window_document(dom, self);
     const char *url = window && dom->url != NULL ? dom->url : "about:blank";
     char *base = d_alloc(dom, OS64_DOM_URL_MAX);

@@ -320,6 +320,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     if (magic == C_COOKIE) {
         const os64_html_node_t *node = d_node(dom, ctx, self);
         if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "cookie requires a document");
         /* A document with no window is cookie-averse (HTML § 3.1.3), as
          * every document is when the host gives no provider. */
@@ -426,6 +427,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     }
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     if (magic == C_IMAGES || magic == C_FORMS) {
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx,"Expected a document");
         return d_classic_collection(dom,ctx,node,magic == C_IMAGES ? D_QUERY_IMAGES : D_QUERY_FORMS);
@@ -494,7 +496,7 @@ void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const
                               void *opaque)
 {
     os64_js_outcome_t outcome;
-    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome)
+    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome)
                                                  : NULL;
     if (ctx != NULL)
         JS_SetGlobalMissHandler(ctx, heard, opaque);

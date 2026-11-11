@@ -136,6 +136,7 @@ static JSValue attach_shadow(os64_dom_t *dom, JSContext *ctx, const os64_html_no
                       (delegates ? OS64_HTML_SHADOW_DELEGATES_FOCUS : 0) | (clonable ? OS64_HTML_SHADOW_CLONABLE : 0) |
                       (serializable ? OS64_HTML_SHADOW_SERIALIZABLE : 0);
     int64_t status = OS64_HTML_OK;
+    dom = d_owner(dom, node);
     os64_html_node_t *root = os64_html_attach_shadow(dom->document, (os64_html_node_t *)node, options, &status);
     return root != NULL ? d_wrap(dom, ctx, root) : d_html_error(ctx, status);
 }
@@ -173,6 +174,7 @@ static JSValue shadow_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     magic &= ~D_SET;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, node);
     const os64_html_node_t *host = os64_html_shadow_host(node);
     bool root_member = magic >= S_HOST && magic <= S_INNER_HTML;
     bool slot_member = magic >= S_NAME;

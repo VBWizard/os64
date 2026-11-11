@@ -193,7 +193,8 @@ static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     const char *s=NULL;size_t n=0;
     if(set){s=JS_ToCStringLen(ctx,&n,argc?argv[0]:JS_UNDEFINED);if(!s)return JS_EXCEPTION;}
@@ -243,7 +244,8 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
 {
     os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
     DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    dom = e->dom;
     if(argc<(magic==0?1:3))return JS_ThrowTypeError(ctx,"Canvas text arguments are missing");
     size_t length;const char *string=JS_ToCStringLen(ctx,&length,argv[0]);if(!string)return JS_EXCEPTION;
     double x=0,y=0,max_width=0;bool limited=magic&&argc>3;
@@ -288,7 +290,8 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     bool italic=!word(f.style,"normal");
     os64_font_family_list_t families={names,count,generic};os64_text_run_t *run=NULL;
     uint32_t pixels=style.size>0?(uint32_t)ceil(style.size):1;
-    os64_font_status_t status=dom->canvas_text.layout?dom->canvas_text.layout(dom->canvas_text.opaque,&families,bold,italic,pixels,text,length,&run):OS64_FONT_UNSUPPORTED;
+    os64_dom_t *owner = d_owner(dom, e->node);
+    os64_font_status_t status=owner->canvas_text.layout?owner->canvas_text.layout(owner->canvas_text.opaque,&families,bold,italic,pixels,text,length,&run):OS64_FONT_UNSUPPORTED;
     garb_free(&f.parsed);d_canvas_release(dom,text,length+1);
     if(status!=OS64_FONT_OK){os64_text_run_release(run);return font_error(ctx,status);}
     os64_text_run_view_t view;status=os64_text_run_view(run,&view);
@@ -324,7 +327,7 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
 int d_canvas_text_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst prototype)
 {
     dom->metrics_class=os64_js_class_id(&metrics_slot);
-    const JSClassDef definition={.class_name="TextMetrics",.finalizer=metrics_finalize};if(JS_NewClass(dom->engine,dom->metrics_class,&definition)<0)return -1;
+    const JSClassDef definition={.class_name="TextMetrics",.finalizer=metrics_finalize};if (!JS_IsRegisteredClass(dom->engine, dom->metrics_class) && JS_NewClass(dom->engine, dom->metrics_class, &definition) < 0)return -1;
     JSValue metrics=JS_NewObject(ctx);if(!d_retain(dom,ctx,metrics))return -1;
     JS_SetClassProto(ctx,dom->metrics_class,JS_DupValue(ctx,metrics));
     JSValue constructor=d_interface_new(ctx,"TextMetrics",0,NULL,metrics,JS_UNDEFINED);

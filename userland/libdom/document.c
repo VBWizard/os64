@@ -266,6 +266,7 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *document = d_node(dom, ctx, self);
     if (document == NULL) return JS_EXCEPTION;
+    dom = d_owner(dom, document);
     if (document->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
     bool window = document == dom->document->document;
     bool set = (magic & D_SET) != 0;

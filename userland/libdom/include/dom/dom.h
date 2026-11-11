@@ -381,6 +381,29 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
 
+/* Explicit clusters own admitted document/state pairs through root teardown.
+ * Create and admit while the runtime is idle, before exposing the new realm.
+ * Admission refusal leaves ownership with the caller. Once consumed is true,
+ * even a NULL binding belongs to the cluster: failure poisons the cluster,
+ * drains it and requires engine destruction. Never free a member separately.
+ * Drain the cluster, destroy the runtime, release layout borrowers, then free
+ * the cluster. Provider opaque storage must survive through drain. */
+typedef struct os64_dom_cluster os64_dom_cluster_t;
+typedef struct {
+    size_t html_bytes, page_bytes, dom_bytes, kept_bytes, canvas_bytes;
+} os64_dom_cluster_limits_t;
+typedef struct {
+    os64_dom_t *binding;
+    bool consumed;
+} os64_dom_admission_t;
+os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
+    os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+void os64_dom_cluster_drain(os64_dom_cluster_t *);
+void os64_dom_cluster_free(os64_dom_cluster_t *);
+os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);
+
 /* Owner-thread browser identity provider, borrowed text for the getter call.
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
@@ -977,7 +1000,10 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
  * (effects_mark answers it) and RELEASES, whenever trees go, everything
  * buried before the oldest generation still held: the keyframes of an
  * effect that was collected, or that setKeyframes gave new ones, are freed
- * by release, never sooner, and every one by os64_dom_free. */
+ * by release, and remaining data at native binding/cluster free. Explicit
+ * clusters share generations and retain retired data until the oldest borrowing
+ * host advances. Release with UINT64_MAX when that host has no trees left;
+ * all hosts must release their trees before cluster_free. */
 struct garb_effect;
 int32_t os64_dom_script_effects(os64_dom_t *dom, const os64_html_node_t *node,
                                 const struct garb_effect *const **out);
@@ -1038,8 +1064,9 @@ void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
  * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the
  * observers and does the standard's arithmetic; the host answers the
- * geometry, every observed pair in ONE call, from the layout it is about to
- * paint. Every rectangle is left, top, right, bottom in CSS pixels in the
+ * geometry in one batch per measurement document, from its current layout.
+ * An explicit root selects its current document; an implicit root keeps the
+ * observer's window. Every rectangle is left, top, right, bottom in CSS pixels in the
  * viewport's coordinates: getBoundingClientRect's space. */
 typedef struct {
     /* In: an element of the binding's document, and the observer's root:
@@ -1076,34 +1103,36 @@ typedef struct {
  * as the geometry provider's. */
 typedef bool (*os64_dom_intersections_provider_t)(void *opaque, os64_dom_intersection_t *items, size_t count,
                                                  os64_dom_geometry_stats_t *cost);
-/* Install/replace outside callbacks; NULL removes it, and the binding then
- * runs no step. */
+/* Install/replace outside callbacks; NULL removes this document's provider.
+ * A step needing its measurements then waits without updating observations. */
 void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque);
 /* How many targets the page's observers observe: 0, and the host need not
  * watch for movement at all. */
 size_t os64_dom_intersections_observed(const os64_dom_t *dom);
 /* Whether a step is owed whether or not anything moved: a target waits for
  * its first observation, or the last step passed one over for its
- * observer's `delay` and that delay has run (options.now_ms's clock). And
+ * observer's `delay` and that delay has run (options.now_ms's clock), or a
+ * required provider or batch allocation refused. And
  * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
  * rendering step, after the animation frame callbacks and the layout they
  * asked for, when something an observation reads may have moved (a
- * layout, a scroll, a resize) or one is owed. It asks the provider once
- * and queues an entry for each target whose threshold index or
+ * layout, a scroll, a resize) or one is owed. A cluster host must step an
+ * observer when its explicit root's document changes geometry too. It asks
+ * each required provider once and queues an entry for each target whose threshold index or
  * intersecting state changed; it runs no script. True when the delivery
  * task is due after it, the first step the DOM budget refuses its batch
  * among them (the task reports the observations lost); false when nothing
- * is, when the provider refused the batch (the step observed nothing, and
- * is owed again as it was), and when the budget refuses the batch again
+ * is, when a required provider is absent or refused (no observation changes
+ * and the step stays owed), and when the budget refuses the batch again
  * before a step has had one. */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
- * the binding keeps the observers, the host answers every observed target's
- * sizes in one call from a layout it makes current, in CSS pixels but for
- * `device`. Unlike the intersection batch, this provider MAY lay the page
+ * the binding keeps the observers; each target's current-document provider
+ * answers its batch in one call from a layout it makes current, in CSS pixels
+ * but for `device`. Unlike the intersection batch, this provider MAY lay the page
  * out: its second round must see what the first round's callbacks changed. */
 typedef struct {
     /* In: an element of the binding's document. */
@@ -1131,9 +1160,10 @@ bool os64_dom_resizes_owed(const os64_dom_t *dom);
  * until nothing is active; then the loop error, an ErrorEvent at window,
  * when an observation was passed over. The host calls it in its rendering
  * step after the animation frame callbacks and before the intersection
- * step, when it laid the page out since the last or one is owed. True
- * when a task ran, its outcome filled; false when nothing had moved, or the
- * provider refused. */
+ * step, when a target document was laid out since the last or one is owed.
+ * A cluster host must also step observers whose targets changed in a sibling.
+ * True when a task ran, its outcome filled; false when nothing had moved,
+ * or a required provider is absent or refused. */
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
  * task: each observer with entries, in the order the page made them,

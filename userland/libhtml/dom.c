@@ -533,8 +533,7 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
     }
     if (child && child->parent != parent)
         return OS64_HTML_NOT_FOUND;
-    if (node->kind == DOCUMENT || (node->kind == FRAGMENT && host(node) &&
-        os64_html_node_document(parent) != os64_html_node_document(node)))
+    if (node->kind == DOCUMENT)
         return OS64_HTML_HIERARCHY;
     if ((node->kind == TEXT && parent->kind == DOCUMENT) ||
         (node->kind == DOCTYPE && parent->kind != DOCUMENT))
@@ -846,7 +845,7 @@ static void tell(HDoc *d, os64_html_change_t *c, bool log)
 void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen)
 {
     *seen = (HSeen){0};
-    if (!telling(d))
+    if (!telling(d) && !(node->kind == FRAGMENT && telling(d_node_document_owner(node))))
         return;
     seen->previous = before ? before->prev : parent->last_child;
     if (node->kind == FRAGMENT) {
@@ -872,7 +871,7 @@ void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *nex
 void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
                    const HSeen *seen, bool log)
 {
-    if (!telling(d))
+    if (!telling(d) && !(node->kind == FRAGMENT && telling(d_node_document_owner(node))))
         return;
     HNode *added = node;
     size_t nadded = 1;
@@ -882,7 +881,7 @@ void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *re
         if (nadded) {
             os64_html_change_t drained = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = node,
                                           .removed = added, .nremoved = nadded};
-            tell(d, &drained, log);
+            tell(d_node_document_owner(node), &drained, log);
         }
     } else if (seen->from)
         d_tell_removed(d, seen->from, node, seen->from_prev, seen->from_next, log);
@@ -925,7 +924,15 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
     bool touched = is_landmark_parent(d, parent) || (node->parent && is_landmark_parent(d, node->parent));
     if (node->kind == FRAGMENT) {
         for (HNode *c; (c = node->first_child) != NULL;) {
-            take_out(d, c, NULL);
+            HDoc *source = d_node_document_owner(c);
+            take_out(source, c, NULL);
+            if (source != d) {
+                /* Validated with the whole fragment before commit. The child
+                 * is detached, so adoption publishes metadata without another
+                 * removal record or a collection point. */
+                int64_t status = os64_html_adopt(&d->pub, (HNode *)os64_html_node_document(parent), c);
+                if (status) d_fatal("libhtml: prevalidated fragment child adoption failed\n");
+            }
             h_attach(d, parent, before, c);
         }
     } else {
@@ -965,7 +972,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     /* Within one arena, place keeps removal/insertion notifications at one
      * revision; h_link updates the node document while preserving identity.
      * A foreign arena needs its source services before destination insertion. */
-    if (d_node_document_owner(node) != d) {
+    if (node->kind != FRAGMENT && d_node_document_owner(node) != d) {
         verdict = os64_html_adopt(doc, (HNode *)os64_html_node_document(parent), node);
         if (verdict) return verdict;
     }
@@ -975,13 +982,8 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
      * taken out and put back, which parts a control from a form outside
      * what moved; if that parted nobody, nothing is different. */
     if (node->kind == FRAGMENT && !node->first_child) {
-        if (os64_html_node_document(node) != os64_html_node_document(parent)) {
-            d_document_walk(node, (HNode *)os64_html_node_document(parent));
-            moved(d);
-        }
-        /* Consuming an empty fragment follows the lifetime rule for a
-         * drained one. With no adoption its revision is unchanged, and
-         * a pin at that revision can still borrow the container. */
+        /* Insertion consumes the children, not the fragment itself. An empty
+         * fragment keeps its node document and does not change a revision. */
         d_detached(d, node);
         h_meta(node)->flags &= ~H_NODE_FRESH;
         d_collect(d);
@@ -997,10 +999,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     if (!stays || d->records != records)
         moved(d);
     d_tell_placed(d, parent, node, before, NULL, &seen, !stays || d->records != records);
-    if (node->kind == FRAGMENT) {
-        d_document_walk(node, (HNode *)os64_html_node_document(parent));
-        d_detached(d, node);
-    }
+    if (node->kind == FRAGMENT) d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
 }
@@ -1016,7 +1015,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     /* Within one arena, place keeps removal/insertion notifications at one
      * revision; h_link updates the node document while preserving identity.
      * A foreign arena needs its source services before destination insertion. */
-    if (d_node_document_owner(node) != d) {
+    if (node->kind != FRAGMENT && d_node_document_owner(node) != d) {
         verdict = os64_html_adopt(doc, (HNode *)os64_html_node_document(parent), node);
         if (verdict) return verdict;
     }
@@ -1061,10 +1060,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
         landmarks(d, NULL);
     d_tell_placed(d, parent, node, before, old, &seen, true);
     d_detached(d, old);
-    if (node->kind == FRAGMENT) {
-        d_document_walk(node, (HNode *)os64_html_node_document(parent));
-        d_detached(d, node);
-    }
+    if (node->kind == FRAGMENT) d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
 }
@@ -1127,7 +1123,8 @@ int64_t os64_html_document_templates(os64_html_document_t *doc, HNode *document,
         for (HNode *n = arena->live_nodes; n; n = h_meta(n)->live_next)
             if (n->template_contents && os64_html_node_document(n) == document)
                 d_document_walk(n->template_contents, inert);
-    moved(d);
+    /* Installing this ownership association changes no rendered tree, style
+     * or control state. Do not invalidate a model built before DOM binding. */
     return OS64_HTML_OK;
 }
 
@@ -1136,7 +1133,7 @@ int64_t os64_html_may_adopt(const os64_html_document_t *destination, const HNode
     HDoc *to = (HDoc *)destination;
     if (!to || !document || document->kind != DOCUMENT || !ours(to, document) || !node ||
         !d_group_contains(to, h_meta(node)->allocation_owner)) return OS64_HTML_BAD_ARGUMENT;
-    if (node->kind == DOCUMENT || (node->kind == FRAGMENT && host(node)))
+    if (node->kind == DOCUMENT || os64_html_shadow_host(node))
         return OS64_HTML_HIERARCHY;
     HDoc *from = d_node_document_owner(node);
     if (!from->pub.is_xml && node->parent == &from->root && node->kind == ELEMENT)
@@ -1455,6 +1452,24 @@ os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *
     say(status, why);
     return n;
 }
+int64_t os64_html_document_keep(os64_html_document_t *doc, HNode *document)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !document || document->kind != DOCUMENT || !ours(d, document))
+        return OS64_HTML_BAD_ARGUMENT;
+    /* Additional Document roots can be named by detached nodes and template
+     * associations. Retain their identity until arena teardown; removing a
+     * child still makes that child an ordinary reclaimable detached unit. */
+    HMeta *m = h_meta(document);
+    if (m->flags & H_NODE_PENDING) {
+        unqueue(d, document);
+        m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+        m->unit_holds = 0;
+        d_lifetime(d)->pending_units--;
+    }
+    return OS64_HTML_OK;
+}
+
 os64_html_node_t *os64_html_create_document(os64_html_document_t *doc, int64_t *status)
 {
     HDoc *d = (HDoc *)doc;
