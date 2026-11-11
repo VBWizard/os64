@@ -2449,11 +2449,21 @@ them, one more than the byte on the wire.
 **Chrome's dependencies.** In the capture the document and the sheet
 depend on stream 0, the script on the sheet, the first picture on the
 script, the second picture on the first, and the `fetch`, sent after the
-others had finished, on stream 0 again. That is one rule: a new stream
-depends, exclusively, on the most recently opened stream that is still
-open and whose weight is at least its own, and on 0 when there is none.
-The connection applies that rule; which streams Chrome itself counted as
-still open at each instant is its own bookkeeping and is not matched.
+others had finished, on stream 0 again. C1's requests went out in
+falling order of weight, so it cannot tell "the newest heavier stream"
+from the rule Chromium's source states
+(`Http2PriorityDependencies::PriorityLowerBound`, read 2026-11-11;
+Quinn's finding on this brief's first draft, which had the former): of
+the streams still open whose weight is at least the new one's, take
+those of the LOWEST such weight, and of those the most recently opened;
+depend on it exclusively, and on 0 when there is none. With a script
+(220) open, then a sheet (256) opened after it, a picture (183) depends
+on the script by Chromium's rule and on the sheet by the other. Capture
+C3 is that page, with responses large enough to still be arriving, and
+the connection applies whichever rule C3 shows; the host case for it is
+the same three streams in that order. Which streams Chrome itself
+counted as still open at each instant is its own bookkeeping and is not
+matched.
 
 The capture is of Chrome 157 and the preset says 156. Its string and
 client hints are refreshed from this capture in this slice, since the
@@ -2490,10 +2500,30 @@ lines are in hand.
   the `fetch` row's weight and line, and is booked in DEBTS until someone
   captures it. `agent.c`'s table fills them from the captures;
   `way_load` passes them down beside `order`.
-- **A connection keeps the greeting it was dialled with.** A fetch that
-  finds a connection in the pool rides it under its own pseudo-header
-  order, weight and lines. yonder closes the pool's idle connections when
-  the agent setting changes, so a new identity dials its own.
+- **A connection keeps the greeting it was dialled with, and the pool
+  hands it only to a fetch that would have said the same** (Quinn's
+  finding: closing idle connections on an agent change is not enough,
+  because a connection in use and a dial in flight both outlive it, and
+  the pool prefers an HTTP/2 connection with room). The rule is the
+  pool's, at every place it gives a fetch a connection or a dial to wait
+  on:
+  - An HTTP/2 connection records its greeting. `fetch_pool_take` gives
+    it only to a fetch whose `h2` is equal to it, value for value (two
+    NULLs are equal), and never to a fetch that says `http1`. This holds
+    for a connection that is idle, in use, or being adopted.
+  - A dial in flight records its dialler's `h2` and `http1`. A fetch
+    waits on it only when both are its own; otherwise the dial is not
+    this fetch's to wait for, and it dials for itself under the key's
+    cap as if the other were not there.
+  - The remembered ALPN answer (a host that chose h2) is ignored by an
+    `http1` fetch, which dials as HTTP/1.1 fetches do.
+  - An HTTP/1.1 connection has no greeting and is anyone's, as now.
+  - Connections under an identity nobody asks for any more are not
+    hunted down: they finish their streams and idle out. yonder still
+    closes the idle ones when the agent setting changes, so they go
+    sooner.
+  The pseudo-header order, weight and lines are each request's own and
+  need no rule.
 
 #### libfetch's own greeting
 
@@ -2551,7 +2581,13 @@ request, and the stream id beside it. The reason sentences are H2.6's.
   first stream id, the priority fields and weight for each kind of
   request, the stream increment and where it falls, the pseudo-header
   order, and the HTTP/2-only lines and their place. `http1` offers no h2;
-  a typed agent gets libfetch's own. Under ASan/UBSan and TSan with the
+  a typed agent gets libfetch's own. Chrome's dependency rule on the
+  three streams C3 distinguishes. The identity changing under load: with
+  a response still arriving on one preset's connection, and again with a
+  dial still in flight, a fetch under another preset and a fetch saying
+  `http1` each get a connection of their own, the first fetch finishes
+  whole, and no request rides a connection greeted as someone else. Under
+  ASan/UBSan and TSan with the
   rest of the HTTP/2 harness. Mutants once at the end, through
   `tools/mutants_parallel.py`.
 - **QEMU, against `nghttpd -v`.** yonder loads the capture page under
