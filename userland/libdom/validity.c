@@ -160,6 +160,7 @@ static int fire_invalid(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
  * node of the window's document: no other has a screen to report on. */
 static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
+    dom = d_owner(dom, node);
     uint32_t flags = 0;
     if (flags_of(dom, ctx, node, &flags) < 0) return -1;
     if (dom->options.activate == NULL || !d_window_document(dom, node)) return 0;

@@ -288,6 +288,40 @@ views, NamedNodeMap views and Attr child lists. ASan/UBSan and LeakSanitizer
 remain enabled. The target consumer and libraries link. No new guest/P5 run
 is claimed; earlier campaign source qualifications remain below.
 
+## Review round 7
+
+All three findings on `de736aec` were reproduced under both teardown policies.
+Validation reporting resolves the control's current binding after invalid
+listeners run, before checking window membership, storing its message or
+notifying the host. Control and form reporting tests adopt invalid targets
+into B/C and check destination providers and message buffers.
+
+Selection tasks use the control's current binding, realm context and timer
+queue after argument conversion. Regressions exhaust A's timer quota, then
+exercise B delivery, adoption into C during conversion and borrowed range-text
+methods; events retain destination prototypes and callback-realm current-event
+state. The scheduling comment now describes destination binding ownership.
+
+ResizeObserver and IntersectionObserver methods validate and select the
+observer record's owner before touching target tables, counters or holds.
+The borrowed ResizeObserver observe/disconnect sequence reproduced an ASan
+crash. The sibling audit also found PerformanceObserver's timeline/registry
+routing mismatch: its record now retains a GC-marked constructor-binding
+anchor. Tests cover borrowed observe, unobserve, disconnect and takeRecords,
+owner counters, performance timeline isolation and buffered task delivery.
+MutationObserver already selects its record's owner.
+
+Both realm matrices pass 550 checks. The complete shipping-engine DOM suite
+passes 44,117 checks and 3,883 allocation sweep points. Instrumented observer
+suites pass: ResizeObserver 1,309; IntersectionObserver 409. The instrumented
+modern-API suite passes 19,948 checks, including forms, selections and
+PerformanceObserver. Five mutants compile and are caught:
+validation reporting, selection queue ownership, and the three observer
+registries. Resize and intersection mutants also reproduce native memory
+errors. ASan/UBSan and LeakSanitizer remain enabled. The target consumer and
+libraries link. No new guest/P5 run is claimed; earlier campaign source
+qualifications remain below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

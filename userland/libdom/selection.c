@@ -69,17 +69,22 @@ static JSValue select_fired(JSContext *ctx, JSValueConst self, int argc, JSValue
 
 /* HTML's "set the selection range" ends by queuing an element task to fire
  * select when the set moved the selection, in extent or direction: a
- * binding timer due at once, which the host runs as the task it is.
+ * timer in the control's current binding, due at once. The function uses
+ * that binding's realm and the host runs it as a task.
  * `before` and the record as it now stands are compared. -1 with an
  * exception pending when it could not be queued. */
 static int select_queue(os64_dom_t *dom, JSContext *ctx, JSValueConst element, const os64_html_node_t *node,
                         uint32_t start, uint32_t end, os64_page_direction_t direction)
 {
+    dom = d_owner(dom, node);
     uint32_t now_start, now_end;
     os64_page_direction_t now_direction;
     if (os64_page_node_selection(d_owner(dom, node)->state, node, &now_start, &now_end, &now_direction) != 0 ||
         (now_start == start && now_end == end && now_direction == direction))
         return 0;
+    os64_js_outcome_t access;
+    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return -1;
     JSValue fn_data[2] = {dom->anchor->value, (JSValue)element};
     JSValue fired = JS_NewCFunctionData(ctx, select_fired, 0, 0, 2, fn_data);
     if (JS_IsException(fired)) return -1;

@@ -125,7 +125,7 @@ static void dom_realm_cases(void)
 typedef struct {
     os64_html_document_t *document;
     int32_t width;
-    unsigned calls, damages, scrolls, resets;
+    unsigned calls, damages, scrolls, resets, reports;
     double scroll_x, scroll_y;
 } ClusterProvider;
 static bool cluster_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
@@ -182,6 +182,7 @@ static void cluster_activate(void *opaque, const os64_html_node_t *node, os64_do
     ClusterProvider *p = opaque;
     check(os64_html_node_owner(node) == p->document, "cluster activation: destination provider owns target");
     if (what == OS64_DOM_ACTIVATE_RESET) p->resets++;
+    if (what == OS64_DOM_ACTIVATE_REPORT) p->reports++;
 }
 
 static void cluster_navigation(os64_dom_t **bindings, ClusterProvider *providers, int destination,
@@ -651,6 +652,90 @@ static void dom_cluster_cases(void)
                 "globalThis.attrChildren=Object.getOwnPropertyDescriptor(A.Attr.prototype,'childNodes').get.call(borrowedAttr);"
                 "assert(attrChildren instanceof C.NodeList,'Attr child list keeps creation realm');",
                 "cluster round6: sibling attribute factories and cached views select creation realm");
+            unsigned reports_b = providers[1].reports, reports_c = providers[2].reports;
+            realm_script(realms[0],
+                "globalThis.reportMoved=document.createElement('input');reportMoved.id='round7-report';reportMoved.required=true;document.body.appendChild(reportMoved);"
+                "reportMoved.oninvalid=()=>B.document.body.appendChild(reportMoved);assert(!reportMoved.reportValidity());"
+                "globalThis.reportForm=document.createElement('form');document.body.appendChild(reportForm);"
+                "globalThis.reportControl=document.createElement('input');reportControl.id='round7-form-report';reportControl.required=true;reportForm.appendChild(reportControl);"
+                "reportControl.oninvalid=()=>C.document.body.appendChild(reportControl);assert(!reportForm.reportValidity());",
+                "cluster round7: invalid listeners move control and form-validation targets");
+            check(providers[1].reports == reports_b + 1 && providers[2].reports == reports_c + 1,
+                  "cluster round7: reporting notifies destination providers");
+            char report_text[256];
+            check(os64_dom_report_message(bindings[1], native_id(providers[1].document->document, "round7-report"),
+                report_text, sizeof(report_text)) && report_text[0], "cluster round7: B owns validation message");
+            check(os64_dom_report_message(bindings[2], native_id(providers[2].document->document, "round7-form-report"),
+                report_text, sizeof(report_text)) && report_text[0], "cluster round7: C owns form-validation message");
+            realm_script(realms[0],
+                "globalThis.selectionMoved=document.createElement('textarea');selectionMoved.value='abcdef';B.document.body.appendChild(selectionMoved);"
+                "globalThis.selectionEvents=[];globalThis.selectionEventClass=B.Event;selectionMoved.addEventListener('select',e=>selectionEvents.push(window.event===e&&e instanceof selectionEventClass));"
+                "globalThis.fullTimers=[];try{for(let i=0;i<4096;i++)fullTimers.push(setTimeout(()=>{},100000));"
+                "selectionMoved.setSelectionRange(1,3)}finally{fullTimers.forEach(clearTimeout)}",
+                "cluster round7: selection queues in B despite exhausted A timer quota");
+            check(os64_dom_timer_fire(bindings[1], p2b_ms, &out) && out.status == OS64_JS_OK,
+                  "cluster round7: B delivers selection task");
+            realm_script(realms[0],
+                "assert(selectionEvents.join()==='true','B selection event and A callback');selectionEvents=[];"
+                "selectionEventClass=C.Event;"
+                "selectionMoved.setSelectionRange({valueOf(){C.document.body.appendChild(selectionMoved);return 2}},4);",
+                "cluster round7: selection conversion adopts into C");
+            check(os64_dom_timer_fire(bindings[2], p2b_ms, &out) && out.status == OS64_JS_OK,
+                  "cluster round7: C delivers post-conversion selection task");
+            realm_script(realms[0],
+                "assert(selectionEvents.join()==='true','C selection event');"
+                "selectionEvents=[];B.HTMLTextAreaElement.prototype.setRangeText.call(selectionMoved,'x',0,1,'select');",
+                "cluster round7: borrowed range-text setter uses destination queue");
+            check(os64_dom_timer_fire(bindings[2], p2b_ms, &out) && out.status == OS64_JS_OK,
+                  "cluster round7: C delivers range-text selection task");
+            realm_script(realms[0], "assert(selectionEvents.join()==='true','range-text select event');",
+                "cluster round7: range-text event delivered");
+            realm_script(realms[0],
+                "globalThis.borrowedResize=new B.ResizeObserver(()=>{});"
+                "A.ResizeObserver.prototype.observe.call(borrowedResize,B.document.body);",
+                "cluster round7: borrowed ResizeObserver observe");
+            check(os64_dom_resizes_observed(bindings[0]) == 0 && os64_dom_resizes_observed(bindings[1]) == 1,
+                  "cluster round7: resize registry belongs to observer B");
+            realm_script(realms[0],
+                "borrowedResize.disconnect();C.ResizeObserver.prototype.observe.call(borrowedResize,C.document.body);"
+                "A.ResizeObserver.prototype.unobserve.call(borrowedResize,C.document.body);"
+                "A.ResizeObserver.prototype.observe.call(borrowedResize,B.document.body);"
+                "C.ResizeObserver.prototype.disconnect.call(borrowedResize);"
+                "globalThis.borrowedIntersection=new C.IntersectionObserver(()=>{});"
+                "A.IntersectionObserver.prototype.observe.call(borrowedIntersection,C.document.body);",
+                "cluster round7: borrowed observer methods share their record owner's registries");
+            check(os64_dom_resizes_observed(bindings[0]) == 0 && os64_dom_resizes_observed(bindings[1]) == 0 &&
+                os64_dom_resizes_observed(bindings[2]) == 0, "cluster round7: resize counters drain without underflow");
+            check(os64_dom_intersections_observed(bindings[0]) == 0 && os64_dom_intersections_observed(bindings[2]) == 1,
+                  "cluster round7: intersection registry belongs to observer C");
+            realm_script(realms[0],
+                "B.IntersectionObserver.prototype.takeRecords.call(borrowedIntersection);"
+                "borrowedIntersection.disconnect();A.IntersectionObserver.prototype.observe.call(borrowedIntersection,B.document.body);"
+                "B.IntersectionObserver.prototype.unobserve.call(borrowedIntersection,B.document.body);"
+                "B.IntersectionObserver.prototype.observe.call(borrowedIntersection,C.document.body);"
+                "A.IntersectionObserver.prototype.disconnect.call(borrowedIntersection);",
+                "cluster round7: borrowed intersection methods drain owner registry");
+            check(os64_dom_intersections_observed(bindings[0]) == 0 && os64_dom_intersections_observed(bindings[1]) == 0 &&
+                os64_dom_intersections_observed(bindings[2]) == 0, "cluster round7: intersection counters drain without underflow");
+            realm_script(realms[0],
+                "globalThis.borrowedPerformance=new B.PerformanceObserver(()=>{});"
+                "A.PerformanceObserver.prototype.observe.call(borrowedPerformance,{entryTypes:['mark']});"
+                "A.performance.mark('round7-A');B.performance.mark('round7-B');"
+                "assert(C.PerformanceObserver.prototype.takeRecords.call(borrowedPerformance).map(e=>e.name).join()==='round7-B','performance observer uses owner timeline');"
+                "C.PerformanceObserver.prototype.disconnect.call(borrowedPerformance);"
+                "B.performance.mark('round7-after-disconnect');assert(borrowedPerformance.takeRecords().length===0);",
+                "cluster round7: borrowed performance observer methods use owner registry");
+            check(os64_dom_timer_fire(bindings[1], p2b_ms, &out) && out.status == OS64_JS_OK,
+                  "cluster round7: drain disconnected performance task");
+            realm_script(realms[0],
+                "globalThis.performanceDelivered=false;"
+                "globalThis.bufferedPerformance=new B.PerformanceObserver(list=>{performanceDelivered=list instanceof B.PerformanceObserverEntryList&&list.getEntries().some(e=>e.name==='round7-B')});"
+                "A.PerformanceObserver.prototype.observe.call(bufferedPerformance,{type:'mark',buffered:true});",
+                "cluster round7: borrowed buffered observe queues owner task");
+            check(os64_dom_timer_fire(bindings[1], p2b_ms, &out) && out.status == OS64_JS_OK,
+                  "cluster round7: B delivers buffered performance task");
+            realm_script(realms[0], "assert(performanceDelivered,'buffered delivery uses owner list prototype');bufferedPerformance.disconnect();",
+                "cluster round7: performance delivery keeps owner realm");
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"

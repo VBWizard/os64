@@ -1030,7 +1030,9 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     DIObserver *o = observer_of(dom, self);
-    if (o == NULL) return JS_ThrowTypeError(ctx, "Expected an IntersectionObserver");
+    if (o == NULL || !d_same_cluster(dom, o->dom) || o->dom->closed)
+        return JS_ThrowTypeError(ctx, "Expected a live IntersectionObserver in this cluster");
+    dom = o->dom;
     switch (magic) {
     case M_OBSERVE: return observe(dom, ctx, o, argc, argv);
     case M_UNOBSERVE: {

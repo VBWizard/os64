@@ -196,6 +196,11 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round7-report-owner', 'validity', 'static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)\n{\n    dom = d_owner(dom, node);', 'static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)\n{'),
+      ('round7-selection-owner', 'selection', '    dom = d_owner(dom, node);\n    uint32_t now_start, now_end;', '    uint32_t now_start, now_end;'),
+      ('round7-resize-owner', 'resize', '    dom = o->dom;\n    struct DResizes *s = dom->resizes;', '    struct DResizes *s = dom->resizes;'),
+      ('round7-intersection-owner', 'intersection', '    dom = o->dom;\n    switch (magic) {', '    switch (magic) {'),
+      ('round7-performance-owner', 'performance', '    dom = d_callback(ctx, &o->anchor, OS64_JS_ABI_ID);\n    if (dom == NULL) return JS_EXCEPTION;', '    (void)0;'),
       ('round6-pointer-owner', 'pointer', '    dom = d_owner(dom, node);\n    DPointer *p = &dom->pointer;', '    DPointer *p = &dom->pointer;'),
       ('round6-attr-clone-owner', 'attr', 'static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)\n{\n    dom = d_owner(dom, document);', 'static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)\n{'),
       ('round6-attr-context', 'attr', 'static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)\n{\n    os64_js_outcome_t access;\n    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);\n    if (ctx == NULL) return NULL;', 'static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)\n{'),
