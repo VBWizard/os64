@@ -196,6 +196,10 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round2-onerror-target-window','event','entry == entry->dom->window && state != NULL &&', 'entry == dom->window && state != NULL &&'),
+      ('round2-animation-local-query','webanimation','size_t members = animation_heads(dom, heads);', 'size_t members = 1; heads[0] = dom->wa_first;'),
+      ('round2-animation-document-filter','webanimation','return d_connected(target) && os64_html_node_document(target) == root;', 'return d_connected(target);'),
+      ('round2-animation-composite-order','webanimation','heads[i]->serial < heads[first]->serial', 'heads[i]->serial > heads[first]->serial'),
       ('review-options-length-owner','options','    dom = d_owner(dom, select);\n    uint32_t count = option_count(select);\n    while (count > wanted)', '    uint32_t count = option_count(select);\n    while (count > wanted)'),
       ('review-options-index-owner','options','    dom = d_owner(dom, select);\n    uint32_t count = option_count(select);\n    if (index >= count)', '    uint32_t count = option_count(select);\n    if (index >= count)'),
       ('review-class-query-owner','collection','has_classes(d_owner(query->dom, query->root), node, query->named)', 'has_classes(query->dom, node, query->named)'),

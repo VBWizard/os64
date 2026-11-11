@@ -662,7 +662,8 @@ static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListe
         callback = held;
     }
     DEvent *state = JS_GetOpaque(event, dom->event_class);
-    bool special = listener->handler != D_LISTENER && entry == dom->window && state != NULL &&
+    /* Window onerror semantics belong to the target, not the callback realm. */
+    bool special = listener->handler != D_LISTENER && entry == entry->dom->window && state != NULL &&
         state->error_event && os64_strcmp(state->type, "error") == 0 && JS_IsFunction(ctx, callback);
     JSValue result = special ? call_error_handler(ctx, callback, entry->value, state)
                              : call_callback(ctx, callback, entry->value, event);

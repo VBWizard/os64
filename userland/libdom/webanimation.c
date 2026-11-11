@@ -2979,6 +2979,34 @@ void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_
     else os64_memset(&dom->wa_css, 0, sizeof(dom->wa_css));
 }
 
+/* Each binding keeps its creation-ordered records. Merge their heads by the
+ * cluster serial so queries and layout see the same composite order. */
+static size_t animation_heads(os64_dom_t *dom, DWaAnimation **heads)
+{
+    size_t members = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < members; ++i)
+        heads[i] = (dom->cluster ? dom->cluster->members[i] : dom)->wa_first;
+    return members;
+}
+
+static DWaAnimation *animation_next(DWaAnimation **heads, size_t members)
+{
+    size_t first = members;
+    for (size_t i = 0; i < members; ++i)
+        if (heads[i] && (first == members || heads[i]->serial < heads[first]->serial)) first = i;
+    if (first == members) return NULL;
+    DWaAnimation *a = heads[first];
+    heads[first] = a->next;
+    return a;
+}
+
+static bool animation_in_query(const os64_html_node_t *target, const os64_html_node_t *root, bool subtree)
+{
+    if (root->kind == OS64_HTML_DOCUMENT)
+        return d_connected(target) && os64_html_node_document(target) == root;
+    return subtree ? within(target, root) : target == root;
+}
+
 /* getAnimations (§ 6.8 Animatable, § 6.10 DocumentOrShadowRoot): the relevant
  * animations of the element (of its subtree with `subtree`), or of the
  * document's connected elements, in composite order — the CSS animations
@@ -2990,12 +3018,12 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
 {
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
-    const os64_html_node_t *root = NULL;
+    const os64_html_node_t *root = d_node(dom, ctx, self);
+    if (root == NULL) return JS_EXCEPTION;
+    if (root->kind != (magic == 0 ? OS64_HTML_ELEMENT : OS64_HTML_DOCUMENT))
+        return JS_ThrowTypeError(ctx, "getAnimations needs an element or document");
     bool subtree = false;
     if (magic == 0) {
-        root = d_node(dom, ctx, self);
-        if (root == NULL || root->kind != OS64_HTML_ELEMENT)
-            return JS_ThrowTypeError(ctx, "getAnimations needs an element");
         if (argc > 0 && JS_IsObject(argv[0])) {
             JSValue v = JS_GetPropertyStr(ctx, argv[0], "subtree");
             if (JS_IsException(v)) return v;
@@ -3005,6 +3033,8 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
             subtree = b != 0;
         }
     }
+    /* Reading subtree may have adopted the receiver into another document. */
+    dom = d_owner(dom, root);
     JSValue list = JS_NewArray(ctx);
     if (JS_IsException(list)) return list;
     uint32_t n = 0;
@@ -3013,7 +3043,7 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
     for (int32_t i = 0; i < ncss; i++) {
         os64_dom_css_animation_t r;
         if (!h->at(h->opaque, i, &r)) break;
-        bool mine = magic == 0 ? (subtree ? within(r.element, root) : r.element == root) : d_connected(r.element);
+        bool mine = animation_in_query(r.element, root, subtree);
         DWaAnimation *a = mine ? css_find(dom, r.id) : NULL;
         if (a != NULL) css_pull(ctx, a, &r);
         else if (mine && css_record_relevant(dom, &r)) a = css_wrap(dom, ctx, &r);
@@ -3028,16 +3058,25 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
             return JS_EXCEPTION;
         }
     }
-    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
+    DWaAnimation *heads[D_REALMS];
+    size_t members = animation_heads(dom, heads);
+    /* Array growth can collect unreferenced records. Pin each queued head;
+     * advancing transfers its reference to this iteration and pins its next. */
+    for (size_t i = 0; i < members; ++i)
+        if (heads[i]) JS_DupValue(ctx, heads[i]->target.value);
+    bool failed = false;
+    for (DWaAnimation *a; (a = animation_next(heads, members)) != NULL;) {
+        if (a->next) JS_DupValue(ctx, a->next->target.value);
         const os64_html_node_t *target = wa_target(a);
-        if (a->css_id != 0 || target == NULL || a->replace == WA_REMOVED || !wa_relevant(a)) continue;
-        bool mine = magic == 0 ? (subtree ? within(target, root) : target == root) : d_connected(target);
-        if (!mine) continue;
-        if (JS_SetPropertyUint32(ctx, list, n++, JS_DupValue(ctx, a->target.value)) < 0) {
-            JS_FreeValue(ctx, list);
-            return JS_EXCEPTION;
-        }
+        if (a->css_id == 0 && target != NULL && a->replace != WA_REMOVED && wa_relevant(a) &&
+            animation_in_query(target, root, subtree))
+            failed = JS_SetPropertyUint32(ctx, list, n++, JS_DupValue(ctx, a->target.value)) < 0;
+        JS_FreeValue(ctx, a->target.value);
+        if (failed) break;
     }
+    for (size_t i = 0; i < members; ++i)
+        if (heads[i]) JS_FreeValue(ctx, heads[i]->target.value);
+    if (failed) { JS_FreeValue(ctx, list); return JS_EXCEPTION; }
     return list;
 }
 
@@ -3331,12 +3370,10 @@ static void index_rebuild(os64_dom_t *dom)
     dom->wa_index_fx = NULL;
     dom->wa_index_n = 0;
     dom->wa_index_stale = false;
-    size_t n = 0, members = dom->cluster ? dom->cluster->count : 1;
     DWaAnimation *heads[D_REALMS];
-    for (size_t i = 0; i < members; ++i) {
-        heads[i] = (dom->cluster ? dom->cluster->members[i] : dom)->wa_first;
+    size_t n = 0, members = animation_heads(dom, heads);
+    for (size_t i = 0; i < members; ++i)
         for (DWaAnimation *a = heads[i]; a; a = a->next) n += wa_applies(a);
-    }
     if (n == 0) return;
     dom->wa_index_nodes = d_alloc(dom, n * sizeof(*dom->wa_index_nodes));
     dom->wa_index_fx = d_alloc(dom, n * sizeof(*dom->wa_index_fx));
@@ -3349,13 +3386,7 @@ static void index_rebuild(os64_dom_t *dom)
         return;
     }
     size_t k = 0;
-    for (;;) {
-        size_t first = members;
-        for (size_t i = 0; i < members; ++i)
-            if (heads[i] && (first == members || heads[i]->serial < heads[first]->serial)) first = i;
-        if (first == members) break;
-        DWaAnimation *a = heads[first];
-        heads[first] = a->next;
+    for (DWaAnimation *a; (a = animation_next(heads, members)) != NULL;) {
         if (!wa_applies(a)) continue;
         const os64_html_node_t *target = wa_target(a);
         /* Insertion by element; the list's order keeps each element's

@@ -1078,6 +1078,32 @@ static void wa_css_pending(void)
     fixture_free(&f);
 }
 
+/* Refuse each result-array allocation: queued animation references must be
+ * released on both successful enumeration and an interrupted query. */
+static void wa_query_refusals(void)
+{
+    size_t cuts = 0;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    for (size_t cut = 0; cut <= cuts; ++cut) {
+        DomFixture f = fixture_new(&options);
+        if (!fixture_ready(&f)) break;
+        p2b_script(&f, "for(let i=0;i<16;i++)document.getElementById('box').animate({opacity:[0,1]},1000)",
+                   "animation query: populate before refusing allocations");
+        size_t reached = 0;
+        check(engine_sweep_run(&f, "globalThis.queried=document.getAnimations()", cut, &reached) == 0,
+              "animation query: allocation probe runs");
+        if (cut == 0) {
+            cuts = reached;
+            p2b_script(&f, "assert(queried.length===16)", "animation query: positive baseline");
+        } else {
+            dom_sweeps++;
+            check(reached >= cut, "animation query: refusal point reached");
+        }
+        fixture_free(&f);
+    }
+    printf("Animation query allocation cuts: %zu\n", cuts);
+}
+
 static void dom_webanimation_cases(void)
 {
     wa_composite();
@@ -1093,4 +1119,5 @@ static void dom_webanimation_cases(void)
     wa_css_late_listener();
     wa_css_pending();
     wa_css_take_over();
+    wa_query_refusals();
 }

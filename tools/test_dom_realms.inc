@@ -250,6 +250,56 @@ static void dom_cluster_cases(void)
             }
             check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK, "cluster: exchange task closes");
             realm_script(realms[0],
+                "globalThis.errorCalls=[];globalThis.errorReturn=true;globalThis.hostCanceled=[];"
+                "B.onerror=function(){errorCalls.push([arguments.length,this===B,window.event.target===B,"
+                "...arguments]);return errorReturn};"
+                "for(const answer of [true,false]){errorReturn=answer;"
+                "let token=new C.Error('token'),ev=new C.ErrorEvent('error',{message:'cross',filename:'source.js',"
+                "lineno:7,colno:8,error:token,cancelable:true});"
+                "assert(B.dispatchEvent(ev)===!answer&&ev.defaultPrevented===answer,'onerror cancellation');"
+                "let got=errorCalls.pop();assert(got.length===8&&got[0]===5&&got[1]&&got[2], 'onerror target and arguments');"
+                "assert(got[3]==='cross'&&got[4]==='source.js'&&got[5]===7&&got[6]===8&&got[7]===token);"
+                "assert(window.event===undefined&&B.event===undefined)}"
+                "errorReturn=true;globalThis.hostErrorWatch=e=>hostCanceled.push(e.defaultPrevented);"
+                "B.addEventListener('error',hostErrorWatch);",
+                "cluster round2: foreign onerror keeps target-window arguments and cancellation");
+            const char *foreign_throw = "throw new Error('foreign onerror host')";
+            check(os64_js_realm_run(realms[1], foreign_throw, strlen(foreign_throw), "foreign-onerror.js", &out)
+                == OS64_JS_EXCEPTION, "cluster round2: host queues B error");
+            check(os64_dom_script_ended(bindings[1], "foreign-onerror.js", &out),
+                "cluster round2: host delivers B error to A handler");
+            realm_script(realms[0],
+                "assert(errorCalls.length===1&&errorCalls[0][0]===5&&errorCalls[0][1]&&errorCalls[0][2]);"
+                "assert(errorCalls[0][3].includes('foreign onerror host'));assert(hostCanceled.join()==='true');"
+                "B.onerror=null;B.removeEventListener('error',hostErrorWatch);"
+                "B.document.onerror=function(){errorCalls.push(arguments.length);return false};"
+                "let ev=new C.ErrorEvent('error',{cancelable:true});"
+                "assert(!B.document.dispatchEvent(ev)&&errorCalls.pop()===1,'Document handler stays ordinary');"
+                "B.document.onerror=null;",
+                "cluster round2: host onerror is special and Document onerror is ordinary");
+            realm_script(realms[0],
+                "globalThis.animC=C.document.createElement('div');C.document.body.appendChild(animC);"
+                "globalThis.firstAnim=animC.animate({opacity:[0,1]},1000);firstAnim.pause();firstAnim.currentTime=20;"
+                "globalThis.animA=document.createElement('div');document.body.appendChild(animA);"
+                "globalThis.secondAnim=animA.animate({opacity:[0,1]},1000);"
+                "globalThis.animB=B.document.createElement('div');B.document.body.appendChild(animB);"
+                "globalThis.thirdAnim=animB.animate({opacity:[0,1]},1000);"
+                "B.document.body.appendChild(animC);B.document.body.appendChild(animA);"
+                "globalThis.queryAnimations=[firstAnim,secondAnim,thirdAnim];"
+                "assert(!C.document.getAnimations().includes(firstAnim),'old document excludes moved animation');"
+                "assert(!document.getAnimations().includes(secondAnim),'source excludes moved animation');"
+                "let found=B.document.getAnimations().filter(a=>queryAnimations.includes(a));"
+                "assert(found.length===3&&found.every((a,i)=>a===queryAnimations[i]),'cluster composite order');"
+                "assert(B.Element.prototype.getAnimations.call(animC)[0]===firstAnim,'borrowed element query');"
+                "assert(A.Document.prototype.getAnimations.call(B.document).includes(firstAnim),'borrowed document query');"
+                "assert(B.document.body.getAnimations({subtree:true}).filter(a=>queryAnimations.includes(a)).length===3);"
+                "assert(B.Element.prototype.getAnimations.call(animC,{get subtree(){C.document.body.appendChild(animC);return true}})[0]===firstAnim);"
+                "assert(C.document.getAnimations().includes(firstAnim)&&!B.document.getAnimations().includes(firstAnim));"
+                "animA.remove();assert(!B.document.getAnimations().includes(secondAnim));"
+                "assert(B.Element.prototype.getAnimations.call(animA)[0]===secondAnim,'detached element query');"
+                "queryAnimations.forEach(a=>a.cancel());animB.remove();animC.remove();",
+                "cluster round2: animation discovery follows current document and global composite order");
+            realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"
                 "assert(retainedOptions[0] instanceof B.HTMLOptionElement,'select.length uses B');"

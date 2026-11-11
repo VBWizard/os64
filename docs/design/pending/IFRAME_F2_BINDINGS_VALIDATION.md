@@ -124,6 +124,33 @@ updated target consumer and libraries. The original frozen QEMU cohort and
 its results below remain evidence for the earlier implementation; this review
 delta does not claim another guest run.
 
+## Review round 2
+
+Both findings on `699702d2` were reproduced and accepted. Window `onerror`
+uses the target entry's binding to select its five-argument calling convention
+and true-to-cancel rule; execution, current event and exception attribution
+remain in the function callback's realm. The regression covers synthetic and
+host-delivered errors, both boolean return values, and a Document handler that
+must retain ordinary one-argument/false-to-cancel semantics.
+
+`getAnimations` resolves the receiver after reading its options, searches the
+cluster's animation lists in global creation order, and limits Document queries
+to connected targets whose current document is that receiver. Borrowed Element
+and Document methods, subtree queries, detached elements and adoption during
+option access preserve animation identity. Queries and layout share the same
+ordered traversal. Query iteration pins queued records across result-array
+allocation and releases them on refusal as well as success.
+
+Leak-enabled checks pass in both engine profiles: realm matrices 290 each;
+events 1,020 each; reporting 1,089 shipping / 4,523 instrumented; Web Animations
+303 shipping / 424 instrumented. The instrumented animation query fails each
+of its 11 allocation points in turn and tears down cleanly. Four new mutants
+compile and are caught: callback-window error semantics, binding-local animation
+queries, missing current-document filtering and reversed composite order.
+`make -C userland dom-realms-test` links the updated target libraries/consumer.
+These are focused review-delta checks; the broader campaign and frozen guest
+results below retain their earlier source qualifications.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the
