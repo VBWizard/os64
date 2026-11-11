@@ -103,7 +103,9 @@ struct flow_timeline {
     const os64_html_document_t *doc;
     FRecord **records;
     int32_t n, cap;
-    int32_t npseudo;            // the records a pseudo-element's style made
+    // The elements' records, as a script sees them (flow_timeline_at): each
+    // one's index in `records`, in their order, room for `cap`.
+    int32_t *seen, nseen;
     // node -> its first record: the element's own, its ::before's, its
     // ::after's, by garb_pseudo_t.
     FMap by_node[GARB_PSEUDO_AFTER + 1];
@@ -129,6 +131,7 @@ void flow_timeline_free(flow_timeline_t *t)
         os64_free(t->records[i]);
     }
     os64_free(t->records);
+    os64_free(t->seen);
     os64_free(t->met);
     for (int k = 0; k <= GARB_PSEUDO_AFTER; k++)
         f_map_free(&t->by_node[k]);
@@ -141,21 +144,18 @@ int32_t f_timeline_records(const flow_timeline_t *t)
 }
 
 // What a script sees leaves out a pseudo-element's records (DEBTS.md: a
-// CSSAnimation of one wants its pseudoElement, and its events theirs).
+// CSSAnimation of one wants its pseudoElement, and its events theirs), by
+// the index record_add keeps, since a script asks for every one each step.
 int32_t flow_timeline_size(const flow_timeline_t *t)
 {
-    return t != NULL ? t->n - t->npseudo : 0;
+    return t != NULL ? t->nseen : 0;
 }
 
 bool flow_timeline_at(const flow_timeline_t *t, int32_t i, flow_css_animation_t *out)
 {
-    if (t == NULL || i < 0 || i >= t->n - t->npseudo)
+    if (t == NULL || i < 0 || i >= t->nseen)
         return false;
-    int32_t at = i;
-    for (int32_t k = 0; t->npseudo > 0 && k <= at; k++)
-        if (t->records[k]->pseudo != GARB_PSEUDO_NONE)
-            at++;
-    const FRecord *r = t->records[at];
+    const FRecord *r = t->records[t->seen[i]];
     *out = (flow_css_animation_t){.id = r->id, .node = r->node, .name = r->name, .name_len = r->len,
                                   .place = r->place,
                                   .clock = {.paused = r->paused, .canceled = r->canceled, .start_ms = r->start,
@@ -217,6 +217,10 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, garb_p
         if (more == NULL)
             return NULL;
         t->records = more;
+        int32_t *seen = os64_realloc(t->seen, (size_t)grown * sizeof(*seen));
+        if (seen == NULL)
+            return NULL;
+        t->seen = seen;
         t->cap = grown;
     }
     FRecord *r = os64_calloc(1, sizeof(*r) + len);
@@ -246,7 +250,8 @@ static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, garb_p
         r->rate = 1;
     }
     os64_html_hold(t->doc, n);
-    t->npseudo += pseudo != GARB_PSEUDO_NONE;
+    if (pseudo == GARB_PSEUDO_NONE)
+        t->seen[t->nseen++] = t->n;
     t->records[t->n++] = r;
     return r;
 }
