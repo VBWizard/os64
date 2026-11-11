@@ -1637,17 +1637,26 @@ static void wake_cases(void)
     CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
     fetch_done(&a);
 
-    // A BUFFER READ EMPTY IS GIVEN BACK when it had grown: a stream that
-    // took 60,000 bytes and has had them all read holds none of that
-    // memory while it waits for more.
-    static char sixty[60000];
+    fetch_done(&a);
+    finish(dead);
+
+    // A BUFFER READ EMPTY IS GIVEN BACK when it had grown: with windows of
+    // a mebibyte, a stream takes 200,000 bytes before any is read, and once
+    // all are read it holds none of that memory while it waits for more.
+    dead = atomic_load(&dead_calls);
+    static const h2_setting_t kWideStream[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 1u << 20}};
+    static const h2_greeting_t kWideWindows = {.settings = kWideStream, .count = 1, .window_increment = 1u << 20};
+    begin_with(&kWideWindows, NULL, 0);
+    static char chunk[10000], taken[200000];
     fetch_init(&a, 3000);
-    CHECK(fetch_get(&a, conn, "/buf") == H2_OK && server_request("/buf") == 7);
-    server_reply(7, "200", NULL, false);
+    CHECK(fetch_get(&a, conn, "/buf") == H2_OK && server_request("/buf") == 1);
+    server_reply(1, "200", NULL, false);
     CHECK(fetch_head(&a) == H2_OK);
-    for (size_t at = 0; at < sizeof(sixty) * 2; at += 15000)
-        peer_send_data(7, sixty, 15000, false);
-    static char taken[120000];
+    for (size_t at = 0; at < sizeof(taken); at += sizeof(chunk))
+        peer_send_data(1, chunk, sizeof(chunk), false);
+    for (int i = 0; i < 400 && h2_conn_buffered(conn) < sizeof(taken); i++)
+        nap_ms(5);
+    CHECK(h2_conn_buffered(conn) >= sizeof(taken));
     for (got = 0; got < sizeof(taken);) {
         int64_t n = h2_stream_read(a.stream, taken + got, sizeof(taken) - got, &a.wait);
         CHECK(n > 0);
@@ -1655,7 +1664,10 @@ static void wake_cases(void)
             break;
         got += (size_t)n;
     }
-    CHECK(h2_conn_buffered(conn) <= 64u * 1024u);
+    CHECK(h2_conn_buffered(conn) == 0);
+    // And it takes more afterwards.
+    peer_send_data(1, "more", 4, true);
+    CHECK(read_all(&a, out, sizeof(out), &got) == 0 && got == 4 && memcmp(out, "more", 4) == 0);
     fetch_done(&a);
     finish(dead);
 
