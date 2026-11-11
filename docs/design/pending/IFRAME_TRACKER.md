@@ -66,3 +66,11 @@ review: F.2a for native ownership and F.2b for bindings. Keep the row in
 progress after F.2a and name its evidence in notes. F.2b's completion flip
 records both PRs; merging the brief or the native half alone does not finish
 the slice.
+
+F.3's [retirement brief](IFRAME_F3_RETIREMENT.md) proposes two implementation
+PRs under its row: F.3a for libjs lifecycle/job ownership and F.3b for DOM
+departure and failed-child isolation. Keep the row in progress between them;
+its final completion records both implementation PRs. The brief selects
+bounded retained slots and the design's runtime-wide overrun fallback, with
+explicit proof obligations for a future recovery extension. It enables no
+frame loading or independent reclamation of departed contexts.

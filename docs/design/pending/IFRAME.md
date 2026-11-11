@@ -97,16 +97,15 @@ the `userland` checkpoint comparison is held stable (§ The cut).*
    "free at the last wrapper finalizer" is not an implemented lifetime
    mechanism. F1 must prove the release model in § Retained ownership
    before F2 can retire child documents independently.
-8. **A frame's overrun retires the frame.** The script budget stays per
-   task. When a frame's task exceeds it, the interrupt unwinds that task,
-   the frame's realm is retired (no task of that document runs again, the
-   document stays on screen as it is) and the runtime, the parent and
-   the siblings continue; the top-level document's own overrun retires
-   the whole tree, as today. This needs libjs's sticky-outcome rule to
-   split (§ Realms) and the libjs owner's confirmation that an
-   interrupted task leaves the heap sound, which upstream's interrupt
-   design intends; failing that, any overrun retires the tree and the
-   DEBTS row says so.
+8. **An overrun has a runtime-wide fallback.** The script budget stays
+   per task, including synchronous calls across realms. The
+   [F.3 brief](IFRAME_F3_RETIREMENT.md#budget-and-interrupt-decision)
+   selects the conservative fallback: an overrun retires the script tree,
+   while ordinary document departure leaves siblings running. Per-child
+   timeout recovery remains a separate extension requiring heap/native
+   unwind proofs, interrupted-realm attribution and a defined boundary
+   for retained calls. F.3 records the fallback in DEBTS/DIVERGENCES when
+   implemented; it does not silently clear libjs's sticky failure latch.
 9. **Out of this design, each with its row:** `window.open` to a new
    window and `opener` (P3a answers `null`, the blocked popup, and the
    status line says a popup was blocked; a second GUI window is the
@@ -513,11 +512,13 @@ Worker budgets remain a separate part of WORKERS.md.
 additional contexts" becomes "consumers create realms through the
 library and nothing else": `os64_js_realm_create(runtime, outcome)`
 returns a realm handle wrapping a new `JSContext` in the runtime (the
-intrinsics installed as the primary's are), and `os64_js_realm_retire
-(runtime, realm)` marks it retired: no task of its own runs again, its
-pending jobs are prevented from entering script, and the context is released
-(`JS_FreeContext` drops an engine reference; it does not keep the native
-binding or arena alive for us). The primary context remains available
+intrinsics installed as the primary's are). The F.3 brief specifies a
+retirement operation: no new document-owned task runs, and ineligible
+jobs are suppressed before execution. The context and its native backing
+remain retained until root teardown, within the cumulative slot and byte
+limits in that brief; retirement does not release the context reference.
+Direct calls to retained functions remain under the live caller's enclosing
+budget and do not reactivate the departed document. The primary context remains available
 through the existing single-document API. Realm-aware run, timer and
 event entry points extend it; compatibility wrappers select the primary.
 
@@ -546,22 +547,16 @@ proper host too. `d_context`, `d_binding` and `d_callback` must distinguish
 the calling realm from the object/provider's owning document; replacing
 one equality test with "same runtime" does not establish authorization.
 
-**Budgets and outcomes.** The memory limit, the job queue and the stack
-limit stay the runtime's. The task budget stays per run. The sticky
-outcomes split: `FAILED_RUNTIME` (out of memory) and `HOST_FAILURE` stay
-runtime-wide; `LIMIT` and `CANCELLED` become realm-level when the run was
-a realm's task, and runtime-wide when it was the primary's. The
-condition for the split is the one § What this settles 8 names: an
-interrupted run unwinds through the engine's own exception path and
-leaves the heap consistent, which is upstream's design for the interrupt
-handler and is what every embedder's timeout relies on.
-The libjs owner confirms it on the harness with a case that interrupts a
-realm mid-allocation and mid-call and then runs the primary; or the
-split is not made and the row says so.
-Cross-realm synchronous calls keep the enclosing task's deadline rather
-than obtaining a fresh budget at each boundary. Specify which documents
-are retired when an interrupted call stack crosses realms, and prove
-that the surviving hosts cannot re-enter a failed execution environment.
+**Budgets and outcomes.** The memory limit, job queue and stack limit stay
+the runtime's. Cross-realm calls and checkpoints keep the enclosing task's
+deadline and job count. F.3 retains runtime-wide sticky failures, including
+execution/job limits and cancellation. A timeout in B called from A ends
+the shared script runtime; ordinary departure uses the lifecycle API rather
+than runtime cancellation. A local native admission refusal is distinct from
+an engine allocation failure. `LIMIT` includes memory exhaustion and cannot
+be made child-local by testing that status alone. The
+[F.3 interrupt decision](IFRAME_F3_RETIREMENT.md#budget-and-interrupt-decision)
+defines the audit and the additional proof required before a future split.
 
 **Promise jobs** are the runtime's one queue and run in order whatever
 realm queued them, which is the standard's "one event loop per agent".
