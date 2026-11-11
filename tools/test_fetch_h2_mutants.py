@@ -335,7 +335,7 @@ mutants = [
      '            s_remembered[i].h1_required = false;', H2),
     ('greeting-not-judged-by-the-connection-at-open', FETCH_C,
      'if (!sendable || !h2_greeting_ok(&would)) {',
-     'if (!sendable) {', H2),
+     'if (!sendable || (!h2_greeting_ok(&would) && false)) {', H2),
     ('share-whatever-the-greeting', POOL_C,
      'if (mine && like && c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&',
      'if (mine && c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&', H2),
