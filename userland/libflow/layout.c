@@ -792,6 +792,20 @@ static int64_t own_definite(const FBox *b)
     return b->def_h >= 0 ? b->def_h : b->ratio_h;
 }
 
+// A flex or grid container with a ratio whose items ask `asked`, more than
+// the height its ratio gives it, where its automatic minimum holds
+// (ratio_content_h): the height it then has, held to its limits, which its
+// items are placed against again; else -1.
+static int64_t ratio_grown(const FBox *b, int64_t cw, int64_t asked)
+{
+    if (b->ratio_h < 0)
+        return -1;
+    const flow_style_t *s = b->style;
+    int64_t vf = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] + b->border[FLOW_BOTTOM];
+    int64_t h = clamp_height(s, ratio_content_h(s, cw, b->w - cw, vf, asked), vf, b->cb_h);
+    return h > b->ratio_h ? h : -1;
+}
+
 // A containing block's content height when it does not depend on its
 // content, or -1: the nearest box with an element's own (own_definite,
 // its style's or its ratio's; an anonymous box is passed over, CSS 2.1 § 9.2.1.1), and above the root
@@ -4421,8 +4435,18 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
     if (l->failed)
         goto done;
     int64_t used;
-    if (flex_place(l, styles, &r, h_def ? h_given : -1, &used, natural))
-        in->y = top + used;
+    if (flex_place(l, styles, &r, h_def ? h_given : -1, &used, natural)) {
+        // Taller where its items ask more than its ratio gives (ratio_grown),
+        // and placed again against that, before anything is placed in them.
+        int64_t grown = ratio_grown(b, cw, *natural);
+        bool placed = true;
+        if (grown >= 0) {
+            b->ratio_h = grown;
+            placed = flex_place(l, styles, &r, grown, &used, natural);
+        }
+        if (placed)
+            in->y = top + used;
+    }
 done:
     if (l->failed || !sized_later(b))
         items_done(l, styles, b, cw);
@@ -5478,8 +5502,20 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
     if (l->failed)
         goto done;
     int64_t used;
-    if (grid_place(l, styles, b, &p, cx, top, h_def ? h_given : -1, &used, natural))
-        in->y = top + used;
+    if (grid_place(l, styles, b, &p, cx, top, h_def ? h_given : -1, &used, natural)) {
+        // As flex() does: taller where its items ask more than its ratio
+        // gives, its rows sized and its items placed again against that.
+        int64_t grown = ratio_grown(b, cw, *natural);
+        bool placed = true;
+        if (grown >= 0) {
+            b->ratio_h = grown;
+            plan_free(l, &p);
+            placed = grid_open(l, b, cw, grown, &p) &&
+                     grid_place(l, styles, b, &p, cx, top, grown, &used, natural);
+        }
+        if (placed)
+            in->y = top + used;
+    }
 done:
     if (l->failed || !sized_later(b))
         items_done(l, styles, b, cw);
@@ -5534,9 +5570,19 @@ static bool sized_later(const FBox *b)
     return b->parent != NULL && (b->parent->flex || b->parent->grid) && !b->out_of_flow;
 }
 
+// Whether in-flow item `b` is its container's only one: a walk that stops
+// at the second, since a row of many items asks it of each.
+static bool lone_item(const FBox *b)
+{
+    for (const FBox *c = b->parent->first; c != NULL; c = c->next)
+        if (c != b && !c->out_of_flow)
+            return false;
+    return true;
+}
+
 // Whether a flex or grid item's container may yet give it another height:
 // a row item it stretches across a line some other height may set — the
-// container's own, a minimum the line is held to, or another item's (a
+// container's own, a limit the line is held to, or another item's (a
 // lone item in a row of no height of its own is its line, and keeps its
 // own) — a column item (flexing grows and shrinks it), a grid item whose
 // written alignment stretches it down its rows (`normal` starts a box
@@ -5550,9 +5596,9 @@ static bool height_set_later(const FBox *b)
     const flow_style_t *ps = b->parent->style, *cs = b->style;
     if (b->parent->flex) {
         bool row = ps->flex_direction == FLOW_FLEX_ROW || ps->flex_direction == FLOW_FLEX_ROW_REVERSE;
-        return !row || (stretches_across(ps, b) &&
-                         (own_definite(b->parent) >= 0 || ps->min_height.kind != FLOW_LENGTH_AUTO ||
-                          flex_items(b->parent) > 1));
+        bool limited = ps->min_height.kind != FLOW_LENGTH_AUTO || ps->max_height.kind == FLOW_LENGTH_PX ||
+                       ps->max_height.kind == FLOW_LENGTH_PERCENT;
+        return !row || (stretches_across(ps, b) && (own_definite(b->parent) >= 0 || limited || !lone_item(b)));
     }
     flow_place_t written = cs->align_self != FLOW_PLACE_AUTO ? cs->align_self : ps->align_items;
     return written != FLOW_PLACE_NORMAL && written != FLOW_PLACE_AUTO &&
@@ -5761,26 +5807,10 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
         l->markers[l->nmarkers++] = b;
     if (b->kind == FB_REPLACED) {
         in.y += rep.h;
-    } else if (b->flex || b->grid) {
-        Cursor start = in;
-        if (b->flex)
-            flex(l, styles, b, cx, cw, &in, &asked);
-        else
-            grid_layout(l, styles, b, cx, cw, &in, &asked);
-        // Items asking more than its ratio's height make it taller where
-        // its automatic minimum holds (ratio_content_h), and are placed
-        // again against the height it then has, which is as definite.
-        int64_t grown = b->ratio_h >= 0
-                      ? clamp_height(s, ratio_content_h(s, cw, b->w - cw, vframe_px, asked), vframe_px, b->cb_h)
-                      : -1;
-        if (grown > b->ratio_h && !l->failed) {
-            b->ratio_h = grown;
-            in = start;
-            if (b->flex)
-                flex(l, styles, b, cx, cw, &in, &asked);
-            else
-                grid_layout(l, styles, b, cx, cw, &in, &asked);
-        }
+    } else if (b->flex) {
+        flex(l, styles, b, cx, cw, &in, &asked);
+    } else if (b->grid) {
+        grid_layout(l, styles, b, cx, cw, &in, &asked);
     } else if (b->ifc) {
         lines(l, styles, b, cx, cw, &in);
     } else {

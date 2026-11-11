@@ -6,6 +6,35 @@
 
 static void percent_height_cases(void)
 {
+    cascade_layout_case("percent height: a flex box with a ratio that grows lays its items' text out once",
+        "<!doctype html><style>body{margin:0}.r{display:flex;width:60px;aspect-ratio:1}"
+        ".c{width:10px;height:100px;font:16px/16px monospace}</style><div class=r><div class=c>x</div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 10 100\n"
+        "        line 0 0 10 16 base 12\n"
+        "          text \"x\" 0 0 8 16 mono 16\n");
+    cascade_layout_case("percent height: a grid with a ratio that grows lays its items' text out once",
+        "<!doctype html><style>body{margin:0}.r{display:grid;width:60px;aspect-ratio:1}"
+        ".c{height:100px;font:16px/16px monospace}</style><div class=r><div class=c>x</div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 60 100\n"
+        "        line 0 0 60 16 base 12\n"
+        "          text \"x\" 0 0 8 16 mono 16\n");
+    cascade_layout_case("percent height: a lone ratio item in a row its max-height holds gives its children none",
+        "<!doctype html><style>body{margin:0}.f{display:flex;width:100px;max-height:20px}.i{width:50px;aspect-ratio:1}"
+        ".c{height:100%}</style><div class=f><div class=i><div class=c></div></div></div>", 400,
+        "page 400 20\n"
+        "block html 0 0 400 20\n"
+        "  block body 0 0 400 20\n"
+        "    block div 0 0 100 20\n"
+        "      block div 0 0 50 20\n"
+        "        block div 0 0 50 0\n");
     cascade_layout_case("percent height: a lone ratio item in a row of no height is its line, and keeps its height",
         "<!doctype html><style>body{margin:0}.f{display:flex;width:100px}.i{flex:1;aspect-ratio:1}.c{height:100%}</style>"
         "<div class=f><div class=i><div class=c></div></div></div>", 400,

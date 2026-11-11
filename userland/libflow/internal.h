@@ -950,8 +950,8 @@ struct FBox {
     // from a definite one is), so its children's percentages and its flex
     // lines and grid tracks resolve against it. Where its automatic
     // minimum, its content's height, is more, a flex or grid container
-    // takes that height here and places its items again; a block grows to
-    // it at its end.
+    // takes that height (ratio_grown) and places its items against it once
+    // more; a block grows to it at its end.
     int64_t ratio_h;
     // A flex item's width and left margin, as its container decided them
     // before laying it out (FLEX.md), which block() takes as given; its
