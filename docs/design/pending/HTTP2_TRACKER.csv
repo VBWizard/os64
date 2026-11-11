@@ -55,7 +55,7 @@ H2.3.7,"tools/test_h2_host.sh: RFC 7541 Appendix C in both directions with table
 H2.3.8,"Mutants once at the end",H2.3.7,done,#535,"215 of 215"
 H2.3.9,"In-house review and as-built section",H2.3.8,done,#535,"one cold read: two defects and a leniency, fixed; Codex round 1 found two more, fixed; round 2 clean"
 
-H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,review,,"HTTP2.md § 2.3 § 2.4 § 2.5 § 2.6, § 4 H2.4 and 'H2.4, as built'; nothing calls it until H2.6; PR #538 with Codex; no P5 pass, nothing in the guest reaches it"
+H2.4,"The connection: state machine, streams, flow control, the reader thread, alone against a scripted peer",H2.0 H2.2 H2.3,done,#538,"HTTP2.md § 4 H2.4 and 'H2.4, as built'; nothing calls it until H2.6. Codex round 4 clean 2026-11-10 after twelve findings in three rounds; no P5 pass, nothing in the guest reaches it"
 H2.4.1,"Brief: connection object and locks named, frame-to-stream delivery, the settings exchange, the scripted h2 peer and its cases",H2.2,done,#536,"adds this slice's rows; the fetch.c half is split out as H2.6 (Q4)"
 H2.4.2,"libtls: os64_tls_transport_release hands the engine, the socket and unread ciphertext over; exports, audit, transport harness cases",H2.4.1,done,#538,
 H2.4.3,"h2_conn_t and h2_stream_t: the lock, what the reader owns alone, holds counted atomically; adopt queues preface, greeting SETTINGS and WINDOW_UPDATE",H2.4.2,done,#538,
@@ -65,9 +65,9 @@ H2.4.6,"Delivery of every frame type to open and closed streams; the first frame
 H2.4.7,"Streams from the fetch's side: open (parks at the mark), send under both windows and the mark, head, read with WINDOW_UPDATE at half, close with RST and credit, how it ended; content-length counted against DATA; a reset after a whole response stops the upload alone",H2.4.5,done,#538,
 H2.4.8,"Endings: peer reset, GOAWAY above and below, death fanned out, the quiet connection, condemned from outside, the write patience",H2.4.6,done,#538,
 H2.4.9,"tools/h2_peer.c (records numbered, reads that stall) and tools/test_h2_conn_host.sh: every case of the brief, eight threads, ASan/UBSan and TSan; the harness ends itself",H2.4.8,done,#538,
-H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,done,#538,"109 of 109 caught; the first run caught 82 of 102 and each of the 12 missed got a case"
+H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,done,#538,"122 mutants, all caught at the end; the first run caught 82 of 102 and each of the 12 missed got a case"
 H2.4.11,"One cold read, as-built section",H2.4.10,done,#538,"Opus found five defects, each fixed with a case and a mutant"
-H2.4.12,"Codex round",H2.4.11,doing,,
+H2.4.12,"Codex round",H2.4.11,done,#538,"round 4 clean; 5, 4 and 3 findings in the rounds before, each fixed with a case and a mutant"
 
 H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2,todo,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
 H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,todo,,"adds this slice's rows"

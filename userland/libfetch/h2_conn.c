@@ -258,8 +258,8 @@ static bool emit(h2_conn_t *c, const uint8_t *frames, size_t len)
 
 // A frame a PEER made us owe: an acknowledgement, a reset of its stream, a
 // window given back for bytes it sent. A peer that makes us owe them faster
-// than its socket takes them is ended, since nothing else bounds what it
-// can make the queue hold. False when the frame did not go.
+// than its socket takes them is ended at the frame that finds the queue
+// past its ceiling. False when the frame did not go.
 static bool emit_owed(h2_conn_t *c, const uint8_t *frame, size_t len)
 {
     if (c->out_bytes > (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST) {

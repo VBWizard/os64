@@ -1764,7 +1764,7 @@ checks in nine groups of cases. The peer's stand-in for the TLS engine
 numbers its records and refuses a second thread inside it, so the out
 queue's order and the one-lock rule are things a case can fail; its
 clock is the host's plus what a case skips, so thirty seconds of write
-patience take no time. `tools/test_h2_conn_mutants.py` is 124 deliberate
+patience take no time. `tools/test_h2_conn_mutants.py` is 122 deliberate
 breaks, one rule each. The first run through `tools/mutants_parallel.py`,
 of the 102 written before the cold read, caught 82; the other twenty
 were eight that did not compile as written and twelve the harness
@@ -1845,6 +1845,13 @@ Its third found three:
 - **A window past 2^31 - 1 for a stream whose answer is whole and whose
   request is still going up is the connection's error.** RFC 9113
   § 6.9.1 allows either; a reset would not change how that stream ended.
+
+Its fourth was clean. A last run of every mutant caught 122 of 124, and
+the two it missed were struck from the set as no longer breaks: removing
+the ceiling from owed frames, or from window credits, changes nothing a
+case can see once the reader holds the queue to the same ceiling after
+every feed (round two). The ceiling is still checked at the frame, which
+ends a flood one pass sooner.
 No QEMU and no P5 pass: nothing here is reachable in the guest.
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
