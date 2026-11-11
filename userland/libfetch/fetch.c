@@ -1337,12 +1337,14 @@ static os64_fetch_status_t h2_before_head(os64_fetch_t *f, h2_result_t r, bool *
         h2_ending_t e = h2_stream_ended(f->h2_stream);
         h2_note_ending(f);
         // HTTP_1_1_REQUIRED (RFC 9113 § 7), on the stream or as the
-        // connection's last word: the server will answer this over
-        // HTTP/1.1 and not over this. It is remembered of the server, and
-        // the request, which it has not acted on, goes again; the second
-        // try and every later fetch to it dial HTTP/1.1 (acquire).
-        if ((e.how == H2_END_PEER_RESET || e.how == H2_END_CONN_DEAD) && e.code == H2_ERR_HTTP_1_1_REQUIRED &&
-            !e.head_seen && f->conn != NULL) {
+        // connection's GOAWAY, whether that GOAWAY counts this stream among
+        // the ones it took up or the ones it did not: the server will
+        // answer this over HTTP/1.1 and not over this. It is remembered of
+        // the server, and the request, which it has not acted on, goes
+        // again; the second try and every later fetch to it dial HTTP/1.1
+        // (acquire).
+        if ((e.how == H2_END_PEER_RESET || e.how == H2_END_CONN_DEAD || e.how == H2_END_UNPROCESSED) &&
+            e.code == H2_ERR_HTTP_1_1_REQUIRED && !e.head_seen && f->conn != NULL) {
             fetch_pool_require_h1(f->conn);
             *again = true;
         } else

@@ -77,7 +77,8 @@ typedef enum {
     R_REFUSE_ONCE_HELD, // RST_STREAM(REFUSED_STREAM) the first time; then the head, and no body
     R_UNENDED,          // the head and the whole body, and the stream left open after it
     R_WANTS_H1,         // over HTTP/2, RST_STREAM(HTTP_1_1_REQUIRED); over HTTP/1.1, the reply
-    R_WANTS_H1_GOAWAY,  // ...the same, said as the connection's GOAWAY
+    R_WANTS_H1_GOAWAY,  // ...the same, said as the connection's GOAWAY, this stream among those it took up
+    R_WANTS_H1_GOAWAY_0,// ...and as a GOAWAY that took up no stream at all
 } route_kind_t;
 
 typedef struct {
@@ -337,7 +338,8 @@ static void serve_h2(dial_t *d)
             peer_send_rst(h.stream, H2_ERR_HTTP_1_1_REQUIRED);
             break;
         case R_WANTS_H1_GOAWAY:
-            peer_send_goaway(h.stream, H2_ERR_HTTP_1_1_REQUIRED);
+        case R_WANTS_H1_GOAWAY_0:
+            peer_send_goaway(r->kind == R_WANTS_H1_GOAWAY ? h.stream : 0, H2_ERR_HTTP_1_1_REQUIRED);
             nap_ms(50);
             peer_hang_up();
             return;
@@ -1937,11 +1939,12 @@ static void http1_cases(void)
 static void wants_h1_cases(void)
 {
     static job_t j;
-    const struct { const char *host, *url; route_kind_t kind; } kWays[2] = {
+    const struct { const char *host, *url; route_kind_t kind; } kWays[3] = {
         {"wants1.test", "https://wants1.test/signin", R_WANTS_H1},
         {"wants2.test", "https://wants2.test/signin", R_WANTS_H1_GOAWAY},
+        {"wants3.test", "https://wants3.test/signin", R_WANTS_H1_GOAWAY_0},
     };
-    for (int w = 0; w < 2; w++) {
+    for (int w = 0; w < 3; w++) {
         begin();
         route("/signin", kWays[w].kind, "200", kPage);
         memset(&j, 0, sizeof(j));
