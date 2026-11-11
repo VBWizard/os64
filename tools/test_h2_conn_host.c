@@ -1588,6 +1588,9 @@ static void wake_cases(void)
             nap_ms(20);
     }
     CHECK(died_within(dead, 5000));
+    // It ended at the ceiling, and not when some other owed frame found the
+    // queue far past it.
+    CHECK(h2_conn_queued(conn) <= (size_t)H2_OUT_MARK + H2_OUT_CONTROL_MOST + 4096);
     fetch_done(&a);
     finish_dead(dead);
 }
