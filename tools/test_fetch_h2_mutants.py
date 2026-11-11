@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""One deliberate break at a time to fetches on an HTTP/2 connection
+(docs/design/pending/HTTP2.md § 4 H2.6): libfetch's pool, its driver, its
+request renderer and its transport's release. A mutant is CAUGHT when its
+harness fails, MISSED when it passes, which means a test is missing and gets
+written. A build failure is neither.
+
+Each mutant is applied to the worktree's copy of its file, the harness is
+run, and the file is put back from the bytes read before the change —
+checked byte for byte — whatever happens. Nothing else is touched. Run it
+through tools/mutants_parallel.py, which bounds what a mutant can write and
+hold.
+"""
+import argparse
+import pathlib
+import re
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--logs', type=pathlib.Path, default=pathlib.Path('/tmp/h2-fetch-mutants'))
+parser.add_argument('--only', help='run the mutants whose name contains this')
+args = parser.parse_args()
+root = pathlib.Path(__file__).resolve().parent.parent
+args.logs.mkdir(parents=True, exist_ok=True)
+
+POOL_C = 'userland/libfetch/pool.c'
+FETCH_C = 'userland/libfetch/fetch.c'
+HTTP_C = 'userland/libfetch/http.c'
+TRANSPORT_C = 'userland/libfetch/transport.c'
+H2 = 'tools/test_fetch_h2_host.sh'
+HTTP = 'tools/test_http_host.sh'
+IO = 'tools/test_fetch_transport_host.sh'
+
+# (name, file, old, new, harness). Each breaks one rule the brief states;
+# none supplies a replacement expectation.
+mutants = [
+    ('take-never-shares', POOL_C,
+     '        if (shared != NULL) {\n            shared->refs++;',
+     '        if (false && shared != NULL) {\n            shared->refs++;', H2),
+    ('take-shares-without-a-count', POOL_C,
+     '            shared->refs++;\n',
+     '', H2),
+    ('take-joins-a-connection-being-adopted', POOL_C,
+     'c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&',
+     'c->protocol == FETCH_PROTO_H2 && h2_conn_room(c->h2) &&', H2),
+    ('take-does-not-wait-for-a-dial-in-flight', POOL_C,
+     '} else if (dial_in_flight && remembered_h2(key)) {',
+     '} else if (false && dial_in_flight && remembered_h2(key)) {', H2),
+    ('take-waits-for-any-dial', POOL_C,
+     '} else if (dial_in_flight && remembered_h2(key)) {',
+     '} else if (dial_in_flight) {', H2),
+    ('take-keeps-an-idle-h2', POOL_C,
+     'if (c->protocol == FETCH_PROTO_H1 && !fresh && !idle_past',
+     'if (!fresh && !idle_past', H2),
+    ('key-not-remembered', POOL_C,
+     '    remember(&conn->key, true);\n',
+     '', H2),
+    ('adopting-takes-no-count', POOL_C,
+     '    conn->protocol = FETCH_PROTO_H2;\n    conn->refs = 1;',
+     '    conn->protocol = FETCH_PROTO_H2;\n    conn->refs = 0;', H2),
+    ('dead-frees-under-a-fetch', POOL_C,
+     '    bool last = c->refs == 0;\n    ring_waiters();',
+     '    bool last = true;\n    ring_waiters();', H2),
+    ('dead-does-not-strike', POOL_C,
+     '    strike(c);\n    bool last = c->refs == 0;',
+     '    bool last = c->refs == 0;', H2),
+    ('dead-never-frees', POOL_C,
+     '    if (last)\n        free_h2(c);\n}\n\nh2_conn_hooks_t',
+     '    (void)last;\n}\n\nh2_conn_hooks_t', H2),
+    ('dead-rings-nobody', POOL_C,
+     '    bool last = c->refs == 0;\n    ring_waiters();',
+     '    bool last = c->refs == 0;', H2),
+    ('put-never-frees', POOL_C,
+     'bool last = conn->refs == 0 && conn->struck && conn->dead_heard;',
+     'bool last = false;', H2),
+    ('put-frees-a-live-connection', POOL_C,
+     'bool last = conn->refs == 0 && conn->struck && conn->dead_heard;',
+     'bool last = conn->refs == 0;', H2),
+    ('put-keeps-the-count', POOL_C,
+     '        conn->refs--;\n        if (conn->refs == 0)',
+     '        if (conn->refs == 0)', H2),
+    ('idle-out-with-a-fetch-on-it', POOL_C,
+     'bool yes = !c->struck && c->h2 != NULL && c->refs == 0 &&',
+     'bool yes = !c->struck && c->h2 != NULL &&', H2),
+    ('idle-out-never', POOL_C,
+     'bool yes = !c->struck && c->h2 != NULL && c->refs == 0 &&',
+     'bool yes = false && !c->struck && c->h2 != NULL && c->refs == 0 &&', H2),
+    ('idle-out-at-once', POOL_C,
+     '(!clock_now(&now) || expired(c, &now));\n    if (yes)\n        strike(c);',
+     '(!clock_now(&now) || expired(c, &now) || true);\n    if (yes)\n        strike(c);', H2),
+    ('closing-not-counted', POOL_C,
+     '        c->closing = true;\n        s_closing++;',
+     '        c->closing = true;', H2),
+    ('closing-never-uncounted', POOL_C,
+     '        c->closing = false;\n        s_closing--;',
+     '        c->closing = false;', H2),
+    ('dial-admitted-past-the-total', POOL_C,
+     'bool admitted = in_table + s_closing < FETCH_POOL_TOTAL;',
+     'bool admitted = true;', H2),
+    ('evicted-h2-not-condemned', POOL_C,
+     '        strike(c);\n        h2_conn_condemn(c->h2);\n        return;',
+     '        strike(c);\n        return;', H2),
+    ('evicted-h2-not-struck', POOL_C,
+     '        strike(c);\n        h2_conn_condemn(c->h2);\n        return;',
+     '        h2_conn_condemn(c->h2);\n        return;', H2),
+    ('room-rings-nobody', POOL_C,
+     '    (void)h2;\n    os64_lock_acquire(&s_lock);\n    ring_waiters();\n    os64_lock_release(&s_lock);\n}',
+     '    (void)h2;\n}', H2),
+    ('tls-facts-forgotten', POOL_C,
+     '    conn->tls_version = tls_version;\n',
+     '', H2),
+    ('h2-answer-not-recognised', FETCH_C,
+     'if (alpn == NULL || !os64_streq(alpn, "h2")) {',
+     'if (true) {', H2),
+    ('no-count-before-the-reader', FETCH_C,
+     '            fetch_pool_adopting(conn);\n',
+     '', H2),
+    ('offer-whatever-the-flag', FETCH_C,
+     'bool offer_h2 = fetch_h2_offer && encrypted;',
+     'bool offer_h2 = encrypted;', H2),
+    ('a-joiner-is-not-reused', FETCH_C,
+     '            f->reused = true;\n            f->detail.tls = OS64_TLS_OK;',
+     '            f->reused = false;\n            f->detail.tls = OS64_TLS_OK;', H2),
+    ('a-joiner-has-no-tls-facts', FETCH_C,
+     '            fetch_pool_tls_facts(conn, &f->detail.tls_version, &f->detail.tls_resumed);\n',
+     '', H2),
+    ('no-room-is-an-answer', FETCH_C,
+     '        if (!no_room)\n            return asked;',
+     '        return asked;', H2),
+    ('no-room-keeps-its-count', FETCH_C,
+     '        // it is not offered again, and this ends.\n        leave_h2(f);',
+     '        // it is not offered again, and this ends.\n        f->h2 = NULL;', H2),
+    ('cookie-judged-by-a-transport', FETCH_C,
+     'f->opt.on_set_cookie(f->opt.ctx, &url, f->hop_encrypted, value, value_len);',
+     'f->opt.on_set_cookie(f->opt.ctx, &url, f->io.encrypted, value, value_len);', H2),
+    ('head-encrypted-by-a-transport', FETCH_C,
+     'h->encrypted = f->hop_encrypted;',
+     'h->encrypted = f->io.encrypted;', H2),
+    ('drop-closes-an-h2-hop-as-h1', FETCH_C,
+     '    if (f->connected && f->h2 != NULL)\n        leave_h2(f);\n    if (f->connected) {',
+     '    if (f->connected) {', H2),
+    ('release-closes-an-h2-hop-as-h1', FETCH_C,
+     '    if (f->h2 != NULL) {\n        leave_h2(f);\n        return;\n    }',
+     '', H2),
+    ('leave-keeps-its-stream', FETCH_C,
+     '    if (f->h2_stream != NULL)\n        h2_stream_close(f->h2_stream);\n    f->h2_stream = NULL;',
+     '    f->h2_stream = NULL;', H2),
+    ('leave-keeps-its-count', FETCH_C,
+     '    f->conn = NULL;\n    fetch_pool_put(conn, NULL);\n}',
+     '    f->conn = NULL;\n    (void)conn;\n}', H2),
+    ('unprocessed-not-tried-again', FETCH_C,
+     '            *again = true;\n            break;\n        case H2_END_PEER_RESET:',
+     '            *again = false;\n            break;\n        case H2_END_PEER_RESET:', H2),
+    ('refused-not-tried-again', FETCH_C,
+     '*again = e.code == H2_ERR_REFUSED_STREAM && !e.any_seen;',
+     '*again = false;', H2),
+    ('any-reset-tried-again', FETCH_C,
+     '*again = e.code == H2_ERR_REFUSED_STREAM && !e.any_seen;',
+     '*again = !e.any_seen;', H2),
+    ('death-tried-again-for-a-post', FETCH_C,
+     '*again = !e.any_seen && f->reused && idempotent(f);',
+     '*again = !e.any_seen && f->reused;', H2),
+    ('death-tried-again-on-its-own-dial', FETCH_C,
+     '*again = !e.any_seen && f->reused && idempotent(f);',
+     '*again = !e.any_seen && idempotent(f);', H2),
+    ('death-tried-again-after-an-answer-began', FETCH_C,
+     '*again = !e.any_seen && f->reused && idempotent(f);',
+     '*again = f->reused && idempotent(f);', H2),
+    ('death-never-tried-again', FETCH_C,
+     '*again = !e.any_seen && f->reused && idempotent(f);',
+     '*again = false;', H2),
+    ('head-too-large-is-a-bad-head', FETCH_C,
+     '            os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported), "head");\n            status = OS64_FETCH_UNSUPPORTED;',
+     '            status = OS64_FETCH_BAD_HEAD;', H2),
+    ('reason-lost-for-a-request-failed', FETCH_C,
+     '    if (status == OS64_FETCH_REQUEST_FAILED)\n        os64_strcopy(f->detail.why, sizeof(f->detail.why), f->h2_note);',
+     '    (void)0;', H2),
+    ('silence-before-the-head-is-a-failure', FETCH_C,
+     '        f->h2_silent = true;\n        f->detail.silent_after_body = false;\n        status = OS64_FETCH_SILENT;',
+     '        f->h2_silent = true;\n        f->detail.silent_after_body = false;', H2),
+    ('upload-not-sent', FETCH_C,
+     '        r = h2_stream_send(f->h2_stream, f->opt.body, f->opt.body_len, true, &f->h2_wait, &sent);',
+     '        r = H2_OK; sent = f->opt.body_len;', H2),
+    ('a-body-opens-no-data', FETCH_C,
+     'bool has_body = sends_body(f) && f->opt.body_len != 0;',
+     'bool has_body = false && sends_body(f);', H2),
+    ('status-not-read', FETCH_C,
+     "            f->reply.status = (value[0] - '0') * 100 + (value[1] - '0') * 10 + (value[2] - '0');",
+     '            f->reply.status = 200;', H2),
+    ('observers-not-told', FETCH_C,
+     '        response_header(f, named, name_len, f->h2_value, value_len);\n        rc = http_head_field',
+     '        rc = http_head_field', H2),
+    ('fields-not-read', FETCH_C,
+     '        rc = http_head_field(&f->reply, named, f->h2_value, value_len);',
+     '        rc = HTTP_HEAD_OK;', H2),
+    ('a-short-body-is-broke', FETCH_C,
+     '        f->body.result = HTTP_BODY_CUT;\n        return 0;',
+     '        return -1;', H2),
+    ('a-silent-body-is-broke', FETCH_C,
+     '    if (n == -(int64_t)H2_SILENT)\n        f->h2_silent = true;\n    if (n != -(int64_t)H2_ENDED)',
+     '    if (n != -(int64_t)H2_ENDED)', H2),
+    ('a-bodiless-reply-is-waited-on', FETCH_C,
+     '    if (f->h2_bodiless) {\n        f->body.result = HTTP_BODY_DONE;\n        return 0;\n    }\n',
+     '', H2),
+    ('a-clean-end-is-not-done', FETCH_C,
+     '    if (n == 0) {\n        f->body.result = HTTP_BODY_DONE;\n        return 0;\n    }\n    f->body.result = HTTP_BODY_BROKE;',
+     '    f->body.result = HTTP_BODY_BROKE;', H2),
+    ('ending-not-noted-mid-body', FETCH_C,
+     '        return -1;\n    h2_note_ending(f);\n    switch',
+     '        return -1;\n    switch', H2),
+    ('note-not-in-the-sentence', FETCH_C,
+     "if (d->h2 && f->h2_note[0] != '\\0' && f->status != OS64_FETCH_REQUEST_FAILED &&",
+     'if (false && d->h2 &&', H2),
+    ('idle-limit-of-a-transport-nobody-opened', FETCH_C,
+     'uint32_t limit = d->h2 ? idle_limit(f) : f->io.idle_ms;',
+     'uint32_t limit = f->io.idle_ms;', H2),
+    ('h2-408-rule', FETCH_C,
+     '    if (f->h2 == NULL && timed_out_while_kept(f))\n        return;',
+     '    if (timed_out_while_kept(f))\n        return;', H2),
+    ('list-keeps-connection', HTTP_C,
+     '{"connection", "keep-alive", "proxy-connection",',
+     '{"keep-alive", "proxy-connection",', HTTP),
+    ('list-keeps-te', HTTP_C,
+     '"transfer-encoding", "upgrade", "te", "host"}',
+     '"transfer-encoding", "upgrade", "host"}', HTTP),
+    ('cookie-not-crumbled', HTTP_C,
+     '    if (line->name_len == 6 && name_matches(line->name, "cookie", 6)) {',
+     '    if (false && line->name_len == 6) {', HTTP),
+    ('cookie-crumbs-may-be-empty', HTTP_C,
+     'if (at > from && !list_add(l, "cookie", 6, value + from, at - from))',
+     'if (!list_add(l, "cookie", 6, value + from, at - from))', HTTP),
+    ('names-keep-their-case', HTTP_C,
+     '        at[i] = to_lower(name[i]);',
+     '        at[i] = name[i];', HTTP),
+    ('authorization-not-sensitive', HTTP_C,
+     '(line->name_len == 13 && name_matches(line->name, "authorization", 13)) ||',
+     'false ||', HTTP),
+    ('authority-before-method', HTTP_C,
+     '    return list_add(l, ":method", 7, method, os64_strlen(method)) &&\n           list_add(l, ":authority", 10, host, os64_strlen(host)) &&',
+     '    return list_add(l, ":authority", 10, host, os64_strlen(host)) &&\n           list_add(l, ":method", 7, method, os64_strlen(method)) &&', HTTP),
+    ('list-past-its-table', HTTP_C,
+     'if (l->count == l->most || name_len + value_len > l->room - l->used)',
+     'if (name_len + value_len > l->room - l->used)', HTTP),
+    ('list-past-its-bytes', HTTP_C,
+     'if (l->count == l->most || name_len + value_len > l->room - l->used)',
+     'if (l->count == l->most)', HTTP),
+    ('value-keeps-its-blanks', HTTP_C,
+     '        while (end > value && is_blank(end[-1]))\n            end--;\n        value_len = (size_t)(end - value);',
+     '        value_len = (size_t)(end - value);', HTTP),
+    ('text-order-ignored-by-the-walk', HTTP_C,
+     'if (!name_listed(order, NULL, line.name, line.name_len) && !put(ctx, &line))',
+     'if (!put(ctx, &line))', HTTP),
+    ('release-keeps-the-wrapper', TRANSPORT_C,
+     "            io->tls = NULL;         // the wrapper is gone, and what it held is the caller's\n",
+     '', IO),
+    ('release-failure-leaves-it-open', TRANSPORT_C,
+     '    if (live(io->error.status))\n        io->error.status = OS64_TLS_TRANSPORT;\n    fetch_transport_close(io, false);\n    return false;',
+     '    if (live(io->error.status))\n        io->error.status = OS64_TLS_TRANSPORT;\n    return false;', IO),
+    ('release-of-a-plain-transport', TRANSPORT_C,
+     '    if (io->tls == NULL || !start_budget(io, &budget))\n        goto fail;\n    for (;;) {\n        uint64_t wait = patience(io, &budget);\n        if (!wait)\n            goto fail;\n        os64_tls_status_t status = os64_tls_transport_release',
+     '    if (!start_budget(io, &budget))\n        goto fail;\n    for (;;) {\n        uint64_t wait = patience(io, &budget);\n        if (!wait)\n            goto fail;\n        os64_tls_status_t status = os64_tls_transport_release', IO),
+    ('release-refusal-not-remembered', TRANSPORT_C,
+     '        if (status != OS64_TLS_NEED_PROGRESS) {\n            remember(io, status);\n            goto fail;',
+     '        if (status != OS64_TLS_NEED_PROGRESS) {\n            goto fail;', IO),
+    ('alpn-of-a-plain-transport', TRANSPORT_C,
+     'return io->tls != NULL ? os64_tls_transport_state(io->tls).alpn : NULL;',
+     'return os64_tls_transport_state(io->tls).alpn;', IO),
+]
+
+caught, missed, unbuilt = [], [], []
+for name, rel, old, new, harness in mutants:
+    if args.only and args.only not in name:
+        continue
+    path = root / rel
+    original = path.read_bytes()
+    text = original.decode()
+    if text.count(old) != 1:
+        print(f'{name}: the text to break is not found once in {rel}', file=sys.stderr)
+        unbuilt.append(name)
+        continue
+    log = args.logs / f'{name}.log'
+    try:
+        path.write_text(text.replace(old, new))
+        with log.open('w') as out:
+            try:
+                result = subprocess.run(['bash', str(root / harness)], cwd=root, stdout=out, stderr=out, timeout=900)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = 'timeout'
+    finally:
+        path.write_bytes(original)
+        if path.read_bytes() != original:
+            print(f'{name}: {rel} WAS NOT RESTORED', file=sys.stderr)
+            sys.exit(2)
+    body = log.read_text(errors='replace')
+    # A compiler's error, not a sanitizer's "runtime error:", which is a catch.
+    built = re.search(r'\.(c|h|inc):\d+:\d+: error:', body) is None and 'undefined reference' not in body
+    if not built:
+        unbuilt.append(name)
+        verdict = 'did not build'
+    elif code != 0:
+        caught.append(name)
+        verdict = 'caught'
+    else:
+        missed.append(name)
+        verdict = 'MISSED'
+    print(f'{name}: {verdict}', flush=True)
+
+print(f'\nh2 fetch mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
+if missed:
+    print('missed: ' + ', '.join(missed))
+if unbuilt:
+    print('did not build: ' + ', '.join(unbuilt))
+sys.exit(1 if missed or unbuilt else 0)
