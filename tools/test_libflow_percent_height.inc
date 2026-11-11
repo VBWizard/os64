@@ -6,6 +6,156 @@
 
 static void percent_height_cases(void)
 {
+    cascade_layout_case("percent height: a lone ratio item in a row of no height is its line, and keeps its height",
+        "<!doctype html><style>body{margin:0}.f{display:flex;width:100px}.i{flex:1;aspect-ratio:1}.c{height:100%}</style>"
+        "<div class=f><div class=i><div class=c></div></div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 100 100\n"
+        "      block div 0 0 100 100\n"
+        "        block div 0 0 100 100\n");
+    cascade_layout_case("percent height: a ratio item a taller one stretches gives its children no definite height",
+        "<!doctype html><style>body{margin:0}.f{display:flex;width:100px}.i{width:50px;aspect-ratio:1}"
+        ".t{width:10px;height:150px}.c{height:100%}</style>"
+        "<div class=f><div class=i><div class=c></div></div><div class=t></div></div>", 400,
+        "page 400 150\n"
+        "block html 0 0 400 150\n"
+        "  block body 0 0 400 150\n"
+        "    block div 0 0 100 150\n"
+        "      block div 0 0 50 150\n"
+        "        block div 0 0 50 0\n"
+        "      block div 50 0 10 150\n");
+    cascade_layout_case("percent height: a ratio grid item written to stretch gives its children no definite height",
+        "<!doctype html><style>body{margin:0}.g{display:grid;height:200px;grid-template-rows:200px}.i{width:50px;aspect-ratio:1;align-self:stretch}.c{height:100%}</style><div class=g><div class=i><div class=c></div></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 50 200\n"
+        "        block div 0 0 50 0\n");
+    cascade_layout_case("percent height: a ratio grid item under normal starts, and gives its children its ratio's height",
+        "<!doctype html><style>body{margin:0}.g{display:grid;height:200px;grid-template-rows:200px}.i{width:50px;aspect-ratio:1}.c{height:100%}</style><div class=g><div class=i><div class=c></div></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 50 50\n"
+        "        block div 0 0 50 50\n");
+    cascade_layout_case("percent height: a ratio item a column flexes gives its children no definite height",
+        "<!doctype html><style>body{margin:0}.g{display:flex;flex-direction:column;height:200px}.i{width:50px;aspect-ratio:1;flex:1}.c{height:100%}</style><div class=g><div class=i><div class=c></div></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 50 200\n"
+        "        block div 0 0 50 0\n");
+    cascade_layout_case("percent height: content taller than a flex row with a ratio grows it",
+        "<!doctype html><style>body{margin:0}.r{display:flex;width:60px;aspect-ratio:1}.c{width:10px;height:100px}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 10 100\n");
+    cascade_layout_case("percent height: content taller than a flex column with a ratio grows it, and keeps its height",
+        "<!doctype html><style>body{margin:0}.r{display:flex;flex-direction:column;width:60px;aspect-ratio:1}.c{height:100px}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 60 100\n");
+    cascade_layout_case("percent height: content taller than a grid with a ratio grows it",
+        "<!doctype html><style>body{margin:0}.r{display:grid;width:60px;aspect-ratio:1}.c{height:100px}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 60 100\n");
+    cascade_layout_case("percent height: a ratio item its row stretches gives its children no definite height",
+        "<!doctype html><style>body{margin:0}.f{display:flex;height:200px}.i{width:50px;aspect-ratio:1}.c{height:100%}</style><div class=f><div class=i><div class=c></div></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 50 200\n"
+        "        block div 0 0 50 0\n");
+    cascade_layout_case("percent height: a ratio item its row does not stretch gives its children its ratio's height",
+        "<!doctype html><style>body{margin:0}.f{display:flex;height:200px;align-items:flex-start}.i{width:50px;aspect-ratio:1}.c{height:100%}</style><div class=f><div class=i><div class=c></div></div></div>", 400,
+        "page 400 200\n"
+        "block html 0 0 400 200\n"
+        "  block body 0 0 400 200\n"
+        "    block div 0 0 400 200\n"
+        "      block div 0 0 50 50\n"
+        "        block div 0 0 50 50\n");
+    cascade_layout_case("percent height: a ratio item measured before it is laid out has no height yet",
+        "<!doctype html><style>body{margin:0}.f{display:flex}.i{aspect-ratio:1}"
+        ".c{height:100%;aspect-ratio:1;font:16px/16px monospace}</style>"
+        "<div class=f><div class=i><div class=c>xxxx</div></div></div>", 400,
+        "page 400 32\n"
+        "block html 0 0 400 32\n"
+        "  block body 0 0 400 32\n"
+        "    block div 0 0 400 32\n"
+        "      block div 0 0 32 32\n"
+        "        block div 0 0 32 32\n"
+        "          line 0 0 32 16 base 12\n"
+        "            text \"xxxx\" 0 0 32 16 mono 16\n");
+    cascade_layout_case("percent height: a ratio's height is definite: an empty ::before grid item stretches to it",
+        "<!doctype html><style>body{margin:0}.r{display:grid;width:60px;aspect-ratio:1}"
+        ".r::before{content:'';grid-area:1/1;width:50%}</style><div class=r></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 30 60\n");
+    cascade_layout_case("percent height: a ratio's height is definite: a child's 100% fills it",
+        "<!doctype html><style>body{margin:0}.r{width:60px;aspect-ratio:1}.c{height:100%}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 60 60\n");
+    cascade_layout_case("percent height: a ratio's height is definite: a row's item stretches to it",
+        "<!doctype html><style>body{margin:0}.r{display:flex;width:60px;aspect-ratio:1}.c{width:10px}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 10 60\n");
+    cascade_layout_case("percent height: a ratio's height is definite: a column's flex:1 item fills it",
+        "<!doctype html><style>body{margin:0}.r{display:flex;flex-direction:column;width:60px;aspect-ratio:1}.c{flex:1}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 60 60\n");
+    cascade_layout_case("percent height: a ratio's height is definite: a grid's auto row stretches to it",
+        "<!doctype html><style>body{margin:0}.r{display:grid;width:60px;aspect-ratio:1}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 60 60\n");
+    cascade_layout_case("percent height: a ratio's height is definite: a 1fr row takes it",
+        "<!doctype html><style>body{margin:0}.r{display:grid;grid-template-rows:1fr;width:60px;aspect-ratio:1}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 60 60\n"
+        "      block div 0 0 60 60\n");
+    cascade_layout_case("percent height: a ratio's height held by max-height is what a child's 100% is of",
+        "<!doctype html><style>body{margin:0}.r{width:60px;aspect-ratio:1;max-height:40px}.c{height:100%}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 40\n"
+        "block html 0 0 400 40\n"
+        "  block body 0 0 400 40\n"
+        "    block div 0 0 60 40\n"
+        "      block div 0 0 60 40\n");
+    cascade_layout_case("percent height: content taller than a ratio's height still grows the box",
+        "<!doctype html><style>body{margin:0}.r{width:60px;aspect-ratio:1}.c{height:100px}</style><div class=r><div class=c></div></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 60 100\n"
+        "      block div 0 0 60 100\n");
     cascade_layout_case("percent height: the root's is of the viewport, the body's of the root's",
         "<!doctype html><style>html{height:100%}body{height:100%;margin:0}</style>", 400,
         "page 400 600\n"

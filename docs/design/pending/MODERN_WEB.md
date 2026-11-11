@@ -1305,8 +1305,15 @@ the style object and WPT all see it go with the switch.
   the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
   each column and is as tall as it is wide). A written `stretch` still
   stretches it down. Intrinsic widths follow a given height through the
-  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
-  box is booked.
+  ratio. The height a ratio gives a box from its width is definite
+  (`FBox.ratio_h`, found once the width is known and before the content
+  is laid out): a child's percentage height, a flex container's lines and
+  a grid's tracks resolve against it. Where the box's automatic minimum,
+  its content's height, is more, it is that tall instead — a flex or grid
+  container places its items again against it. A flex or grid item whose
+  container may yet stretch or flex it has none, as a stretched size is
+  not definite (FLEX.md, decision 1). A table's inner boxes take none,
+  as § 4.1 says, and a table's own box is booked.
 
 The two grammar laxities WPT exposed in passing are fixed too: a radial
 gradient's `at` is a full `<position>`, and each of `text-indent`'s

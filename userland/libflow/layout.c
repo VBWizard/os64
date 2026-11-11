@@ -785,9 +785,16 @@ static int64_t replaced_for(L *l, const FBox *b, int axis, int64_t size, int64_t
 
 // ── Relative offsets ────────────────────────────────────────────────────
 
+// A box's own content height where it does not wait on its content: its
+// style's (def_h), else the one its ratio gives it (ratio_h), else -1.
+static int64_t own_definite(const FBox *b)
+{
+    return b->def_h >= 0 ? b->def_h : b->ratio_h;
+}
+
 // A containing block's content height when it does not depend on its
-// content, or -1: the nearest box with an element's own (def_h; an
-// anonymous box is passed over, CSS 2.1 § 9.2.1.1), and above the root
+// content, or -1: the nearest box with an element's own (own_definite,
+// its style's or its ratio's; an anonymous box is passed over, CSS 2.1 § 9.2.1.1), and above the root
 // the initial containing block's, the viewport (§ 10.1). What a
 // percentage height is of (§ 10.5, where the other case computes it to
 // auto), and through offset_height a percentage top or bottom (§ 9.3.2,
@@ -798,7 +805,7 @@ static int64_t definite_height(const L *l, const FBox *b)
         b = b->parent;
     if (b == NULL)
         return l->icb_h;
-    return b->def_known ? b->def_h : -1;
+    return b->def_known ? own_definite(b) : -1;
 }
 
 // What a percentage top or bottom is of (§ 9.3.2): definite_height — but a
@@ -873,6 +880,7 @@ static void seed_heights(const L *l, FBox *b, int64_t cbw)
     b->def_h = own_height(b, b->cb_h, vf);
     if (b->def_h >= 0 && !b->abs_h_set)
         b->def_h = clamp_height(b->style, b->def_h, vf, b->cb_h);
+    b->ratio_h = -1;
     b->def_known = true;
 }
 
@@ -4219,10 +4227,11 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
     const flow_style_t *s = b->style;
     int64_t top = in->y;
     *natural = 0;
-    // Its height where its style fixes it, held to its limits (block_at's
-    // def_h); and its items', which it measures before laying any out.
-    bool h_def = b->def_h >= 0;
-    int64_t h_given = b->def_h;
+    // Its height where it does not wait on its items, held to its limits
+    // (own_definite: its style's or its ratio's); and its items', which it
+    // measures before laying any out.
+    int64_t h_given = own_definite(b);
+    bool h_def = h_given >= 0;
     for (FBox *c = b->first; c != NULL; c = c->next)
         if (!c->out_of_flow)
             seed_heights(l, c, cw);
@@ -5414,10 +5423,10 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
     const flow_style_t *s = b->style;
     int64_t top = in->y;
     *natural = 0;
-    // Its height where its style fixes it, held to its limits (block_at's
-    // def_h).
-    bool h_def = b->def_h >= 0;
-    int64_t h_given = b->def_h;
+    // Its height where it does not wait on its items, held to its limits
+    // (own_definite: its style's or its ratio's).
+    int64_t h_given = own_definite(b);
+    bool h_def = h_given >= 0;
     for (FBox *c = b->first; c != NULL; c = c->next)
         if (c->out_of_flow) {
             // Its static position: the content box's start corner (GRID.md
@@ -5523,6 +5532,31 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
 static bool sized_later(const FBox *b)
 {
     return b->parent != NULL && (b->parent->flex || b->parent->grid) && !b->out_of_flow;
+}
+
+// Whether a flex or grid item's container may yet give it another height:
+// a row item it stretches across a line some other height may set — the
+// container's own, a minimum the line is held to, or another item's (a
+// lone item in a row of no height of its own is its line, and keeps its
+// own) — a column item (flexing grows and shrinks it), a grid item whose
+// written alignment stretches it down its rows (`normal` starts a box
+// with a ratio). The height its ratio gives it is then not the one it
+// ends with, and is not definite for what it holds, as a stretched or
+// flexed size is not (FLEX.md, decision 1).
+static bool height_set_later(const FBox *b)
+{
+    if (!sized_later(b))
+        return false;
+    const flow_style_t *ps = b->parent->style, *cs = b->style;
+    if (b->parent->flex) {
+        bool row = ps->flex_direction == FLOW_FLEX_ROW || ps->flex_direction == FLOW_FLEX_ROW_REVERSE;
+        return !row || (stretches_across(ps, b) &&
+                         (own_definite(b->parent) >= 0 || ps->min_height.kind != FLOW_LENGTH_AUTO ||
+                          flex_items(b->parent) > 1));
+    }
+    flow_place_t written = cs->align_self != FLOW_PLACE_AUTO ? cs->align_self : ps->align_items;
+    return written != FLOW_PLACE_NORMAL && written != FLOW_PLACE_AUTO &&
+           self_align(cs->align_self, ps->align_items, b) == FLOW_PLACE_STRETCH;
 }
 
 // A block-level box in its parent's flow. On entry `cur` is the point
@@ -5688,6 +5722,10 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
     b->w = b->border[FLOW_LEFT] + b->padding[FLOW_LEFT] + cw + b->padding[FLOW_RIGHT] +
            b->border[FLOW_RIGHT];
     int64_t cx = b->x + b->border[FLOW_LEFT] + b->padding[FLOW_LEFT];
+    // The height its ratio gives it, known from here (FBox.ratio_h).
+    b->ratio_h = by_ratio && !height_set_later(b)
+               ? clamp_height(s, ratio_height(s, cw, b->w - cw, vframe_px), vframe_px, b->cb_h)
+               : -1;
     Margins pm = margins_join(cur->pm, margin_of(mt));
 
     Cursor in;
@@ -5723,10 +5761,26 @@ static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, in
         l->markers[l->nmarkers++] = b;
     if (b->kind == FB_REPLACED) {
         in.y += rep.h;
-    } else if (b->flex) {
-        flex(l, styles, b, cx, cw, &in, &asked);
-    } else if (b->grid) {
-        grid_layout(l, styles, b, cx, cw, &in, &asked);
+    } else if (b->flex || b->grid) {
+        Cursor start = in;
+        if (b->flex)
+            flex(l, styles, b, cx, cw, &in, &asked);
+        else
+            grid_layout(l, styles, b, cx, cw, &in, &asked);
+        // Items asking more than its ratio's height make it taller where
+        // its automatic minimum holds (ratio_content_h), and are placed
+        // again against the height it then has, which is as definite.
+        int64_t grown = b->ratio_h >= 0
+                      ? clamp_height(s, ratio_content_h(s, cw, b->w - cw, vframe_px, asked), vframe_px, b->cb_h)
+                      : -1;
+        if (grown > b->ratio_h && !l->failed) {
+            b->ratio_h = grown;
+            in = start;
+            if (b->flex)
+                flex(l, styles, b, cx, cw, &in, &asked);
+            else
+                grid_layout(l, styles, b, cx, cw, &in, &asked);
+        }
     } else if (b->ifc) {
         lines(l, styles, b, cx, cw, &in);
     } else {
