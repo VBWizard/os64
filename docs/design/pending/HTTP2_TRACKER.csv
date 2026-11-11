@@ -3,7 +3,7 @@ Q1,"The bell's implementation: kernel handle kind (Fable's lean) or pipe-backed 
 Q2,"The receive window: match the preset's values exactly (Fable's lean) or advertise a smaller one of our own",,ruled,,"RULED 2026-11-09 by Chris: match the preset's window; max_body stays the real bound (HTTP2.md § 2.6). Applied in H2.5"
 Q3,"How a reader is stopped: slices and a flag with the reader the socket's only closer (Fable's lean) or a kernel hang-up verb",,ruled,,"RULED 2026-11-09 by Chris: the slices; no kernel change (HTTP2.md § 2.3). Applied in H2.4; the verb is a § 2.10 row"
 Q4,"H2.4 as two slices, the connection alone and then fetches on it as H2.6 (Fable's lean), or one slice as first planned",,ruled,,"RULED 2026-11-10 by Chris: two slices (HTTP2.md § 7). Quinn's read of the brief recommended the same"
-Q5,"A way to turn HTTP/2 off without a rebuild: an http2 = off line in net.conf read by libfetch once per process (Fable's lean), or no switch",,open,,"HTTP2.md section 4 H2.5, Asked of Chris; it gives the P5 a before-and-after on one build and a way round a site that breaks"
+Q5,"A way to turn HTTP/2 off without a rebuild: an http2 = off line in net.conf read by libfetch once per process (Fable's lean), or no switch",,ruled,,"RULED 2026-11-11 by Chris: yes, in net.conf, since it governs every program that speaks through libfetch (HTTP2.md section 4 H2.5, The off switch). Applied in H2.5.7"
 
 H2.0,"The bell: a handle whose read waits and whose write rings (os64/bell.h)",Q1,done,#526,"HTTP2.md § 2.4 and § 4 H2.0 (as built: the owed wake, not pipe.c's claim and sweep); merged 2026-11-10, Codex round 1 clean, P5 passed"
 H2.0.1,"Kernel bell_t: spinlock, rung flag, one parked waiter, pipe.c's park discipline; joins handle.c's pin with a holders count; handle_share refuses it",H2.0,done,#526,"read pipe.c's read path first; the first review question is where it differs"
@@ -77,7 +77,8 @@ H2.5.3,"h2_conn: the first stream id in the greeting; a priority on HEADERS and 
 H2.5.4,"http.c: the pseudo-header order from the greeting; the HTTP/2-only lines placed by order; TE sent only as trailers where a preset says so, and HTTP2.md 2.7 amended",H2.5.1,todo,,
 H2.5.5,"The head's http2 fact; yonder's request record says the protocol and the stream",H2.5.1,todo,,
 H2.5.6,"libway and agent.c: way_identity_t carries the greeting, a weight per destination, the HTTP/2-only lines and http1; the costumes set http1; yonder closes idle pool connections when the agent changes",H2.5.2,todo,,"values from C1 and C2, never from memory"
-H2.5.7,"The off switch, if Q5 is ruled for it",Q5,todo,,
+H2.5.15,"The Chrome preset's string and client hints refreshed to 157 from C1",H2.5.1,todo,,
+H2.5.7,"The off switch: http2 = off in net.conf, read by libfetch once per process",H2.5.1,todo,,"Q5"
 H2.5.8,"Host proof: every row of the brief's capture table checked by the scripted peer for each preset and for libfetch's own; http1 offers no h2; ASan/UBSan and TSan; mutants once",H2.5.6,todo,,
 H2.5.9,"h2probe: no flag, no wait for the reader, links libfetch.so",H2.5.2,todo,,
 H2.5.10,"QEMU against nghttpd -v under each browser preset on e1000 and virtio: the server's log against the capture, one connection, HTTP/2 on every request; the measurement of section 5",H2.5.8,todo,,

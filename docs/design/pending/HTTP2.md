@@ -2431,19 +2431,33 @@ already found Firefox's requests the same on either platform apart from
 the platform token in its User-Agent, and nothing in an HTTP/2 greeting
 names a platform.
 
-| | Chrome (C1) | Firefox 158 (C2) |
+| | Chrome 157, Windows (C1) | Firefox 158 (C2) |
 |---|---|---|
-| SETTINGS, in order | pending C1 | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 131072, `MAX_FRAME_SIZE` 16384 |
-| Connection WINDOW_UPDATE | pending C1 | 12517377 |
-| First stream id | pending C1 | 3 |
-| Pseudo-header order | pending C1 | `:method`, `:path`, `:authority`, `:scheme` |
-| HEADERS carries a priority | pending C1 | yes: depends on 0, not exclusive, weight by kind (document 42, sheet 22, script 22, picture 12, `fetch` 22) |
-| WINDOW_UPDATE on each new stream | pending C1 | 12451840, straight after its HEADERS |
-| PRIORITY frames | pending C1 | none |
-| Lines sent over HTTP/2 that HTTP/1.1 lacks | pending C1 | `te: trailers`, last |
+| SETTINGS, in order | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 6291456, `MAX_HEADER_LIST_SIZE` 262144 | `HEADER_TABLE_SIZE` 65536, `ENABLE_PUSH` 0, `INITIAL_WINDOW_SIZE` 131072, `MAX_FRAME_SIZE` 16384 |
+| Connection WINDOW_UPDATE | 15663105 | 12517377 |
+| First stream id | 1 | 3 |
+| Pseudo-header order | `:method`, `:authority`, `:scheme`, `:path` | `:method`, `:path`, `:authority`, `:scheme` |
+| HEADERS carries a priority | yes: exclusive, weight by kind (document 256, sheet 256, script 220, picture 183, `fetch` 220), depending on an earlier stream (below) | yes: depends on 0, not exclusive, weight by kind (document 42, sheet 22, script 22, picture 12, `fetch` 22) |
+| WINDOW_UPDATE on each new stream | none | 12451840, straight after its HEADERS |
+| PRIORITY frames | none | none |
+| Lines sent over HTTP/2 that HTTP/1.1 lacks | `priority`, last: document `u=0, i`, sheet `u=0`, script `u=1`, picture `u=2, i`, `fetch` `u=1, i` | `te: trailers`, last |
 
 Firefox's `priority` line is the one its preset already sends over
-HTTP/1.1, with the same values.
+HTTP/1.1, with the same values. The weights are as `nghttpd` prints
+them, one more than the byte on the wire.
+
+**Chrome's dependencies.** In the capture the document and the sheet
+depend on stream 0, the script on the sheet, the first picture on the
+script, the second picture on the first, and the `fetch`, sent after the
+others had finished, on stream 0 again. That is one rule: a new stream
+depends, exclusively, on the most recently opened stream that is still
+open and whose weight is at least its own, and on 0 when there is none.
+The connection applies that rule; which streams Chrome itself counted as
+still open at each instant is its own bookkeeping and is not matched.
+
+The capture is of Chrome 157 and the preset says 156. Its string and
+client hints are refreshed from this capture in this slice, since the
+lines are in hand.
 
 #### The greeting's representation
 
@@ -2452,8 +2466,10 @@ HTTP/1.1, with the same values.
   pairs in order, at most eight; the connection's window increment (0
   sends none); the first stream id (1 or 3); an increment sent as a
   WINDOW_UPDATE on each new stream after its HEADERS (0 sends none); the
-  pseudo-header order as four letters (`"masp"`, `"mpas"`); and whether
-  HEADERS carries a priority, with its exclusive bit. `os64_fetch_options_t`
+  pseudo-header order as four letters (`"masp"`, `"mpas"`); and how
+  HEADERS carries a priority: not at all, flat (depending on stream 0,
+  not exclusive: Firefox's), or chained (exclusive, by the rule above:
+  Chrome's). `os64_fetch_options_t`
   gains `h2`, a pointer to one, borrowed until the fetch is closed.
   NULL means libfetch's own (below).
 - **Per request**, beside `order`: `h2_weight` (the priority's weight for
@@ -2468,8 +2484,11 @@ HTTP/1.1, with the same values.
   `h2_stream_open` takes the priority and the stream increment. The
   connection copies the SETTINGS at adoption, as it does now.
 - **`way_identity_t`** (libway) gains the preset's half: a pointer to its
-  `os64_fetch_h2_t`, a weight for each destination, its HTTP/2-only lines,
-  and `http1`. `agent.c`'s table fills them from the captures;
+  `os64_fetch_h2_t`, a weight for each destination, its HTTP/2-only lines
+  (for Chrome a `priority` value for each destination), and `http1`. A
+  destination the captures do not show (a font, a frame, a worker) takes
+  the `fetch` row's weight and line, and is booked in DEBTS until someone
+  captures it. `agent.c`'s table fills them from the captures;
   `way_load` passes them down beside `order`.
 - **A connection keeps the greeting it was dialled with.** A fetch that
   finds a connection in the pool rides it under its own pseudo-header
@@ -2491,7 +2510,7 @@ four for the connection lets four streams fill at once.
 A preset's windows are larger (Q2's ruling: match them). What bounds
 memory under a preset is the connection's window, since no more than
 that can be in flight unread across all its streams: about 12 MiB for
-Firefox's, and Chrome's as C1 shows.
+Firefox's and 15 MiB for Chrome's.
 
 #### What a preset is allowed to say
 
@@ -2561,14 +2580,15 @@ Everything in § 2.10. A greeting for a browser with no capture (Safari's
 preset keeps libfetch's own until someone captures it). PRIORITY and
 PRIORITY_UPDATE frames, which neither capture shows on a page load.
 
-#### Asked of Chris
+#### The off switch (Q5, ruled)
 
-- **Q5 — a way to turn HTTP/2 off without a rebuild.** A `http2 = off`
-  line in `net.conf` on the config ladder, read by libfetch once per
-  process (Fable's lean), or no switch. It costs a few lines. It gives
-  the P5 a before-and-after on one build, which § 5's table wants, and a
-  way round a site that breaks on the day one does. A boot token would
-  not reach the P5.
+`http2 = off` in `net.conf`, on the config ladder, read by libfetch once
+per process: every dial then offers `http/1.1` alone. `net.conf` and not
+`yonder.conf` because the choice is the network's and not one program's:
+os64get and wend speak through libfetch too, and one line turns all of
+them. It gives the P5 a before-and-after on one build, which § 5's table
+wants, and a way round a site that breaks. `/sys/conf` shows which file
+answered, as for any reader.
 
 ## 5. Proof, across the arc
 
@@ -2605,7 +2625,7 @@ BROWSER_DEBTS loses nothing it has not already lost. WIRE.md § 2 gains a
 one-line pointer here. Each slice's "as built" lands under its brief
 above, by its builder, in its PR.
 
-## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09 and Q4 on 2026-11-10)
+## 7. Questions (each is a `Q` row in the tracker; all ruled by Chris for the leans, Q1 to Q3 on 2026-11-09, Q4 on 2026-11-10 and Q5 on 2026-11-11)
 
 - **Q1 — the bell's implementation.** A kernel handle kind (§ 2.4; one
   handle per bell, a small kernel slice with a Codex round; Fable's lean),
@@ -2632,3 +2652,7 @@ above, by its builder, in its PR.
   on what would be the largest diff of the arc, with the pool's changes
   and the connection's reviewed together). RULED by Chris on 2026-11-10:
   two slices. Quinn's read of the brief recommended the same.
+- **Q5 — a way to turn HTTP/2 off without a rebuild.** An `http2 = off`
+  line in `net.conf` on the config ladder, read by libfetch once per
+  process (Fable's lean), or no switch. RULED by Chris on 2026-11-11:
+  yes, in `net.conf` (§ 4 H2.5, The off switch).
