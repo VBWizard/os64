@@ -24,8 +24,7 @@
 #include "os64/thread.h"
 
 #define OUT_BLOCK      16384u
-// What we cut our own frames to. Every peer takes it, and a frame no larger
-// than a block of the queue is one a stalled socket holds back whole.
+// What we cut our own frames to: the size every peer takes.
 #define OUR_FRAME      H2_FRAME_SIZE_LEAST
 #define FIELDS_MOST    512u
 // The largest frame, and the largest header table, a greeting may promise to
@@ -382,7 +381,7 @@ static bool room_locked(const h2_conn_t *c)
 // thread with no patience to give writes what the socket takes at once.
 // `last` is the reader's, once, before it closes a dying connection's
 // socket: what the socket will take at once of what is still queued, which
-// is how a GOAWAY of ours, queued as the connection was condemned, is sent.
+// is how the GOAWAY of a connection error of ours is sent.
 static void drain_as(h2_conn_t *c, bool patient, bool last)
 {
     os64_lock_acquire(&c->lock);
@@ -543,8 +542,15 @@ static void on_settings(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
         case H2_SETTING_MAX_FRAME_SIZE:
             c->peer_max_frame = setting.value;
             break;
+        case H2_SETTING_ENABLE_PUSH:
+            // § 6.5.2: a server may say 0 and may not say 1.
+            if (setting.value != 0) {
+                conn_error(c, H2_ERR_PROTOCOL);
+                return;
+            }
+            break;
         default:
-            break;              // ENABLE_PUSH is the server's to obey; the rest we do not know
+            break;              // a setting we do not know (§ 6.5.2: ignored)
         }
     }
     c->peer_settings_seen = true;
@@ -757,10 +763,12 @@ static void on_frame(h2_conn_t *c, const h2_frame_header_t *header, const uint8_
         conn_error(c, H2_ERR_PROTOCOL);
     else if (!parsed && !fault.stream)
         conn_error(c, fault.error);
+    else if (!parsed && c->block.open)
+        conn_error(c, H2_ERR_PROTOCOL);     // § 6.10: only a CONTINUATION may follow an open block
     else if (!parsed) {
         h2_stream_t *s = find(c, header->stream);
         if (s != NULL)
-            reset_stream(c, s, fault.error, H2_END_FLOW);
+            reset_stream(c, s, fault.error, H2_END_BAD_FRAME);
         else if (!was_ours(c, header->stream))
             conn_error(c, H2_ERR_PROTOCOL);
     } else if (frame.kind == H2_FRAME_PUSH_PROMISE)
@@ -838,19 +846,28 @@ static void take_in(h2_conn_t *c, const uint8_t *cipher, size_t len)
         c->plain_len += (uint32_t)out.transferred;
         moved = moved || out.transferred != 0;
         os64_tls_state_t state = os64_tls_state(c->tls);
-        // A fatal status, or the peer's close_notify: either way it is over.
-        if (fatal(state.status) || state.status == OS64_TLS_CLEAN_EOF)
+        // The peer's close_notify ends the connection once the plaintext
+        // that came before it has been read and cut: a response whose last
+        // frame shares a read with the close is whole.
+        bool eof = state.status == OS64_TLS_CLEAN_EOF;
+        if (fatal(state.status))
             die(c, H2_ERR_NO_ERROR);
         else
             pump(c);            // what the engine owes for what it was fed
         // Fed nothing and gave nothing with input still in hand: the engine
         // is waiting on a frame larger than the room one may have.
-        if (!moved && fed < len)
+        if (!moved && fed < len && !eof)
             conn_error(c, H2_ERR_INTERNAL);
         os64_lock_release(&c->lock);
         cut_frames(c);
-        if (!moved)
+        if (!moved) {
+            if (eof) {
+                os64_lock_acquire(&c->lock);
+                die(c, H2_ERR_NO_ERROR);
+                os64_lock_release(&c->lock);
+            }
             return;
+        }
     }
 }
 
@@ -1171,8 +1188,8 @@ h2_result_t h2_stream_send(h2_stream_t *s, const void *bytes, size_t len, bool e
         h2_result_t stop = H2_OK;
         if (s->ending.how != H2_END_NOT_YET && s->ending.how != H2_END_CLEAN)
             stop = H2_ENDED;
-        else if (s->peer_reset)
-            stop = H2_STOP;             // its response is whole; it wants no more of the request
+        else if (s->peer_reset || (s->ending.how == H2_END_CLEAN && c->dying))
+            stop = H2_STOP;             // its response is whole, and no more of the request is wanted or can go
         size_t left = len - *sent;
         bool done = left == 0 && (!ends || s->sent_end);
         if (stop != H2_OK || done) {
@@ -1199,8 +1216,8 @@ h2_result_t h2_stream_send(h2_stream_t *s, const void *bytes, size_t len, bool e
             drain(c, true);
             continue;
         }
-        // No window, a queue past its mark, or a connection on its way out
-        // (whose reader will end this stream and ring).
+        // No window, a queue past its mark, or a connection on its way out,
+        // whose reader ends this stream and rings.
         if (at_door)
             door_add(c, wait);
         os64_lock_release(&c->lock);
@@ -1301,8 +1318,8 @@ void h2_stream_close(h2_stream_t *s)
         if (c->streams[i] == s)
             c->streams[i] = NULL;
     c->stream_count--;
-    if (c->goaway && c->stream_count == 0)
-        die(c, H2_ERR_NO_ERROR);        // it took no new stream, and its last has left
+    if ((c->goaway || c->quiet) && c->stream_count == 0)
+        die(c, H2_ERR_NO_ERROR);        // it takes no new stream, and its last has left
     os64_lock_release(&c->lock);
     drain(c, false);
     if (c->hooks.room != NULL)

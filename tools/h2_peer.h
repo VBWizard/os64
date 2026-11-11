@@ -63,6 +63,9 @@ void peer_send_window(uint32_t stream, uint32_t increment);
 void peer_send_rst(uint32_t stream, uint32_t code);
 void peer_send_goaway(uint32_t last_stream, uint32_t code);
 void peer_send_ping(void);
+// The stream's last DATA (END_STREAM, at most 256 bytes) and the engine's
+// close_notify, handed to the client together: one read brings both.
+void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len);
 // A record that makes the client's engine owe one of its own (a KeyUpdate).
 void peer_send_engine_owes(void);
 // The server's bytes as records, not sent: for h2_conn_adopt's `unread`.

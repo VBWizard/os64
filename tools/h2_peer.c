@@ -18,7 +18,7 @@
 // A record: its kind, its number, its payload's length, its payload.
 #define REC_HEAD 7u
 #define REC_MOST 4096u
-enum { REC_DATA = 1, REC_OWED = 2, REC_MAKE_OWE = 3 };
+enum { REC_DATA = 1, REC_OWED = 2, REC_MAKE_OWE = 3, REC_CLOSE = 4 };
 
 #define SOCKET 7
 #define THREAD_HANDLE 1000
@@ -46,6 +46,7 @@ struct os64_tls_client {
     uint8_t plain[1u << 16];
     size_t plain_at, plain_len;
     atomic_bool failed;
+    bool eof;                   // a close_notify was fed
     atomic_int inside;
 };
 static struct os64_tls_client engine;
@@ -229,7 +230,8 @@ static bool engine_owes(os64_tls_client *c, uint8_t kind, const void *payload, s
 os64_tls_state_t os64_tls_state(os64_tls_client *c)
 {
     enter(c);
-    os64_tls_state_t state = {.status = c->failed ? OS64_TLS_TRANSPORT : OS64_TLS_OK,
+    // CLEAN_EOF from the moment the close is fed, plaintext still unread or not.
+    os64_tls_state_t state = {.status = c->failed ? OS64_TLS_TRANSPORT : c->eof ? OS64_TLS_CLEAN_EOF : OS64_TLS_OK,
                               .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN | OS64_TLS_RECV_CIPHER};
     if (c->out_at != c->out_len)
         state.flags |= OS64_TLS_SEND_CIPHER;
@@ -266,7 +268,7 @@ os64_tls_transfer_t os64_tls_feed_ciphertext(os64_tls_client *c, const void *dat
     enter(c);
     const uint8_t *in = data;
     size_t fed = 0;
-    while (fed < length && !c->failed) {
+    while (fed < length && !c->failed && !c->eof) {
         if (c->plain_at == c->plain_len)
             c->plain_at = c->plain_len = 0;
         // A record is begun only with room for the most it can carry.
@@ -283,6 +285,8 @@ os64_tls_transfer_t os64_tls_feed_ciphertext(os64_tls_client *c, const void *dat
             c->plain_len += len;
         } else if (c->rec[0] == REC_MAKE_OWE)
             engine_owes(c, REC_OWED, NULL, 0);
+        else if (c->rec[0] == REC_CLOSE)
+            c->eof = true;
         else
             c->failed = true;
         c->rec_len = 0;
@@ -609,6 +613,22 @@ void peer_send_ping(void)
 {
     static const uint8_t eight[8] = {'p', 'i', 'n', 'g', 'p', 'i', 'n', 'g'};
     peer_send_frame(H2_FRAME_PING, 0, 0, eight, 8);
+}
+
+void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len)
+{
+    uint8_t frame[H2_FRAME_HEADER_LEN + 256], head[REC_HEAD];
+    if (len > 256)
+        abort();
+    h2_frame_header_write(frame, &(h2_frame_header_t){.length = (uint32_t)len, .type = H2_FRAME_DATA,
+                                                      .flags = H2_FLAG_END_STREAM, .stream = stream});
+    memcpy(frame + H2_FRAME_HEADER_LEN, bytes, len);
+    pthread_mutex_lock(&mu);
+    wrap(&to_client, frame, H2_FRAME_HEADER_LEN + len);
+    record(head, REC_CLOSE, server_out_seq++, 0);
+    put(&to_client, head, REC_HEAD);
+    pthread_cond_broadcast(&moved);
+    pthread_mutex_unlock(&mu);
 }
 
 void peer_send_engine_owes(void)

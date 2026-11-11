@@ -886,8 +886,8 @@ static void error_cases(void)
         finish_dead(dead);
     }
 
-    // A window of nothing for a STREAM is that stream's error alone, and a
-    // PRIORITY of the wrong length too; a type nobody knows is dropped.
+    // A window of nothing for a STREAM is that stream's error alone. A
+    // PRIORITY, and a type nobody knows, are dropped.
     int dead = atomic_load(&dead_calls);
     fetch_t a, b;
     char body[16];
@@ -900,6 +900,7 @@ static void error_cases(void)
     memset(payload, 0, 8);
     peer_send_frame(H2_FRAME_WINDOW_UPDATE, 0, 1, payload, 4);
     CHECK(server_sees_rst(1, H2_ERR_PROTOCOL) && fetch_head(&a) == H2_ENDED);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_BAD_FRAME && h2_stream_ended(a.stream).code == H2_ERR_PROTOCOL);
     peer_send_frame(0x42, 0xff, 3, payload, 8);
     peer_send_frame(H2_FRAME_PRIORITY, 0, 3, payload, 5);
     server_reply(3, "200", "fine", true);
@@ -1254,9 +1255,11 @@ static void wait_cases(void)
     CHECK(!h2_conn_room(conn));
     fetch_init(&b, 200);
     CHECK(fetch_get(&b, conn, "/after") == H2_NO_ROOM);
+    // And when its last stream leaves it ends, as after a GOAWAY: nothing
+    // will ever use it again.
     fetch_done(&a);
     fetch_done(&b);
-    finish(dead);
+    finish_dead(dead);
 
     // Silent on ONE stream while frames arrive on the connection is that
     // stream's alone.
@@ -1446,6 +1449,60 @@ static void wake_cases(void)
     peer_stall(false);
     pthread_join(t, NULL);
     fetch_done(&stuck.f);
+    finish_dead(dead);
+
+    // THE SERVER'S CLOSE IN THE SAME READ AS ITS LAST FRAME: the frame is
+    // delivered before the connection ends, and the response is whole.
+    dead = atomic_load(&dead_calls);
+    begin();
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/bye") == H2_OK && server_request("/bye") == 1);
+    server_reply(1, "200", NULL, false);
+    CHECK(fetch_head(&a) == H2_OK);
+    peer_send_data_and_close(1, "whole", 5);
+    size_t got;
+    CHECK(read_all(&a, out, sizeof(out), &got) == 0 && got == 5 && memcmp(out, "whole", 5) == 0);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
+    fetch_done(&a);
+    finish_dead(dead);
+
+    // AN UPLOAD WHOSE ANSWER IS WHOLE, on a connection that then died with
+    // no reset: the send stops at once, and the response stands.
+    dead = atomic_load(&dead_calls);
+    begin();
+    fetch_init(&a, 3000);
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
+    server_reply(1, "413", NULL, true);
+    CHECK(fetch_head(&a) == H2_OK);
+    peer_hang_up();
+    CHECK(died_within(dead, 2000));
+    static char body[70000];
+    CHECK(h2_stream_send(a.stream, body, sizeof(body), true, &a.wait, &sent) == H2_STOP && sent == 0);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
+    fetch_done(&a);
+    finish_dead(dead);
+
+    // A SERVER THAT TURNS PUSH ON has broken RFC 9113 § 6.5.2.
+    dead = atomic_load(&dead_calls);
+    begin();
+    static const h2_setting_t kPush[] = {{H2_SETTING_ENABLE_PUSH, 1}};
+    peer_send_settings(kPush, 1);
+    CHECK(server_sees_goaway(H2_ERR_PROTOCOL));
+    finish_dead(dead);
+
+    // A FIELD BLOCK IS OPEN, and the frame after it is not its
+    // CONTINUATION: the connection's error, whatever else is wrong with
+    // that frame (here a PRIORITY of four bytes, which alone is its
+    // stream's).
+    dead = atomic_load(&dead_calls);
+    begin();
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/x") == H2_OK && server_request("/x") == 1);
+    static const uint8_t kStatus[4] = {0x88};
+    peer_send_frame(H2_FRAME_HEADERS, 0, 1, kStatus, 1);
+    peer_send_frame(H2_FRAME_PRIORITY, 0, 1, kStatus, 4);
+    CHECK(server_sees_goaway(H2_ERR_PROTOCOL));
+    fetch_done(&a);
     finish_dead(dead);
 }
 

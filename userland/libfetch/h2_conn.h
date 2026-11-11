@@ -101,7 +101,8 @@ typedef enum {
     H2_END_BAD_HEAD,        // we reset it: its head broke RFC 9113 § 8.2
     H2_END_HEAD_TOO_LARGE,  // we reset it: its head is past H2_HEAD_MOST
     H2_END_BAD_LENGTH,      // we reset it: its body is not its content-length
-    H2_END_FLOW,            // we reset it: it sent past its window
+    H2_END_FLOW,            // we reset it: it sent past its window, or gave ours more than 2^31 - 1
+    H2_END_BAD_FRAME,       // we reset it: a frame for it broke a rule RFC 9113 makes the stream's; `code` says which
 } h2_end_t;
 
 typedef struct {
@@ -124,8 +125,8 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
                          const h2_greeting_t *greeting, const h2_conn_hooks_t *hooks);
 
 // Whether a new stream may be opened: the connection is not ending, has had
-// no GOAWAY, has not gone quiet, and has fewer streams than the peer and
-// H2_STREAMS_MOST allow.
+// no GOAWAY, has not gone quiet, has fewer streams than the peer and
+// H2_STREAMS_MOST allow, and has a stream id left to give.
 bool h2_conn_room(h2_conn_t *conn);
 // How many streams it has now, and how many bytes wait in its out queue.
 uint32_t h2_conn_streams(h2_conn_t *conn);
@@ -160,9 +161,9 @@ int64_t h2_stream_read(h2_stream_t *stream, void *buffer, size_t room, h2_wait_t
 // How the stream ended, or H2_END_NOT_YET.
 h2_ending_t h2_stream_ended(h2_stream_t *stream);
 
-// Leave the stream: a reset (CANCEL) if either side had not finished and the
-// peer has not reset it, the unread bytes credited to the connection, the
-// stream freed. Never waits.
+// Leave the stream: a reset (CANCEL) if either side had not finished, the
+// peer has not reset it and the connection is not ending; the unread bytes
+// credited to the connection; the stream freed. Never waits.
 void h2_stream_close(h2_stream_t *stream);
 
 #endif
