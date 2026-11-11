@@ -2146,7 +2146,7 @@ the perf slice.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Transitions, and `:hover` with them | § Transitions: their trigger is hover, and hover is a restyle and a layout per move | the perf slice: they are the slice after it (Chris, 10/14: "as long as we don't forget") |
-| The animation events and the Web Animations API | scripts' surface, which the Modern Web arc gives (Platform waits for its arc) | a page with scripts on that waits on `animationend` |
+| ~~The animation events and the Web Animations API~~ **PAID 2026-11-09** (WEB_ANIMATIONS.md slices A, B1 and B2: `animate()`, `getAnimations()` with `CSSAnimation`, and the four CSS animation events) | — | — |
 | `animation-composition`, `animation-timeline` (scroll-driven), `animation-range`, view transitions | newer levels. GitHub writes `animation-timeline: scroll(self)` 15 times, outside `@supports`, on animations of no duration that set custom properties: run on the clock they end as they start and show nothing, as in a browser without scroll timelines | a page that runs on scroll |
 | `display` in a keyframe | ignored: an animated display builds and unbuilds boxes, and browsers began animating it only lately | a page that animates it |
 | Grid track lists interpolated | discrete here | a page that animates its grid |

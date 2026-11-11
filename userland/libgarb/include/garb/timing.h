@@ -97,22 +97,27 @@ garb_clock_t garb_clock_at(const garb_timing_t *t, double local, bool backwards)
 // time it holds while `held`, and its playback rate: the local time at
 // `now` is `hold_ms` when held, else (now - start_ms) * rate. That is all
 // libflow needs to work where the effect is at any time itself, so a
-// running one ticks with no call into script per frame; those fields are
-// the whole contract between libdom and libflow, and a change to them is a
+// running one ticks with no call into script per frame. Beside them, how
+// each keyframe's values meet the value underneath (its composite, its
+// effect's where it said auto: Web Animations 1 § 5.4) and whether each
+// iteration builds on the last (iterationComposite). Those fields are the
+// whole contract between libdom and libflow, and a change to them is a
 // change to this sentence.
+typedef enum { GARB_COMPOSITE_REPLACE = 0, GARB_COMPOSITE_ADD, GARB_COMPOSITE_ACCUMULATE } garb_composite_t;
 typedef struct {
     double offset;
     bool has_easing;
     garb_easing_t easing;
     const garb_set_t *sets;
     int32_t nsets;
+    garb_composite_t composite;
 } garb_effect_keyframe_t;
 typedef struct garb_effect {
     const garb_effect_keyframe_t *frames;
     int32_t nframes;
     garb_timing_t timing;
     double start_ms, hold_ms, rate;
-    bool held;
+    bool held, iteration_accumulate;
 } garb_effect_t;
 
 #pragma GCC visibility pop

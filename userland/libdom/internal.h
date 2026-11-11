@@ -147,7 +147,8 @@ int d_proto_parent(int kind);
  * properties of the ones from SCROLL on are the Modern Web arc's, installed
  * by its table's rows (d_event_handler), not with the rest; SLOTCHANGE's
  * by shadow trees' install, with that switch (shadow.c, observer.c fires
- * it).
+ * it); the CSS animation events' by Web Animations' install, whose update
+ * step fires them (webanimation.c).
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
  * document's alone: HTML gives them an IDL property on Document and no
  * content attribute, so no element's on<type> attribute is a handler for
@@ -164,7 +165,8 @@ enum {
     D_EVENT_INVALID, D_EVENT_POINTERDOWN, D_EVENT_POINTERUP, D_EVENT_POINTERMOVE,
     D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
     D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
-    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE, D_EVENT_COUNT
+    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE,
+    D_EVENT_ANIMATIONSTART, D_EVENT_ANIMATIONEND, D_EVENT_ANIMATIONITERATION, D_EVENT_ANIMATIONCANCEL, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
@@ -694,6 +696,16 @@ struct os64_dom {
     const struct garb_effect **wa_index_fx;
     size_t wa_index_n;
     DValue *wa_timeline, *wa_event_prototype, *wa_promise_then;
+    /* CSS animations (CSSAnimation and the CSS animation events): the
+     * host's (count NULL for none); the ones the last step saw, for their
+     * events; CSSAnimation's prototype and AnimationEvent's. */
+    os64_dom_css_animations_t wa_css;
+    struct DWaSeen *wa_seen;
+    size_t wa_nseen, wa_seen_cap;
+    uint32_t wa_css_pass;
+    uint64_t wa_css_version;            /* the host's version as the last step read it */
+    bool wa_css_listening;              /* whether the last step heard a CSS animation event's listener */
+    DValue *wa_css_prototype, *wa_css_event_prototype;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;
@@ -969,6 +981,9 @@ int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, D
  * runs them. d_dispatch at window assumes a script's call is already
  * running, which a task the binding opened has not. */
 int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, os64_js_outcome_t *outcome);
+/* The same at `node`, its path the node's ancestors as d_dispatch's. */
+int d_dispatch_node_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node,
+                         os64_js_outcome_t *outcome);
 /* 0f's P1b row (event.c): EventTarget, its constructor, and Window. */
 int d_targets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A host task's bookkeeping (event.c): an entry's outcome folded into the

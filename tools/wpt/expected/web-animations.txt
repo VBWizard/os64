@@ -669,6 +669,192 @@ interfaces/KeyframeEffect/target.html	Test setting target from a valid target to
 interfaces/KeyframeEffect/target.html	Test setting target from null to a valid target
 interfaces/Animation/commitStyles.html	Throws if the target effect's ancestor is display:none
 interfaces/Animation/commitStyles.html	Treats display:contents in a display:none subtree as not rendered
+# Slice B2 (WEB_ANIMATIONS.md § 6): every test B2 makes pass — composite
+# add and accumulate per property and per effect, iterationComposite, and
+# the effect stack's underlying values. What still fails on those pages is
+# booked in DEBTS: the kinds that do not add, unpaired transform lists
+# accumulated, and an opacity keyframe held to [0, 1] before it is
+# composited (clamping-001's four tentative cases, which passed before B2
+# only because every effect replaced).
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-width: length of rem
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-left-width: length of rem
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-right-width: length of rem
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-top-width: length of rem
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: length
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: length of rem
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: units "em" onto "rem"
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: units "rem" onto "em"
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of rgba()
+animation-model/animation-types/accumulation-per-property-002.html	outline-offset: length
+animation-model/animation-types/accumulation-per-property-002.html	outline-offset: length of rem
+animation-model/animation-types/accumulation-per-property-002.html	outline-width: length
+animation-model/animation-types/accumulation-per-property-002.html	outline-width: length of rem
+animation-model/animation-types/accumulation-per-property-002.html	rotate without rotation axes
+animation-model/animation-types/accumulation-per-property-002.html	scale
+animation-model/animation-types/accumulation-per-property-002.html	scale with one unspecified value
+animation-model/animation-types/accumulation-per-property-002.html	scale with two unspecified values
+animation-model/animation-types/accumulation-per-property-002.html	transform: rotate
+animation-model/animation-types/accumulation-per-property-002.html	transform: rotate3d
+animation-model/animation-types/accumulation-per-property-002.html	transform: scale
+animation-model/animation-types/accumulation-per-property-002.html	transform: skew
+animation-model/animation-types/accumulation-per-property-002.html	transform: translate
+animation-model/animation-types/accumulation-per-property-002.html	translate
+animation-model/animation-types/accumulation-per-property-002.html	translate with transform
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-width: length
+animation-model/animation-types/addition-per-property-001.html	border-bottom-width: length of rem
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-001.html	border-left-width: length
+animation-model/animation-types/addition-per-property-001.html	border-left-width: length of rem
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-001.html	border-right-width: length
+animation-model/animation-types/addition-per-property-001.html	border-right-width: length of rem
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-001.html	border-top-width: length
+animation-model/animation-types/addition-per-property-001.html	border-top-width: length of rem
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: length
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: length of rem
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: units "em" onto "rem"
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: units "rem" onto "em"
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of rgba()
+animation-model/animation-types/addition-per-property-002.html	outline-offset: length
+animation-model/animation-types/addition-per-property-002.html	outline-offset: length of rem
+animation-model/animation-types/addition-per-property-002.html	outline-width: length
+animation-model/animation-types/addition-per-property-002.html	outline-width: length of rem
+animation-model/animation-types/addition-per-property-002.html	rotate without rotation axes
+animation-model/animation-types/addition-per-property-002.html	scale
+animation-model/animation-types/addition-per-property-002.html	scale with one unspecified value
+animation-model/animation-types/addition-per-property-002.html	scale with two unspecified values
+animation-model/animation-types/addition-per-property-002.html	transform: matrix
+animation-model/animation-types/addition-per-property-002.html	transform: matrix3d
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices in matched transform lists
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices in mismatched transform lists
+animation-model/animation-types/addition-per-property-002.html	transform: rotate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate on rotate and translate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate on translate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate3d
+animation-model/animation-types/addition-per-property-002.html	transform: scale
+animation-model/animation-types/addition-per-property-002.html	transform: skew
+animation-model/animation-types/addition-per-property-002.html	transform: translate
+animation-model/animation-types/addition-per-property-002.html	transform: translate on rotate
+animation-model/animation-types/addition-per-property-002.html	translate
+animation-model/animation-types/addition-per-property-002.html	translate with underlying percentage value
+animation-model/animation-types/addition-per-property-002.html	translate with underlying transform
+animation-model/combining-effects/clamping-001.tentative.html	11. opacity keyframes should not clamp before compositing, replace 200% + add -100% = 1
+animation-model/combining-effects/clamping-001.tentative.html	5. opacity keyframes should not clamp before compositing, replace 2 + add -1 = 1
+animation-model/combining-effects/effect-composition.html	Composite replace fully replaces the underlying animation value
+animation-model/combining-effects/effect-composition.html	Composite when mixing accumulate and replace
+animation-model/combining-effects/effect-composition.html	Composite when mixing add and replace
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value with implicit from values
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value with implicit to values
+animation-model/combining-effects/effect-composition.html	accumulate onto the base value
+animation-model/combining-effects/effect-composition.html	accumulate onto the base value when the interval does not include the 0 or 1 keyframe
+animation-model/combining-effects/effect-composition.html	accumulate specified on a keyframe overrides the composite mode of the effect
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value with implicit from values
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value with implicit to values
+animation-model/combining-effects/effect-composition.html	add onto the base value
+animation-model/combining-effects/effect-composition.html	add onto the base value when the interval does not include the 0 or 1 keyframe
+animation-model/combining-effects/effect-composition.html	add specified on a keyframe overrides the composite mode of the effect
+animation-model/combining-effects/effect-composition.html	unspecified composite mode on a keyframe is overriden by setting accumulate of the effect
+animation-model/combining-effects/effect-composition.html	unspecified composite mode on a keyframe is overriden by setting add of the effect
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the animation's composite mode
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the animation's iteration composite mode
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value via a parent element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using additive animation
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using additive animation on a single keyframe
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations made by directly changing the keyframes
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations via a a parent element
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	duration changes with an iteration composition operation of accumulate
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation that the values can'tbe reduced
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <length> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <percentage> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of opacity animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform from none to translate
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform list animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform of rotate3d function
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform: [ scale(1), scale(2) ] animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform: scale(2) animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition starts with non-zero value animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition with negative final value animation
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Animations persisted before they would be removed contribute to the effect stack
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Persisted animations contribute to the effect stack
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Removed animations do not contribute to the effect stack
+interfaces/KeyframeEffect/iterationComposite.html	iterationComposite can be updated while an animation is in progress
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation that green component is decreasing
 [excluded]
 interfaces/Animatable/getAnimations.html	its "Triggers a style change event" test waits for a CSS transition's transitionrun, and CSS transitions are not built (PILE3.md § Transitions): since slice B's constructors let that test reach the wait, the page times out whole. getAnimations is held by tools/test_dom_webanimation.inc meanwhile
 [passing]
@@ -680,6 +866,12 @@ animation-model/animation-types/accumulation-per-property-001.html	background-cl
 animation-model/animation-types/accumulation-per-property-001.html	background-clip: "content-box" onto "padding-box"
 animation-model/animation-types/accumulation-per-property-001.html	background-clip: "padding-box" onto "content-box"
 animation-model/animation-types/accumulation-per-property-001.html	background-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	background-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	background-image (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	background-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
 animation-model/animation-types/accumulation-per-property-001.html	background-image: "url("http://localhost/test-2")" onto "url("http://localhost/test-1")"
@@ -688,29 +880,61 @@ animation-model/animation-types/accumulation-per-property-001.html	background-or
 animation-model/animation-types/accumulation-per-property-001.html	background-origin: "padding-box" onto "content-box"
 animation-model/animation-types/accumulation-per-property-001.html	background-repeat (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-style: "dotted" onto "solid"
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-style: "solid" onto "dotted"
 animation-model/animation-types/accumulation-per-property-001.html	border-bottom-width (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-bottom-width: length of rem
 animation-model/animation-types/accumulation-per-property-001.html	border-collapse (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-collapse: "collapse" onto "separate"
 animation-model/animation-types/accumulation-per-property-001.html	border-collapse: "separate" onto "collapse"
 animation-model/animation-types/accumulation-per-property-001.html	border-left-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	border-left-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-left-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-left-style: "dotted" onto "solid"
 animation-model/animation-types/accumulation-per-property-001.html	border-left-style: "solid" onto "dotted"
 animation-model/animation-types/accumulation-per-property-001.html	border-left-width (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-left-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-left-width: length of rem
 animation-model/animation-types/accumulation-per-property-001.html	border-right-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	border-right-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-right-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-right-style: "dotted" onto "solid"
 animation-model/animation-types/accumulation-per-property-001.html	border-right-style: "solid" onto "dotted"
 animation-model/animation-types/accumulation-per-property-001.html	border-right-width (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-right-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-right-width: length of rem
 animation-model/animation-types/accumulation-per-property-001.html	border-spacing (type: lengthPair) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-top-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	border-top-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	border-top-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	border-top-style: "dotted" onto "solid"
 animation-model/animation-types/accumulation-per-property-001.html	border-top-style: "solid" onto "dotted"
 animation-model/animation-types/accumulation-per-property-001.html	border-top-width (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	border-top-width: length
+animation-model/animation-types/accumulation-per-property-001.html	border-top-width: length of rem
 animation-model/animation-types/accumulation-per-property-001.html	box-shadow (type: boxShadowList) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	box-sizing (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	box-sizing: "border-box" onto "content-box"
@@ -730,6 +954,12 @@ animation-model/animation-types/accumulation-per-property-001.html	clip: "rect(1
 animation-model/animation-types/accumulation-per-property-001.html	clip: "rect(10px, 10px, 10px, 10px)" onto "rect(10px, 10px, 10px, auto)"
 animation-model/animation-types/accumulation-per-property-001.html	clip: "rect(10px, 10px, 10px, auto)" onto "rect(10px, 10px, 10px, 10px)"
 animation-model/animation-types/accumulation-per-property-001.html	color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-001.html	color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-001.html	color-interpolation (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	column-gap (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-001.html	column-gap (type: length) has testAccumulation function
@@ -812,6 +1042,10 @@ animation-model/animation-types/accumulation-per-property-002.html	justify-self 
 animation-model/animation-types/accumulation-per-property-002.html	justify-self: "end" onto "start"
 animation-model/animation-types/accumulation-per-property-002.html	justify-self: "start" onto "end"
 animation-model/animation-types/accumulation-per-property-002.html	letter-spacing (type: lengthPercentageOrCalc) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: length
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: length of rem
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: units "em" onto "rem"
+animation-model/animation-types/accumulation-per-property-002.html	letter-spacing: units "rem" onto "em"
 animation-model/animation-types/accumulation-per-property-002.html	line-height (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	line-height: "10" onto "normal"
 animation-model/animation-types/accumulation-per-property-002.html	line-height: "10px" onto "normal"
@@ -833,11 +1067,21 @@ animation-model/animation-types/accumulation-per-property-002.html	object-fit: "
 animation-model/animation-types/accumulation-per-property-002.html	object-fit: "fill" onto "contain"
 animation-model/animation-types/accumulation-per-property-002.html	order (type: integer) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	outline-color (type: color) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of #RGB
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of #RGBa
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsl()
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/accumulation-per-property-002.html	outline-color supports animating as color of rgba()
 animation-model/animation-types/accumulation-per-property-002.html	outline-offset (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	outline-offset: length
+animation-model/animation-types/accumulation-per-property-002.html	outline-offset: length of rem
 animation-model/animation-types/accumulation-per-property-002.html	outline-style (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	outline-style: "dotted" onto "none"
 animation-model/animation-types/accumulation-per-property-002.html	outline-style: "none" onto "dotted"
 animation-model/animation-types/accumulation-per-property-002.html	outline-width (type: length) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	outline-width: length
+animation-model/animation-types/accumulation-per-property-002.html	outline-width: length of rem
 animation-model/animation-types/accumulation-per-property-002.html	overflow (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	overflow-wrap (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	overflow-wrap: "break-word" onto "normal"
@@ -866,7 +1110,11 @@ animation-model/animation-types/accumulation-per-property-002.html	position: "ab
 animation-model/animation-types/accumulation-per-property-002.html	position: "fixed" onto "absolute"
 animation-model/animation-types/accumulation-per-property-002.html	quotes (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	rotate (type: rotateList) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	rotate without rotation axes
+animation-model/animation-types/accumulation-per-property-002.html	scale
 animation-model/animation-types/accumulation-per-property-002.html	scale (type: scaleList) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	scale with one unspecified value
+animation-model/animation-types/accumulation-per-property-002.html	scale with two unspecified values
 animation-model/animation-types/accumulation-per-property-002.html	stop-color (type: color) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	stop-opacity (type: opacity) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	stroke-dasharray (type: dasharray) has testAccumulation function
@@ -897,7 +1145,14 @@ animation-model/animation-types/accumulation-per-property-002.html	transform: no
 animation-model/animation-types/accumulation-per-property-002.html	transform: non-invertible matrices in matched transform lists (non-invertible onto invertible)
 animation-model/animation-types/accumulation-per-property-002.html	transform: non-invertible matrices in mismatched transform lists (invertible onto non-invertible)
 animation-model/animation-types/accumulation-per-property-002.html	transform: non-invertible matrices in mismatched transform lists (non-invertible onto invertible)
+animation-model/animation-types/accumulation-per-property-002.html	transform: rotate
+animation-model/animation-types/accumulation-per-property-002.html	transform: rotate3d
+animation-model/animation-types/accumulation-per-property-002.html	transform: scale
+animation-model/animation-types/accumulation-per-property-002.html	transform: skew
+animation-model/animation-types/accumulation-per-property-002.html	transform: translate
+animation-model/animation-types/accumulation-per-property-002.html	translate
 animation-model/animation-types/accumulation-per-property-002.html	translate (type: translateList) has testAccumulation function
+animation-model/animation-types/accumulation-per-property-002.html	translate with transform
 animation-model/animation-types/accumulation-per-property-002.html	vector-effect (type: discrete) has testAccumulation function
 animation-model/animation-types/accumulation-per-property-002.html	vector-effect: "none" onto "non-scaling-stroke"
 animation-model/animation-types/accumulation-per-property-002.html	visibility (type: visibility) has testAccumulation function
@@ -917,6 +1172,12 @@ animation-model/animation-types/addition-per-property-001.html	background-clip (
 animation-model/animation-types/addition-per-property-001.html	background-clip: "content-box" onto "padding-box"
 animation-model/animation-types/addition-per-property-001.html	background-clip: "padding-box" onto "content-box"
 animation-model/animation-types/addition-per-property-001.html	background-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	background-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	background-image (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	background-image: "url("http://localhost/test-1")" onto "url("http://localhost/test-2")"
 animation-model/animation-types/addition-per-property-001.html	background-image: "url("http://localhost/test-2")" onto "url("http://localhost/test-1")"
@@ -925,29 +1186,61 @@ animation-model/animation-types/addition-per-property-001.html	background-origin
 animation-model/animation-types/addition-per-property-001.html	background-origin: "padding-box" onto "content-box"
 animation-model/animation-types/addition-per-property-001.html	background-repeat (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-bottom-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	border-bottom-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-bottom-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-bottom-style: "dotted" onto "solid"
 animation-model/animation-types/addition-per-property-001.html	border-bottom-style: "solid" onto "dotted"
 animation-model/animation-types/addition-per-property-001.html	border-bottom-width (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-bottom-width: length
+animation-model/animation-types/addition-per-property-001.html	border-bottom-width: length of rem
 animation-model/animation-types/addition-per-property-001.html	border-collapse (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-collapse: "collapse" onto "separate"
 animation-model/animation-types/addition-per-property-001.html	border-collapse: "separate" onto "collapse"
 animation-model/animation-types/addition-per-property-001.html	border-left-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	border-left-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-left-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-left-style: "dotted" onto "solid"
 animation-model/animation-types/addition-per-property-001.html	border-left-style: "solid" onto "dotted"
 animation-model/animation-types/addition-per-property-001.html	border-left-width (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-left-width: length
+animation-model/animation-types/addition-per-property-001.html	border-left-width: length of rem
 animation-model/animation-types/addition-per-property-001.html	border-right-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	border-right-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-right-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-right-style: "dotted" onto "solid"
 animation-model/animation-types/addition-per-property-001.html	border-right-style: "solid" onto "dotted"
 animation-model/animation-types/addition-per-property-001.html	border-right-width (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-right-width: length
+animation-model/animation-types/addition-per-property-001.html	border-right-width: length of rem
 animation-model/animation-types/addition-per-property-001.html	border-spacing (type: lengthPair) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-top-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	border-top-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	border-top-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	border-top-style: "dotted" onto "solid"
 animation-model/animation-types/addition-per-property-001.html	border-top-style: "solid" onto "dotted"
 animation-model/animation-types/addition-per-property-001.html	border-top-width (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	border-top-width: length
+animation-model/animation-types/addition-per-property-001.html	border-top-width: length of rem
 animation-model/animation-types/addition-per-property-001.html	box-shadow (type: boxShadowList) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	box-sizing (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	box-sizing: "border-box" onto "content-box"
@@ -967,6 +1260,12 @@ animation-model/animation-types/addition-per-property-001.html	clip: "rect(10px,
 animation-model/animation-types/addition-per-property-001.html	clip: "rect(10px, 10px, 10px, 10px)" onto "rect(10px, 10px, 10px, auto)"
 animation-model/animation-types/addition-per-property-001.html	clip: "rect(10px, 10px, 10px, auto)" onto "rect(10px, 10px, 10px, 10px)"
 animation-model/animation-types/addition-per-property-001.html	color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-001.html	color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-001.html	color-interpolation (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	column-gap (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-001.html	column-gap (type: length) has testAddition function
@@ -1048,6 +1347,10 @@ animation-model/animation-types/addition-per-property-002.html	justify-self (typ
 animation-model/animation-types/addition-per-property-002.html	justify-self: "end" onto "start"
 animation-model/animation-types/addition-per-property-002.html	justify-self: "start" onto "end"
 animation-model/animation-types/addition-per-property-002.html	letter-spacing (type: lengthPercentageOrCalc) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: length
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: length of rem
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: units "em" onto "rem"
+animation-model/animation-types/addition-per-property-002.html	letter-spacing: units "rem" onto "em"
 animation-model/animation-types/addition-per-property-002.html	line-height (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	line-height: "10" onto "normal"
 animation-model/animation-types/addition-per-property-002.html	line-height: "10px" onto "normal"
@@ -1069,11 +1372,21 @@ animation-model/animation-types/addition-per-property-002.html	object-fit: "cont
 animation-model/animation-types/addition-per-property-002.html	object-fit: "fill" onto "contain"
 animation-model/animation-types/addition-per-property-002.html	order (type: integer) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	outline-color (type: color) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of #RGB
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of #RGBa
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsl()
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of hsla()
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of rgb() with overflowed  from and to values
+animation-model/animation-types/addition-per-property-002.html	outline-color supports animating as color of rgba()
 animation-model/animation-types/addition-per-property-002.html	outline-offset (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	outline-offset: length
+animation-model/animation-types/addition-per-property-002.html	outline-offset: length of rem
 animation-model/animation-types/addition-per-property-002.html	outline-style (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	outline-style: "dotted" onto "none"
 animation-model/animation-types/addition-per-property-002.html	outline-style: "none" onto "dotted"
 animation-model/animation-types/addition-per-property-002.html	outline-width (type: length) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	outline-width: length
+animation-model/animation-types/addition-per-property-002.html	outline-width: length of rem
 animation-model/animation-types/addition-per-property-002.html	overflow (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	overflow-wrap (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	overflow-wrap: "break-word" onto "normal"
@@ -1102,7 +1415,11 @@ animation-model/animation-types/addition-per-property-002.html	position: "absolu
 animation-model/animation-types/addition-per-property-002.html	position: "fixed" onto "absolute"
 animation-model/animation-types/addition-per-property-002.html	quotes (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	rotate (type: rotateList) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	rotate without rotation axes
+animation-model/animation-types/addition-per-property-002.html	scale
 animation-model/animation-types/addition-per-property-002.html	scale (type: scaleList) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	scale with one unspecified value
+animation-model/animation-types/addition-per-property-002.html	scale with two unspecified values
 animation-model/animation-types/addition-per-property-002.html	stop-color (type: color) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	stop-opacity (type: opacity) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	stroke-dasharray (type: dasharray) has testAddition function
@@ -1127,7 +1444,23 @@ animation-model/animation-types/addition-per-property-002.html	text-transform (t
 animation-model/animation-types/addition-per-property-002.html	text-transform: "capitalize" onto "uppercase"
 animation-model/animation-types/addition-per-property-002.html	text-transform: "uppercase" onto "capitalize"
 animation-model/animation-types/addition-per-property-002.html	transform (type: transformList) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	transform: matrix
+animation-model/animation-types/addition-per-property-002.html	transform: matrix3d
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices in matched transform lists
+animation-model/animation-types/addition-per-property-002.html	transform: non-invertible matrices in mismatched transform lists
+animation-model/animation-types/addition-per-property-002.html	transform: rotate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate on rotate and translate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate on translate
+animation-model/animation-types/addition-per-property-002.html	transform: rotate3d
+animation-model/animation-types/addition-per-property-002.html	transform: scale
+animation-model/animation-types/addition-per-property-002.html	transform: skew
+animation-model/animation-types/addition-per-property-002.html	transform: translate
+animation-model/animation-types/addition-per-property-002.html	transform: translate on rotate
+animation-model/animation-types/addition-per-property-002.html	translate
 animation-model/animation-types/addition-per-property-002.html	translate (type: translateList) has testAddition function
+animation-model/animation-types/addition-per-property-002.html	translate with underlying percentage value
+animation-model/animation-types/addition-per-property-002.html	translate with underlying transform
 animation-model/animation-types/addition-per-property-002.html	vector-effect (type: discrete) has testAddition function
 animation-model/animation-types/addition-per-property-002.html	vector-effect: "none" onto "non-scaling-stroke"
 animation-model/animation-types/addition-per-property-002.html	visibility (type: visibility) has testAddition function
@@ -1531,17 +1864,40 @@ animation-model/animation-types/visibility.html	Visibility clamping behavior
 animation-model/animation-types/visibility.html	Visibility clamping behavior with an easing that has a negative component
 animation-model/combining-effects/applying-interpolated-transform.html	 apply interpolated transform on multiple keyframes
 animation-model/combining-effects/applying-the-composited-result.html	Finishing an animation that does not fill forwards causes its animation style to be cleared
-animation-model/combining-effects/clamping-001.tentative.html	10. opacity keyframes should not clamp before compositing, replace 200% + add -200% = 0
+animation-model/combining-effects/clamping-001.tentative.html	11. opacity keyframes should not clamp before compositing, replace 200% + add -100% = 1
 animation-model/combining-effects/clamping-001.tentative.html	12. opacity keyframes should not clamp before compositing, replace -100% + add 200% = 1
-animation-model/combining-effects/clamping-001.tentative.html	2. opacity keyframes should not clamp before compositing, replace 1 + add -1 = 0
-animation-model/combining-effects/clamping-001.tentative.html	4. opacity keyframes should not clamp before compositing, replace 2 + add -2 = 0
+animation-model/combining-effects/clamping-001.tentative.html	5. opacity keyframes should not clamp before compositing, replace 2 + add -1 = 1
 animation-model/combining-effects/clamping-001.tentative.html	6. opacity keyframes should not clamp before compositing, replace -1 + add 2 = 1
-animation-model/combining-effects/clamping-001.tentative.html	8. opacity keyframes should not clamp before compositing, replace 100% + add -100% = 0
+animation-model/combining-effects/effect-composition.html	Composite replace fully replaces the underlying animation value
+animation-model/combining-effects/effect-composition.html	Composite when mixing accumulate and replace
+animation-model/combining-effects/effect-composition.html	Composite when mixing add and replace
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value with implicit from values
+animation-model/combining-effects/effect-composition.html	accumulate onto an underlying animation value with implicit to values
+animation-model/combining-effects/effect-composition.html	accumulate onto the base value
+animation-model/combining-effects/effect-composition.html	accumulate onto the base value when the interval does not include the 0 or 1 keyframe
+animation-model/combining-effects/effect-composition.html	accumulate specified on a keyframe overrides the composite mode of the effect
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value with implicit from values
+animation-model/combining-effects/effect-composition.html	add onto an underlying animation value with implicit to values
+animation-model/combining-effects/effect-composition.html	add onto the base value
+animation-model/combining-effects/effect-composition.html	add onto the base value when the interval does not include the 0 or 1 keyframe
+animation-model/combining-effects/effect-composition.html	add specified on a keyframe overrides the composite mode of the effect
+animation-model/combining-effects/effect-composition.html	unspecified composite mode on a keyframe is overriden by setting accumulate of the effect
+animation-model/combining-effects/effect-composition.html	unspecified composite mode on a keyframe is overriden by setting add of the effect
 animation-model/keyframe-effects/background-shorthand.html	Shorthand properties expand to longhand counterparts in computed keyframes.
 animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on element
 animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to font-size on parent element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the animation's composite mode
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the animation's iteration composite mode
 animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the animation's keyframes
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value via a parent element
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using additive animation
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using additive animation on a single keyframe
 animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to the base value when using the fill value is an implicit keyframe
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations made by directly changing the keyframes
+animation-model/keyframe-effects/effect-value-context-filling.html	Filling effect values reflect changes to underlying animations via a a parent element
 animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size from reparenting
 animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on element
 animation-model/keyframe-effects/effect-value-context.html	Effect values reflect changes to font-size on parent element
@@ -1550,12 +1906,30 @@ animation-model/keyframe-effects/effect-value-context.html	Effect values reflect
 animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	An easing on a keyframe with no value for the target property is not applied
 animation-model/keyframe-effects/effect-value-easing-on-keyframe-without-property.html	Control: the same easing on a keyframe that does specify the property is applied
 animation-model/keyframe-effects/effect-value-interval-distance.html	Interval distance is calculated correctly (precision test)
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	duration changes with an iteration composition operation of accumulate
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <calc()> value animation that the values can'tbe reduced
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <color> type animation that green component is decreasing
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <length> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of <percentage> type animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of opacity animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform from none to translate
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform list animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform of rotate3d function
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform(rotate) animation
 animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform: [ scale(0), scale(1) ] animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform: [ scale(1), scale(2) ] animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition of transform: scale(2) animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition starts with non-zero value animation
+animation-model/keyframe-effects/effect-value-iteration-composite-operation.html	iteration composition with negative final value animation
 animation-model/keyframe-effects/effect-value-overlapping-keyframes.html	Overlapping keyframes at 0 and 1 use the appropriate value when the progress is outside the range [0, 1]
 animation-model/keyframe-effects/effect-value-overlapping-keyframes.html	Overlapping keyframes between 0 and 1 use the appropriate value on each side of the overlap point
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Animations persisted before they would be removed contribute to the effect stack
 animation-model/keyframe-effects/effect-value-replaced-animations.html	Persisted animations contribute to animated style
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Persisted animations contribute to the effect stack
 animation-model/keyframe-effects/effect-value-replaced-animations.html	Removed animations do not contribute to animated style
+animation-model/keyframe-effects/effect-value-replaced-animations.html	Removed animations do not contribute to the effect stack
 animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-end easing on a keyframe uses the right limit in the before phase
 animation-model/keyframe-effects/effect-value-step-easing-reversed-direction.html	Reversed step-start easing on a keyframe uses the left limit in the after phase
 animation-model/keyframe-effects/effect-value-transformed-distance.html	Linear-equivalent cubic-bezier keyframe easing applied to an effect with a ease function does not alter the result
@@ -2076,6 +2450,7 @@ interfaces/KeyframeEffect/copy-constructor.html	Copied KeyframeEffect has the sa
 interfaces/KeyframeEffect/copy-constructor.html	Copied KeyframeEffect has the same keyframes
 interfaces/KeyframeEffect/copy-constructor.html	Copied KeyframeEffect has the same target
 interfaces/KeyframeEffect/copy-constructor.html	Copied KeyframeEffect has the same timing content
+interfaces/KeyframeEffect/iterationComposite.html	iterationComposite can be updated while an animation is in progress
 interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	'easing' and 'offset' are ignored on iterable objects
 interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	A list of values returned from a custom iterator should be ignored
 interfaces/KeyframeEffect/processing-a-keyframes-argument-001.html	A non-object returned from the Symbol.iterator property should cause a TypeError to be thrown

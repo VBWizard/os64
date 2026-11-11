@@ -316,6 +316,9 @@ typedef struct {
     double offset;
     bool has_easing;
     garb_easing_t easing;
+    // How its values meet the value underneath: a script effect's own
+    // (garb_effect_keyframe_t); a CSS animation's replace.
+    garb_composite_t composite;
     const garb_set_t *decls;
     int32_t ndecls;
     int32_t sheet;
@@ -340,6 +343,9 @@ typedef struct {
     flow_animation_t timing;
     FRecord *record;
     const garb_effect_t *script;
+    // Each iteration builds on the last (a script's iterationComposite:
+    // accumulate).
+    bool iteration_accumulate;
     FKeyframe *frames;
     int32_t nframes;
     FProps props;
