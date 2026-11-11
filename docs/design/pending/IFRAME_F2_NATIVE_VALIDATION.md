@@ -1,7 +1,8 @@
 # F.2a — native ownership and adoption
 
 Implementation record for the native half of [F.2](IFRAME_F2_OWNERSHIP.md),
-based on `f239ea75` (the reviewed brief, PR #533). F.2 remains in progress:
+PR [#537](https://github.com/VBWizard/os64/pull/537), based on `f239ea75`
+(the reviewed brief, PR #533). F.2 remains in progress:
 libdom clusters, JavaScript wrappers and service routing belong to F.2b.
 Yonder still creates one binding. This PR exposes no visible iframe behavior.
 
