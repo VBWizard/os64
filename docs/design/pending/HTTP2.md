@@ -2757,6 +2757,8 @@ with the switch off is proved on the host and not in the guest. The
 record of the Chrome load: `HTTP: 2 (stream 1)`, one connection made,
 six requests sent over HTTP/2, no fetch waited.
 
+**Codex.** Three rounds. The first two each found one way a server's `HTTP_1_1_REQUIRED` went unheard (above); the third was clean, at `e8dd1d0f`.
+
 **Not done.** § 5's table on live pages. Connections and waits per page
 are the numbers that mean something, the off switch gives them on one
 build, and a QEMU timing would say nothing of the saving: it is the P5

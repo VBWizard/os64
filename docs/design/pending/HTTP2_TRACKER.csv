@@ -70,7 +70,7 @@ H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,done,#538,"1
 H2.4.11,"One cold read, as-built section",H2.4.10,done,#538,"Opus found five defects, each fixed with a case and a mutant"
 H2.4.12,"Codex round",H2.4.11,done,#538,"round 4 clean; 5, 4 and 3 findings in the rounds before, each fixed with a case and a mutant"
 
-H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2 C3,review,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
+H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2 C3,p5,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
 H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,done,#544,"adds this slice's rows"
 H2.5.2,"libfetch: os64_fetch_h2_t and the options beside order (h2, h2_weight, h2_lines, http1); fetch_h2_offer deleted and the offer rule in dial; libfetch's own greeting as the default",H2.5.1,done,#549,
 H2.5.3,"h2_conn: the first stream id in the greeting; a priority on HEADERS and a WINDOW_UPDATE after it, per stream",H2.5.1,done,#549,
@@ -84,8 +84,8 @@ H2.5.8,"Host proof: every row of the brief's capture table checked by the script
 H2.5.9,"h2probe: no flag, no wait for the reader, links libfetch.so",H2.5.2,done,#549,
 H2.5.10,"QEMU against nghttpd -v under each browser preset on e1000 and virtio: the server's log against the capture, one connection, HTTP/2 on every request; the measurement of section 5",H2.5.8,done,#549,
 H2.5.11,"The books: DEBTS, DIVERGENCES, the 2.10 rows, WIRE.md's pointer",H2.5.2,done,#549,
-H2.5.12,"One cold read, then Codex",H2.5.10,doing,,
-H2.5.13,"Chris's P5 pass: the sites that scored us by outcome, ordinary browsing under each browser preset, h2probe against a live site",H2.5.12,todo,,"the merge waits on it"
+H2.5.12,"One cold read, then Codex",H2.5.10,done,#549,
+H2.5.13,"Chris's P5 pass: the sites that scored us by outcome, ordinary browsing under each browser preset, h2probe against a live site",H2.5.12,doing,,"the merge waits on it"
 H2.5.14,"As built, under the brief",H2.5.13,todo,,
 
 H2.6,"Fetches on the connection: the pool shares one connection among fetches, a fetch runs on a stream, the retry rules and words, a guest probe",H2.4,done,#542,"HTTP2.md § 4 H2.6 and 'H2.6, as built'; the switch stays off (fetch_h2_offer, hidden) until H2.5. Codex round 3 clean 2026-11-11 (one library finding, one test finding before it); h2probe passes in QEMU on e1000 and virtio; no P5 pass yet, and h2probe is what to run there"
