@@ -126,7 +126,10 @@ static bool obtain(fetch_t *f, const fetch_pool_key_t *key, uint32_t idle_most, 
     fetch_pool_wait_t wait = {.bell = &f->bell, .patience_ms = patience_ms,
                               .cancelled = fetch_cancelled, .cancel_ctx = f};
     f->conn = NULL;
-    f->answer = fetch_pool_take(key, idle_most, fresh, &wait, &f->conn, &f->io);
+    // Every fetch here would say the same greeting: who may share an HTTP/2
+    // connection is test_fetch_h2_host's to prove.
+    static const fetch_pool_say_t kSay = {0};
+    f->answer = fetch_pool_take(key, &kSay, idle_most, fresh, &wait, &f->conn, &f->io);
     f->waited_ms = wait.waited_ms;
     f->for_the_table = wait.for_the_table;
     if (f->answer == FETCH_POOL_KEPT) {
