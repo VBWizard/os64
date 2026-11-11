@@ -67,6 +67,10 @@ typedef enum {
     R_HELD,             // the head now, the body when `release_held` is set
     R_RESET_MID_BODY,   // the head, half the body, RST_STREAM(INTERNAL_ERROR)
     R_HALF_HEAD,        // HEADERS without END_HEADERS, and the connection ends
+    R_CANCEL,           // RST_STREAM(CANCEL) before any answer
+    R_HUGE_HEAD,        // a head of a hundred fields of a thousand bytes
+    R_OPEN,             // the head, and the stream left open with nothing after it
+    R_ECHO,             // the request's body back, once it has all come
 } route_kind_t;
 
 typedef struct {
@@ -129,6 +133,7 @@ static struct {
     uint32_t max_streams;           // 0 = says nothing
     atomic_int hang_up_at_handshake;   // this many dials are hung up on as their handshake ends
     atomic_int refuse;                 // this many dials fail
+    int handshake_ms;                  // how long its handshake takes
 } hosts[8];
 static int nhosts;
 
@@ -177,6 +182,10 @@ static void serve_h2(dial_t *d)
     const uint8_t *payload;
     uint32_t held[64];
     int nheld = 0;
+    // An upload in progress: its stream, and what has come of its body.
+    uint32_t echo_stream = 0;
+    static _Thread_local uint8_t echo[4096];
+    size_t echo_len = 0;
     int at = host_at(d->host);
     uint32_t most = at >= 0 ? hosts[at].max_streams : 0;
     peer_use(d->wire);
@@ -194,6 +203,16 @@ static void serve_h2(dial_t *d)
             continue;
         if (h.type == H2_FRAME_RST_STREAM)
             atomic_fetch_add(&d->resets, 1);
+        if (h.type == H2_FRAME_DATA && h.stream == echo_stream) {
+            size_t n = h.length < sizeof(echo) - echo_len ? h.length : sizeof(echo) - echo_len;
+            memcpy(echo + echo_len, payload, n);
+            echo_len += n;
+            if (h.flags & H2_FLAG_END_STREAM) {
+                route_t back = {.status = "200", .body = echo, .body_len = echo_len};
+                send_reply_h2(h.stream, &back, false);
+                echo_stream = 0;
+            }
+        }
         if (h.type == H2_FRAME_DATA && (h.flags & H2_FLAG_END_STREAM))
             atomic_fetch_add(&d->bodies, 1);
         if (h.type != H2_FRAME_HEADERS)
@@ -241,6 +260,33 @@ static void serve_h2(dial_t *d)
             return;
         case R_SILENT:
             break;
+        case R_CANCEL:
+            peer_send_rst(h.stream, H2_ERR_CANCEL);
+            break;
+        case R_OPEN:
+            send_reply_h2(h.stream, r, true);
+            break;
+        case R_ECHO:
+            echo_stream = h.stream;
+            echo_len = 0;
+            if (h.flags & H2_FLAG_END_STREAM) {
+                route_t none = {.status = "200", .body = (const uint8_t *)"no body came", .body_len = 12};
+                send_reply_h2(h.stream, &none, false);
+                echo_stream = 0;
+            }
+            break;
+        case R_HUGE_HEAD: {
+            static char wide[1001];
+            h2_field_t many[101];
+            memset(wide, 'w', sizeof(wide) - 1);
+            many[0] = (h2_field_t){.name = (const uint8_t *)":status", .name_len = 7, .value = (const uint8_t *)"200",
+                                   .value_len = 3};
+            for (int i = 1; i <= 100; i++)
+                many[i] = (h2_field_t){.name = (const uint8_t *)"x-wide", .name_len = 6,
+                                       .value = (const uint8_t *)wide, .value_len = 1000};
+            peer_send_headers(h.stream, many, 101, true);
+            break;
+        }
         case R_HALF_HEAD: {
             static const uint8_t kStatus[1] = {0x88};
             peer_send_frame(H2_FRAME_HEADERS, 0, h.stream, kStatus, 1);
@@ -290,6 +336,7 @@ static void serve_h1(dial_t *d)
         const route_t *r = path != NULL ? route_for(path + 1, path_len) : NULL;
         bool head = strncmp(in, "HEAD ", 5) == 0;
         atomic_fetch_add(&d->requests, 1);
+        in[have] = '\0';
         have = 0;
         char out[2048];
         if (r == NULL) {
@@ -297,6 +344,20 @@ static void serve_h1(dial_t *d)
             continue;
         }
         atomic_fetch_add(&((route_t *)r)->hits, 1);
+        route_t back;
+        if (r->kind == R_ECHO) {
+            // The body follows the head: as many bytes as Content-Length says.
+            static _Thread_local char body[4096];
+            const char *said = strcasestr(in, "content-length:");
+            size_t want = said != NULL ? (size_t)strtoul(said + 15, NULL, 10) : 0, got = 0;
+            size_t after = (size_t)(in + strlen(in) - (end + 4));
+            memcpy(body, end + 4, after < sizeof(body) ? after : sizeof(body));
+            got = after;
+            while (got < want && got < sizeof(body) && !atomic_load(&stopping))
+                got += peer_raw_take(body + got, sizeof(body) - got, 20);
+            back = (route_t){.status = "200", .body = (const uint8_t *)body, .body_len = got};
+            r = &back;
+        }
         int len = snprintf(out, sizeof(out), "HTTP/1.1 %s Status\r\n", r->status != NULL ? r->status : "200");
         for (int i = 0; i < 8 && r->fields[i][0] != NULL; i++)
             len += snprintf(out + len, sizeof(out) - (size_t)len, "%s: %s\r\n", r->fields[i][0], r->fields[i][1]);
@@ -399,6 +460,8 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     bool offered = false;
     for (size_t i = 0; i < c->alpn_count; i++)
         offered = offered || (c->alpn[i].length == strlen(answer) && memcmp(c->alpn[i].data, answer, c->alpn[i].length) == 0);
+    if (at >= 0 && hosts[at].handshake_ms != 0)
+        nap_ms(hosts[at].handshake_ms);
     struct os64_tls_transport *t = calloc(1, sizeof(*t));
     t->handle = h;
     t->alpn = offered ? answer : "http/1.1";
@@ -623,8 +686,13 @@ static void settle(void)
     fetch_pool_drain();
     for (int i = 0; i < 600 && (fetch_pool_closing() != 0 || peer_sockets_open() != 0); i++)
         nap_ms(5);
-    CHECK(fetch_pool_closing() == 0);
-    CHECK(peer_sockets_open() == 0);
+    if (fetch_pool_closing() != 0 || peer_sockets_open() != 0) {
+        // Nothing after this could be trusted, and a connection that never
+        // closes makes every later case wait: stop here.
+        fprintf(stderr, "test_fetch_h2_host: %zu connections still closing and %u sockets open at a case's end\n",
+                fetch_pool_closing(), peer_sockets_open());
+        exit(1);
+    }
     size_t kept, live;
     fetch_pool_counts(&kept, &live);
     CHECK(kept == 0 && live == 0);
@@ -700,7 +768,7 @@ static void basic_cases(void)
     r->fields[0][1] = "gzip";
     r = route("/empty", R_REPLY, "204", NULL);
     r = route("/head", R_REPLY, "200", kPage);
-    r = route("/post", R_REPLY, "200", "posted");
+    r = route("/post", R_ECHO, "200", NULL);
 
     same_as_h1("a GET", "/page", NULL, 200);
     same_as_h1("a gzip body", "/gzip", NULL, 200);
@@ -710,10 +778,16 @@ static void basic_cases(void)
     os64_fetch_options_t post = {.method = OS64_FETCH_METHOD_POST, .body = "name=value", .body_len = 10,
                                  .content_type = "application/x-www-form-urlencoded"};
     same_as_h1("a POST", "/post", &post, 200);
+    // (The server echoes what it was sent, so the upload is what is compared.)
+    static job_t posted;
+    memset(&posted, 0, sizeof(posted));
+    posted.opt = post;
+    job_go(&posted, "https://h2.same.test/post");
+    CHECK(posted.ended == OS64_FETCH_OK && posted.body_len == 10 && memcmp(posted.body, "name=value", 10) == 0);
     same_as_h1("a path nobody serves", "/nowhere", NULL, 404);
 
     // One HTTP/2 connection carried all six of its host's.
-    CHECK(h2_dials() == 1 && atomic_load(&dials[0].requests) == 6 && requests_seen() == 12);
+    CHECK(h2_dials() == 1 && atomic_load(&dials[0].requests) == 7 && requests_seen() == 13);
     size_t kept, live;
     fetch_pool_counts(&kept, &live);
     CHECK(kept >= 2 && live == 0);
@@ -760,9 +834,10 @@ static void sharing_cases(void)
     // key has answered h2 it is remembered: with its connections gone and a
     // dial in flight, three more wait for that dial and dial nothing.
     begin();
+    int slow = host_says("burst.test", "h2", 0);
+    hosts[slow].handshake_ms = 150;     // every fetch asks before any dial has an answer
     route("/held", R_HELD, "200", NULL);
     memset(jobs, 0, sizeof(jobs));
-    peer_thread_head_start(0);
     for (int i = 0; i < 3; i++) {
         jobs[i].keep_open = true;
         job_start(&jobs[i], "https://burst.test/held");
@@ -770,7 +845,7 @@ static void sharing_cases(void)
     for (int i = 0; i < 3; i++)
         job_join(&jobs[i]);
     int first = atomic_load(&ndials);
-    CHECK(first >= 1 && first <= 3 && h2_dials() == first);
+    CHECK(first == 3 && h2_dials() == 3);
     atomic_store(&release_held, true);
     for (int i = 0; i < 3; i++) {
         job_read(&jobs[i]);
@@ -780,6 +855,8 @@ static void sharing_cases(void)
     settle();
     // (The pool's memory of the key outlives its connections.)
     begin();
+    slow = host_says("burst.test", "h2", 0);
+    hosts[slow].handshake_ms = 150;
     route("/held", R_HELD, "200", NULL);
     memset(jobs, 0, sizeof(jobs));
     for (int i = 0; i < 3; i++) {
@@ -939,6 +1016,51 @@ static void retry_cases(void)
     job_go(&k, "https://mid.test/half");
     CHECK(k.status == OS64_FETCH_REQUEST_FAILED && strstr(k.reason, "retried") == NULL);
     settle();
+
+    // A RESET THAT IS NOT A REFUSAL is not "never processed": the caller's,
+    // though nothing of an answer came and the request is idempotent.
+    begin();
+    route("/warm", R_REPLY, "200", "warm");
+    route("/cancelled", R_CANCEL, "200", NULL);
+    route("/huge", R_HUGE_HEAD, "200", NULL);
+    route_t *brief = route("/short", R_REPLY, "200", "12345");
+    brief->fields[0][0] = "content-length";
+    brief->fields[0][1] = "10";
+    route("/open204", R_OPEN, "204", NULL);
+    route("/held", R_HELD, "200", NULL);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://words.test/warm");
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://words.test/cancelled");
+    CHECK(j.status == OS64_FETCH_REQUEST_FAILED && strstr(j.reason, "the server reset the stream: CANCEL") != NULL &&
+          strstr(j.reason, "retried") == NULL && atomic_load(&ndials) == 1);
+    // A HEAD LARGER THAN THIS READS is a legal thing refused, by the word
+    // HTTP/1.1's over-long framing header has.
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://words.test/huge");
+    CHECK(j.status == OS64_FETCH_UNSUPPORTED && strcmp(j.detail.unsupported, "head") == 0);
+    CHECK(j.detail.h2 && j.detail.h2_code_ours && j.detail.h2_code == H2_ERR_ENHANCE_YOUR_CALM);
+    CHECK(strstr(j.reason, "too long to read") != NULL && strstr(j.reason, "(HTTP/2: we reset the stream") != NULL);
+    // A BODY SHORTER THAN ITS LENGTH is CUT, as HTTP/1.1's is.
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://words.test/short");
+    CHECK(j.status == OS64_FETCH_OK && j.ended == OS64_FETCH_CUT);
+    CHECK(strstr(j.reason, "body is not what its head promised") != NULL && j.detail.h2_code_ours);
+    // A 204 WHOSE STREAM THE SERVER LEAVES OPEN is whole all the same: no
+    // content may follow it, and none is waited for.
+    memset(&j, 0, sizeof(j));
+    j.opt.idle_ms = 400;
+    job_go(&j, "https://words.test/open204");
+    CHECK(j.ended == OS64_FETCH_OK && j.http_status == 204 && j.body_len == 0);
+    // SILENT MID-BODY: the head came, the body never does, and the fetch
+    // says how long it waited and where.
+    memset(&j, 0, sizeof(j));
+    j.opt.idle_ms = 300;
+    job_go(&j, "https://words.test/held");
+    CHECK(j.status == OS64_FETCH_OK && j.ended == OS64_FETCH_SILENT && j.detail.silent_after_body);
+    CHECK(strstr(j.reason, "went silent for 300 ms after 0 bytes") != NULL);
+    CHECK(atomic_load(&ndials) == 1);
+    settle();
 }
 
 // ── Leaving a stream ────────────────────────────────────────────────────
@@ -1087,6 +1209,25 @@ static void pool_cases(void)
         nap_ms(round * 110);    // the reader looks every half second: before, at and after its look
     }
     CHECK(atomic_load(&ndials) >= 2 && requests_seen() == 6);
+    settle();
+
+    // IDLE TIME IS FOR A CONNECTION WITH NO FETCH ON IT: with one held open
+    // past the idle time, the connection stays, and the next fetch joins it.
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    j.keep_open = true;
+    job_go(&j, "https://busy.test/held");
+    peer_clock_skip(FETCH_POOL_IDLE_MS + 1);
+    nap_ms(2 * H2_READER_SLICE_MS + 100);
+    memset(&k, 0, sizeof(k));
+    job_go(&k, "https://busy.test/page");
+    CHECK(k.ended == OS64_FETCH_OK && atomic_load(&ndials) == 1);
+    atomic_store(&release_held, true);
+    job_read(&j);
+    CHECK(j.ended == OS64_FETCH_OK);
+    os64_fetch_close(j.f);
     settle();
 
     // EVICTION AFTER EVICTION, EVERY CLOSE HELD BACK A SLICE: the table is

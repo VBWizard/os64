@@ -1604,6 +1604,8 @@ static int64_t wire_read(os64_fetch_t *f, void *dst, size_t cap)
         return 0;
     }
     f->body.result = HTTP_BODY_BROKE;
+    f->detail.h2 = true;
+    f->detail.h2_stream = h2_stream_id(f->h2_stream);
     if (n == -(int64_t)H2_SILENT)
         f->h2_silent = true;
     if (n != -(int64_t)H2_ENDED)
