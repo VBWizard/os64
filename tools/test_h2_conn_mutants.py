@@ -420,7 +420,7 @@ mutants = [
      'if (parent == NULL || s->weight > parent->weight ||', CONN),
     ('chained-depends-on-a-lighter', CONN_C,
      '        if (s == NULL || s->weight < weight)\n            continue;',
-     '        if (s == NULL || s->weight < 1)\n            continue;', CONN),
+     '        if (s == NULL || s->weight + weight < weight)\n            continue;', CONN),
     ('chained-is-not-exclusive', CONN_C,
      '                priority.exclusive = true;\n',
      '                priority.exclusive = false;\n', CONN),
