@@ -2685,7 +2685,10 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     into->sheet = kept_from;
     into->important = kept_important;
     into->n = nwin;
-    // A pseudo-element's animations are booked (GENERATED_CONTENT.md § 2).
+    // A pseudo-element's animations read the frames libflow asks for with
+    // its element (garb_keyframes): a rule holding var() is read against the
+    // element's custom properties, and only when the element names it too
+    // (DEBTS.md).
     if (!own)
         return;
     const garb_val_t *names = animation_names(c, el, have[GARB_ANIMATION_NAME]

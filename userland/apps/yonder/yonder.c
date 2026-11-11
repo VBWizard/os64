@@ -3788,6 +3788,9 @@ static void diag_motion(Page *p)
             continue;
         char key[24], v[256];
         size_t at = element_named(v, sizeof(v), "", m->node);
+        if (m->pseudo != GARB_PSEUDO_NONE && at < sizeof(v))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, "%s",
+                                        m->pseudo == GARB_PSEUDO_BEFORE ? "::before" : "::after");
         if (m->name.text != NULL && at < sizeof(v))
             at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " (%.*s)", (int)m->name.len, m->name.text);
         if (at < sizeof(v)) {

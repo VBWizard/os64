@@ -116,12 +116,14 @@ struct DWaAnimation {
     /* A CSSAnimation (WEB_ANIMATIONS.md § 3): the host's id for the CSS
      * animation it drives, 0 once that is gone (its owning element
      * cleared); its animation-name; animation-play-state, and the timing,
-     * as its style last gave them; and the step's pass that last found it. */
+     * as its style last gave them; whether a script has taken its play
+     * state over from that property (css_take_over); and the step's pass
+     * that last found it. */
     bool css;
     uint64_t css_id;
     char *css_name;
     size_t css_name_len;
-    bool css_style_paused;
+    bool css_style_paused, css_overridden;
     garb_timing_t css_timing;
     uint32_t css_pass;
 };
@@ -2373,6 +2375,8 @@ enum {
     A_CSS_NAME
 };
 
+static void css_take_over(DWaAnimation *a, int magic, bool set, bool was_paused);
+
 static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                 JSValue *data)
 {
@@ -2390,6 +2394,7 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     if (a == NULL) return JS_ThrowTypeError(ctx, "Expected an Animation");
     if (a->dom == NULL) return JS_UNDEFINED;
     dom = a->dom;
+    bool was_paused = play_state(a) == WA_PAUSED;
     int r = 0;
     switch (magic) {
     case A_ID:
@@ -2473,6 +2478,7 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     default: return JS_UNDEFINED;
     }
     if (r < 0) return JS_EXCEPTION;
+    if (a->css) css_take_over(a, magic, set, was_paused);
     wa_keep(ctx, a);
     return JS_UNDEFINED;
 }
@@ -2609,9 +2615,23 @@ static void css_quietly(JSContext *ctx, int r)
     if (r < 0) JS_FreeValue(ctx, JS_GetException(ctx));
 }
 
+/* Whether member `magic`, which succeeded, takes a CSSAnimation's play
+ * state over from animation-play-state, whose changes it then answers no
+ * more (CSS Animations 2; WPT's CSSAnimation-pausing, as Chrome and Gecko
+ * do): play() and pause() always; reverse(), and a start time set, when
+ * they move it between paused and not. */
+static void css_take_over(DWaAnimation *a, int magic, bool set, bool was_paused)
+{
+    bool flipped = (play_state(a) == WA_PAUSED) != was_paused;
+    if (magic == A_PLAY || magic == A_PAUSE || (magic == A_REVERSE && flipped) ||
+        (magic == A_START && set && flipped))
+        a->css_overridden = true;
+}
+
 /* What the style changed since the CSSAnimation last looked: its timing,
  * taken as the effect's, and animation-play-state, which pauses it or
- * plays it on without rewinding. */
+ * plays it on without rewinding, until a script takes its play state over
+ * (css_take_over). */
 static void css_pull(JSContext *ctx, DWaAnimation *a, const os64_dom_css_animation_t *r)
 {
     garb_timing_t t = css_timing_of(r);
@@ -2621,8 +2641,9 @@ static void css_pull(JSContext *ctx, DWaAnimation *a, const os64_dom_css_animati
         a->css_timing = t;
         d->fx.timing = t;
     }
-    if (r->style_paused != a->css_style_paused) {
-        a->css_style_paused = r->style_paused;
+    bool restyled = r->style_paused != a->css_style_paused;
+    a->css_style_paused = r->style_paused;
+    if (restyled && !a->css_overridden) {
         css_quietly(ctx, r->style_paused ? pause(ctx, a) : play(ctx, a, false));
     } else if (timing) {
         update_finished(ctx, a, false, false);

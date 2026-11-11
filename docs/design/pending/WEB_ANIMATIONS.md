@@ -210,8 +210,13 @@ record keeps its clock through every layout. `animation-play-state`
 then no longer moves the record; the binding reads the property's
 changes at the update step and answers each as CSS Animations 2 says:
 a change to `paused` pauses the `CSSAnimation`, a change to `running`
-plays it without rewinding. That is the "API wins until the property
-next changes" rule, with no flag the two share. An animation whose
+plays it without rewinding — until a script takes the play state over,
+after which the property's changes are answered no more (slice C,
+Chris's ruling of 2026-11-10, replacing B2's "API wins until the
+property next changes"). `play()` and `pause()` take it over whenever
+they succeed; `reverse()`, and a start time set, when they move the
+animation between paused and not (`css_take_over`; WPT's
+`CSSAnimation-pausing`, as Chrome and Gecko do). An animation whose
 name leaves the list cancels its `CSSAnimation`, which keeps its
 `animationName` and loses its owning element. Its effect is a
 `KeyframeEffect` with the animation's target and timing and no keyframes
@@ -260,8 +265,10 @@ the validation page's freeze-and-read values match Chrome's (§ 6).
 **Out of both:** scroll-driven timelines (`ScrollTimeline`,
 `ViewTimeline`, `animation-timeline`; 12 hosts), a DEBTS row of their
 own; `CSSTransition`, which arrives with transitions; animations of a
-pseudo-element (already a DEBTS row for CSS ones, and `pseudoElement`
-in `animate()`'s options is NotSupportedError until then).
+pseudo-element as a script sees them — its CSS ones run (slice C) and
+are left out of `getAnimations()` and the events, a DEBTS row, and
+`pseudoElement` in `animate()`'s options is NotSupportedError until
+then.
 
 ## 5. Bounds
 

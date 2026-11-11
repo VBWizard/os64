@@ -288,6 +288,7 @@ static void dom_cluster_cases(void)
                 "B.document.body.onclick=foreignCallback;B.document.body.dispatchEvent(new C.Event('click'));"
                 "assert(foreignEventSeen.join()==='true,true','handler callback realm');"
                 "B.document.body.onclick=null;"
+                "B.document.body.id='review-event-target';"
                 "globalThis.boundForeign=foreignCallback.bind(null);globalThis.proxyForeign=new Proxy(foreignCallback,{});"
                 "Object.setPrototypeOf(foreignCallback,B.Function.prototype);"
                 "B.document.body.addEventListener('bound-realm',boundForeign);"
@@ -298,6 +299,15 @@ static void dom_cluster_cases(void)
                 "assert(foreignEventSeen.length===5&&foreignEventSeen.every(Boolean),'bound/proxy/named handler realm');"
                 "assert(window.event===undefined&&B.event===undefined);",
                 "cluster review: foreign method and handler retain function realm");
+            os64_dom_event_t foreign_event = {.type = "foreign-realm"};
+            bool foreign_prevented = false;
+            check(os64_dom_dispatch(bindings[1], native_id(providers[1].document->document, "review-event-target"),
+                &foreign_event, &foreign_prevented, &out) == OS64_JS_OK,
+                "cluster review: host dispatch enters foreign callback realm");
+            realm_script(realms[0],
+                "assert(foreignEventSeen.length===6&&foreignEventSeen.every(Boolean));"
+                "assert(window.event===undefined&&B.event===undefined);",
+                "cluster review: host callback exposes and restores its own window.event");
             realm_script(realms[0],
                 "globalThis.callbackErrors=[];"
                 "globalThis.captureCallbackError=e=>{callbackErrors.push('A');e.preventDefault()};"

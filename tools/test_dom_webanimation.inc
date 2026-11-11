@@ -1003,6 +1003,54 @@ static void wa_css_late_listener(void)
 /* An animation with a pending pause task owes no event until the task
  * runs (CSS Animations 2): the style pauses it in the step it reaches its
  * active phase, and its start comes at the next step. */
+/* A script takes a CSSAnimation's play state over from animation-play-state
+ * (CSS Animations 2; WPT's CSSAnimation-pausing): play() and pause()
+ * always; reverse() and a start time set only when they move it between
+ * paused and not. Each animation's property then changes twice. */
+static void wa_css_take_over(void)
+{
+    p2b_ms = 1000; p2b_us = 1000000;
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    wa_css_install(&f);
+    const os64_html_node_t *doc = f.document->document;
+    const char *const ids[] = {"one", "two", "box", "field", "check"};
+    WaCssRecord *played = wa_css_add(31, wa_by_id(doc, ids[0]), "played", 1000, 100000, 0, 1);
+    played->r.paused = played->r.style_paused = true;
+    (void)wa_css_add(32, wa_by_id(doc, ids[1]), "paused", 1000, 100000, 0, 1);
+    (void)wa_css_add(33, wa_by_id(doc, ids[2]), "reversed", 1000, 100000, 0, 1);
+    (void)wa_css_add(34, wa_by_id(doc, ids[3]), "held", 1000, 100000, 0, 1);
+    (void)wa_css_add(35, wa_by_id(doc, ids[4]), "started", 1000, 100000, 0, 1);
+    p2b_advance(100);
+    p2b_script(&f,
+        "globalThis.c=document.getAnimations();"
+        "c[0].play();c[1].pause();c[2].reverse();c[3].startTime=null;c[4].startTime=document.timeline.currentTime;"
+        "assert(c[3].playState==='paused'&&c[4].playState==='running',c[3].playState+' '+c[4].playState);",
+        "web animations: css: take over: the calls");
+    p2b_advance(20);
+    wa_step(&f, "web animations: css: take over: their step");
+    /* Each property's two changes end where an animation that kept
+     * answering it would be in the other state from the one wanted. */
+    static const bool kFlips[2][5] = {{false, true, true, true, true}, {true, false, true, false, true}};
+    for (int flip = 0; flip < 2; flip++) {
+        for (int32_t i = 0; i < 5; i++)
+            wa_css_records[i].r.style_paused = kFlips[flip][i];
+        wa_css_version++;
+        p2b_advance(20);
+        wa_step(&f, "web animations: css: take over: the property flips");
+        p2b_advance(20);
+        wa_step(&f, "web animations: css: take over: and its tasks run");
+    }
+    p2b_script(&f,
+        "const st=c.map(a=>a.playState).join();"
+        "assert(st==='running,paused,paused,paused,paused',st);",
+        "web animations: css: take over: play() and pause() hold; reverse() and a start time that "
+        "moved nothing do not, one that paused it does");
+    wa_css_n = 0;
+    fixture_free(&f);
+}
+
 static void wa_css_pending(void)
 {
     p2b_ms = 1000; p2b_us = 1000000;
@@ -1044,4 +1092,5 @@ static void dom_webanimation_cases(void)
     wa_css_events();
     wa_css_late_listener();
     wa_css_pending();
+    wa_css_take_over();
 }

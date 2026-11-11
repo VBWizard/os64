@@ -101,7 +101,7 @@ QuickJS patch exposes its existing function-realm query; bound functions and
 proxies follow their target. Script attribution is recorded in that binding too.
 Compiled attribute handlers retain their existing creation-document behavior.
 
-The focused matrix passes 276 checks in each engine profile, under both
+The focused matrix passes 280 checks in each engine profile, under both
 teardown policies, with ASan/UBSan and leak detection enabled. It covers
 reentrant select adoption, quirks/standards moves, started and inert script
 adoption/import, ordinary and named handlers, bound/proxy callbacks, changed
@@ -109,6 +109,20 @@ function prototypes and exception delivery to the callback's window. Five
 review mutants compile and are caught by those assertions, including both
 option filler loops. The validation table below records the original F2b
 campaign; these results are the review delta.
+
+The branch also merges userland through `c1150130`, including Web Animations C
+(#541). Its animation-member conflict preserves both the animation owner's
+binding and the new CSS play-state override. The integrated shipping-engine
+DOM suite passes 43,781 checks and 3,879 allocation sweep points. Instrumented
+checks pass: events 1,020; reporting 4,523; cloning 999; Web Animations 292;
+and admission failures 16,778 checks over 1,048 cuts per teardown policy.
+The final realm probe adds host-dispatched callback coverage after the full
+shipping run; it passes the 280 checks above in both profiles. No implementation
+changed between those runs. The libjs realm suite passes 1,152 checks, engine
+preparation passes six tests, and `make -C userland dom-realms-test` links the
+updated target consumer and libraries. The original frozen QEMU cohort and
+its results below remain evidence for the earlier implementation; this review
+delta does not claim another guest run.
 
 ## Validation
 
