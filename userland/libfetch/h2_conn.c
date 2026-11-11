@@ -380,7 +380,10 @@ static bool room_locked(const h2_conn_t *c)
 // more, or the connection is dying. `patient` waits on the socket for what
 // is left of the write patience and ends the connection when it runs out; a
 // thread with no patience to give writes what the socket takes at once.
-static void drain(h2_conn_t *c, bool patient)
+// `last` is the reader's, once, before it closes a dying connection's
+// socket: what the socket will take at once of what is still queued, which
+// is how a GOAWAY of ours, queued as the connection was condemned, is sent.
+static void drain_as(h2_conn_t *c, bool patient, bool last)
 {
     os64_lock_acquire(&c->lock);
     if (c->draining || c->dead) {
@@ -388,7 +391,7 @@ static void drain(h2_conn_t *c, bool patient)
         return;
     }
     c->draining = true;
-    while (!c->dying) {
+    while (last || !c->dying) {
         out_block_t *b = c->out_head;
         if (b == NULL || b->at == b->len)
             break;
@@ -442,6 +445,8 @@ static void drain(h2_conn_t *c, bool patient)
     c->draining = false;
     os64_lock_release(&c->lock);
 }
+
+static void drain(h2_conn_t *c, bool patient) { drain_as(c, patient, false); }
 
 // ── Delivery: what each frame does (HTTP2.md § 4 H2.4's table) ──────────
 
@@ -890,7 +895,9 @@ static int64_t reader(void *arg)
         }
     }
 
-    // Nobody is writing and nobody will: the socket is the reader's to close.
+    // Nobody is writing and nobody will: the socket is the reader's, for one
+    // last word and then to close.
+    drain_as(c, false, true);
     os64_close(c->socket);
     os64_lock_acquire(&c->lock);
     c->dead = true;
