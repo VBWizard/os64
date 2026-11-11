@@ -1991,19 +1991,22 @@ static void opening_cases(void)
     CHECK(picture == 5 && dep == script && exclusive && weight == 182);
     uint32_t second = opened(&d, 183, &dep, &exclusive, &weight);
     CHECK(second == 7 && dep == picture && exclusive);
+    // With two of a weight open, a third depends on the NEWER of them.
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 9 && dep == second);
+    fetch_done(&e);
     // A stream its fetch has closed is no longer one to depend on: with the
-    // pictures gone, a third depends on the script again; with the script
+    // pictures gone, another depends on the script again; with the script
     // gone too, on the sheet; and something heavier than all that is left,
     // on nothing.
     fetch_done(&c);
     fetch_done(&d);
-    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 9 && dep == script);
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 11 && dep == script);
     fetch_done(&e);
     fetch_done(&a);
-    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 11 && dep == sheet);
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 13 && dep == sheet);
     fetch_done(&e);
     fetch_done(&b);
-    CHECK(opened(&e, 256, &dep, &exclusive, &weight) == 13 && dep == 0);
+    CHECK(opened(&e, 256, &dep, &exclusive, &weight) == 15 && dep == 0);
     fetch_done(&e);
     finish(dead);
 

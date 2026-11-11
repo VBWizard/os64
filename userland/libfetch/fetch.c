@@ -50,7 +50,8 @@ _Static_assert((int)OS64_FETCH_H2_PRIORITY_NONE == (int)H2_PRIORITY_NONE &&
                "the public priority modes are the connection's");
 
 // `http2 = off` in net.conf (the config search path) turns HTTP/2 off for
-// the whole process: read once, at the first fetch that could offer it.
+// the whole process: read once, by the first fetch whose caller has not
+// already said it speaks HTTP/1.1 alone.
 // The choice is the network's and not one program's, so it lives beside
 // the resolver's settings and every program that fetches obeys it.
 static uint32_t s_h2_switch;    // 0 unread, 1 on, 2 off
@@ -878,7 +879,8 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                 fetch_pool_gone(conn);
                 f->detail.dial = OS64_NET_ERR_NO_RESOURCES;
                 os64_snprintf(f->detail.why, sizeof(f->detail.why),
-                              "an HTTP/2 connection could not be started (memory or a thread)");
+                              "an HTTP/2 connection could not be started (memory, a thread, or a greeting "
+                              "HTTP/2 does not allow)");
                 return OS64_FETCH_DIAL_FAILED;
             }
             fetch_pool_dialled_h2(conn, h2, version, resumed);
@@ -1905,7 +1907,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     // and a dial can use it after the caller's copy is gone.
     const os64_fetch_h2_t *greeting = opt != NULL && opt->h2 != NULL ? opt->h2 : &kOwnGreeting;
     const char *pseudo = greeting->pseudo != NULL ? greeting->pseudo : "masp";
-    if (greeting->count > OS64_FETCH_H2_SETTINGS_MAX || os64_strlen(pseudo) != 4) {
+    if (greeting->count > OS64_FETCH_H2_SETTINGS_MAX || !http_h2_pseudo_ok(pseudo)) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why), "the HTTP/2 greeting asked for is not one this can send");
         f->status = OS64_FETCH_REQUEST_FAILED;
         return f;

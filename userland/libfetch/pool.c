@@ -426,7 +426,11 @@ void fetch_pool_dialled(fetch_conn_t *conn)
     conn->refs = 1;
     if (conn->key.tls) {
         // Not h2: fetches waiting on this dial's verdict dial for themselves.
-        remember(&conn->key, false);
+        // The answer is the server's only when HTTP/2 was offered: a dial
+        // that offered HTTP/1.1 alone heard nothing about what the host
+        // speaks, and leaves what is remembered of it as it was.
+        if (!conn->say.http1)
+            remember(&conn->key, false);
         ring_waiters();
     }
     os64_lock_release(&s_lock);

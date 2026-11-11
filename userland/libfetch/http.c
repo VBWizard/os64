@@ -682,13 +682,8 @@ static bool list_line(void *ctx, const head_line_t *line)
     return true;
 }
 
-bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
-                         size_t most, char *storage, size_t room, size_t *count)
+bool http_h2_pseudo_ok(const char *pseudo)
 {
-    static const http_request_extras_t none = {0};
-    const char *pseudo = (extras != NULL ? extras : &none)->h2_pseudo;
-    if (pseudo == NULL)
-        pseudo = "masp";
     // Each of the four letters once: a request without one of its
     // pseudo-headers, or with one twice, is malformed (RFC 9113 § 8.3.1).
     bool seen[4] = {false};
@@ -699,7 +694,17 @@ bool http_request_fields(const http_url_t *url, const http_request_extras_t *ext
             return false;
         seen[which] = true;
     }
-    if (letters != 4)
+    return letters == 4;
+}
+
+bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
+                         size_t most, char *storage, size_t room, size_t *count)
+{
+    static const http_request_extras_t none = {0};
+    const char *pseudo = (extras != NULL ? extras : &none)->h2_pseudo;
+    if (pseudo == NULL)
+        pseudo = "masp";
+    if (!http_h2_pseudo_ok(pseudo))
         return false;
     request_list_t list = { .url = url, .pseudo = pseudo, .fields = fields, .most = most, .storage = storage,
                             .room = room };

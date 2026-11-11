@@ -229,6 +229,9 @@ typedef struct {
 } http_field_t;
 bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
                          size_t most, char *storage, size_t room, size_t *count);
+// Whether `pseudo` is an order http_request_fields takes: the letters m, a,
+// s and p, each once.
+bool http_h2_pseudo_ok(const char *pseudo);
 // Framing, routing and body metadata belong to the renderer. extra_headers
 // cannot supply Host, Content-Length, Content-Type, Content-Encoding,
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,

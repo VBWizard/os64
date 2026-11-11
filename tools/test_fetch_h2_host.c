@@ -1655,7 +1655,7 @@ static void greeting_cases(void)
             job_go(&j, "https://bad.test/page");
             CHECK(j.ended == OS64_FETCH_REQUEST_FAILED);
         }
-        CHECK(requests_seen() == 0);
+        CHECK(requests_seen() == 0 && atomic_load(&ndials) == 0);
         settle();
     }
 }
@@ -1783,15 +1783,16 @@ static void identity_cases(void)
 
 // ONE DIFFERENCE IS A DIFFERENT GREETING: with a connection held under one
 // greeting, a fetch whose greeting differs from it in a single thing dials
-// a connection of its own, and one that says the very same shares.
+// a connection of its own (eight such things), and one that says the very
+// same shares.
 static void difference_cases(void)
 {
     static job_t held, j;
     static const os64_fetch_h2_t kBase = {.settings = {{2, 0}, {4, 100000}}, .count = 2, .window_increment = 1000,
                                           .first_stream = 1, .stream_increment = 0,
                                           .priority = OS64_FETCH_H2_PRIORITY_FLAT};
-    os64_fetch_h2_t other[7];
-    for (int i = 0; i < 7; i++)
+    os64_fetch_h2_t other[8];
+    for (int i = 0; i < 8; i++)
         other[i] = kBase;
     other[0].settings[1].value = 100001;
     other[1].settings[1].id = 3;
@@ -1800,6 +1801,11 @@ static void difference_cases(void)
     other[4].first_stream = 3;
     other[5].stream_increment = 1;
     other[6].priority = OS64_FETCH_H2_PRIORITY_CHAINED;
+    // One more setting than the connection's, the two they share the same:
+    // a greeting is its whole list, not the part another has too.
+    other[7].settings[2].id = 6;
+    other[7].settings[2].value = 65536;
+    other[7].count = 3;
     begin();
     route("/held", R_HELD, "200", NULL);
     route("/page", R_REPLY, "200", kPage);
@@ -1816,7 +1822,7 @@ static void difference_cases(void)
     job_go(&j, "https://differ.test/page");
     JOB_OK(&j);
     CHECK(atomic_load(&ndials) == 1);
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         memset(&j, 0, sizeof(j));
         j.opt.h2 = &other[i];
         job_go(&j, "https://differ.test/page");
@@ -1866,6 +1872,39 @@ static void http1_cases(void)
     job_go(&j[0], "https://both.test/page");
     CHECK(j[0].ended == OS64_FETCH_OK && !j[0].http2 && atomic_load(&ndials) == 2 && h2_dials() == 1 &&
           atomic_load(&dials[0].requests) == 1);
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
+    settle();
+
+    // AN HTTP/1.1-ONLY DIAL TEACHES THE POOL NOTHING ABOUT ITS HOST. The
+    // host is remembered as HTTP/2; a fetch that says http1 dials it and is
+    // answered HTTP/1.1, having offered nothing else; and the host is still
+    // remembered as HTTP/2, so a second fetch waits for the first's dial
+    // and shares its connection.
+    begin();
+    int slow = host_says("known.test", "h2", 0);
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(j, 0, sizeof(j));
+    job_go(&j[0], "https://known.test/page");
+    CHECK(j[0].ended == OS64_FETCH_OK && j[0].http2);
+    j[1].opt.http1 = true;
+    job_go(&j[1], "https://known.test/page");
+    CHECK(j[1].ended == OS64_FETCH_OK && !j[1].http2 && atomic_load(&ndials) == 2);
+    drain_now();
+    hosts[slow].handshake_ms = 300;
+    memset(&held, 0, sizeof(held));
+    held.keep_open = true;
+    job_start(&held, "https://known.test/held");
+    for (int i = 0; i < 200 && atomic_load(&ndials) < 3; i++)
+        nap_ms(2);
+    memset(&j[2], 0, sizeof(j[2]));
+    job_go(&j[2], "https://known.test/page");
+    job_join(&held);
+    CHECK(j[2].ended == OS64_FETCH_OK && j[2].http2 && atomic_load(&ndials) == 3 &&
+          atomic_load(&dials[2].requests) == 2);
     atomic_store(&release_held, true);
     job_read(&held);
     CHECK(held.ended == OS64_FETCH_OK);
