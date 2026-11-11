@@ -2726,13 +2726,15 @@ refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
 two HTTP/2-only lines and their place, what is refused. The wire counters
 (#547) are counted on the HTTP/2 path at the same places.
 
-**Mutants.** `tools/test_fetch_h2_mutants.py` (116) and
+**Mutants.** `tools/test_fetch_h2_mutants.py` (121) and
 `tools/test_h2_conn_mutants.py` (140), through `tools/mutants_parallel.py`:
-the full run caught 248 of 253. Three did not build and were rewritten;
-two were missed and each got a case (a greeting with one more setting
-than a held connection's; a third stream of a weight two open streams
-share). Those five and five written after the run were then run alone,
-and each was caught.
+the full run, before the cold read, caught 248 of 253. Three did not
+build and were rewritten; two were missed and each got a case (a
+greeting with one more setting than a held connection's; a third stream
+of a weight two open streams share). Those, the ones written after the
+run and the ones whose lines the cold read's fixes moved were then run
+alone, and each was caught: every mutant in both lists is caught on its
+latest run, and the two lists have not been run whole since the fixes.
 
 **Proof, QEMU** (headless, against `nghttpd -v` with the libtls fixture
 certificate; the logs and the comparison script are in the kit's
