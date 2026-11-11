@@ -12,8 +12,11 @@
 // THE CLOCK is the host's, plus whatever a case adds with peer_clock_skip:
 // a write patience of thirty seconds is skipped, not waited.
 //
-// One connection at a time: peer_begin makes the socket and the engine to
-// hand to h2_conn_adopt, and peer_end checks they were let go.
+// A CASE SPEAKS FOR ONE CONNECTION AT A TIME, the one it has in hand.
+// peer_begin makes the first (its socket and engine are what h2_conn_adopt
+// is handed) and takes it in hand; peer_end checks it was let go. A harness
+// with several connections opens each with peer_open and says which it
+// speaks for with peer_use, which is the calling thread's own choice.
 #ifndef H2_PEER_H
 #define H2_PEER_H
 #include <stdbool.h>
@@ -26,6 +29,13 @@
 
 // A new socket and engine, and a server whose tables are empty.
 void peer_begin(os64_tls_client **engine, int32_t *socket);
+// Another connection, as new: its number, for peer_use, peer_engine and
+// peer_socket. peer_forget_all lets every number be given out again.
+int peer_open(void);
+void peer_forget_all(void);
+void peer_use(int index);
+os64_tls_client *peer_engine(int index);
+int32_t peer_socket(int index);
 // The socket was closed once, the engine freed, no record was left cut, and
 // no record arrived out of order. False names nothing; the case's CHECK does.
 bool peer_end(void);

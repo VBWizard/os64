@@ -20,23 +20,14 @@
 #define REC_MOST 4096u
 enum { REC_DATA = 1, REC_OWED = 2, REC_MAKE_OWE = 3, REC_CLOSE = 4 };
 
-#define SOCKET 7
+#define SOCKET_FIRST 100
+#define PEER_WIRES 24
 #define THREAD_HANDLE 1000
 
 typedef struct {
     uint8_t *bytes;
     size_t at, len, room;
 } run_t;
-
-static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t moved = PTHREAD_COND_INITIALIZER;
-static run_t to_server, to_client, server_plain;
-static bool stalled, hung_up, records_bad;
-static size_t write_most;
-static unsigned write_interrupts;
-static unsigned closes, owed;
-static uint32_t server_in_seq, server_out_seq;
-static _Atomic uint64_t skipped_ms;
 
 struct os64_tls_client {
     uint8_t out[1u << 18];
@@ -50,16 +41,49 @@ struct os64_tls_client {
     bool eof;                   // a close_notify was fed
     atomic_int inside;
 };
-static struct os64_tls_client engine;
-static atomic_bool engine_freed;
 
-static h2_hpack_encoder_t server_encoder;
-static h2_hpack_decoder_t server_decoder;
-static uint32_t encoder_store[H2_HPACK_STORAGE(4096) / 4 + 1], decoder_store[H2_HPACK_STORAGE(4096) / 4 + 1];
-static uint8_t decoder_scratch[4096];
-static uint8_t decoded_bytes[1u << 17];
-static h2_field_t decoded[512];
-static size_t decoded_len, decoded_count;
+// One connection: the socket's two directions, the client's engine, and the
+// server's half of everything (its record numbers, its HPACK tables, what it
+// has read). A case speaks for the server of the wire it has in hand (`W`,
+// peer_use); the library's threads find a wire by its socket or its engine.
+struct wire {
+    run_t to_server, to_client, server_plain;
+    bool stalled, hung_up, records_bad;
+    size_t write_most;
+    unsigned write_interrupts;
+    unsigned closes, owed;
+    uint32_t server_in_seq, server_out_seq;
+    struct os64_tls_client engine;
+    atomic_bool freed;
+    bool open;
+    h2_hpack_encoder_t server_encoder;
+    h2_hpack_decoder_t server_decoder;
+    uint32_t encoder_store[H2_HPACK_STORAGE(4096) / 4 + 1], decoder_store[H2_HPACK_STORAGE(4096) / 4 + 1];
+    uint8_t decoder_scratch[4096];
+};
+
+static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t moved = PTHREAD_COND_INITIALIZER;
+static struct wire wires[PEER_WIRES];
+static _Thread_local struct wire *W = &wires[0];
+static _Atomic uint64_t skipped_ms;
+
+static _Thread_local uint8_t decoded_bytes[1u << 17];
+static _Thread_local h2_field_t decoded[512];
+static _Thread_local size_t decoded_len, decoded_count;
+
+static struct wire *wire_of(int32_t handle)
+{
+    return handle >= SOCKET_FIRST && handle < SOCKET_FIRST + PEER_WIRES ? &wires[handle - SOCKET_FIRST] : NULL;
+}
+
+static struct wire *wire_of_engine(const os64_tls_client *c)
+{
+    for (int i = 0; i < PEER_WIRES; i++)
+        if (&wires[i].engine == c)
+            return &wires[i];
+    abort();
+}
 
 static void put(run_t *r, const void *bytes, size_t len)
 {
@@ -119,23 +143,24 @@ int64_t os64_ticks(os64_ticks_t *t)
 
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms)
 {
-    if (handle != SOCKET)
+    struct wire *w = wire_of(handle);
+    if (w == NULL)
         abort();
     struct timespec end;
     until(&end, timeout_ms);
     pthread_mutex_lock(&mu);
-    if (closes != 0)
+    if (w->closes != 0)
         abort();                // a read of a socket that was closed
-    while (to_client.at == to_client.len && !hung_up)
+    while (w->to_client.at == w->to_client.len && !w->hung_up)
         if (pthread_cond_timedwait(&moved, &mu, &end) != 0)
             break;
     int64_t got = OS64_ERR_TIMEOUT;
-    if (to_client.at != to_client.len) {
-        size_t n = to_client.len - to_client.at < len ? to_client.len - to_client.at : len;
-        memcpy(buf, to_client.bytes + to_client.at, n);
-        to_client.at += n;
+    if (w->to_client.at != w->to_client.len) {
+        size_t n = w->to_client.len - w->to_client.at < len ? w->to_client.len - w->to_client.at : len;
+        memcpy(buf, w->to_client.bytes + w->to_client.at, n);
+        w->to_client.at += n;
         got = (int64_t)n;
-    } else if (hung_up)
+    } else if (w->hung_up)
         got = 0;
     pthread_mutex_unlock(&mu);
     return got;
@@ -143,16 +168,17 @@ int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms
 
 int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms)
 {
-    if (handle != SOCKET || len == 0)
+    struct wire *w = wire_of(handle);
+    if (w == NULL || len == 0)
         abort();
     os64_ticks_t began, now;
     os64_ticks(&began);
     pthread_mutex_lock(&mu);
-    if (closes != 0)
+    if (w->closes != 0)
         abort();                // a write to a socket that was closed
     // A signal, twenty seconds into a write that moved nothing.
-    if (stalled && timeout_ms != 0 && write_interrupts != 0) {
-        write_interrupts--;
+    if (w->stalled && timeout_ms != 0 && w->write_interrupts != 0) {
+        w->write_interrupts--;
         atomic_fetch_add(&skipped_ms, 20000);
         pthread_mutex_unlock(&mu);
         return OS64_INTERRUPTED;
@@ -160,16 +186,16 @@ int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t tim
     // Stalled: wait out the patience by the case's clock, which it may skip.
     for (;;) {
         os64_ticks(&now);
-        if (!stalled || now.ticks - began.ticks >= timeout_ms)
+        if (!w->stalled || now.ticks - began.ticks >= timeout_ms)
             break;
         struct timespec nap;
         until(&nap, 5);
         pthread_cond_timedwait(&moved, &mu, &nap);
     }
     int64_t wrote = OS64_ERR_TIMEOUT;
-    if (!stalled) {
-        size_t n = write_most != 0 && write_most < len ? write_most : len;
-        put(&to_server, buf, n);
+    if (!w->stalled) {
+        size_t n = w->write_most != 0 && w->write_most < len ? w->write_most : len;
+        put(&w->to_server, buf, n);
         wrote = (int64_t)n;
         pthread_cond_broadcast(&moved);
     }
@@ -179,9 +205,10 @@ int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t tim
 
 int64_t os64_close(int32_t handle)
 {
-    if (handle == SOCKET) {
+    struct wire *w = wire_of(handle);
+    if (w != NULL) {
         pthread_mutex_lock(&mu);
-        closes++;
+        w->closes++;
         pthread_cond_broadcast(&moved);
         pthread_mutex_unlock(&mu);
     }
@@ -324,51 +351,83 @@ os64_tls_status_t os64_tls_flush(os64_tls_client *c)
 void os64_tls_free(os64_tls_client *c)
 {
     if (c != NULL)
-        atomic_store(&engine_freed, true);
+        atomic_store(&wire_of_engine(c)->freed, true);
 }
 
 // ── The connection's two ends ───────────────────────────────────────────
 
+// Under `mu`: a wire as new, its buffers kept for the next use.
+static void wire_reset(struct wire *w)
+{
+    run_t a = w->to_server, b = w->to_client, c = w->server_plain;
+    memset(w, 0, sizeof(*w));
+    w->to_server = (run_t){.bytes = a.bytes, .room = a.room};
+    w->to_client = (run_t){.bytes = b.bytes, .room = b.room};
+    w->server_plain = (run_t){.bytes = c.bytes, .room = c.room};
+    w->open = true;
+    h2_hpack_encoder_init(&w->server_encoder, w->encoder_store, sizeof(w->encoder_store), 4096);
+    h2_hpack_decoder_init(&w->server_decoder, w->decoder_store, sizeof(w->decoder_store), w->decoder_scratch,
+                          sizeof(w->decoder_scratch), 4096);
+}
+
 void peer_begin(os64_tls_client **out_engine, int32_t *socket)
 {
     pthread_mutex_lock(&mu);
-    to_server.at = to_server.len = to_client.at = to_client.len = server_plain.at = server_plain.len = 0;
-    stalled = hung_up = records_bad = false;
-    write_most = 0;
-    write_interrupts = 0;
-    closes = owed = 0;
-    server_in_seq = server_out_seq = 0;
-    memset(&engine, 0, sizeof(engine));
-    atomic_store(&engine_freed, false);
-    h2_hpack_encoder_init(&server_encoder, encoder_store, sizeof(encoder_store), 4096);
-    h2_hpack_decoder_init(&server_decoder, decoder_store, sizeof(decoder_store), decoder_scratch,
-                          sizeof(decoder_scratch), 4096);
+    wire_reset(&wires[0]);
     pthread_mutex_unlock(&mu);
-    *out_engine = &engine;
-    *socket = SOCKET;
+    W = &wires[0];
+    *out_engine = &wires[0].engine;
+    *socket = SOCKET_FIRST;
 }
+
+void peer_forget_all(void)
+{
+    pthread_mutex_lock(&mu);
+    for (int i = 0; i < PEER_WIRES; i++)
+        wires[i].open = false;
+    pthread_mutex_unlock(&mu);
+}
+
+int peer_open(void)
+{
+    int at = -1;
+    pthread_mutex_lock(&mu);
+    for (int i = 0; i < PEER_WIRES && at < 0; i++)
+        if (!wires[i].open) {
+            wire_reset(&wires[i]);
+            at = i;
+        }
+    pthread_mutex_unlock(&mu);
+    if (at < 0)
+        abort();                // a case opened more connections than this has wires
+    return at;
+}
+
+void peer_use(int index) { W = &wires[index]; }
+os64_tls_client *peer_engine(int index) { return &wires[index].engine; }
+int32_t peer_socket(int index) { return SOCKET_FIRST + index; }
 
 // The server's side of the wire: every whole record the client has written,
 // checked for its order and unwrapped.
 static void pull(void)
 {
-    while (to_server.len - to_server.at >= REC_HEAD) {
-        const uint8_t *head = to_server.bytes + to_server.at;
+    while (W->to_server.len - W->to_server.at >= REC_HEAD) {
+        const uint8_t *head = W->to_server.bytes + W->to_server.at;
         size_t len = record_len(head);
         if (len > REC_MOST) {
-            records_bad = true;
-            to_server.at = to_server.len;
+            W->records_bad = true;
+            W->to_server.at = W->to_server.len;
             return;
         }
-        if (to_server.len - to_server.at < REC_HEAD + len)
+        if (W->to_server.len - W->to_server.at < REC_HEAD + len)
             return;
-        if (record_seq(head) != server_in_seq++ || (head[0] != REC_DATA && head[0] != REC_OWED))
-            records_bad = true;
+        if (record_seq(head) != W->server_in_seq++ || (head[0] != REC_DATA && head[0] != REC_OWED))
+            W->records_bad = true;
         else if (head[0] == REC_DATA)
-            put(&server_plain, head + REC_HEAD, len);
+            put(&W->server_plain, head + REC_HEAD, len);
         else
-            owed++;
-        to_server.at += REC_HEAD + len;
+            W->owed++;
+        W->to_server.at += REC_HEAD + len;
     }
 }
 
@@ -376,7 +435,7 @@ bool peer_records_sound(void)
 {
     pthread_mutex_lock(&mu);
     pull();
-    bool sound = !records_bad && !engine.failed;
+    bool sound = !W->records_bad && !W->engine.failed;
     pthread_mutex_unlock(&mu);
     return sound;
 }
@@ -384,12 +443,12 @@ bool peer_records_sound(void)
 unsigned peer_closes(void)
 {
     pthread_mutex_lock(&mu);
-    unsigned n = closes;
+    unsigned n = W->closes;
     pthread_mutex_unlock(&mu);
     return n;
 }
 
-bool peer_engine_freed(void) { return atomic_load(&engine_freed); }
+bool peer_engine_freed(void) { return atomic_load(&W->freed); }
 
 bool peer_end(void) { return peer_closes() == 1 && peer_engine_freed() && peer_records_sound(); }
 
@@ -397,7 +456,7 @@ unsigned peer_owed_records(void)
 {
     pthread_mutex_lock(&mu);
     pull();
-    unsigned n = owed;
+    unsigned n = W->owed;
     pthread_mutex_unlock(&mu);
     return n;
 }
@@ -405,7 +464,7 @@ unsigned peer_owed_records(void)
 void peer_stall(bool on)
 {
     pthread_mutex_lock(&mu);
-    stalled = on;
+    W->stalled = on;
     pthread_cond_broadcast(&moved);
     pthread_mutex_unlock(&mu);
 }
@@ -413,21 +472,21 @@ void peer_stall(bool on)
 void peer_write_cap(size_t most)
 {
     pthread_mutex_lock(&mu);
-    write_most = most;
+    W->write_most = most;
     pthread_mutex_unlock(&mu);
 }
 
 void peer_interrupt_writes(unsigned times)
 {
     pthread_mutex_lock(&mu);
-    write_interrupts = times;
+    W->write_interrupts = times;
     pthread_mutex_unlock(&mu);
 }
 
 void peer_hang_up(void)
 {
     pthread_mutex_lock(&mu);
-    hung_up = true;
+    W->hung_up = true;
     pthread_cond_broadcast(&moved);
     pthread_mutex_unlock(&mu);
 }
@@ -448,11 +507,11 @@ static bool have(size_t need, int timeout_ms)
     until(&end, (uint64_t)timeout_ms);
     for (;;) {
         pull();
-        if (server_plain.len - server_plain.at >= need)
+        if (W->server_plain.len - W->server_plain.at >= need)
             return true;
         if (pthread_cond_timedwait(&moved, &mu, &end) != 0) {
             pull();
-            return server_plain.len - server_plain.at >= need;
+            return W->server_plain.len - W->server_plain.at >= need;
         }
     }
 }
@@ -461,9 +520,9 @@ bool peer_preface(int timeout_ms)
 {
     pthread_mutex_lock(&mu);
     bool ok = have(H2_PREFACE_LEN, timeout_ms) &&
-              memcmp(server_plain.bytes + server_plain.at, h2_preface, H2_PREFACE_LEN) == 0;
+              memcmp(W->server_plain.bytes + W->server_plain.at, h2_preface, H2_PREFACE_LEN) == 0;
     if (ok)
-        server_plain.at += H2_PREFACE_LEN;
+        W->server_plain.at += H2_PREFACE_LEN;
     pthread_mutex_unlock(&mu);
     return ok;
 }
@@ -474,12 +533,12 @@ bool peer_frame(h2_frame_header_t *header, const uint8_t **payload, int timeout_
     pthread_mutex_lock(&mu);
     bool ok = have(H2_FRAME_HEADER_LEN, timeout_ms);
     if (ok) {
-        h2_frame_header_read(server_plain.bytes + server_plain.at, header);
+        h2_frame_header_read(W->server_plain.bytes + W->server_plain.at, header);
         ok = header->length <= sizeof(held) && have(H2_FRAME_HEADER_LEN + header->length, timeout_ms);
     }
     if (ok) {
-        memcpy(held, server_plain.bytes + server_plain.at + H2_FRAME_HEADER_LEN, header->length);
-        server_plain.at += H2_FRAME_HEADER_LEN + header->length;
+        memcpy(held, W->server_plain.bytes + W->server_plain.at + H2_FRAME_HEADER_LEN, header->length);
+        W->server_plain.at += H2_FRAME_HEADER_LEN + header->length;
         *payload = held;
     }
     pthread_mutex_unlock(&mu);
@@ -515,7 +574,7 @@ static bool keep(void *ctx, const h2_field_t *f)
 bool peer_decode(const uint8_t *block, size_t len, const h2_field_t **fields, size_t *count)
 {
     decoded_len = decoded_count = 0;
-    bool ok = h2_hpack_decode(&server_decoder, block, len, keep, NULL) == H2_HPACK_OK;
+    bool ok = h2_hpack_decode(&W->server_decoder, block, len, keep, NULL) == H2_HPACK_OK;
     *fields = decoded;
     *count = decoded_count;
     return ok;
@@ -527,7 +586,7 @@ static void wrap(run_t *r, const uint8_t *plain, size_t len)
     for (size_t at = 0; at < len;) {
         size_t n = len - at < REC_MOST ? len - at : REC_MOST;
         uint8_t head[REC_HEAD];
-        record(head, REC_DATA, server_out_seq++, n);
+        record(head, REC_DATA, W->server_out_seq++, n);
         put(r, head, REC_HEAD);
         put(r, plain + at, n);
         at += n;
@@ -537,7 +596,7 @@ static void wrap(run_t *r, const uint8_t *plain, size_t len)
 static void say(const uint8_t *plain, size_t len)
 {
     pthread_mutex_lock(&mu);
-    wrap(&to_client, plain, len);
+    wrap(&W->to_client, plain, len);
     pthread_cond_broadcast(&moved);
     pthread_mutex_unlock(&mu);
 }
@@ -582,7 +641,7 @@ void peer_send_headers_split(uint32_t stream, const h2_field_t *fields, size_t c
 {
     size_t bound = h2_hpack_encode_bound(fields, count), len;
     uint8_t *block = malloc(bound);
-    h2_hpack_encode(&server_encoder, fields, count, block, bound, &len);
+    h2_hpack_encode(&W->server_encoder, fields, count, block, bound, &len);
     size_t at = len < piece ? len : piece;
     peer_send_frame(H2_FRAME_HEADERS, (end_stream ? H2_FLAG_END_STREAM : 0) | (at == len ? H2_FLAG_END_HEADERS : 0),
                     stream, block, at);
@@ -640,9 +699,9 @@ void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len)
                                                       .flags = H2_FLAG_END_STREAM, .stream = stream});
     memcpy(frame + H2_FRAME_HEADER_LEN, bytes, len);
     pthread_mutex_lock(&mu);
-    wrap(&to_client, frame, H2_FRAME_HEADER_LEN + len);
-    record(head, REC_CLOSE, server_out_seq++, 0);
-    put(&to_client, head, REC_HEAD);
+    wrap(&W->to_client, frame, H2_FRAME_HEADER_LEN + len);
+    record(head, REC_CLOSE, W->server_out_seq++, 0);
+    put(&W->to_client, head, REC_HEAD);
     pthread_cond_broadcast(&moved);
     pthread_mutex_unlock(&mu);
 }
@@ -650,8 +709,8 @@ void peer_send_data_and_close(uint32_t stream, const void *bytes, size_t len)
 void peer_engine_holds_settings(const h2_setting_t *settings, uint32_t count)
 {
     pthread_mutex_lock(&mu);
-    engine.plain_len += settings_frame(settings, count, engine.plain + engine.plain_len,
-                                       sizeof(engine.plain) - engine.plain_len);
+    W->engine.plain_len += settings_frame(settings, count, W->engine.plain + W->engine.plain_len,
+                                         sizeof(W->engine.plain) - W->engine.plain_len);
     pthread_mutex_unlock(&mu);
 }
 
@@ -659,8 +718,8 @@ void peer_send_engine_owes(void)
 {
     uint8_t head[REC_HEAD];
     pthread_mutex_lock(&mu);
-    record(head, REC_MAKE_OWE, server_out_seq++, 0);
-    put(&to_client, head, REC_HEAD);
+    record(head, REC_MAKE_OWE, W->server_out_seq++, 0);
+    put(&W->to_client, head, REC_HEAD);
     pthread_cond_broadcast(&moved);
     pthread_mutex_unlock(&mu);
 }
