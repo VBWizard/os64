@@ -6,6 +6,7 @@
 #include "os64/signal.h"
 
 #define CIPHER_CAP 4096u
+_Static_assert(CIPHER_CAP == OS64_TLS_TRANSPORT_UNREAD_MAX, "release's room is the input buffer's size");
 #define WAIT_SLICE_MS 10u
 struct os64_tls_transport {
     os64_tls_client *client;
@@ -280,6 +281,24 @@ os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *t, os64_tls_statu
         return OS64_TLS_BAD_ARGUMENT;
     os64_tls_state_t state = inspect(t);
     return state.status == OS64_TLS_OK ? fail(t, reason) : state.status;
+}
+os64_tls_status_t os64_tls_transport_release(os64_tls_transport *t, os64_tls_client **client, int32_t *handle,
+    void *unread, size_t room, size_t *unread_len)
+{
+    if (!t || !client || !handle || !unread_len || (room && !unread)) return OS64_TLS_BAD_ARGUMENT;
+    os64_tls_state_t state = inspect(t);
+    if (state.status != OS64_TLS_OK) return state.status;
+    if (t->closing) return OS64_TLS_CANCELLED;
+    // Ciphertext still owed is the handshake's last flight or a record of
+    // this owner's: the engine's sequence has moved past it, so it cannot
+    // be left behind, and it is not the new owner's to find.
+    if (!t->handshake_done || (state.flags & OS64_TLS_SEND_CIPHER)) return OS64_TLS_NEED_PROGRESS;
+    size_t left = t->input_end - t->input_at;
+    if (left > room) return OS64_TLS_BAD_ARGUMENT;
+    for (size_t i = 0; i < left; i++) ((unsigned char *)unread)[i] = t->input[t->input_at + i];
+    *unread_len = left; *client = t->client; *handle = t->handle;
+    wipe(t, sizeof *t); os64_free(t);
+    return OS64_TLS_OK;
 }
 void os64_tls_transport_free(os64_tls_transport *t)
 {
