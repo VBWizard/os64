@@ -206,6 +206,14 @@ typedef struct {
     os64_fetch_hop_t hop;                     // REDIRECT_STOPPED / TOO_MANY_HOPS
     char     why[OS64_FETCH_WHY_MAX];         // PROXY_BAD / REQUEST_FAILED: the sentence
     bool     silent_after_body;               // SILENT: mid-body (true) or before the head
+    // The hop that ended the fetch ran over HTTP/2: its stream's id, and the
+    // RFC 9113 § 7 error code that ended it when one did (`h2_coded`), sent
+    // by this side (`h2_code_ours`) or by the server.
+    bool     h2;
+    uint32_t h2_stream;
+    bool     h2_coded;
+    uint32_t h2_code;
+    bool     h2_code_ours;
 } os64_fetch_detail_t;
 
 // ── Options ─────────────────────────────────────────────────────────────

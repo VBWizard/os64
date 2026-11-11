@@ -9,21 +9,47 @@
 //
 // A CONNECTION IS AN OBJECT WITH A COUNT (fetch_conn_t). The pool's table
 // holds every one libfetch has: DIALLING (a slot reserved while its dial is
-// in flight), LIVE (a fetch is using it; the count is 1), or IDLE (kept; the
-// count is 0). All three count toward the two caps below, which is what
-// makes them caps on what a server sees and not only on what is kept.
+// in flight), LIVE (in use; the count is the fetches using it), or IDLE
+// (kept; the count is 0). All three count toward the two caps below, which
+// is what makes them caps on what a server sees and not only on what is
+// kept.
+//
+// AN HTTP/1.1 CONNECTION belongs to exactly one fetch between its take and
+// its put: the pool reads its key and its state to count it and leaves its
+// transport alone, and closes what it evicts after the lock is let go.
+//
+// AN HTTP/2 CONNECTION is shared: every fetch with a stream on it holds a
+// count, its transport is the connection's own for life (h2_conn.h), and
+// nobody but its reader closes its socket. Its life, from the dial:
+//
+//   DIALLING   fetch_pool_take answered DIAL. Count 0, no reader.
+//   ADOPTING   fetch_pool_adopting: the dialler's count, taken BEFORE
+//              h2_conn_adopt starts the reader, so a peer that fails at
+//              once cannot have the record freed under the dialler.
+//   LIVE       fetch_pool_dialled_h2. Takes join it, puts leave it.
+//   STRUCK     out of the table for good: its reader said it died, or
+//              that it idled out; or it was evicted for a slot or drained
+//              (and condemned). No take finds it.
+//   freed      by whoever sees the last of three things: struck, the last
+//              fetch's put, and the reader's last word. The reader's hooks
+//              are handed the record, so it must outlive the reader.
+//
+// A struck connection whose reader has yet to close the socket is CLOSING
+// and still counts against FETCH_POOL_TOTAL, which is a promise about the
+// handles libfetch holds and not about a table.
 //
 // ONE LOCK, HELD ONLY TO TAKE, PUT OR LET GO, to edit the waiters' list and
 // to ring the bells on it. Never across a dial, a probe, a close or a wait.
-// A connection belongs to exactly one fetch between its take and its put:
-// the pool reads its key and its state to count it and leaves its transport
-// alone, and closes what it evicts after the lock is let go.
+// It is taken BEFORE an HTTP/2 connection's own lock (the pool asks a
+// connection whether it has room, and condemns it, under this one), and the
+// connection's hooks arrive with none of the connection's locks held.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "os64/bell.h"
 #include "os64/file.h"
+#include "h2_conn.h"
 #include "fetch/http.h"
 #include "fetch/transport.h"
 #include "tls/tls.h"
@@ -91,9 +117,16 @@ _Static_assert(FETCH_POOL_TOTAL <= OS64_TASK_HANDLES / 4,
                "libfetch's connections may hold at most a quarter of a task's handles");
 _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within the whole's");
 
-// What a connection speaks. One value until HTTP/2 arrives (HTTP2.md H2.4
-// adds its own); it is here so that slice adds a value and not a field.
-typedef enum { FETCH_PROTO_H1 = 1 } fetch_proto_t;
+// What a connection speaks: what its TLS handshake's ALPN answer said, for
+// its whole life (HTTP2.md § 2.1).
+typedef enum { FETCH_PROTO_H1 = 1, FETCH_PROTO_H2 } fetch_proto_t;
+
+// WHETHER A DIAL OFFERS HTTP/2. False at rest, and nothing in the library
+// sets it. Its visibility is hidden, so libfetch.so does not export it and
+// no function it does export writes it: a program linked against the
+// library speaks HTTP/1.1. The host harness and /tests/h2probe compile
+// these sources into themselves and set it (HTTP2.md § 4 H2.6).
+extern bool fetch_h2_offer __attribute__((visibility("hidden")));
 
 typedef struct fetch_conn fetch_conn_t;
 
@@ -119,25 +152,39 @@ typedef enum {
     // it closes and reports with fetch_pool_gone, then asks again.
     FETCH_POOL_KEPT,
     // A slot for a connection the caller is to dial. fetch_pool_dialled
-    // when the dial succeeds, fetch_pool_gone when it does not.
+    // when the dial succeeds (fetch_pool_adopting and fetch_pool_dialled_h2
+    // when it answered h2), fetch_pool_gone when it does not.
     FETCH_POOL_DIAL,
+    // A live HTTP/2 connection of the key that had room for a stream when
+    // it was asked, now counted as this fetch's too. Leave to try: the
+    // fetch opens its stream (fetch_pool_h2), and a connection that then
+    // says H2_NO_ROOM is given back (fetch_pool_put) and the pool asked
+    // again. `*io` is untouched.
+    FETCH_POOL_SHARED,
     FETCH_POOL_TIMED_OUT,       // waited out its patience
     FETCH_POOL_INTERRUPTED,     // its cancellation said stop
     FETCH_POOL_FAILED           // no bell, no memory or no clock to wait by
 } fetch_pool_take_t;
 
 // A connection for `key`, in this order (HTTP2.md § 2.2):
-//   1. unless `fresh`, a kept one given back less than `idle_most_ms` ago
-//      (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a request sent once),
-//      the most recently kept first;
-//   2. a slot to dial in, when the key holds fewer than FETCH_POOL_PER_KEY
-//      connections of every kind. AN IDLE CONNECTION NEVER MAKES A FETCH
-//      WAIT FOR ONE: with the table full, the least recently kept of any
-//      key is closed for the slot; with the key at its cap and holding a
-//      kept connection this fetch may not take (`fresh`, or kept too long
-//      for it), that one is;
-//   3. otherwise the fetch WAITS, on its bell, until a connection is given
-//      back or goes, and asks again from the top.
+//   1. a live HTTP/2 connection with room for a stream, the one longest
+//      live first (FETCH_POOL_SHARED);
+//   2. unless `fresh`, a kept HTTP/1.1 one given back less than
+//      `idle_most_ms` ago (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a
+//      request sent once), the most recently kept first;
+//   3. when the key last answered ALPN with h2 and a dial to it is in
+//      flight, a WAIT for that dial's verdict, even under the key's cap;
+//   4. a slot to dial in, when the key holds fewer than FETCH_POOL_PER_KEY
+//      connections of every kind and the sockets libfetch holds, closing
+//      ones among them, are under FETCH_POOL_TOTAL. AN IDLE CONNECTION
+//      NEVER MAKES A FETCH WAIT FOR ONE longer than a closing HTTP/2
+//      connection's reader takes to look (H2_READER_SLICE_MS): with the
+//      table full, the least recently kept of any key is closed for the
+//      slot; with the key at its cap and holding a kept connection this
+//      fetch may not take (`fresh`, or kept too long for it), that one is;
+//   5. otherwise the fetch WAITS, on its bell, until a connection is given
+//      back, goes, finishes its dial or gains room, and asks again from
+//      the top.
 // Connections past their idle time are closed on the way, whatever their
 // key. Every waiter is rung at every put and every departure: a ring is a
 // hint, and each one woken asks again under the lock. No order is promised
@@ -149,24 +196,47 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
 // connection is in use, by the fetch that dialled it.
 void fetch_pool_dialled(fetch_conn_t *conn);
 
-// Give a connection in use back to be kept, with its transport, which is
-// the pool's from here: kept, or closed at once when the clock cannot be
-// read. The transport's cancellation is dropped: it names the fetch that is
-// leaving.
+// The dial answered h2: the dialler's count on the connection, taken before
+// h2_conn_adopt starts a reader whose hooks (fetch_pool_hooks) name it.
+// After this, a failed adoption is still fetch_pool_gone.
+void fetch_pool_adopting(fetch_conn_t *conn);
+// The hooks an HTTP/2 connection made for this record is given.
+h2_conn_hooks_t fetch_pool_hooks(fetch_conn_t *conn);
+// The adoption succeeded: `h2` is the connection's, with the adopter's hold
+// on it, and takes may join it — unless its reader has already said it
+// died, in which case it stays out of the table and the dialler, whose
+// stream it will refuse, gives it back like any other. The key is
+// remembered as h2, and fetches waiting on this dial are rung. The TLS
+// facts are kept for the fetches that join (fetch_pool_tls_facts).
+void fetch_pool_dialled_h2(fetch_conn_t *conn, h2_conn_t *h2, uint16_t tls_version, bool tls_resumed);
+// The HTTP/2 connection a fetch holding `conn` opens its stream on; NULL
+// for an HTTP/1.1 connection.
+h2_conn_t *fetch_pool_h2(fetch_conn_t *conn);
+void fetch_pool_tls_facts(fetch_conn_t *conn, uint16_t *version, bool *resumed);
+
+// Give a connection in use back. HTTP/1.1: to be kept, with its transport,
+// which is the pool's from here: kept, or closed at once when the clock
+// cannot be read. The transport's cancellation is dropped: it names the
+// fetch that is leaving. HTTP/2: the fetch's count alone (`io` is not
+// read); the connection goes on, kept from now when no fetch is left on it.
 void fetch_pool_put(fetch_conn_t *conn, const fetch_transport_t *io);
 
-// A connection that is no more: a dial that failed, a kept one its probe
-// refused, one its fetch closed. The caller has closed its transport, or
-// never had one. Its slot is free from here.
+// A connection that is no more: a dial that failed (an adoption that
+// failed among them), a kept HTTP/1.1 one its probe refused, one its fetch
+// closed. The caller has closed its transport, or never had one. Its slot
+// is free from here. Never an HTTP/2 connection that was adopted: those
+// end by their reader.
 void fetch_pool_gone(fetch_conn_t *conn);
 
 // Close every kept connection. For a program that wants none left behind,
 // and for the host harness, which checks for leaks at exit. Connections in
-// use are their fetches'.
+// use are their fetches'. An HTTP/2 one is condemned and is closed by its
+// reader within a slice: fetch_pool_closing says how many have yet to be.
 void fetch_pool_drain(void);
+size_t fetch_pool_closing(void);
 
-// Close the least recently used kept connection, whatever its key: true
-// when there was one. For a dial refused for want of resources (a handle,
+// Close the least recently used kept HTTP/1.1 connection, whatever its key:
+// true when there was one. For a dial refused for want of resources (a handle,
 // a port, memory), which a kept connection may be holding.
 bool fetch_pool_evict_one(void);
 
@@ -176,6 +246,11 @@ bool fetch_pool_evict_one(void);
 size_t fetch_pool_idle(void);
 size_t fetch_pool_live(void);
 void fetch_pool_counts(size_t *kept, size_t *live);
+
+// The HTTP/2 connections in the table: how many, the bytes waiting in their
+// out queues, and the bytes their streams' receive buffers are allocated to
+// hold. For /tests/h2probe.
+void fetch_pool_h2_stats(size_t *connections, size_t *queued, size_t *buffered);
 
 // ── The system's trust store, one per process ───────────────────────────
 //

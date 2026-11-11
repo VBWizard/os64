@@ -85,7 +85,7 @@ typedef enum {
     H2_SILENT,          // the wait outlasted its patience
     H2_INTERRUPTED,     // the wait's cancellation said stop
     H2_ENDED,           // the stream ended, and not well: h2_stream_ended says how
-    H2_STOP,            // send only: the peer ended the stream under the upload (RFC 9113 § 8.1)
+    H2_STOP,            // send only: the response is whole, or the peer reset the stream after it was: no more of the request goes
     H2_NO_ROOM,         // open only: the connection takes no new stream
     H2_TOO_LARGE,       // open only: the request's fields encode past H2_HEAD_MOST
     H2_FAILED,          // no memory, no clock or no bell
@@ -149,7 +149,9 @@ h2_result_t h2_stream_open(h2_conn_t *conn, const h2_field_t *fields, size_t cou
 
 // Request body bytes, with END_STREAM after the last when `ends`. Waits for
 // the stream's and the connection's send windows and at the out queue's
-// mark. `*sent` is how many were queued, whatever the answer.
+// mark, and stops (H2_STOP) as soon as the response is whole: a server that
+// answered without the body is not owed the rest of it. `*sent` is how many
+// were queued, whatever the answer.
 h2_result_t h2_stream_send(h2_stream_t *stream, const void *bytes, size_t len, bool ends, h2_wait_t *wait,
                            size_t *sent);
 
@@ -161,6 +163,9 @@ h2_result_t h2_stream_head(h2_stream_t *stream, h2_wait_t *wait, h2_hpack_emit_t
 // Body bytes: how many were copied; 0 at the peer's END_STREAM; or a
 // negative h2_result_t (-H2_SILENT, -H2_INTERRUPTED, -H2_ENDED, -H2_FAILED).
 int64_t h2_stream_read(h2_stream_t *stream, void *buffer, size_t room, h2_wait_t *wait);
+
+// The stream's id on its connection, for a fetch's detail.
+uint32_t h2_stream_id(const h2_stream_t *stream);
 
 // How the stream ended, or H2_END_NOT_YET.
 h2_ending_t h2_stream_ended(h2_stream_t *stream);

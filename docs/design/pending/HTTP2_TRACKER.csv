@@ -72,17 +72,17 @@ H2.4.12,"Codex round",H2.4.11,done,#538,"round 4 clean; 5, 4 and 3 findings in t
 H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2,todo,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
 H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,todo,,"adds this slice's rows"
 
-H2.6,"Fetches on the connection: the pool shares one connection among fetches, a fetch runs on a stream, the retry rules and words, a guest probe",H2.4,design-review,,"HTTP2.md § 4 H2.6; split from H2.4 by Q4's ruling; the switch stays off (a flag private to libfetch); brief awaits Chris's read (#540)"
+H2.6,"Fetches on the connection: the pool shares one connection among fetches, a fetch runs on a stream, the retry rules and words, a guest probe",H2.4,done,#542,"HTTP2.md § 4 H2.6 and 'H2.6, as built'; the switch stays off (fetch_h2_offer, hidden) until H2.5. Codex round 3 clean 2026-11-11 (one library finding, one test finding before it); h2probe passes in QEMU on e1000 and virtio; no P5 pass yet, and h2probe is what to run there"
 H2.6.1,"Brief, written against the tree after H2.4's round",H2.4,done,#540,"adds this slice's rows"
-H2.6.2,"The offer and its private flag; fetch_transport_alpn and fetch_transport_release; the one greeting until H2.5",H2.6.1,todo,,
-H2.6.3,"pool.c: fetch_conn_t's lifecycle (dialling, h2 live, struck, freed by the last of three), the three hooks, FETCH_POOL_SHARED, fetch_pool_dialled_h2, the remembered-h2 table, put for h2, drain and the dying count",H2.6.2,todo,,
-H2.6.4,"http.c: http_request_compose with the text unchanged byte for byte, http_request_fields (pseudo-headers, lowercase, forbidden fields out, cookies crumbled), http_head_field shared by both reply parsers",H2.6.1,todo,,
-H2.6.5,"fetch.c: the dial that answers h2 (release, adopt, dialled_h2), exchange_h2, wire_read and its table, every f->io with its h2 arm, leaving a stream",H2.6.3 H2.6.4,todo,,
-H2.6.6,"What is tried again and what it is called: the retry table, a request at most twice, the detail's four fields and the sentences",H2.6.5,todo,,
-H2.6.7,"tools/h2_peer.c serves several connections; tools/test_fetch_host.sh gains the h2 world and every case of the brief; test_http_host.sh gains the field list",H2.6.6,todo,,
-H2.6.8,"/tests/h2probe, and QEMU on the e1000 and on virtio against a real h2 server",H2.6.6,todo,,
-H2.6.9,"Mutants once at the end, through the capped runner",H2.6.7,todo,,
-H2.6.10,"One cold read, as-built section",H2.6.9,todo,,
-H2.6.11,"Codex round",H2.6.10,todo,,
+H2.6.2,"The offer and its private flag; fetch_transport_alpn and fetch_transport_release; the one greeting until H2.5",H2.6.1,done,#542,
+H2.6.3,"pool.c: fetch_conn_t's lifecycle (dialling, adopting with the dialler's reference, h2 live, struck, freed by the last of three), closing sockets counted against the table's total, the three hooks, FETCH_POOL_SHARED, fetch_pool_dialled_h2, the remembered-h2 table, put for h2, drain and the dying count",H2.6.2,done,#542,
+H2.6.4,"http.c: http_request_compose with the text unchanged byte for byte, http_request_fields (pseudo-headers, lowercase, forbidden fields out, cookies crumbled), http_head_field shared by both reply parsers",H2.6.1,done,#542,
+H2.6.5,"fetch.c: the dial that answers h2 (release, adopt, dialled_h2), exchange_h2, wire_read and its table, every f->io with its h2 arm, leaving a stream",H2.6.3 H2.6.4,done,#542,
+H2.6.6,"What is tried again and what it is called: the retry table, a request at most twice, the detail's four fields and the sentences",H2.6.5,done,#542,
+H2.6.7,"tools/h2_peer.c serves several connections; tools/test_fetch_host.sh gains the h2 world and every case of the brief; test_http_host.sh gains the field list",H2.6.6,done,#542,
+H2.6.8,"/tests/h2probe, and QEMU on the e1000 and on virtio against a real h2 server",H2.6.6,done,#542,
+H2.6.9,"Mutants once at the end, through the capped runner",H2.6.7,done,#542,"78 mutants, all caught at the end; the first run caught 56 of 77"
+H2.6.10,"One cold read, as-built section",H2.6.9,done,#542,"Opus: an unbounded redial, stale detail, long names unheard, and six comments; each fixed"
+H2.6.11,"Codex round",H2.6.10,done,#542,"round 3 clean; round 1 found an upload waiting under a whole response, round 2 a timing-dependent test"
 C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,todo,,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
 C2,"Capture Firefox on Windows the same way",,todo,,"Chris's; Firefox builds a priority tree and Chrome does not"

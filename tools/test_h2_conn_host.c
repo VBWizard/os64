@@ -115,6 +115,10 @@ static h2_result_t fetch_get(fetch_t *f, h2_conn_t *c, const char *path)
 static h2_result_t fetch_head(fetch_t *f)
 {
     f->head[0] = '\0';
+    // A stream that was never opened has no head: the case's CHECK says
+    // where, which a crash here would not.
+    if (f->stream == NULL)
+        return H2_FAILED;
     return h2_stream_head(f->stream, &f->wait, note_field, f);
 }
 
@@ -1389,6 +1393,20 @@ static void wake_cases(void)
     // Both sides finished the stream: leaving it owes the server no reset.
     fetch_done(&a);
     CHECK(!peer_frame_of(H2_FRAME_RST_STREAM, &h, &payload, 300));
+
+    // A WHOLE RESPONSE UNDER AN UPLOAD THAT IS WAITING FOR WINDOW, and no
+    // reset: the server answered without the body (a 413) and gives no
+    // window for the rest. The send stops there, and does not wait out its
+    // patience for a window that is not coming.
+    fetch_init(&a, 60000);
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    uint32_t early = server_request("/up");
+    server_reply(early, "413", NULL, true);
+    CHECK(fetch_head(&a) == H2_OK);
+    CHECK(h2_stream_send(a.stream, "0123456789abcdefghijklmno", 25, true, &a.wait, &sent) == H2_STOP && sent <= 10);
+    CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN && !h2_stream_ended(a.stream).reset_after_end);
+    fetch_done(&a);
+    CHECK(server_sees_rst(early, H2_ERR_CANCEL));
 
     // RUNG FOR NOTHING IT WANTS, with its patience already spent, a wait
     // ends there; and the connection that rang it is not quiet.

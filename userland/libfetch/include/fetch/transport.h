@@ -45,6 +45,18 @@ typedef struct {
 bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
                           const os64_tls_config_t *config, uint32_t idle_ms,
                           bool (*cancel_fn)(void *ctx), void *cancel_ctx);
+// The ALPN name the handshake chose: valid while the transport is open, and
+// NULL for a plain one or when the server chose none.
+const char *fetch_transport_alpn(fetch_transport_t *io);
+// Hand an open TLS transport's engine and socket to another owner (an
+// HTTP/2 connection), with the ciphertext that arrived behind the handshake
+// (`unread`, at least OS64_TLS_TRANSPORT_UNREAD_MAX bytes of room). Steps
+// the transport until nothing of its own is owed to the wire, under the
+// idle limit and the cancellation like any wait. True: the transport holds
+// nothing any more, and the engine and the socket are the caller's. False:
+// the transport is closed, as after any failure, and its error says why.
+bool fetch_transport_release(fetch_transport_t *io, os64_tls_client **engine, int32_t *socket,
+                             void *unread, size_t room, size_t *unread_len);
 typedef enum { FETCH_WRITE_ERROR, FETCH_WRITE_DONE, FETCH_WRITE_RESPONSE } fetch_write_result_t;
 // Resume at *sent, advancing it only for accepted bytes. RESPONSE leaves the
 // response unread for the HTTP parser; an interim head permits another call.

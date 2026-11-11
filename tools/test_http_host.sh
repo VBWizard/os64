@@ -894,6 +894,10 @@ path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /a\r\nContent
 verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
 if verdict != "ok" or got["location"] != "/a":
     fail("repeated-location", f"{verdict} location={got.get('location')!r}")
+# The request as HTTP/2's field list, against the same request as text.
+listed = subprocess.run([exe, "fields"], capture_output=True, text=True)
+if listed.returncode != 0:
+    fail("the h2 field list", listed.stderr.strip())
 if failures:
     raise SystemExit(f"{failures} failure(s)")
 print("test_http_host: all checks passed")

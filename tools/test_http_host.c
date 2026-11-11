@@ -7,10 +7,12 @@
 // exactly where a token straddles two reads — a status line split between
 // the '2' and the '00', a CRLF whose halves arrive a second apart.
 
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "fetch/http.h"
 #include "os64/str.h"
@@ -280,8 +282,166 @@ static int do_absolute(const char *baseText, const char *location)
     return 0;
 }
 
+// ── The request as HTTP/2's field list, against the same request as text ──
+
+static int field_failures;
+#define FIELD_CHECK(x) \
+    do { \
+        if (!(x)) { \
+            fprintf(stderr, "fields: %s:%d: %s\n", __FILE__, __LINE__, #x); \
+            field_failures++; \
+        } \
+    } while (0)
+
+static bool field_is(const http_field_t *f, const char *name, const char *value)
+{
+    return f->name_len == strlen(name) && memcmp(f->name, name, f->name_len) == 0 &&
+           f->value_len == strlen(value) && memcmp(f->value, value, f->value_len) == 0;
+}
+
+static bool of_the_connection(const char *name, size_t len)
+{
+    static const char *const kNames[] = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
+                                         "upgrade", "te", "host"};
+    for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); i++)
+        if (strlen(kNames[i]) == len && strncasecmp(name, kNames[i], len) == 0)
+            return true;
+    return false;
+}
+
+// THE TWO RENDERINGS AGREE: the list is the four pseudo-headers, then the
+// text's lines after Host, in the text's order, each name in lower case,
+// less the fields that speak of the connection, a Cookie line as its pairs.
+static void fields_against_text(const char *what, const char *address, const http_request_extras_t *x)
+{
+    http_url_t url;
+    static char text[16384], storage[16384];
+    http_field_t fields[64];
+    size_t count = 0;
+    if (http_url_parse(address, &url) != HTTP_URL_OK || !http_request(text, sizeof(text), &url, false, x) ||
+        !http_request_fields(&url, x, fields, 64, storage, sizeof(storage), &count) || count < 4) {
+        fprintf(stderr, "fields: %s: a request that should render did not\n", what);
+        field_failures++;
+        return;
+    }
+    const char *method = x != NULL && x->method_name != NULL ? x->method_name
+                       : x != NULL && x->method == HTTP_METHOD_POST ? "POST" : "GET";
+    FIELD_CHECK(field_is(&fields[0], ":method", method));
+    FIELD_CHECK(fields[1].name_len == 10 && memcmp(fields[1].name, ":authority", 10) == 0);
+    FIELD_CHECK(field_is(&fields[2], ":scheme", url.scheme) && field_is(&fields[3], ":path", url.path));
+    // Host's value is :authority's.
+    const char *host = strstr(text, "\r\nHost: ");
+    FIELD_CHECK(host != NULL);
+    if (host == NULL)
+        return;
+    host += 8;
+    const char *host_end = strstr(host, "\r\n");
+    FIELD_CHECK((size_t)(host_end - host) == fields[1].value_len && memcmp(host, fields[1].value, fields[1].value_len) == 0);
+
+    size_t at = 4;
+    for (const char *line = host_end + 2; line[0] != '\r'; line = strstr(line, "\r\n") + 2) {
+        const char *colon = strchr(line, ':'), *end = strstr(line, "\r\n");
+        size_t name_len = (size_t)(colon - line);
+        const char *value = colon + 1;
+        while (value < end && (*value == ' ' || *value == '\t'))
+            value++;
+        while (end > value && (end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+        if (of_the_connection(line, name_len))
+            continue;
+        if (name_len == 6 && strncasecmp(line, "cookie", 6) == 0) {
+            for (const char *p = value; p < end;) {
+                const char *semi = memchr(p, ';', (size_t)(end - p));
+                const char *stop = semi != NULL ? semi : end;
+                if (stop > p) {
+                    FIELD_CHECK(at < count && fields[at].name_len == 6 && memcmp(fields[at].name, "cookie", 6) == 0 &&
+                                fields[at].value_len == (size_t)(stop - p) && memcmp(fields[at].value, p, (size_t)(stop - p)) == 0);
+                    at++;
+                }
+                p = stop + 1;
+                while (p < end && *p == ' ')
+                    p++;
+            }
+            continue;
+        }
+        bool same = at < count && fields[at].name_len == name_len && fields[at].value_len == (size_t)(end - value) &&
+                    memcmp(fields[at].value, value, fields[at].value_len) == 0;
+        for (size_t i = 0; same && i < name_len; i++)
+            same = fields[at].name[i] == (char)tolower((unsigned char)line[i]);
+        if (!same) {
+            fprintf(stderr, "fields: %s: field %zu is not the text's line \"%.*s\"\n", what, at, (int)(end - line), line);
+            field_failures++;
+        }
+        bool credential = (name_len == 13 && strncasecmp(line, "authorization", 13) == 0) ||
+                          (name_len == 19 && strncasecmp(line, "proxy-authorization", 19) == 0);
+        FIELD_CHECK(at >= count || fields[at].sensitive == credential);
+        at++;
+    }
+    if (at != count) {
+        fprintf(stderr, "fields: %s: %zu fields, and the text has %zu\n", what, count, at);
+        field_failures++;
+    }
+    for (size_t i = 0; i < count; i++)
+        FIELD_CHECK(!of_the_connection(fields[i].name, fields[i].name_len));
+}
+
+static int do_fields(void)
+{
+    static const http_request_extras_t kPlain = {0};
+    static const http_request_extras_t kBrowser = {
+        .user_agent = "Mozilla/5.0 (X11) Thing/1.0", .accept = "text/html,*/*;q=0.8", .keep_alive = true,
+        .extra_headers = "Cookie: a=1; b=two; c=3\r\nReferer: https://example.test/from\r\n"
+                         "Authorization: Basic c2VjcmV0\r\nX-Mixed-CASE:   padded value  \r\n",
+        .order = "Accept, Cookie, User-Agent, Referer"};
+    static const http_request_extras_t kPost = {.method = HTTP_METHOD_POST, .body_len = 12,
+                                                .content_type = "application/json", .user_agent = "ua"};
+    static const http_request_extras_t kNamed = {.method_name = "PUT", .body_len = 0, .body_present = true,
+                                                 .body_headers = "Content-Type: text/plain\r\nContent-Language: en\r\n",
+                                                 .identity = true};
+    static const http_request_extras_t kOneCookie = {.extra_headers = "Cookie: only=one\r\n"};
+    static const http_request_extras_t kOddCookie = {.extra_headers = "Cookie: a=1;b=2;  c=3;\r\n"};
+    static const http_request_extras_t kGapCookie = {.extra_headers = "Cookie: a=1;; b=2; ;c=3\r\n"};
+    fields_against_text("no extras", "https://example.test/", &kPlain);
+    fields_against_text("a NULL extras", "https://example.test/path?q=1", NULL);
+    fields_against_text("a browser's", "https://example.test/page", &kBrowser);
+    fields_against_text("a POST", "https://example.test/api", &kPost);
+    fields_against_text("a named method", "https://example.test/thing", &kNamed);
+    fields_against_text("one cookie", "https://example.test/", &kOneCookie);
+    fields_against_text("cookies oddly spaced", "https://example.test/", &kOddCookie);
+    fields_against_text("cookies with nothing between two semicolons", "https://example.test/", &kGapCookie);
+    fields_against_text("a port in the authority", "https://example.test:8443/", &kBrowser);
+
+    // Spelled out once, so the comparison above is not the only witness.
+    http_url_t url;
+    static char storage[4096];
+    http_field_t f[32];
+    size_t n = 0;
+    FIELD_CHECK(http_url_parse("https://example.test:8443/a?b", &url) == HTTP_URL_OK);
+    FIELD_CHECK(http_request_fields(&url, &kBrowser, f, 32, storage, sizeof(storage), &n) && n == 13);
+    if (n == 13) {
+        FIELD_CHECK(field_is(&f[0], ":method", "GET") && field_is(&f[1], ":authority", "example.test:8443") &&
+                    field_is(&f[2], ":scheme", "https") && field_is(&f[3], ":path", "/a?b"));
+        FIELD_CHECK(field_is(&f[4], "accept", "text/html,*/*;q=0.8"));
+        FIELD_CHECK(field_is(&f[5], "cookie", "a=1") && field_is(&f[6], "cookie", "b=two") && field_is(&f[7], "cookie", "c=3"));
+        FIELD_CHECK(field_is(&f[8], "user-agent", "Mozilla/5.0 (X11) Thing/1.0"));
+        FIELD_CHECK(field_is(&f[9], "referer", "https://example.test/from"));
+        FIELD_CHECK(field_is(&f[10], "accept-encoding", "gzip, identity"));
+        FIELD_CHECK(field_is(&f[11], "authorization", "Basic c2VjcmV0") && f[11].sensitive && !f[10].sensitive);
+        FIELD_CHECK(field_is(&f[12], "x-mixed-case", "padded value"));
+    }
+    // What does not fit is refused and not cut: the table, then the bytes.
+    FIELD_CHECK(!http_request_fields(&url, &kBrowser, f, 12, storage, sizeof(storage), &n));
+    FIELD_CHECK(!http_request_fields(&url, &kBrowser, f, 32, storage, 100, &n));
+    // And what http_request refuses, this refuses.
+    static const http_request_extras_t kBad = {.extra_headers = "Host: elsewhere\r\n"};
+    FIELD_CHECK(!http_request_fields(&url, &kBad, f, 32, storage, sizeof(storage), &n));
+    return field_failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "fields") == 0)
+        return do_fields();
     if (argc == 4 && strcmp(argv[1], "post") == 0) {
         http_url_t url;
         char request[8192];

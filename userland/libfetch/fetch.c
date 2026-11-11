@@ -26,6 +26,21 @@
 // The bound is checked anyway, because a truncated dial string fails with
 // the WRONG complaint — a port nobody mistyped (Codex review, 2026-08-22).
 #define FETCH_DIAL_MAX (OS64_RESOLVE_NAME_MAX + 16)
+// The most fields one request is sent as over HTTP/2, a Cookie line counted
+// as its pairs. A request with more is refused as one that does not fit.
+#define FETCH_H2_FIELDS 256
+
+// WHAT AN HTTP/2 CONNECTION OF OURS SAYS FIRST, until a preset says it
+// (HTTP2.md § 4 H2.6): no push, a megabyte of window for each stream, four
+// for the connection, and the head limit the connection holds itself to.
+// os64's own numbers, and nobody's fingerprint.
+static const h2_setting_t kGreetingSettings[] = {
+    {H2_SETTING_ENABLE_PUSH, 0},
+    {H2_SETTING_INITIAL_WINDOW_SIZE, 1u << 20},
+    {H2_SETTING_MAX_HEADER_LIST_SIZE, H2_HEAD_MOST},
+};
+static const h2_greeting_t kGreeting = {.settings = kGreetingSettings, .count = 3,
+                                        .window_increment = (4u << 20) - 65535u};
 
 struct os64_fetch {
     os64_fetch_options_t opt;
@@ -54,6 +69,16 @@ struct os64_fetch {
     // (request_extras): here and not on the stack for the reason `request`
     // is, at about 13 KB.
     char hop_fields[OS64_FETCH_HOP_FIELDS_MAX];
+    // The same request as HTTP/2's field list, rendered when the hop's
+    // connection turns out to speak it: the fields, the bytes they point
+    // into, and one value's worth of room to hand a response's field on
+    // NUL-terminated.
+    http_field_t h2_request[FETCH_H2_FIELDS];
+    h2_field_t   h2_fields[FETCH_H2_FIELDS];
+    char         h2_names[HTTP_TARGET_MAX + HTTP_HOST_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX +
+                          2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX + OS64_FETCH_CONTENT_TYPE_MAX +
+                          HTTP_METHOD_NAME_MAX + 256];
+    char         h2_value[HTTP_LINE_MAX];
 
     // One conversation with the world: the connection, the stream reading
     // it, and the head that came back. A redirect gives the connection back
@@ -66,6 +91,22 @@ struct os64_fetch {
     // it, and NULL when it holds none.
     fetch_transport_t io;
     fetch_conn_t     *conn;
+    // The hop's connection speaks HTTP/2 (HTTP2.md § 4 H2.6): the connection
+    // owns its transport, `io` is not this hop's, and the request is a
+    // stream. `h2` is set from the take to the hop's end; the stream from
+    // its open.
+    h2_conn_t        *h2;
+    h2_stream_t      *h2_stream;
+    h2_wait_t         h2_wait;      // what every wait on the stream brings: the bell, the idle limit, the predicate
+    bool              h2_silent;    // a wait on the stream outlasted the idle limit
+    bool              h2_bodiless;  // the final head says no content follows: nothing is waited for
+    http_head_result_t h2_head;     // what the head's fields added up to (on_h2_field)
+    char              h2_note[160]; // how the stream ended, for the reason sentence
+    // The hop is direct https: what the head reports as `encrypted` and what
+    // lets a Secure cookie be kept. A fact of the hop, since a fetch that
+    // joins an HTTP/2 connection opens no transport to read it from.
+    bool              hop_encrypted;
+    http_request_extras_t hop_request;  // the hop's request as composed, for the renderer its connection needs
     // What this fetch parks on when every connection to its peer is in use
     // (pool.h): none until its first wait, closed with the fetch.
     os64_bell_t       bell;
@@ -82,9 +123,10 @@ struct os64_fetch {
     os64_fetch_detail_t   detail;
     os64_fetch_status_t   status;
     bool have_head;                 // `head` is filled and the connection is positioned at the body
-    bool connected;                 // io holds a live connection
+    bool connected;                 // this fetch holds a connection: `io`, or on an HTTP/2 hop its count and its stream
     bool reused;                    // ...taken from the pool, not dialled for this request
-    uint32_t retried;               // requests that failed on a reused connection and went again on a fresh one
+    uint32_t retried;               // requests that went a second time (retry_on_fresh, h2_before_head)
+    uint32_t retried_h2;            // ...of them, the ones whose first try was a stream
     bool body_open;                 // `body` frames the final head's body (body_prepare)
     bool sent_whole;                // every byte of the request went before its final head came
     // The framing was told the body is empty when the wire may hold some: a
@@ -513,7 +555,7 @@ static void response_header(void *ctx, const char *name, size_t name_len,
 {
     os64_fetch_t *f = ctx;
     // A kept connection's 408 is going again; its fields are nobody's.
-    if (timed_out_while_kept(f))
+    if (f->h2 == NULL && timed_out_while_kept(f))
         return;
     if (f->opt.on_header != NULL)
         f->opt.on_header(f->opt.ctx, name, name_len, value, value_len);
@@ -543,11 +585,13 @@ static void response_header(void *ctx, const char *name, size_t name_len,
     // Apply the authenticated-prefix check used before redirects. TLS
     // authentication/protocol errors suppress delivery; missing closure alone
     // is tolerated for framed HTTP. Later reads can still fail.
-    if (!fetch_transport_complete(&f->io, true))
+    // (An HTTP/2 hop has no such prefix to doubt: a head reaches its stream
+    // whole, from a connection whose every frame was authenticated.)
+    if (f->h2 == NULL && !fetch_transport_complete(&f->io, true))
         return;
     os64_url_t url;
     url_filled(&f->current, &url);
-    f->opt.on_set_cookie(f->opt.ctx, &url, f->io.encrypted, value, value_len);
+    f->opt.on_set_cookie(f->opt.ctx, &url, f->hop_encrypted, value, value_len);
 }
 
 // ── The head: dial, ask, read, and follow ───────────────────────────────
@@ -567,7 +611,7 @@ static void head_fill(os64_fetch_t *f)
     h->location = f->reply.location;
     url_filled(&f->current, &h->url);
     http_url_render(&f->current, h->url_text, sizeof(h->url_text));
-    h->encrypted = f->io.encrypted;
+    h->encrypted = f->hop_encrypted;
     proxy_facts(&f->proxy, &h->via_proxy, h->proxy_host, sizeof(h->proxy_host), &h->proxy_port);
     f->progress.has_length = h->has_length;
     f->progress.length = h->length;
@@ -576,6 +620,11 @@ static void head_fill(os64_fetch_t *f)
 
 static void tls_snapshot(os64_fetch_t *f)
 {
+    // An HTTP/2 hop's transport is its connection's: what the handshake
+    // chose was noted when the connection was taken (acquire), and a TLS
+    // failure since is the connection's death, told through the stream.
+    if (f->h2 != NULL)
+        return;
     f->detail.tls = f->io.error.status;
     f->detail.tls_policy = f->io.error.policy_reason;
     f->detail.tls_engine = f->io.error.upstream_error;
@@ -583,8 +632,25 @@ static void tls_snapshot(os64_fetch_t *f)
     f->detail.tls_resumed = f->io.error.resumed;
 }
 
+// Leave an HTTP/2 hop: the stream, which is reset when either side had not
+// finished, and this fetch's count on the connection. The connection goes
+// on; nothing a fetch does ends one.
+static void leave_h2(os64_fetch_t *f)
+{
+    if (f->h2_stream != NULL)
+        h2_stream_close(f->h2_stream);
+    f->h2_stream = NULL;
+    f->h2 = NULL;
+    f->connected = false;
+    fetch_conn_t *conn = f->conn;
+    f->conn = NULL;
+    fetch_pool_put(conn, NULL);
+}
+
 static os64_fetch_status_t drop_connection(os64_fetch_t *f, os64_fetch_status_t status)
 {
+    if (f->connected && f->h2 != NULL)
+        leave_h2(f);
     if (f->connected) {
         fetch_transport_close(&f->io, false);
         f->connected = false;
@@ -654,6 +720,10 @@ static void release_connection(os64_fetch_t *f, bool normal)
 {
     if (!f->connected)
         return;
+    if (f->h2 != NULL) {
+        leave_h2(f);
+        return;
+    }
     f->connected = false;
     fetch_reuse_facts_t facts;
     reuse_facts(f, &facts);
@@ -674,10 +744,13 @@ static bool idempotent(const os64_fetch_t *f);
 static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
                                 uint16_t peerPort);
 
-// A connection for this hop, in the pool's order (pool.h): a kept one that
-// still answers its probe, adopted (one the probe refuses is closed, and
-// the pool asked again); else one dialled in the slot the pool gave; else,
-// with every connection to the peer in use, a wait for one. A request the
+// A connection for this hop, in the pool's order (pool.h): a live HTTP/2
+// one with room, joined (`f->h2` is set, and the caller opens a stream);
+// else a kept HTTP/1.1 one that still answers its probe, adopted (one the
+// probe refuses is closed, and the pool asked again); else one dialled in
+// the slot the pool gave, which becomes an HTTP/2 connection of the pool's
+// when the server's ALPN answer is h2; else, with every connection to the
+// peer in use, a wait for one. A request the
 // retry rule would not send again takes only a kept connection used moments
 // ago (FETCH_POOL_ONCE_MS), since nothing could save it from one its server
 // closed while it sat idle. `fresh` takes no kept connection at all.
@@ -692,6 +765,18 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
         fetch_transport_t io;
         fetch_conn_t *conn = NULL;
         switch (fetch_pool_take(key, idle_most, fresh, &wait, &conn, &io)) {
+        case FETCH_POOL_SHARED:
+            // A live HTTP/2 connection with room: this fetch's stream is
+            // opened on it (exchange_h2), and no dial is made on this hop.
+            f->conn = conn;
+            f->h2 = fetch_pool_h2(conn);
+            f->reused = true;
+            f->detail.tls = OS64_TLS_OK;
+            f->detail.tls_policy = 0;
+            f->detail.tls_engine = 0;
+            fetch_pool_tls_facts(conn, &f->detail.tls_version, &f->detail.tls_resumed);
+            f->detail.tls_fallback = false;
+            return OS64_FETCH_OK;
         case FETCH_POOL_KEPT:
             if (fetch_transport_idle_ok(&io)) {
                 f->io = io;
@@ -712,8 +797,45 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
                 fetch_pool_gone(conn);      // dial closed what it opened
                 return dialled;
             }
-            fetch_pool_dialled(conn);
+            const char *alpn = fetch_transport_alpn(&f->io);
+            if (alpn == NULL || !os64_streq(alpn, "h2")) {
+                fetch_pool_dialled(conn);
+                f->conn = conn;
+                return OS64_FETCH_OK;
+            }
+            // The server chose HTTP/2 (HTTP2.md § 2.1): the engine and the
+            // socket leave the transport for a connection of their own,
+            // which every fetch to this key shares from here.
+            uint8_t unread[OS64_TLS_TRANSPORT_UNREAD_MAX];
+            size_t unread_len = 0;
+            os64_tls_client *engine = NULL;
+            int32_t socket = -1;
+            uint16_t version = f->io.error.version;
+            bool resumed = f->io.error.resumed;
+            if (!fetch_transport_release(&f->io, &engine, &socket, unread, sizeof(unread), &unread_len)) {
+                tls_snapshot(f);
+                fetch_pool_gone(conn);
+                return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_TLS_FAILED;
+            }
+            // This fetch's count on the connection BEFORE its reader exists:
+            // a peer that fails at once runs the reader's last word before
+            // the adoption returns, and the record must still be here.
+            fetch_pool_adopting(conn);
+            h2_conn_hooks_t hooks = fetch_pool_hooks(conn);
+            h2_conn_t *h2 = h2_conn_adopt(engine, socket, unread, unread_len, &kGreeting, &hooks);
+            if (h2 == NULL) {
+                // Not made: no reader was started, and both are still ours.
+                os64_tls_free(engine);
+                os64_close(socket);
+                fetch_pool_gone(conn);
+                f->detail.dial = OS64_NET_ERR_NO_RESOURCES;
+                os64_snprintf(f->detail.why, sizeof(f->detail.why),
+                              "an HTTP/2 connection could not be started (memory or a thread)");
+                return OS64_FETCH_DIAL_FAILED;
+            }
+            fetch_pool_dialled_h2(conn, h2, version, resumed);
             f->conn = conn;
+            f->h2 = h2;
             return OS64_FETCH_OK;
         }
         case FETCH_POOL_INTERRUPTED:
@@ -787,6 +909,8 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
                                     const fetch_pool_key_t *key, bool fresh, bool *again);
 static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
                                 uint16_t peerPort);
+static os64_fetch_status_t exchange_h2(os64_fetch_t *f, bool *again, bool *no_room);
+static void h2_note_ending(os64_fetch_t *f);
 
 // Ask, and keep asking wherever the answers point, until an answer is the
 // thing itself or a verdict says stop. On OK the connection is open and
@@ -800,6 +924,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             return OS64_FETCH_INTERRUPTED;
 
         bool encrypted = os64_streq(f->current.scheme, "https") && !f->proxy.inUse;
+        f->hop_encrypted = encrypted;
         // Compose before dialing so a refused callback costs no connection.
         char *request = f->request, *extraForHop = f->hop_extra;
         if (!request_extras(f, extraForHop, sizeof(f->hop_extra), encrypted)) {
@@ -825,6 +950,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             .keep_alive = f->opt.keep_alive,
             .order = f->order[0] ? f->order : NULL,
         };
+        f->hop_request = extras;
         if (!http_request(request, sizeof(f->request), &f->current, f->proxy.inUse, &extras)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why),
                          "the request does not fit, or a header holds a byte a header cannot");
@@ -893,10 +1019,12 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 // One request on one connection, to the end of its final head: a kept
 // connection for `key` when one answers its probe, unless `fresh` (the retry
 // rule's second try), and one dialled otherwise, after a wait in the pool's
-// queue when the peer's connections are all in use (acquire). On OK the head is in
-// `reply` and the connection positioned at the body; on anything else the
-// connection is closed, and `*again` says whether the failure is one the
-// retry rule sends again (retry_on_fresh).
+// queue when the peer's connections are all in use (acquire), or a stream
+// on an HTTP/2 connection (exchange_h2). On OK the head is in `reply` and
+// the body ready to read; on anything else the fetch holds nothing (an
+// HTTP/1.1 connection is closed; an HTTP/2 stream is closed and its
+// connection goes on), and `*again` says whether the request goes once
+// more (retry_on_fresh, h2_before_head).
 static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool encrypted,
                                     const fetch_pool_key_t *key, bool fresh, bool *again)
 {
@@ -913,10 +1041,38 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     f->detail.dial_port = peerPort;
     f->detail.dial_hop = f->head.hops;
 
-    os64_fetch_status_t acquired = acquire(f, key, encrypted, fresh, peerHost, peerPort);
-    if (acquired != OS64_FETCH_OK)
-        return acquired;
-    f->connected = true;
+    // What an earlier try or hop left of HTTP/2's is not this one's.
+    f->detail.h2 = f->detail.h2_coded = f->detail.h2_code_ours = false;
+    f->detail.h2_stream = f->detail.h2_code = 0;
+    f->h2_note[0] = '\0';
+    unsigned own_refusals = 0;
+    for (;;) {
+        os64_fetch_status_t acquired = acquire(f, key, encrypted, fresh, peerHost, peerPort);
+        if (acquired != OS64_FETCH_OK)
+            return acquired;
+        f->connected = true;
+        if (f->h2 == NULL)
+            break;
+        bool no_room = false;
+        os64_fetch_status_t asked = exchange_h2(f, again, &no_room);
+        if (!no_room)
+            return asked;
+        // The connection had no room for the stream: it filled, went quiet,
+        // heard a GOAWAY or died since the pool asked it, or it is one this
+        // fetch dialled that never had any (a server that allows no stream,
+        // or ends the connection as it begins). One the pool SHARED has no
+        // room at the next take either, so it is not offered again. One
+        // this fetch DIALLED is a new connection every time, so that is
+        // bounded here: a second such refusal is the server's answer.
+        bool dialled = !f->reused;
+        leave_h2(f);
+        if (dialled && ++own_refusals == 2) {
+            f->detail.h2 = true;
+            os64_strcopy(f->detail.why, sizeof(f->detail.why),
+                         "the server's HTTP/2 connections took no request, twice");
+            return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_REQUEST_FAILED;
+        }
+    }
 
     // Upload and response heads share the connection. A final response
     // ends the upload; an interim response resumes at the accepted byte.
@@ -998,6 +1154,194 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     return OS64_FETCH_OK;
 }
 
+// The idle limit a wait on this fetch's behalf is given.
+static uint32_t idle_limit(const os64_fetch_t *f)
+{
+    return f->opt.idle_ms != 0 ? f->opt.idle_ms : FETCH_IDLE_MS_DEFAULT;
+}
+
+// One field of an HTTP/2 response's final head, in wire order: `:status`
+// is the status, and every other is offered to the observers and then read
+// for what the fetch depends on, by the functions the HTTP/1.1 head reader
+// uses (http_head_field), so the two heads mean the same thing. A field
+// that cannot be read sets `h2_head`, and the rest are still heard.
+static bool on_h2_field(void *ctx, const h2_field_t *field)
+{
+    os64_fetch_t *f = ctx;
+    const char *name = (const char *)field->name, *value = (const char *)field->value;
+    size_t name_len = field->name_len, value_len = field->value_len;
+    http_head_result_t rc = HTTP_HEAD_OK;
+    if (name_len != 0 && name[0] == ':') {
+        // h2_head_check made `:status` three digits, and the only one.
+        if (name_len == 7 && value_len == 3)
+            f->reply.status = (value[0] - '0') * 100 + (value[1] - '0') * 10 + (value[2] - '0');
+        return true;
+    }
+    while (value_len != 0 && (value[0] == ' ' || value[0] == '\t')) {
+        value++;
+        value_len--;
+    }
+    while (value_len != 0 && (value[value_len - 1] == ' ' || value[value_len - 1] == '\t'))
+        value_len--;
+    // The name NUL-terminated, for the reader of what the fetch depends on.
+    // No name that reader knows is as long as this holds, so a longer one
+    // is an observer's alone.
+    char named[HTTP_TOKEN_MAX * 2];
+    bool known = name_len < sizeof(named);
+    if (name_len == 0)
+        return true;
+    if (known) {
+        os64_memcpy(named, name, name_len);
+        named[name_len] = '\0';
+    }
+    if (!http_field_value_ok(value, value_len))
+        rc = HTTP_HEAD_SYNTAX;
+    else if (value_len >= sizeof(f->h2_value)) {
+        // Too long to hold: refused when the fetch depends on it, left out
+        // and the observer told whose it was when it is metadata.
+        rc = known ? http_head_field_too_long(&f->reply, named) : HTTP_HEAD_OK;
+        if (rc == HTTP_HEAD_OK)
+            response_header(f, name, name_len, NULL, 0);
+    } else {
+        os64_memcpy(f->h2_value, value, value_len);
+        f->h2_value[value_len] = '\0';
+        response_header(f, name, name_len, f->h2_value, value_len);
+        if (known)
+            rc = http_head_field(&f->reply, named, f->h2_value, value_len);
+    }
+    if (rc != HTTP_HEAD_OK && f->h2_head == HTTP_HEAD_OK)
+        f->h2_head = rc;
+    return true;
+}
+
+// A stream that ended, or a wait on it that did, before the final head:
+// what the fetch ends as, and whether the request goes once more (HTTP2.md
+// § 4 H2.6's table). A request goes at most twice, whatever failed first.
+static os64_fetch_status_t h2_before_head(os64_fetch_t *f, h2_result_t r, bool *again)
+{
+    os64_fetch_status_t status = OS64_FETCH_REQUEST_FAILED;
+    f->detail.h2 = true;
+    f->h2_note[0] = '\0';
+    if (r == H2_SILENT) {
+        f->h2_silent = true;
+        f->detail.silent_after_body = false;
+        status = OS64_FETCH_SILENT;
+    } else if (r == H2_INTERRUPTED)
+        status = OS64_FETCH_INTERRUPTED;
+    else if (r == H2_TOO_LARGE)
+        os64_strcopy(f->h2_note, sizeof(f->h2_note),
+                     "the request does not fit, or a header holds a byte a header cannot");
+    else if (r != H2_ENDED || f->h2_stream == NULL)
+        os64_strcopy(f->h2_note, sizeof(f->h2_note), "the stream could not be opened or waited on (memory, the clock or a bell)");
+    else {
+        h2_ending_t e = h2_stream_ended(f->h2_stream);
+        h2_note_ending(f);
+        switch (e.how) {
+        case H2_END_UNPROCESSED:
+            // RFC 9113 § 6.8: the server did not process it, whatever it was.
+            *again = true;
+            break;
+        case H2_END_PEER_RESET:
+            // § 8.7: REFUSED_STREAM says the same of one stream.
+            *again = e.code == H2_ERR_REFUSED_STREAM && !e.any_seen;
+            break;
+        case H2_END_CONN_DEAD:
+            // The retry rule as HTTP/1.1 has it: a connection this request
+            // was not dialled for died before any answer, and sending the
+            // request twice does what once would.
+            *again = !e.any_seen && f->reused && idempotent(f);
+            break;
+        case H2_END_HEAD_TOO_LARGE:
+            os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported), "head");
+            status = OS64_FETCH_UNSUPPORTED;
+            break;
+        case H2_END_BAD_HEAD:
+        case H2_END_FLOW:
+        case H2_END_BAD_FRAME:
+        case H2_END_BAD_LENGTH:
+            f->detail.head = HTTP_HEAD_SYNTAX;
+            status = OS64_FETCH_BAD_HEAD;
+            break;
+        default:
+            break;
+        }
+    }
+    if (status == OS64_FETCH_REQUEST_FAILED)
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), f->h2_note);
+    *again = *again && !cancelled(f);
+    if (*again)
+        f->retried_h2++;
+    return drop_connection(f, status);
+}
+
+// One request as a stream on the HTTP/2 connection `acquire` took, to the
+// end of its final head. On OK the head is in `reply` and the body is the
+// stream's to read (wire_read); on anything else the stream is closed, this
+// fetch's count on the connection given back, and `*again` says whether the
+// request goes once more. `*no_room` (with OK) is the connection declining
+// a stream it had room for when the pool asked: the caller gives it back
+// and asks the pool again.
+static os64_fetch_status_t exchange_h2(os64_fetch_t *f, bool *again, bool *no_room)
+{
+    size_t count = 0;
+    f->h2_silent = false;
+    f->h2_bodiless = false;
+    f->h2_stream = NULL;
+    f->h2_wait = (h2_wait_t){.bell = &f->bell, .patience_ms = idle_limit(f),
+                             .cancelled = cancel_predicate, .cancel_ctx = f};
+    if (!http_request_fields(&f->current, &f->hop_request, f->h2_request, FETCH_H2_FIELDS, f->h2_names,
+                             sizeof(f->h2_names), &count))
+        return h2_before_head(f, H2_TOO_LARGE, again);
+    for (size_t i = 0; i < count; i++)
+        f->h2_fields[i] = (h2_field_t){.name = (const uint8_t *)f->h2_request[i].name,
+                                       .value = (const uint8_t *)f->h2_request[i].value,
+                                       .name_len = (uint32_t)f->h2_request[i].name_len,
+                                       .value_len = (uint32_t)f->h2_request[i].value_len,
+                                       .sensitive = f->h2_request[i].sensitive};
+
+    bool has_body = sends_body(f) && f->opt.body_len != 0;
+    h2_result_t r = h2_stream_open(f->h2, f->h2_fields, count, !has_body, os64_streq(f->method_name, "HEAD"),
+                                   &f->h2_wait, &f->h2_stream);
+    if (r == H2_NO_ROOM) {
+        *no_room = true;
+        return OS64_FETCH_OK;
+    }
+    if (r != H2_OK)
+        return h2_before_head(f, r, again);
+
+    // The upload. A server that answered and wants no more of it (H2_STOP)
+    // has not failed the request: what it said is read below.
+    size_t sent = 0;
+    if (has_body) {
+        r = h2_stream_send(f->h2_stream, f->opt.body, f->opt.body_len, true, &f->h2_wait, &sent);
+        if (r != H2_OK && r != H2_STOP) {
+            f->sent_whole = false;
+            return h2_before_head(f, r, again);
+        }
+    }
+    f->sent_whole = !has_body || sent == f->opt.body_len;
+
+    os64_memset(&f->reply, 0, sizeof(f->reply));
+    os64_memset(&f->head.keep, 0, sizeof(f->head.keep));    // a redirect's caching fields are not its target's
+    f->h2_head = HTTP_HEAD_OK;
+    r = h2_stream_head(f->h2_stream, &f->h2_wait, on_h2_field, f);
+    if (r != H2_OK)
+        return h2_before_head(f, r, again);
+    if (f->h2_head != HTTP_HEAD_OK) {
+        // A head HTTP/2 let through and this cannot act on, by the words the
+        // HTTP/1.1 path gives the same head.
+        f->detail.h2 = true;
+        f->detail.h2_stream = h2_stream_id(f->h2_stream);
+        f->detail.head = f->h2_head;
+        if (f->h2_head == HTTP_HEAD_FRAMING) {
+            os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported), "head");
+            return drop_connection(f, OS64_FETCH_UNSUPPORTED);
+        }
+        return drop_connection(f, OS64_FETCH_BAD_HEAD);
+    }
+    return OS64_FETCH_OK;
+}
+
 // A connection dialled for this request: the dial, then TLS under the store
 // ask settled on.
 static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
@@ -1012,10 +1356,15 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
         return OS64_FETCH_REQUEST_FAILED;
     }
 
-    const os64_tls_name_t alpn = {"http/1.1", 8};
+    // HTTP/2 is offered ahead of HTTP/1.1 when the library may (pool.h's
+    // fetch_h2_offer), and the server's pick is the connection's protocol
+    // for life (HTTP2.md § 2.1). The first name alone is skipped where h2 is
+    // not spoken: the TLS 1.2 fallback, below.
+    static const os64_tls_name_t kAlpn[] = {{"h2", 2}, {"http/1.1", 8}};
+    bool offer_h2 = fetch_h2_offer && encrypted;
     os64_tls_config_t config = {
         .hostname = {f->current.host, os64_strlen(f->current.host)},
-        .alpn = &alpn, .alpn_count = 1, .trust = f->trust,
+        .alpn = offer_h2 ? kAlpn : kAlpn + 1, .alpn_count = offer_h2 ? 2 : 1, .trust = f->trust,
         // The port is leave to resume (tls.h): a session kept from an
         // earlier connection to this host, port and store is offered, and
         // this connection's tickets are kept for the next.
@@ -1052,6 +1401,8 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
         if (!encrypted || config.protocol != OS64_TLS_PROTOCOL_DEFAULT ||
             f->detail.tls != OS64_TLS_PEER_CHOSE_TLS12) return OS64_FETCH_TLS_FAILED;
         config.protocol = OS64_TLS_PROTOCOL_TLS12_FALLBACK;
+        config.alpn = kAlpn + 1;
+        config.alpn_count = 1;
         f->detail.tls_fallback = true;
     }
 }
@@ -1116,7 +1467,15 @@ static os64_fetch_status_t body_prepare(os64_fetch_t *f)
         f->progress.has_length = true;
         f->progress.length = 0;
     }
-    if (!http_body_open(&f->body, &f->stream, &f->reply)) {
+    if (f->h2 != NULL) {
+        // A stream is its own framing: there is nothing to open, and a reply
+        // that may carry no content is not waited on for any (wire_read).
+        os64_memset(&f->body, 0, sizeof(f->body));
+        f->h2_bodiless = f->reply.hasLength && f->reply.length == 0 &&
+                         (f->reply.status == 204 || f->reply.status == 205 || f->reply.status == 304 ||
+                          os64_streq(f->method_name, "HEAD"));
+        f->wire_unread = false;
+    } else if (!http_body_open(&f->body, &f->stream, &f->reply)) {
         os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported),
                      f->reply.transferEncoding);
         return OS64_FETCH_UNSUPPORTED;
@@ -1153,6 +1512,16 @@ static int64_t finish(os64_fetch_t *f, os64_fetch_status_t status, int64_t answe
     return answer;
 }
 
+// The transport's word on a body the framing says is whole. An HTTP/2
+// stream that ended clean has it already: its connection ends every stream
+// that had not finished before it dies of a TLS failure.
+static bool transport_whole(os64_fetch_t *f)
+{
+    return f->h2 != NULL || fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE);
+}
+
+static bool went_silent(const os64_fetch_t *f) { return f->h2 != NULL ? f->h2_silent : f->io.silent; }
+
 // What the framing's 0 or < 0 means, in the library's vocabulary.
 static int64_t framing_ended(os64_fetch_t *f, int64_t n)
 {
@@ -1162,7 +1531,7 @@ static int64_t framing_ended(os64_fetch_t *f, int64_t n)
             // HTTP removes framing before gzip decoding. For a close-framed
             // HTTPS body, the transport requires authenticated TLS closure;
             // plain HTTP has no way to tell a complete reply from a raw FIN.
-            if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
+            if (!transport_whole(f)) {
                 tls_snapshot(f);
                 return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
             }
@@ -1175,7 +1544,7 @@ static int64_t framing_ended(os64_fetch_t *f, int64_t n)
     switch (f->body.result) {
         case HTTP_BODY_BROKE:
             tls_snapshot(f);
-            if (f->io.silent) {
+            if (went_silent(f)) {
                 f->detail.silent_after_body = true;
                 return finish(f, OS64_FETCH_SILENT, -1);
             }
@@ -1187,6 +1556,104 @@ static int64_t framing_ended(os64_fetch_t *f, int64_t n)
             // beside a terminal TLS status, and the reason's tail names it.
             tls_snapshot(f);
             return finish(f, OS64_FETCH_BAD_HEAD, -1);
+    }
+}
+
+// How a stream ended, in a fetch's words: the detail's four facts, and the
+// note the reason sentence carries.
+static void h2_note_ending(os64_fetch_t *f)
+{
+    h2_ending_t e = h2_stream_ended(f->h2_stream);
+    os64_fetch_detail_t *d = &f->detail;
+    d->h2 = true;
+    d->h2_stream = h2_stream_id(f->h2_stream);
+    d->h2_coded = false;
+    d->h2_code = e.code;
+    d->h2_code_ours = false;
+    const char *name = h2_error_name(e.code);
+    f->h2_note[0] = '\0';
+    switch (e.how) {
+    case H2_END_NOT_YET:
+    case H2_END_CLEAN:
+        break;
+    case H2_END_PEER_RESET:
+        d->h2_coded = true;
+        os64_snprintf(f->h2_note, sizeof(f->h2_note), "the server reset the stream: %s", name);
+        break;
+    case H2_END_UNPROCESSED:
+        d->h2_coded = true;
+        os64_snprintf(f->h2_note, sizeof(f->h2_note),
+                      "the server ended the connection before it took this request: GOAWAY %s", name);
+        break;
+    case H2_END_CONN_DEAD:
+        d->h2_coded = e.code != H2_ERR_NO_ERROR;
+        if (d->h2_coded)
+            os64_snprintf(f->h2_note, sizeof(f->h2_note), "the connection ended under the request: %s", name);
+        else
+            os64_strcopy(f->h2_note, sizeof(f->h2_note), "the connection ended under the request");
+        break;
+    case H2_END_HEAD_TOO_LARGE:
+        d->h2_coded = d->h2_code_ours = true;
+        os64_strcopy(f->h2_note, sizeof(f->h2_note), "we reset the stream: its head is larger than this reads");
+        break;
+    case H2_END_BAD_LENGTH:
+        d->h2_coded = d->h2_code_ours = true;
+        os64_strcopy(f->h2_note, sizeof(f->h2_note),
+                     "we reset the stream: its body is not what its head promised");
+        break;
+    case H2_END_BAD_HEAD:
+    case H2_END_FLOW:
+    case H2_END_BAD_FRAME:
+        d->h2_coded = d->h2_code_ours = true;
+        os64_snprintf(f->h2_note, sizeof(f->h2_note),
+                      "we reset the stream: the response broke HTTP/2's rules (%s)", name);
+        break;
+    }
+}
+
+// Body bytes off the wire, the framing removed, for either protocol: > 0
+// got some; 0 the body is over, and `f->body.result` says whether it ended
+// (DONE) or was merely stopped (CUT); < 0 it cannot go on, and the result
+// says why. http_body_read's contract exactly, which an HTTP/2 stream's
+// endings are translated into here (HTTP2.md § 4 H2.6 has the table), so
+// that framing_ended stays the one place that turns them into statuses.
+static int64_t wire_read(os64_fetch_t *f, void *dst, size_t cap)
+{
+    if (f->h2 == NULL)
+        return http_body_read(&f->body, dst, cap);
+    if (f->h2_bodiless) {
+        f->body.result = HTTP_BODY_DONE;
+        return 0;
+    }
+    int64_t n = h2_stream_read(f->h2_stream, dst, cap, &f->h2_wait);
+    if (n > 0) {
+        f->body.delivered += (uint64_t)n;
+        return n;
+    }
+    if (n == 0) {
+        f->body.result = HTTP_BODY_DONE;
+        return 0;
+    }
+    f->body.result = HTTP_BODY_BROKE;
+    f->detail.h2 = true;
+    f->detail.h2_stream = h2_stream_id(f->h2_stream);
+    if (n == -(int64_t)H2_SILENT)
+        f->h2_silent = true;
+    if (n != -(int64_t)H2_ENDED)
+        return -1;
+    h2_note_ending(f);
+    switch (h2_stream_ended(f->h2_stream).how) {
+    case H2_END_BAD_LENGTH:
+        f->body.result = HTTP_BODY_CUT;
+        return 0;
+    case H2_END_BAD_HEAD:
+    case H2_END_HEAD_TOO_LARGE:
+    case H2_END_FLOW:
+    case H2_END_BAD_FRAME:
+        f->body.result = HTTP_BODY_SYNTAX;
+        return -1;
+    default:
+        return -1;
     }
 }
 
@@ -1217,7 +1684,7 @@ static int64_t read_identity(os64_fetch_t *f, uint8_t *buf, size_t cap)
     } else if (want < cap) {
         cap = want;
     }
-    int64_t n = http_body_read(&f->body, dst, cap);
+    int64_t n = wire_read(f, dst, cap);
     if (n <= 0)
         return framing_ended(f, n);
     f->progress.wire += (uint64_t)n;
@@ -1276,7 +1743,7 @@ static int64_t read_gzip(os64_fetch_t *f, uint8_t *buf, size_t cap)
                 return (int64_t)produced;
             }
             if (st == OS64_GZIP_DONE) {
-                if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
+                if (!transport_whole(f)) {
                     tls_snapshot(f);
                     return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
                 }
@@ -1303,7 +1770,7 @@ static int64_t read_gzip(os64_fetch_t *f, uint8_t *buf, size_t cap)
         }
 
         // Refill the staging run from the framing.
-        int64_t n = http_body_read(&f->body, f->wire, FETCH_WIRE_CHUNK);
+        int64_t n = wire_read(f, f->wire, FETCH_WIRE_CHUNK);
         if (n > 0) {
             f->wire_have = (size_t)n;
             f->wire_next = 0;
@@ -1573,10 +2040,11 @@ const char *os64_fetch_reason(os64_fetch_t *f)
             // whole seconds, milliseconds otherwise — "0 seconds" for a
             // 500 ms budget was a false duration (Codex, PR #92 rd4).
             char idle[32];
-            if (f->io.idle_ms % 1000u == 0)
-                os64_snprintf(idle, sizeof(idle), "%u seconds", f->io.idle_ms / 1000u);
+            uint32_t limit = d->h2 ? idle_limit(f) : f->io.idle_ms;
+            if (limit % 1000u == 0)
+                os64_snprintf(idle, sizeof(idle), "%u seconds", limit / 1000u);
             else
-                os64_snprintf(idle, sizeof(idle), "%u ms", f->io.idle_ms);
+                os64_snprintf(idle, sizeof(idle), "%u ms", limit);
             if (d->silent_after_body)
                 os64_snprintf(out, cap, "the server went silent for %s after %lu bytes",
                               idle, (unsigned long)f->progress.wire);
@@ -1660,7 +2128,16 @@ const char *os64_fetch_reason(os64_fetch_t *f)
     // A body that ended badly on an encrypted transport has the transport's
     // verdict behind it (a truncation the peer never authenticated, an
     // engine error), and the numbers are worth the tail of the sentence.
-    if ((f->status == OS64_FETCH_CUT || f->status == OS64_FETCH_BROKE ||
+    // How an HTTP/2 stream ended is the tail of whatever it ended the fetch
+    // as (a REQUEST_FAILED's sentence is that already).
+    if (d->h2 && f->h2_note[0] != '\0' && f->status != OS64_FETCH_REQUEST_FAILED &&
+        f->status != OS64_FETCH_OK) {
+        size_t have = os64_strlen(out);
+        if (have < cap)
+            os64_snprintf(out + have, cap - have, " (HTTP/2: %s)", f->h2_note);
+    }
+    if (!d->h2 &&
+        (f->status == OS64_FETCH_CUT || f->status == OS64_FETCH_BROKE ||
          f->status == OS64_FETCH_SILENT || f->status == OS64_FETCH_BAD_HEAD) &&
         fetch_transport_tls_failed(&f->io)) {
         size_t have = os64_strlen(out);
@@ -1673,13 +2150,16 @@ const char *os64_fetch_reason(os64_fetch_t *f)
     // The retry rule's one trace (retry_on_fresh), on whatever the outcome
     // was, so a record of the fetch can carry it: how many of its requests
     // went again, each at most once.
+    // (A stream's second try may ride the connection that refused the
+    // first, so only an HTTP/1.1 retry is said to be on a fresh one.)
     if (f->retried != 0) {
+        const char *where = f->retried_h2 == 0 ? " on a fresh connection" : "";
         size_t have = os64_strlen(out);
         if (have < cap && f->retried == 1)
-            os64_snprintf(out + have, cap - have, " (retried once on a fresh connection)");
+            os64_snprintf(out + have, cap - have, " (retried once%s)", where);
         else if (have < cap)
-            os64_snprintf(out + have, cap - have, " (%u requests retried, each once on a fresh connection)",
-                          (unsigned)f->retried);
+            os64_snprintf(out + have, cap - have, " (%u requests retried, each once%s)", (unsigned)f->retried,
+                          where);
     }
     return f->reason;
 }

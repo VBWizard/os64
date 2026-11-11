@@ -198,6 +198,24 @@ typedef struct {
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
                   const http_request_extras_t *extras);
 
+// The same request as HTTP/2 carries it (RFC 9113 § 8.3): `:method`,
+// `:authority`, `:scheme` and `:path`, then every field http_request would
+// write after Host, in the same order, each name in lower case. Host's value
+// is `:authority` and no `host` field is sent; the fields that speak of the
+// connection (Connection, Keep-Alive, Proxy-Connection, Transfer-Encoding,
+// Upgrade, TE) are left out, whatever `keep_alive` says (§ 8.2.2); a Cookie
+// line becomes one `cookie` field for each cookie-pair (§ 8.2.3);
+// Authorization and Proxy-Authorization are marked `sensitive`. Names and
+// values are copied into `storage`, which the fields point into. False, as
+// http_request is, when the extras are refused, and when the fields or their
+// bytes do not fit `most` or `room`.
+typedef struct {
+    const char *name, *value;       // neither NUL-terminated
+    size_t name_len, value_len;
+    bool sensitive;                 // a credential: never to be put in a compression table
+} http_field_t;
+bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
+                         size_t most, char *storage, size_t room, size_t *count);
 // Framing, routing and body metadata belong to the renderer. extra_headers
 // cannot supply Host, Content-Length, Content-Type, Content-Encoding,
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
@@ -304,6 +322,20 @@ http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t
 http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
                                                    http_header_fn on_header, void *ctx);
 
+// WHAT ONE FIELD OF A REPLY'S HEAD MEANS, for a head that did not arrive as
+// HTTP/1.1's text: the half of the head reader that fills `out` from a name
+// and a value (its length, its codings, its type and charset, where it
+// points, what it says of the connection), with the same conflicts refused.
+// The HTTP/2 path calls it for each field of a response, so the two cannot
+// disagree about what a Content-Type is. `name` and `value` are
+// NUL-terminated, and `vlen` is the value's length.
+http_head_result_t http_head_field(http_response_t *out, const char *name, const char *value, size_t vlen);
+// The same for a field whose value was too long to hold: FRAMING when the
+// fetch depends on it, OK when it is metadata to leave out.
+http_head_result_t http_head_field_too_long(http_response_t *out, const char *name);
+// Whether every byte of a field's value is one a value may hold (HTAB,
+// printable ASCII, obs-text).
+bool http_field_value_ok(const char *value, size_t len);
 const char *http_head_reason(http_head_result_t rc);
 
 // Raw bytes after the head, in whatever quantity is to hand: > 0 got some, 0
