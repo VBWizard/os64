@@ -1000,15 +1000,73 @@ static void queue_cases(void)
     fetch_done(&second.f);
     CHECK(peer_records_sound());
 
+    // A stall that ended is forgotten: thirty seconds later the connection
+    // is not blamed for it.
+    int alive = atomic_load(&dead_calls);
+    peer_clock_skip(H2_WRITE_PATIENCE_MS + 1);
+    nap_ms(H2_READER_SLICE_MS + 100);
+    CHECK(atomic_load(&dead_calls) == alive && h2_conn_room(conn));
+
+    // A PING is answered with its own eight bytes.
+    peer_send_ping();
+    CHECK(peer_frame_of(H2_FRAME_PING, &h, &payload, 2000) && (h.flags & H2_FLAG_ACK) && h.length == 8 &&
+          memcmp(payload, "pingping", 8) == 0);
+
+    // What a fetch leaves UNREAD in its buffer is credited to the
+    // connection when it goes: 40,000 bytes nobody will read.
+    fetch_init(&a, 3000);
+    CHECK(fetch_get(&a, conn, "/unread") == H2_OK);
+    uint32_t id = server_request("/unread");
+    server_reply(id, "200", NULL, false);
+    static char lot[40000];
+    for (size_t at = 0; at < sizeof(lot); at += 10000)
+        peer_send_data(id, lot + at, 10000, false);
+    CHECK(fetch_head(&a) == H2_OK);
+    nap_ms(100);
+    fetch_done(&a);
+    // (With the few bytes the cases above read on this connection.)
+    CHECK(peer_frame_of(H2_FRAME_WINDOW_UPDATE, &h, &payload, 2000) && h.stream == 0);
+    uint32_t credited = (uint32_t)payload[0] << 24 | payload[1] << 16 | payload[2] << 8 | payload[3];
+    CHECK(credited >= 40000 && credited < 40100);
+
+    // DATA waits at the queue's mark too: an upload into a stalled socket
+    // queues the mark and a frame, and no more, however much it has to send.
+    static char upload[600000];
+    pings(true);
+    fetch_init(&a, 3000);
+    h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
+    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    id = server_request("/up");
+    peer_send_window(id, 1u << 20);
+    peer_send_window(0, 1u << 20);
+    nap_ms(100);
+    peer_stall(true);
+    opener_t holder = {.path = "/holder"};
+    fetch_init(&holder.f, 3000);
+    pthread_create(&t, NULL, opener, &holder);      // the drainer, stuck on the socket
+    nap_ms(100);
+    size_t sent;
+    a.wait.patience_ms = 400;
+    CHECK(h2_stream_send(a.stream, upload, sizeof(upload), true, &a.wait, &sent) == H2_SILENT);
+    CHECK(sent >= H2_OUT_MARK - 20000 && sent <= H2_OUT_MARK + 20000);
+    CHECK(h2_conn_queued(conn) <= H2_OUT_MARK + 20000);
+    peer_stall(false);
+    pthread_join(t, NULL);
+    pings(false);
+    fetch_done(&a);
+    fetch_done(&holder.f);
+    CHECK(server_request("/holder") == id + 2);
+
     // A reset queued with no drainer at all reaches the wire by the reader,
     // within a slice of the socket taking bytes again.
     fetch_init(&a, 3000);
-    CHECK(fetch_get(&a, conn, "/gone") == H2_OK && server_request("/gone") == 9);
+    CHECK(fetch_get(&a, conn, "/gone") == H2_OK);
+    id = server_request("/gone");
     peer_stall(true);
     fetch_done(&a);
     nap_ms(50);
     peer_stall(false);
-    CHECK(server_sees_rst(9, H2_ERR_CANCEL));
+    CHECK(server_sees_rst(id, H2_ERR_CANCEL));
 
     // THE QUEUE HAS A CEILING. With the socket stalled and one thread stuck
     // as its drainer, another opens and cancels streams as fast as it can.
