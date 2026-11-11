@@ -13,14 +13,19 @@
 // each fetch here holds two of this program's sixty-four handles while it
 // runs: its thread's, and the bell an HTTP/2 fetch waits on. It prints each
 // fetch's outcome, its bytes and its time, and then what the pool holds.
-// Exit 0 when every fetch read its body whole, the bodies agree, and one
-// HTTP/2 connection carried them all; 1 when a fetch failed or the bodies
-// differ; 2 when more than one connection was used, or none spoke HTTP/2.
+// Exit 0 when every fetch read its body whole and one HTTP/2 connection
+// carried them all; 1 when a fetch failed; 2 when more than one connection
+// was used, or none spoke HTTP/2.
+//
+// Whether the bodies must agree depends on the server. A live site may make
+// its page anew for each request, so differing bodies there are printed and
+// are not a failure. With --fixture the server is a local one serving a
+// file, and bodies that differ are a failure (exit 1).
 //
 // --cold skips the first fetch. A server met for the first time may be
 // dialled once for each fetch that finds no connection, up to libfetch's
 // six to a host, and that is correct: the probe then prints how many
-// connections the burst made and passes on the bodies alone.
+// connections the burst made and does not judge that count.
 //
 // --fixture verifies the server against libtls's test root in place of the
 // system's store, for a local server holding the fixture certificate (its
@@ -135,7 +140,7 @@ int main(int argc, char **argv)
     }
     fetch_h2_offer = true;
 
-    bool failed = false;
+    bool failed = false, differ = false;
     if (!cold) {
         fetch_one(&s_outcome[FETCHES_MAX]);
         say("first", &s_outcome[FETCHES_MAX]);
@@ -160,8 +165,8 @@ int main(int argc, char **argv)
         char who[16];
         os64_snprintf(who, sizeof(who), "%lu", (unsigned long)i + 1);
         say(who, &s_outcome[i]);
-        failed = failed || s_outcome[i].status != OS64_FETCH_OK || s_outcome[i].bytes != like->bytes ||
-                 s_outcome[i].sum != like->sum;
+        failed = failed || s_outcome[i].status != OS64_FETCH_OK;
+        differ = differ || s_outcome[i].bytes != like->bytes || s_outcome[i].sum != like->sum;
     }
 
     size_t kept = 0, live = 0, h2 = 0, queued = 0, buffered = 0;
@@ -173,9 +178,15 @@ int main(int argc, char **argv)
                 (unsigned long)live, (unsigned long)h2, (unsigned long)queued, (unsigned long)buffered);
     fetch_pool_drain();
     if (failed) {
-        os64_printf("h2probe: FAIL: a fetch failed, or the bodies differ\n");
+        os64_printf("h2probe: FAIL: a fetch failed\n");
         return 1;
     }
+    if (differ && fixture) {
+        os64_printf("h2probe: FAIL: the bodies differ, and the fixture server serves a file\n");
+        return 1;
+    }
+    if (differ)
+        os64_printf("h2probe: the bodies differ, as a page made anew for each request does\n");
     if (h2 == 0) {
         os64_printf("h2probe: FAIL: no connection spoke HTTP/2 (the server chose HTTP/1.1)\n");
         return 2;

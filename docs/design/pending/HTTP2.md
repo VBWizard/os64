@@ -2244,10 +2244,14 @@ sentences that use them:
   (default 6) on threads of its own. It prints, per fetch, the status,
   the bytes and the time; then the pool's counts, the protocol the
   connection spoke, and what the connection's queue and buffers held at
-  the end. Passes (exit 0) when every fetch is OK, the bodies agree
-  with each other, and the measured fetches dialled nothing: one
-  connection carried them. `h2probe --cold URL [count]` skips the first
-  fetch and passes on the bodies alone, printing how many connections
+  the end. Passes (exit 0) when every fetch is OK and the measured
+  fetches dialled nothing: one connection carried them. Bodies that
+  differ fail it only with `--fixture`, where the server serves a file;
+  a live site may make its page anew for each request, so there the
+  difference is printed and not judged (the P5's first run against a
+  live site failed a correct run on exactly that). `h2probe --cold URL
+  [count]` skips the first fetch and does not judge the number of
+  connections, printing how many
   the burst dialled: an origin met for the first time may be dialled up
   to the key's cap (§ 2.2), and that is correct (Quinn's read: the
   first draft's pass condition would have failed a correct pool).
