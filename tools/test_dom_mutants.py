@@ -196,6 +196,11 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('review-options-length-owner','options','    dom = d_owner(dom, select);\n    uint32_t count = option_count(select);\n    while (count > wanted)', '    uint32_t count = option_count(select);\n    while (count > wanted)'),
+      ('review-options-index-owner','options','    dom = d_owner(dom, select);\n    uint32_t count = option_count(select);\n    if (index >= count)', '    uint32_t count = option_count(select);\n    if (index >= count)'),
+      ('review-class-query-owner','collection','has_classes(d_owner(query->dom, query->root), node, query->named)', 'has_classes(query->dom, node, query->named)'),
+      ('review-started-script-identity','window','static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)\n{\n    dom = d_creation_owner(dom, node);', 'static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)\n{'),
+      ('review-callback-realm','event','if (!dom->cluster || !JS_IsFunction(ctx, callback)) return dom;', 'if (dom || !JS_IsFunction(ctx, callback)) return dom;'),
       ('realm-from-current-document','node','uint8_t slot = os64_html_node_creation_realm(node);','uint8_t slot = os64_html_node_creation_realm(os64_html_node_document(node));'),
       ('receiver-uses-method-owner','geometry','    dom = d_owner(dom, element);','    (void)element;'),
       ('binding-local-wrapper-cache','node','DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;\n    for (DValue *entry', 'DValue **table = dom->buckets;\n    for (DValue *entry'),

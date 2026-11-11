@@ -160,6 +160,13 @@ static void cluster_damage(void *opaque, const os64_html_node_t *node, uint32_t 
     provider->damages++;
 }
 
+static unsigned cluster_started;
+static void cluster_script_connected(void *opaque, const os64_html_node_t *node)
+{
+    (void)opaque; (void)node;
+    cluster_started++;
+}
+
 static void dom_cluster_cases(void)
 {
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
@@ -186,6 +193,8 @@ static void dom_cluster_cases(void)
             os64_dom_options_t options = p2b_options(i == 0 ? "https://a.example/" :
                                                    i == 1 ? "https://b.example/" : "https://c.example/");
             options.ranges = options.shadow_trees = true;
+            options.script_connected = cluster_script_connected;
+            if (i == 2) f.document->quirks = OS64_HTML_QUIRKS;
             os64_dom_admission_t result = os64_dom_create_in_realm(cluster, realms[i], f.document, f.state, &options, &out);
             check(result.binding && result.consumed && out.status == OS64_JS_OK, "cluster: independent DOM installed");
             if (!result.binding) fprintf(stderr,"cluster installation %zu: %d %s\n",i,out.status,out.message);
@@ -240,6 +249,67 @@ static void dom_cluster_cases(void)
                 JS_FreeValue(ctx, global);
             }
             check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK, "cluster: exchange task closes");
+            realm_script(realms[0],
+                "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
+                "B.document.adoptNode(filler);filler.length=1;"
+                "assert(retainedOptions[0] instanceof B.HTMLOptionElement,'select.length uses B');"
+                "retainedOptions.length=2;assert(retainedOptions[1] instanceof B.HTMLOptionElement,'options.length uses B');"
+                "retainedOptions[4]=document.createElement('option');"
+                "assert(retainedOptions[2] instanceof B.HTMLOptionElement&&retainedOptions[3] instanceof B.HTMLOptionElement,'indexed fillers use B');"
+                "filler.length={valueOf(){C.document.adoptNode(filler);return 6}};"
+                "assert(retainedOptions[5] instanceof C.HTMLOptionElement,'length conversion can adopt');",
+                "cluster review: filler options follow current Document after conversion");
+            realm_script(realms[0],
+                "globalThis.classRoot=C.document.createElement('div');classRoot.innerHTML='<i class=foo></i>';"
+                "globalThis.classes=classRoot.getElementsByClassName('FOO');assert(classes.length===1,'quirks match');"
+                "B.document.adoptNode(classRoot);assert(classes.length===0,'standards mismatch');"
+                "C.document.adoptNode(classRoot);assert(classes.length===1,'quirks match restored');",
+                "cluster review: retained class query follows current Document mode");
+            cluster_started = 0;
+            realm_script(realms[0],
+                "globalThis.startedScript=document.createElement('script');startedScript.textContent='already started';"
+                "document.body.appendChild(startedScript);",
+                "cluster review: initial script handed to source provider");
+            check(cluster_started == 1, "cluster review: script starts once");
+            realm_script(realms[0],
+                "B.document.body.appendChild(startedScript);C.document.body.appendChild(startedScript);"
+                "B.document.body.appendChild(B.document.importNode(startedScript,true));"
+                "globalThis.inertScripts=document.createElement('div');inertScripts.innerHTML='<script>inert</script>';"
+                "B.document.body.appendChild(B.document.importNode(inertScripts,true));"
+                "C.document.body.appendChild(inertScripts);"
+                "B.document.body.appendChild(inertScripts.cloneNode(true));",
+                "cluster review: moved and imported started or inert scripts remain started");
+            check(cluster_started == 1, "cluster review: adoption and import do not restart scripts");
+            realm_script(realms[0],
+                "globalThis.foreignEventSeen=[];globalThis.foreignCallback=e=>foreignEventSeen.push(window.event===e);"
+                "B.document.body.addEventListener('foreign-realm',foreignCallback);"
+                "B.document.body.dispatchEvent(new C.Event('foreign-realm'));"
+                "assert(foreignEventSeen.join()==='true','listener callback realm');"
+                "B.document.body.onclick=foreignCallback;B.document.body.dispatchEvent(new C.Event('click'));"
+                "assert(foreignEventSeen.join()==='true,true','handler callback realm');"
+                "B.document.body.onclick=null;"
+                "globalThis.boundForeign=foreignCallback.bind(null);globalThis.proxyForeign=new Proxy(foreignCallback,{});"
+                "Object.setPrototypeOf(foreignCallback,B.Function.prototype);"
+                "B.document.body.addEventListener('bound-realm',boundForeign);"
+                "B.document.body.addEventListener('proxy-realm',proxyForeign);"
+                "B.document.body.dispatchEvent(new C.Event('bound-realm'));"
+                "B.document.body.dispatchEvent(new C.Event('proxy-realm'));"
+                "globalThis.foreignAbort=new B.AbortController();foreignAbort.signal.onabort=foreignCallback;foreignAbort.abort();"
+                "assert(foreignEventSeen.length===5&&foreignEventSeen.every(Boolean),'bound/proxy/named handler realm');"
+                "assert(window.event===undefined&&B.event===undefined);",
+                "cluster review: foreign method and handler retain function realm");
+            realm_script(realms[0],
+                "globalThis.callbackErrors=[];"
+                "globalThis.captureCallbackError=e=>{callbackErrors.push('A');e.preventDefault()};"
+                "window.addEventListener('error',captureCallbackError);"
+                "B.addEventListener('error',e=>{callbackErrors.push('B');e.preventDefault()});"
+                "B.document.body.addEventListener('throw-realm',()=>{throw Error('foreign callback')});"
+                "B.document.body.dispatchEvent(new C.Event('throw-realm'));",
+                "cluster review: cross-realm callback exception dispatched");
+            realm_script(realms[0],
+                "assert(callbackErrors.join()==='A','callback errors belong to A: '+callbackErrors);"
+                "window.removeEventListener('error',captureCallbackError);",
+                "cluster review: exception reaches callback realm rather than method realm");
             realm_script(realms[0], "B.document.body.appendChild(earlyTarget);",
                          "cluster: existing effect moves into a later-admitted binding");
             const struct garb_effect *const *early_effects = NULL;

@@ -86,6 +86,30 @@ animation before admitting a sibling, then moves its target into that sibling
 without another animation update. New bindings start with an invalidated effect
 index so their first layout discovers effects published before admission.
 
+## Review round 1
+
+All four findings on `347f0665` were accepted. Filler options now allocate
+in the select's current binding after numeric conversion, including retained
+options collections and indexed gaps. Live class queries use their root's
+current document mode while their storage stays charged to their creator.
+Script ALREADY STARTED marks live with the node's immutable creation binding;
+adoption and cross-document cloning consult that same identity.
+
+Function listeners and handler properties resolve the callback's engine realm,
+independently of the method binding and mutable prototypes. The hash-checked
+QuickJS patch exposes its existing function-realm query; bound functions and
+proxies follow their target. Script attribution is recorded in that binding too.
+Compiled attribute handlers retain their existing creation-document behavior.
+
+The focused matrix passes 276 checks in each engine profile, under both
+teardown policies, with ASan/UBSan and leak detection enabled. It covers
+reentrant select adoption, quirks/standards moves, started and inert script
+adoption/import, ordinary and named handlers, bound/proxy callbacks, changed
+function prototypes and exception delivery to the callback's window. Five
+review mutants compile and are caught by those assertions, including both
+option filler loops. The validation table below records the original F2b
+campaign; these results are the review delta.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

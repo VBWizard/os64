@@ -259,6 +259,7 @@ static JSValue options_length_set(os64_dom_t *dom, JSContext *ctx, const os64_ht
 {
     uint32_t wanted;
     if (JS_ToUint32(ctx, &wanted, value) < 0) return JS_EXCEPTION;
+    dom = d_owner(dom, select);
     uint32_t count = option_count(select);
     while (count > wanted) {
         const os64_html_node_t *last = option_at(select, count - 1);
@@ -290,6 +291,7 @@ int d_options_set_index(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
         if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "Expected an option or null");
         return -1;
     }
+    dom = d_owner(dom, select);
     uint32_t count = option_count(select);
     if (index >= count) {
         if (index - count > OPTIONS_APPEND_MAX) return 0;

@@ -1658,16 +1658,19 @@ static size_t script_bucket(const os64_html_node_t *node)
     return ((key >> 4) ^ (key >> 12)) % (sizeof(((os64_dom_t *)0)->scripts) / sizeof(DScript *));
 }
 
-static bool script_marked(const os64_dom_t *dom, const os64_html_node_t *node)
+static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     for (const DScript *mark = dom->scripts[script_bucket(node)]; mark != NULL; mark = mark->next)
         if (mark->node == node) return true;
     return false;
 }
 
-/* ALREADY STARTED, kept as a held node so the identity outlives a removal. */
+/* ALREADY STARTED belongs to node identity. Its immutable creation binding
+ * keeps the mark and native hold across adoption, including clone lookups. */
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node)
 {
+    dom = d_creation_owner(dom, node);
     if (script_marked(dom, node)) return 0;
     DScript *mark = d_alloc(dom, sizeof(*mark));
     if (mark == NULL) return -1;

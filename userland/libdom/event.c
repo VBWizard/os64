@@ -1565,6 +1565,20 @@ static void listeners_changed(os64_dom_t *dom, DValue *entry)
         entry->listeners_changed(dom->engine, entry);
 }
 
+/* Callable identity, not the inherited method or mutable prototype, names
+ * a function callback's realm. Object listeners keep their registration binding. */
+static os64_dom_t *callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst callback)
+{
+    if (!dom->cluster || !JS_IsFunction(ctx, callback)) return dom;
+    JSContext *realm_ctx = JS_GetFunctionRealm(ctx, callback);
+    if (realm_ctx == NULL) return NULL;
+    os64_js_outcome_t out;
+    os64_js_realm_t *realm = os64_js_realm_from_context(dom->runtime, realm_ctx, OS64_JS_ABI_ID, &out);
+    for (size_t i = 0; i < dom->cluster->count; ++i)
+        if (dom->cluster->members[i]->realm == realm) return dom->cluster->members[i];
+    return dom;
+}
+
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
                                 JSValueConst *argv, int magic)
 {
@@ -1605,7 +1619,8 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
                 d_string_free(dom, &type);
                 return JS_EXCEPTION;
             }
-        uint32_t script = d_callback_script(dom, ctx, argv[1]);
+        os64_dom_t *owner = callback_owner(dom, ctx, argv[1]);
+        uint32_t script = owner ? d_callback_script(owner, ctx, argv[1]) : D_SCRIPT_FAILED;
         DListener *listener = script == D_SCRIPT_FAILED ? NULL : listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
         else {
@@ -1613,7 +1628,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
             listener->once = once;
             set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
             listener->script = script;
-            listener->callback_owner = dom;
+            listener->callback_owner = owner;
             count(dom, listener, 1);
         }
     }
@@ -1673,12 +1688,13 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (slot == NULL || slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(value)) {
-        uint32_t script = d_callback_script(dom, ctx, value);
+        os64_dom_t *owner = callback_owner(dom, ctx, value);
+        uint32_t script = owner ? d_callback_script(owner, ctx, value) : D_SCRIPT_FAILED;
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
         slot->script = script;
-        slot->callback_owner = dom;
+        slot->callback_owner = owner;
     } else slot_state(dom, slot, D_SLOT_EMPTY);
     listeners_changed(dom, entry);
     return JS_UNDEFINED;
@@ -2307,13 +2323,15 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
             if (slot != NULL) slot->handler = D_SLOT_EMPTY;
         }
         JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-        uint32_t script = slot != NULL && JS_IsObject(value) ? d_callback_script(dom, ctx, value) : D_NO_SCRIPT;
+        os64_dom_t *owner = slot != NULL && JS_IsObject(value) ? callback_owner(dom, ctx, value) : dom;
+        uint32_t script = owner == NULL ? D_SCRIPT_FAILED :
+            slot != NULL && JS_IsObject(value) ? d_callback_script(owner, ctx, value) : D_NO_SCRIPT;
         if (slot == NULL || script == D_SCRIPT_FAILED) result = JS_EXCEPTION;
         else if (JS_IsObject(value)) {
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
             slot->script = script;
-            slot->callback_owner = dom;
+            slot->callback_owner = owner;
         } else slot_state(dom, slot, D_SLOT_EMPTY);
         listeners_changed(dom, entry);
     }

@@ -106,7 +106,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
     if (query->kind >= D_QUERY_TBODIES) return table_member(query, node);
-    if (query->kind == D_QUERY_CLASSES) return has_classes(query->dom, node, query->named);
+    if (query->kind == D_QUERY_CLASSES) return has_classes(d_owner(query->dom, query->root), node, query->named);
     if (query->kind == D_QUERY_NAME) {
         const os64_html_attr_t *name = node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML
             ? os64_html_attr(node, "name") : NULL;
