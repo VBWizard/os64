@@ -177,6 +177,15 @@ int main(int argc, char **argv)
                 (unsigned long)count, (long)(all / 1000), (unsigned long)(kept + live), kept + live == 1 ? "" : "s",
                 (unsigned long)live, (unsigned long)h2, (unsigned long)queued, (unsigned long)buffered);
     fetch_pool_drain();
+    // Outlive the connection's reader. The kernel kills whatever threads are
+    // alive when a program exits and reports the program as killed (exit
+    // 137) in place of the code it returned (DEBTS.md), and a drained
+    // HTTP/2 connection's reader takes up to a slice to see that it was
+    // condemned. The last sleep covers the reader's few steps between
+    // telling the pool it is gone and returning.
+    for (int waited = 0; fetch_pool_closing() != 0 && waited < 2000; waited += 20)
+        os64_sleep(20);
+    os64_sleep(50);
     if (failed) {
         os64_printf("h2probe: FAIL: a fetch failed\n");
         return 1;
