@@ -1740,10 +1740,13 @@ Where the build departs from the brief, or says more than it did:
   cuts the plaintext that preceded it and only then ends the connection:
   a server that sends its last DATA and closes, in one segment, has sent
   a whole response.
-- **A send stops (`H2_STOP`) when the response is whole and the
-  connection is ending**, reset or no reset. A server that answers an
-  upload early and then closes sends no RST_STREAM; the answer stands and
-  the rest of the request has nowhere to go.
+- **A send stops (`H2_STOP`) when the response is whole**, reset or no
+  reset. A server that answers an upload early sends no RST_STREAM as
+  often as not; the answer stands and the rest of the request is not
+  owed. (As first built this held only for a connection that was also
+  ending; H2.6's Codex round found an early 413 with no reset waiting
+  out the upload's window, and the rule is HTTP/1.1's now: the final
+  response ends the upload.)
 - **`H2_END_BAD_FRAME`** is an ending of its own for a stream we reset:
   a frame for it broke a rule RFC 9113 makes the stream's (a
   WINDOW_UPDATE of nothing), with the code in `code`. `H2_END_FLOW` is
@@ -2379,6 +2382,12 @@ One cold read by Opus found the redial with no bound, the detail kept
 from an earlier try, the long names the observers did not hear, the
 field cap's comment, and six comments that were not the whole truth;
 each is fixed, the first four with a case and a mutant.
+
+Codex's first round (#542) found one: an upload waited for flow-control
+window under a response that was already whole (an early 413 with no
+reset), and ended SILENT with the answer discarded. A send now stops as
+soon as the response is whole, in `h2_stream_send`, with a case at each
+level and a mutant.
 
 Known and left: a request of more than 256 fields (a Cookie line of
 some 245 pairs, with the rest of a head) is refused over HTTP/2 where

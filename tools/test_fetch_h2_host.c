@@ -1089,6 +1089,17 @@ static void retry_cases(void)
     CHECK(j.status == OS64_FETCH_OK && j.ended == OS64_FETCH_SILENT);
     CHECK(strstr(j.reason, "REFUSED_STREAM") == NULL && strstr(j.reason, "(retried once)") != NULL);
     CHECK(j.detail.h2 && !j.detail.h2_coded && j.detail.h2_code == 0);
+    // AN ANSWER BEFORE THE UPLOAD IS DONE: a 413 to a body larger than the
+    // server's window, whole, with no reset and no window given. The fetch
+    // has its answer and does not wait out the idle limit for window.
+    route("/early413", R_REPLY, "413", "too large");
+    static char upload[100000];
+    memset(upload, 'u', sizeof(upload));
+    memset(&j, 0, sizeof(j));
+    j.opt = (os64_fetch_options_t){.method = OS64_FETCH_METHOD_POST, .body = upload, .body_len = sizeof(upload),
+                                   .idle_ms = 2000};
+    job_go(&j, "https://words.test/early413");
+    CHECK(j.ended == OS64_FETCH_OK && j.http_status == 413 && j.body_len == 9 && memcmp(j.body, "too large", 9) == 0);
     // SILENT MID-BODY: the head came, the body never does, and the fetch
     // says how long it waited and where.
     memset(&j, 0, sizeof(j));

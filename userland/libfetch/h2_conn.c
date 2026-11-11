@@ -1254,8 +1254,13 @@ h2_result_t h2_stream_send(h2_stream_t *s, const void *bytes, size_t len, bool e
         h2_result_t stop = H2_OK;
         if (s->ending.how != H2_END_NOT_YET && s->ending.how != H2_END_CLEAN)
             stop = H2_ENDED;
-        else if (s->peer_reset || (s->ending.how == H2_END_CLEAN && c->dying))
-            stop = H2_STOP;             // its response is whole, and no more of the request is wanted or can go
+        else if (s->peer_reset || s->ending.how == H2_END_CLEAN)
+            // The response is whole (or the peer reset the stream after it
+            // was): the server has answered without the rest of the request,
+            // and may never give the window the rest would wait for. The
+            // upload ends here, as HTTP/1.1's does when the final head
+            // arrives under it.
+            stop = H2_STOP;
         size_t left = len - *sent;
         bool done = left == 0 && (!ends || s->sent_end);
         if (stop != H2_OK || done) {
