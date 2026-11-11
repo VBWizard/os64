@@ -23,7 +23,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libway/origin.c \
    userland/libfetch/fetch.c userland/libfetch/http.c \
    userland/libfetch/transport.c userland/libfetch/proxy.c userland/libfetch/pool.c \
-   tools/host_bell.c -I tools \
+   tools/host_bell.c tools/h2_absent.c -I tools -I userland/libfetch \
    userland/libgzip/inflate.c userland/libgzip/deflate.c userland/libgzip/gzip.c \
    userland/libpage/core.c userland/libpage/state.c userland/libpage/resolve.c userland/libpage/value.c \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \

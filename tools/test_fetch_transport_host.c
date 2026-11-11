@@ -85,6 +85,22 @@ os64_tls_status_t os64_tls_transport_flush(os64_tls_transport *t) {return t->sta
 os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *t) {t->closing=true;return t->status;}
 os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *t,os64_tls_status_t s) {return t->status=s;}
 void os64_tls_transport_free(os64_tls_transport *t) {assert(t==&transport);frees++;os64_close(7);}
+// The release verb: NEED_PROGRESS while the wrapper owes ciphertext (which a
+// step sends, one per step), then OK with the engine, the socket and three
+// unread bytes; or `release_refuses`, at once.
+static unsigned release_owes, releases;
+static os64_tls_status_t release_refuses;
+static os64_tls_client *const kEngine = (os64_tls_client *)"engine";
+os64_tls_status_t os64_tls_transport_release(os64_tls_transport *t, os64_tls_client **client, int32_t *handle,
+                                             void *unread, size_t room, size_t *unread_len)
+{
+    assert(t == &transport && room >= OS64_TLS_TRANSPORT_UNREAD_MAX);
+    releases++;
+    if (release_refuses != OS64_TLS_OK) return release_refuses;
+    if (release_owes) { if (!stall) release_owes--; return OS64_TLS_NEED_PROGRESS; }
+    *client = kEngine; *handle = 7; memcpy(unread, "abc", 3); *unread_len = 3;
+    return OS64_TLS_OK;
+}
 
 static fetch_transport_t open_io(bool tls)
 {
@@ -217,7 +233,45 @@ int main(int argc, char **argv)
         fetch_transport_close(&io,false);
     }
 
+    // THE HANDSHAKE'S ALPN ANSWER, and none for a plain connection.
+    io=open_io(true);assert(!strcmp(fetch_transport_alpn(&io),"http/1.1"));fetch_transport_close(&io,false);
+    io=open_io(false);assert(fetch_transport_alpn(&io)==NULL);fetch_transport_close(&io,false);
+
+    // RELEASE: the engine and the socket leave the transport, which then
+    // holds nothing: closing it closes nothing and frees nothing.
+    os64_tls_client *engine=NULL;int32_t socket=-1;size_t unread_len=0;
+    unsigned char unread[OS64_TLS_TRANSPORT_UNREAD_MAX];
+    io=open_io(true);releases=release_owes=0;release_refuses=OS64_TLS_OK;
+    assert(fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(engine==kEngine && socket==7 && unread_len==3 && !memcmp(unread,"abc",3) && releases==1 && steps==0);
+    assert(io.tls==NULL && io.handle==-1);
+    fetch_transport_close(&io,false);assert(frees==0 && closes==0);
+    // Ciphertext still owed is stepped out first, each step a wait.
+    io=open_io(true);releases=0;release_owes=2;
+    assert(fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(releases==3 && steps==2 && io.tls==NULL);
+    fetch_transport_close(&io,false);assert(frees==0);
+    // Refused (the peer closed, a failure): the transport is closed as after
+    // any failure, and its error says why.
+    io=open_io(true);releases=release_owes=0;release_refuses=OS64_TLS_PROTOCOL;
+    assert(!fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(io.error.status==OS64_TLS_PROTOCOL && frees==1 && closes==1 && io.tls==NULL);
+    release_refuses=OS64_TLS_OK;
+    // Owed and never sent: the idle limit ends it, silent.
+    io=open_io(true);release_owes=1;stall=true;
+    assert(!fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(io.error.status==OS64_TLS_TIMEOUT && io.silent && frees==1 && now>=FETCH_IDLE_MS_DEFAULT);
+    // Cancelled while it waits.
+    io=open_io(true);release_owes=1;stall=true;cancel_wait=true;
+    assert(!fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(io.error.status==OS64_TLS_CANCELLED && frees==1);
+    // A plain connection has no engine to hand over.
+    io=open_io(false);
+    assert(!fetch_transport_release(&io,&engine,&socket,unread,sizeof unread,&unread_len));
+    assert(closes==1 && io.error.status==OS64_TLS_TRANSPORT);
+    release_owes=0;
+
     io=open_io(false);fetch_transport_close(&io,false);closes=0;create_fail=true;os64_tls_config_t c={0};
     assert(!fetch_transport_open(&io,7,&c,0,cancelled_p,NULL));fetch_transport_close(&io,false);assert(closes==1 && frees==0);
-    puts("PASS URL I/O budgets, prefixes, interruption, cancellation, closure and ownership");
+    puts("PASS URL I/O budgets, prefixes, interruption, cancellation, closure, ownership and release");
 }
