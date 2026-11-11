@@ -4,8 +4,11 @@ Implementation [#539](https://github.com/VBWizard/os64/pull/539), on the merged
 native foundation [#537](https://github.com/VBWizard/os64/pull/537). The accepted
 scope is [IFRAME_F2_OWNERSHIP.md](IFRAME_F2_OWNERSHIP.md); native ownership costs
 and proofs are in [IFRAME_F2_NATIVE_VALIDATION.md](IFRAME_F2_NATIVE_VALIDATION.md).
-Implementation acceptance still requires code review before F.2's completion
-flip. This record supersedes F.2b's initial realm-routing checkpoint.
+Codex review completed without major findings at `89feeeca` on 2026-11-11
+([review receipt](https://github.com/VBWizard/os64/pull/539#issuecomment-6807317672)).
+The final tracker/documentation commit prepares F.2's completion for merge and
+changes no implementation or tests. This record supersedes F.2b's initial
+realm-routing checkpoint.
 
 ## Implemented contract
 
