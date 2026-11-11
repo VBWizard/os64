@@ -121,12 +121,19 @@ _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within th
 // its whole life (HTTP2.md § 2.1).
 typedef enum { FETCH_PROTO_H1 = 1, FETCH_PROTO_H2 } fetch_proto_t;
 
-// WHETHER A DIAL OFFERS HTTP/2. False at rest, and nothing in the library
-// sets it. Its visibility is hidden, so libfetch.so does not export it and
-// no function it does export writes it: a program linked against the
-// library speaks HTTP/1.1. The host harness and /tests/h2probe compile
-// these sources into themselves and set it (HTTP2.md § 4 H2.6).
-extern bool fetch_h2_offer __attribute__((visibility("hidden")));
+// WHAT A FETCH WOULD SAY FIRST on an HTTP/2 connection of its own: the
+// greeting (h2_conn.h), held by value, and whether it speaks HTTP/1.1 alone.
+// A server can tell one greeting from another, so an HTTP/2 connection, and
+// a dial that may become one, belong to the fetches that would have said
+// the same (fetch_pool_take).
+#define FETCH_H2_SETTINGS_MOST 8
+typedef struct {
+    h2_setting_t settings[FETCH_H2_SETTINGS_MOST];
+    uint32_t count;
+    uint32_t window_increment, first_stream, stream_increment;
+    h2_priority_mode_t priority;
+    bool http1;                 // offers http/1.1 alone, and takes no HTTP/2 connection
+} fetch_pool_say_t;
 
 typedef struct fetch_conn fetch_conn_t;
 
@@ -166,13 +173,17 @@ typedef enum {
     FETCH_POOL_FAILED           // no bell, no memory or no clock to wait by
 } fetch_pool_take_t;
 
-// A connection for `key`, in this order (HTTP2.md § 2.2):
-//   1. a live HTTP/2 connection with room for a stream, the one longest
-//      live first (FETCH_POOL_SHARED);
+// A connection for `key`, for a fetch that would say `say`, in this order
+// (HTTP2.md § 2.2, and § 4 H2.5 for `say`):
+//   1. a live HTTP/2 connection with room for a stream that was greeted as
+//      `say` greets, the one longest live first (FETCH_POOL_SHARED); never
+//      for a fetch that says http1;
 //   2. unless `fresh`, a kept HTTP/1.1 one given back less than
 //      `idle_most_ms` ago (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a
-//      request sent once), the most recently kept first;
-//   3. when the key last answered ALPN with h2 and a dial to it is in
+//      request sent once), the most recently kept first, whoever dialled
+//      it: an HTTP/1.1 connection has no greeting;
+//   3. when the key last answered ALPN with h2, the fetch does not say
+//      http1, and a dial to the key by a fetch that says the same is in
 //      flight, a WAIT for that dial's verdict, even under the key's cap;
 //   4. a slot to dial in, when the key holds fewer than FETCH_POOL_PER_KEY
 //      connections of every kind and the sockets libfetch holds, closing
@@ -189,8 +200,8 @@ typedef enum {
 // key. Every waiter is rung at every put and every departure: a ring is a
 // hint, and each one woken asks again under the lock. No order is promised
 // among waiters.
-fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, bool fresh,
-                                  fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io);
+fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_say_t *say, uint32_t idle_most_ms,
+                                  bool fresh, fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io);
 
 // The dial a FETCH_POOL_DIAL slot was reserved for succeeded: the
 // connection is in use, by the fetch that dialled it.

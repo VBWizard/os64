@@ -687,6 +687,7 @@ static void opt_base(os64_fetch_options_t *opt, Hop *h, yonder_fetch_job_t *job,
     way_metadata_t m = h->preflight ? way_metadata_preflight(&h->metadata) : h->metadata;
     opt->order = way_identity_order(job->identity, &m);
     opt->keep_alive = way_identity_keep_alive(job->identity);
+    way_identity_h2(job->identity, m.dest, &opt->h2, &opt->h2_weight, &opt->h2_priority, &opt->http1);
     opt->user_agent = job->agent;
     opt->max_body = max_body;
     opt->cancelled = hop_cancelled;

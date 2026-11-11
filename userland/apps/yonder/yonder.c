@@ -4029,6 +4029,10 @@ static void agent_use(const char *agent)
 {
     g.way.agent = agent;
     g.way.identity = yonder_agent_identity(agent);
+    // The connections kept under the last identity go now. One still in use
+    // is left to its fetches, and no fetch under the new identity is given
+    // it (libfetch matches an HTTP/2 connection to who is asking).
+    os64_fetch_forget_idle();
     if (g.page.tree != NULL)
         say_laid_out(g.laid_ms);
 }

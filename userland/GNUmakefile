@@ -300,10 +300,10 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 # engine into part of the foundational runtime by accident. (os64get is not
 # here: it names libfetch, which carries its own edges on libgzip and libtls;
 # yonder is, for the zlib door it calls itself, unwrapping a WOFF font.)
-LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder h2probe
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest resumeprobe capprobe yonder
+LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest resumeprobe capprobe yonder h2probe
 # What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
 # `wend` declares the edge before it CALLS anything through it, which is
 # deliberate: the library is otherwise on the image with nothing loading it,
@@ -531,8 +531,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),scribefonttest),$(addprefix $(OBJ)/apps/scribe/,scribe.c.o scribe_buf.c.o)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
-                       $(if $(filter $(1),tlslibtest tlstransportprobe h2probe),$(OBJ)/pic/libtls/test/trust_vectors.c.o) \
-                       $(if $(filter $(1),h2probe),$(LIBFETCH_OBJS))
+                       $(if $(filter $(1),tlslibtest tlstransportprobe h2probe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) \
                        $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
                        $(if $(filter $(1),domtest yonder),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \

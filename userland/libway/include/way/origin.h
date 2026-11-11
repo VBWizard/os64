@@ -379,6 +379,8 @@ way_order_t way_order_of(const way_metadata_t *m);
 // What a face's agent preset says on every request beside its User-Agent,
 // verbatim as that browser sends it. Any may be NULL; a typed agent has
 // none of it.
+struct os64_fetch_h2;
+
 typedef struct {
     // The client hints, as whole "Name: value\r\n" lines in the browser's
     // order, sent only to a potentially trustworthy URL and never with a
@@ -405,6 +407,18 @@ typedef struct {
     const char *order[WAY_ORDERS];
     // `Connection: keep-alive` on every request, as the browser says it.
     bool keep_alive;
+    // HTTP/2, as the browser speaks it (fetch/fetch.h, os64_fetch_h2_t):
+    // what its connection says first, NULL for libfetch's own; each
+    // destination's priority weight, 1 to 256, where the greeting states
+    // one; and a Priority value it sends over HTTP/2 and not over
+    // HTTP/1.1, NULL for none. A destination with no weight or value of its
+    // own takes WAY_DEST_EMPTY's: the browser was not captured asking for
+    // one (DEBTS.md).
+    const struct os64_fetch_h2 *h2;
+    uint32_t h2_weight[WAY_DESTS];
+    const char *h2_priority[WAY_DESTS];
+    // The client never spoke HTTP/2: every request offers HTTP/1.1 alone.
+    bool http1;
 } way_identity_t;
 
 // The preset's order for a request `m` describes, NULL for none (`id` may
@@ -415,6 +429,12 @@ const char *way_identity_order(const way_identity_t *id, const way_metadata_t *m
 const char *way_identity_accept(const way_identity_t *id, way_dest_t dest);
 // Whether the preset says `Connection: keep-alive` (false for a NULL `id`).
 bool way_identity_keep_alive(const way_identity_t *id);
+// The preset's HTTP/2 half for a request of `dest`: its greeting (NULL for
+// none), the request's weight (0 for none) and its HTTP/2-only Priority
+// (NULL for none), and whether it speaks HTTP/1.1 alone. Any out may be
+// NULL; a NULL `id` gives none of it.
+void way_identity_h2(const way_identity_t *id, way_dest_t dest, const struct os64_fetch_h2 **greeting,
+                     uint32_t *weight, const char **priority, bool *http1);
 
 // The most a hop's identity lines may take: Chrome's longest (its Reload
 // of a clicked link) is about 320 bytes, and the rest is room for a brand

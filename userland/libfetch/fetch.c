@@ -10,6 +10,7 @@
 #include "pool.h"
 #include "proxy.h"
 
+#include "os64/conf.h"
 #include "os64/dial.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -30,17 +31,51 @@
 // as its pairs. A request with more is refused as one that does not fit.
 #define FETCH_H2_FIELDS 256
 
-// WHAT AN HTTP/2 CONNECTION OF OURS SAYS FIRST, until a preset says it
-// (HTTP2.md § 4 H2.6): no push, a megabyte of window for each stream, four
-// for the connection, and the head limit the connection holds itself to.
-// os64's own numbers, and nobody's fingerprint.
-static const h2_setting_t kGreetingSettings[] = {
-    {H2_SETTING_ENABLE_PUSH, 0},
-    {H2_SETTING_INITIAL_WINDOW_SIZE, 1u << 20},
-    {H2_SETTING_MAX_HEADER_LIST_SIZE, H2_HEAD_MOST},
+// WHAT AN HTTP/2 CONNECTION SAYS FIRST FOR A CALLER THAT NAMES NO GREETING
+// (HTTP2.md § 4 H2.5): no push, a megabyte of window for each stream, four
+// for the connection, and the head limit the connection holds itself to;
+// its first stream is 1, and its requests state no priority. os64's own
+// numbers, and nobody's fingerprint.
+static const os64_fetch_h2_t kOwnGreeting = {
+    .settings = {{H2_SETTING_ENABLE_PUSH, 0},
+                 {H2_SETTING_INITIAL_WINDOW_SIZE, 1u << 20},
+                 {H2_SETTING_MAX_HEADER_LIST_SIZE, H2_HEAD_MOST}},
+    .count = 3,
+    .window_increment = (4u << 20) - 65535u,
 };
-static const h2_greeting_t kGreeting = {.settings = kGreetingSettings, .count = 3,
-                                        .window_increment = (4u << 20) - 65535u};
+_Static_assert(OS64_FETCH_H2_SETTINGS_MAX == FETCH_H2_SETTINGS_MOST, "a caller's greeting fits the pool's copy of it");
+_Static_assert((int)OS64_FETCH_H2_PRIORITY_NONE == (int)H2_PRIORITY_NONE &&
+               (int)OS64_FETCH_H2_PRIORITY_FLAT == (int)H2_PRIORITY_FLAT &&
+               (int)OS64_FETCH_H2_PRIORITY_CHAINED == (int)H2_PRIORITY_CHAINED,
+               "the public priority modes are the connection's");
+
+// `http2 = off` in net.conf (the config search path) turns HTTP/2 off for
+// the whole process: read once, at the first fetch that could offer it.
+// The choice is the network's and not one program's, so it lives beside
+// the resolver's settings and every program that fetches obeys it.
+static uint32_t s_h2_switch;    // 0 unread, 1 on, 2 off
+
+static bool h2_switch_line(const char *key, const char *value, void *user)
+{
+    bool *off = user;
+    if (key != NULL && value != NULL && os64_streq_nocase(key, "http2"))
+        *off = os64_streq_nocase(value, "off");
+    return true;                // every line is read: the last `http2` decides
+}
+
+static bool h2_switched_off(void)
+{
+    uint32_t state = __atomic_load_n(&s_h2_switch, __ATOMIC_ACQUIRE);
+    if (state == 0) {
+        bool off = false;
+        os64_conf_find_read("net.conf", h2_switch_line, &off, NULL, 0);
+        state = off ? 2 : 1;
+        // Two first fetches at once read the same file and store the same
+        // answer.
+        __atomic_store_n(&s_h2_switch, state, __ATOMIC_RELEASE);
+    }
+    return state == 2;
+}
 
 struct os64_fetch {
     os64_fetch_options_t opt;
@@ -53,6 +88,13 @@ struct os64_fetch {
     char method_name[OS64_FETCH_METHOD_MAX];    // empty: `method`
     char body_headers[OS64_FETCH_EXTRA_MAX];
     char order[OS64_FETCH_ORDER_MAX];           // empty: libfetch's own order
+    // What this fetch would say first on an HTTP/2 connection of its own,
+    // or that it speaks HTTP/1.1 alone: what the pool matches it to a
+    // connection by, and the greeting of one it dials.
+    fetch_pool_say_t say;
+    char h2_pseudo[5];                          // the pseudo-headers' order
+    bool h2_te_trailers;
+    char h2_priority[OS64_FETCH_H2_PRIORITY_MAX];   // empty: none
     os64_fetch_method_t method; // current request; opt.method is the initial method
 
     // One hop's request, composed before its dial, and the fields it carries.
@@ -612,6 +654,7 @@ static void head_fill(os64_fetch_t *f)
     url_filled(&f->current, &h->url);
     http_url_render(&f->current, h->url_text, sizeof(h->url_text));
     h->encrypted = f->hop_encrypted;
+    h->http2 = f->detail.h2;        // the exchange that read this head was a stream's
     proxy_facts(&f->proxy, &h->via_proxy, h->proxy_host, sizeof(h->proxy_host), &h->proxy_port);
     f->progress.has_length = h->has_length;
     f->progress.length = h->length;
@@ -764,7 +807,7 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
     for (;;) {
         fetch_transport_t io;
         fetch_conn_t *conn = NULL;
-        switch (fetch_pool_take(key, idle_most, fresh, &wait, &conn, &io)) {
+        switch (fetch_pool_take(key, &f->say, idle_most, fresh, &wait, &conn, &io)) {
         case FETCH_POOL_SHARED:
             // A live HTTP/2 connection with room: this fetch's stream is
             // opened on it (exchange_h2), and no dial is made on this hop.
@@ -822,7 +865,12 @@ static os64_fetch_status_t acquire(os64_fetch_t *f, const fetch_pool_key_t *key,
             // the adoption returns, and the record must still be here.
             fetch_pool_adopting(conn);
             h2_conn_hooks_t hooks = fetch_pool_hooks(conn);
-            h2_conn_t *h2 = h2_conn_adopt(engine, socket, unread, unread_len, &kGreeting, &hooks);
+            h2_greeting_t greeting = {.settings = f->say.settings, .count = f->say.count,
+                                      .window_increment = f->say.window_increment,
+                                      .first_stream = f->say.first_stream,
+                                      .stream_increment = f->say.stream_increment,
+                                      .priority = f->say.priority};
+            h2_conn_t *h2 = h2_conn_adopt(engine, socket, unread, unread_len, &greeting, &hooks);
             if (h2 == NULL) {
                 // Not made: no reader was started, and both are still ours.
                 os64_tls_free(engine);
@@ -949,6 +997,9 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             .identity = f->opt.identity,
             .keep_alive = f->opt.keep_alive,
             .order = f->order[0] ? f->order : NULL,
+            .h2_priority = f->h2_priority[0] ? f->h2_priority : NULL,
+            .h2_te_trailers = f->h2_te_trailers,
+            .h2_pseudo = f->h2_pseudo,
         };
         f->hop_request = extras;
         if (!http_request(request, sizeof(f->request), &f->current, f->proxy.inUse, &extras)) {
@@ -1301,7 +1352,7 @@ static os64_fetch_status_t exchange_h2(os64_fetch_t *f, bool *again, bool *no_ro
 
     bool has_body = sends_body(f) && f->opt.body_len != 0;
     h2_result_t r = h2_stream_open(f->h2, f->h2_fields, count, !has_body, os64_streq(f->method_name, "HEAD"),
-                                   &f->h2_wait, &f->h2_stream);
+                                   f->opt.h2_weight, &f->h2_wait, &f->h2_stream);
     if (r == H2_NO_ROOM) {
         *no_room = true;
         return OS64_FETCH_OK;
@@ -1327,11 +1378,13 @@ static os64_fetch_status_t exchange_h2(os64_fetch_t *f, bool *again, bool *no_ro
     r = h2_stream_head(f->h2_stream, &f->h2_wait, on_h2_field, f);
     if (r != H2_OK)
         return h2_before_head(f, r, again);
+    // The head came over HTTP/2: said in the detail whatever follows, and
+    // what the head's `http2` reports.
+    f->detail.h2 = true;
+    f->detail.h2_stream = h2_stream_id(f->h2_stream);
     if (f->h2_head != HTTP_HEAD_OK) {
         // A head HTTP/2 let through and this cannot act on, by the words the
         // HTTP/1.1 path gives the same head.
-        f->detail.h2 = true;
-        f->detail.h2_stream = h2_stream_id(f->h2_stream);
         f->detail.head = f->h2_head;
         if (f->h2_head == HTTP_HEAD_FRAMING) {
             os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported), "head");
@@ -1356,12 +1409,13 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
         return OS64_FETCH_REQUEST_FAILED;
     }
 
-    // HTTP/2 is offered ahead of HTTP/1.1 when the library may (pool.h's
-    // fetch_h2_offer), and the server's pick is the connection's protocol
-    // for life (HTTP2.md § 2.1). The first name alone is skipped where h2 is
-    // not spoken: the TLS 1.2 fallback, below.
+    // HTTP/2 is offered ahead of HTTP/1.1 on an encrypted hop unless this
+    // fetch speaks HTTP/1.1 alone (its caller's `http1`, or net.conf's
+    // switch), and the server's pick is the connection's protocol for life
+    // (HTTP2.md § 2.1). The first name alone is skipped where h2 is not
+    // spoken: the TLS 1.2 fallback, below.
     static const os64_tls_name_t kAlpn[] = {{"h2", 2}, {"http/1.1", 8}};
-    bool offer_h2 = fetch_h2_offer && encrypted;
+    bool offer_h2 = encrypted && !f->say.http1;
     os64_tls_config_t config = {
         .hostname = {f->current.host, os64_strlen(f->current.host)},
         .alpn = offer_h2 ? kAlpn : kAlpn + 1, .alpn_count = offer_h2 ? 2 : 1, .trust = f->trust,
@@ -1839,11 +1893,35 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
          os64_strcopy(f->extra, sizeof(f->extra), opt->extra_headers) >= sizeof(f->extra)) ||
         (opt && opt->body_headers &&
          os64_strcopy(f->body_headers, sizeof(f->body_headers), opt->body_headers) >= sizeof(f->body_headers)) ||
-        (opt && opt->order && os64_strcopy(f->order, sizeof(f->order), opt->order) >= sizeof(f->order))) {
+        (opt && opt->order && os64_strcopy(f->order, sizeof(f->order), opt->order) >= sizeof(f->order)) ||
+        (opt && opt->h2_priority &&
+         os64_strcopy(f->h2_priority, sizeof(f->h2_priority), opt->h2_priority) >= sizeof(f->h2_priority))) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why), "a request header is longer than this will send");
         f->status = OS64_FETCH_REQUEST_FAILED;
         return f;
     }
+    // What this fetch would say first on an HTTP/2 connection: its caller's
+    // greeting or libfetch's own, held by value so the pool can compare it
+    // and a dial can use it after the caller's copy is gone.
+    const os64_fetch_h2_t *greeting = opt != NULL && opt->h2 != NULL ? opt->h2 : &kOwnGreeting;
+    const char *pseudo = greeting->pseudo != NULL ? greeting->pseudo : "masp";
+    if (greeting->count > OS64_FETCH_H2_SETTINGS_MAX || os64_strlen(pseudo) != 4) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), "the HTTP/2 greeting asked for is not one this can send");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
+    for (uint32_t i = 0; i < greeting->count; i++)
+        f->say.settings[i] = (h2_setting_t){.identifier = greeting->settings[i].id,
+                                            .value = greeting->settings[i].value};
+    f->say.count = greeting->count;
+    f->say.window_increment = greeting->window_increment;
+    f->say.first_stream = greeting->first_stream != 0 ? greeting->first_stream : 1;
+    f->say.stream_increment = greeting->stream_increment;
+    f->say.priority = (h2_priority_mode_t)greeting->priority;
+    f->say.http1 = (opt != NULL && opt->http1) || h2_switched_off();
+    os64_strcopy(f->h2_pseudo, sizeof(f->h2_pseudo), pseudo);
+    f->h2_te_trailers = greeting->te_trailers;
+
     // ...and one that holds a byte a header cannot is refused HERE, before a
     // dial: a header composed from page content is a header an attacker
     // composes, and the refusal must not cost a connection to find out.
@@ -2182,4 +2260,9 @@ void os64_fetch_close(os64_fetch_t *f)
     if (f->wire != NULL)
         os64_free(f->wire);
     os64_free(f);
+}
+
+void os64_fetch_forget_idle(void)
+{
+    fetch_pool_drain();
 }

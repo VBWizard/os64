@@ -45,13 +45,31 @@
 typedef struct h2_conn h2_conn_t;
 typedef struct h2_stream h2_stream_t;
 
-// What the client says first: its SETTINGS in the order given, and the
-// WINDOW_UPDATE that raises the connection's receive window from the
-// protocol's 65,535 (0 sends none). A preset's, from H2.5.
+// How a new stream's HEADERS states a priority (RFC 9113 § 5.3.2 calls the
+// scheme deprecated; browsers still send it, and it is part of what a
+// server can tell one from another by).
+typedef enum {
+    H2_PRIORITY_NONE = 0,   // HEADERS carries none
+    H2_PRIORITY_FLAT,       // depends on stream 0, not exclusive: Firefox's
+    // Exclusive, on a stream this connection still has: of those whose
+    // weight is at least the new one's, the lightest, and of those the most
+    // recently opened; stream 0 when there is none. Chromium's rule
+    // (HTTP2.md § 4 H2.5, capture C3).
+    H2_PRIORITY_CHAINED,
+} h2_priority_mode_t;
+
+// What the client says first and how it opens streams: its SETTINGS in the
+// order given; the WINDOW_UPDATE that raises the connection's receive
+// window from the protocol's 65,535 (0 sends none); the id of its first
+// stream (odd; 0 means 1); a WINDOW_UPDATE sent on each new stream straight
+// after its HEADERS (0 sends none); and how HEADERS states a priority.
 typedef struct {
     const h2_setting_t *settings;
     uint32_t count;
     uint32_t window_increment;
+    uint32_t first_stream;
+    uint32_t stream_increment;
+    h2_priority_mode_t priority;
 } h2_greeting_t;
 
 // The pool's side. Each is called by the connection with NONE of its own
@@ -143,9 +161,11 @@ void h2_conn_release(h2_conn_t *conn);
 // `ends` (no body follows). `bodiless` says the request is a HEAD: its
 // response states a length and carries no content. Content on such a
 // response, or on a 204 or a 304, resets the stream (H2_END_BAD_LENGTH). Waits, under `wait`, while the
-// out queue is past its mark. On H2_OK `*stream` is the caller's to close.
+// out queue is past its mark. `weight` is the stream's priority weight, 1 to
+// 256, used when the connection's greeting says HEADERS states one.
+// On H2_OK `*stream` is the caller's to close.
 h2_result_t h2_stream_open(h2_conn_t *conn, const h2_field_t *fields, size_t count, bool ends, bool bodiless,
-                           h2_wait_t *wait, h2_stream_t **stream);
+                           uint32_t weight, h2_wait_t *wait, h2_stream_t **stream);
 
 // Request body bytes, with END_STREAM after the last when `ends`. Waits for
 // the stream's and the connection's send windows and at the out queue's

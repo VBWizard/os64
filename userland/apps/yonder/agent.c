@@ -6,9 +6,11 @@
 // Each spelled as that browser spells it; a site that checks the number
 // more closely can be handed another in the field. Chrome and Firefox as on
 // Windows 10 and 11, which both report NT 10.0: their strings and their
-// lines are what Chrome 156 and Firefox 158 sent a local listener in
+// lines are what Chrome and Firefox 158 sent a local listener in
 // October 2026, byte for byte, header names in their own case (the W1
-// capture files: WIRE.md § 1 as built names each). Chrome sends no
+// capture files: WIRE.md § 1 as built names each); Chrome's string and
+// client hints are the ones Chrome 157 sent in November 2026 (HTTP2.md
+// § 4 H2.5, capture C1). Chrome sends no
 // Priority over HTTP/1.1, and asks every cache to revalidate on the
 // browser's Reload; Firefox sends a Priority on every request, and its rows
 // are the ones it sent for each destination asked (no font was, so a font
@@ -65,14 +67,43 @@ static const char *const kFirefoxPreflight =
     "Access-Control-Request-Headers, Referer, Origin, Connection, Sec-Fetch-Dest, Sec-Fetch-Mode, "
     "Sec-Fetch-Site, Priority, Pragma, Cache-Control";
 
+// HOW EACH BROWSER SPEAKS HTTP/2 (HTTP2.md § 4 H2.5; captures C1, C2 and
+// C3 in the kit's h2cap directory): what its connection says first, the
+// weight it gives a request of each destination, and the lines it adds
+// there. Chrome 157 states a priority on every request as a chain of
+// exclusive dependencies and sends a Priority line over HTTP/2 alone;
+// Firefox 158 starts at stream 3, states a flat priority, raises each
+// stream's window as it opens it, and says `te: trailers`. A destination
+// neither capture asked for (a font) takes the fetch row's. yonder's own
+// preset, Safari's and a typed agent say libfetch's own greeting; the
+// costumes, whose browsers never spoke HTTP/2, speak HTTP/1.1 alone.
+static const os64_fetch_h2_t kChromeH2 = {
+    .settings = {{1, 65536}, {2, 0}, {4, 6291456}, {6, 262144}},   // table, push, stream window, head list
+    .count = 4,
+    .window_increment = 15663105,
+    .first_stream = 1,
+    .priority = OS64_FETCH_H2_PRIORITY_CHAINED,
+    .pseudo = "masp",
+};
+static const os64_fetch_h2_t kFirefoxH2 = {
+    .settings = {{1, 65536}, {2, 0}, {4, 131072}, {5, 16384}},     // table, push, stream window, frame size
+    .count = 4,
+    .window_increment = 12517377,
+    .first_stream = 3,
+    .stream_increment = 12451840,
+    .priority = OS64_FETCH_H2_PRIORITY_FLAT,
+    .pseudo = "mpas",
+    .te_trailers = true,
+};
+
 static const yonder_agent_preset_t kPresets[] = {
     {"yonder", YONDER_AGENT,
      {.language = "en-US,en;q=0.9", .keep_alive = true,
       .accept = {[WAY_DEST_DOCUMENT] = "text/html,application/xhtml+xml,text/*;q=0.9,*/*;q=0.8"}}},
     {"Chrome on Windows",
      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-     "Chrome/156.0.0.0 Safari/537.36",
-     {.hints = "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+     "Chrome/157.0.0.0 Safari/537.36",
+     {.hints = "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                "sec-ch-ua-mobile: ?0\r\n"
                "sec-ch-ua-platform: \"Windows\"\r\n",
       .language = "en-US,en;q=0.9", .reload_cache_control = "max-age=0", .keep_alive = true,
@@ -82,7 +113,12 @@ static const yonder_agent_preset_t kPresets[] = {
                  [WAY_DEST_STYLE] = "text/css,*/*;q=0.1", [WAY_DEST_SCRIPT] = "*/*",
                  [WAY_DEST_IMAGE] = "image/*,*/*;q=0.8", [WAY_DEST_EMPTY] = "*/*"},
       .order = {[WAY_ORDER_NAVIGATE] = kChromeNavigate, [WAY_ORDER_NO_CORS] = kChromeRequest,
-                [WAY_ORDER_CORS] = kChromeRequest, [WAY_ORDER_PREFLIGHT] = kChromePreflight}}},
+                [WAY_ORDER_CORS] = kChromeRequest, [WAY_ORDER_PREFLIGHT] = kChromePreflight},
+      .h2 = &kChromeH2,
+      .h2_weight = {[WAY_DEST_DOCUMENT] = 256, [WAY_DEST_STYLE] = 256, [WAY_DEST_SCRIPT] = 220,
+                    [WAY_DEST_IMAGE] = 183, [WAY_DEST_EMPTY] = 220},
+      .h2_priority = {[WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_STYLE] = "u=0", [WAY_DEST_SCRIPT] = "u=1",
+                      [WAY_DEST_IMAGE] = "u=2, i", [WAY_DEST_EMPTY] = "u=1, i"}}},
     {"Firefox on Windows",
      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0",
      {.language = "en-US,en;q=0.9", .keep_alive = true,
@@ -94,14 +130,17 @@ static const yonder_agent_preset_t kPresets[] = {
                  [WAY_DEST_STYLE] = "text/css,*/*;q=0.1", [WAY_DEST_SCRIPT] = "*/*",
                  [WAY_DEST_IMAGE] = "image/png,image/*;q=0.8,*/*;q=0.5", [WAY_DEST_EMPTY] = "*/*"},
       .order = {[WAY_ORDER_NAVIGATE] = kFirefoxNavigate, [WAY_ORDER_NO_CORS] = kFirefoxNoCors,
-                [WAY_ORDER_CORS] = kFirefoxCors, [WAY_ORDER_PREFLIGHT] = kFirefoxPreflight}}},
+                [WAY_ORDER_CORS] = kFirefoxCors, [WAY_ORDER_PREFLIGHT] = kFirefoxPreflight},
+      .h2 = &kFirefoxH2,
+      .h2_weight = {[WAY_DEST_DOCUMENT] = 42, [WAY_DEST_STYLE] = 22, [WAY_DEST_SCRIPT] = 22,
+                    [WAY_DEST_IMAGE] = 12, [WAY_DEST_EMPTY] = 22}}},
     {"Safari on iPhone",
      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
      "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
      {.language = "en-US,en;q=0.9", .keep_alive = true,
       .accept = {[WAY_DEST_DOCUMENT] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}}},
-    {"Netscape 4 on Windows 98", "Mozilla/4.08 [en] (Win98; U)", {0}},
-    {"Lynx", "Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13", {0}},
+    {"Netscape 4 on Windows 98", "Mozilla/4.08 [en] (Win98; U)", {.http1 = true}},
+    {"Lynx", "Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13", {.http1 = true}},
 };
 
 // A preset's string as an earlier yonder spelled it, and the preset it is
@@ -113,6 +152,8 @@ static const struct {
 } kRetired[] = {
     {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
      "Chrome/154.0.0.0 Safari/537.36", "Chrome on Windows"},
+    {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+     "Chrome/156.0.0.0 Safari/537.36", "Chrome on Windows"},
     {"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
      "Firefox on Windows"},
 };

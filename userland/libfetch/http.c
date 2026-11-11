@@ -320,6 +320,7 @@ bool http_request_extras_ok(const http_request_extras_t *extras)
     }
     return extras_clean(extras->content_type, CLEAN_VALUE) &&
            extras_clean(extras->user_agent, CLEAN_VALUE) && extras_clean(extras->accept, CLEAN_VALUE) &&
+           extras_clean(extras->h2_priority, CLEAN_VALUE) &&
            extras_clean(extras->extra_headers, CLEAN_EXTRA_LINES) &&
            extras_clean(extras->body_headers, CLEAN_BODY_LINES);
 }
@@ -367,11 +368,13 @@ typedef struct {
 
 // Where a walk over those lines is, in this writer's own order: the fixed
 // lines in turn (`slot`), then the lines of `body_headers` and of
-// `extra_headers` as given (`at`, inside the block being walked). `length` is the
-// Content-Length's digits, "" for none.
+// `extra_headers` as given (`at`, inside the block being walked), then, for
+// a request HTTP/2 will carry (`h2`), the lines the extras name for it
+// alone. `length` is the Content-Length's digits, "" for none.
 typedef struct {
     const http_request_extras_t *x;
     const char *length;
+    bool h2;
     int slot;
     const char *at;
 } head_lines_t;
@@ -389,10 +392,23 @@ static bool head_lines_next(head_lines_t *w, head_line_t *line)
     for (;;) {
         const http_request_extras_t *x = w->x;
         int slot = w->slot;
-        if (slot >= 6) {
-            const char *block = slot == 6 ? x->body_headers : slot == 7 ? x->extra_headers : NULL;
-            if (slot > 7)
+        if (slot >= 8) {
+            // The lines a browser adds over HTTP/2 alone, after everything
+            // else unless the order moves them.
+            if (slot > 9)
                 return false;
+            w->slot++;
+            if (!w->h2)
+                continue;
+            if (slot == 8) {
+                if (x->h2_priority == NULL) continue;
+                head_line_fixed(line, "Priority", x->h2_priority); return true;
+            }
+            if (!x->h2_te_trailers) continue;
+            head_line_fixed(line, "TE", "trailers"); return true;
+        }
+        if (slot >= 6) {
+            const char *block = slot == 6 ? x->body_headers : x->extra_headers;
             if (w->at == NULL)
                 w->at = block != NULL ? block : "";
             if (*w->at == '\0') {
@@ -464,7 +480,7 @@ static bool head_line_put(char *out, size_t cap, size_t *at, const head_line_t *
 typedef bool (*request_start_fn)(void *ctx, const char *method, const char *target, const char *host);
 typedef bool (*request_line_fn)(void *ctx, const head_line_t *line);
 
-static bool request_walk(const http_url_t *url, bool absoluteForm, const http_request_extras_t *extras,
+static bool request_walk(const http_url_t *url, bool absoluteForm, bool h2, const http_request_extras_t *extras,
                          request_start_fn start, request_line_fn put, void *ctx)
 {
     static const http_request_extras_t none = {0};
@@ -522,13 +538,13 @@ static bool request_walk(const http_url_t *url, bool absoluteForm, const http_re
         size_t len = (size_t)(p - name);
         if (len == 0 || name_listed(order, name, name, len) || (len == 4 && name_matches(name, "host", 4)))
             continue;
-        head_lines_t lines = { .x = extras, .length = length };
+        head_lines_t lines = { .x = extras, .length = length, .h2 = h2 };
         head_line_t line;
         while (head_lines_next(&lines, &line))
             if (line.name_len == len && name_matches(line.name, name, len) && !put(ctx, &line))
                 return false;
     }
-    head_lines_t lines = { .x = extras, .length = length };
+    head_lines_t lines = { .x = extras, .length = length, .h2 = h2 };
     head_line_t line;
     while (head_lines_next(&lines, &line))
         if (!name_listed(order, NULL, line.name, line.name_len) && !put(ctx, &line))
@@ -564,7 +580,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 {
     request_text_t text = { .out = out, .cap = cap };
     // The blank line is written LAST and only here.
-    return request_walk(url, absoluteForm, extras, text_start, text_line, &text) &&
+    return request_walk(url, absoluteForm, false, extras, text_start, text_line, &text) &&
            head_put(out, cap, &text.at, "\r\n", 2);
 }
 
@@ -572,6 +588,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 
 typedef struct {
     const http_url_t *url;
+    const char *pseudo;         // the pseudo-headers' order, four letters
     http_field_t *fields;
     size_t most, count;
     char *storage;
@@ -600,10 +617,17 @@ static bool list_start(void *ctx, const char *method, const char *target, const 
 {
     request_list_t *l = ctx;
     (void)target;       // the origin-form path is the url's; an h2 hop is never through a proxy
-    return list_add(l, ":method", 7, method, os64_strlen(method)) &&
-           list_add(l, ":authority", 10, host, os64_strlen(host)) &&
-           list_add(l, ":scheme", 7, l->url->scheme, os64_strlen(l->url->scheme)) &&
-           list_add(l, ":path", 5, l->url->path, os64_strlen(l->url->path));
+    // The four pseudo-headers in the order the extras ask for, one letter
+    // each (http.h); http_request_fields has judged the letters.
+    for (const char *p = l->pseudo; *p != '\0'; p++) {
+        bool added = *p == 'm' ? list_add(l, ":method", 7, method, os64_strlen(method))
+                   : *p == 'a' ? list_add(l, ":authority", 10, host, os64_strlen(host))
+                   : *p == 's' ? list_add(l, ":scheme", 7, l->url->scheme, os64_strlen(l->url->scheme))
+                   : list_add(l, ":path", 5, l->url->path, os64_strlen(l->url->path));
+        if (!added)
+            return false;
+    }
+    return true;
 }
 
 static bool list_line(void *ctx, const head_line_t *line)
@@ -612,8 +636,11 @@ static bool list_line(void *ctx, const head_line_t *line)
     // RFC 9113 § 8.2.2: the fields that speak of the connection have no
     // meaning on a stream and make a request malformed. A browser's h1
     // `Connection: keep-alive` is not sent on h2 by that browser either.
+    // TE is not among them here: a caller's lines cannot hold one
+    // (request_reserved), so one that reaches this is the walk's own
+    // `TE: trailers`, the single value § 8.2.2 allows.
     static const char *const kOfTheConnection[] = {"connection", "keep-alive", "proxy-connection",
-                                                   "transfer-encoding", "upgrade", "te", "host"};
+                                                   "transfer-encoding", "upgrade", "host"};
     if (name_in(line->name, line->name_len, kOfTheConnection,
                 sizeof(kOfTheConnection) / sizeof(kOfTheConnection[0])))
         return true;
@@ -658,9 +685,26 @@ static bool list_line(void *ctx, const head_line_t *line)
 bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
                          size_t most, char *storage, size_t room, size_t *count)
 {
-    request_list_t list = { .url = url, .fields = fields, .most = most, .storage = storage, .room = room };
+    static const http_request_extras_t none = {0};
+    const char *pseudo = (extras != NULL ? extras : &none)->h2_pseudo;
+    if (pseudo == NULL)
+        pseudo = "masp";
+    // Each of the four letters once: a request without one of its
+    // pseudo-headers, or with one twice, is malformed (RFC 9113 § 8.3.1).
+    bool seen[4] = {false};
+    size_t letters = 0;
+    for (const char *p = pseudo; *p != '\0'; p++, letters++) {
+        int which = *p == 'm' ? 0 : *p == 'a' ? 1 : *p == 's' ? 2 : *p == 'p' ? 3 : -1;
+        if (which < 0 || seen[which])
+            return false;
+        seen[which] = true;
+    }
+    if (letters != 4)
+        return false;
+    request_list_t list = { .url = url, .pseudo = pseudo, .fields = fields, .most = most, .storage = storage,
+                            .room = room };
     *count = 0;
-    if (!request_walk(url, false, extras, list_start, list_line, &list))
+    if (!request_walk(url, false, true, extras, list_start, list_line, &list))
         return false;
     *count = list.count;
     return true;

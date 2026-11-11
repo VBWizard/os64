@@ -19,6 +19,7 @@ struct fetch_conn {
     fetch_proto_t protocol;
     unsigned refs;                  // fetches using it: 0 idle; h1: 1 in use
     bool dialling;                  // a slot reserved for a dial in flight
+    fetch_pool_say_t say;           // what its dialler would say first: an HTTP/2 connection's greeting
     uint64_t kept_at;               // ticks: when it was last given back
     // HTTP/2 alone (pool.h's lifecycle).
     h2_conn_t *h2;                  // NULL while its reader is being started (ADOPTING)
@@ -38,8 +39,6 @@ static fetch_conn_t *s_conns[FETCH_POOL_TOTAL];
 static fetch_pool_wait_t *s_waiters;
 static size_t s_closing;            // connections struck whose reader has yet to close the socket
 static uint64_t s_order;
-
-bool fetch_h2_offer;
 
 // What a key's last TLS dial answered ALPN with: h2 or not. It decides one
 // thing, whether a fetch waits for a dial in flight to the key (take), so a
@@ -82,6 +81,18 @@ static bool remembered_h2(const fetch_pool_key_t *key)
         if (s_remembered[i].used && same_key(&s_remembered[i].key, key))
             return s_remembered[i].h2;
     return false;
+}
+
+static bool same_say(const fetch_pool_say_t *a, const fetch_pool_say_t *b)
+{
+    if (a->http1 != b->http1 || a->count != b->count || a->window_increment != b->window_increment ||
+        a->first_stream != b->first_stream || a->stream_increment != b->stream_increment ||
+        a->priority != b->priority)
+        return false;
+    for (uint32_t i = 0; i < a->count; i++)
+        if (a->settings[i].identifier != b->settings[i].identifier || a->settings[i].value != b->settings[i].value)
+            return false;
+    return true;
 }
 
 static bool clock_now(os64_ticks_t *now)
@@ -205,8 +216,8 @@ static bool waited(const os64_ticks_t *start, uint64_t *ms)
     return true;
 }
 
-fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, bool fresh,
-                                  fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io)
+fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_say_t *say, uint32_t idle_most_ms,
+                                  bool fresh, fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io)
 {
     // The object a dial slot would need, made before the lock is taken and
     // freed if this pass did not use it.
@@ -247,12 +258,17 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
             in_all++;
             bool mine = same_key(&c->key, key);
             of_key += mine;
+            // Whether this fetch would have greeted it the same. An HTTP/2
+            // connection, and a dial that may become one, are another
+            // fetch's to share only then; a say with http1 set is like only
+            // another with it set, so such a fetch shares neither.
+            bool like = same_say(&c->say, say);
             bool starting = c->dialling || (c->protocol == FETCH_PROTO_H2 && c->h2 == NULL);
-            dial_in_flight = dial_in_flight || (mine && starting);
+            dial_in_flight = dial_in_flight || (mine && starting && like);
             // An HTTP/2 connection with room takes another stream, the one
             // longest live first, so that duplicates dialled in a burst go
             // quiet and idle out (HTTP2.md § 2.2).
-            if (mine && c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&
+            if (mine && like && c->protocol == FETCH_PROTO_H2 && c->h2 != NULL && h2_conn_room(c->h2) &&
                 (shared == NULL || c->order < shared->order))
                 shared = c;
             if (!idle(c))
@@ -280,7 +296,7 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
             *io = best->io;
             *conn = best;
             answer = FETCH_POOL_KEPT;
-        } else if (dial_in_flight && remembered_h2(key)) {
+        } else if (dial_in_flight && !say->http1 && remembered_h2(key)) {
             // The key answered h2 last time and a dial to it is in flight:
             // its verdict is worth waiting for, since one connection will
             // carry this fetch too. The dial's end, either way, rings.
@@ -315,6 +331,7 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_mos
             if (slot != FETCH_POOL_TOTAL && admitted) {
                 os64_memset(spare, 0, sizeof(*spare));
                 spare->key = *key;
+                spare->say = *say;
                 spare->io.handle = -1;
                 spare->protocol = FETCH_PROTO_H1;
                 spare->dialling = true;
