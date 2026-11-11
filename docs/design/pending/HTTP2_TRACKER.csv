@@ -70,8 +70,8 @@ H2.4.10,"Mutants once at the end, through the capped runner",H2.4.9,done,#538,"1
 H2.4.11,"One cold read, as-built section",H2.4.10,done,#538,"Opus found five defects, each fixed with a case and a mutant"
 H2.4.12,"Codex round",H2.4.11,done,#538,"round 4 clean; 5, 4 and 3 findings in the rounds before, each fixed with a case and a mutant"
 
-H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2,todo,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
-H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,todo,,"adds this slice's rows"
+H2.5,"The switch: ALPN offers h2, one request model two renderers, the greeting per preset from captures, QEMU and P5 proof",H2.6 C1 C2,design,,"HTTP2.md § 2.1 § 2.7 § 2.8 § 2.9 § 2.10; costumes (Netscape 4, Lynx) stay h1 by ruling in § 2.1; merge waits on Chris's P5 pass"
+H2.5.1,"Brief: the greeting in agent.c and os64_fetch_options_t, yonder's own greeting, the record, the nghttpd proof, the rows",H2.6 C1 C2,done,#544,"adds this slice's rows"
 H2.5.2,"libfetch: os64_fetch_h2_t and the options beside order (h2, h2_weight, h2_lines, http1); fetch_h2_offer deleted and the offer rule in dial; libfetch's own greeting as the default",H2.5.1,todo,,
 H2.5.3,"h2_conn: the first stream id in the greeting; a priority on HEADERS and a WINDOW_UPDATE after it, per stream",H2.5.1,todo,,
 H2.5.4,"http.c: the pseudo-header order from the greeting; the HTTP/2-only lines placed by order; TE sent only as trailers where a preset says so, and HTTP2.md 2.7 amended",H2.5.1,todo,,
@@ -99,5 +99,5 @@ H2.6.8,"/tests/h2probe, and QEMU on the e1000 and on virtio against a real h2 se
 H2.6.9,"Mutants once at the end, through the capped runner",H2.6.7,done,#542,"78 mutants, all caught at the end; the first run caught 56 of 77"
 H2.6.10,"One cold read, as-built section",H2.6.9,done,#542,"Opus: an unbounded redial, stale detail, long names unheard, and six comments; each fixed"
 H2.6.11,"Codex round",H2.6.10,done,#542,"round 3 clean; round 1 found an upload waiting under a whole response, round 2 a timing-dependent test"
-C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,todo,,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
-C2,"Capture Firefox on Windows the same way",,todo,,"Chris's; Firefox builds a priority tree and Chrome does not"
+C1,"Capture Chrome on Windows against a local nghttpd -v: SETTINGS (ids, order, values), the first WINDOW_UPDATE, PRIORITY frames, pseudo-header order, for a navigation and a page of sub-resources",,done,#544,"Chris's; kept beside the W1 set with the browser's version in the name; needed by H2.5, not before"
+C2,"Capture Firefox on Windows the same way",,done,#544,"Chris's; Firefox builds a priority tree and Chrome does not"
