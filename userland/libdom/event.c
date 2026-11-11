@@ -498,6 +498,7 @@ static int reflected(os64_dom_t *dom, const os64_html_node_t *node, int kind)
 int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                             const char *name)
 {
+    dom = d_owner(dom, node);
     int kind = handler_kind(name);
     if (kind < 0 || !handler_on(dom, kind) || node->kind != OS64_HTML_ELEMENT) return 0;
     int target = reflected(dom, node, kind);
@@ -1663,6 +1664,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     DValue *entry;
     if (target_entry(dom, ctx, self, set && argc > 0 && JS_IsObject(argv[0]), &entry) < 0) return JS_EXCEPTION;
     if (entry == NULL) return set ? JS_UNDEFINED : JS_NULL;
+    dom = entry->node != NULL ? d_owner(dom, entry->node) : entry->dom;
     int target = entry != dom->window ? reflected(dom, entry->node, kind) : 0;
     if (target < 0) return set ? JS_UNDEFINED : JS_NULL;
     if (target > 0) entry = dom->window;

@@ -196,6 +196,10 @@ if args.events:
     ]
 if args.realms:
     mutants=[
+      ('round3-base-uri-owner','mixin','JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)\n{\n    dom = d_owner(dom, self);', 'JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)\n{'),
+      ('round3-rendered-owner','webanimation','static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)\n{\n    dom = d_owner(dom, target);', 'static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)\n{'),
+      ('round3-handler-receiver','event','    dom = entry->node != NULL ? d_owner(dom, entry->node) : entry->dom;', '    (void)entry->dom;'),
+      ('round3-handler-attribute','event','int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,\n                            const char *name)\n{\n    dom = d_owner(dom, node);', 'int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,\n                            const char *name)\n{'),
       ('round2-onerror-target-window','event','entry == entry->dom->window && state != NULL &&', 'entry == dom->window && state != NULL &&'),
       ('round2-animation-local-query','webanimation','size_t members = animation_heads(dom, heads);', 'size_t members = 1; heads[0] = dom->wa_first;'),
       ('round2-animation-document-filter','webanimation','return d_connected(target) && os64_html_node_document(target) == root;', 'return d_connected(target);'),

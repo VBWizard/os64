@@ -1307,6 +1307,7 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
  * own, so about:blank is its fallback, and a base in it still counts. */
 JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
+    dom = d_owner(dom, self);
     bool window = d_window_document(dom, self);
     const char *url = window && dom->url != NULL ? dom->url : "about:blank";
     char *base = d_alloc(dom, OS64_DOM_URL_MAX);

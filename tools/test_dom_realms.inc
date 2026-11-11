@@ -140,7 +140,10 @@ static bool cluster_computed(void *opaque, const os64_html_node_t *node, os64_do
     ClusterProvider *p = opaque;
     check(os64_html_node_owner(node) == p->document, "cluster computed: destination provider");
     const char *color = p->width == 100 ? "red" : p->width == 101 ? "green" : "blue";
-    return os64_dom_computed_put(out, GARB_COLOR, color, strlen(color));
+    const os64_html_attr_t *display = os64_html_attr(node, "data-render");
+    const char *box = display ? display->value : "block";
+    return os64_dom_computed_put(out, GARB_COLOR, color, strlen(color)) &&
+           os64_dom_computed_put(out, GARB_DISPLAY, box, strlen(box));
 }
 static os64_dom_image_status_t cluster_image(void *opaque, const os64_html_node_t *node,
                                             bool pixels, os64_dom_image_view_t *out)
@@ -299,6 +302,52 @@ static void dom_cluster_cases(void)
                 "assert(B.Element.prototype.getAnimations.call(animA)[0]===secondAnim,'detached element query');"
                 "queryAnimations.forEach(a=>a.cancel());animB.remove();animC.remove();",
                 "cluster round2: animation discovery follows current document and global composite order");
+            realm_script(realms[0],
+                "globalThis.baseTarget=document.createElement('div');baseTarget.setAttribute('data-a','x');"
+                "globalThis.baseAttr=baseTarget.getAttributeNode('data-a');B.document.adoptNode(baseTarget);"
+                "assert(baseTarget.baseURI==='https://b.example/'&&baseAttr.baseURI===baseTarget.baseURI,'adopted base fallback');"
+                "globalThis.relativeBase=B.document.createElement('base');relativeBase.setAttribute('href','assets/#part');"
+                "B.document.head.appendChild(relativeBase);"
+                "assert(baseTarget.baseURI==='https://b.example/assets/#part'&&baseAttr.baseURI===baseTarget.baseURI,'relative base');"
+                "assert(Object.getOwnPropertyDescriptor(Node.prototype,'baseURI').get.call(B.document)===baseTarget.baseURI);"
+                "baseTarget.removeAttributeNode(baseAttr);C.document.adoptNode(baseTarget);"
+                "assert(baseTarget.baseURI==='https://c.example/'&&baseAttr.baseURI==='https://b.example/assets/#part','detached Attr retains document');"
+                "globalThis.baseInert=B.document.implementation.createHTMLDocument();baseInert.adoptNode(baseTarget);"
+                "assert(baseTarget.baseURI==='about:blank','windowless fallback');relativeBase.remove();",
+                "cluster round3: baseURI follows current document for nodes and retained Attrs");
+            realm_script(realms[0],
+                "globalThis.commitTarget=document.createElement('div');document.body.appendChild(commitTarget);"
+                "globalThis.commitMotion=commitTarget.animate({color:['red','blue']},1000);"
+                "commitMotion.pause();commitMotion.currentTime=20;B.document.body.appendChild(commitTarget);"
+                "commitMotion.commitStyles();assert(commitTarget.style.color==='green','B computed style committed');"
+                "C.document.body.appendChild(commitTarget);B.Animation.prototype.commitStyles.call(commitMotion);"
+                "assert(commitTarget.style.color==='blue','C computed style committed');"
+                "commitTarget.setAttribute('data-render','contents');throws('InvalidStateError',()=>commitMotion.commitStyles());"
+                "commitTarget.removeAttribute('data-render');globalThis.commitParent=C.document.createElement('div');"
+                "commitParent.setAttribute('data-render','none');C.document.body.appendChild(commitParent);"
+                "commitParent.appendChild(commitTarget);throws('InvalidStateError',()=>commitMotion.commitStyles());"
+                "commitTarget.remove();throws('InvalidStateError',()=>commitMotion.commitStyles());"
+                "commitMotion.cancel();commitParent.remove();",
+                "cluster round3: commitStyles uses destination rendering and computed style");
+            realm_script(realms[0],
+                "globalThis.movedBody=document.createElement('body');B.document.adoptNode(movedBody);"
+                "globalThis.bodyCalls=[];globalThis.bodyCallback=function(e){bodyCalls.push(this===B&&window.event===e)};"
+                "movedBody.onload=bodyCallback;assert(movedBody.onload===bodyCallback&&B.onload===bodyCallback&&A.onload===null,'body reflects B');"
+                "B.dispatchEvent(new C.Event('load'));assert(bodyCalls.join()==='true','callback keeps A realm');"
+                "movedBody.onload=null;assert(B.onload===null);"
+                "globalThis.bodyAttrs=[];globalThis.bodyListener=()=>bodyAttrs.push('listener');"
+                "globalThis.savedBody=B.document.body;globalThis.attributeBody=document.createElement('body');"
+                "try{attributeBody.setAttribute('onresize',{toString(){B.document.documentElement.replaceChild(attributeBody,savedBody);"
+                "return 'A.bodyAttrs.push(window===B)'}});"
+                "A.EventTarget.prototype.addEventListener.call(B,'resize',bodyListener);B.dispatchEvent(new C.Event('resize'));"
+                "assert(bodyAttrs.join()==='true,listener','attribute handler precedes later listener')}"
+                "finally{B.document.documentElement.replaceChild(savedBody,attributeBody);B.onresize=null;B.removeEventListener('resize',bodyListener)}"
+                "globalThis.movedFrameset=document.createElement('frameset');C.document.adoptNode(movedFrameset);"
+                "movedFrameset.onload=bodyCallback;assert(C.onload===bodyCallback&&movedFrameset.onload===bodyCallback,'frameset reflects C');"
+                "globalThis.handlerInert=B.document.implementation.createHTMLDocument();handlerInert.adoptNode(movedFrameset);"
+                "movedFrameset.onload=()=>{};assert(movedFrameset.onload===null&&C.onload===bodyCallback,'windowless ignores assignment');"
+                "C.onload=null;",
+                "cluster round3: adopted body and frameset reflect destination window handlers");
             realm_script(realms[0],
                 "globalThis.filler=document.createElement('select');globalThis.retainedOptions=filler.options;"
                 "B.document.adoptNode(filler);filler.length=1;"

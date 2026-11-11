@@ -151,6 +151,34 @@ queries, missing current-document filtering and reversed composite order.
 These are focused review-delta checks; the broader campaign and frozen guest
 results below retain their earlier source qualifications.
 
+## Review round 3
+
+All three findings on `b91c5e74` were reproduced under both teardown policies.
+The shared base-URI helper resolves the node's current binding before selecting
+its URL and document, including retained and detached Attr callers. The
+rendered-target check for `commitStyles` uses the target's current binding;
+animation ownership is unchanged. Handler properties choose their target from
+the receiver's current document before resolving the callback's own realm.
+The attribute-handler entry point applies the same ownership rule so a handler
+slot takes its place when an adopted body's attribute is set.
+
+Regressions cover destination URLs and relative bases, borrowed baseURI getters,
+detached Attrs and windowless documents; style commits across B/C providers,
+including detached/display:none/display:contents refusals; and adopted body and
+frameset properties, callback realm, windowless refusal, and handler order when value conversion adopts a body before borrowed listener
+registration.
+
+Both final realm matrices pass 318 checks. The shipping DOM suite passes 43,834
+checks and 3,879 allocation sweep points. Instrumented suites pass: events
+1,020; reporting 4,523; Web Animations 424 (including 11 query-allocation cuts);
+and attributes 3,426. ASan/UBSan and LeakSanitizer remain enabled. The final
+focused rerun tightens the handler-attribute test with reentrant adoption and
+borrowed listener registration; no implementation changed after the full shipping
+run. Four review mutants
+compile and are caught, including the sibling handler-attribute entry point.
+The updated target consumer and libraries link. No new guest/hardware run is
+claimed; the earlier campaign's source qualifications still apply below.
+
 ## Validation
 
 Host checks use ASan/UBSan and LeakSanitizer with `detect_leaks=1`, outside the

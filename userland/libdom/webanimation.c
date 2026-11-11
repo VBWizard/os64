@@ -1982,6 +1982,7 @@ static int time_arg(JSContext *ctx, JSValueConst v, double *out)
  * a throw. */
 static int target_rendered(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *target)
 {
+    dom = d_owner(dom, target);
     if (!d_in_window_tree(dom, target)) return 0;
     for (const os64_html_node_t *n = target; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
         JSValue display = d_computed_property(dom, ctx, n, GARB_DISPLAY, "none");
