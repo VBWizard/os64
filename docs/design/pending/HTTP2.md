@@ -1672,6 +1672,188 @@ scripted server over an in-memory socket whose reads can be made to stall:
 - No QEMU: nothing here is reachable in the guest. The first guest proof
   is H2.6's probe.
 
+#### H2.4, as built (2026-11-10, Fable)
+
+`userland/libfetch/h2_conn.c/.h`, compiled into libfetch.so with the
+library's hidden visibility, and one new verb in libtls,
+`os64_tls_transport_release`. Nothing calls the connection: no program's
+behaviour changes with this slice, and H2.6 is what joins it to a fetch.
+Where the build departs from the brief, or says more than it did:
+
+- **The release verb does not flush.** `os64_tls_transport_release` hands
+  over the engine, the socket and up to `OS64_TLS_TRANSPORT_UNREAD_MAX`
+  bytes of ciphertext that arrived with the handshake, and frees the
+  wrapper without closing anything. While the engine still owes
+  ciphertext it answers NEED_PROGRESS and the caller steps the transport
+  as it would for any other verb; the brief had the verb send what was
+  owed. A verb that writes to a socket needs a deadline and a
+  cancellation, and the transport's step already has both.
+- **The control ceiling is on the whole queue.** A frame the peer makes
+  us owe (an acknowledgement, a reset of its stream) ends the connection
+  with ENHANCE_YOUR_CALM when the queue already holds more than
+  `H2_OUT_MARK + H2_OUT_CONTROL_MOST`. The brief counted control bytes
+  apart from DATA; one count is one rule, and DATA and new streams stop
+  at the mark, so everything above it is control by construction.
+- **The reader has a last word.** Before it closes a dying connection's
+  socket it offers the queue once more with no patience
+  (`drain_as(c, false, true)`). Without it a GOAWAY of ours, queued by
+  the same call that condemned the connection, never reached the wire:
+  every drainer stops at `dying`. It waits for a drainer that is inside
+  a write to come back first, so the socket is never closed under one.
+- **A condemned connection sends nothing more.** `emit` refuses once the
+  connection is dying, which makes a fetch that leaves its stream
+  afterwards owe the server no reset; the socket's close is the news.
+- **`h2_conn_queued`** says how many bytes wait in the out queue. The
+  brief did not list it; the harness needs it to see the mark hold, and
+  H2.6's probe will print it.
+- **`H2_TOO_LARGE` is judged on the encoder's bound**, not on the encoded
+  size: `h2_hpack_encode_bound` over the request's fields against
+  `H2_HEAD_MOST`, before any table changes. A request refused this way
+  has touched nothing. The bound is the most the fields can encode to
+  with any table, so a request the table would have shortened under the
+  limit is refused all the same: the limit is on what is asked, and does
+  not depend on what the connection carried before.
+- **Our own frames are cut at 16,384 bytes** whatever the peer allows:
+  the smallest frame is always legal, and a larger one buys nothing on a
+  connection that interleaves.
+- **A greeting that asks for a max frame size or a table over 1 MiB is
+  not adopted.** Both are memory this connection allocates at adoption.
+- **The first frame must be the server's SETTINGS** (RFC 9113 § 3.4), and
+  an acknowledgement does not count. Anything else is PROTOCOL_ERROR.
+- **DATA for a stream that has ended** (our reset, or its own
+  END_STREAM) is dropped and its bytes credited to the connection at
+  once; DATA for a stream we never opened is the connection's error.
+- **A reset after a whole response holds for any code.** The brief wrote
+  the rule for NO_ERROR (RFC 9113 § 8.1); a server that says CANCEL or
+  REFUSED_STREAM after its END_STREAM has still sent a whole response.
+  The response stands, `reset_after_end` and `reset_code` say why the
+  upload stopped, and a send answers `H2_STOP`.
+- **A head that ends its stream short of its content-length is
+  delivered**, and the stream then fails at the first read
+  (`H2_END_BAD_LENGTH`). The head did arrive; it is the body that is not
+  what it promised, and a fetch's sentence can say so.
+- **The server's close does not cost the frames that came with it.**
+  When the engine reports the peer's close_notify, the reader reads and
+  cuts the plaintext that preceded it and only then ends the connection:
+  a server that sends its last DATA and closes, in one segment, has sent
+  a whole response.
+- **A send stops (`H2_STOP`) when the response is whole and the
+  connection is ending**, reset or no reset. A server that answers an
+  upload early and then closes sends no RST_STREAM; the answer stands and
+  the rest of the request has nowhere to go.
+- **`H2_END_BAD_FRAME`** is an ending of its own for a stream we reset:
+  a frame for it broke a rule RFC 9113 makes the stream's (a
+  WINDOW_UPDATE of nothing), with the code in `code`. `H2_END_FLOW` is
+  the windows alone.
+- **A stream's fault inside an open field block is the connection's.**
+  RFC 9113 § 6.10 lets nothing but a CONTINUATION follow an open block,
+  and that outranks what else is wrong with the frame.
+- **A server's `ENABLE_PUSH = 1` is PROTOCOL_ERROR** (§ 6.5.2), judged
+  here because `h2_setting_check` cannot know which end it is reading
+  for.
+- **The pool is asked about idleness only for a connection with no
+  stream**, and its yes is checked again under the lock: a stream opened
+  between the question and the answer keeps the connection.
+- **A wait whose patience is under `H2_LOOK_MS` never looks up.** It is
+  woken by what it waits for or it ends at its patience, which is what
+  lets the harness prove each wake (below).
+
+Proof. `tools/test_h2_conn_host.sh` builds the connection against
+`tools/h2_peer.c` twice, under ASan/UBSan and under TSan: about 6,100
+checks in nine groups of cases. The peer's stand-in for the TLS engine
+numbers its records and refuses a second thread inside it, so the out
+queue's order and the one-lock rule are things a case can fail; its
+clock is the host's plus what a case skips, so thirty seconds of write
+patience take no time. `tools/test_h2_conn_mutants.py` is 122 deliberate
+breaks, one rule each. The first run through `tools/mutants_parallel.py`,
+of the 102 written before the cold read, caught 82; the other twenty
+were eight that did not compile as written and twelve the harness
+missed, and each of the twelve got a case:
+
+- three wakes (DATA, a head, and a window given by SETTINGS each ring the
+  fetch that waits) had been hidden by the look every second, and are
+  proved with a patience too short to look;
+- a wait rung after its patience was spent;
+- a body longer than both windows, which fails unless what was credited
+  became window again;
+- a refusal remembered after the socket took the bytes;
+- the reader closing under a drainer; the pool asked about a connection
+  with a stream; a reset sent after a condemnation; a reset for a stream
+  both sides had finished;
+- a head for a stream never opened, and a head over the limit by the sum
+  of many small fields.
+
+One cold read by Opus followed. It found five defects, each fixed with
+a case and a mutant of its own: the four entries above that begin "The
+server's close", "A send stops", "A stream's fault" and "A server's
+`ENABLE_PUSH`", and a quiet connection that did not end when its last
+stream left, which § 2.5 already asked for. Then the mutants once more:
+109 of 109 caught.
+
+Codex's first round (#538) found five more, each fixed with a case and
+at least one mutant, all caught:
+
+- **Window given back counts against the queue's ceiling.** A
+  WINDOW_UPDATE is a frame the peer makes us owe like any other: padded
+  frames at a stream with a small window, sent to a socket that takes
+  nothing, grew the queue past `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Plaintext the engine already holds at adoption is read at once.**
+  The reader's first act is to take in what came with the handshake,
+  ciphertext or not: a server's SETTINGS decrypted with its Finished
+  would otherwise wait for the next record.
+- **The decoder's scratch is a head, not a table.** One literal field
+  passes through it, and a field may be as large as `H2_HEAD_MOST`
+  whatever SETTINGS_HEADER_TABLE_SIZE is. With the scratch at the
+  table's 4,096 bytes a 5,000-byte cookie ended its stream.
+- **A change to the initial window is applied to streams that still
+  send.** One that has sent its last, or was reset, keeps its slot until
+  its fetch leaves and has no window to overflow.
+- **Two content-lengths that differ** are a malformed head (RFC 9110
+  § 8.6), as they are for HTTP/1.1 in `http.c`; two that agree are one.
+
+Its second round found four:
+
+- **What the engine owes of its own accord has the ceiling too.** A
+  KeyUpdate's answer is ciphertext no frame of ours asked for; a peer
+  that asks for them at a socket that takes nothing is ended at the same
+  `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Content where none may be resets the stream** (`H2_END_BAD_LENGTH`):
+  a HEAD's response, a 204 and a 304 (RFC 9110 § 6.4.1). `bodiless` had
+  only excused the content-length; `no_content`, decided at the final
+  head, also refuses DATA that carries a byte. An empty DATA frame with
+  END_STREAM is how such a stream is meant to end.
+- **A receive buffer read empty is freed once it has grown past
+  64 KiB.** The window its bytes held goes back to the peer when they
+  are read, so a buffer kept at its high-water mark is memory held twice
+  over: a server filling each of 64 streams in turn could hold the
+  stream window 64 times against one connection window.
+  `h2_conn_buffered` says what the buffers are allocated to hold.
+- **A signal does not start the write patience again.** A patient write
+  that is interrupted having moved nothing stamps the refusal as a
+  timeout does, so the thirty seconds are counted from the first attempt
+  that moved nothing.
+
+Its third found three:
+
+- **`any_seen` is set when a HEADERS or DATA frame for the stream
+  arrives**, not when its head has been decoded: a head whose
+  CONTINUATION never comes is still a server that answered, and the
+  retry rule's "before any byte" must say so.
+- **The pool is told of room by the limit a whole SETTINGS frame
+  leaves**, so a frame that states MAX_CONCURRENT_STREAMS twice is
+  judged once.
+- **A window past 2^31 - 1 for a stream whose answer is whole and whose
+  request is still going up is the connection's error.** RFC 9113
+  § 6.9.1 allows either; a reset would not change how that stream ended.
+
+Its fourth was clean. A last run of every mutant caught 122 of 124, and
+the two it missed were struck from the set as no longer breaks: removing
+the ceiling from owed frames, or from window credits, changes nothing a
+case can see once the reader holds the queue to the same ceiling after
+every feed (round two). The ceiling is still checked at the frame, which
+ends a flood one pass sooner.
+No QEMU and no P5 pass: nothing here is reachable in the guest.
+
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
 
 Split from H2.4 by Q4's ruling. fetch.c's `acquire` gains § 2.2's h2 clauses (a

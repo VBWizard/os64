@@ -33,5 +33,6 @@
     os64_tls_transport_begin_close;
     os64_tls_transport_abort;
     os64_tls_transport_free;
+    os64_tls_transport_release;
   local: *;
 };
