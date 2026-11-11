@@ -1915,11 +1915,22 @@ which is the thing to get right before any code:
 
 | State | In the table | `refs` | Reader | How it gets here | What may happen next |
 |---|---|---|---|---|---|
-| DIALLING | yes | 0 | none | `fetch_pool_take` answered DIAL | h1: `fetch_pool_dialled`. h2: `fetch_pool_dialled_h2`. Failed: `fetch_pool_gone` |
-| H2 LIVE | yes | n ≥ 0 | running | `fetch_pool_dialled_h2` (refs = 1, the dialler's) | a take joins it (`refs++`); a put leaves it (`refs--`, and at 0 `kept_at = now`); STRUCK |
+| DIALLING | yes | 0 | none | `fetch_pool_take` answered DIAL | h1: `fetch_pool_dialled`. h2: `fetch_pool_adopting`. Failed: `fetch_pool_gone` |
+| ADOPTING | yes | 1, the dialler's | starting | `fetch_pool_adopting`, BEFORE `h2_conn_adopt` | `fetch_pool_dialled_h2`; the `dead` hook (STRUCK, and still the dialler's); adopt failed: `fetch_pool_gone` |
+| H2 LIVE | yes | n ≥ 0 | running | `fetch_pool_dialled_h2`, when it was not struck meanwhile | a take joins it (`refs++`); a put leaves it (`refs--`, and at 0 `kept_at = now`); STRUCK |
 | STRUCK | no | n ≥ 0 | running or done | the `dead` hook; the `idle_out` hook answering yes; eviction for a slot; `fetch_pool_drain` | puts until `refs == 0`; the `dead` hook if it has not come |
 | FREED | — | 0 | done | STRUCK, `refs == 0` and `dead` heard, whichever comes last | — |
 
+- **The dialler holds the connection before its reader exists**
+  (Quinn's read of this brief). `h2_conn_adopt` starts the reader
+  before it returns, and a peer that fails at once runs the `dead` hook
+  before the dialler has the connection back. So the dialler's reference
+  is taken first, by `fetch_pool_adopting`, and `fetch_pool_dialled_h2`
+  publishes a connection only if it is still in the table: one the
+  `dead` hook struck meanwhile stays STRUCK, the dialler's stream open
+  answers `H2_NO_ROOM`, its put frees the connection, and it asks again.
+  No take can join an ADOPTING connection (it has no `h2` to ask for
+  room), and `idle_out` says no to it (`refs` is 1).
 - **A connection is freed by whoever sees the last of three things**:
   struck from the table, its last fetch gone, and its reader's `dead`
   hook heard. The hook's `ctx` is the `fetch_conn_t`, so the object must
@@ -1947,15 +1958,23 @@ which is the thing to get right before any code:
      fetch);
   3. if the key is REMEMBERED as h2 and one of its connections is
      DIALLING: wait for that dial's verdict, even under the key's cap;
-  4. a slot to dial in (`FETCH_POOL_DIAL`), by today's rules. An idle
-     h2 connection is evictable for a slot exactly as an idle h1 one is:
-     it is condemned and struck in the same hold, and **its slot is free
-     at once**. Its socket closes when its reader next looks, within
-     `H2_READER_SLICE_MS`, so for that long the library holds one handle
-     more than its table shows. `FETCH_POOL_TOTAL` is a quarter of a
-     task's handles for exactly this kind of slack; the alternative,
-     holding the slot until the reader has closed, makes a fetch wait on
-     an idle connection, which § 2.2 forbids;
+  4. a slot to dial in (`FETCH_POOL_DIAL`), by today's rules, with one
+     more: **a connection whose socket is still open counts, in the
+     table or not.** An idle h2 connection is evictable for a slot as an
+     idle h1 one is, condemned and struck in the same hold, but its
+     socket closes only when its reader next looks, within
+     `H2_READER_SLICE_MS`. Until its `dead` hook it is CLOSING, the pool
+     counts the closing, and a dial is admitted only while the table's
+     connections and the closing ones together are under
+     `FETCH_POOL_TOTAL`. So the sockets libfetch holds never pass the
+     sixteen the table promises a task's handles (Quinn's read: freeing
+     the slot at once let evictions pile up closing sockets past any
+     bound). The price is that a fetch may wait, for at most a slice,
+     on an h2 connection that was idle: § 2.2's "an idle connection
+     never makes a fetch wait" is exact for h1 and within half a second
+     for h2. The `dead` hook rings the waiters. The key's own cap does
+     not count the closing: they are leaving, and a server sees them
+     go;
   5. otherwise wait, as today.
 - **`FETCH_POOL_SHARED` is leave to try, not a stream.** The fetch calls
   `h2_stream_open`; `H2_NO_ROOM` (the connection filled, went quiet,
@@ -1979,8 +1998,8 @@ which is the thing to get right before any code:
   whatever its streams. A STRUCK one is in neither.
 - `fetch_pool_drain` condemns and strikes every h2 connection with no
   fetch on it and waits for nothing; the host harness, which checks for
-  leaks, waits for their `dead` hooks through a count the pool keeps of
-  connections struck and not yet freed (`fetch_pool_dying`).
+  leaks, waits for the closing count (`fetch_pool_closing`) to reach
+  zero.
 
 #### The dial that answers h2
 
@@ -1992,14 +2011,16 @@ is `h2`:
    NEED_PROGRESS, under the fetch's idle deadline and cancellation like
    any step. Failure is the dial's failure (`TLS_FAILED`, the transport
    closed, `fetch_pool_gone`).
-2. `h2_conn_adopt(engine, socket, unread, len, &fetch_h2_greeting,
+2. `fetch_pool_adopting(conn)`: the dialler's reference, taken before
+   a reader exists (the lifecycle above).
+3. `h2_conn_adopt(engine, socket, unread, len, &fetch_h2_greeting,
    &hooks)`. NULL (no memory, no thread) leaves the engine and socket
    the caller's: both are closed, `fetch_pool_gone`, and the fetch ends
    `DIAL_FAILED` with the sentence "an HTTP/2 connection could not be
    started (memory or a thread)".
-3. `fetch_pool_dialled_h2(conn, h2, &tls_facts)`: the connection is H2
-   LIVE with this fetch on it, the key is remembered, the waiters are
-   rung. `tls_facts` is the version and the resumed bit, kept on the
+4. `fetch_pool_dialled_h2(conn, h2, &tls_facts)`: the connection is H2
+   LIVE with this fetch on it unless it died meanwhile, the key is
+   remembered, the waiters are rung. `tls_facts` is the version and the resumed bit, kept on the
    `fetch_conn_t` so a fetch that joins later can fill its detail
    (`tls_snapshot`'s h2 arm) without a transport of its own.
 
@@ -2106,6 +2127,7 @@ and untouched.
 | `fetch_transport_close`, `fetch_pool_gone` in `drop_connection` | `h2_stream_close`, `fetch_pool_put` |
 | `release_connection`'s `connection_reusable` | not asked: `h2_stream_close`, `fetch_pool_put` |
 | `fetch_transport_idle_ok` at a take | not asked (no probe) |
+| `f->io.encrypted`, read by `head_fill` (the head's `encrypted`) and by the `Set-Cookie` callback (whether a `Secure` cookie may be kept) | `f->hop_encrypted`, for h1 and h2 alike: `ask` already works out whether the hop is direct https before it takes a connection, and that answer is the fact. A fetch that JOINS an h2 connection never opened a transport, so its `f->io.encrypted` is false, its head would say unencrypted and the jar would refuse every `Secure` cookie (Quinn's read) |
 
 `drop_connection` and `release_connection` each gain the h2 arm at
 their top, and `f->connected` means "holds a connection or a stream" in
@@ -2185,6 +2207,16 @@ sentences that use them:
     POST is not;
   - a redirect from h2 to h1 and back, the stream closed and the
     connection kept;
+  - a `Secure` cookie set on a fetch that joined an h2 connection, and
+    on each side of a redirect between https over h2 and plain http:
+    kept on the first, refused on the second, and the head's
+    `encrypted` says which;
+  - the `dead` hook forced before `h2_conn_adopt` returns (the peer
+    hangs up as the reader starts): no use after free, the dialler asks
+    again;
+  - eviction after eviction with every reader's close held back: the
+    sockets open never pass `FETCH_POOL_TOTAL`, and a fetch that waits
+    for one is rung when a reader closes;
   - `max_body` reached, a cancelled fetch, and a close with the body
     unread: each resets its stream, the connection lives, and the next
     fetch uses it;
@@ -2199,19 +2231,23 @@ sentences that use them:
 - **Mutants** once at the end, through `tools/mutants_parallel.py`,
   over the new code in pool.c, fetch.c and http.c.
 - **`/tests/h2probe`** (`userland/tests/h2probe/`): built with
-  libfetch's sources and the flag set. `h2probe URL [count]` fetches
-  the URL `count` times at once (default 6) on threads of its own and
-  prints, per fetch, the status, the bytes and the time; then the
-  pool's counts, the protocol the connection spoke, and what the
-  connection's queue and buffers held at the end. Passes (exit 0) when
-  every fetch is OK, the bodies agree with each other, and one
-  connection carried them.
+  libfetch's sources and the flag set. `h2probe URL [count]` makes ONE
+  fetch first, so the origin's ALPN answer is known and its connection
+  is in the pool, and then fetches the URL `count` times at once
+  (default 6) on threads of its own. It prints, per fetch, the status,
+  the bytes and the time; then the pool's counts, the protocol the
+  connection spoke, and what the connection's queue and buffers held at
+  the end. Passes (exit 0) when every fetch is OK, the bodies agree
+  with each other, and the measured fetches dialled nothing: one
+  connection carried them. `h2probe --cold URL [count]` skips the first
+  fetch and passes on the bodies alone, printing how many connections
+  the burst dialled: an origin met for the first time may be dialled up
+  to the key's cap (§ 2.2), and that is correct (Quinn's read: the
+  first draft's pass condition would have failed a correct pool).
 - **QEMU**: h2probe against a real h2 server, headless, on the e1000
   and on virtio. This is the first time the reader's slices, the bell,
   a detached thread and the real TLS engine meet the kernel. The server
-  is a public one reached through slirp unless Chris installs nghttp2's
-  server on the workstation (a request, below; H2.5's proof needs it
-  anyway). No host name goes in a commit.
+  is `nghttpd` on the workstation, reached through slirp's gateway.
 - **P5**: Chris can run `h2probe` against any https site he likes; it
   is the one thing in this slice a person can test. The slice does not
   wait on it.
@@ -2222,13 +2258,6 @@ The offer in the shipped library, the greeting per preset, the head's
 `http2` fact, yonder's record, and the DEBTS rows of § 2.10: H2.5.
 Spreading streams over duplicate connections, a PING ahead of a request,
 and h2 through a proxy: § 2.10.
-
-#### One request of Chris
-
-`sudo apt install nghttp2-server` on the workstation, when convenient.
-`nghttpd -v` is the local server § 2.9 and H2.5's proof already name,
-and with it H2.6's QEMU proof needs no public site. Without it this
-slice's QEMU proof uses a public server, and nothing else changes.
 
 ### H2.5 — The switch (brief when its turn comes)
 
