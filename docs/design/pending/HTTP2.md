@@ -2388,6 +2388,8 @@ window under a response that was already whole (an early 413 with no
 reset), and ended SILENT with the answer discarded. A send now stops as
 soon as the response is whole, in `h2_stream_send`, with a case at each
 level and a mutant.
+Its second found a case of the harness that counted resets a
+finished stream does not owe; its third was clean.
 
 Known and left: a request of more than 256 fields (a Cookie line of
 some 245 pairs, with the rest of a head) is refused over HTTP/2 where
