@@ -159,9 +159,10 @@
 		// task_enqueue_dead_child does NOT: enqueueing one child twice makes
 		// `parent->deadChildTail->deadChildNext = child` write child->next =
 		// child, and a self-linked corpse means the undertaker's walk never
-		// ends. Claimed with an atomic exchange, so the winner is decided
-		// before any of that runs. Zeroed = unclaimed, by the
-		// all-allocations-zeroed rule.
+		// ends. Claimed under signalLock (task_claim_teardown), so the winner
+		// is decided before any of that runs. The claim also freezes retVal:
+		// an exit code offered after it is refused (task_offer_exit_code).
+		// Zeroed = unclaimed, by the all-allocations-zeroed rule.
 		volatile bool tearingDown;
         char exename[128];
         thread_t* threads;
@@ -497,4 +498,5 @@
 	// single control point for "exit means exit" — see the implementation
 	// for why marking alone is not enough on a tickless boot.
 	void task_terminate_sibling_threads(task_t* task, thread_t* self);
+	void task_offer_exit_code(task_t* task, uint64_t code);   // refused once a thread has claimed the teardown
 	#endif
