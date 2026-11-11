@@ -1732,6 +1732,25 @@ Where the build departs from the brief, or says more than it did:
   delivered**, and the stream then fails at the first read
   (`H2_END_BAD_LENGTH`). The head did arrive; it is the body that is not
   what it promised, and a fetch's sentence can say so.
+- **The server's close does not cost the frames that came with it.**
+  When the engine reports the peer's close_notify, the reader reads and
+  cuts the plaintext that preceded it and only then ends the connection:
+  a server that sends its last DATA and closes, in one segment, has sent
+  a whole response.
+- **A send stops (`H2_STOP`) when the response is whole and the
+  connection is ending**, reset or no reset. A server that answers an
+  upload early and then closes sends no RST_STREAM; the answer stands and
+  the rest of the request has nowhere to go.
+- **`H2_END_BAD_FRAME`** is an ending of its own for a stream we reset:
+  a frame for it broke a rule RFC 9113 makes the stream's (a
+  WINDOW_UPDATE of nothing), with the code in `code`. `H2_END_FLOW` is
+  the windows alone.
+- **A stream's fault inside an open field block is the connection's.**
+  RFC 9113 § 6.10 lets nothing but a CONTINUATION follow an open block,
+  and that outranks what else is wrong with the frame.
+- **A server's `ENABLE_PUSH = 1` is PROTOCOL_ERROR** (§ 6.5.2), judged
+  here because `h2_setting_check` cannot know which end it is reading
+  for.
 - **The pool is asked about idleness only for a connection with no
   stream**, and its yes is checked again under the lock: a stream opened
   between the question and the answer keeps the connection.
@@ -1740,15 +1759,16 @@ Where the build departs from the brief, or says more than it did:
   lets the harness prove each wake (below).
 
 Proof. `tools/test_h2_conn_host.sh` builds the connection against
-`tools/h2_peer.c` twice, under ASan/UBSan and under TSan: about 6,030
+`tools/h2_peer.c` twice, under ASan/UBSan and under TSan: about 6,100
 checks in nine groups of cases. The peer's stand-in for the TLS engine
 numbers its records and refuses a second thread inside it, so the out
 queue's order and the one-lock rule are things a case can fail; its
 clock is the host's plus what a case skips, so thirty seconds of write
-patience take no time. `tools/test_h2_conn_mutants.py` is 102 deliberate
-breaks, one rule each. The first run through `tools/mutants_parallel.py`
-caught 82; the other twenty were eight that did not compile as written
-and twelve the harness missed, and each of the twelve got a case:
+patience take no time. `tools/test_h2_conn_mutants.py` is 109 deliberate
+breaks, one rule each. The first run through `tools/mutants_parallel.py`,
+of the 102 written before the cold read, caught 82; the other twenty
+were eight that did not compile as written and twelve the harness
+missed, and each of the twelve got a case:
 
 - three wakes (DATA, a head, and a window given by SETTINGS each ring the
   fetch that waits) had been hidden by the look every second, and are
@@ -1763,8 +1783,13 @@ and twelve the harness missed, and each of the twelve got a case:
 - a head for a stream never opened, and a head over the limit by the sum
   of many small fields.
 
-One cold read by Opus followed, and then the mutants once more, all
-caught. No QEMU and no P5 pass: nothing here is reachable in the guest.
+One cold read by Opus followed. It found five defects, each fixed with
+a case and a mutant of its own: the four entries above that begin "The
+server's close", "A send stops", "A stream's fault" and "A server's
+`ENABLE_PUSH`", and a quiet connection that did not end when its last
+stream left, which § 2.5 already asked for. Then the mutants once more:
+109 of 109 caught.
+No QEMU and no P5 pass: nothing here is reachable in the guest.
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
 
