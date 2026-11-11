@@ -2632,6 +2632,72 @@ them. It gives the P5 a before-and-after on one build, which § 5's table
 wants, and a way round a site that breaks. `/sys/conf` shows which file
 answered, as for any reader.
 
+#### H2.5, as built (2026-11-11, Fable)
+
+What the build made of the brief, and where it left it.
+
+- **The offer.** `fetch_h2_offer` is gone. `dial` (fetch.c) offers
+  `h2, http/1.1` on an encrypted hop unless the fetch speaks HTTP/1.1
+  alone: its caller's `http1`, or `http2 = off` in net.conf, which
+  `h2_switched_off` reads once per process at the first fetch. The shipped
+  `/etc/net.conf` documents the line, commented out, and says that a
+  `/home/net.conf` is read in place of it and not on top of it.
+- **The greeting.** `os64_fetch_h2_t` (fetch.h) as the brief has it, with
+  one more member, `te_trailers`. A fetch copies its caller's at open, or
+  libfetch's own (`kOwnGreeting`), into a `fetch_pool_say_t` (pool.h): the
+  greeting by value and `http1`. That one value is what the pool compares
+  and what a dial hands `h2_conn_adopt`.
+- **A departure: typed fields, not lines.** The brief gave a caller
+  `h2_lines`, whole lines sent only over HTTP/2. The request model refuses
+  a caller's own `TE` line (it is libfetch's to say), so what a browser
+  adds over HTTP/2 is two typed things: `h2_priority` in the options (a
+  Priority value, per request) and `te_trailers` in the greeting (the
+  preset's, on every request). http.c walks them after every other line
+  unless `order` names them (`head_lines_next`), only for the HTTP/2
+  rendering, and no longer drops `te` there.
+- **The connection** (h2_conn.c): the greeting's `first_stream`,
+  `stream_increment` and `priority` mode; `h2_stream_open` takes a weight.
+  `chained_parent` is Chromium's rule as capture C3 shows it. A stream's
+  receive window is the SETTINGS' and the increment together
+  (`our_stream_window`), and its credit is given back at half of that. A
+  frame for a stream below the first is a frame for an idle stream.
+- **The pool** (Quinn's finding): `same_say` compares two says value for
+  value, and `fetch_pool_take` shares an HTTP/2 connection, or waits on a
+  dial in flight, only for a fetch whose say is the same. A record keeps
+  its dialler's say from the moment its slot is reserved.
+- **libway and yonder.** `way_identity_t` carries the greeting, a weight
+  and an HTTP/2-only Priority for each destination, and `http1`;
+  `way_identity_h2` gives a destination with none the fetch row's.
+  `agent.c` holds the two greetings and the rows, from C1, C2 and C3; the
+  costumes say `http1`. The Chrome preset is 157's string and hints, and
+  its 156 string is retired to it. `os64_fetch_forget_idle` (new, public)
+  closes the kept connections, and yonder calls it when the agent changes.
+- **The head's fact, and the record.** `os64_fetch_head_t.http2`, and the
+  detail's `h2` and `h2_stream` on every head that came over HTTP/2.
+  **A departure:** yonder's record has no line for each request, so it
+  cannot say the protocol of each. It gains one fact for the page, `HTTP`:
+  `2 (stream N)` or `1.1`. A page's other requests are seen in a server's
+  log, or by `h2probe`.
+- **`/tests/h2probe`** links `libfetch.so`, sets no flag, and no longer
+  waits for the connection's reader before it returns (#543 made a
+  program's exit code its own).
+- **`tools/host_suites.py`** lists `test_tracker.py`, which was in tools/
+  and in no list, so the runner refused to start.
+
+**Proof, host.** `tools/test_fetch_h2_host.sh`: every row of the capture
+table for yonder's own, Chrome's and Firefox's presets, read by a scripted
+server from the client's frames, with the presets taken from `agent.c`
+itself; Chrome's dependencies on C3's streams; a font under Chrome; a
+greeting that cannot be sent; Quinn's two cases (a response still
+arriving, a dial still in flight), in which Firefox and Lynx each get a
+connection of their own and neither waits on Chrome's dial; seven
+greetings that differ from a held connection's in one thing each; `http1`
+beside a live HTTP/2 connection; and, in a process of its own, net.conf's
+switch. `tools/test_h2_conn_host.sh`: the three shapes of opening a
+stream, the stream window and its credit, a greeting the connection
+refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
+two HTTP/2-only lines and their place, what is refused.
+
 ## 5. Proof, across the arc
 
 - **Host first, always.** H2.3 and most of H2.4 are pure or scripted and
