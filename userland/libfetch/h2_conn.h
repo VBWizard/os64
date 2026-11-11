@@ -117,7 +117,8 @@ typedef struct {
 } h2_ending_t;
 
 // Take over a TLS engine whose handshake is done and its socket (libtls's
-// os64_tls_transport_release), with the ciphertext that came with them.
+// os64_tls_transport_release), with the ciphertext that came with them;
+// plaintext the engine already holds is read first too.
 // Queues the preface and the greeting and starts the reader. The connection
 // comes back holding one hold, the adopter's (h2_conn_release). NULL when it
 // could not be made: the engine and the socket are still the caller's.

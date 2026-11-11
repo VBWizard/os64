@@ -1764,7 +1764,7 @@ checks in nine groups of cases. The peer's stand-in for the TLS engine
 numbers its records and refuses a second thread inside it, so the out
 queue's order and the one-lock rule are things a case can fail; its
 clock is the host's plus what a case skips, so thirty seconds of write
-patience take no time. `tools/test_h2_conn_mutants.py` is 109 deliberate
+patience take no time. `tools/test_h2_conn_mutants.py` is 115 deliberate
 breaks, one rule each. The first run through `tools/mutants_parallel.py`,
 of the 102 written before the cold read, caught 82; the other twenty
 were eight that did not compile as written and twelve the harness
@@ -1789,6 +1789,27 @@ server's close", "A send stops", "A stream's fault" and "A server's
 `ENABLE_PUSH`", and a quiet connection that did not end when its last
 stream left, which § 2.5 already asked for. Then the mutants once more:
 109 of 109 caught.
+
+Codex's first round (#538) found five more, each fixed with a case and
+at least one mutant, all caught:
+
+- **Window given back counts against the queue's ceiling.** A
+  WINDOW_UPDATE is a frame the peer makes us owe like any other: padded
+  frames at a stream with a small window, sent to a socket that takes
+  nothing, grew the queue past `H2_OUT_MARK + H2_OUT_CONTROL_MOST`.
+- **Plaintext the engine already holds at adoption is read at once.**
+  The reader's first act is to take in what came with the handshake,
+  ciphertext or not: a server's SETTINGS decrypted with its Finished
+  would otherwise wait for the next record.
+- **The decoder's scratch is a head, not a table.** One literal field
+  passes through it, and a field may be as large as `H2_HEAD_MOST`
+  whatever SETTINGS_HEADER_TABLE_SIZE is. With the scratch at the
+  table's 4,096 bytes a 5,000-byte cookie ended its stream.
+- **A change to the initial window is applied to streams that still
+  send.** One that has sent its last, or was reset, keeps its slot until
+  its fetch leaves and has no window to overflow.
+- **Two content-lengths that differ** are a malformed head (RFC 9110
+  § 8.6), as they are for HTTP/1.1 in `http.c`; two that agree are one.
 No QEMU and no P5 pass: nothing here is reachable in the guest.
 
 ### H2.6 — Fetches on the connection (brief when H2.4 has landed)
