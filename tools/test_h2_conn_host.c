@@ -1952,6 +1952,14 @@ static void opening_cases(void)
     for (int i = 0; i < 3; i++)
         peer_send_data(3, much, sizeof(much), false);       // 48,000: past 20,000, within 60,000
     CHECK(fetch_head(&a) == H2_OK && h2_stream_ended(a.stream).how == H2_END_NOT_YET);
+    // And it is half of THAT window, 30,000, that a stream gives back at:
+    // 16,000 read says nothing, and 32,000 read is said.
+    static uint8_t taken[16000];
+    CHECK(h2_stream_read(a.stream, taken, sizeof(taken), &a.wait) == 16000);
+    CHECK(!peer_frame_of(H2_FRAME_WINDOW_UPDATE, &h, &payload, 150));
+    CHECK(h2_stream_read(a.stream, taken, sizeof(taken), &a.wait) == 16000);
+    CHECK(peer_frame_of(H2_FRAME_WINDOW_UPDATE, &h, &payload, 2000) && h.stream == 3 &&
+          (((uint32_t)payload[0] << 24) | (uint32_t)payload[1] << 16 | (uint32_t)payload[2] << 8 | payload[3]) == 32000);
     server_reply(5, "200", NULL, false);
     for (int i = 0; i < 4; i++)
         peer_send_data(5, much, sizeof(much), false);       // 64,000: past 60,000

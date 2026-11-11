@@ -1743,6 +1743,11 @@ static void identity_cases(void)
     job_start(&again, "https://flight.test/page");
     job_start(&firefox, "https://flight.test/page");
     job_start(&lynx, "https://flight.test/page");
+    // Their dials begin while Chrome's handshake is still going: neither
+    // waited for a verdict that is not theirs.
+    for (int i = 0; i < 100 && atomic_load(&ndials) < 4; i++)
+        nap_ms(2);
+    CHECK(atomic_load(&ndials) == 4 && !atomic_load(&chrome.done));
     job_join(&chrome);
     job_join(&again);
     job_join(&firefox);
@@ -1776,11 +1781,65 @@ static void identity_cases(void)
     settle();
 }
 
+// ONE DIFFERENCE IS A DIFFERENT GREETING: with a connection held under one
+// greeting, a fetch whose greeting differs from it in a single thing dials
+// a connection of its own, and one that says the very same shares.
+static void difference_cases(void)
+{
+    static job_t held, j;
+    static const os64_fetch_h2_t kBase = {.settings = {{2, 0}, {4, 100000}}, .count = 2, .window_increment = 1000,
+                                          .first_stream = 1, .stream_increment = 0,
+                                          .priority = OS64_FETCH_H2_PRIORITY_FLAT};
+    os64_fetch_h2_t other[7];
+    for (int i = 0; i < 7; i++)
+        other[i] = kBase;
+    other[0].settings[1].value = 100001;
+    other[1].settings[1].id = 3;
+    other[2].count = 1;
+    other[3].window_increment = 1001;
+    other[4].first_stream = 3;
+    other[5].stream_increment = 1;
+    other[6].priority = OS64_FETCH_H2_PRIORITY_CHAINED;
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&held, 0, sizeof(held));
+    held.opt.h2 = &kBase;
+    held.keep_open = true;
+    job_go(&held, "https://differ.test/held");
+    CHECK(held.status == OS64_FETCH_OK && atomic_load(&ndials) == 1);
+    // The same greeting from another copy of it: values are compared, not
+    // where the caller keeps them.
+    os64_fetch_h2_t same = kBase;
+    memset(&j, 0, sizeof(j));
+    j.opt.h2 = &same;
+    job_go(&j, "https://differ.test/page");
+    JOB_OK(&j);
+    CHECK(atomic_load(&ndials) == 1);
+    for (int i = 0; i < 7; i++) {
+        memset(&j, 0, sizeof(j));
+        j.opt.h2 = &other[i];
+        job_go(&j, "https://differ.test/page");
+        JOB_OK(&j);
+        if (atomic_load(&ndials) != 2 + i)
+            fprintf(stderr, "difference %d: %d dials\n", i, atomic_load(&ndials));
+        CHECK(j.http2 && atomic_load(&ndials) == 2 + i);
+        // Its own connection goes before the next asks, so that the key's
+        // cap is never what makes a fetch dial.
+        drain_now();
+    }
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK && held.body_len == 9);
+    os64_fetch_close(held.f);
+    settle();
+}
+
 // A fetch that says http1 is dialled as HTTP/1.1, whatever the host would
 // answer, and nothing of HTTP/2's is touched.
 static void http1_cases(void)
 {
-    static job_t j[3];
+    static job_t j[3], held;
     begin();
     route("/page", R_REPLY, "200", kPage);
     int released = atomic_load(&tls_released);
@@ -1791,6 +1850,26 @@ static void http1_cases(void)
         CHECK(j[i].ended == OS64_FETCH_OK && j[i].body_len == sizeof(kPage) - 1 && !j[i].detail.h2 && !j[i].http2);
     }
     CHECK(h2_dials() == 0 && atomic_load(&tls_released) == released && requests_seen() == 3);
+    settle();
+
+    // ...and with an HTTP/2 connection to the host live, greeted exactly as
+    // this fetch would greet one but for that word, it is given none of it.
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&held, 0, sizeof(held));
+    held.keep_open = true;
+    job_go(&held, "https://both.test/held");
+    CHECK(held.status == OS64_FETCH_OK && held.http2 && h2_dials() == 1);
+    memset(&j[0], 0, sizeof(j[0]));
+    j[0].opt.http1 = true;
+    job_go(&j[0], "https://both.test/page");
+    CHECK(j[0].ended == OS64_FETCH_OK && !j[0].http2 && atomic_load(&ndials) == 2 && h2_dials() == 1 &&
+          atomic_load(&dials[0].requests) == 1);
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
     settle();
 }
 
@@ -1826,6 +1905,7 @@ int main(void)
         pool_cases();
         greeting_cases();
         identity_cases();
+        difference_cases();
         http1_cases();
     }
     if (atomic_load(&failures) != 0) {

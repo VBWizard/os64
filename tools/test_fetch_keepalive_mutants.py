@@ -229,7 +229,8 @@ mutants = [
      'static const char *const kOnce[] = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"};',
      'static const char *const kOnce[] = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "POST"};', FETCH),
     ('retry-unsaid', FETCH_C,
-     '" (retried once on a fresh connection)");', '"%s", "");', FETCH),
+     'os64_snprintf(out + have, cap - have, " (retried once%s)", where);',
+     'os64_snprintf(out + have, cap - have, "%s", "");', FETCH),
     # The request writer
     ('408-not-retried', FETCH_C, '        *again = !cancelled(f);\n', '        *again = false;\n', FETCH),
     ('408-heard', FETCH_C,
