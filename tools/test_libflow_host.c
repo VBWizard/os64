@@ -1452,6 +1452,7 @@ int main(int argc, char **argv)
         computed_round1_cases();
         computed_round2_cases();
         computed_svg_cases();
+        conic_computed_cases();
         text_teardown();
         printf("libflow: %d checks, %d failed%s\n", checks, failures,
                live != 0 ? " (AND LEAKED)" : "");
@@ -1613,6 +1614,7 @@ int main(int argc, char **argv)
     computed_round1_cases();
     computed_round2_cases();
     computed_svg_cases();
+    conic_computed_cases();
     filter_cases();
     fixed_cases();
     paint_cases();

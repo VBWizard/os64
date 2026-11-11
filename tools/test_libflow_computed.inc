@@ -395,6 +395,32 @@ static bool computed_svg_url(void *ctx, const char *written, uint32_t len, int32
     return computed_url(NULL, written, len, sheet, out, cap);
 }
 
+// A conic gradient as getComputedStyle writes it, as Chrome does: where
+// its turn starts and its centre, each left out at its initial value, and
+// its stops in the units the page wrote.
+static void conic_computed_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>"
+                     "#a{background-image:conic-gradient(from 90deg at 4px 4px,red 25%,blue 90deg)}"
+                     "#b{background-image:conic-gradient(red,blue)}</style>"
+                     "<div id=a></div><div id=b></div>",
+                 800, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    const os64_html_node_t *root = p.doc->document;
+    flow_computed_t *c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "a"), NULL)
+                                      : NULL;
+    computed_is(c, "computed: a conic gradient as written", GARB_BACKGROUND_IMAGE,
+                "conic-gradient(from 90deg at 4px 4px, rgb(255, 0, 0) 25%, rgb(0, 0, 255) 90deg)");
+    flow_computed_free(c);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "b"), NULL) : NULL;
+    computed_is(c, "computed: a conic gradient's initial start and centre left out", GARB_BACKGROUND_IMAGE,
+                "conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))");
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 static void computed_svg_cases(void)
 {
     static const struct { int32_t prop; const char *value; } initial[] = {

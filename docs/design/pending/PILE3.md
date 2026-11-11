@@ -407,8 +407,11 @@ degrees, or `to` one of eight sides and corners; a radial's shape, size and
 centre — then its stops, a stop written with two positions becoming two
 and a hint a position alone. It is still written out as `name(...)`, so the
 declaration corpus does not churn; what was kept is proven through
-libflow's style dump. Conic gradients and image-set are taken by name and
-drawn as nothing.
+libflow's style dump. image-set is taken by name and drawn as nothing; a
+conic gradient is read, kept and drawn the same way since 2026-11-11 (the
+CSS Images slice: its turn's start and centre, stops at angles or
+percentages of the turn), except one whose angle or stop is a calc() with
+an angle in it, which is still taken by name (DEBTS.md).
 
 **libflow carries `flow_gradient_t`** in a background layer's image, beside
 the url() — one picture per layer, never both (S4c, below). The geometry stays
@@ -465,8 +468,8 @@ draws it.
 |---|---|---|
 | `background-size`, `-origin`, `-clip`, and `background-position` for a gradient | — | done in S4b, below |
 | An inline element's gradient across its pieces | each piece is its own tile, where the browsers lay the pieces end to end and draw one gradient along them; the public tree does not say which piece is first | a gradient on a span that wraps |
-| Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
-| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
+| ~~Conic gradients~~ and image-set | conic: drawn since 2026-11-11 (the CSS Images slice); image-set: no picture is made for it | a page whose look depends on one |
+| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted: a linear or radial gradient writing one is refused, a conic one taken by name and drawn as nothing, as conic gradients were before they were drawn — so the rest of its `background` applies (and WPT's invalid `conic-gradient(in from 90deg, …)` is taken that way too) | a page that writes one |
 | A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |
 
 ## Background size, origin and clip (slice S4b)

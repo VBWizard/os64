@@ -239,11 +239,16 @@ static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
     static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
                                           "closest-corner", "size"};
     putf(b, " gradient=%s%s:", g->repeating ? "repeating-" : "",
-         g->kind == FLOW_GRADIENT_LINEAR ? "linear" : "radial");
+         g->kind == FLOW_GRADIENT_LINEAR ? "linear" : g->kind == FLOW_GRADIENT_CONIC ? "conic" : "radial");
     if (g->kind == FLOW_GRADIENT_LINEAR && (g->to_x != 0 || g->to_y != 0)) {
         putf(b, "to %d %d", (int)g->to_x, (int)g->to_y);
     } else if (g->kind == FLOW_GRADIENT_LINEAR) {
         putf(b, "%d", (int)g->angle);
+    } else if (g->kind == FLOW_GRADIENT_CONIC) {
+        putf(b, "from %d at ", (int)g->angle);
+        length(b, g->centre[0]);
+        puts_(b, "/");
+        length(b, g->centre[1]);
     } else {
         putf(b, "%s %s ", g->circle ? "circle" : "ellipse", kExtent[g->extent]);
         if (g->extent == FLOW_EXTENT_SIZE) {

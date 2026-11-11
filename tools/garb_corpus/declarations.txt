@@ -538,6 +538,52 @@ IN: background-image: radial-gradient(10px 20% at 0 0, red, blue)
 OUT: background-image: radial-gradient(...)
 IN: background-image: radial-gradient(10px circle, red, blue)
 OUT: background-image: radial-gradient(...)
+# A stop written with two positions is two stops (Images 4 § 3.4.1), so one
+# colour with two is a gradient: the solid-colour idiom. One with one is not.
+IN: background-image: linear-gradient(orange 0 0)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(orange 0)
+OUT: invalid
+# A conic gradient (Images 4 § 3.3): where its turn starts and its centre,
+# then stops at angles or percentages of the turn, never lengths.
+IN: background-image: conic-gradient(red, blue)
+OUT: background-image: conic-gradient(...)
+IN: background-image: conic-gradient(from 90deg at 4px 4px, #0000 90deg, currentColor 0)
+OUT: background-image: conic-gradient(...)
+IN: background-image: repeating-conic-gradient(#0000 0 35deg, red 0 90deg)
+OUT: background-image: repeating-conic-gradient(...)
+IN: background-image: conic-gradient(red 25%, blue 1turn)
+OUT: background-image: conic-gradient(...)
+IN: background-image: conic-gradient(from 0, red, blue)
+OUT: background-image: conic-gradient(...)
+IN: background-image: conic-gradient(red 10px, blue)
+OUT: invalid
+IN: background-image: conic-gradient(from, red, blue)
+OUT: invalid
+IN: background-image: conic-gradient(at, red, blue)
+OUT: invalid
+IN: background-image: conic-gradient(at left 4px top, red, blue)
+OUT: invalid
+IN: background-image: conic-gradient(red)
+OUT: invalid
+# A calc() with an angle in it is read nowhere (DEBTS.md), so a conic
+# gradient holding one is taken by name, drawn as nothing, rather than
+# costing the declaration; one without an angle is refused as it was.
+IN: background-image: conic-gradient(from calc(270deg - 10deg), red, blue)
+OUT: background-image: conic-gradient(...)
+IN: background-image: conic-gradient(red calc(50% + 0), blue)
+OUT: invalid
+# A colour interpolation method is read nowhere (PILE3.md § Booked): a
+# linear gradient writing one is refused, as it always was; a conic one is
+# taken by name, as it was before conic gradients were drawn.
+IN: background-image: conic-gradient(in hsl longer hue, red, red)
+OUT: background-image: conic-gradient(...)
+IN: background-image: linear-gradient(in oklab, red, blue)
+OUT: invalid
+# A stop's angle-percentage has no range: negative is a place before the
+# turn's start.
+IN: background-image: conic-gradient(red -10%, blue)
+OUT: background-image: conic-gradient(...)
 IN: background-image: radial-gradient(ellipse 0 20px, red, blue)
 OUT: background-image: radial-gradient(...)
 IN: background-image: linear-gradient(red,, blue)
