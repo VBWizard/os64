@@ -122,10 +122,11 @@ _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within th
 typedef enum { FETCH_PROTO_H1 = 1, FETCH_PROTO_H2 } fetch_proto_t;
 
 // WHETHER A DIAL OFFERS HTTP/2. False at rest, and nothing in the library
-// sets it: libfetch.so exports no way to reach it, so a program linked
-// against the library speaks HTTP/1.1. The host harness and /tests/h2probe
-// compile these sources into themselves and set it (HTTP2.md § 4 H2.6).
-extern bool fetch_h2_offer;
+// sets it. Its visibility is hidden, so libfetch.so does not export it and
+// no function it does export writes it: a program linked against the
+// library speaks HTTP/1.1. The host harness and /tests/h2probe compile
+// these sources into themselves and set it (HTTP2.md § 4 H2.6).
+extern bool fetch_h2_offer __attribute__((visibility("hidden")));
 
 typedef struct fetch_conn fetch_conn_t;
 
@@ -245,6 +246,11 @@ bool fetch_pool_evict_one(void);
 size_t fetch_pool_idle(void);
 size_t fetch_pool_live(void);
 void fetch_pool_counts(size_t *kept, size_t *live);
+
+// The HTTP/2 connections in the table: how many, the bytes waiting in their
+// out queues, and the bytes their streams' receive buffers are allocated to
+// hold. For /tests/h2probe.
+void fetch_pool_h2_stats(size_t *connections, size_t *queued, size_t *buffered);
 
 // ── The system's trust store, one per process ───────────────────────────
 //

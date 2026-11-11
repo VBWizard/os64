@@ -1293,8 +1293,10 @@ QEMU: nothing in this slice runs in the guest yet.
 
 `userland/libfetch/h2_frame.c/.h` and `h2_hpack.c/.h`, with RFC 7541's two
 tables as data in `h2_hpack_tables.h`. They are compiled into libfetch.so
-with the library's hidden visibility and nothing calls them: no program's
-behaviour changes with this slice. Where the build departs from the brief,
+and nothing calls them: no program's behaviour changes with this slice.
+(libfetch.so exports every symbol it defines, these among them, as it
+does the pool's; no header a program includes declares them. An earlier
+wording here said the library hid its symbols, which it does not.) Where the build departs from the brief,
 or says more than it did:
 
 - **A fault says whose it is.** `h2_fault_t` is the error code, the rule,
@@ -1674,8 +1676,9 @@ scripted server over an in-memory socket whose reads can be made to stall:
 
 #### H2.4, as built (2026-11-10, Fable)
 
-`userland/libfetch/h2_conn.c/.h`, compiled into libfetch.so with the
-library's hidden visibility, and one new verb in libtls,
+`userland/libfetch/h2_conn.c/.h`, compiled into libfetch.so (which
+exports it, like everything it defines: see H2.3's note), and one new
+verb in libtls,
 `os64_tls_transport_release`. Nothing calls the connection: no program's
 behaviour changes with this slice, and H2.6 is what joins it to a fetch.
 Where the build departs from the brief, or says more than it did:
@@ -1887,10 +1890,11 @@ answer, because a missed one is a read of a transport nobody opened.
 - `dial` offers `h2, http/1.1` when ALL of: the hop is direct TLS
   (never through a proxy, § 2.1), the config's protocol is the default
   (never the TLS 1.2 fallback), and `fetch_h2_offer` is set.
-  `fetch_h2_offer` is a `bool` with the library's hidden visibility,
-  false at rest, declared in `pool.h`. Nothing in libfetch.so sets it,
-  and no exported symbol reaches it, so a program linked against the
-  library cannot turn h2 on. The host harness and `/tests/h2probe`
+  `fetch_h2_offer` is a `bool`, false at rest, declared in `pool.h` with
+  hidden visibility: the one symbol of libfetch's that the shared
+  library does not export (it exports the rest, as built). Nothing in
+  libfetch.so sets it and no exported function writes it, so a program
+  linked against the library cannot turn h2 on. The host harness and `/tests/h2probe`
   compile libfetch's sources into themselves and set it. H2.5 deletes
   the flag.
 - The connection's protocol is the ALPN name the handshake chose, read

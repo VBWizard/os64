@@ -503,6 +503,21 @@ void fetch_pool_tls_facts(fetch_conn_t *conn, uint16_t *version, bool *resumed)
     os64_lock_release(&s_lock);
 }
 
+void fetch_pool_h2_stats(size_t *connections, size_t *queued, size_t *buffered)
+{
+    *connections = *queued = *buffered = 0;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
+        fetch_conn_t *c = s_conns[i];
+        if (c == NULL || c->protocol != FETCH_PROTO_H2 || c->h2 == NULL)
+            continue;
+        *connections += 1;
+        *queued += h2_conn_queued(c->h2);
+        *buffered += h2_conn_buffered(c->h2);
+    }
+    os64_lock_release(&s_lock);
+}
+
 size_t fetch_pool_closing(void)
 {
     os64_lock_acquire(&s_lock);
