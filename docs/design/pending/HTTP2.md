@@ -2326,20 +2326,38 @@ departs from the brief, or says more than it did:
   is on the fetch's bell, so each fetch in flight holds one handle of
   its task's sixty-four. `h2probe` is capped at sixteen fetches for
   that: thirty-two, each with a thread's handle too, ran it out.
+- **A dialler is refused by its own new connection at most twice.** A
+  server that allows no stream, or ends each connection as it begins,
+  refuses the stream on a connection the fetch has just dialled, and a
+  new dial is a new connection every time. The second such refusal ends
+  the fetch REQUEST_FAILED ("the server's HTTP/2 connections took no
+  request, twice"). The brief argued that the take's loop ends only for a
+  connection the pool shared; the cold read found the other half.
+- **HTTP/2's detail and its note are cleared at each exchange**, so a
+  second try or a later hop says nothing of the first.
+- **The retry's tail says "on a fresh connection" for HTTP/1.1 alone.**
+  A refused stream's second try may ride the connection that refused the
+  first (RFC 9113 § 8.7 allows it), so an HTTP/2 retry reads "(retried
+  once)".
+- **A response field's name of any length reaches the observers**, as
+  over HTTP/1.1; only a name short enough to be one the fetch itself
+  reads (under 64 bytes) is read for it.
 - **`h2probe --fixture`** verifies the server against libtls's test root,
   so a local `nghttpd` holding the fixture certificate (`example.test`)
   serves it with no change to the guest's store.
 
-Proof. tools/test_fetch_h2_host.sh: 318 checks, under ASan/UBSan and
+Proof. tools/test_fetch_h2_host.sh: 343 checks, under ASan/UBSan and
 under TSan. tools/test_http_host.sh: the text request unchanged for every
 case it had, and the field list checked against the text of the same
 request, line for line. tools/test_fetch_transport_host.sh: the release
 verb. The HTTP/1.1 harnesses (fetch, pool, way, os64get) pass as they
-did. tools/test_fetch_h2_mutants.py: 74 deliberate breaks, all caught;
-the first run caught 56 of 77, and of the rest three were struck as
-above (two lost rings, and `TE`, which the composer never emits), five
-were missed and each got a case or a stronger one, and the others had
-not compiled or had not run. Two faults of the HARNESS were found on
+did. tools/test_fetch_h2_mutants.py: 78 deliberate breaks, all caught at
+the end; the first run caught 56 of 77, and of the rest three were
+struck as above (two lost rings, and `TE`, which the composer never
+emits), five were missed and each got a case or a stronger one, and the
+others had not compiled or had not run. One more was struck after the
+cold read: a refusal by a SHARED connection counted as a dialler's own,
+which only a race between a take and an open can reach. Two faults of the HARNESS were found on
 the way and fixed: `peer_frame` handed every server thread one static
 buffer, which dropped a request about once in ten runs under load, and
 a case that had allowed "one to three" dials now holds the handshake
@@ -2355,7 +2373,19 @@ through slirp, on the e1000 and on virtio alike:
 | `h2probe --fixture URL 16` | PASS: one connection, sixteen at once |
 
 Each fetch read the same 240,000 bytes. (Timings under TCG say nothing
-about the P5 and are not recorded.)
+about the P5 and are not recorded.) The table is of the final code.
+
+One cold read by Opus found the redial with no bound, the detail kept
+from an earlier try, the long names the observers did not hear, the
+field cap's comment, and six comments that were not the whole truth;
+each is fixed, the first four with a case and a mutant.
+
+Known and left: a request of more than 256 fields (a Cookie line of
+some 245 pairs, with the rest of a head) is refused over HTTP/2 where
+HTTP/1.1 would send it. The tools/test_h2_conn_host.sh harness failed
+once in some twenty runs with a case using a stream whose open had
+failed; it did not recur in twelve runs under load, its helper now
+fails a named check instead of crashing, and its cause is not found.
 
 ### H2.5 — The switch (brief when its turn comes)
 
