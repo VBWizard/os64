@@ -162,6 +162,9 @@ h2_result_t h2_stream_head(h2_stream_t *stream, h2_wait_t *wait, h2_hpack_emit_t
 // negative h2_result_t (-H2_SILENT, -H2_INTERRUPTED, -H2_ENDED, -H2_FAILED).
 int64_t h2_stream_read(h2_stream_t *stream, void *buffer, size_t room, h2_wait_t *wait);
 
+// The stream's id on its connection, for a fetch's detail.
+uint32_t h2_stream_id(const h2_stream_t *stream);
+
 // How the stream ended, or H2_END_NOT_YET.
 h2_ending_t h2_stream_ended(h2_stream_t *stream);
 

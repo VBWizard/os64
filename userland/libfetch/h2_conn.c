@@ -1370,6 +1370,8 @@ int64_t h2_stream_read(h2_stream_t *s, void *buffer, size_t room, h2_wait_t *wai
     }
 }
 
+uint32_t h2_stream_id(const h2_stream_t *s) { return s->id; }
+
 h2_ending_t h2_stream_ended(h2_stream_t *s)
 {
     os64_lock_acquire(&s->conn->lock);
