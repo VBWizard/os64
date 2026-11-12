@@ -1075,10 +1075,14 @@ typedef struct {
     uint64_t (*version)(void *opaque);
     void *opaque;
 } os64_dom_css_animations_t;
-/* Copied; NULL removes it, after which getAnimations answers a script's
- * animations alone and no CSS animation event fires. The callbacks are
- * owner-thread, inside a script's task: they must not enter JS. Install
- * outside callbacks. */
+/* Copied; NULL removes it, after which active getAnimations queries answer
+ * script animations alone and no CSS animation event fires. A CSS snapshot
+ * holds a provider loan from count through record consumption; drive/version
+ * calls also hold loans. Replacement while a provider is borrowed is ignored.
+ * Callbacks are owner-thread and must not enter JS. Version may be queried
+ * outside a script task by the native scheduler. Inactive getAnimations and
+ * timeline-scheduling methods refuse with InvalidStateError; exported object
+ * identity and pure retained effect/time data remain available. */
 void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css);
 
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's

@@ -670,6 +670,49 @@ allocation sweeps pass **13,325 checks** with leak detection enabled. The
 target DOM library builds. These results do not replace final guest/WPT
 acceptance or the outstanding departure-finish proofs.
 
+## CSS animation departure checkpoint
+
+CSS snapshots retain a provider loan from count through record consumption;
+drive and scheduler version calls retain their captured producer too. Native
+retirement stops subsequent records and script queries refuse partial results.
+Provider replacement and scheduler reentry cannot disturb a borrowed snapshot.
+The public callback comment was incorrect about scheduler version reads being
+inside script tasks; it now describes both entry paths.
+
+Internal quiescent animation cleanup detaches the provider, clears pending
+event payloads, freezes effect clocks and releases activity-owned registry
+holds. It preserves exported Animation/KeyframeEffect identity and borrowed
+layout generations. Adopted effects remain visible in the active document;
+data survives the last JavaScript reference until the borrowing layout tree
+acknowledges release. Inactive pure seeks and keyframe edits remain usable,
+without reacquiring activity holds or accumulating cancel events. Timeline
+methods and `startTime` assignment refuse inactive service after conversions.
+
+The final `--animation-retirement` fixture passes **1,196 checks**, across
+thirteen scenarios under both teardown policies, with the instrumented engine
+and ASan/UBSan/LSan enabled. Instrumented Web Animations (**675**) and realm
+routing (**678**) regressions pass. The preceding implementation fails **1,302
+checks** in this fixture, using a no-op adapter for its absent internal cleanup
+entry. The adapter does not add any retirement behavior.
+The full shipping-engine suite passes **59,890 checks**, including **3,991
+native binding allocation sweeps**. The target DOM library builds; tracker,
+stale-reference and diff checks pass.
+
+Fourteen isolated mutants are caught: missing snapshot/step/drive/version
+loans, record queries after retirement, borrowed-provider replacement,
+destructive cleanup, premature layout acknowledgement, unfrozen clocks,
+retained or reacquired registry holds, obsolete cancel-event payloads, and
+playback-rate/start-time conversion gates. The cumulative caught count is
+**187**. The premature acknowledgement mutant produces an ASan use-after-free.
+A wrapping guard and finish-notification guard mutation survive the fixture's
+other lifetime/job protections and are not counted. The new start-time
+regression failed before its guard was added; its failure evidence is retained.
+
+Public finish still needs engine, dispatch and reaction quiescence, plus
+integration with the other cleanup seams. Animation creation/timeline routing
+for adopted receivers remains an explicit follow-up proof. These internal
+checks do not authorize freeing provider storage or replace guest/WPT evidence.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

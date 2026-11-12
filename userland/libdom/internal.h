@@ -1883,6 +1883,7 @@ void d_animation_drain(os64_dom_t *dom);
  * buried (no layout reads an effect once the binding is freed). */
 int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_web_animations_drain(os64_dom_t *dom);
+void d_web_animations_cancel(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);
 /* The document timeline sampled at `now` (performance.now()'s clock): a
  * frame-callback batch's timestamp is the timeline's time in its

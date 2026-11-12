@@ -104,6 +104,20 @@ members' diagnostic debt. If a directly run script retired its service owner,
 an active sibling can drive the owed reports without changing their owners.
 Hosts must settle a directly run script before starting another native task.
 
+## CSS animation snapshots and retained effects
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `webanimation.c`: CSS count/at/version snapshots | Queried or stepped document | One loan spans count, records and consumption, including nested clock pushes. Retirement stops later records and prevents partial script queries. Replacement and scheduler reentry are refused while the cluster has a provider loan. |
+| `webanimation.c`: CSS clock drive and scheduler version | Animation's document | Captured provider and opaque stay borrowed through the response. Retirement suppresses later host calls and scheduling. Version can run outside a script task; the previous public comment claiming all callbacks were inside tasks was incorrect. |
+| `webanimation.c`: native activity cleanup | Departed animation owner | Internal quiescent cleanup detaches CSS services, frees event payloads, freezes clocks and releases activity holds. Exported animation/effect records and layout generations survive. Public finish must supply the engine/dispatch/reaction barrier before invoking this seam. |
+
+Retained current-time seeks, effect edits and cancellation do not restore
+departed activity. Starting a timeline, including `startTime` assignment after
+argument conversion, refuses. Native layout data outlives JavaScript's last
+reference until the borrowing trees acknowledge release; another document's
+acknowledgement does not stand in for the borrowing document's.
+
 ## Entries still to integrate
 
 These are open implementation obligations. They must be handled before a
@@ -112,7 +126,7 @@ successful public finish can promise that opaque storage is no longer borrowed.
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
 | Script/module/report hosts and console detachment | `report.c`, libjs host installation | Integrate guarded routes into safe-point finish without deleting siblings' state. |
-| CSS animation hosts and effect borrowers | `webanimation.c` | Guard count/at/version/drive; stop timeline scheduling while retaining effect identity and tree generations until acknowledgements. Do not reuse destructive animation drain. |
+| CSS animation cleanup and current-document services | `webanimation.c` | Integrate guarded snapshots and retained-effect cleanup into public finish; complete animation creation/timeline routing proofs for adopted receivers. Do not reuse destructive animation drain. |
 
 Provider replacement contracts and departure cleanup must agree: clearing a
 provider cannot erase the release operation for an existing loan. Image and
