@@ -694,39 +694,43 @@ typedef struct {
      * JSON (NULL for null; copied), and when `push` the entry that was
      * current stays behind it. No event, whatever the fragment did. False
      * when the host could not (no memory): QuotaExceededError, and nothing
-     * changed. */
+     * changed. If the callback retires the document, the binding refuses
+     * local completion with SecurityError, irrespective of this result. */
     bool (*update)(void *opaque, const char *url, const char *state, size_t length, bool push);
     /* A fragment navigation the document's script asked for (location.hash
      * =, or an address that differs from the document's only in its
      * fragment): the host adds the entry `url` (replaces the current one
      * when `replace`), scrolls to its fragment, and owes hashchange when
      * the fragment moved (os64_dom_history_event). On true the binding
-     * makes `url` the document's address and null its state, and fires
+     * makes `url` the active document's address and null its state, and fires
      * popstate itself, inside the script that asked (HTML § Navigate to a
      * fragment, whose "update document for history step application"
      * fires it then and there). False when the host could not: nothing
      * changed, and the binding asks for the address as a navigation
-     * instead (os64_dom_take_navigation). */
+     * instead (os64_dom_take_navigation). Retirement during the callback
+     * prevents local completion and fallback navigation. */
     bool (*fragment)(void *opaque, const char *url, bool replace);
     /* history.length: the entries in the session. */
     uint32_t (*length)(void *opaque);
     void *opaque;
 } os64_dom_history_t;
-/* Copied; NULL removes it, after which pushState and replaceState change
- * only the document's own address and state, a fragment navigation is an
- * ask (os64_dom_take_navigation), and history.length reads 1. The
+/* Copied; NULL removes it, after which an active document's pushState and
+ * replaceState change only the document's own address and state, a fragment
+ * navigation is an ask (os64_dom_take_navigation), and history.length reads 1. The
  * callbacks are owner-thread, inside a script's task: they must not enter
- * JS. Install outside callbacks. */
+ * JS. Install outside callbacks. A callback may mark retirement; its opaque
+ * storage must remain valid until the provider loan has ended. */
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
 /* The session moved to another entry of this document without a fetch: a
  * traversal (Back, Forward, history.go) or a fragment navigation the host
  * began (a link to `#x`). The document's address becomes `url`, its state
  * `length` bytes of the JSON the host kept (NULL for null), read the next
  * time history.state is. Nothing is dispatched: the host follows with
- * os64_dom_history_event. False on no memory, nothing changed; it is the
- * step of a move that can fail, so a host calls it before its own entries
- * move and moves them only on true, or the window would show one address
- * while the page's scripts read another. Owner thread, outside JS. */
+ * os64_dom_history_event. False on an inactive document or no memory, with
+ * nothing changed; it is the step of a move that can fail, so a host calls
+ * it before its own entries move and moves them only on true, or the window
+ * would show one address while the page's scripts read another. Owner thread,
+ * outside JS. */
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
 /* The document's current entry and its state, named: a new name at every
  * state update, fragment navigation and move. A host takes it when it owes
@@ -751,8 +755,8 @@ typedef struct {
     uint64_t entry;
 } os64_dom_history_event_t;
 /* `popstate` or `hashchange` at window, as one task. OK with nothing run
- * when modern is off or nothing could hear it; BAD_ARGUMENT for a
- * hashchange without both addresses, or a length with no state. */
+ * when the document is retired, modern is off or nothing could hear it;
+ * BAD_ARGUMENT for a hashchange without both addresses, or a length with no state. */
 os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
                                         os64_js_outcome_t *outcome);
 /* Whether the page set history.scrollRestoration to "manual": the host
@@ -1206,7 +1210,8 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
 /* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
- * one before it. False when there is none. */
+ * one before it. False when there is none or the document is inactive;
+ * taking from an inactive document discards the owed ask and its node holds. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The

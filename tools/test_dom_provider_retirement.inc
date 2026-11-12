@@ -13,6 +13,8 @@ enum {
     RP_CLOCK_NOW, RP_CLOCK_MARK, RP_CLOCK_MEASURE, RP_CLOCK_EVENT, RP_TIMING,
     RP_ZOOM_RATIO, RP_ZOOM_SCREEN, RP_ZOOM_MEDIA_NEW, RP_ZOOM_MEDIA_READ, RP_ZOOM_MEDIA_STEP,
     RP_CLOCK_IDLE_NATIVE, RP_CLOCK_RAF_NATIVE, RP_CLOCK_WA, RP_CLOCK_NOW_MS, RP_CLOCK_WA_NATIVE,
+    RP_HISTORY_LENGTH, RP_HISTORY_PUSH, RP_HISTORY_REPLACE, RP_HISTORY_FRAGMENT,
+    RP_HISTORY_FRAGMENT_REFUSE, RP_HISTORY_UPDATE_REFUSE,
     RP_UPDATE, RP_RELEASE, RP_MS, RP_US, RP_ZOOM, RP_COUNT
 };
 typedef struct {
@@ -248,6 +250,37 @@ static uint32_t retirement_zoom(void *opaque)
     retirement_provider_touch(p, p->kind >= RP_ZOOM_RATIO && p->kind <= RP_ZOOM_MEDIA_STEP ? p->kind : RP_ZOOM);
     return 1250;
 }
+static uint32_t retirement_history_length(void *opaque)
+{
+    retirement_provider_touch(opaque, RP_HISTORY_LENGTH);
+    return 4;
+}
+static bool retirement_history_update(void *opaque, const char *url, const char *state, size_t length, bool push)
+{
+    (void)url; (void)state; (void)length;
+    RetirementProvider *p = opaque;
+    bool refuse = p->armed && p->kind == RP_HISTORY_UPDATE_REFUSE;
+    retirement_provider_touch(p, p->kind == RP_HISTORY_UPDATE_REFUSE ? p->kind :
+                              push ? RP_HISTORY_PUSH : RP_HISTORY_REPLACE);
+    return !refuse;
+}
+static bool retirement_history_fragment(void *opaque, const char *url, bool replace)
+{
+    (void)url; (void)replace;
+    RetirementProvider *p = opaque;
+    retirement_provider_touch(p, p->kind == RP_HISTORY_FRAGMENT_REFUSE ? p->kind : RP_HISTORY_FRAGMENT);
+    return p->kind != RP_HISTORY_FRAGMENT_REFUSE;
+}
+static void retirement_no_navigation(RetirementProvider *p, const char *label)
+{
+    os64_dom_navigation_t ask;
+    bool taken = os64_dom_take_navigation(p->binding, &ask);
+    check(!taken && ask.kind == OS64_DOM_NAVIGATE_NONE, label);
+    /* A failing implementation can return held nodes; release those so the
+     * assertion, rather than fixture teardown, diagnoses the regression. */
+    if (ask.node) os64_html_release(p->base.document, ask.node);
+    if (ask.submitter) os64_html_release(p->base.document, ask.submitter);
+}
 static void provider_native_retirement_cases(void)
 {
     const char *operations[] = {
@@ -266,7 +299,10 @@ static void provider_native_retirement_cases(void)
         "B.channel.port1.postMessage('x',[B.buffer])", "B.performance.now()", "B.performance.mark('implicit')",
         "B.performance.measure('implicit')", "new B.Event('mark')", "assert(B.performance.timing.loadEventEnd===2007)",
         "B.devicePixelRatio", "B.screen.width", "B.matchMedia('(resolution: 1.25dppx)')", "B.media.matches", NULL,
-        NULL, NULL, "B.document.timeline.currentTime", "B.performance.now()", NULL
+        NULL, NULL, "B.document.timeline.currentTime", "B.performance.now()", NULL,
+        "B.history.length", "B.history.pushState({next:2},'', '#push')",
+        "B.history.replaceState({next:2},'', '#replace')", "B.location.hash='fragment'",
+        "B.location.replace('#refused')", "B.history.pushState({next:2},'', '#refused')"
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (unsigned kind = 0; kind < sizeof(operations) / sizeof(operations[0]); kind++) {
@@ -322,6 +358,11 @@ static void provider_native_retirement_cases(void)
                 os64_dom_set_cookies(dom, &cookies);
                 os64_dom_set_user_agent(dom, retirement_agent, &p[i]);
                 os64_dom_set_global_miss(dom, retirement_service_miss, &p[i]);
+                os64_dom_history_t history = {retirement_history_update, retirement_history_fragment,
+                                             retirement_history_length, &p[i]};
+                os64_dom_set_history(dom, &history);
+                check(os64_dom_history_moved(dom, "https://providers.example/", "{\"kept\":1}", 10),
+                      "provider retirement: initial history snapshot installed");
                 realm_script(realms[i], STORAGE_ASSERT
                     "globalThis.box=document.createElement('div');document.body.appendChild(box);"
                     "globalThis.text=document.createTextNode('words');box.appendChild(text);"
@@ -343,6 +384,9 @@ static void provider_native_retirement_cases(void)
                     "globalThis.buffer=new ArrayBuffer(16);globalThis.channel=new MessageChannel();"
                     "globalThis.savedEvent=new Event('saved');globalThis.savedStamp=savedEvent.timeStamp;"
                     "globalThis.savedTiming=performance.timing.loadEventEnd;"
+                    "globalThis.savedState=history.state;"
+                    "globalThis.link=document.createElement('a');link.href='/pending';document.body.appendChild(link);"
+                    "globalThis.form=document.createElement('form');document.body.appendChild(form);"
                     "globalThis.media=matchMedia('(resolution: 1.25dppx)');",
                     "provider retirement: clock and media snapshots prepared");
             }
@@ -353,6 +397,8 @@ static void provider_native_retirement_cases(void)
                   "provider retirement: child objects exported"); JS_FreeValue(ac, global);
             realm_script(realms[0],
                 "globalThis.refused=f=>{try{f();return false}catch(e){return e.name==='InvalidStateError'}};"
+                "globalThis.historyCallbacks=0;B.addEventListener('popstate',()=>historyCallbacks++);"
+                "B.addEventListener('hashchange',()=>historyCallbacks++);"
                 "globalThis.ro=new ResizeObserver(()=>{});ro.observe(B.box);"
                 "globalThis.io=new IntersectionObserver(()=>{},{root:B.document});io.observe(B.box);",
                 "provider retirement: active observer owns child target");
@@ -372,6 +418,8 @@ static void provider_native_retirement_cases(void)
             if (kind == RP_CLOCK_WA_NATIVE)
                 realm_script(realms[1], "box.animate([{opacity:0},{opacity:1}],1000);",
                              "provider retirement: animation update prepared");
+            realm_script(realms[1], "link.click();", "provider retirement: navigation pending before mark");
+            uint64_t entry = os64_dom_history_entry(p[1].binding);
             memset(p[1].calls, 0, sizeof(p[1].calls)); p[1].armed = true;
             if (kind == RP_BROKEN)
                 check(os64_html_remove_attr(p[1].base.document, native_id(p[1].base.document->document, "service-box"),
@@ -396,6 +444,13 @@ static void provider_native_retirement_cases(void)
                 if (kind == RP_CLOCK_EVENT || kind == RP_TIMING || kind == RP_CLOCK_WA)
                     realm_script(realms[0], "assert(!operationThrew);",
                                  "provider retirement: passive snapshot survives native mark");
+                if (kind == RP_HISTORY_LENGTH || kind == RP_HISTORY_PUSH || kind == RP_HISTORY_REPLACE ||
+                    kind == RP_HISTORY_UPDATE_REFUSE)
+                    realm_script(realms[0], "assert(operationThrew&&operationError==='SecurityError');",
+                                 "provider retirement: history refuses post-mark completion");
+                if (kind == RP_HISTORY_FRAGMENT || kind == RP_HISTORY_FRAGMENT_REFUSE)
+                    realm_script(realms[0], "assert(operationThrew&&operationError==='InvalidStateError');",
+                                 "provider retirement: fragment retirement prevents commit and fallback");
             } else if (kind == RP_IMAGE_EVENT) {
                 check(!os64_dom_image_event(p[1].binding, NULL, NULL, false),
                       "provider retirement: native image task stops after acquisition retirement");
@@ -422,6 +477,18 @@ static void provider_native_retirement_cases(void)
             check(os64_js_realm_is_retired(realms[1]) && p[1].calls[kind] == 1, completion);
             check(!d_provider_busy(p[0].binding) && !d_provider_busy(p[1].binding),
                   "provider retirement: loans balance after success or refusal");
+            retirement_no_navigation(&p[1], "provider retirement: pending navigation discarded after mark");
+            retirement_no_navigation(&p[1], "provider retirement: discarded navigation stays empty");
+            check(os64_dom_history_entry(p[1].binding) == entry &&
+                  !os64_dom_history_moved(p[1].binding, "https://providers.example/late", NULL, 0),
+                  "provider retirement: no local history commit after mark");
+            os64_dom_history_event_t late_history = {.entry=entry};
+            check(os64_dom_history_event(p[1].binding, &late_history, &out) == OS64_JS_OK,
+                  "provider retirement: obsolete native history event discarded");
+            late_history = (os64_dom_history_event_t){.hashchange=true, .old_url="https://providers.example/",
+                                                    .new_url="https://providers.example/late"};
+            check(os64_dom_history_event(p[1].binding, &late_history, &out) == OS64_JS_OK,
+                  "provider retirement: obsolete native hashchange discarded");
             check(os64_dom_timer_next(p[1].binding) == UINT64_MAX &&
                   os64_dom_animation_next(p[1].binding) == UINT64_MAX &&
                   os64_dom_idle_next(p[1].binding) == UINT64_MAX &&
@@ -439,6 +506,24 @@ static void provider_native_retirement_cases(void)
                 realm_script(realms[0], "assert(!operationThrew&&context.getImageData(0,0,1,1).data[0]===255);",
                              "provider retirement: borrowed pixels remain usable until release");
             unsigned calls[RP_COUNT]; memcpy(calls, p[1].calls, sizeof(calls));
+            realm_script(realms[0],
+                "let security=f=>{try{f();return false}catch(e){return e.name==='SecurityError'}};"
+                "assert(security(()=>B.history.length));assert(security(()=>B.history.state));"
+                "assert(security(()=>B.history.scrollRestoration));"
+                "assert(security(()=>{B.history.scrollRestoration='manual'}));"
+                "assert(security(()=>B.history.back()));assert(security(()=>B.history.forward()));"
+                "assert(security(()=>B.history.go(0)));assert(security(()=>B.history.go(-1)));"
+                "assert(security(()=>B.history.pushState(null,'')));assert(security(()=>B.history.replaceState(null,'')));"
+                "assert(refused(()=>B.location.reload()));assert(refused(()=>B.location.assign('/late')));"
+                "assert(refused(()=>B.location.replace('/late')));assert(refused(()=>{B.location.hash='late'}));"
+                "assert(refused(()=>{B.location.href='/late'}));assert(refused(()=>{B.location.hash=''}));"
+                "assert(B.location.href==='https://providers.example/'&&B.savedState.kept===1);"
+                "assert(historyCallbacks===0);"
+                "B.savedState.kept=3;assert(B.savedState.kept===3);B.link.click();B.form.submit();"
+                "assert(history.length===4);history.pushState({sibling:1},'','#sibling');"
+                "assert(history.state.sibling===1&&location.hash==='#sibling');",
+                "provider retirement: history services refuse while exported state and sibling history survive");
+            retirement_no_navigation(&p[1], "provider retirement: inactive actions enqueue no new navigation");
             if (kind != RP_BROKEN)
                 check(os64_html_remove_attr(p[1].base.document, native_id(p[1].base.document->document, "service-box"),
                       "data-native") == OS64_HTML_OK, "provider retirement: native attribute removal after mark");
@@ -482,6 +567,12 @@ static void provider_native_retirement_cases(void)
             check(!os64_dom_image_event(p[1].binding, NULL, NULL, false) &&
                   !os64_dom_view_step(p[1].binding, &out) && !memcmp(calls, p[1].calls, sizeof(calls)),
                   "provider retirement: no late native or script provider calls");
+            os64_dom_set_history(p[1].binding, NULL);
+            realm_script(realms[0],
+                "assert(security(()=>B.history.length));assert(security(()=>B.history.pushState(null,'','#none')));"
+                "assert(refused(()=>B.location.assign('#none')));"
+                "assert(B.location.href==='https://providers.example/'&&B.savedState.kept===3);",
+                "provider retirement: removing history host does not revive local navigation");
             realm_script(realms[0], "document.body.appendChild(B.box);assert(B.box.getBoundingClientRect().width===100);",
                          "provider retirement: adopted retained node uses active destination provider");
             check(!d_provider_busy(p[0].binding), "provider retirement: sibling remains quiescent after adoption query");
@@ -493,12 +584,22 @@ static void provider_native_retirement_cases(void)
 
 static void provider_conversion_retirement_cases(void)
 {
-    static const char *operations[] = {
-        "alert({toString(){retire();return 'late'}})",
-        "document.write('first',{toString(){retire();return 'late'}})",
-        "document.writeln({toString(){retire();return 'late'}},'last')",
-        "document.cookie={toString(){retire();return 'late'}}",
-        "input.reportValidity()"
+    static const struct { const char *source, *error; } operations[] = {
+        {"alert({toString(){retire();return 'late'}})", "InvalidStateError"},
+        {"document.write('first',{toString(){retire();return 'late'}})", "InvalidStateError"},
+        {"document.writeln({toString(){retire();return 'late'}},'last')", "InvalidStateError"},
+        {"document.cookie={toString(){retire();return 'late'}}", "InvalidStateError"},
+        {"input.reportValidity()", ""},
+        {"history.pushState({}, {toString(){retire();return ''}}, '#title')", "SecurityError"},
+        {"history.replaceState({}, '', {toString(){retire();return '#url'}})", "SecurityError"},
+        {"history.pushState({get x(){retire();return 1}}, '', '#state')", "SecurityError"},
+        {"history.go({valueOf(){retire();return -1}})", "SecurityError"},
+        {"history.scrollRestoration={toString(){retire();return 'manual'}}", "SecurityError"},
+        {"location.assign({toString(){retire();return '/late'}})", "InvalidStateError"},
+        {"location.replace({toString(){retire();return '#late'}})", "InvalidStateError"},
+        {"location.hash={toString(){retire();return ''}}", "InvalidStateError"},
+        {"form.requestSubmit()", ""},
+        {"link.click()", ""}
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (size_t i = 0; i < sizeof(operations) / sizeof(operations[0]); ++i) {
@@ -509,7 +610,7 @@ static void provider_conversion_retirement_cases(void)
         check(os64_js_create_with_teardown(&config, policy, OS64_JS_ABI_ID, &f.runtime, &out) == OS64_JS_OK,
               "provider conversion: runtime created");
         retirement_realms[1] = os64_js_primary_realm(f.runtime, OS64_JS_ABI_ID, &out);
-        RetirementProvider p = {.realm=retirement_realms[1]};
+        RetirementProvider p = {.realm=retirement_realms[1], .base.document=f.document};
         os64_dom_options_t options = p2b_options("https://providers.example/");
         options.alert = retirement_alert; options.alert_opaque = &p;
         options.host_opaque = &p; options.write = retirement_write; options.activate = retirement_activate;
@@ -519,6 +620,9 @@ static void provider_conversion_retirement_cases(void)
         if (f.binding) {
             os64_dom_cookies_t cookies = {retirement_cookie_get, retirement_cookie_set, &p, retirement_cookie_enabled};
             os64_dom_set_cookies(f.binding, &cookies);
+            os64_dom_history_t history = {retirement_history_update, retirement_history_fragment,
+                                         retirement_history_length, &p};
+            os64_dom_set_history(f.binding, &history);
             check(os64_js_realm_task_begin(p.realm, OS64_JS_ABI_ID, "provider conversion", &out) == OS64_JS_OK,
                   "provider conversion: setup task begins");
             JSContext *ctx = os64_js_realm_context(p.realm, OS64_JS_ABI_ID, &out);
@@ -528,18 +632,22 @@ static void provider_conversion_retirement_cases(void)
             JS_FreeValue(ctx, global);
             check(os64_js_task_end(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
                   "provider conversion: setup task ends");
-            char source[1200];
+            char source[1800];
             snprintf(source, sizeof(source), STORAGE_ASSERT
                 "globalThis.input=document.createElement('input');input.required=true;document.body.appendChild(input);"
                 "input.addEventListener('invalid',retire);"
-                "let refused=false;try{%s}catch(e){refused=e.name==='InvalidStateError'}"
-                "assert(refused===%s);", operations[i], i < 4 ? "true" : "false");
+                "globalThis.form=document.createElement('form');document.body.appendChild(form);"
+                "globalThis.link=document.createElement('a');link.href='/late';document.body.appendChild(link);"
+                "form.addEventListener('submit',retire);link.addEventListener('click',retire);"
+                "let error='';try{%s}catch(e){error=e.name}assert(error==='%s');",
+                operations[i].source, operations[i].error);
             realm_script(p.realm, source, "provider conversion: retirement before host service");
             check(os64_js_realm_is_retired(p.realm), "provider conversion: conversion or event marked realm");
             unsigned total = 0;
             for (size_t j = 0; j < RP_COUNT; j++) total += p.calls[j];
             check(total == 0 && !d_provider_busy(f.binding),
                   "provider conversion: no host call or outstanding loan after mark");
+            retirement_no_navigation(&p, "provider conversion: no navigation delivered after conversion or event retirement");
         }
         fixture_free(&f);
     }

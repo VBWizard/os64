@@ -46,6 +46,7 @@ alone do not authorize freeing provider storage.
 | `core.c`: shared millisecond/microsecond reads; callers in timers, idle, animation, events, messages, storage, XHR, intersection and Web Animations | Clock's document | Each host read; inactive reads use binding-owned saved samples. Timer/idle/frame creation and message posting recheck after clock callbacks before publishing work or detaching transfers. Transport/storage cleanup remains a separate obligation below. |
 | `performance.c`: current time and navigation timing | Performance object's window | Native clock/timing call through snapshot copy. Live `now()` and implicit mark/measure timestamps refuse retirement; explicit timestamps and previously sampled navigation timing remain usable. |
 | `screen.c`, `view.c`: zoom and media-query sampling | Screen or media-query window | Each zoom call. A media environment uses one sample; post-call retirement refuses script query results and stops native media delivery. Stored screen metadata remains available. |
+| `window.c`: history length/update/fragment | History or Location service's document | Each native call; recheck after argument/state conversion and host completion. Inactive History operations use SecurityError, while exported state objects remain usable. Retirement prevents local completion and fragment fallback even when the host accepted an entry. Pending navigation holds are discarded when taken after retirement; late native moves and history events do no work. |
 
 ## Entries still to integrate
 
@@ -56,7 +57,6 @@ successful public finish can promise that opaque storage is no longer borrowed.
 |---|---|---|
 | Failed diagnostics, script/module/report hosts and console | `report.c`, libjs host installation | Detach report/loader/output routes without deleting siblings' state. Missing-global and broken-attribute loans are covered above. |
 | Storage identity/load/commit and walkers | `storage.c` | Guard normal service entry; settle owed changes once while provider remains valid. Cleanup must also work during root drain, which has set `closed`. |
-| History length/update/fragment | `window.c` | Guard after URL/state conversions and through host completion; retained serialized data is separate from navigation activity. |
 | Fetch/XHR transport | `fetch.c`, `xhr.c` | Guard start/more/run; keep synchronous response loans through release. Cancel by binding request token, unlink before cancellation reentry, and discard late answers without author abort events. Cleanup release/cancel must remain callable while departing. |
 | CSS animation hosts and effect borrowers | `webanimation.c` | Guard count/at/version/drive; stop timeline scheduling while retaining effect identity and tree generations until acknowledgements. Do not reuse destructive animation drain. |
 | Other synchronous native visitors | `importmap.c`, `pointer.c`, storage walkers | Count callback extent, stop later callbacks on departure, and retain records while a visitor is running. |

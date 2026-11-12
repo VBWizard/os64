@@ -395,6 +395,51 @@ retirement; sampling a port timestamp after transfer; and continuing a native
 Web Animation update after clock retirement. The cumulative caught count is
 **97**. Full instrumented and guest acceptance remain outstanding.
 
+## History and navigation checkpoint
+
+History length/update/fragment callbacks borrow provider storage and recheck
+activity on return. URL/title conversion and state serialization can retire
+the binding; none may lead to a later native history call. History methods
+and properties use the interface's SecurityError for inactive documents,
+including state and scroll restoration. Already exported state objects keep
+their identity and remain mutable. Location operations refuse unavailable
+navigation with InvalidStateError; saved address reads remain local to the
+binding. Stable proxy routing across replacement documents is F.4 work.
+
+A host callback that accepts an entry and marks retirement does not cause a
+local binding commit or fragment fallback. The host's accepted entry is not
+rolled back. A refused callback that retires also prevents fallback. Native
+history moves refuse inactive documents, owed popstate/hashchange events are
+discarded, and taking a previously queued navigation discards its node holds.
+Link/form activation cannot enqueue a departed document's navigation. Removing
+the history provider does not revive the local fallback path.
+
+The fixture now covers 56 native callback scenarios and 15 conversion/event
+scenarios under both teardown policies. Active sibling history and exported
+state are checked after departure. Tests release unexpected returned navigation
+holds so a failing baseline reports assertions instead of failing fixture
+teardown. A duplicate lexical declaration in the extended fixture was corrected
+before the final run. The final fixture reports **984 failures** against the
+preceding implementation and passes against the guards:
+
+| Coverage | Result |
+|---|---:|
+| Complete shipping-engine DOM suite | 52,381 checks; 3,991 native allocation sweeps |
+| Provider retirement, shipping and instrumented | 6,814 checks each |
+| Instrumented scroll/view/history | 313 checks |
+| Instrumented events/navigation | 1,020 checks |
+| Instrumented cross-realm routing | 678 checks |
+| Instrumented window | 820 checks |
+| Instrumented windowless document implementation | 2,968 checks |
+
+All pass with ASan/UBSan/LSan enabled. The native DOM library builds. Twelve
+isolated mutants are caught: unborrowed history length/update/fragment calls;
+accepting a length/update/fragment result after retirement; late native moves
+and events; taking obsolete navigation; accepting Location after conversion
+retirement; and inactive history-state/restoration access. The cumulative
+caught count is **109**. Full instrumented, guest and current pinned-WPT
+acceptance remain outstanding.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

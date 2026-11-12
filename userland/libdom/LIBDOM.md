@@ -504,6 +504,13 @@ reads back the last string a script set, as HTML keeps it, and
 `defaultStatus`, which no standard has, accepts an assignment and reads
 empty; the status line itself is the browser's and shows neither.
 
+Inactive document services cannot enqueue navigation. Location requests refuse
+with InvalidStateError; retained Location data still names the binding's saved
+address. Taking an inactive document's pending ask discards its node holds.
+Stable WindowProxy/Location routing across replacement documents belongs to
+the iframe proxy slice. History uses its specified SecurityError inactive
+behavior, described below.
+
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it; with the switch on the
 event is a MouseEvent and its dispatch runs the activation, an element
@@ -1021,7 +1028,7 @@ style's member. `document.defaultView` is window.
 **History** (`os64_dom_set_history`) is the host's session: `pushState`
 and `replaceState` give it the entry's address (one the document may
 rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
-carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
+carry; DataCloneError otherwise, QuotaExceededError past 2 MiB or when the
 host refuses), and fire nothing. `history.state` is that JSON read once,
 the same object until the entry changes. A fragment navigation a script
 makes goes to the host at once, and its `popstate` fires inside that
@@ -1036,6 +1043,17 @@ the entry's state and name (`os64_dom_history_entry`), its state being
 history.state itself only while that entry is still the current one.
 `history.scrollRestoration` is the host's to read
 (`os64_dom_history_manual`).
+
+History methods and properties (including `state` and `scrollRestoration`)
+throw SecurityError for an inactive associated document, following
+[HTML's History interface](https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface).
+Previously returned state objects remain ordinary retained data. Host
+length/update/fragment callbacks hold provider loans; conversion and callback
+retirement prevent later native calls or local completion. A host-accepted
+entry is not rolled back if the callback retires the document, but the departed
+binding neither commits that result nor falls back to another navigation.
+Late native moves refuse and owed events are discarded. The finish protocol
+must still detach the provider before its opaque storage can be freed.
 
 ## The Modern Web's surface
 
