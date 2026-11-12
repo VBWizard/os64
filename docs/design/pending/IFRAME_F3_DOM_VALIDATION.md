@@ -7,6 +7,10 @@ was clean; the six design findings on #546 have evidence replies and are
 resolved. Draft PR #553 carries the first DOM checkpoint at `0f9055d3`.
 F.3 remains `code`, not complete.
 
+The rendering-provider checkpoint merges `userland` through `a965756f` in
+`231c9f60`. Its host objects were rebuilt for the merged headers and added
+binding/cluster loan counters. Earlier results below remain checkpoint-specific.
+
 ## Implemented boundary
 
 Mutation-observer notification and the custom-element backup queue are
@@ -246,6 +250,59 @@ data creator as activity owner, and checking callback eligibility only once.
 The fixture also reads retained Blob, byte-backed Response and closed-stream
 Response data after their creator retires. These are settled-data proofs,
 not a claim that the transport cancellation/provider audit is complete.
+
+## Rendering-provider checkpoint
+
+Native provider loans are counted on both their binding and cluster, including
+nested sibling calls. Rendering entry points refuse inactive owners and stop
+multi-pass queries or native walks when a callback marks retirement. Image
+loans capture their producer and opaque through consumption and release, even
+if that producer is replaced during acquisition. Font loans extend through run
+release. Retained Canvas pixels remain available, and adopted nodes use their
+new document's providers. Completed layout cost remains charged when the
+result is refused after retirement.
+
+The [provider inventory](IFRAME_F3_PROVIDERS.md) lists guarded sites and the
+remaining families. These counters are groundwork for safe-point finish;
+they do not yet authorize a host to free provider opaque storage.
+
+Both shipping and instrumented engine profiles pass with ASan/UBSan/LSan:
+
+| Coverage | Shipping | Instrumented |
+|---|---:|---:|
+| Provider retirement, both teardown policies | 854 | 854 |
+| Existing retirement and initial provider cases | 1,270 | 1,270 |
+| Cross-realm routing | 678 | 678 |
+| Canvas | 548 | 548 |
+| Resize | 229 | 1,309 |
+| Intersection | 409 | 409 |
+| Geometry, scrolling, view and history | 313 | 313 |
+| Ranges | 126 | 126 |
+
+The provider-only total includes stronger assertions added after the combined
+retirement run: synchronous post-mark refusal, replacement-safe image release,
+and cost accounting. Fourteen scenarios each run under both teardown policies;
+they include expanded hit/range buffers, native image polling, font refusal,
+observer measurement, and normal/reset Canvas damage visitors. The font test
+covers the refusal path; it does not independently prove a successful run's
+release during retirement.
+
+Nine isolated mutants are caught: missing cluster accounting, clearing an
+outer loan on a nested return, admitting inactive owners, losing the captured
+image release, ending its loan before release, accepting retired geometry,
+continuing damage delivery after retirement, and dropping completed cost in
+either hit or range queries. The cumulative caught count is 74. The normal native
+`dom-library` target builds successfully.
+
+The complete shipping-engine DOM run passes 46,421 checks with 3,991 native
+binding allocation sweeps and leak detection enabled. The instrumented results
+above are focused runs; they are not a completed full instrumented acceptance.
+
+An initial broad run found stale 64 KiB history expectations after the merged
+limit grew to 2 MiB. Updated tests prove exact-limit primitive JSON acceptance,
+one-byte overflow refusal and preserved state. They use a fresh binding so
+the preceding large media-query fixtures do not exhaust native storage before
+the JSON boundary is reached. This changes tests, not the merged history limit.
 
 ## Remaining F.3b work
 

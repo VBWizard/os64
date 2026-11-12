@@ -459,13 +459,23 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         size_t count = n - groups[i].at;
         if (count == 0) continue;
         os64_dom_geometry_stats_t cost = {0};
-        bool answered = owner->intersections_provider != NULL &&
-            owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost);
+        bool answered = false;
+        if (owner->intersections_provider != NULL && d_provider_enter(owner)) {
+            answered = owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost);
+            d_provider_leave(owner);
+        }
         owner->geometry_stats.layouts += cost.layouts;
         owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!d_delivery_active(dom)) return false;
+        if (!d_delivery_active(owner)) continue;
         if (!answered) return false;
         os64_dom_view_t view = {0};
-        if (owner->view.read != NULL) owner->view.read(owner->view.opaque, &view);
+        if (owner->view.read != NULL && d_provider_enter(owner)) {
+            owner->view.read(owner->view.opaque, &view);
+            d_provider_leave(owner);
+        }
+        if (!d_delivery_active(dom)) return false;
+        if (!d_delivery_active(owner)) continue;
         groups[i].viewport[2] = view.width;
         groups[i].viewport[3] = view.height;
     }

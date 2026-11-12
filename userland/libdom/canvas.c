@@ -427,19 +427,27 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
 }
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
-    if(!dom || dom->closed || !visit)return;
+    if(!visit || !d_provider_enter(dom))return;
     size_t count = dom->cluster ? dom->cluster->count : 1;
     for (size_t i = 0; i < count; ++i) {
         os64_dom_t *storage = dom->cluster ? dom->cluster->members[i] : dom;
         for(DValue *e=storage->values;e;e=e->next) {
         if(!d_more_peek(e)->canvas_object || !d_in_window_tree(dom,e->node))continue;
-        if(d_more_peek(e)->canvas_reset_pending){visit(opaque,e->node,0,0,NULL);continue;}
+        if(d_more_peek(e)->canvas_reset_pending){
+            visit(opaque,e->node,0,0,NULL);
+            if(!d_delivery_active(dom))goto done;
+            continue;
+        }
         draw2d_damage_t damage;canvas_bitmap_t bitmap;
         if(d_more_peek(e)->canvas && canvas_damage(d_more_peek(e)->canvas,&damage)==CANVAS_OK &&
-           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK)
+           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(d_more_peek(e)->canvas,&bitmap)==CANVAS_OK) {
             visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
+            if(!d_delivery_active(dom))goto done;
+        }
     }
     }
+done:
+    d_provider_leave(dom);
 }
 void os64_dom_canvas_painted(os64_dom_t *dom, const os64_html_node_t *node)
 {

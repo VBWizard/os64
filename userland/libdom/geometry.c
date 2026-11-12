@@ -47,11 +47,12 @@ bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *el
         d_error(ctx, "InvalidStateError", "No layout provider is installed");
         return false;
     }
-    if (!budget(dom, ctx)) return false;
+    if (!budget(dom, ctx) || !d_provider_begin(dom, ctx)) return false;
     bool ready = dom->geometry(dom->geometry_opaque, element, out);
+    d_provider_leave(dom);
     dom->geometry_stats.layouts = add_count(dom->geometry_stats.layouts, out->layouts);
     dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, out->elapsed_us);
-    if (!budget(dom, ctx)) return false;
+    if (!budget(dom, ctx) || !d_require_active(dom, ctx)) return false;
     if (!ready) {
         d_error(ctx, "InvalidStateError", "A current layout could not be produced");
         return false;

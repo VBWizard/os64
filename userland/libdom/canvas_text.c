@@ -291,15 +291,18 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     os64_font_family_list_t families={names,count,generic};os64_text_run_t *run=NULL;
     uint32_t pixels=style.size>0?(uint32_t)ceil(style.size):1;
     os64_dom_t *owner = d_owner(dom, e->node);
+    if(!d_provider_begin(owner,ctx)) {
+        garb_free(&f.parsed);d_canvas_release(dom,text,length+1);return JS_EXCEPTION;
+    }
     os64_font_status_t status=owner->canvas_text.layout?owner->canvas_text.layout(owner->canvas_text.opaque,&families,bold,italic,pixels,text,length,&run):OS64_FONT_UNSUPPORTED;
     garb_free(&f.parsed);d_canvas_release(dom,text,length+1);
-    if(status!=OS64_FONT_OK){os64_text_run_release(run);return font_error(ctx,status);}
+    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_provider_leave(owner);return font_error(ctx,status);}
     os64_text_run_view_t view;status=os64_text_run_view(run,&view);
     Commands commands={0};size_t capacity=OS64_GEOMETRY_COMMAND_MAX*sizeof(*commands.commands);
     if(magic&&status==OS64_FONT_OK&&d_canvas_allocate(dom,capacity,(void **)&commands.commands)!=OS64_GEOMETRY_OK)status=OS64_FONT_LIMIT;
     os64_geometry_bounds_t bounds={.empty=true};
     if(status==OS64_FONT_OK)status=os64_text_run_outline(run,OS64_GEOMETRY_COMMAND_MAX,magic?collect:NULL,&commands,&bounds);
-    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_canvas_release(dom,commands.commands,capacity);return font_error(ctx,status);}
+    if(status!=OS64_FONT_OK){os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return font_error(ctx,status);}
     double scale=style.size/pixels,width=view.advance_x/64.0*scale;
     double ascent=view.ascent/64.0*scale,descent=view.descent/64.0*scale;
     /* Fonts without explicit baseline tables use the same metric-based
@@ -322,7 +325,7 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
         os64_geometry_map_t placement={scale*squeeze,0,0,scale,x-anchor*squeeze,y+baseline};
         result=d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_draw_contours(d_more_peek(e)->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
     }
-    os64_text_run_release(run);d_canvas_release(dom,commands.commands,capacity);return result;
+    os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return result;
 }
 int d_canvas_text_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst prototype)
 {

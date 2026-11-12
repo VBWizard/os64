@@ -224,10 +224,15 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
         }
         if (n == 0) continue;
         os64_dom_geometry_stats_t cost = {0};
-        bool answered = owner->resizes_provider != NULL &&
-            owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+        bool answered = false;
+        if (owner->resizes_provider != NULL && d_provider_enter(owner)) {
+            answered = owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+            d_provider_leave(owner);
+        }
         owner->geometry_stats.layouts += cost.layouts;
         owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!d_delivery_active(dom)) return 0;
+        if (!d_delivery_active(owner)) continue;
         if (!answered) return -1;
         size_t at = 0;
         for (DRObserver *o = s->observers; o != NULL; o = o->next) {

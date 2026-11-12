@@ -169,6 +169,32 @@ bool d_require_active(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
+bool d_provider_enter(os64_dom_t *dom)
+{
+    if (!d_delivery_active(dom)) return false;
+    dom->provider_borrows++;
+    if (dom->cluster) dom->cluster->provider_borrows++;
+    return true;
+}
+
+bool d_provider_begin(os64_dom_t *dom, JSContext *ctx)
+{
+    if (d_provider_enter(dom)) return true;
+    d_error(ctx, "InvalidStateError", "The document's host service is inactive");
+    return false;
+}
+
+void d_provider_leave(os64_dom_t *dom)
+{
+    dom->provider_borrows--;
+    if (dom->cluster) dom->cluster->provider_borrows--;
+}
+
+bool d_provider_busy(const os64_dom_t *dom)
+{
+    return dom && (dom->provider_borrows || (dom->cluster && dom->cluster->provider_borrows));
+}
+
 int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
 {
     /* A bound function or callable proxy can belong to a different realm

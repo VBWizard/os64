@@ -374,6 +374,7 @@ struct os64_dom_cluster {
     struct DObservers *observers;
     struct DCustomAgent *custom_agent;
     size_t dispatching;
+    size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
@@ -391,6 +392,7 @@ struct os64_dom {
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
+    size_t provider_borrows;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
     bool mutation_installed;
@@ -799,6 +801,13 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 bool d_delivery_active(const os64_dom_t *dom);
 /* Service-creating methods refuse inactive owners after argument conversion. */
 bool d_require_active(os64_dom_t *dom, JSContext *ctx);
+/* Owner-thread provider loans include consuming and releasing borrowed output.
+ * The cluster count makes a sibling's outstanding loan visible to cleanup.
+ * Coverage is inventoried in IFRAME_F3_PROVIDERS.md. */
+bool d_provider_enter(os64_dom_t *dom);
+bool d_provider_begin(os64_dom_t *dom, JSContext *ctx);
+void d_provider_leave(os64_dom_t *dom);
+bool d_provider_busy(const os64_dom_t *dom);
 /* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
  * activity is the operation's current document, not the callback's creator. */
 int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
