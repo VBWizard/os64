@@ -646,6 +646,27 @@ began. (The boot that showed this also failed the adapter's reset
 outright, with the signature DEBTS already has for a warm reboot with
 devices connected; whether the early pass contributed is not known.)
 
+**What the P5 measured** (Chris's pass, 2026-11-12, the build of
+22:40 UTC, about fifteen minutes of use; `/sys/usb`):
+
+- Bluetooth through `kusb`: both bonds loaded at boot through `kworker`;
+  both devices reconnected after being switched off and on; a forget of
+  slot 1 was saved; a NEW mouse was paired into slot 1 and its bond saved
+  (`mouse ready`, `bond storage: saved`). Ctrl+C from the keyboards and
+  terminal switches work.
+- On the adapter's controller, 3,271 drains that found events were within
+  20 ms of the ring being seen empty, 29 between 20 and 200 ms, none
+  beyond. The worst gap between passes is 68 ms, during boot; after the
+  first read it is 20 ms, as in QEMU.
+- `step_delay_max_us` is 20.8 ms: with terminal switches among the events,
+  the Bluetooth step ran at most that long after a wake began. QEMU's 37
+  ms for one switch was the emulator; on the P5 the bound is two ticks.
+- No pass was refused the flag.
+- Not this slice's, and in DEBTS: one boot's adapter reset went unanswered
+  (a warm reboot with devices connected, cured by a cold boot), and one
+  boot's keyboard link dropped with reason `3d` during HID setup and was
+  not retried until `reconnect` was written.
+
 ## Measure first
 
 Before any change, on the P5, with the LE keyboard and the trackball each:
