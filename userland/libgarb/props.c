@@ -508,7 +508,7 @@ static const char *const kBlendModes[] = {
     "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color",
     "luminosity", "plus-lighter", "plus-darker", NULL};
 static const char *const kIsolation[] = {"auto", "isolate", NULL};
-// Masking 1 § 7.5-7.8: a mask's clip may also be no box at all, and its
+// Masking 1 § 7.5, § 7.8, § 7.2: a mask's clip may also be no box at all, and its
 // layers combine by an operator and are read by a mode.
 static const char *const kMaskClip[] = {"border-box", "padding-box", "content-box", "no-clip",
                                         NULL};
@@ -2048,7 +2048,7 @@ static const garb_prop_t kMaskProps[M_N] = {
     GARB_MASK_SIZE, GARB_MASK_ORIGIN, GARB_MASK_CLIP, GARB_MASK_COMPOSITE, GARB_MASK_MODE,
 };
 
-// The `mask` shorthand's layers (Masking 1 § 7.11), each one's values added
+// The `mask` shorthand's layers (Masking 1 § 7.9), each one's values added
 // to `lists`: a background's layer without the colour or the attachment,
 // with an operator and a mode, its position Values 4's <position>, and
 // `no-clip` the clip's own word. The longhands are all marked together, so

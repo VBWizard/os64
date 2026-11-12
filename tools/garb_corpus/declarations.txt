@@ -1583,6 +1583,10 @@ IN: quirks mask-position: 5 5
 OUT: invalid
 IN: quirks -webkit-mask-position-x: 5
 OUT: invalid
+IN: quirks mask: url(a.svg) 5 5
+OUT: invalid
+IN: quirks background: url(a.png) 5 5
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 5px; background-position-y: 5px; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: -webkit-mask-position-y: center
 OUT: mask-position-y: 50%
 IN: mask-size: 50% auto, cover

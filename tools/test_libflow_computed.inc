@@ -19,10 +19,11 @@ static const char kComputedPage[] =
     "#anim{animation:spin 2s linear infinite;will-change:transform}"
     "#mask{-webkit-mask:url(icon.svg) right 2px top 0/10px no-repeat content-box,"
     "linear-gradient(#000,transparent) exclude luminance no-clip}"
+    "#mask>b{display:block;mask-image:inherit;mask-mode:inherit}"
     "</style>"
     "<div id=box>box</div><div id=hidden><p id=inner>x<span id=deep>y</span></p></div>"
     "<div id=pos>p</div><div id=grid></div><span id=face>s</span><div id=flt></div>"
-    "<div id=shadow>t</div><div id=anim>a</div><div id=mask>m</div>";
+    "<div id=shadow>t</div><div id=anim>a</div><div id=mask>m<b id=heir>h</b></div>";
 
 static const os64_html_node_t *computed_find(const os64_html_node_t *n, const char *id)
 {
@@ -197,6 +198,12 @@ static void computed_cases(void)
     computed_is(c, "computed: mask-clip, no-clip", GARB_MASK_CLIP, "content-box, no-clip");
     computed_is(c, "computed: mask-composite", GARB_MASK_COMPOSITE, "add, exclude");
     computed_is(c, "computed: mask-mode", GARB_MASK_MODE, "match-source, luminance");
+    flow_computed_free(c);
+    c = flow_computed_new(tree, &p.env, computed_find(root, "heir"), NULL);
+    computed_is(c, "computed: mask-image taken by inherit", GARB_MASK_IMAGE,
+                "url(\"icon.svg\"), linear-gradient(rgb(0, 0, 0), rgba(0, 0, 0, 0))");
+    computed_is(c, "computed: mask-mode taken by inherit", GARB_MASK_MODE, "match-source, luminance");
+    computed_is(c, "computed: what it does not inherit is initial", GARB_MASK_CLIP, "border-box");
     flow_computed_free(c);
 
     // A node that is no element, and an element no layout of this document

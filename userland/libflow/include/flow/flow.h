@@ -295,7 +295,7 @@ typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
 typedef enum { FLOW_FIT_LENGTHS = 0, FLOW_FIT_COVER, FLOW_FIT_CONTAIN } flow_bg_fit_t;
 // A box a layer is placed in or cut to; NO_CLIP is a mask's clip that cuts
-// to nothing (Masking 1 § 7.7), never a background's.
+// to nothing (Masking 1 § 7.5), never a background's.
 typedef enum {
     FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT, FLOW_EDGE_NO_CLIP
 } flow_edge_t;
@@ -672,7 +672,7 @@ typedef enum {
     FLOW_COMPOSITE_ADD = 0, FLOW_COMPOSITE_SUBTRACT, FLOW_COMPOSITE_INTERSECT,
     FLOW_COMPOSITE_EXCLUDE
 } flow_composite_t;
-// What of a mask layer's image is its coverage (§ 7.9): its alpha, or its
+// What of a mask layer's image is its coverage (§ 7.2): its alpha, or its
 // luminance times its alpha. MATCH_SOURCE is alpha for every image libflow
 // keeps — a gradient's or a picture's, never an SVG <mask>'s.
 typedef enum { FLOW_MASK_ALPHA = 0, FLOW_MASK_LUMINANCE, FLOW_MASK_MATCH_SOURCE } flow_mask_mode_t;
@@ -768,8 +768,9 @@ typedef struct {
     // The mask (Masking 1 § 7; MASKS.md): a list per property, as the
     // backgrounds' are, each at least one long. A layer with an image makes
     // a box a stacking context and a group whose bounds are cut to its
-    // border box (flow_masked); a plain inline's is not drawn and makes
-    // nothing, as its opacity is painted opaque. Not inherited.
+    // border box unless a layer is cut to no box (flow_masked); a plain
+    // inline's does nothing, and an inline-block's is not drawn (it is no
+    // stacked box), as their opacity is painted opaque. Not inherited.
     flow_masks_t masks;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
@@ -1706,11 +1707,12 @@ flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
 bool flow_background_has_image(const flow_style_t *s);
 // A style's mask layers, as its background layers: how many, and layer
 // `i` (0 the top). A layer with no image is a transparent one (Masking 1
-// § 7.2).
+// § 7.1).
 int32_t flow_mask_layers(const flow_style_t *s);
 flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i);
 // Whether a mask is granted: a layer has a picture or a gradient, and the
-// box is no plain inline.
+// box is no plain inline (an inline-block's is granted and still not drawn:
+// flow_style_t.masks).
 bool flow_masked(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is — in
@@ -1799,9 +1801,10 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 
 // The same walk, told where each GROUP is: a stacking context painted below
 // full opacity (flow_style_t.opacity), drawn through its matrix
-// (flow_box_through), filtered (flow_style_t.filter), or blended by a
-// mode other than normal (flow_style_t.mix_blend), the root's included —
-// one group when it is more than one.
+// (flow_box_through), filtered (flow_style_t.filter), masked
+// (flow_masked), or blended by a mode other than normal
+// (flow_style_t.mix_blend), the root's included — one group when it is
+// more than one.
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds at least everything the group paints
 // (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at
@@ -1809,7 +1812,8 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // where its frame puts it, grown by its `ink` and cut to its clip, a
 // drawn-through group inside counted through its matrix and cut to its
 // clip, and all of it grown by what the group's filter spreads
-// (flow_filter_reach) — so a face
+// (flow_filter_reach) and, when it is masked, cut to its border box unless
+// a mask layer is cut to no box (Masking 1 § 7.5) — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),
 // through its matrix. Inside a drawn-through group the walk culls against

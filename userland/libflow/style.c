@@ -3115,7 +3115,7 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     }
 }
 
-// `mask-composite` or `mask-mode`'s list (Masking 1 § 7.8-7.9), one entry
+// `mask-composite` or `mask-mode`'s list (Masking 1 § 7.8, § 7.2), one entry
 // per layer, in flow_composite_t's or flow_mask_mode_t's order; an entry
 // flow cannot read is the initial value. Past the lists' budget, the list
 // is left as it was.

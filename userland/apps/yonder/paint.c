@@ -2588,12 +2588,27 @@ static bool filter_drawn(const Painter *p, const flow_box_t *box)
     return true;
 }
 
-// Whether a group's mask is drawn (MASKS.md): granted (flow_masked), and
-// verbs to capture its coverage and lay its layer by it.
+// Whether a mask layer's picture is a reference to an SVG <mask> in a
+// document (`url(#id)`), which is not drawn (MASKS.md § 8).
+static bool mask_reference(const flow_layer_t *l)
+{
+    return l->image != NULL && l->image_len > 0 && l->image[0] == '#';
+}
+
+// Whether a group's mask is drawn (MASKS.md): granted (flow_masked), with
+// no layer a reference to an SVG <mask> — such a mask is drawn as none —
+// and verbs to capture its coverage and lay its layer by it.
 static bool mask_drawn(const Painter *p, const flow_box_t *box)
 {
-    return flow_masked(box->style) && p->v->layer_open != NULL && p->v->layer_close != NULL &&
-           p->v->layer_take != NULL;
+    if (!flow_masked(box->style) || p->v->layer_open == NULL || p->v->layer_close == NULL ||
+        p->v->layer_take == NULL)
+        return false;
+    for (int32_t i = 0; i < flow_mask_layers(box->style); i++) {
+        flow_layer_t l = flow_mask_layer(box->style, i).layer;
+        if (mask_reference(&l))
+            return false;
+    }
+    return true;
 }
 
 // Whether a box's mask hides it whole whatever its pictures hold (MASKS.md
@@ -2654,16 +2669,17 @@ static flow_blend_t blend_of(const Painter *p, const flow_box_t *box, int32_t d)
     return on_sheets(p, d) ? FLOW_BLEND_NORMAL : blend_asked(p, box);
 }
 
-// A group's LAYER opened (FILTER.md, MIX_BLEND.md), for a filter drawn or a
-// mode other than normal: its bounds `b`, in the coordinates being
-// painted, cut to the view grown by how far from outside it what lands in
-// it can come — flow_filter_reach MIRRORED, since a shadow cast down shows
-// below a source above the view — and to `outside`, what clips the group
-// from outside, which its spread may not pass; that layer is what is
-// painted until the close. True when the group is the layer's: one open,
-// or none of it showing, so nothing is painted. False when it is to be
-// painted plain: nothing to filter or blend, past the paint's budget, or a
-// layer the verbs could not make; the last two are counted
+// A group's LAYER opened (FILTER.md, MASKS.md, MIX_BLEND.md), for a filter
+// drawn, a mask drawn or a mode other than normal: its bounds `b`, in the
+// coordinates being painted, cut to the view grown by how far from outside
+// it what lands in it can come — flow_filter_reach MIRRORED, since a
+// shadow cast down shows below a source above the view — and to
+// `outside`, what clips the group from outside, which its spread may not
+// pass; that layer is what is painted until the close. True when the group
+// is the layer's: one open, or none of it showing — a mask that hides it
+// whole among those — so nothing is painted. False when it is to be
+// painted plain: nothing to filter, mask or blend, past the paint's
+// budget, or a layer the verbs could not make; the last two are counted
 // (yonder_paint_layers_refused).
 static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64_gui_rect_t outside,
                        int32_t d)
@@ -2745,7 +2761,7 @@ static bool mask_layer(const Painter *p, const flow_box_t *b, const Round *outer
 // capture over `at` and taken back as its alpha or luminance, then laid
 // onto what the layers below came to by its operator — the bottom one's
 // ignored, as there is nothing below it (Masking 1 § 7.8). A layer with
-// no image is transparent (§ 7.2). False, `run` unfinished, when memory or
+// no image is transparent (§ 7.1). False, `run` unfinished, when memory or
 // a capture was not to be had: the group is then laid unmasked.
 static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect_t at,
                           uint8_t *run)
@@ -2810,8 +2826,8 @@ static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect
 // opacity group asks nothing of the verbs and is drawn opaque where it is,
 // and a group drawn through its matrix is not painted at all: nothing
 // remembers where to put it back, and the walk culled it for the turned
-// and the upright drawings, not this one. A FILTERED or BLENDED one opens a
-// layer (layer_try) inside all of that — in its own coordinates when it is
+// and the upright drawings, not this one. A FILTERED, MASKED or BLENDED one
+// opens a layer (layer_try) inside all of that — in its own coordinates when it is
 // laid through its matrix, the matrix laying the layer, its blend dropped
 // there (blend_of) — or is painted plain as the rest of it says.
 static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
@@ -2888,8 +2904,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 }
 
 // Closes: what it painted is laid over what was under it at the group's
-// opacity, in 255ths — its layer first, when one is open, filtered and
-// laid by its mode, and through its matrix, when it was laid so — and the
+// opacity, in 255ths — its layer first, when one is open, filtered, masked
+// (mask_coverage) and laid by its mode, and through its matrix, when it
+// was laid so — and the
 // view and the shift are what they were.
 static void group_close(void *ctx, const flow_box_t *box)
 {

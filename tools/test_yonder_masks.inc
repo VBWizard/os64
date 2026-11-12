@@ -124,6 +124,15 @@ static void mask_paint_cases(void)
               "width: 4px; height: 4px; background: #00ff00;"
               " mask: linear-gradient(#000 0 0) 0 0 / 0 4px",
               "fill 0 0 200 100 #fefefe\n");
+    // A reference to an SVG <mask> is not drawn: the box is drawn plain,
+    // in the group the mask makes, and not counted.
+    mask_case("mask: a reference to an SVG mask is drawn as none",
+              "width: 4px; height: 4px; background: #00ff00; mask: url(#m)",
+              "fill 0 0 200 100 #fefefe\n"
+              "group 0 0 4 4\n"
+              "fill 0 0 4 4 #00ff00\n"
+              "end group 255\n");
+    expect("mask: a reference is not counted refused", yonder_paint_layers_refused == 0, NULL);
     // Only `none` is no mask: no group at all.
     mask_case("mask: none is no mask",
               "width: 4px; height: 4px; background: #00ff00; mask: none",
@@ -142,6 +151,37 @@ static void mask_paint_cases(void)
               "take\n"
               "end filter 0 #101010 128 cover 510\n"
               "ffff\n");
+    // A layer cut to no box lets the group reach past its border box: the
+    // shadow 1px all round is in the layer, and the mask's one layer
+    // repeated covers it.
+    mask_case("mask: no-clip lets the layer reach past the border box",
+              "margin: 1px; width: 2px; height: 1px; box-shadow: 0 0 0 1px red;"
+              " mask: linear-gradient(#000 0 0) no-clip",
+              "fill 0 0 200 100 #fefefe\n"
+              "filter 0 0 4 3\n"
+              "fill 0 0 4 1 #ff0000\n"
+              "fill 0 2 4 1 #ff0000\n"
+              "fill 0 1 1 1 #ff0000\n"
+              "fill 3 1 1 1 #ff0000\n"
+              "filter 0 0 4 3\n"
+              "pixels 0 0 4 3 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000"
+              " ff000000 ff000000 ff000000 ff000000 ff000000\n"
+              "take\n"
+              "end filter 0 #101010 255 cover 3060\n"
+              "ffffffff\n"
+              "ffffffff\n"
+              "ffffffff\n");
+    // The bottom layer's operator is ignored: there is nothing below it
+    // to intersect with (Masking 1 § 7.8).
+    mask_case("mask: the bottom layer's operator is ignored",
+              "width: 2px; height: 1px; mask: linear-gradient(#000 0 0) intersect",
+              "fill 0 0 200 100 #fefefe\n"
+              "filter 0 0 2 1\n"
+              "filter 0 0 2 1\n"
+              "pixels 0 0 2 1 ff000000 ff000000\n"
+              "take\n"
+              "end filter 0 #101010 255 cover 510\n"
+              "ffff\n");
     // A rounded box rounds its mask: a 4 x 4 circle covers its corners
     // less than its middle.
     char *got = mask_paint("<!doctype html><style>body { margin: 0 } .m { width: 4px; height: 4px;"
@@ -159,6 +199,13 @@ static void mask_paint_cases(void)
                      " mask: linear-gradient(#000 0 0) }</style><span>a</span>",
                      200, (os64_gui_rect_t){0, 0, 200, 100});
     expect("mask: a plain inline's is not drawn", got != NULL && strstr(got, "filter ") == NULL, got);
+    free(got);
+    // Nor an inline-block's, which is no stacked box (DEBTS.md).
+    got = mask_paint("<!doctype html><style>body { margin: 0 } span { display: inline-block;"
+                     " width: 4px; height: 4px; background: #00ff00; mask: linear-gradient(#000 0 0) }"
+                     "</style><span></span>",
+                     200, (os64_gui_rect_t){0, 0, 200, 100});
+    expect("mask: an inline-block's is not drawn", got != NULL && strstr(got, "filter ") == NULL, got);
     free(got);
     // Past the paint's budget (MASKS.md § 10, ruling 1): a box the size of
     // the view costs itself and a capture, twice the view, which is all of

@@ -486,8 +486,9 @@ void yonder_mask_take(const uint32_t *layer, size_t n, bool luminance, uint8_t *
             continue;
         }
         // The colour premultiplied, so its luminance is already times its
-        // alpha: Rec. 709's weights, the grayscale filter's, in 10000ths.
-        uint32_t y = (2126 * chan(p, 16) + 7152 * chan(p, 8) + 722 * chan(p, 0) + 5000) / 10000;
+        // alpha: feColorMatrix's luminance-to-alpha weights (Masking 1
+        // § 7.10.1), in 10000ths.
+        uint32_t y = (2125 * chan(p, 16) + 7154 * chan(p, 8) + 721 * chan(p, 0) + 5000) / 10000;
         out[i] = (uint8_t)(y > 255 ? 255 : y);
     }
 }

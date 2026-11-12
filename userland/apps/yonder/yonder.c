@@ -6086,7 +6086,9 @@ static int32_t css_picture(const Page *p, const flow_layer_t *l)
 
 // The layers that may name a picture: a style's background layers, then
 // its mask's (MASKS.md § 6) — a mask's picture is fetched, sized and
-// repainted on arrival as a background's is.
+// repainted on arrival as a background's is. A mask's reference to an SVG
+// <mask> (`url(#id)`) names none: it is not drawn (MASKS.md § 8), and its
+// address is the page's own.
 static int32_t picture_layers(const flow_style_t *s)
 {
     return flow_background_layers(s) + flow_mask_layers(s);
@@ -6095,7 +6097,12 @@ static int32_t picture_layers(const flow_style_t *s)
 static flow_layer_t picture_layer(const flow_style_t *s, int32_t i)
 {
     int32_t n = flow_background_layers(s);
-    return i < n ? flow_background_layer(s, i) : flow_mask_layer(s, i - n).layer;
+    if (i < n)
+        return flow_background_layer(s, i);
+    flow_layer_t l = flow_mask_layer(s, i - n).layer;
+    if (l.image != NULL && l.image_len > 0 && l.image[0] == '#')
+        l.image = NULL;
+    return l;
 }
 
 // Whether any of a style's layers shows picture `k`.

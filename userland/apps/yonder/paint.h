@@ -127,7 +127,7 @@ typedef struct {
     // painting not laid anywhere but taken back as COVERAGE into `out` (its
     // bounds.w by bounds.h, a row bounds.w) — each pixel's alpha, or with
     // `luminance` its colour's luminance times its alpha (Masking 1
-    // § 7.9) — and discarded. NULL: no mask is drawn, and the painter
+    // § 7.2) — and discarded. NULL: no mask is drawn, and the painter
     // never opens a layer for one.
     void (*layer_take)(void *ctx, uint8_t *out, bool luminance);
 } yonder_verbs_t;

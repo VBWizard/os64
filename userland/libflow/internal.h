@@ -127,8 +127,9 @@ static inline bool f_blended(const flow_style_t *s)
 
 // Whether a mask is granted (MASKS.md § 3): a layer has a picture or a
 // gradient — a mask of only `none` layers is no mask — on a box that is no
-// plain inline, whose mask is not drawn, as its opacity is painted opaque.
-// A stacking context and a group.
+// plain inline, whose mask does nothing, as its opacity is painted opaque.
+// A stacking context and a group; an inline-block's is neither, being no
+// stacked box (flow_style_t.masks).
 static inline bool f_masked(const flow_style_t *s)
 {
     if (s->display == FLOW_DISPLAY_INLINE)

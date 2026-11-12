@@ -81,10 +81,11 @@ So:
    group's **coverage**, one byte a pixel of the layer: for each mask layer,
    bottom to top, it opens a *capture* layer over the mask painting area,
    paints that mask layer's image into it with the painters backgrounds use
-   (`gradient`, and the face's picture lookup through a new mask flag on the
-   `backdrop` verb), and takes its coverage back with a new verb,
-   `layer_take(ctx, uint8_t *out, mode)` — alpha, or luminance times alpha
-   for `luminance` — which also discards the capture. Each layer's coverage
+   (`gradient`, and the face's picture lookup through a flag on the layer
+   index the `backdrop` verb is handed, `YONDER_MASK_LAYER`), and takes its
+   coverage back with a new verb, `layer_take(ctx, uint8_t *out, bool
+   luminance)` — alpha, or luminance times alpha — which also discards the
+   capture. Each layer's coverage
    is combined into the running coverage by its `mask-composite`.
 3. **`layer_close` gains a coverage argument** (NULL for none), multiplied
    into the premultiplied layer after the filter and before the opacity and
@@ -115,7 +116,7 @@ layers and its size; that is a measured follow-up, not this slice.
   Each is a LAYERS value read with the background grammar's own readers —
   `bg_image`, `position`, the size and repeat readers — so a conic gradient
   or a `var()` in a mask reads exactly as it does in a background.
-- **The shorthand** `mask` (Masking 1 § 7.11): a background's shorthand
+- **The shorthand** `mask` (Masking 1 § 7.9): a background's shorthand
   without the colour, plus `mask-mode` and `mask-composite`, and the
   `<geometry-box>` pair as background's is.
 - **`-webkit-` names**: every `-webkit-mask-*` is an alias of its longhand,
@@ -159,14 +160,17 @@ layers and its size; that is a measured follow-up, not this slice.
 
 ## 7. Slices
 
-- **M1, masks**: the longhands, both shorthands and every `-webkit-` alias
+- **M1, masks**: the longhands, both shorthands and the `-webkit-` aliases
   read; libflow's lists, the group, `getComputedStyle`; the painter's
-  coverage with `mask-composite: add` and alpha; gradient and picture mask
-  images, the icon pattern among them. That draws spinners 13, 18, 19, 25,
-  26 and 28 whole.
-- **M2, composite and mode**: `subtract`, `intersect`, `exclude` and the
-  `-webkit-` legacy keywords; `mask-mode: luminance`; `mask-position` and
-  `-size` animated. That draws spinners 3, 4 and 5.
+  coverage, every operator and both modes — once the four operators were
+  read, drawing them was four lines of arithmetic (`yonder_mask_combine`),
+  and reading a value the painter then ignores would draw spinners 3, 4
+  and 5 wrong rather than not at all; gradient and picture mask images,
+  the icon pattern among them.
+- **M2, the rest**: `-webkit-mask-composite` and its legacy keywords (left
+  unread by M1, so a page's `destination-in` beside `intersect` is the
+  standard word's); `mask-position` and `-size` animated; and the coverage
+  cache, if measurement asks for it (§ 3).
 
 Each slice gets a cold read before Codex and mutants of its rules, as this
 arc's slices have.
@@ -176,8 +180,15 @@ arc's slices have.
 - `url(#id)`, a mask from an SVG `<mask>` element (2 hosts): an SVG-side
   feature, taken by name and drawn as no mask until then.
 - `mask-border` and `-webkit-mask-box-image`.
-- A mask on an inline box that breaks across lines: each piece masked as
-  its own box (backgrounds' pieces already work so; PILE3.md § Booked).
+- A mask on a plain inline box, or on an inline-block: neither is a group
+  in libflow (an inline-block's content is painted where its atom is on
+  its line, and its opacity and filter are not drawn either; PILE3.md §
+  Booked), so its mask is not drawn — and the icon pattern laid out
+  inline-block draws its plain square of `currentColor`. An icon that is
+  a block, a flex item or a grid item (blockified) is drawn masked.
+- The SVG geometry boxes `fill-box`, `stroke-box` and `view-box` in
+  `mask-origin` and `mask-clip`, and `-webkit-mask-clip: text`: not read,
+  so the declaration is dropped.
 - `clip-path` (84 hosts, the same as masks): the next slice, which reuses
   this one's coverage at the layer's close with a shape for its source.
 

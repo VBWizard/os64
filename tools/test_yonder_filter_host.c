@@ -337,7 +337,7 @@ static void blend_cases(void)
 static void mask_cases(void)
 {
     // Alpha, and luminance: premultiplied half-white is 128 of luminance
-    // as of alpha; pure green is Rec. 709's 0.7152 of 255, 182.
+    // as of alpha; pure green is feColorMatrix's 0.7154 of 255, 182.
     const uint32_t layer[3] = {0x80808080u, 0xff00ff00u, 0x00000000u};
     uint8_t got[3];
     yonder_mask_take(layer, 3, false, got);

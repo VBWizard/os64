@@ -388,6 +388,22 @@ static void sizes_page_cases(void)
           "sizes: the canvas's picture is kept at the root's origin box, not the body's");
     sizes_close();
 
+    /* A mask's picture is sent for and kept at the size it is drawn, as a
+     * background's is (MASKS.md § 6); a reference to an SVG <mask> is no
+     * picture to send for (§ 8). */
+    sizes_open("<!doctype html><style>body{margin:0}div{width:300px;height:150px;"
+               "mask:url(https://t.test/a.png) no-repeat;mask-size:200px 100px}"
+               "p{mask:url(#m)}</style><div></div><p>x</p>",
+               "SIZED 400x200");
+    pictures_start(&g.page);
+    sizes_layout(1000);
+    check(sizes_run(), "sizes: a mask's picture arrives");
+    sizes_layout(1000);
+    job = sizes_held();
+    check(g.page.npics == 1 && job && job->cover_w == 200 && job->cover_h == 100,
+          "sizes: a mask's picture is kept at the size it is drawn, and a reference is none");
+    sizes_close();
+
     /* An SVG is drawn from its document: never resampled. */
     sizes_open("<!doctype html><style>body{margin:0}img{display:block;width:16px}</style>"
                "<img src='https://t.test/a.svg'>", picture_svg_source);
