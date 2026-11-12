@@ -1,4 +1,4 @@
-# F.3b DOM validation — shared-delivery checkpoint
+# F.3b DOM validation — shared delivery and events
 
 2026-11-12. Work in progress against the
 [reviewed retirement brief](IFRAME_F3_RETIREMENT.md). This branch starts from
@@ -34,6 +34,15 @@ Storage validation (`d_context`) remains separate. Retained DOM wrappers,
 observer methods, definitions and ordinary exported functions remain usable;
 this checkpoint does not free a binding or introduce a departure API.
 
+Event delivery applies the same activity/function checks to ordinary
+listeners, resolved `handleEvent` methods, handler slots and window.onerror.
+A `handleEvent` getter can retire a realm or adopt the target; delivery
+rechecks the current document and returned method afterward. Inactive-target
+listeners are skipped before their getters run. Host dispatch enters through
+the active target when an object listener's registration realm has retired,
+then resolves and gates its method inside that guarded entry. Suppressed
+handlers neither cancel an event nor increment the host listener-call count.
+
 ## Evidence
 
 `tools/test_dom_host.sh --realm-retirement` runs a three-binding fixture under
@@ -50,15 +59,19 @@ object access and balanced native teardown.
 
 | Final focused suite | Shipping engine | Instrumented engine |
 |---|---:|---:|
-| Retirement queues | 90 checks | 90 checks |
+| Retirement queues and events | 112 checks | 112 checks |
 | Cross-realm binding routing | 678 checks | 678 checks |
+| Events | 1,020 checks | 1,020 checks |
 | Mutation observers | 32 checks | 32 checks |
 | Custom elements, including allocation failures | 298 checks | 298 checks |
 
 These runs retain ASan/UBSan and LeakSanitizer, outside the sandbox that denied
 LSan thread attachment during F.3a. Unchanged host/engine objects from the
 final F.3a run were reused; `core.c`, `observer.c`, `custom.c` and the host
-test translation unit were rebuilt. The native `dom-library` target also
+test translation unit were rebuilt for the shared-queue checkpoint. The event
+extension also rebuilds `event.c` and the expanded test translation unit;
+retirement, cross-realm and event suites were rerun on that source. Observer
+and custom-element totals above are from the shared-queue checkpoint. The native `dom-library` target also
 builds successfully from this worktree. No full-suite, WPT, QEMU or P5
 acceptance is claimed for this intermediate checkpoint.
 
@@ -68,6 +81,15 @@ realm or activity eligibility; treating a definition's creator as the current
 document; bypassing queued-upgrade, synchronous-constructor or slotchange
 eligibility; and retaining discarded observer records. Mutants used temporary
 source copies and did not modify the implementation worktree.
+
+Seven further event mutants were compiled and caught: forcing entry through
+a retired registration realm, omitting function/method/window.onerror gates,
+using stale activity after a getter, losing admitted-call accounting, and
+using a target's creation binding instead of its current document. The new
+event fixture first reproduced retired callback execution and live object
+handler refusal against the preceding checkpoint. Its expected revoked
+observer error is explicitly consumed and checked separately from the host
+event outcome, so an earlier report cannot contaminate the dispatch result.
 
 ## Remaining F.3b work
 

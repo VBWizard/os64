@@ -103,8 +103,34 @@ static void dom_retirement_cases(void)
                 "globalThis.liveA=function(){moLog.push('A');if(stopC)retireC()};",
                 "retirement queues: A callbacks installed");
             realm_script(retirement_realms[2], "globalThis.liveC=function(){A.moLog.push('C')};"
-                "globalThis.reaction=function(){A.ceLog.push(this.id)};",
+                "globalThis.reaction=function(){A.ceLog.push(this.id)};"
+                "globalThis.liveEvent=function(){A.eventLog.push('C')};",
                 "retirement queues: C callbacks installed");
+            realm_script(retirement_realms[0], "globalThis.eventLog=[];globalThis.getters=0;",
+                "retirement events: shared oracle installed");
+            realm_script(retirement_realms[1],
+                "globalThis.eventNode=document.createElement('div');eventNode.id='depart-event';"
+                "C.document.body.appendChild(eventNode);"
+                "eventNode.addEventListener('life',()=>A.eventLog.push('dead')) ;"
+                "eventNode.addEventListener('life',{handleEvent:C.liveEvent});"
+                "eventNode.onclick=()=>A.eventLog.push('dead-slot');"
+                "globalThis.inactiveTarget=document.createElement('div');document.body.appendChild(inactiveTarget);"
+                "inactiveTarget.addEventListener('life',C.liveEvent);"
+                "inactiveTarget.addEventListener('life',{get handleEvent(){A.getters+=100;return C.liveEvent}});"
+                "globalThis.deadEvent=()=>A.eventLog.push('dead-getter-result');"
+                "globalThis.deadError=()=>{A.eventLog.push('dead-error');return true};",
+                "retirement events: B-created adopted target and B-registered C method");
+            realm_script(retirement_realms[2],
+                "B.eventNode.addEventListener('life',liveEvent);",
+                "retirement events: live callback on adopted target");
+            realm_script(retirement_realms[0],
+                "globalThis.getterTarget=document.createElement('div');"
+                "getterTarget.addEventListener('life',{get handleEvent(){getters++;retireB();return B.deadEvent}});"
+                "getterTarget.addEventListener('life',()=>eventLog.push('tail'));"
+                "globalThis.swapTarget=document.createElement('div');"
+                "swapTarget.addEventListener('life',{get handleEvent(){getters++;B.document.adoptNode(swapTarget);return C.liveEvent}});"
+                "swapTarget.addEventListener('life',()=>eventLog.push('inactive-tail'));",
+                "retirement events: getter retirement and adoption stimuli installed");
             realm_script(retirement_realms[1],
                 "globalThis.dead=function(){A.moLog.push('dead-callback')};"
                 "globalThis.mo=new MutationObserver(C.liveC);mo.observe(observed,{attributes:true});",
@@ -150,7 +176,11 @@ static void dom_retirement_cases(void)
                 "document.body.appendChild(deadCallback);"
                 "B.observed.setAttribute('data-first','1');observed.setAttribute('data-first','1');"
                 "C.observed.setAttribute('data-first','1');"
-                "for(const w of [B,A,C])w.host.appendChild(w.document.createElement('i'));pulse();retireB();",
+                "for(const w of [B,A,C])w.host.appendChild(w.document.createElement('i'));pulse();"
+                "getterTarget.dispatchEvent(new Event('life'));"
+                "assert(eventLog.join()==='tail','getter retires returned callback realm: '+eventLog);eventLog=[];"
+                "swapTarget.dispatchEvent(new Event('life'));"
+                "assert(eventLog.length===0&&getters===2,'getter changes activity document');retireB();",
                 "retirement queues: B enqueues shared jobs then retires before checkpoint");
             realm_script(retirement_realms[0],
                 "assert(moLog.join()==='A,C','observer delivery: '+moLog);",
@@ -164,6 +194,39 @@ static void dom_retirement_cases(void)
             realm_script(retirement_realms[0],
                 "assert(slots.join()==='A,C','slotchange delivery: '+slots);",
                 "retirement queues: shared slot signals skip retired document");
+            realm_script(retirement_realms[0],
+                "assert(B.eventNode.dispatchEvent(new Event('life')));"
+                "assert(B.inactiveTarget.dispatchEvent(new Event('life')));"
+                "B.eventNode.click();onerror=B.deadError;"
+                "assert(dispatchEvent(new ErrorEvent('error',{cancelable:true})));onerror=null;"
+                "assert(eventLog.join()==='C,C'&&getters===2,'script dispatch eligibility: '+eventLog);eventLog=[];",
+                "retirement events: retained dispatch gates target activity and callback realm");
+            os64_dom_event_t event = {.type = "life", .kind = OS64_DOM_EVENT_PLAIN};
+            bool prevented = true;
+            uint64_t b_calls = os64_dom_listener_calls(bindings[1]), c_calls = os64_dom_listener_calls(bindings[2]);
+            check(os64_dom_dispatch(bindings[2], native_id(retirement_documents[2]->document, "depart-event"),
+                  &event, &prevented, &out) == OS64_JS_OK && !prevented,
+                  "retirement events: host dispatch avoids retired registration entry");
+            check(os64_dom_listener_calls(bindings[1]) == b_calls + 1 &&
+                  os64_dom_listener_calls(bindings[2]) == c_calls + 1,
+                  "retirement events: suppressed listeners do not count as host calls");
+            realm_script(retirement_realms[0],
+                "assert(eventLog.join()==='C,C','host dispatch eligibility: '+eventLog);eventLog=[];"
+                "globalThis.hostSwap=document.createElement('div');hostSwap.id='host-swap';document.body.appendChild(hostSwap);"
+                "B.EventTarget.prototype.addEventListener.call(hostSwap,'life',{get handleEvent(){"
+                "getters++;B.document.adoptNode(hostSwap);return C.liveEvent}});"
+                "hostSwap.addEventListener('life',()=>eventLog.push('host-inactive-tail'));",
+                "retirement events: host dispatch preserves live object handler and function");
+            os64_js_outcome_t reported;
+            check(os64_dom_take_report(bindings[0], &reported) && reported.status == OS64_JS_EXCEPTION &&
+                  strstr(reported.message, "revoked") != NULL,
+                  "retirement queues: revoked observer lookup retains its ordinary report");
+            check(os64_dom_dispatch(bindings[0], native_id(retirement_documents[0]->document, "host-swap"),
+                  &event, &prevented, &out) == OS64_JS_OK && !prevented,
+                  "retirement events: host getter may adopt target into inactive document");
+            realm_script(retirement_realms[0],
+                "assert(hostSwap.ownerDocument===B.document&&eventLog.length===0&&getters===3);",
+                "retirement events: host getter and later listener recheck current activity");
             realm_script(retirement_realms[0],
                 "assert(B.plain()===42,'ordinary retained function remains callable');"
                 "assert(B.adopted.ownerDocument===C.document&&B.adopted instanceof B.HTMLElement);"
