@@ -140,8 +140,9 @@ typedef struct tty
 	// and finish, a task's departure and a seat are each one indivisible
 	// transition, never a check on one core and a store on another. A leaf
 	// lock, irqsave, held for a pointer compare and a task-list walk and
-	// nothing else; readers (the Ctrl+C intercept in IRQ context, the mode
-	// query, /proc) read the pointer bare — a single aligned word.
+	// nothing else. A reader that only COMPARES the pointer reads it bare,
+	// a single aligned word; a reader that will DEREFERENCE the task takes
+	// it under this lock with a lifetime hold (console_fg_hold).
 	spinlock_t fg_lock;
 	// Raw mode has no word here on purpose: the terminal is raw exactly
 	// while fgTask->wantsRaw (task.h) — derived, never stored, so there is

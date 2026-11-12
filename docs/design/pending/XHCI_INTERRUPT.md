@@ -579,7 +579,21 @@ interrupts are off: the keyboard interpreter and its chords
 thread), `input_inject_key`, the pointer paths in `gui/input.c`, and the
 Bluetooth pointer registration. None assumes either. Each takes its own
 lock with interrupts saved, as it must: the PS/2 keyboard reaches the same
-functions from an interrupt handler. What the audit did find is the
+functions from an interrupt handler.
+
+THE AUDIT ASKED THE WRONG QUESTION ONCE, and Codex's third round found
+what it missed (#559, P1). "Does it assume a lock or interrupts off?" is
+not the only thing a thread changes: a thread can be PREEMPTED, for long
+enough that something it is pointing at dies. The Ctrl+C intercept read
+the terminal's foreground task bare and then dereferenced and signalled
+it; from an interrupt handler or inside the scheduler's pass nothing could
+exit and be buried in between, and from `kusb` it can. The foreground is
+now taken HELD (`console_fg_hold`: under the terminal's foreground lock,
+with a lifetime hold the reaper honours) by every reader that
+dereferences it: the intercept, the raw-mode query, and `/proc`'s terminal
+file, which had the same exposure before this arc. The question an audit
+of this kind has to ask of every pointer the delivery path reads is "who
+keeps this alive while I am off the CPU?". What the audit did find is the
 LONGEST of them: a terminal switch repaints the terminal synchronously
 from the key (`tty_focus`, by its own comment a deliberate choice), and
 that one event took 37 ms under QEMU's emulation. That is D2's "one
