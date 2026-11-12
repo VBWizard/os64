@@ -635,8 +635,16 @@ it is: `kernel_init` enables the scheduler, WAITS ONE SECOND, wakes the
 APs and only then sets `kProcessSignals`. `kusb` gets its first pass
 before that wait, nothing rings its bell during it (112 ticks, one ring),
 and the old poll did not run in it either; its gap never showed the second
-only because its first poll came after. The measurement now starts when
-signal processing does.
+only because its first poll came after.
+
+That early pass was worse than a wrong number. On the P5 it started
+Bluetooth's clockwork, which sent the adapter its reset and then went
+unserved for 1.2 s of the reset's two-second answer window (`/sys/usb`
+showed one event on the adapter's controller waiting 1.2 s). `kusb` now
+does no work until signal processing is on, which is where the old poll
+began. (The boot that showed this also failed the adapter's reset
+outright, with the signature DEBTS already has for a warm reboot with
+devices connected; whether the early pass contributed is not known.)
 
 ## Measure first
 

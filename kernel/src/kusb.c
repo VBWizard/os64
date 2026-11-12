@@ -11,6 +11,7 @@
 #include "CONFIG.h"
 #include "serial_logging.h"
 #include "smp_core.h"
+#include "signals.h"            // kProcessSignals — nothing rings the bell before it
 #include "x86_64.h"             // rdtsc
 
 doorbell_t kUsbDoorbell;
@@ -53,6 +54,18 @@ void kusb_thread(void)
 		// the work: a ring that lands during the pass raises a fresh edge
 		// and the park below returns at once (knet.c has the long form).
 		uint64_t edge = doorbell_take(&kUsbDoorbell);
+		// NO WORK BEFORE SIGNAL PROCESSING IS ON. kernel_init enables the
+		// scheduler, waits a second, and only then turns signal processing
+		// on, which is what rings this bell every tick. A pass in that
+		// second would start Bluetooth's clockwork (a controller reset
+		// with a two-second answer window, on the P5) and then leave it
+		// unserved until the wait ended. The first ring after signals are
+		// on ends this park.
+		if (!kProcessSignals)
+		{
+			parked = doorbell_park(&kUsbDoorbell, KUSB_BACKSTOP_TICKS);
+			continue;
+		}
 		kKusbWakes++;
 		uint64_t started = rdtsc();
 		if (doorbell_edge_rung(edge) && doorbell_edge_cpu(edge) == get_core_local_storage()->cpu)

@@ -369,15 +369,6 @@ static void xhci_timeline_add(xhci_timeline_kind_t kind, unsigned slot, unsigned
 // so no gap.
 static uint64_t xhci_pass_began(uint64_t now)
 {
-	// Until the kernel turns signal processing on, nothing rings kusb's
-	// bell: boot waits a second after it enables the scheduler, and a pass
-	// that slips in before that wait would record the wait as a gap. There
-	// is no cadence to measure yet, so none is.
-	if (!kProcessSignals) {
-		s_polls++;
-		s_interval_polls++;
-		return 0;
-	}
 	uint64_t gap = s_poll_last_tsc ? now - s_poll_last_tsc : 0;
 	s_poll_last_tsc = now;
 	s_polls++;
