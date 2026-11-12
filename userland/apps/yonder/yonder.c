@@ -4089,6 +4089,10 @@ static void agent_use(const char *agent)
 {
     g.way.agent = agent;
     g.way.identity = yonder_agent_identity(agent);
+    // The connections kept under the last identity go now. One still in use
+    // is left to its fetches, and no fetch under the new identity is given
+    // it (libfetch matches an HTTP/2 connection to who is asking).
+    os64_fetch_forget_idle();
     if (g.page.tree != NULL)
         say_laid_out(g.laid_ms);
 }
@@ -13782,6 +13786,17 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
                 (g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2") :
                 g.stream.head.tls_resumed ? "1.3 (resumed)" : "1.3");
         }
+        // Which HTTP carried the page, for one that came over a network and
+        // not from bytes kept here: over HTTP/2, the stream it was on its
+        // connection, which says whether the connection was new (a client's
+        // first stream) or one an earlier request had made. A plain line:
+        // it is how the page came, and a replay rebuilds nothing from it.
+        if (g.stream.local == NULL && g.stream.head.http2) {
+            char spoke[40];
+            os64_snprintf(spoke, sizeof(spoke), "2 (stream %u)", (unsigned)g.stream.head.h2_stream);
+            yonder_diag_fact(fresh.diag, "HTTP", spoke);
+        } else if (g.stream.local == NULL && g.stream.head.status != 0)
+            yonder_diag_fact(fresh.diag, "HTTP", "1.1");
         // The server's answer, for every page from the network (0 when its
         // protocol has none), which a replay requires rather than assumes.
         // One that is an error is shown, as a browser shows it, and is a

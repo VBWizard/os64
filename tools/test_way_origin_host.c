@@ -1425,6 +1425,30 @@ static void orders(void)
     expect("accept: past the destinations, none", way_identity_accept(&some, WAY_DESTS) == NULL, NULL);
     expect("keep-alive: the preset's", way_identity_keep_alive(&some), NULL);
     expect("keep-alive: no preset, none", !way_identity_keep_alive(NULL), NULL);
+
+    // The preset's HTTP/2 half: a destination's own weight and line, the
+    // fetch row's for one with none, and nothing from no preset.
+    way_identity_t h2 = {.h2 = (const struct os64_fetch_h2 *)&h2, .http1 = true};
+    h2.h2_weight[WAY_DEST_EMPTY] = 220;
+    h2.h2_weight[WAY_DEST_IMAGE] = 183;
+    h2.h2_priority[WAY_DEST_EMPTY] = "u=1, i";
+    h2.h2_priority[WAY_DEST_IMAGE] = "u=2, i";
+    const struct os64_fetch_h2 *greeting = NULL;
+    uint32_t weight = 0;
+    const char *priority = NULL;
+    bool http1 = false;
+    way_identity_h2(&h2, WAY_DEST_IMAGE, &greeting, &weight, &priority, &http1);
+    expect("h2: the destination's own weight and line",
+           greeting == h2.h2 && weight == 183 && priority != NULL && strcmp(priority, "u=2, i") == 0 && http1, NULL);
+    way_identity_h2(&h2, WAY_DEST_FONT, &greeting, &weight, &priority, &http1);
+    expect("h2: a destination with none takes the fetch row's",
+           weight == 220 && priority != NULL && strcmp(priority, "u=1, i") == 0, NULL);
+    way_identity_h2(&h2, WAY_DESTS, &greeting, &weight, &priority, &http1);
+    expect("h2: past the destinations, the greeting and no weight or line",
+           greeting == h2.h2 && weight == 0 && priority == NULL, NULL);
+    way_identity_h2(NULL, WAY_DEST_IMAGE, &greeting, &weight, &priority, &http1);
+    expect("h2: no preset, none of it", greeting == NULL && weight == 0 && priority == NULL && !http1, NULL);
+    way_identity_h2(&h2, WAY_DEST_IMAGE, NULL, NULL, NULL, NULL);       // any out may be NULL
 }
 
 static void referrers(void)

@@ -169,6 +169,7 @@ typedef struct {
     uint16_t proxy_port;
     os64_fetch_method_t method;               // request that produced this head, after redirects
     os64_fetch_keep_t keep;                   // this head's caching fields
+    bool     http2;                           // this head came over HTTP/2
 } os64_fetch_head_t;
 
 // Counters a caller reads between reads, for a meter or a status line.
@@ -246,6 +247,42 @@ typedef struct {
 // An order names each line a browser sends once: Chrome's longest, a
 // navigation's, is under 300 bytes.
 #define OS64_FETCH_ORDER_MAX    512
+
+// WHAT A CLIENT SAYS FIRST ON AN HTTP/2 CONNECTION, and how it shapes its
+// requests there. A server sees all of it before it sees a header, and it
+// differs from one browser to the next, so a caller that asks as a browser
+// asks says it as that browser does (HTTP2.md § 2.9, and § 4 H2.5 for the
+// captures the browser presets' values come from).
+#define OS64_FETCH_H2_SETTINGS_MAX 8
+#define OS64_FETCH_H2_PRIORITY_MAX 32
+typedef enum {
+    OS64_FETCH_H2_PRIORITY_NONE = 0,    // a request's HEADERS states no priority
+    OS64_FETCH_H2_PRIORITY_FLAT,        // each depends on stream 0, not exclusively: Firefox
+    // Each depends, exclusively, on an earlier stream its fetch has not yet
+    // closed: of those
+    // at least as heavy, the lightest, and of those the newest: Chrome.
+    OS64_FETCH_H2_PRIORITY_CHAINED,
+} os64_fetch_h2_priority_t;
+typedef struct os64_fetch_h2 {
+    // The SETTINGS frame: RFC 9113 § 6.5.2 identifiers and values, in order.
+    struct {
+        uint16_t id;
+        uint32_t value;
+    } settings[OS64_FETCH_H2_SETTINGS_MAX];
+    uint32_t count;
+    // Added to the connection's receive window by a WINDOW_UPDATE after the
+    // SETTINGS; 0 sends none.
+    uint32_t window_increment;
+    uint32_t first_stream;              // the first request's stream id, odd; 0 is 1
+    // Added to each new stream's receive window by a WINDOW_UPDATE straight
+    // after its HEADERS; 0 sends none.
+    uint32_t stream_increment;
+    os64_fetch_h2_priority_t priority;
+    // The four pseudo-headers' order, one letter each: m method, a
+    // authority, s scheme, p path. NULL is "masp".
+    const char *pseudo;
+    bool te_trailers;                   // every request says `te: trailers`
+} os64_fetch_h2_t;
 
 typedef struct {
     // Request headers, each optional (NULL = not sent). They are COPIED at
@@ -367,7 +404,33 @@ typedef struct {
     // request this is (way/origin.h, way_identity_order). NULL: libfetch's
     // own order throughout.
     const char *order;
+    // What an HTTP/2 connection dialled for this fetch says first, and how
+    // this fetch's requests are shaped on one (os64_fetch_h2_t), copied at
+    // open. NULL: libfetch's own. A fetch rides only a connection that was
+    // greeted as its own would be, so two callers with different greetings
+    // never share one.
+    const os64_fetch_h2_t *h2;
+    // This request's priority weight on HTTP/2, 1 to 256, for a greeting
+    // whose `priority` is not NONE; 0 is the protocol's default, 16.
+    uint32_t h2_weight;
+    // A Priority line's value (RFC 9218) sent only when HTTP/2 carries the
+    // request, for a browser that sends one there and not over HTTP/1.1.
+    // Copied at open; placed by `order`, or last.
+    const char *h2_priority;
+    // Speak HTTP/1.1 alone: the dial does not offer HTTP/2, and no HTTP/2
+    // connection is taken. For a caller that stands for a client which
+    // never spoke it.
+    bool http1;
 } os64_fetch_options_t;
+
+// Close the connections kept for later fetches. For a caller whose identity
+// has changed: nothing kept under the old one is needed again, and a fetch
+// in flight keeps its own until it ends.
+void os64_fetch_forget_idle(void);
+
+// Every fetch offers HTTP/2 on a direct https connection unless it says
+// `http1`, or the line `http2 = off` is in net.conf on the config search
+// path, which is read once per process and turns it off for every fetch.
 
 // WHAT THIS PROCESS'S FETCHES HAVE COST THE WIRE since it started, every
 // fetch of every caller in it together. For a caller that wants to know

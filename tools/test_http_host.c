@@ -435,6 +435,47 @@ static int do_fields(void)
     // And what http_request refuses, this refuses.
     static const http_request_extras_t kBad = {.extra_headers = "Host: elsewhere\r\n"};
     FIELD_CHECK(!http_request_fields(&url, &kBad, f, 32, storage, sizeof(storage), &n));
+
+    // WHAT HTTP/2 ALONE CARRIES (HTTP2.md § 4 H2.5). The pseudo-headers in
+    // the order asked for; a Priority and `te: trailers` after every other
+    // line; and none of the three in the text.
+    static const http_request_extras_t kFirefoxLike = {.user_agent = "Agent/1", .extra_headers = "X-One: 1\r\n",
+                                                       .keep_alive = true, .h2_priority = "u=4",
+                                                       .h2_te_trailers = true, .h2_pseudo = "mpas"};
+    FIELD_CHECK(http_request_fields(&url, &kFirefoxLike, f, 32, storage, sizeof(storage), &n) && n == 9);
+    if (n == 9) {
+        FIELD_CHECK(field_is(&f[0], ":method", "GET") && field_is(&f[1], ":path", "/a?b") &&
+                    field_is(&f[2], ":authority", "example.test:8443") && field_is(&f[3], ":scheme", "https"));
+        FIELD_CHECK(field_is(&f[4], "user-agent", "Agent/1") && field_is(&f[6], "x-one", "1"));
+        FIELD_CHECK(field_is(&f[7], "priority", "u=4") && field_is(&f[8], "te", "trailers"));
+    }
+    static char text[2048];
+    FIELD_CHECK(http_request(text, sizeof(text), &url, false, &kFirefoxLike) &&
+                strstr(text, "riority") == NULL && strstr(text, "\nTE:") == NULL && strstr(text, "\nte:") == NULL &&
+                strstr(text, "Connection: keep-alive\r\n") != NULL);
+    // The order may name them, and then they go where it puts them.
+    static const http_request_extras_t kOrdered = {.user_agent = "Agent/1", .h2_priority = "u=0, i",
+                                                   .h2_te_trailers = true, .order = "TE, Priority, User-Agent"};
+    FIELD_CHECK(http_request_fields(&url, &kOrdered, f, 32, storage, sizeof(storage), &n) && n == 8);
+    if (n == 8)
+        FIELD_CHECK(field_is(&f[4], "te", "trailers") && field_is(&f[5], "priority", "u=0, i") &&
+                    field_is(&f[6], "user-agent", "Agent/1"));
+    // With neither asked for, neither is sent; and the default order is
+    // method, authority, scheme, path (checked against the text, above).
+    static const http_request_extras_t kNeither = {.user_agent = "Agent/1"};
+    FIELD_CHECK(http_request_fields(&url, &kNeither, f, 32, storage, sizeof(storage), &n) && n == 6);
+    // A pseudo-header order that is not the four letters once each, and a
+    // Priority that holds a byte a header cannot, are refused.
+    static const char *const kBadOrders[] = {"mas", "masps", "mmas", "masx", ""};
+    for (size_t i = 0; i < sizeof(kBadOrders) / sizeof(kBadOrders[0]); i++) {
+        http_request_extras_t x = {.h2_pseudo = kBadOrders[i]};
+        FIELD_CHECK(!http_request_fields(&url, &x, f, 32, storage, sizeof(storage), &n));
+    }
+    static const http_request_extras_t kBadPriority = {.h2_priority = "u=1\r\nX-Smuggled: 1"};
+    FIELD_CHECK(!http_request_fields(&url, &kBadPriority, f, 32, storage, sizeof(storage), &n));
+    // A caller's own TE line is still refused: the one above is the walk's.
+    static const http_request_extras_t kOwnTe = {.extra_headers = "TE: trailers\r\n"};
+    FIELD_CHECK(!http_request_fields(&url, &kOwnTe, f, 32, storage, sizeof(storage), &n));
     return field_failures == 0 ? 0 : 1;
 }
 

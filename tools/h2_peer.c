@@ -203,11 +203,23 @@ int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t tim
     return wrote;
 }
 
+static bool closes_held;
+static _Thread_local bool library_thread;   // started by os64_thread: a connection's reader
+void peer_hold_closes(bool held)
+{
+    pthread_mutex_lock(&mu);
+    closes_held = held;
+    pthread_cond_broadcast(&moved);
+    pthread_mutex_unlock(&mu);
+}
+
 int64_t os64_close(int32_t handle)
 {
     struct wire *w = wire_of(handle);
     if (w != NULL) {
         pthread_mutex_lock(&mu);
+        while (closes_held && library_thread)
+            pthread_cond_wait(&moved, &mu);
         w->closes++;
         pthread_cond_broadcast(&moved);
         pthread_mutex_unlock(&mu);
@@ -224,6 +236,7 @@ static void *start(void *x)
 {
     start_t s = *(start_t *)x;
     free(x);
+    library_thread = true;
     s.fn(s.arg);
     return NULL;
 }

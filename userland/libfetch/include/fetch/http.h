@@ -193,22 +193,35 @@ typedef struct {
     // listed twice counts once, and Host, which is always first, is not
     // moved by naming it. NULL: this writer's own order throughout.
     const char *order;
+    // What the request adds when HTTP/2 carries it, and http_request never
+    // writes. `h2_priority`: a Priority line's value (RFC 9218) for a
+    // browser that sends one over HTTP/2 alone. `h2_te_trailers`: the line
+    // `TE: trailers`, the one TE HTTP/2 allows, for a browser that sends
+    // it. Both follow every other line unless `order` names them.
+    // `h2_pseudo`: the order of the four pseudo-headers as one letter each
+    // (m method, a authority, s scheme, p path), every letter once; NULL is
+    // "masp".
+    const char *h2_priority;
+    bool h2_te_trailers;
+    const char *h2_pseudo;
 } http_request_extras_t;
 
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
                   const http_request_extras_t *extras);
 
-// The same request as HTTP/2 carries it (RFC 9113 § 8.3): `:method`,
-// `:authority`, `:scheme` and `:path`, then every field http_request would
-// write after Host, in the same order, each name in lower case. Host's value
+// The same request as HTTP/2 carries it (RFC 9113 § 8.3): the four
+// pseudo-headers in the extras' `h2_pseudo` order, then every field
+// http_request would write after Host, in the same order, each name in
+// lower case, and the lines the extras name for HTTP/2 alone. Host's value
 // is `:authority` and no `host` field is sent; the fields that speak of the
 // connection (Connection, Keep-Alive, Proxy-Connection, Transfer-Encoding,
-// Upgrade, TE) are left out, whatever `keep_alive` says (§ 8.2.2); a Cookie
+// Upgrade) are left out, whatever `keep_alive` says (§ 8.2.2); a Cookie
 // line becomes one `cookie` field for each cookie-pair (§ 8.2.3);
 // Authorization and Proxy-Authorization are marked `sensitive`. Names and
 // values are copied into `storage`, which the fields point into. False, as
-// http_request is, when the extras are refused, and when the fields or their
-// bytes do not fit `most` or `room`.
+// http_request is, when the extras are refused (`h2_pseudo` not the four
+// letters once each among them), and when the fields or their bytes do not
+// fit `most` or `room`.
 typedef struct {
     const char *name, *value;       // neither NUL-terminated
     size_t name_len, value_len;
@@ -216,6 +229,9 @@ typedef struct {
 } http_field_t;
 bool http_request_fields(const http_url_t *url, const http_request_extras_t *extras, http_field_t *fields,
                          size_t most, char *storage, size_t room, size_t *count);
+// Whether `pseudo` is an order http_request_fields takes: the letters m, a,
+// s and p, each once.
+bool http_h2_pseudo_ok(const char *pseudo);
 // Framing, routing and body metadata belong to the renderer. extra_headers
 // cannot supply Host, Content-Length, Content-Type, Content-Encoding,
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,

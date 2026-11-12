@@ -109,7 +109,7 @@ static bool note_field(void *ctx, const h2_field_t *field)
 static h2_result_t fetch_get(fetch_t *f, h2_conn_t *c, const char *path)
 {
     h2_field_t request[] = {F(":method", "GET"), F(":scheme", "https"), F(":path", path), F(":authority", "a.test")};
-    return h2_stream_open(c, request, 4, true, false, &f->wait, &f->stream);
+    return h2_stream_open(c, request, 4, true, false, 16, &f->wait, &f->stream);
 }
 
 static h2_result_t fetch_head(fetch_t *f)
@@ -592,7 +592,7 @@ static void window_cases(void)
     pings(true);
     fetch_init(&a, 400);
     h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
     size_t sent;
     CHECK(h2_stream_send(a.stream, "0123456789abcdefghijklmno", 25, true, &a.wait, &sent) == H2_SILENT && sent == 10);
     h2_frame_header_t h;
@@ -621,7 +621,7 @@ static void window_cases(void)
     // second stream with all the stream window it wants stops there.
     fetch_t b;
     fetch_init(&b, 400);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &b.wait, &b.stream) == H2_OK && server_request("/up") == 3);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &b.wait, &b.stream) == H2_OK && server_request("/up") == 3);
     peer_send_window(3, 1000000);
     CHECK(h2_stream_send(b.stream, big, sizeof(big), true, &b.wait, &sent) == H2_SILENT && sent == 65535 - 25);
     b.wait.patience_ms = 3000;
@@ -772,7 +772,7 @@ static void head_cases(void)
     // do not have: left alone.
     fetch_init(&a, 3000);
     h2_field_t head_request[] = {F(":method", "HEAD"), F(":scheme", "https"), F(":path", "/h"), F(":authority", "a.test")};
-    CHECK(h2_stream_open(conn, head_request, 4, true, true, &a.wait, &a.stream) == H2_OK && server_request("/h") == 25);
+    CHECK(h2_stream_open(conn, head_request, 4, true, true, 16, &a.wait, &a.stream) == H2_OK && server_request("/h") == 25);
     peer_send_headers(25, ten, 2, true);
     CHECK(fetch_head(&a) == H2_OK && read_all(&a, body, sizeof(body), &got) == 0 && got == 0);
     CHECK(h2_stream_ended(a.stream).how == H2_END_CLEAN);
@@ -791,7 +791,7 @@ static void head_cases(void)
     static char upload[100000];
     fetch_init(&a, 3000);
     h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 29);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 29);
     server_reply(29, "200", "no need", true);
     peer_send_rst(29, H2_ERR_NO_ERROR);
     nap_ms(100);
@@ -804,7 +804,7 @@ static void head_cases(void)
     // The same with the upload already under way, parked for window.
     pings(true);
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 31);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 31);
     CHECK(h2_stream_send(a.stream, upload, 65535, false, &a.wait, &sent) == H2_OK && sent == 65535);
     server_reply(31, "200", "enough", true);
     peer_send_rst(31, H2_ERR_CANCEL);       // whatever the code, the response was whole before it
@@ -1085,7 +1085,7 @@ static void queue_cases(void)
     pings(true);
     fetch_init(&a, 3000);
     h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK);
     id = server_request("/up");
     peer_send_window(id, 1u << 20);
     peer_send_window(0, 1u << 20);
@@ -1308,7 +1308,7 @@ static void wait_cases(void)
     memset(huge, 'h', sizeof(huge) - 1);
     fetch_init(&a, 1000);
     h2_field_t big[] = {F(":method", "GET"), F(":scheme", "https"), F(":path", "/"), F("cookie", huge)};
-    CHECK(h2_stream_open(conn, big, 4, true, false, &a.wait, &a.stream) == H2_TOO_LARGE && a.stream == NULL);
+    CHECK(h2_stream_open(conn, big, 4, true, false, 16, &a.wait, &a.stream) == H2_TOO_LARGE && a.stream == NULL);
     CHECK(fetch_get(&a, conn, "/fine") == H2_OK && server_request("/fine") == 5);
     fetch_done(&a);
     finish(dead);
@@ -1377,7 +1377,7 @@ static void wake_cases(void)
     begin_with(&kGreeting, kTen, 1);
     fetch_init(&a, 900);
     h2_field_t post[] = {F(":method", "POST"), F(":scheme", "https"), F(":path", "/up"), F(":authority", "a.test")};
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
     later_t l = {say_window, 100};
     pthread_create(&t, NULL, later, &l);
     CHECK(h2_stream_send(a.stream, "0123456789abcdefghijklmno", 25, true, &a.wait, &sent) == H2_OK && sent == 25);
@@ -1399,7 +1399,7 @@ static void wake_cases(void)
     // window for the rest. The send stops there, and does not wait out its
     // patience for a window that is not coming.
     fetch_init(&a, 60000);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK);
     uint32_t early = server_request("/up");
     server_reply(early, "413", NULL, true);
     CHECK(fetch_head(&a) == H2_OK);
@@ -1489,7 +1489,7 @@ static void wake_cases(void)
     dead = atomic_load(&dead_calls);
     begin();
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 1);
     server_reply(1, "413", NULL, true);
     CHECK(fetch_head(&a) == H2_OK);
     peer_hang_up();
@@ -1578,7 +1578,7 @@ static void wake_cases(void)
     fetch_done(&a);
     // For a stream still sending it is the error RFC 9113 § 6.9.2 says.
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK && server_request("/up") == 9);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK && server_request("/up") == 9);
     peer_send_window(9, 0x7fffffff - 65536);
     static const h2_setting_t kTwoMore[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 65537}};
     peer_send_settings(kTwoMore, 1);
@@ -1633,7 +1633,7 @@ static void wake_cases(void)
     begin();
     h2_field_t head_request[] = {F(":method", "HEAD"), F(":scheme", "https"), F(":path", "/h"), F(":authority", "a.test")};
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, head_request, 4, true, true, &a.wait, &a.stream) == H2_OK && server_request("/h") == 1);
+    CHECK(h2_stream_open(conn, head_request, 4, true, true, 16, &a.wait, &a.stream) == H2_OK && server_request("/h") == 1);
     server_reply(1, "200", NULL, false);
     peer_send_data(1, "not empty", 9, true);
     CHECK(server_sees_rst(1, H2_ERR_PROTOCOL));
@@ -1648,7 +1648,7 @@ static void wake_cases(void)
     CHECK(read_all(&a, out, sizeof(out), &got) == -(int64_t)H2_ENDED && got == 0);
     fetch_done(&a);
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, head_request, 4, true, true, &a.wait, &a.stream) == H2_OK && server_request("/h") == 5);
+    CHECK(h2_stream_open(conn, head_request, 4, true, true, 16, &a.wait, &a.stream) == H2_OK && server_request("/h") == 5);
     server_reply(5, "200", NULL, false);
     peer_send_data(5, "", 0, true);
     CHECK(fetch_head(&a) == H2_OK && read_all(&a, out, sizeof(out), &got) == 0 && got == 0);
@@ -1729,7 +1729,7 @@ static void wake_cases(void)
     // request is still going up: no reset would change how that stream
     // ended, so it is the connection's error.
     fetch_init(&a, 3000);
-    CHECK(h2_stream_open(conn, post, 4, false, false, &a.wait, &a.stream) == H2_OK);
+    CHECK(h2_stream_open(conn, post, 4, false, false, 16, &a.wait, &a.stream) == H2_OK);
     uint32_t up = server_request("/up");
     server_reply(up, "413", NULL, true);
     CHECK(fetch_head(&a) == H2_OK);
@@ -1880,10 +1880,155 @@ static void many_cases(void)
     finish(dead);
 }
 
+// ── How a client's streams are opened (HTTP2.md § 4 H2.5) ────────────────
+
+// A stream opened with `weight`: its id, and what its HEADERS said of
+// priority. `*dep` is UINT32_MAX when it said nothing.
+static uint32_t opened(fetch_t *f, uint32_t weight, uint32_t *dep, bool *exclusive, uint32_t *wire_weight)
+{
+    h2_field_t request[] = {F(":method", "GET"), F(":scheme", "https"), F(":path", "/p"), F(":authority", "a.test")};
+    h2_frame_header_t h;
+    const uint8_t *payload;
+    const h2_field_t *fields;
+    size_t count;
+    fetch_init(f, 2000);
+    CHECK(h2_stream_open(conn, request, 4, true, false, weight, &f->wait, &f->stream) == H2_OK);
+    CHECK(peer_frame_of(H2_FRAME_HEADERS, &h, &payload, 2000));
+    *dep = UINT32_MAX;
+    *exclusive = false;
+    *wire_weight = 0;
+    size_t skip = 0;
+    if (h.flags & H2_FLAG_PRIORITY) {
+        *dep = ((uint32_t)(payload[0] & 0x7f) << 24) | (uint32_t)payload[1] << 16 | (uint32_t)payload[2] << 8 | payload[3];
+        *exclusive = (payload[0] & 0x80) != 0;
+        *wire_weight = payload[4];
+        skip = 5;
+    }
+    CHECK(peer_decode(payload + skip, h.length - skip, &fields, &count) && count == 4);
+    return h.stream;
+}
+
+static void opening_cases(void)
+{
+    int dead = atomic_load(&dead_calls);
+    fetch_t a, b, c, d, e;
+    uint32_t dep, weight;
+    bool exclusive;
+    h2_frame_header_t h;
+    const uint8_t *payload;
+
+    // NO PRIORITY, AND THE FIRST STREAM IS 1, for a greeting that says
+    // neither: whatever weight the caller names.
+    begin();
+    CHECK(opened(&a, 200, &dep, &exclusive, &weight) == 1 && dep == UINT32_MAX);
+    CHECK(opened(&b, 0, &dep, &exclusive, &weight) == 3 && dep == UINT32_MAX);
+    fetch_done(&a);
+    fetch_done(&b);
+    finish(dead);
+
+    // FIREFOX'S SHAPE: the first stream is 3; each HEADERS says a flat
+    // priority (stream 0, not exclusive, the caller's weight less one on the
+    // wire); and a WINDOW_UPDATE for the stream follows it at once.
+    dead = atomic_load(&dead_calls);
+    static const h2_setting_t kSmall[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 20000}};
+    // (A connection window wide enough that the streams' are what is met.)
+    static const h2_greeting_t kFlat = {.settings = kSmall, .count = 1, .window_increment = 1u << 20,
+                                        .first_stream = 3, .stream_increment = 40000,
+                                        .priority = H2_PRIORITY_FLAT};
+    begin_with(&kFlat, NULL, 0);
+    CHECK(opened(&a, 42, &dep, &exclusive, &weight) == 3 && dep == 0 && !exclusive && weight == 41);
+    CHECK(peer_frame(&h, &payload, 2000) && h.type == H2_FRAME_WINDOW_UPDATE && h.stream == 3 && h.length == 4 &&
+          (((uint32_t)payload[0] << 24) | (uint32_t)payload[1] << 16 | (uint32_t)payload[2] << 8 | payload[3]) == 40000);
+    CHECK(opened(&b, 12, &dep, &exclusive, &weight) == 5 && dep == 0 && !exclusive && weight == 11);
+    CHECK(peer_frame(&h, &payload, 2000) && h.type == H2_FRAME_WINDOW_UPDATE && h.stream == 5);
+    // A weight out of range is the protocol's default, 16.
+    CHECK(opened(&c, 300, &dep, &exclusive, &weight) == 7 && weight == 15);
+    CHECK(peer_frame(&h, &payload, 2000) && h.type == H2_FRAME_WINDOW_UPDATE && h.stream == 7);
+    // The stream's window is the SETTINGS' and the increment together: a
+    // body past the first and within the two is taken, and one past both is
+    // the stream's flow-control error.
+    static uint8_t much[16000];
+    server_reply(3, "200", NULL, false);
+    for (int i = 0; i < 3; i++)
+        peer_send_data(3, much, sizeof(much), false);       // 48,000: past 20,000, within 60,000
+    CHECK(fetch_head(&a) == H2_OK && h2_stream_ended(a.stream).how == H2_END_NOT_YET);
+    // And it is half of THAT window, 30,000, that a stream gives back at:
+    // 16,000 read says nothing, and 32,000 read is said.
+    static uint8_t taken[16000];
+    CHECK(h2_stream_read(a.stream, taken, sizeof(taken), &a.wait) == 16000);
+    CHECK(!peer_frame_of(H2_FRAME_WINDOW_UPDATE, &h, &payload, 150));
+    CHECK(h2_stream_read(a.stream, taken, sizeof(taken), &a.wait) == 16000);
+    CHECK(peer_frame_of(H2_FRAME_WINDOW_UPDATE, &h, &payload, 2000) && h.stream == 3 &&
+          (((uint32_t)payload[0] << 24) | (uint32_t)payload[1] << 16 | (uint32_t)payload[2] << 8 | payload[3]) == 32000);
+    server_reply(5, "200", NULL, false);
+    for (int i = 0; i < 4; i++)
+        peer_send_data(5, much, sizeof(much), false);       // 64,000: past 60,000
+    CHECK(peer_frame_of(H2_FRAME_RST_STREAM, &h, &payload, 2000) && h.stream == 5);
+    CHECK(h2_stream_ended(b.stream).how == H2_END_FLOW);
+    // A frame for stream 1, which this client never opened, is a frame for
+    // an idle stream: the connection's error.
+    peer_send_window(1, 100);
+    CHECK(peer_frame_of(H2_FRAME_GOAWAY, &h, &payload, 2000));
+    fetch_done(&a);
+    fetch_done(&b);
+    fetch_done(&c);
+    finish(dead);
+
+    // CHROME'S SHAPE: every HEADERS says an exclusive dependency on the
+    // stream still open that is the lightest of those at least as heavy,
+    // the newest of that weight; stream 0 when there is none. Capture C3's
+    // streams, in its order: a script, a sheet opened after it, a picture
+    // (which depends on the SCRIPT, the nearer weight, and not on the newer
+    // and heavier sheet), a second picture (on the first).
+    dead = atomic_load(&dead_calls);
+    static const h2_greeting_t kChained = {.settings = kSettings, .count = 2, .priority = H2_PRIORITY_CHAINED};
+    begin_with(&kChained, NULL, 0);
+    uint32_t script = opened(&a, 220, &dep, &exclusive, &weight);
+    CHECK(script == 1 && dep == 0 && exclusive && weight == 219);
+    uint32_t sheet = opened(&b, 256, &dep, &exclusive, &weight);
+    CHECK(sheet == 3 && dep == 0 && exclusive && weight == 255);
+    uint32_t picture = opened(&c, 183, &dep, &exclusive, &weight);
+    CHECK(picture == 5 && dep == script && exclusive && weight == 182);
+    uint32_t second = opened(&d, 183, &dep, &exclusive, &weight);
+    CHECK(second == 7 && dep == picture && exclusive);
+    // With two of a weight open, a third depends on the NEWER of them.
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 9 && dep == second);
+    fetch_done(&e);
+    // A stream its fetch has closed is no longer one to depend on: with the
+    // pictures gone, another depends on the script again; with the script
+    // gone too, on the sheet; and something heavier than all that is left,
+    // on nothing.
+    fetch_done(&c);
+    fetch_done(&d);
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 11 && dep == script);
+    fetch_done(&e);
+    fetch_done(&a);
+    CHECK(opened(&e, 183, &dep, &exclusive, &weight) == 13 && dep == sheet);
+    fetch_done(&e);
+    fetch_done(&b);
+    CHECK(opened(&e, 256, &dep, &exclusive, &weight) == 15 && dep == 0);
+    fetch_done(&e);
+    finish(dead);
+
+    // A GREETING THE CONNECTION WILL NOT SAY: an even first stream, or a
+    // stream window past 2^31 - 1. Nothing is made, and the engine and the
+    // socket are still the caller's.
+    os64_tls_client *engine;
+    int32_t socket;
+    peer_begin(&engine, &socket);
+    static const h2_greeting_t kEven = {.settings = kSettings, .count = 2, .first_stream = 2};
+    static const h2_setting_t kHuge[] = {{H2_SETTING_INITIAL_WINDOW_SIZE, 0x7fffffffu}};
+    static const h2_greeting_t kPast = {.settings = kHuge, .count = 1, .stream_increment = 1};
+    CHECK(h2_conn_adopt(engine, socket, NULL, 0, &kEven, &kHooks) == NULL);
+    CHECK(h2_conn_adopt(engine, socket, NULL, 0, &kPast, &kHooks) == NULL);
+    CHECK(peer_closes() == 0 && !peer_engine_freed());
+}
+
 int main(void)
 {
     alarm(SECONDS_MOST);
     basic_cases();
+    opening_cases();
     ending_cases();
     window_cases();
     head_cases();

@@ -290,6 +290,10 @@ typedef struct {
     uint16_t tls_version;
     bool tls_fallback;
     bool tls_resumed;      // the connection's TLS 1.3 handshake resumed a kept session
+    // The final hop ran over HTTP/2, as a stream of this number on its
+    // connection (libfetch's `http2` and its detail's stream).
+    bool http2;
+    uint32_t h2_stream;
     way_body_t body;
     // Navigation Timing's redirectCount: the redirects followed to get here
     // when every one stayed on the origin of the address asked for, and 0

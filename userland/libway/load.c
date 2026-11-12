@@ -128,6 +128,7 @@ void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
     opt->ctx = hooks;
     opt->order = way_identity_order(hooks->identity, &hooks->metadata);
     opt->keep_alive = way_identity_keep_alive(hooks->identity);
+    way_identity_h2(hooks->identity, hooks->metadata.dest, &opt->h2, &opt->h2_weight, &opt->h2_priority, &opt->http1);
     const char *accept = way_identity_accept(hooks->identity, hooks->metadata.dest);
     if (accept != NULL)
         opt->accept = accept;
@@ -467,6 +468,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
     opt.order = way_identity_order(s->identity, &s->metadata);
     opt.keep_alive = way_identity_keep_alive(s->identity);
+    way_identity_h2(s->identity, s->metadata.dest, &opt.h2, &opt.h2_weight, &opt.h2_priority, &opt.http1);
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
@@ -538,6 +540,8 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;
     out->head.tls_resumed = detail->tls_resumed;
+    out->head.http2 = head->http2;
+    out->head.h2_stream = head->http2 ? detail->h2_stream : 0;
     os64_strcopy(out->asked, sizeof(out->asked), url);
     return true;
 }

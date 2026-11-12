@@ -22,7 +22,8 @@ PY
 common=(-std=c11 -O1 -g -Wall -Wextra -Werror -fno-sanitize-recover=all -pthread -D_GNU_SOURCE
         -I "$work" -I userland/libfetch/include -I userland/libfetch -I userland/libtls/include
         -I userland/libgzip/include -I userland/libos64/include -I abi/include -I tools
-        tools/test_fetch_h2_host.c tools/h2_peer.c tools/host_bell.c
+        -I userland/apps/yonder -I userland/libway/include
+        tools/test_fetch_h2_host.c tools/h2_peer.c tools/host_bell.c userland/apps/yonder/agent.c
         userland/libfetch/fetch.c userland/libfetch/http.c userland/libfetch/transport.c
         userland/libfetch/proxy.c userland/libfetch/pool.c
         userland/libfetch/h2_conn.c userland/libfetch/h2_frame.c userland/libfetch/h2_hpack.c
@@ -33,3 +34,6 @@ cc "${common[@]}" -fsanitize=thread -o "$work/fetch_tsan"
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/fetch_asan"
 # TSan's shadow memory wants the low address layout (tools/test_h2_conn_host.sh).
 TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1}" setarch "$(uname -m)" -R "$work/fetch_tsan"
+# net.conf's switch is read once in a process's life, so the process that
+# has it off is one of its own.
+H2_SWITCH_OFF=1 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/fetch_asan"

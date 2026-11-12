@@ -249,8 +249,9 @@ object, invisible to callers:
   only for it.
 - **Not in this PR:** TLS session resumption (it came later: TLS13.md
   § Resumption), which cuts the first-connection
-  cost further; HTTP/2; pipelining (nobody speaks it). Each stays a row,
-  and the first is the next worth paying once this lands.
+  cost further; HTTP/2 (it came later too: HTTP2.md, where one connection
+  carries a host's requests at once); pipelining (nobody speaks it). Each
+  stays a row, and the first is the next worth paying once this lands.
 
 **What stops sending.** `Connection: close` leaves the fixed block; the
 request writer sends nothing for `Connection` on HTTP/1.1 (persistent is
