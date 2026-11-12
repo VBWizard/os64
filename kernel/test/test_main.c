@@ -3819,6 +3819,7 @@ typedef enum { STEER_OK, STEER_UNAVAILABLE, STEER_FAILED } orphan_steer_t;
 //
 // A layout this disk cannot give is reported as UNAVAILABLE rather than
 // forced, because forcing it would fail a fixture write:
+//   - fewer free inodes than the drill has files to create;
 //   - more short groups in a row than the bound below allows;
 //   - a crossing with nowhere to cross to: when the rest of the disk holds
 //     fewer free blocks than the fixtures need, leaving the victim's group
@@ -3831,6 +3832,10 @@ typedef enum { STEER_OK, STEER_UNAVAILABLE, STEER_FAILED } orphan_steer_t;
 //     on, and filling the spacer moves nothing the victim will see.
 static orphan_steer_t ext2_orphan_steer(bool straddle, const char **why)
 {
+    if (ext2_free_inodes(kRootFilesystem) < sizeof(kOrphanFixtures) / sizeof(kOrphanFixtures[0])) {
+        *why = "fewer free inodes than the drill's files, counted as if all were held at once";
+        return STEER_UNAVAILABLE;
+    }
     size_t bs = (size_t)kRootFilesystem->blockSize;
     uint8_t *chunk = kmalloc(bs * ORPHAN_SPACER_CHUNK);
     *why = "out of memory";
