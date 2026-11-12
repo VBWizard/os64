@@ -317,10 +317,11 @@ static void acl_resync(void)
     // A wild length in a short packet is a whole transfer already.
     setup(); bt_host_receive(&host,wild,8,MPS,multi_report,NULL);
     assert(!host.failed && !host.wire_skip && host.wire_resyncs==1);
-    // Bytes after a complete packet in the same USB packet are not another.
+    // The packet form drops nothing the stream form would deliver: two ACL
+    // packets in one USB packet are both routed.
     uint8_t two[2*sizeof(report)]; memcpy(two,report,sizeof(report)); memcpy(two+sizeof(report),report,sizeof(report));
     setup(); bt_host_receive(&host,two,sizeof(two),MPS,multi_report,NULL);
-    assert(input_count[0]==1 && host.wire_resyncs==1 && host.wire_used==0);
+    assert(input_count[0]==2 && host.wire_resyncs==0 && host.wire_used==0);
     // A packet longer than one USB packet still assembles: full, then short.
     uint8_t big[4+4+70]={12,0x20,74,0,70,0,4,0,0x1b,10,0,2,0,4};
     setup();

@@ -35,10 +35,11 @@ void bt_host_init(bt_host_t *, uint64_t);
 void bt_host_event(bt_host_t *, const uint8_t *, size_t);
 // `max_packet`: the bulk endpoint's maximum packet size when the bytes are
 // ONE USB packet, 0 for an arbitrary slice of the stream. As bt_hci_feed:
-// an ACL packet is the whole of its transfer and a packet shorter than the
-// maximum ends one, so the packet form can tell when its assembler is out
-// of step, and empties it. A header whose length cannot be real is then a
-// transfer to skip, where the stream form can only call the host failed.
+// a packet shorter than the maximum ends a transfer and an ACL packet does
+// not continue past the end of one, so the packet form can tell when its
+// assembler is out of step, and empties it. A header whose length cannot
+// be real is then a transfer to skip, where the stream form can only call
+// the host failed.
 void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
 void bt_host_tick(bt_host_t *, uint64_t, bool, bool, bool,

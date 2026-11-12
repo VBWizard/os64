@@ -809,7 +809,7 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 		}
 		probe->packets++;
 		bt_intel_feed_events(&rx->stream, &probe->events, rx->buffer,
-		                     rx->endpoint.packet_bytes - residual, rx->endpoint.packet_bytes);
+		                     rx->endpoint.packet_bytes - residual);
 		// Bound unsolicited traffic as well as time: a continuously ready
 		// device must not keep the boot-time event drain spinning indefinitely.
 		if (!probe->events.malformed && !probe->events.download_failed && probe->packets < 64)

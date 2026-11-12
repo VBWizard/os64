@@ -444,8 +444,19 @@ reconnect after power loss with a new RPA. They cover persistent disable,
 disconnect suppression and forgetting. Link-failure fixtures check both
 Encryption Change/Disconnection Complete event orders and recovery through the
 manager for timeout (08) and establishment failure (3e); missing-key,
-authentication and MIC failures remain blocked even when followed by either
-disconnect reason. `tools/test_bt_bond_store_host.sh` runs
+authentication and MIC failures at the start of encryption remain blocked
+even when followed by either disconnect reason. A MIC failure (3d) that
+ends a link the saved key had ALREADY encrypted is the radio's and is
+retried by the manager, at most three times running with no input in
+between (`integrity_drop_after_encryption`).
+
+The controller's start-up round is run again when its reset and the reset
+that cleans up after it both go unanswered, three times in all before the
+host is failed, and `/sys/bluetooth/scan` says which half of a timed-out
+command was missing. At run time the event and ACL assemblers are fed
+whole USB packets and empty themselves at the end of a transfer they are
+out of step with (`event framing resyncs`, `ACL framing resyncs`); the
+bootloader's replies are still read as a byte stream. `tools/test_bt_bond_store_host.sh` runs
 the production storage code with short I/O, corruption, sync/close/rename errors,
 and filesystem read-only demotion. The xHCI harness verifies disk callbacks run
 outside the poll lock and an in-flight save cannot acknowledge a newer forget.

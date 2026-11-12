@@ -103,9 +103,6 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
             break;
         }
         host_wire_empty(h);
-        // An ACL packet is the whole of its transfer: bytes after it in the
-        // same USB packet are not the start of another.
-        if(max_packet && n) { h->wire_resyncs++; return; }
     }
     // The transfer is over and the packet is not: what is held was never
     // the start of one.

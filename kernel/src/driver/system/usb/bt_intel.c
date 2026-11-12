@@ -144,12 +144,6 @@ void bt_hci_feed(bt_hci_stream_t *stream,
         if (stream->used >= 2 && stream->used == 2 + stream->bytes[1]) {
             event(context, stream->bytes, stream->used);
             stream->used = 0;
-            // An event is the whole of its transfer: bytes after it in the
-            // same packet are not the start of another.
-            if (max_packet != 0 && bytes != 0) {
-                stream->resyncs++;
-                return;
-            }
         }
     }
     // The transfer is over and the event is not: what is held was never the
@@ -223,9 +217,9 @@ static void loader_event(void *context, const uint8_t *event, size_t bytes)
 }
 
 void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,
-                          const uint8_t *data, size_t bytes, size_t max_packet)
+                          const uint8_t *data, size_t bytes)
 {
-    bt_hci_feed(stream, loader_event, events, data, bytes, max_packet);
+    bt_hci_feed(stream, loader_event, events, data, bytes, 0);
 }
 
 static uint16_t firmware_id(uint32_t top)
