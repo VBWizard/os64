@@ -73,7 +73,8 @@ upstream of the reviewer, not a filter on it.
 **WORKING AN HTTP/2 SLICE?** `docs/design/pending/HTTP2.md` § 0 says how
 `HTTP2_TRACKER.csv` beside it is kept — which rows a branch may touch, when
 a row flips, and that `tools/http2_tracker.py` passes before a push. It is
-that arc's rule alone; no other arc has a tracker.
+that arc's rule alone: an arc with a tracker keeps its own rules beside its
+design (`tools/TRACKERS.md` is the shared format).
 
 ## Project Overview
 

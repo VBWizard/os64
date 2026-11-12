@@ -532,7 +532,7 @@ static void pci_caps_record(uint8_t bus, uint8_t device, uint8_t function)
 // Read every recorded function's capability list into the table
 // pci_caps_of answers from. The lists are read here, while enumeration is
 // reading configuration space anyway, so that a later question about a
-// device (the /sys/bus/pci nodes ask on every read) touches no hardware.
+// device touches no hardware.
 static void pci_caps_capture(void)
 {
 	uint32_t total = (uint32_t)kPCIDeviceCount + kPCIFunctionCount + kPCIBridgeCount;
