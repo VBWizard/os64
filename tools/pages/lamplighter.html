@@ -89,6 +89,28 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
       mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
       -webkit-mask-composite:xor;mask-composite:exclude;animation:sweep 2.5s linear infinite}
+/* Channel buoys: a striped disc made a ring by the legacy compositing word
+   alone, `-webkit-mask-composite: xor` and no standard one (M2): a disc
+   where the word is not read. */
+.buoy{border-radius:50%;background:repeating-conic-gradient(#e74c3c 0 45deg,#f4f1e8 45deg 90deg);
+      -webkit-mask:radial-gradient(closest-side,#000 52%,#0000 55%),linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor}
+/* The moon's path on the water: soft glints whose mask slides along the
+   row (mask-position animated, M2), a tile's width a loop. */
+.glint{position:absolute;left:0;width:100%;height:12.5%;pointer-events:none;
+       background:linear-gradient(90deg,#dce9ff00,#dce9ff99 30% 70%,#dce9ff00);
+       -webkit-mask:radial-gradient(closest-side,#000,#0000) 0 50%/90px 55% repeat-x;
+       mask:radial-gradient(closest-side,#000,#0000) 0 50%/90px 55% repeat-x;
+       animation:glint 2.4s linear infinite}
+@keyframes glint{to{-webkit-mask-position:90px 50%;mask-position:90px 50%}}
+/* The tower's halo, breathing: its soft disc's mask grows and shrinks
+   (mask-size animated, M2). */
+#halo{position:absolute;pointer-events:none;width:25%;height:37.5%;
+      background:radial-gradient(circle,#fff3c2aa,#ffcf5c55 45%,#0000 70%);
+      -webkit-mask:radial-gradient(closest-side,#000 40%,#0000) center/30% 30% no-repeat;
+      mask:radial-gradient(closest-side,#000 40%,#0000) center/30% 30% no-repeat;
+      animation:breathe 1.8s ease-in-out infinite alternate}
+@keyframes breathe{to{-webkit-mask-size:100% 100%;mask-size:100% 100%}}
 #banner{position:absolute;left:10%;right:10%;top:36%;padding:14px;text-align:center;border-radius:12px;
         background:#0b1630e6;border:2px solid var(--gold);font-size:22px;z-index:9;display:none}
 #banner small{display:block;font-size:15px;color:var(--dim);margin-top:6px}
@@ -101,7 +123,8 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
 #check td{padding:5px 6px;border-top:1px solid #213a68;vertical-align:top}
 #check .ok{color:#7ddc8f;font-weight:bold}#check .no{color:#ff8a80;font-weight:bold}
 #check p{font-size:13px;color:var(--dim);margin:8px 0 0}
-#fps{position:fixed;right:10px;top:10px;padding:4px 10px;border-radius:8px;background:#000a;color:#7ddc8f;font:14px monospace;display:none}
+/* The frame meter sits in the harbour's corner, where the eyes are. */
+#fps{position:absolute;right:8px;top:8px;z-index:11;padding:4px 10px;border-radius:8px;background:#000a;color:#7ddc8f;font:14px monospace;display:none}
 </style>
 <main>
 <p class="eyebrow">YONDER / THE PROVING GROUND</p>
@@ -115,9 +138,9 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
  <div id="banner"></div>
  <section id="check"><h2>Self-check</h2><table id="checks"></table>
  <p>A check says the engine <b>read</b> the feature. Whether it <b>drew</b> it is your eyes' call: each row says what to look for, and the same file opened in another browser is the answer key.</p></section>
+ <div id="fps">-- fps</div>
 </div>
 </main>
-<div id="fps">-- fps</div>
 <script>
 (function () {
   'use strict';
@@ -148,11 +171,42 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       check: function () { return cs($('ring'), 'mask-composite').indexOf('exclude') === 0; } },
     atom: { name: 'inline-block effects', from: '#555',
       look: 'In the sentence above the harbour, unlit lamps are faded, grey and soft; lit ones are bright gold.',
-      check: function () { var h = document.querySelector('.hl.out'); return !h || cs(h, 'opacity') === '0.3'; } }
+      check: function () { var h = document.querySelector('.hl.out'); return !h || cs(h, 'opacity') === '0.3'; } },
+    legacy: { name: '-webkit-mask-composite\'s legacy words', from: 'masks M2',
+      look: 'The red and white channel buoys are rings you can see the water through, not solid discs. Chrome and Safari draw rings; Firefox, which reads only the standard word, draws discs.',
+      check: function () { var b = arena.querySelector('.buoy'); return !!b && (cs(b, 'mask-composite').indexOf('exclude') === 0 || cs(b, '-webkit-mask-composite').indexOf('xor') === 0); } },
+    maskpos: { name: 'mask-position animated', from: 'masks M2',
+      look: 'Moonlight glints slide along the bright row of water; they move, not just shine.',
+      check: function () { return midway('mask-position', '0px 0px', '20px 20px') === '10px 10px'; } },
+    masksize: { name: 'mask-size animated', from: 'masks M2',
+      look: 'The glow round the lighthouse breathes: it grows and shrinks, always soft-edged.',
+      check: function () { return midway('mask-size', '0px 0px', '20px 20px') === '10px 10px'; } }
   };
+
+  // A property's computed value halfway through a paused animation from
+  // `a` to `b` on a probe of its own: the self-check of an animated
+  // property, which a running animation's moving value cannot be. A
+  // keyframe names it in camel case, as script does.
+  function midway(prop, a, b) {
+    var p = document.createElement('div'), from = {}, to = {}, v = '';
+    var key = prop.replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); });
+    from[key] = a; to[key] = b;
+    p.style.cssText = 'position:absolute;width:20px;height:20px;mask-image:linear-gradient(#000,#000)';
+    arena.appendChild(p);
+    try {
+      var anim = p.animate([from, to], { duration: 1000 });
+      anim.pause(); anim.currentTime = 500;
+      v = cs(p, prop);
+      anim.cancel();
+    } catch (e) { v = ''; }
+    arena.removeChild(p);
+    return v;
+  }
 
   // The levels. Tiles are [column, row] from the top left; a lane is a row
   // boats sail along, `dur` milliseconds a crossing, `dir` 1 rightward.
+  // Buoys block the way as rocks do; `glint` is the row the moon's path
+  // lies on, and `halo` puts a breathing glow round the tower.
   var LEVELS = [
     { name: 'First Light', shows: ['aspect', 'conic', 'cssanim', 'waapi'],
       start: [0, 7], tower: [11, 0],
@@ -172,7 +226,15 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       rocks: [[2, 0], [7, 0], [5, 2], [8, 3], [0, 4], [4, 5], [8, 6]],
       fog: [[9, 2, 1], [1, 6, 1]],
       lanes: [{ row: 1, dur: 8000, dir: 1, boats: [0, 0.5] }, { row: 4, dur: 10000, dir: -1, boats: [0.2, 0.7] },
-              { row: 5, dur: 7000, dir: 1, boats: [0.35, 0.85] }] }
+              { row: 5, dur: 7000, dir: 1, boats: [0.35, 0.85] }] },
+    { name: 'Moonrise', shows: ['legacy', 'maskpos', 'masksize'],
+      start: [0, 7], tower: [11, 0], halo: true, glint: 3,
+      lamps: [[3, 0], [9, 1], [1, 3], [7, 3], [11, 5], [4, 6]],
+      rocks: [[6, 1], [2, 5], [9, 6]],
+      buoys: [[0, 1], [3, 1], [8, 5], [5, 5]],
+      fog: [[11, 5, 1]],
+      lanes: [{ row: 2, dur: 10000, dir: 1, boats: [0, 0.5] }, { row: 4, dur: 8000, dir: -1, boats: [0.25, 0.75] },
+              { row: 6, dur: 9000, dir: 1, boats: [0.1, 0.6] }] }
   ];
 
   function cs(el, prop) { return el ? getComputedStyle(el).getPropertyValue(prop).trim() : ''; }
@@ -193,11 +255,24 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     // outlives its element in a browser, so a lane removed while its
     // animation runs is kept, and visited, for the page's life.
     if (lanes) lanes.forEach(function (lane) { if (lane.anim) lane.anim.cancel(); });
-    // Everything but the banner and the self-check, which outlive a level.
-    var check = $('check');
-    Array.prototype.slice.call(arena.children).forEach(function (c) { if (c !== banner && c !== check) arena.removeChild(c); });
+    // Everything but the banner, the self-check and the meter, which
+    // outlive a level.
+    var check = $('check'), meter = $('fps');
+    Array.prototype.slice.call(arena.children).forEach(function (c) {
+      if (c !== banner && c !== check && c !== meter) arena.removeChild(c);
+    });
     banner.style.display = 'none';
     moves = 0; done = false; boatClock.advanced = false;
+    if (level.glint !== undefined) {
+      var glint = document.createElement('div'); glint.className = 'glint'; place(glint, 0, level.glint);
+      arena.appendChild(glint);
+    }
+    if (level.halo) {
+      // Three tiles by three, centred on the tower.
+      var halo = document.createElement('div'); halo.id = 'halo';
+      place(halo, level.tower[0] - 1, level.tower[1] - 1);
+      arena.appendChild(halo);
+    }
     beam = document.createElement('div'); beam.id = 'beam';
     // Its pivot, the left middle, on the tower's centre: half its height
     // (20% of the harbour's) above it.
@@ -206,6 +281,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     arena.appendChild(beam);
     tile('', level.tower[0], level.tower[1]).id = 'tower';
     rocks = {}; level.rocks.forEach(function (r) { tile('rock', r[0], r[1]); rocks[r[0] + ',' + r[1]] = true; });
+    (level.buoys || []).forEach(function (b) { tile('buoy', b[0], b[1]); rocks[b[0] + ',' + b[1]] = true; });
     rocks[level.tower[0] + ',' + level.tower[1]] = true;
     lamps = level.lamps.map(function (l) { return { x: l[0], y: l[1], lit: false, el: tile('lamp', l[0], l[1]) }; });
     lanes = level.lanes.map(function (spec) {
@@ -351,7 +427,10 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   });
 
   $('status').style.display = 'none';
-  build(0);
+  // lamplighter.html#4 opens at level 4, in a browser whose document keeps
+  // the address's fragment (yonder's does not: DEBTS.md).
+  var asked = parseInt(location.hash.slice(1), 10);
+  build(asked >= 1 && asked <= LEVELS.length ? asked - 1 : 0);
   requestAnimationFrame(frame);
 })();
 </script>
