@@ -319,6 +319,14 @@ static void test_busy_bit(void)
 	model_pass(0, false, 0, false);
 	CHECK(hc[0].reads == 2 && hc[0].writes == 2, "not owed, yet ERDP was read or written");
 
+	// The rule itself, asked directly: the bit reading set is not enough
+	// without an acknowledged interrupt. (The glue never asks this way,
+	// because it reads the register only when one is owed.)
+	xhci_evt_drain_t nothing = { 0, false };
+	CHECK(!xhci_evt_erdp(&hc[0].ring, nothing, false, true).write, "an unowed busy bit was retired");
+	CHECK(xhci_evt_erdp(&hc[0].ring, nothing, true, true).write, "an owed, set busy bit was not retired");
+	CHECK(!xhci_evt_erdp(&hc[0].ring, nothing, true, false).write, "an owed, clear busy bit was written");
+
 	// Owed and progress: progress decides, no read.
 	produce(0, now);
 	model_pass(0, false, 0, true);
