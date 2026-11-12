@@ -42,8 +42,9 @@ recoloured for dark mode (`invert()`, `brightness(0)`), greyed-out logos
   root element", `f_anchors`): `html { filter: grayscale(1) }` leaves a
   fixed header fixed to the viewport.
 - **A plain inline's filter is not drawn** and makes nothing
-  (`f_filtered`), and **an inline-block's is not drawn** though it is a
-  containing block, as their opacity is painted opaque (§ 10).
+  (`f_filtered`), as its opacity is painted opaque (§ 10). An
+  inline-block's, and an inline picture's, is drawn since 2026-11-12: the
+  atom on its line is stacked whole and is a group (`public_frag`).
 
 ## 3. The problem: a group has no coverage
 
@@ -204,8 +205,9 @@ and booked.
 ## 10. Not in 8c (DEBTS rows)
 
 - SVG filter references (`url(#f)`) and the SVG filter primitives.
-- `filter` on an inline box or an inline-block: not drawn, as their
-  `opacity` is not (PILE3.md § Booked: neither is one layer to group).
+- `filter` on a plain inline box: not drawn, as its `opacity` is not
+  (PILE3.md § Booked: no one layer to group). The inline-block half was
+  paid 2026-11-12 (the atom group).
 - `filter` and `backdrop-filter` on a table's rows, row groups and columns:
   no containing blocks, as a transform on them is not (PILE3.md § Booked).
 - Interpolating `filter` lists (Filter Effects 1): an animated filter

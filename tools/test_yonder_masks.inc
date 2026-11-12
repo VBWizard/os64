@@ -241,13 +241,23 @@ static void mask_paint_cases(void)
                      200, (os64_gui_rect_t){0, 0, 200, 100});
     expect("mask: a plain inline's is not drawn", got != NULL && strstr(got, "filter ") == NULL, got);
     free(got);
-    // Nor an inline-block's, which is no stacked box (DEBTS.md).
-    got = mask_paint("<!doctype html><style>body { margin: 0 } span { display: inline-block;"
-                     " width: 4px; height: 4px; background: #00ff00; mask: linear-gradient(#000 0 0) }"
-                     "</style><span></span>",
-                     200, (os64_gui_rect_t){0, 0, 200, 100});
-    expect("mask: an inline-block's is not drawn", got != NULL && strstr(got, "filter ") == NULL, got);
-    free(got);
+    // An inline-block's is: its atom is stacked whole, a group of its own
+    // (the icon pattern laid out inline-block), its frame painted once.
+    mask_case("mask: an inline-block's is drawn, its atom whole",
+              "display: inline-block; width: 4px; height: 4px; background: #00ff00;"
+              " mask: linear-gradient(#000 0 0)",
+              "fill 0 0 200 100 #fefefe\n"
+              "filter 0 10 4 4\n"
+              "fill 0 10 4 4 #00ff00\n"
+              "filter 0 10 4 4\n"
+              "pixels 0 10 4 4 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000"
+              " ff000000 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000 ff000000\n"
+              "take\n"
+              "end filter 0 #101010 255 cover 4080\n"
+              "ffffffff\n"
+              "ffffffff\n"
+              "ffffffff\n"
+              "ffffffff\n");
     // Past the paint's budget (MASKS.md § 10, ruling 1): a box the size of
     // the view costs itself and a capture, twice the view, which is all of
     // it, so the second and the fourth are drawn plain, each counted — but
