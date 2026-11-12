@@ -54,7 +54,7 @@ const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply', 'R
     'Symbol_asyncIterator', 'Symbol_iterator', 'Symbol_toStringTag',
     'AbortController', 'AbortController_abort', 'AbortController_signal',
     'AbortSignal_aborted', 'AbortSignal_reason',
-    'EventTarget_addEventListener', 'EventTarget_removeEventListener', 'AsyncIteratorPrototype',
+    'AddAbortAlgorithm', 'RemoveAbortAlgorithm', 'AsyncIteratorPrototype',
     'TextDecoder', 'TextDecoder_decode', 'TextDecoder_encoding', 'TextDecoder_fatal', 'TextDecoder_ignoreBOM',
     'TextEncoder', 'TextEncoder_encode', 'String_charCodeAt', 'String_slice'];
 for (let i = 0; i < NEEDED.length; i++)
@@ -128,8 +128,8 @@ const abortControllerAbort = I.AbortController_abort;
 const abortControllerSignal = I.AbortController_signal;
 const abortSignalAborted = I.AbortSignal_aborted;
 const abortSignalReason = I.AbortSignal_reason;
-const addEventListener = I.EventTarget_addEventListener;
-const removeEventListener = I.EventTarget_removeEventListener;
+const addAbortAlgorithm = I.AddAbortAlgorithm;
+const removeAbortAlgorithm = I.RemoveAbortAlgorithm;
 const AsyncIteratorPrototype = I.AsyncIteratorPrototype;
 
 // Only this file can name it: a constructor given it as its first argument
@@ -2240,10 +2240,10 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
     let shuttingDown = false;
     let currentWrite = resolvedWith(undefined);
     const result = newDeferred();
-    let abortListener;
+    let abortAlgorithm;
 
     if (signal !== undefined) {
-        abortListener = function () {
+        abortAlgorithm = function () {
             const error = apply(abortSignalReason, signal, []);
             const actions = slots();
             let count = 0;
@@ -2256,10 +2256,10 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
             shutdownWithAnAction(function () { return waitForAll(actions, count); }, true, error);
         };
         if (apply(abortSignalAborted, signal, [])) {
-            abortListener();
+            abortAlgorithm();
             return result.promise;
         }
-        apply(addEventListener, signal, ['abort', abortListener]);
+        addAbortAlgorithm(signal, abortAlgorithm);
     }
 
     function waitForAll(actions, count) {
@@ -2352,7 +2352,7 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
     function finalize(isError, error) {
         writerRelease(writer);
         defaultReaderRelease(reader);
-        if (signal !== undefined) apply(removeEventListener, signal, ['abort', abortListener]);
+        if (signal !== undefined) removeAbortAlgorithm(signal, abortAlgorithm);
         if (isError) rejectDeferred(result, error);
         else resolveDeferred(result, undefined);
     }

@@ -521,6 +521,44 @@ static void dom_retirement_cases(void)
                 "new B.ReadableStream({start:C.filterLive});assert(walkLog.join()==='C,C,C,C');",
                 "retirement streams: callback refusal settles promises and live callback remains callable");
             realm_script(retirement_realms[0],
+                "globalThis.pipeAborts=[];globalThis.pipeControllers=[new AbortController(),new B.AbortController()];"
+                "for(let controller of pipeControllers){"
+                "controller.signal.addEventListener('abort',B.deadTask);"
+                "new B.ReadableStream().pipeTo(new B.WritableStream(),{signal:controller.signal,preventAbort:true,preventCancel:true})"
+                ".then(()=>pipeAborts.push('unexpected'),e=>pipeAborts.push(e))}" ,
+                "retirement streams: retained pipe receives active and retired signal abort algorithms");
+            JSContext *collection_context = os64_js_context(runtime, OS64_JS_ABI_ID, &out);
+            if (collection_context) {
+                JS_RunGC(JS_GetRuntime(collection_context));
+                JS_RunGC(JS_GetRuntime(collection_context));
+            }
+            realm_script(retirement_realms[0], "for(let controller of pipeControllers)controller.abort('stopped');",
+                "retirement streams: pending pipe algorithms survive cycle collection");
+            realm_script(retirement_realms[0],
+                "assert(pipeAborts.join()==='stopped,stopped',pipeAborts.join());"
+                "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle');",
+                "retirement streams: abort settles internal pipes without delivering retired event callbacks");
+            realm_script(retirement_realms[0],
+                "globalThis.abortOrder=[];globalThis.orderController=new AbortController();"
+                "orderController.signal.addEventListener('abort',e=>e.stopImmediatePropagation());"
+                "for(let i=1;i<=3;i++){new B.ReadableStream({start(c){if(i===1)c.close()},cancel(){abortOrder.push(i)}})"
+                ".pipeTo(new B.WritableStream(),{signal:orderController.signal}).catch(()=>{})}",
+                "retirement streams: completed pipe removes its internal abort algorithm");
+            realm_script(retirement_realms[0], "orderController.abort('ordered');",
+                "retirement streams: abort algorithms precede stopped event delivery");
+            realm_script(retirement_realms[0], "assert(abortOrder.join()==='2,3',abortOrder.join());",
+                "retirement streams: removing first pipe preserves later algorithm order");
+            realm_script(retirement_realms[0],
+                "(()=>{let controller=new AbortController();globalThis.pipeWeak=new WeakRef(controller.signal);"
+                "new B.ReadableStream().pipeTo(new B.WritableStream(),{signal:controller.signal}).catch(()=>{})})()",
+                "retirement streams: unobserved pending pipe forms a collectible signal cycle");
+            if (collection_context) {
+                JS_RunGC(JS_GetRuntime(collection_context));
+                JS_RunGC(JS_GetRuntime(collection_context));
+            }
+            realm_script(retirement_realms[0], "assert(pipeWeak.deref()===undefined);",
+                "retirement streams: native abort holds are traced for cycle collection");
+            realm_script(retirement_realms[0],
                 "globalThis.retainedReads=[];B.retainedBlob.text().then(v=>retainedReads.push(v));"
                 "B.retainedResponse.text().then(v=>retainedReads.push(v));",
                 "retirement bodies: read settled data retained from B");

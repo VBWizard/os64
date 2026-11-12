@@ -107,6 +107,14 @@ failure: a closed Response body could be read after its creator retired, but
 cloning it stranded tee continuations. Default and byte-stream clones now
 finish both branches. Internal neutrality does not bypass the author checks.
 
+Pipe abort is registered in AbortSignal's native algorithm list, with traced
+function holds and explicit removal when the pipe settles. It runs before
+author abort events, including for a retained signal whose document departed.
+Completed-pipe removal preserves the order of later algorithms. Signal
+finalization clears Response back-pointers before releasing internal closures
+that might own those Responses. This keeps cleanup independent of event
+callback eligibility and `stopImmediatePropagation`.
+
 ## Evidence
 
 `tools/test_dom_host.sh --realm-retirement` runs a three-binding fixture under
@@ -123,7 +131,7 @@ object access and balanced native teardown.
 
 | Final focused suite | Shipping engine | Instrumented engine |
 |---|---:|---:|
-| Retirement delivery, messages, observers, traversal, Streams and retained data | 418 checks | 418 checks |
+| Retirement delivery, messages, observers, traversal, Streams and retained data | 434 checks | 434 checks |
 | Cross-realm binding routing | 678 checks | 678 checks |
 | Events | 1,020 checks | 1,020 checks |
 | Mutation observers | 32 checks | 32 checks |
@@ -133,7 +141,7 @@ object access and balanced native teardown.
 | Intersection observers | 409 checks | 409 checks |
 | Resize observers | 239 checks | 1,309 checks |
 | Traversal | 11 checks | 11 checks |
-| Fetch, Headers, Blob, FormData and Streams | 1,554 checks | 10,526 checks |
+| Fetch, Headers, Blob, FormData and Streams | 1,514 checks | 10,526 checks |
 | Modern DOM, including URL and data-iteration coverage | 5,550 checks | 19,948 checks |
 | P2b idle/message/clone and allocation sweeps | 1,174 checks | 13,324 checks |
 | Core DOM, including retained selection | 332 checks | 332 checks |
@@ -178,6 +186,23 @@ Nine Streams mutants are caught: each of the four start paths, size callbacks,
 promise callbacks, reaction ownership, microtask ownership and incorrectly
 using the stream's creation document as callback activity. Together with the
 prior campaigns below, 62 isolated source mutants are caught.
+
+The native pipe-abort extension reruns retirement and fetch/Streams under both
+engine profiles, and piping WPT retains 230 passes with no failures. Its
+regressions reproduce stranded aborts before the fix, then cover live/retired
+signals, stopped author events, removal order and collectible unobserved pipe
+cycles. Three additional mutants (skipped internal abort, reordered removal,
+untraced function holds) are caught, bringing the caught total to 65. The
+tracing mutant initially survived while the fixture retained the signal; the
+unobserved-cycle WeakRef assertion closes that gap. A destructor-only hold
+omission mutant is not detected by this fixture and is not counted as caught.
+The normal implementation passes the leak-enabled allocation sweeps.
+
+A separate audit observation remains unresolved: a B-created readable stream
+piped into an A-created writable stream fails the self-hosted private-brand
+check, even before departure. The retained-pipe retirement regression uses
+B-created streams on both sides to isolate the lifecycle behavior. Mixed-realm
+stream interoperability is not claimed by these results.
 
 Nine isolated source mutants were compiled and rejected by named assertions:
 restoring first-enqueuer ownership for either shared queue; ignoring callback

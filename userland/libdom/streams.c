@@ -156,10 +156,6 @@ static const struct {
     {"AbortController_signal", "AbortController.prototype.signal", GETTER},
     {"AbortSignal_aborted", "AbortSignal.prototype.aborted", GETTER},
     {"AbortSignal_reason", "AbortSignal.prototype.reason", GETTER},
-    /* EventTarget's, as an AbortSignal inherits them: the pipes listen on
-     * a signal and on nothing else. */
-    {"EventTarget_addEventListener", "AbortSignal.prototype.addEventListener", VALUE},
-    {"EventTarget_removeEventListener", "AbortSignal.prototype.removeEventListener", VALUE},
     /* The Encoding standard's streams decode and encode through the
      * realm's TextDecoder and TextEncoder, and look at a string's code
      * units through String's own methods. */
@@ -277,6 +273,20 @@ static JSValue internal_microtask(JSContext *ctx, JSValueConst self, int argc, J
     return JS_UNDEFINED;
 }
 
+static JSValue internal_abort_add(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (argc < 2) return JS_ThrowTypeError(ctx, "Expected a signal and internal abort algorithm");
+    return d_signal_add_internal(ctx, argv[0], argv[1]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static JSValue internal_abort_remove(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (argc >= 2) d_signal_remove_internal(ctx, argv[0], argv[1]);
+    return JS_UNDEFINED;
+}
+
 /* The intrinsics object and private callback guard, or JS_EXCEPTION. A capture that is missing is
  * left out, and streams.js names it when it refuses to load. */
 static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
@@ -293,12 +303,17 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
-    JSValue reaction = JS_NewCFunction(ctx, internal_reaction, "InternalReaction", 1);
-    if (JS_IsException(reaction)) goto fail;
-    if (JS_DefinePropertyValueStr(ctx, object, "InternalReaction", reaction, JS_PROP_C_W_E) < 0) goto fail;
-    JSValue microtask = JS_NewCFunction(ctx, internal_microtask, "InternalMicrotask", 1);
-    if (JS_IsException(microtask)) goto fail;
-    if (JS_DefinePropertyValueStr(ctx, object, "InternalMicrotask", microtask, JS_PROP_C_W_E) < 0) goto fail;
+    static const struct { const char *name; JSCFunction *function; int length; } helpers[] = {
+        {"InternalReaction", internal_reaction, 1},
+        {"InternalMicrotask", internal_microtask, 1},
+        {"AddAbortAlgorithm", internal_abort_add, 2},
+        {"RemoveAbortAlgorithm", internal_abort_remove, 2},
+    };
+    for (size_t i = 0; i < sizeof(helpers) / sizeof(helpers[0]); i++) {
+        JSValue function = JS_NewCFunction(ctx, helpers[i].function, helpers[i].name, helpers[i].length);
+        if (JS_IsException(function)) goto fail;
+        if (JS_DefinePropertyValueStr(ctx, object, helpers[i].name, function, JS_PROP_C_W_E) < 0) goto fail;
+    }
     return object;
 fail:
     JS_FreeValue(ctx, object);

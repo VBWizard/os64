@@ -214,9 +214,12 @@ Where the build departs from §§ 3–7, and why:
   abort that lands after the answer still errors a body nobody read.
 - **A clone an abort can still reach is teed**, and the abort errors the
   tee's source, so the clone sees it (DEBTS' clone row, paid).
-- **EventTarget's methods are captured from `AbortSignal.prototype`**:
-  that is where libdom puts them when the streams row runs, and a signal
-  is the only target the pipes listen on.
+- **Pipe abort uses the signal's native algorithm list.** Private factory
+  helpers add and remove the internal function, whose hold the signal traces.
+  Algorithms run before the abort event, even if author event delivery is
+  stopped or the signal's creation document has departed. Removal preserves
+  the remaining algorithms' order. This follows
+  [ReadableStreamPipeTo](https://streams.spec.whatwg.org/#readable-stream-pipe-to).
 - **A refusal while streams.js loads fails the runtime.** libjs latches an
   allocator refusal met under script as the runtime's failure; no C-only
   installer had ever run script, so the DOM host's allocation sweep now

@@ -1448,14 +1448,18 @@ char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length);
 /* Whether `value` is a URLSearchParams (XHR's send() treats one as it
  * treats a string when it rewrites a charset). */
 bool d_params_is(JSValueConst value);
-/* AbortSignal (abort.c). A signal's algorithms are C's: a fetch's abort,
- * by its request's token, and a dependent signal's. */
+/* AbortSignal (abort.c): native fetch/Streams algorithms and weak dependent
+ * signal links are separate from author event listeners. */
 JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 bool d_signal_is(JSValueConst value);
 bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx);
 int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source);
 int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+/* Private self-hosted algorithms, never author event callbacks. The signal
+ * traces their holds; removal or abort releases them before further delivery. */
+int d_signal_add_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
+void d_signal_remove_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
 /* A fetch answered: its algorithm now aborts the Response whose state is
  * `answered` (NULL: there is no body to error, and the algorithm goes),
  * and the Response keeps this signal's state at *back, which this side

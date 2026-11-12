@@ -22,13 +22,14 @@
  * sources (DOM's "create a dependent abort signal" flattens), so an abort
  * walks one level.
  *
- * A signal's ALGORITHMS are C's, never a container a page can reach: each
- * a fetch's abort (fetch.c's d_fetch_abort), by its request's token, and,
- * once answered, the Response it errors, known by C pointer both ways
+ * A signal's algorithms are native records, inaccessible to page code.
+ * Fetch aborts use a request token and, once answered, the Response they
+ * error, known by C pointer both ways
  * (d_signal_fetch_answered/d_signal_fetch_settled): the Response holds the signal
  * until its body settles, the algorithm points at the Response, and each
- * side's finalizer clears the other's pointer. An abort walks the list as
- * it stands (abort_steps says why that is the safe order). */
+ * side's finalizer clears the other's pointer. Private self-hosted Streams
+ * algorithms hold traced functions; they are independent of event delivery.
+ * An abort removes each record before running it, so reentrant removal is safe. */
 
 static JSClassID signal_slot, controller_slot;
 
@@ -39,6 +40,7 @@ typedef struct {
     uint32_t token;             /* the request's */
     void *answered;             /* its Response's state once answered (fetch.c's), else NULL */
     void **back;                /* where that Response keeps this signal, cleared when this one goes */
+    JSValue internal;           /* private Streams algorithm, or undefined for fetch */
 } DAlgorithm;
 
 struct DLink {
@@ -154,11 +156,18 @@ static void signal_finalizer(JSRuntime *rt, JSValue value)
         JS_FreeValueRT(rt, l->hold);
         js_free_rt(rt, l);
     }
-    for (size_t i = 0; i < s->count; i++)
-        if (s->algorithms[i].back != NULL) *s->algorithms[i].back = NULL;
+    /* An internal closure can own a Response further down this list. Clear
+     * its back-pointer before releasing closures that can finalize it. */
+    DAlgorithm *algorithms = s->algorithms;
+    size_t algorithm_count = s->count;
+    s->algorithms = NULL;
+    s->count = s->cap = 0;
+    for (size_t i = 0; i < algorithm_count; i++)
+        if (algorithms[i].back != NULL) *algorithms[i].back = NULL;
+    for (size_t i = 0; i < algorithm_count; i++) JS_FreeValueRT(rt, algorithms[i].internal);
     d_event_target_finalize(rt, &s->target);
     JS_FreeValueRT(rt, s->reason);
-    js_free_rt(rt, s->algorithms);
+    js_free_rt(rt, algorithms);
     js_free_rt(rt, s);
     for (size_t i = 0; i < nholds; i++) JS_FreeValueRT(rt, holds[i]);
     js_free_rt(rt, holds);
@@ -170,6 +179,7 @@ static void signal_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     if (s == NULL) return;
     d_event_target_mark(rt, &s->target, mark);
     JS_MarkValue(rt, s->reason, mark);
+    for (size_t i = 0; i < s->count; i++) JS_MarkValue(rt, s->algorithms[i].internal, mark);
     for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) JS_MarkValue(rt, l->hold, mark);
 }
 
@@ -227,10 +237,8 @@ JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
     return object;
 }
 
-int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
+static int algorithm_add(JSContext *ctx, DSignal *s, DAlgorithm algorithm)
 {
-    DSignal *s = signal_state(signal);
-    if (s == NULL) return 0;
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 4;
         DAlgorithm *grown = js_realloc(ctx, s->algorithms, cap * sizeof(*grown));
@@ -238,18 +246,56 @@ int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
         s->algorithms = grown;
         s->cap = cap;
     }
-    s->algorithms[s->count++] = (DAlgorithm){token, NULL, NULL};
+    s->algorithms[s->count++] = algorithm;
     hold_update(JS_GetRuntime(ctx), s);
     return 0;
 }
 
-/* The algorithm for `token` dropped (both pointers cleared), and the GC
- * clause asked again. */
+int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
+{
+    DSignal *s = signal_state(signal);
+    if (s == NULL) return 0;
+    return algorithm_add(ctx, s, (DAlgorithm){token, NULL, NULL, JS_UNDEFINED});
+}
+
+int d_signal_add_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback)
+{
+    DSignal *s = signal_state(signal);
+    if (s == NULL || !JS_IsFunction(ctx, callback)) {
+        JS_ThrowTypeError(ctx, "Expected a signal and internal abort algorithm");
+        return -1;
+    }
+    if (s->aborted) return 0;
+    JSValue hold = JS_DupValue(ctx, callback);
+    if (algorithm_add(ctx, s, (DAlgorithm){0, NULL, NULL, hold}) < 0) {
+        JS_FreeValue(ctx, hold);
+        return -1;
+    }
+    return 0;
+}
+
+/* Unlink before releasing holds; retain the order of remaining algorithms. */
 static void algorithm_drop(JSRuntime *rt, DSignal *s, size_t i)
 {
     if (s->algorithms[i].back != NULL) *s->algorithms[i].back = NULL;
-    s->algorithms[i] = s->algorithms[--s->count];
+    JSValue released = s->algorithms[i].internal;
+    s->count--;
+    os64_memmove(s->algorithms + i, s->algorithms + i + 1, (s->count - i) * sizeof(s->algorithms[0]));
     hold_update(rt, s);
+    JS_FreeValueRT(rt, released);
+}
+
+void d_signal_remove_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback)
+{
+    DSignal *s = signal_state(signal);
+    if (!JS_IsFunction(ctx, callback)) return;
+    for (size_t i = 0; s != NULL && i < s->count; i++) {
+        JSValue value = s->algorithms[i].internal;
+        if (JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(callback)) {
+            algorithm_drop(JS_GetRuntime(ctx), s, i);
+            return;
+        }
+    }
 }
 
 void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back)
@@ -308,15 +354,14 @@ static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue re
     return true;
 }
 
-/* A signal's abort steps: its fetches aborted, then its `abort` event.
+/* A signal's abort steps: native/private algorithms, then its `abort` event.
  * The list is walked as it stands, first entry first, each entry taken off
  * before its algorithm runs. An algorithm can run streams.js (a body's
  * stream errored), and a collection that script triggers can finalize a
  * Response further down the list; that Response's finalizer takes its own
  * entry off (d_signal_fetch_settled), so the walk never reaches a Response
- * that is gone. Nothing joins the list meanwhile: fetch() refuses an
- * aborted signal before it adds an algorithm. -1 when the runtime is
- * finished with. */
+ * that is gone. Fetch and private algorithm registration refuse an aborted
+ * signal. -1 when an internal algorithm cannot complete. */
 static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 {
     DSignal *s = signal_state(signal);
@@ -328,7 +373,14 @@ static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
         os64_memmove(s->algorithms, s->algorithms + 1, s->count * sizeof(s->algorithms[0]));
         /* The Response no longer keeps a pointer to this signal's list. */
         if (a.back != NULL) *a.back = NULL;
-        d_fetch_abort(dom, ctx, a.token, a.answered, reason);
+        if (!JS_IsUndefined(a.internal)) {
+            JSValue result = JS_Call(ctx, a.internal, JS_UNDEFINED, 0, NULL);
+            JS_FreeValue(ctx, a.internal);
+            if (JS_IsException(result)) { JS_FreeValue(ctx, reason); return -1; }
+            JS_FreeValue(ctx, result);
+        } else {
+            d_fetch_abort(dom, ctx, a.token, a.answered, reason);
+        }
         s = signal_state(signal);
     }
     js_free(ctx, s->algorithms);
