@@ -424,6 +424,21 @@ static void test_wait_covers_late_visit(void)
 	      (unsigned long)hc[1].wait.recent_max, (unsigned long)hc[1].wait.max);
 }
 
+// A ring that has never been seen empty has no bound to give: what boot
+// left on it has waited an unknown time, and that must not be reported as
+// a wait since time zero.
+static void test_wait_before_first_empty(void)
+{
+	model_reset(1, 16);
+	now = 5000;
+	produce(0, now);
+	model_pass(0, true, now + 10, false);
+	CHECK(hc[0].handled == 1 && hc[0].wait.max == 0 && hc[0].wait.over == 0 &&
+	      hc[0].wait.within[0] + hc[0].wait.within[1] + hc[0].wait.within[2] == 0,
+	      "a ring never seen empty reported a wait of %lu", (unsigned long)hc[0].wait.max);
+	CHECK(hc[0].wait.seen_empty != 0, "the first empty stop did not set the stamp");
+}
+
 // Work carried over is as old as it was: a drain stopped by its deadline
 // does not move the stamp.
 static void test_wait_carries_over(void)
@@ -502,6 +517,7 @@ int main(int argc, char **argv)
 	test_visit_deadline();
 	test_visit_rotation();
 	test_wait_covers_late_visit();
+	test_wait_before_first_empty();
 	test_wait_carries_over();
 	test_random(rounds);
 	for (uint32_t c = 0; c < MAX_CONTROLLERS; c++)

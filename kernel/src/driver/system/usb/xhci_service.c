@@ -90,9 +90,9 @@ xhci_visit_result_t xhci_visit(xhci_visit_t *v, xhci_visit_drain_t drain, void *
 	xhci_visit_result_t result = { 0, 0, false };
 	if (v->count == 0)
 		return result;
-	if (v->cursor >= v->count)
-		v->cursor = 0;
 
+	// Taken modulo the count below, so a cursor left over from a larger
+	// count still names a controller.
 	uint32_t first = v->cursor;
 	for (uint32_t n = 0; n < v->count; n++) {
 		uint32_t index = (first + n) % v->count;
