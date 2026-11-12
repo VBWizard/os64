@@ -21,12 +21,19 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
+#include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "../kernel/src/driver/system/usb/xhci.c"
 #include "../kernel/src/tty.c"
 #include "../kernel/src/vt_select.c"
 extern int puts(const char *);
 extern _Noreturn void abort(void);
 volatile uint64_t kTicksSinceStart;
+// What the driver asks of kusb's side of the kernel, none of it reached by
+// these cases: a bell, a clock that moves, a sleep.
+doorbell_t kUsbDoorbell;
+void doorbell_ring(doorbell_t *db) { db->rings++; }
+uint64_t rdtsc(void) { static uint64_t cycles; return cycles += 1000; }
+void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 uintptr_t kHHDMOffset;
 __uint128_t kDebugLevel;
 struct Framebuffer kFrameBuffer = {.width=1024, .height=768};
@@ -258,7 +265,7 @@ int main(void)
 
     // A delayed command completion cannot authorize Disable Slot cleanup.
     xhci_trb_t events[RING_TRBS]={0}; uint64_t runtime[16]={0};
-    hc.evt=events; hc.evt_cycle=1; hc.rt=(uint8_t *)runtime;
+    hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1}; hc.rt=(uint8_t *)runtime;
     hc.command_trb=0x2000;
     events[0]=(xhci_trb_t){.param=0x2010,.status=TRB_CC_SUCCESS << 24,
         .control=TRB_TYPE(TRB_EV_CMD_COMPLETE) | TRB_CYCLE | (2u << 24)};
