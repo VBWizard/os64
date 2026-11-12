@@ -389,7 +389,11 @@ So the two halves divide like this:
   - handled events, stopped at an empty slot: write `ERDP` = that slot,
     with `EHB`.
   - handled events, stopped at the deadline: write `ERDP` = the last
-    event handled, with `EHB`.
+    event handled, with `EHB`, UNLESS that is the slot the register
+    already names. (The ring was last written empty at slot N and this
+    drain handled the one event at N: the last event handled is N again.
+    Writing it would be the same value twice running; nothing is
+    written, and the next drain publishes past it. Codex, #559.)
   - handled nothing, mark taken: READ `ERDP`; if `EHB` reads set, write
     the pointer back with `EHB`, which is the one write that retires it;
     if it reads clear, write nothing.
@@ -484,11 +488,13 @@ next is older than any gap. So those lines keep their names and are
 described as how often `kusb` comes round, nothing more.
 
 **How long an event may have waited is measured per controller**, from
-the last moment that controller's ring was SEEN EMPTY to the start of the
+the last moment that controller's ring was SEEN EMPTY to the END of the
 drain that found events on it. That interval includes whatever `kusb` did
-before reaching the controller, and it keeps growing across wakes while
-work is carried over, because a drain stopped by the deadline does not
-move the stamp. Reported per controller as a maximum and the same four
+before reaching the controller and the handlers that ran ahead of an
+event inside the drain (to the drain's start, as first built, it missed
+those: Codex, #559), and it keeps growing across wakes while work is
+carried over, because a drain stopped by the deadline does not move the
+stamp. Reported per controller as a maximum and the same four
 buckets. For an interrupt-driven controller the time from the top half's
 stamp to the start of that controller's drain is reported beside it, named
 for what it is (interrupt to service), with a maximum and a late count.
