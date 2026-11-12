@@ -45,8 +45,9 @@ typedef struct DDefinition {
     os64_dom_t *dom;
     char *name;
     DValue *constructor, *prototype, *callbacks[CB_COUNT];
-    /* The script each was handed over from (d_callback_script): whose
-     * failure an exception in it is. */
+    /* Reporting belongs to the callable realm, independently of the registry
+     * that retains the definition and the current document of its elements. */
+    os64_dom_t *constructor_owner, *callback_owners[CB_COUNT];
     uint32_t constructor_script, scripts[CB_COUNT];
     char **observed;
     size_t observed_count;
@@ -473,17 +474,18 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     const os64_html_node_t *element = r->element;
     if (element->ce != OS64_HTML_CE_PLAIN || d == NULL) return 0;
     dom = d->dom;
+    os64_dom_t *report_owner = d->constructor_owner;
     os64_js_outcome_t outcome;
     ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
     if (!ctx) return -1;
     int eligible = d_delivery_eligible(d_owner(dom, element), ctx, d->constructor->value);
-    if (eligible <= 0) return eligible < 0 ? report(dom, ctx, d->constructor_script) : 0;
+    if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, d->constructor_script) : 0;
     /* The wrapper first, so one made now is HTMLElement's and not the
      * failed state's HTMLUnknownElement (d_node_kind). */
     JSValue self = d_wrap(dom, ctx, element);
-    if (JS_IsException(self)) return report(dom, ctx, d->constructor_script);
+    if (JS_IsException(self)) return report(report_owner, ctx, d->constructor_script);
     DValueMore *more = d_more(dom, ctx, d_find(dom, element));
-    if (!more) { JS_FreeValue(ctx, self); return report(dom, ctx, d->constructor_script); }
+    if (!more) { JS_FreeValue(ctx, self); return report(report_owner, ctx, d->constructor_script); }
     more->custom_definition = d;
     /* Room on the construction stack before anything is marked or queued:
      * an upgrade the binding cannot afford leaves the element waiting with
@@ -494,7 +496,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
         if (stack == NULL) {
             JS_FreeValue(ctx, self);
             d_error(ctx, "QuotaExceededError", "Custom element construction stack quota exceeded");
-            return report(dom, ctx, d->constructor_script);
+            return report(report_owner, ctx, d->constructor_script);
         }
         if (d->depth != 0) os64_memcpy(stack, d->stack, d->depth * sizeof(*stack));
         d_free(dom, d->stack);
@@ -516,9 +518,9 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     if (d->disable_shadow && element->shadow_root != NULL) {
         result = d_error(ctx, "NotSupportedError", "The custom element's definition disables shadow, and it has a shadow root");
     } else {
-        DScripts before = d_script_enter(dom, d->constructor_script);
+        DScripts before = d_script_enter(report_owner, d->constructor_script);
         result = JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
-        d_script_leave(dom, &before, false);
+        d_script_leave(report_owner, &before, false);
     }
     d->depth--;
     r->constructing = false;
@@ -542,7 +544,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     if (!d_exception_catchable(ctx)) return -1;
     JSValue error = JS_GetException(ctx);
     remember_failure(dom, ctx, d, error);
-    d_report_as(dom, ctx, error, d->constructor_script);
+    d_report_as(report_owner, ctx, error, d->constructor_script);
     JS_FreeValue(ctx, error);
     return 0;
 }
@@ -552,14 +554,15 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     DDefinition *d = definition_for(dom, r->element);
     if (d == NULL || d->callbacks[reaction->kind] == NULL) return 0;
     dom = d->dom;
+    os64_dom_t *report_owner = d->callback_owners[reaction->kind];
     os64_js_outcome_t outcome;
     ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
     if (!ctx) return -1;
     uint32_t script = d->scripts[reaction->kind];
     int eligible = d_delivery_eligible(d_owner(dom, r->element), ctx, d->callbacks[reaction->kind]->value);
-    if (eligible <= 0) return eligible < 0 ? report(dom, ctx, script) : 0;
+    if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, script) : 0;
     JSValue self = d_wrap(dom, ctx, r->element);
-    if (JS_IsException(self)) return report(dom, ctx, script);
+    if (JS_IsException(self)) return report(report_owner, ctx, script);
     JSValue args[4] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
     int argc = 0;
     if (reaction->kind == CB_ATTRIBUTE) {
@@ -574,9 +577,9 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     for (int i = 0; i < argc; i++) made = made && !JS_IsException(args[i]);
     JSValue result = JS_EXCEPTION;
     if (made) {
-        DScripts before = d_script_enter(dom, script);
+        DScripts before = d_script_enter(report_owner, script);
         result = JS_Call(ctx, d->callbacks[reaction->kind]->value, self, argc, args);
-        d_script_leave(dom, &before, false);
+        d_script_leave(report_owner, &before, false);
     }
     for (int i = 0; i < argc; i++) JS_FreeValue(ctx, args[i]);
     JS_FreeValue(ctx, self);
@@ -584,7 +587,7 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
         JS_FreeValue(ctx, result);
         return 0;
     }
-    return report(dom, ctx, script);
+    return report(report_owner, ctx, script);
 }
 
 /* An element's reactions, in order, until none waits: those a reaction
@@ -811,7 +814,9 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
     if (d == NULL || !os64_html_custom_name(name)) return 0;
     int eligible = d_delivery_eligible(d_owner(dom, document), ctx, d->constructor->value);
     if (eligible == 0) return 0;
+    DScripts before = d_script_enter(d->constructor_owner, d->constructor_script);
     JSValue result = eligible < 0 ? JS_EXCEPTION : JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
+    d_script_leave(d->constructor_owner, &before, false);
     if (!JS_IsException(result)) {
         const os64_html_node_t *element;
         const char *wrong = constructed_wrong(dom, result, name, &element);
@@ -832,7 +837,7 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
     }
     JSValue error = JS_GetException(ctx);
     remember_failure(dom, ctx, d, error);
-    d_report_as(dom, ctx, error, d->constructor_script);
+    d_report_as(d->constructor_owner, ctx, error, d->constructor_script);
     JS_FreeValue(ctx, error);
     int64_t status;
     os64_html_node_t *element = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, name, &status);
@@ -1077,7 +1082,9 @@ static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const cha
     os64_memset(d, 0, sizeof(*d));
     d->dom = dom;
     d->name = copy_text(dom, name);
-    d->constructor_script = d_callback_script(dom, ctx, constructor);
+    d->constructor_owner = d_callback_owner(dom, ctx, constructor);
+    d->constructor_script = d->constructor_owner != NULL
+        ? d_callback_script(d->constructor_owner, ctx, constructor) : D_SCRIPT_FAILED;
     bool ok = d->name != NULL && d->constructor_script != D_SCRIPT_FAILED;
     if (ok) {
         d->constructor = d_retain(dom, ctx, JS_DupValue(ctx, constructor));
@@ -1086,7 +1093,9 @@ static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const cha
     }
     for (int i = 0; ok && i < CB_COUNT; i++) {
         if (JS_IsUndefined(reading->callbacks[i])) continue;
-        d->scripts[i] = d_callback_script(dom, ctx, reading->callbacks[i]);
+        d->callback_owners[i] = d_callback_owner(dom, ctx, reading->callbacks[i]);
+        d->scripts[i] = d->callback_owners[i] != NULL
+            ? d_callback_script(d->callback_owners[i], ctx, reading->callbacks[i]) : D_SCRIPT_FAILED;
         d->callbacks[i] = d->scripts[i] != D_SCRIPT_FAILED
             ? d_retain(dom, ctx, JS_DupValue(ctx, reading->callbacks[i])) : NULL;
         ok = d->callbacks[i] != NULL;

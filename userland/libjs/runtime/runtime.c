@@ -2510,6 +2510,11 @@ static char *module_normalize(JSContext *context, const char *base, const char *
     }
     char *name = realm->loader.resolve != NULL
         ? realm->loader.resolve(realm->loader.opaque, base, specifier) : NULL;
+    if (realm->retired || realm->staged) {
+        os64_free(name);
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
     if (name == NULL) {
         JS_ThrowTypeError(context, "cannot resolve module specifier '%s'", specifier);
         return NULL;
@@ -2535,9 +2540,15 @@ static JSModuleDef *module_load(JSContext *context, const char *name, void *opaq
     }
     const char *bytes = NULL;
     size_t length = 0;
-    if (realm->loader.source == NULL ||
-        !realm->loader.source(realm->loader.opaque, name, &bytes, &length) ||
-        (bytes == NULL && length != 0)) {
+    bool loaded = realm->loader.source != NULL &&
+        realm->loader.source(realm->loader.opaque, name, &bytes, &length);
+    /* The wrapper's active-call barrier keeps the source loan alive. A host
+     * that retires its document cannot start another compilation on return. */
+    if (realm->retired || realm->staged) {
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
+    if (!loaded || (bytes == NULL && length != 0)) {
         JS_ThrowReferenceError(context, "could not load module '%s'", name);
         return NULL;
     }

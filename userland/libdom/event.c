@@ -247,6 +247,7 @@ void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
 
 void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script)
 {
+    if (!d_delivery_active(dom)) return;
     if (dom->report.status == OS64_JS_OK) first_report(dom, ctx, error);
     d_report_error(dom, ctx, error, script);
 }
@@ -1600,7 +1601,7 @@ static void listeners_changed(os64_dom_t *dom, DValue *entry)
 
 /* Callable identity, not the inherited method or mutable prototype, names
  * a function callback's realm. Object listeners keep their registration binding. */
-static os64_dom_t *callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst callback)
+os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst callback)
 {
     if (!dom->cluster || !JS_IsFunction(ctx, callback)) return dom;
     JSContext *realm_ctx = JS_GetFunctionRealm(ctx, callback);
@@ -1656,7 +1657,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
                 d_string_free(dom, &type);
                 return JS_EXCEPTION;
             }
-        os64_dom_t *owner = callback_owner(registration, ctx, argv[1]);
+        os64_dom_t *owner = d_callback_owner(registration, ctx, argv[1]);
         uint32_t script = owner ? d_callback_script(owner, ctx, argv[1]) : D_SCRIPT_FAILED;
         DListener *listener = script == D_SCRIPT_FAILED ? NULL : listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
@@ -1726,7 +1727,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (slot == NULL || slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(value)) {
-        os64_dom_t *owner = callback_owner(dom, ctx, value);
+        os64_dom_t *owner = d_callback_owner(dom, ctx, value);
         uint32_t script = owner ? d_callback_script(owner, ctx, value) : D_SCRIPT_FAILED;
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
         slot_state(dom, slot, D_SLOT_FUNCTION);
@@ -2361,7 +2362,7 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
             if (slot != NULL) slot->handler = D_SLOT_EMPTY;
         }
         JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-        os64_dom_t *owner = slot != NULL && JS_IsObject(value) ? callback_owner(dom, ctx, value) : dom;
+        os64_dom_t *owner = slot != NULL && JS_IsObject(value) ? d_callback_owner(dom, ctx, value) : dom;
         uint32_t script = owner == NULL ? D_SCRIPT_FAILED :
             slot != NULL && JS_IsObject(value) ? d_callback_script(owner, ctx, value) : D_NO_SCRIPT;
         if (slot == NULL || script == D_SCRIPT_FAILED) result = JS_EXCEPTION;

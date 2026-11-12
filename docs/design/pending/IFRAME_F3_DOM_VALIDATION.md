@@ -575,6 +575,54 @@ the mousemove case closes that coverage gap. The cumulative caught count is
 **147**. These remain native lifetime proofs; public departure finish, report
 and animation provider integration, and final guest/WPT acceptance remain open.
 
+## Diagnostic and module checkpoint
+
+Native failed-report notices hold provider loans through their borrowed text.
+Task close detaches bookkeeping into a local snapshot before invoking the
+host, so reentry cannot consume the same debt or mutate its arguments.
+Each notice checks activity; retirement during one suppresses later notices
+and rejection summaries. Inactive `reportError` and engine report hooks do
+not create debt. Pending error/rejection delivery releases obsolete values
+without author events. Native report settlement and drain refuse provider
+reentry; this is not the complete public safe-point barrier.
+
+Custom-element definitions retain callable owners alongside script IDs.
+Reactions, synchronous construction and queued upgrades report through the
+callable's binding, independently of registry storage and current element
+activity. A live callback retained by a retired registry can still report
+to its own window. Both colliding and unequal script IDs are covered, so a
+lookup in the registry's script table cannot silently change error muting.
+
+Module normalization and loading recheck retirement after native callbacks.
+The prior runtime could continue linking an already compiled dependency or
+compile returned source after its provider retired the realm. The resolver's
+owned name is released on refusal. Tests also prove that loader/script-host
+replacement is BUSY inside these calls and can detach after unwinding.
+Existing console output gates were inspected; no console change was needed.
+
+The final `--report-retirement` fixture covers 13 scenarios under both
+teardown policies and passes **616 checks** with the instrumented engine.
+It finds **96 failures** against the preceding implementation. Isolating the
+prior module wrapper with the corrected DOM finds **8 failures** in the
+original 12-scenario fixture. Instrumented report regression/allocation
+sweeps (**4,523**), custom elements (**298**), events (**1,020**) and realm
+routing (**678**) pass with ASan/UBSan/LSan enabled. The target DOM library,
+including the changed runtime wrapper, builds.
+The complete shipping-engine DOM suite passes **57,575 checks**, including
+**3,991 native binding allocation sweeps**.
+
+Twelve isolated mutants are caught: unborrowed diagnostics, notice after
+mark, aliased close text, close/drain reentry, inactive report debt, reaction
+registry owner/script lookup, upgrade/create registry owner, and continued
+module work after resolver/source retirement. The initial colliding-ID test
+missed the wrong-table lookup; the unequal-ID case closes that gap. A redundant
+error-event gate mutation was not caught and is not counted. The cumulative
+caught count is **159**.
+
+Scheduled callbacks and observer error-attribution still require a callable
+realm/script-table pass; their activity gates alone do not establish correct
+report ownership. Public finish and host-route detachment remain open.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

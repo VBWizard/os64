@@ -1302,6 +1302,9 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
  * getter's call found the runtime must stop: asked before the callback is
  * recorded, so the caller can fail with nothing done. */
 uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Callable realm's binding within this cluster, or the supplied fallback for
+ * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
+os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
 /* Around every call the binding makes into a callback of the page's: the
  * muting state (report.c's current_script reads it) as it stood, kept by
  * the caller, and the callback's script made the one being called, which
