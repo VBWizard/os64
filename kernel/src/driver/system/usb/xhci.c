@@ -195,7 +195,7 @@ typedef struct {
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
-// controllers, so initialized controllers remain live and are all polled.
+// controllers, so initialized controllers remain live and are all drained.
 typedef struct {
 	uint8_t pci_bus, pci_device, pci_function;
 	bool         present;         // controller found and running
@@ -224,7 +224,7 @@ typedef struct {
 	xhci_device_t bluetooth_device;
 
 	// One EP0 request per controller: synchronous during enumeration,
-	// asynchronous from the serialized runtime Bluetooth poll path.
+	// asynchronous from the runtime Bluetooth step of kusb's pass.
 	volatile uint32_t control_slot;
 	volatile bool     xfer_done;
 	volatile uint8_t  xfer_cc;
@@ -274,7 +274,7 @@ static volatile uint32_t s_bond_io_busy;
 static bool s_bond_manager_ready;
 
 extern volatile uint64_t kTicksSinceStart;   // Typematic and USB/Bluetooth deadlines.
-extern uint64_t kCPUCyclesPerSecond;         // TSC cycles to time, for the poll's measurements.
+extern uint64_t kCPUCyclesPerSecond;         // TSC cycles to time, for a pass's measurements.
 
 // ── What a pass measures about itself (/sys/usb) ────────────────────────────
 //
@@ -1513,8 +1513,9 @@ static void xhci_report_addf(char *out, size_t cap, size_t *len, const char *fmt
 	*len = (size_t)n < cap - *len ? *len + (size_t)n : cap - 1;
 }
 
-// /sys/usb: the controllers, how the poll that serves them has run, and
-// the Bluetooth timeline (see "What the poll measures about itself").
+// /sys/usb: the controllers, how long an event on each may have waited,
+// kusb's passes and latencies, and the Bluetooth timeline (see "What a
+// pass measures about itself").
 size_t xhci_usb_report(char *out, size_t cap)
 {
 	if (!cap) return 0;
@@ -2084,7 +2085,8 @@ static bool xhci_init_controller(pci_device_t *dev)
 	mmio_w64(s_hc->op, XHCI_OP_DCBAAP, virt_to_phys(s_hc->dcbaa));
 
 	// Command ring + event ring (interrupter 0, interrupts left DISABLED —
-	// we poll; see xhci.h for why that's a decision and not a shortcut).
+	// the tick drives the drain; see xhci.h for why that's a decision and
+	// not a shortcut).
 	if (!ring_init(&s_hc->cmd))
 		return false;
 	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
