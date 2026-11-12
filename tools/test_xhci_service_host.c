@@ -150,8 +150,9 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 	controller_t *k = &hc[c];
 	model_tick();
 	uint32_t before = k->handled;
-	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k,
-	                                    use_deadline ? model_clock : NULL, NULL, deadline);
+	// Always with the clock: the stamp for "seen empty" is the drain's own.
+	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k, model_clock, NULL,
+	                                    use_deadline ? deadline : UINT64_MAX);
 	CHECK(d.handled == k->handled - before, "drain said %u handled, the handler ran %u times",
 	      d.handled, k->handled - before);
 
@@ -283,6 +284,36 @@ static void test_wait_includes_the_drain(void)
 	      (unsigned long)hc[0].wait.max);
 }
 
+// The ring is looked at and found empty, and THEN, before the caller gets
+// round to accounting, an event arrives. The stamp for "seen empty" must be
+// from before the look, or it is later than the event and the bound comes
+// out shorter than the wait. (Codex, #559 round 2: empty check at 100, an
+// arrival at 101, accounting at 200, handling at 205; a stamp taken at
+// accounting reported 5 for a wait of 104.)
+static void test_wait_stamp_precedes_the_look(void)
+{
+	model_reset(1, 16);
+	controller_t *k = &hc[0];
+	now = 100;
+	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k, model_clock, NULL, UINT64_MAX);
+	CHECK(d.handled == 0 && !d.work_left && d.empty_at == 100, "setup: empty_at %lu", (unsigned long)d.empty_at);
+	now = 101;
+	produce(0, now);                           // arrives after the look
+	now = 200;                                 // the caller was preempted
+	xhci_wait_account(&k->wait, d, now, kEdges);
+	CHECK(k->wait.seen_empty == 100, "the stamp is %lu, not the look's 100", (unsigned long)k->wait.seen_empty);
+	k->cost = 5;
+	d = xhci_evt_drain(&k->ring, model_handle, k, model_clock, NULL, UINT64_MAX);
+	xhci_wait_account(&k->wait, d, now, kEdges);
+	CHECK(k->handled_at[0] - k->posted_at[0] == 99, "setup: the event waited %lu",
+	      (unsigned long)(k->handled_at[0] - k->posted_at[0]));
+	CHECK(k->wait.max == 105 && k->wait.max >= k->handled_at[0] - k->posted_at[0],
+	      "the bound %lu does not cover the wait", (unsigned long)k->wait.max);
+	// A drain with no clock has no stamp to give, and says so with zero.
+	d = xhci_evt_drain(&k->ring, model_handle, k, NULL, NULL, 0);
+	CHECK(d.empty_at == 0 && !d.work_left, "a clockless drain stamped %lu", (unsigned long)d.empty_at);
+}
+
 // The ring was last published empty at slot N; the next drain handles the
 // one event at N and its deadline stops it with another waiting. The last
 // event handled is slot N, which the register already names: writing it
@@ -387,7 +418,7 @@ static void test_busy_bit(void)
 	// The rule itself, asked directly: the bit reading set is not enough
 	// without an acknowledged interrupt. (The glue never asks this way,
 	// because it reads the register only when one is owed.)
-	xhci_evt_drain_t nothing = { 0, false };
+	xhci_evt_drain_t nothing = { 0, false, 0 };
 	CHECK(!xhci_evt_erdp(&hc[0].ring, nothing, false, true).write, "an unowed busy bit was retired");
 	CHECK(xhci_evt_erdp(&hc[0].ring, nothing, true, true).write, "an owed, set busy bit was not retired");
 	CHECK(!xhci_evt_erdp(&hc[0].ring, nothing, true, false).write, "an owed, clear busy bit was written");
@@ -585,6 +616,7 @@ int main(int argc, char **argv)
 	test_idle_passes_write_nothing();
 	test_early_stop();
 	test_wait_includes_the_drain();
+	test_wait_stamp_precedes_the_look();
 	test_one_event_partial_drain();
 	test_deadline_already_passed();
 	test_wrap();

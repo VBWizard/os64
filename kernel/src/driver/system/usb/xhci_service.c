@@ -9,15 +9,22 @@
 xhci_evt_drain_t xhci_evt_drain(xhci_evt_ring_t *r, xhci_evt_handle_t handle, void *ctx,
                                 xhci_clock_t clock, void *clock_ctx, uint64_t deadline)
 {
-	xhci_evt_drain_t result = { 0, false };
+	xhci_evt_drain_t result = { 0, false, 0 };
 
 	for (;;) {
+		// The clock is read BEFORE the look at the slot. If the look finds
+		// the ring empty, this is the time it is said to have been empty
+		// at: an event that arrives after the look arrived after this, and
+		// a stamp taken after the look could be later than that event.
+		uint64_t looked_at = clock != NULL ? clock(clock_ctx) : 0;
 		const xhci_trb_t *ev = &r->trb[r->dequeue];
 		// The controller writes the cycle bit last: a slot whose bit does
 		// not match is one it has not finished, or not started.
-		if ((ev->control & XHCI_TRB_CYCLE) != (r->cycle ? XHCI_TRB_CYCLE : 0))
+		if ((ev->control & XHCI_TRB_CYCLE) != (r->cycle ? XHCI_TRB_CYCLE : 0)) {
+			result.empty_at = looked_at;
 			return result;
-		if (clock != NULL && clock(clock_ctx) >= deadline) {
+		}
+		if (clock != NULL && looked_at >= deadline) {
 			result.work_left = true;
 			return result;
 		}
@@ -89,11 +96,11 @@ void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t ended,
 		else if (bound <= edge[2]) w->within[2]++;
 		else w->over++;
 	}
-	// The drain's last look found the ring empty at `ended`. A drain the
-	// deadline stopped leaves the stamp where it was: the events still on
-	// the ring are as old as they were.
+	// The drain's last look found the ring empty, and it read the clock
+	// before that look. A drain the deadline stopped leaves the stamp where
+	// it was: the events still on the ring are as old as they were.
 	if (!drain.work_left)
-		w->seen_empty = ended;
+		w->seen_empty = drain.empty_at;
 }
 
 xhci_visit_result_t xhci_visit(xhci_visit_t *v, xhci_visit_drain_t drain, void *ctx,

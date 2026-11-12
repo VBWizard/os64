@@ -489,7 +489,10 @@ described as how often `kusb` comes round, nothing more.
 
 **How long an event may have waited is measured per controller**, from
 the last moment that controller's ring was SEEN EMPTY to the END of the
-drain that found events on it. That interval includes whatever `kusb` did
+drain that found events on it. "Seen empty" is a time read BEFORE the
+look that found the ring empty, inside the drain: read after it, an event
+could arrive between the look and the stamp and be reported younger than
+it is (Codex, #559 round 2). That interval includes whatever `kusb` did
 before reaching the controller and the handlers that ran ahead of an
 event inside the drain (to the drain's start, as first built, it missed
 those: Codex, #559), and it keeps growing across wakes while work is

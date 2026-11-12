@@ -48,6 +48,10 @@ typedef struct {
 	// to read yet, so the ring is empty. true: the deadline passed and the
 	// next slot holds an event nobody has handled.
 	bool     work_left;
+	// When the ring was found empty: the clock as read BEFORE the look that
+	// found it so, so nothing that arrived after the look is older than
+	// this. Meaningful only when work_left is false and a clock was given.
+	uint64_t empty_at;
 } xhci_evt_drain_t;
 
 // Handle events until the ring is empty or `deadline` has passed. The clock
@@ -89,7 +93,8 @@ void xhci_evt_published(xhci_evt_ring_t *r, xhci_erdp_t erdp);
 //
 // The controller does not stamp its events, so the wait is bounded, not
 // measured: an event found by a drain arrived after the last moment this
-// ring was SEEN EMPTY and was handled before the drain ENDED. That interval
+// ring was SEEN EMPTY (a time read before the look, xhci_evt_drain_t) and
+// was handled before the drain ENDED. That interval
 // includes whatever the daemon did before it reached this ring and the
 // handlers that ran ahead of the event inside the drain, and it keeps
 // growing across wakes while work is carried over, because a drain stopped
