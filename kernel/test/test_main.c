@@ -3552,7 +3552,9 @@ static bool test_vfs_rename(void)
 // produces is the allocator's business and changes as the disk fills, so
 // the drill runs twice and STEERS each run: once with the victim in one
 // group, once with a spacer file leaving its group too little room, so it
-// must cross.
+// must cross. A disk that cannot build one of those layouts skips that run
+// and says why (ext2_orphan_steer) rather than failing it: a failure here
+// demotes every mount, and a disk's layout is not a write-path defect.
 //
 // A FAILED CLAIM CLEANS UP BEFORE IT RETURNS. In the middle of the drill the
 // real root is writable while an orphan's retry map names blocks the bitmap
@@ -3794,6 +3796,16 @@ static uint32_t ext2_orphan_next_group(void)
     return group;
 }
 
+// What the drill's fixtures need on disk beside the spacer, counted as if
+// all were held at once: two thirteen-block files with their indirect
+// roots, and two one-block replacements.
+#define ORPHAN_FIXTURE_BLOCKS (2u * (ORPHAN_DATA_BLOCKS + 1u) + 2u)
+
+// What steering came to. UNAVAILABLE is the disk's answer, not a fault: the
+// layout cannot be built here without a fixture failing to fit, so the run
+// is skipped and says why. FAILED is a write that did not complete.
+typedef enum { STEER_OK, STEER_UNAVAILABLE, STEER_FAILED } orphan_steer_t;
+
 // Arrange where the next victim lands by appending to the spacer until the
 // group it will start in has the right room. One group: room for all
 // fourteen of its blocks (thirteen data and the indirect root), so a group
@@ -3804,21 +3816,37 @@ static uint32_t ext2_orphan_next_group(void)
 // one round, and it can cost up to a whole group of spacer (8 MiB on a
 // 1 KiB filesystem with an empty group), given back when the drill ends.
 // The spacer stays until then.
-static bool ext2_orphan_steer(bool straddle)
+//
+// A layout this disk cannot give is reported as UNAVAILABLE rather than
+// forced, because forcing it would fail a fixture write:
+//   - more short groups in a row than the bound below allows;
+//   - a crossing with nowhere to cross to: when the rest of the disk holds
+//     fewer free blocks than the fixtures need, leaving the victim's group
+//     short would only make the victim's own write fail;
+//   - a spacer that does not land where the victim will. A file's blocks
+//     are taken from the first group with room at or after its INODE's
+//     group, so the spacer and the victim agree only when their inodes
+//     share a group; when the spacer took the last free inode of the
+//     directory's group, the victim's inode, and its blocks, start further
+//     on, and filling the spacer moves nothing the victim will see.
+static orphan_steer_t ext2_orphan_steer(bool straddle, const char **why)
 {
     size_t bs = (size_t)kRootFilesystem->blockSize;
     uint8_t *chunk = kmalloc(bs * ORPHAN_SPACER_CHUNK);
+    *why = "out of memory";
     if (chunk == NULL)
-        return false;
+        return STEER_FAILED;
     memset(chunk, 0x33, bs * ORPHAN_SPACER_CHUNK);
     vfs_file_t *spacer = NULL;
     if (kRootFilesystem->fops->open(&spacer, ORPHAN_DIR "/spacer", "c", kRootFilesystem) != 0) {
         kfree(chunk);
-        return false;
+        *why = "the spacer could not be created";
+        return STEER_FAILED;
     }
 
     uint32_t fill_to = straddle ? 12 : 0;
-    bool ok = false;
+    orphan_steer_t verdict = STEER_UNAVAILABLE;
+    *why = "every group the victim could start in stayed too short";
     // Bounded, and generously: a round of the one-group arm fills one group
     // that has thirteen blocks or fewer left (groups with none are skipped
     // by the allocator without costing a round), and a disk that fills up
@@ -3827,31 +3855,45 @@ static bool ext2_orphan_steer(bool straddle)
     for (uint32_t round = 0; round < 256; round++) {
         uint32_t g = ext2_orphan_next_group();
         uint32_t room = g == UINT32_MAX ? 0 : ext2_group_free_blocks(kRootFilesystem, g);
-        if (room == 0)
+        if (room == 0) {
+            verdict = STEER_FAILED;
+            *why = "a one-byte probe file could not be written";
             break;
+        }
+        if (straddle && ext2_free_blocks(kRootFilesystem) < room + ORPHAN_FIXTURE_BLOCKS) {
+            *why = "no other group has room for the victim to cross into";
+            break;
+        }
         if (straddle ? room <= fill_to : room > ORPHAN_DATA_BLOCKS) {
-            ok = true;
+            verdict = STEER_OK;
             break;
         }
         bool landed = true;
+        int wrote = 0;
+        uint32_t n = 0;
         while (landed && room > fill_to) {
             // A large write can also take up to three of the spacer's own
             // indirect blocks; keeping that much in hand is what stops it
             // carrying the room below ten.
-            uint32_t n = room > fill_to + ORPHAN_SPACER_CHUNK + 3 ? ORPHAN_SPACER_CHUNK : 1;
-            int wrote = kRootFilesystem->fops->write(spacer, chunk, n * bs);
+            n = room > fill_to + ORPHAN_SPACER_CHUNK + 3 ? ORPHAN_SPACER_CHUNK : 1;
+            wrote = kRootFilesystem->fops->write(spacer, chunk, n * bs);
             uint32_t now = ext2_group_free_blocks(kRootFilesystem, g);
-            // A write that took nothing from g did not land there, and the
-            // victim would not either.
             landed = wrote == (int)(n * bs) && now < room;
             room = now;
         }
-        if (!landed)
+        if (!landed) {
+            if (wrote != (int)(n * bs)) {
+                verdict = STEER_FAILED;
+                *why = "a spacer write did not complete";
+            } else {
+                *why = "the spacer's blocks land in a different group from the victim's";
+            }
             break;
+        }
     }
     kRootFilesystem->fops->close(spacer);
     kfree(chunk);
-    return ok;
+    return verdict;
 }
 
 // A failed claim leaves through the drill's cleanup (see the header).
@@ -3862,7 +3904,8 @@ static bool ext2_orphan_steer(bool straddle)
     } while (0)
 
 // One run of the whole drill, with the victim steered into one block group
-// or across two. *runs_out reports the shape the victim actually had.
+// or across two. *runs_out reports the shape the victim actually had, or 0
+// when this disk cannot build the layout and the run was skipped.
 static bool ext2_orphan_drill(bool straddle, uint32_t *runs_out)
 {
     const char *arm = straddle ? "two groups" : "one group";
@@ -3875,8 +3918,16 @@ static bool ext2_orphan_drill(bool straddle, uint32_t *runs_out)
     uint32_t runs = 0, first_run = 0;
 
     ext2_orphan_remove_fixtures();
-    if (!ext2_orphan_steer(straddle))
-        OR_FAIL("could not steer the victim's blocks into the wanted shape\n");
+    const char *why = NULL;
+    orphan_steer_t steered = ext2_orphan_steer(straddle, &why);
+    if (steered == STEER_UNAVAILABLE) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (%s) - layout unavailable: %s\n", arm, why);
+        ext2_orphan_remove_fixtures();
+        *runs_out = 0;
+        return true;
+    }
+    if (steered != STEER_OK)
+        OR_FAIL("could not steer the victim's blocks: %s\n", why);
 
     // THE BASELINE, taken after that cleanup and with the spacer in place,
     // so a previous boot's leftovers cannot masquerade as this run's leak.
@@ -4159,7 +4210,13 @@ static bool test_ext2_orphan(void)
     uint32_t one_runs = 0, two_runs = 0;
     if (!ext2_orphan_drill(false, &one_runs) || !ext2_orphan_drill(true, &two_runs))
         return false;
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; victim in %u group run(s), then across %u; storage returned exactly both times)\n",
+    if (one_runs == 0 && two_runs == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (neither layout could be built on this disk)\n");
+        return true;
+    }
+    // A skipped run printed its own SKIP line with the reason; its shape
+    // reads 0 here.
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; victim in %u group run(s), then across %u, 0 = skipped; storage returned exactly each time it ran)\n",
            one_runs, two_runs);
     return true;
 }
