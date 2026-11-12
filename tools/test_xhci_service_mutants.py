@@ -11,7 +11,9 @@ The shape is test_damage_mutants.py's: each mutant is applied to the tree's
 copy of the file, the suite is run, and the file is put back from the bytes
 read before the change, checked byte for byte, whatever happens. Run it from
 a clean tree, and never beside another harness that edits the same tree; the
-per-mutant logs are in --logs.
+per-mutant logs are in --logs. Under tools/mutants_parallel.py it needs
+`--with kernel`: the runner's copies do not carry the kernel's sources
+unless asked.
 """
 import argparse
 import pathlib

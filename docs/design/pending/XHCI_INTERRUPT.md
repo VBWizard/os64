@@ -542,6 +542,75 @@ and in CLAUDE.md's table.
   measured it. D2's bound is "one tick plus one callback", and it is only
   as good as that number.
 
+### X.2 as built (2026-11-12)
+
+What the code is, where it says more than D1 to D12 or differs.
+
+- **The arithmetic is its own file.** `xhci_service.c` holds the drain
+  against a deadline, what `ERDP` is owed, the wait bound and the visit's
+  order, with no kernel headers. `xhci.c` keeps the registers and calls
+  it. The `ehb_owed` rule of D6 is in that file and tested there; X.2's
+  `xhci.c` always passes "nothing owed", because no interrupt is
+  acknowledged yet, and X.3 supplies the mark.
+- **The pass is `xhci_pass`**, called by `kusb` and nobody else. `kusb.c`
+  is the doorbell loop and the latencies.
+- **The report has "since read" maxima** for the gap between passes and
+  for each controller's wait. They start again at every read, which is
+  the brief's "since boot and since last read" for the two numbers a
+  workload is judged by.
+- **`xhci_visit` has no guard for a cursor past the count.** The mutants
+  showed it could not matter: the cursor is taken modulo the count.
+
+**The audit (X.2.11).** Every function a HID report or a Bluetooth input
+report reaches was read for an assumption that the queue lock is held or
+interrupts are off: the keyboard interpreter and its chords
+(`hid_keyboard.c`), `keyboard_deliver_event` and `keyboard_emit_event`,
+`tty_input_event`, `tty_input_push`, `tty_focus` and its siblings,
+`console_intr_intercept_tty` (which raises SIGINT with a word-OR per
+thread), `input_inject_key`, the pointer paths in `gui/input.c`, and the
+Bluetooth pointer registration. None assumes either. Each takes its own
+lock with interrupts saved, as it must: the PS/2 keyboard reaches the same
+functions from an interrupt handler. What the audit did find is the
+LONGEST of them: a terminal switch repaints the terminal synchronously
+from the key (`tty_focus`, by its own comment a deliberate choice), and
+that one event took 37 ms under QEMU's emulation. That is D2's "one
+callback". On the P5 it is owed; if it is long there too, the repaint
+moves out of the drain before audio depends on the bound.
+
+**What QEMU measured** (`/sys/usb`, USB keyboard and mouse, 2026-11-12):
+
+| Boot | Wait, worst | Events within 20 ms | Gap between passes after boot |
+|---|---|---|---|
+| default entry (logd), `qemu-xhci` | 20.1 ms | 150 of 151 | 20.5 ms |
+| the same, `/sys/usb` read every 10 ms while the mouse moves | 20.2 ms | 212 of 214 | 20.3 ms |
+| `/QEMU GUI Boot` (no logd) | 47.7 ms | 75 of 77 | not read |
+| two controllers | 20.2 ms | 77 of 78 | not read |
+| 24 CPUs, the sparse layout | 20.4 ms | 75 of 76 | not read |
+| `-smp 2` | 20.2 ms | 75 of 76 | not read |
+| no xHCI controller | no `kusb`, `controllers: 0` | | |
+
+The read-every-10-ms run refused `kusb` the flag seven times; the longest
+wait from a refusal to the pass that did the work was 1.6 ms, so the
+holder's release is what brings it back (D4). No event was lost in any
+run. The GUI entry's 47.7 ms is the terminal switch above.
+
+**Against D11's "nothing got worse": two things did, in QEMU.**
+
+1. ONCE DURING BOOT the gap between passes is 1.0 to 1.4 s on every run.
+   The BSP makes no scheduler pass for that long (the bell is rung from
+   the BSP's pass and `kusb` runs on the BSP), where the old poll was
+   carried by whichever core passed next and its worst gap on the same
+   entry was 10.6 ms. `knet` sits through the same stall. No USB event
+   happened to arrive in it in these runs. What the BSP is doing then is
+   not looked into.
+2. AFTER BOOT the worst gap is 20 ms where the poll's was 10 ms: now and
+   then a tick passes without a pass of `kusb`. One event in about a
+   hundred waits a second tick.
+
+Both are the price of one consumer on one core driven by that core's
+tick, and both are what X.3's interrupt takes off the common path. The
+P5's reading decides whether either is felt there; DEBTS has the row.
+
 ## Measure first
 
 Before any change, on the P5, with the LE keyboard and the trackball each:
