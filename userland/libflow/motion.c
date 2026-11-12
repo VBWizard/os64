@@ -1626,6 +1626,11 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         break;
     case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
     case GARB_ISOLATION: d->isolate = s->isolate; break;
+    case GARB_MASK_IMAGE: case GARB_MASK_REPEAT: case GARB_MASK_POSITION_X:
+    case GARB_MASK_POSITION_Y: case GARB_MASK_SIZE: case GARB_MASK_ORIGIN: case GARB_MASK_CLIP:
+    case GARB_MASK_COMPOSITE: case GARB_MASK_MODE:
+        f_take_mask(p, d, s);
+        break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;

@@ -6084,11 +6084,32 @@ static int32_t css_picture(const Page *p, const flow_layer_t *l)
     return picture_find(p, url);
 }
 
+// The layers that may name a picture: a style's background layers, then
+// its mask's (MASKS.md § 6) — a mask's picture is fetched, sized and
+// repainted on arrival as a background's is. A mask's reference to an SVG
+// <mask> (`url(#id)`) names none: it is not drawn (MASKS.md § 8), and its
+// address is the page's own.
+static int32_t picture_layers(const flow_style_t *s)
+{
+    return flow_background_layers(s) + flow_mask_layers(s);
+}
+
+static flow_layer_t picture_layer(const flow_style_t *s, int32_t i)
+{
+    int32_t n = flow_background_layers(s);
+    if (i < n)
+        return flow_background_layer(s, i);
+    flow_layer_t l = flow_mask_layer(s, i - n).layer;
+    if (l.image != NULL && l.image_len > 0 && l.image[0] == '#')
+        l.image = NULL;
+    return l;
+}
+
 // Whether any of a style's layers shows picture `k`.
 static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
 {
-    for (int32_t i = 0; i < flow_background_layers(s); i++) {
-        flow_layer_t l = flow_background_layer(s, i);
+    for (int32_t i = 0; i < picture_layers(s); i++) {
+        flow_layer_t l = picture_layer(s, i);
         if (l.image != NULL && css_picture(p, &l) == k)
             return true;
     }
@@ -6158,8 +6179,8 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
     if (!walk->sheets)
         return false;
     bool fresh = false;             // a refusal the record had not met
-    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
-        flow_layer_t l = flow_background_layer(b->style, i);
+    for (int32_t i = 0; i < picture_layers(b->style); i++) {
+        flow_layer_t l = picture_layer(b->style, i);
         char url[OS64_FETCH_URL_MAX];
         if (l.image == NULL)
             continue;
@@ -6185,8 +6206,11 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         } else if ((k = picture_for(p, url)) < 0) {
             fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+        // The canvas's owner's background is tiled in the root's origin box;
+        // its mask, in its own.
         yonder_tile_t tile;
-        const flow_box_t *in = b == walk->owner && walk->root != NULL ? walk->root : b;
+        const flow_box_t *in = b == walk->owner && walk->root != NULL &&
+                                       i < flow_background_layers(b->style) ? walk->root : b;
         if (k >= 0 && picture_tile(p, &p->pics[k], &l, yonder_box_edge(in, in->rect, l.origin), 0, 0, &tile))
             picture_drawn_at(p, k, tile.at.w, tile.at.h, b->style->pixelated);
     }
@@ -8389,15 +8413,18 @@ typedef struct {
 } SheetPicturesSeen;
 
 // One box of the view's walk: which pictures does a sheet put behind it?
+// The canvas's owner's background is asked apart (pictures_seen); its mask
+// is its box's own, drawn there, so it is asked here.
 static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
 {
     SheetPicturesSeen *look = ctx;
     os64_gui_rect_t meet;
-    if (b == look->owner || !box_draws_background(b) ||
+    if (!box_draws_background(b) ||
         !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
-    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
-        flow_layer_t l = flow_background_layer(b->style, i);
+    for (int32_t i = b == look->owner ? flow_background_layers(b->style) : 0;
+         i < picture_layers(b->style); i++) {
+        flow_layer_t l = picture_layer(b->style, i);
         int32_t k = l.image != NULL ? css_picture(&g.page, &l) : -1;
         if (k < 0 || k >= look->n)
             continue;
@@ -14781,7 +14808,10 @@ static void svg_picture_pixels_free(yonder_svg_pixels_t *out)
 // whether there is one, and one that has arrived is tiled across `area`
 // over what is under it — sheet layer `layer`'s at the size, position and
 // repeat it says, in the origin box the painter names, or (`layer` -1) an
-// attribute's natural size at the page zoom, from (ox, oy).
+// attribute's natural size at the page zoom, from (ox, oy). A mask layer's
+// (YONDER_MASK_LAYER) is drawn as a sheet layer's is; one not yet arrived
+// draws nothing, so its coverage hides the box until it comes (MASKS.md
+// § 10, ruling 2).
 static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
                            const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip)
@@ -14792,13 +14822,19 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     flow_layer_t l = {0};
     if (area == NULL) {
         // Only asking: a sheet's picture, whether it has come or not, or
-        // an attribute's.
+        // an attribute's — or, for a mask layer, whether that layer names
+        // one (a rounded box asks before it draws, round_backdrop).
+        if (layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+            return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
         for (int32_t i = 0; i < flow_background_layers(b->style); i++)
             if (flow_background_layer(b->style, i).image != NULL)
                 return true;
         return b->node != NULL && b->pseudo == 0 && os64_page_background_for(page_model(p), b->node) >= 0;
     }
-    if (layer >= 0) {
+    if (layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
+        l = flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer;
+        k = css_picture(p, &l);
+    } else if (layer >= 0) {
         l = flow_background_layer(b->style, layer);
         k = css_picture(p, &l);
     } else {
@@ -15424,7 +15460,8 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 }
 
 // Its pixels recovered from the two sheets, into the black one, filtered
-// (filter.h) and laid onto each target outside at `alpha` by `mode`: a
+// (filter.h), times its coverage `cover` (NULL for all), and laid onto
+// each target outside at `alpha` by `mode`: a
 // sheet pixel (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the
 // target's offset taking that onto its pixels, inside what the target
 // paints. Laid normal where the targets outside are a group's sheets,
@@ -15434,7 +15471,7 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 // for the filter's work, laid unfiltered; either counted once
 // (yonder_paint_layers_refused).
 static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                             uint8_t alpha, flow_blend_t mode)
+                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     GlassPane *gp = ctx;
     GlassThrough *t = pane_sheets_close(gp);
@@ -15454,6 +15491,8 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
             plain = true;
         }
     }
+    if (cover != NULL)
+        yonder_layer_cover(layer, (size_t)w * (size_t)h, cover);
     if (mode != FLOW_BLEND_NORMAL && (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)) {
         mode = FLOW_BLEND_NORMAL;
         plain = true;
@@ -15465,6 +15504,20 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
         yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
                          t->bounds.x + on->dx, t->bounds.y + on->dy, alpha, mode);
     }
+    through_free(t);
+}
+
+// A capture's coverage (MASKS.md § 3): its pixels recovered from its two
+// sheets, read as alpha or luminance into `out`, and the sheets freed,
+// laid nowhere.
+static void pane_layer_take(void *ctx, uint8_t *out, bool luminance)
+{
+    GlassThrough *t = pane_sheets_close(ctx);
+    if (t == NULL)
+        return;
+    yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
+    yonder_layer_recover(&s, t->surf[0].pixels);
+    yonder_mask_take(t->surf[0].pixels, (size_t)t->bounds.w * (size_t)t->bounds.h, luminance, out);
     through_free(t);
 }
 
@@ -15660,10 +15713,17 @@ static bool timed_layer_open(void *ctx, os64_gui_rect_t bounds)
 }
 
 static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                              uint8_t alpha, flow_blend_t mode)
+                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     cost_begin(PS_FILTERS);
-    pane_layer_close(ctx, filter, n, current, alpha, mode);
+    pane_layer_close(ctx, filter, n, current, alpha, mode, cover);
+    cost_end(PS_FILTERS);
+}
+
+static void timed_layer_take(void *ctx, uint8_t *out, bool luminance)
+{
+    cost_begin(PS_FILTERS);
+    pane_layer_take(ctx, out, luminance);
     cost_end(PS_FILTERS);
 }
 
@@ -15707,7 +15767,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
-                        timed_layer_open, timed_layer_close, timed_backdrop_filter};
+                        timed_layer_open, timed_layer_close, timed_backdrop_filter,
+                        timed_layer_take};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;

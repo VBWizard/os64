@@ -1668,13 +1668,13 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
     // Below full opacity (f_opacity_context), filtered (f_filtered),
-    // blended (f_blended) or isolated (f_isolated), a box its block-level
+    // blended (f_blended), masked (f_masked) or isolated (f_isolated), a box its block-level
     // parent's walks would reach is a stacking context of its own, painted
     // whole; and so is one transformed. The root is the first context
     // already, and an inline-block's content is painted where its atom is.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
                  ((f_opacity_context(src->style) || f_filtered(src->style) ||
-                   f_blended(src->style) || f_isolated(src->style)) &&
+                   f_blended(src->style) || f_masked(src->style) || f_isolated(src->style)) &&
                   parent != NULL && parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
@@ -1838,7 +1838,7 @@ static bool makes_context(const flow_box_t *b)
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
            s->position == FLOW_POSITION_STICKY || f_opacity_context(s) || f_filtered(s) ||
-           f_blended(s) || f_isolated(s) ||
+           f_blended(s) || f_masked(s) || f_isolated(s) ||
            (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
@@ -1856,17 +1856,17 @@ static bool own_through(const flow_box_t *b)
 }
 
 // Composited whole: below full opacity, drawn through its matrix,
-// filtered (`filter`, not `backdrop-filter`, which needs no layer), or
-// blended by a mode other than normal — but plus-darker, drawn as normal,
-// and the root's, which has nothing behind it (`isolation` needs no
-// layer); and painted at all — and for the life of an animation of its
+// filtered (`filter`, not `backdrop-filter`, which needs no layer),
+// masked, or blended by a mode other than normal — but plus-darker, drawn
+// as normal, and the root's, which has nothing behind it (`isolation`
+// needs no layer); and painted at all — and for the life of an animation of its
 // opacity or its
 // transform, whatever their values, so a frame that fades or turns it is
 // painted as one (PILE3.md § Animations).
 static bool is_group(const flow_box_t *b)
 {
     return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0 ||
-            f_group_filter(b->style) ||
+            f_group_filter(b->style) || f_masked(b->style) ||
             (f_blended(b->style) && b->style->mix_blend != FLOW_BLEND_PLUS_DARKER && b->parent != NULL)) &&
            !b->unpainted;
 }
@@ -2954,9 +2954,9 @@ int32_t flow_background_layers(const flow_style_t *s)
     return s->backgrounds.nimage;
 }
 
-flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i)
+// Layer `i` of a list of layers, each list repeated to the images' count.
+static flow_layer_t layer_of(const flow_backgrounds_t *b, int32_t i)
 {
-    const flow_backgrounds_t *b = &s->backgrounds;
     const flow_bg_image_t *im = &b->image[i % b->nimage];
     const flow_bg_size_t *sz = &b->size[i % b->nsize];
     return (flow_layer_t){im->url,
@@ -2969,6 +2969,28 @@ flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i)
                           {sz->size[0], sz->size[1]},
                           b->origin[i % b->norigin],
                           b->clip[i % b->nclip]};
+}
+
+flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i)
+{
+    return layer_of(&s->backgrounds, i);
+}
+
+int32_t flow_mask_layers(const flow_style_t *s)
+{
+    return s->masks.layers.nimage;
+}
+
+flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i)
+{
+    const flow_masks_t *m = &s->masks;
+    return (flow_mask_layer_t){layer_of(&m->layers, i), m->composite[i % m->ncomposite],
+                               m->mode[i % m->nmode]};
+}
+
+bool flow_masked(const flow_style_t *s)
+{
+    return f_masked(s);
 }
 
 bool flow_background_has_image(const flow_style_t *s)
@@ -3280,7 +3302,8 @@ static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4])
 // cut to its clip, in the coordinates the group is painted in — a group
 // drawn through its matrix inside it counted as its own bounds sent
 // through that matrix, cut to what clips it from outside — and all of it
-// grown by what the group's filter spreads (filter_grown).
+// grown by what the group's filter spreads (filter_grown) and cut to what
+// its mask leaves (mask_cut).
 // What one box's layer adds to its group: its overflow rect where its
 // frame puts it, grown by its ink and cut to its clip; false for nothing.
 static bool layer_reach(const Layer *l, flow_point_t scroll, os64_gui_rect_t *at)
@@ -3317,6 +3340,25 @@ static os64_gui_rect_t filter_grown(const flow_box_t *box, os64_gui_rect_t r)
     if (r.w <= 0 || r.h <= 0 || (d[0] | d[1] | d[2] | d[3]) == 0)
         return r;
     return grown(r, d);
+}
+
+// A group's bounds `r`, filtered, cut to what its mask leaves (Masking 1
+// § 7.5): nothing of a masked box shows outside its border box — the
+// largest of the boxes a layer is cut to — unless a layer cuts to no box.
+// Before the matrix, in the coordinates the group is painted in. A
+// filtered group is not cut: the bounds are also what its layer holds, and
+// the filter reads what is outside the border box — a blur draws a child
+// beyond it into the box — before the mask cuts the result, which its
+// coverage, none outside, does.
+static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_point_t scroll)
+{
+    if (!f_masked(box->style) || f_group_filter(box->style))
+        return r;
+    for (int32_t i = 0; i < flow_mask_layers(box->style); i++)
+        if (flow_mask_layer(box->style, i).layer.clip == FLOW_EDGE_NO_CLIP)
+            return r;
+    flow_point_t o = flow_box_doc_offset(box, scroll);
+    return meet(r, moved(box->rect, o.x, o.y));
 }
 
 // A view `r` grown by how far from outside it what lands in it can come
@@ -3357,7 +3399,7 @@ static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_poi
         r = any ? join(r, at) : at;
         any = true;
     }
-    return filter_grown(tree->layers[i].box, r);
+    return mask_cut(tree->layers[i].box, filter_grown(tree->layers[i].box, r), scroll);
 }
 
 // Every group's bounds at once, by the layer of its OPEN, bottom up: each
@@ -3397,7 +3439,8 @@ static os64_gui_rect_t *all_group_bounds(const flow_tree_t *tree, flow_point_t s
         }
         for (; finish > 0 && depth > 0; finish--) {
             struct Open done = stack[--depth];
-            done.r = filter_grown(tree->layers[done.layer].box, done.r);
+            done.r = mask_cut(tree->layers[done.layer].box,
+                              filter_grown(tree->layers[done.layer].box, done.r), scroll);
             out[done.layer] = done.r;
             if (depth > 0 && nested_reach(tree->layers[done.layer].box, done.r, scroll, &at)) {
                 struct Open *top = &stack[depth - 1];
