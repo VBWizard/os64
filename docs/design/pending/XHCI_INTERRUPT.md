@@ -18,11 +18,16 @@ forces the tick is a third case to measure, not a way back to the old
 behaviour. Her list of what the design must prove is § What the design
 must prove.*
 
+*§ The design (added 2026-11-12, tracker row X.2.1) is the brief become a
+design: it answers § What the design must prove item by item and is what
+X.2 and X.3 build. Where an earlier section and § The design differ, § The
+design is the later word.*
+
 ## The tracker
 
 `XHCI_TRACKER.csv` beside this file is where the arc stands: three slices
 (`X.1` measure, `X.2` the daemon, `X.3` the interrupt), their sub-tasks,
-and the questions of § Not decided as `Q` rows. `~/tracker.sh xhci` draws
+and the questions of § Decided, and what is still open as `Q` rows. `~/tracker.sh xhci` draws
 it; `tools/TRACKERS.md` is the format. The rules are this arc's:
 
 - The design (`X.2.1`) may add, split or drop sub-task rows, in the PR
@@ -120,8 +125,9 @@ Two things are waiting on it:
    is the builder's to argue.
 4. **Bluetooth's clockwork moves with it.** What is timing (the policy
    step, reconnection, later the audio pump's neighbour) runs from the
-   daemon; what is disk I/O stays in `kworker`, which the daemon nudges
-   when there is a bond to write. The daemon never touches a disk.
+   daemon; what is disk I/O stays in `kworker`. The daemon never touches a
+   disk. (This item proposed that the daemon nudge `kworker` when there is
+   a bond to write; § The design, D3, declines that and says why.)
 5. **A report**: `/sys/usb`, which X.1 created with the poll's own
    numbers, grows one block a controller: how it is driven (MSI, INTx or tick), fires and
    spurious, the daemon's wakes, and how long a ring waited to be answered,
@@ -163,6 +169,285 @@ Two things are waiting on it:
   daemon must be told to stand back.
 - **Suspend and resume** of a controller, if the tree does either, must
   leave the interrupt as it found it.
+
+## The design (X.2.1)
+
+*Written 2026-11-12 by Fable from a read of `xhci.c`'s boot, poll, drain
+and Bluetooth paths, `doorbell.c`, `knet.c`, `kworker.c`, the RTL8125's
+MSI, and § What was measured. It is what X.2 and X.3 build. It awaits a
+read before code; where the builder finds the source disagrees, the source
+is right and this section is corrected in the same PR. Two statements
+about the xHCI specification are from memory and are marked: the builder
+checks them against the text before relying on them.*
+
+### D1. Who owns what, after the arc
+
+| Thing | Owner at boot (before `scheduler_enable`) | Owner at run time |
+|---|---|---|
+| A controller's event ring, `evt_dequeue`, `ERDP` | the boot thread, synchronously (`xhci_run_command`, `xhci_control_request`, `xhci_bt_wait`) | `kusb`, under the serializing flag |
+| `s_hc` (the scratch "controller I am working on") | the boot thread | `kusb`; nothing else reads or writes it |
+| `USBSTS.EINT`, `IMAN` | nobody (interrupter left off) | the top half writes them; `kusb` writes them once, when it enables interrupts |
+| Bluetooth host state (`bt_host_t`, scans, LE peers, managers) | the boot thread | whoever holds the serializing flag: `kusb` for timing, sysfs for a snapshot or a request, `kworker` for a bond |
+| Bond files | nobody | `kworker`, outside the flag |
+| The poll's measurements and the timeline | nobody | `kusb`, under the flag |
+
+There is ONE runtime consumer of every event ring. That is the property
+the arc buys before any interrupt exists, and X.2 is the slice that
+establishes it.
+
+### D2. The daemon: `kusb`
+
+A kernel task created beside `knet` in `kernel_init`, before
+`scheduler_enable`, pinned to the BSP, only when USB is enabled and at
+least one controller came up. Its bell is `kUsbDoorbell`, registered at
+the top of its body. The tick rings it once a tick from `processSignals`,
+with `knet`'s once-per-tick guard and for `knet`'s reason; `xhci_poll`'s
+call there is deleted, and no call to the drain remains on the scheduler's
+path (Q3).
+
+Its loop is `knet`'s, with the doorbell's protocol untouched (take before
+work; park re-checks under the queue lock):
+
+1. `doorbell_take`. Time the wait as `knet` does, wake and response kept
+   apart.
+2. Take the serializing flag (D4). If it cannot be had, go to 6.
+3. **Drain**, in rounds. A round visits every controller once and drains
+   up to one ring's worth of events from each (`RING_TRBS`). Rounds repeat
+   while any controller moved, until `KUSB_DRAIN_ROUNDS` (8) or the time
+   budget, ONE tick of TSC time, is spent. One tick, where `knet` takes
+   two, because the consumer this arc exists for paces at 15 to 20 ms and
+   the timers in step 4 are its clock.
+4. **Once per wake, after the drains, whatever the budget said**: for each
+   controller, the Bluetooth runtime step (`xhci_bt_runtime_poll`) and the
+   keyboards' typematic ticks. A busy controller cannot hold these off for
+   longer than the budget.
+5. Release the flag. If the budget was spent while a round still moved,
+   count it and raise the bell so the park returns at once.
+6. `doorbell_park` with a one-second backstop.
+
+**Every pass over a controller ends by writing `ERDP` with the dequeue
+pointer and the busy bit, whether or not it consumed an event** (D6 says
+why). `xhci_drain_events` writes it today only when it handled something;
+that changes in X.2, where it is harmless, so that X.3 changes nothing in
+the drain.
+
+The drain is split so its bound is real: `xhci_drain_events(max)` returns
+what it handled and whether it stopped at `max` with the next slot
+already valid. The boot-time callers pass no bound.
+
+### D3. What moves, and what does not
+
+- **Input delivery leaves the scheduler's pass for a thread.** Today a HID
+  report is delivered inside `processSignals`, under the queue lock, and
+  its reader is woken by the console check a few lines below in the same
+  pass. From `kusb` the report is delivered in thread context and the
+  reader is woken by the pass `kusb`'s own park provokes, as DOORBELL.md
+  found for `knet`. The delivery code takes its own locks
+  (`gui/input.c`'s `s_input_lock`, irqsave) and calls no `_locked`
+  scheduler verb. THE BUILDER AUDITS, before coding, every function a HID
+  report or a Bluetooth input report reaches (the keyboard interpreter and
+  its VT chords, the tty input ring, the GUI queue, pointer registration)
+  for an assumption that the queue lock is held or interrupts are off, and
+  lists what it found in the PR.
+- **Bluetooth's clockwork** is `bt_host_tick`, reached from the runtime
+  step, so it moves with the drain and needs no change of its own.
+- **`bt_host_policy` has one timing caller: the end of `bt_host_tick`.**
+  The call at the top of `xhci_bluetooth_maintain` is deleted: the daemon
+  runs the policy every wake, which is at least every tick, and
+  `kworker`'s visit every two seconds adds nothing to that. The call
+  after a bond is loaded becomes a ring of `kUsbDoorbell`: `kworker`
+  publishes what it read and the daemon's next wake, microseconds later,
+  starts the discovery. `kworker` no longer calls the policy at all.
+- **`kworker` keeps the disk, reading as well as writing**, exactly as it
+  has it: the load of each slot's bond at startup, the snapshot taken
+  under the flag and the I/O done outside it, the generation check that
+  stops a stale save acknowledging a forget, `next_save`'s retry after a
+  failed write, and `s_bond_io_busy`. It is NOT nudged. A bond saved two
+  seconds after it changed costs nothing, and a wake primitive for
+  `kworker` would be a second thing to prove. (The brief proposed the
+  nudge; this is the design declining it.)
+- **`kworker` stops spinning for the flag.** After its disk I/O it spins
+  with `pause` until the poll lets go. That was honest against a poll
+  that held the flag for microseconds; `kusb` may hold it for a tick. It
+  sleeps a tick between attempts.
+
+### D4. The serializing flag, and work that is kept
+
+`s_poll_busy` stays, a test-and-set flag with a new rule: it has ONE
+release door, and the door knows whether the daemon was turned away.
+
+- `kusb` sets `s_kusb_waiting`, then tries the flag. If it gets it, it
+  clears `s_kusb_waiting` and works. If not, it counts the refusal,
+  stamps the time, and parks.
+- Every other holder releases through `xhci_serial_release()`: release
+  the flag, then, if an atomic exchange finds `s_kusb_waiting` set, ring
+  `kUsbDoorbell`.
+
+Set-then-try on one side and release-then-check on the other close the
+window: either the daemon's try succeeds, or the releaser sees the mark.
+The bell was taken and the work was not done, and the holder's release is
+what brings the daemon back, in the time the holder held and no longer.
+The tick is behind that as it is behind everything. The report shows how
+many times it happened and the longest wait from refusal to the pass that
+did the work.
+
+The other holders are bounded and never drain: a sysfs read renders a
+status text; a sysfs write queues a request; `kworker` snapshots or
+publishes a bond. None of them touches `s_hc` or an event ring.
+
+### D5. From boot to running
+
+Enumeration and the AX210's firmware load run on the boot thread before
+`scheduler_enable`, draining synchronously, as today. `kusb` does not
+exist then and no interrupt is enabled then, so they stay serialized with
+the event consumer by construction: there is no moment with two.
+
+**`kusb` enables the interrupts itself**, at the top of its body, after
+its bell is registered, holding the flag (X.3). By then the handler's
+state is complete and unchanging (D7), the IDT entry exists, and the wake
+path works. For each controller, in this order:
+
+1. Decide how it is driven (D8). If by the tick, stop here.
+2. Program MSI or MSI-X at the vector, addressed at the BSP; set the PCI
+   command register's INTx-disable bit.
+3. Write the moderation interval (D9).
+4. Clear `USBSTS.EINT` and `IMAN.IP`, whatever boot left there.
+5. Publish the controller to the handler's list (count last).
+6. Set `IMAN.IE`, then `USBCMD.INTE`.
+
+Then it falls into its loop, whose first pass drains every controller and
+writes every `ERDP` with the busy bit. That first unconditional pass is
+what accounts for events the boot left on a ring and for an event pending
+at the moment of enabling: nothing depends on the controller sending a
+message for a condition that existed before `IE` was set.
+
+A controller whose programming does not read back as written stays
+tick-driven and says so, on the glass and in the report, as the RTL8125
+does.
+
+### D6. The interrupt protocol
+
+*From memory of xHCI 1.2 § 4.17.2 and § 5.5.2.3.3, and of how QEMU's
+model and Linux's handler behave; the builder checks the text.* An event
+sets the interrupter's pending bit and its EVENT HANDLER BUSY bit
+(`ERDP.EHB`) together, and the controller signals. While `EHB` is set, a
+further event signals nothing. Software clears `EHB` by writing `ERDP`
+with that bit; if the ring is not empty at that write, the controller
+signals again. With MSI or MSI-X the pending bit clears itself when the
+message is sent; `USBSTS.EINT` does not.
+
+So the two halves divide like this:
+
+- **The top half** (one shared vector, D7), for each published
+  controller: read `USBSTS`; if `EINT` is clear, next controller. Else
+  write `USBSTS` with `EINT` alone (the register's other write-one-to-clear
+  bits stay as they are), then write `IMAN` with `IP` and `IE` both set
+  (clears pending, keeps enable), count a fire for that controller. After
+  the walk: if no controller had `EINT`, count a spurious entry; else ring
+  `kUsbDoorbell`. No lock, no event ring, no `s_hc`, no print. EOI in the
+  stub.
+- **The bottom half** owns `ERDP`. Consuming events and writing `ERDP`
+  with `EHB` is what re-arms the controller, and D2's "every pass writes
+  it" is what makes these cases safe:
+
+| Case | What happens |
+|---|---|
+| An event arrives while `kusb` is mid-drain | `EHB` is still set, so no message. Either the drain's loop sees the event, or its closing `ERDP` write finds the ring not empty and the controller signals again. |
+| The drain stops at its budget with events left | Its `ERDP` write clears `EHB` with the ring not empty: the controller signals again, and `kusb` has raised its own bell besides. |
+| A tick wake and an interrupt overlap | One consumer, so there is no race on the ring. The interrupt's ring lands on a bell that is already up, or raises it for a pass that finds nothing and writes `ERDP` anyway. |
+| A pass consumes nothing while `EHB` is set (boot leftovers; an interrupt for an event an earlier pass already took) | The unconditional write clears it. Without it the controller would be mute until the next event happened to be consumed by a tick pass. |
+| The flashlight, or a controller left tick-driven | `IE` is never set; the same loop, driven by the tick's ring. |
+
+### D7. The vector, the handler's state, and the core
+
+One vector for every controller, `0x47`: class 4, beside the e1000's and
+the RTL8125's, above the APs' priority bar and below the scheduler's
+class. The P5 has five controllers; five vectors and five stubs would buy
+only the attribution of a spurious entry. A shared vector is sound for
+edge-triggered messages because the handler walks EVERY published
+controller on every entry: a second message arriving in service sets the
+LAPIC's request bit again and the handler runs again.
+
+The handler reads a list of controller pointers and a count, written once
+by `kusb` before any `IE` is set and never changed after. Through them it
+reads `op` and `rt`, set at bring-up and never changed. The register file
+is mapped at its upper-half alias, so all of it is reachable under
+whatever CR3 was interrupted; that mapping and its comment stay, and the
+comment gains the handler as its second reason.
+
+Messages are addressed at the BSP and `kusb` is pinned there, for `knet`'s
+reasons: the ring is then a self-IPI, and the tick that rings the bell
+and preempts a busy drainer is the BSP's own (the tickless idle path
+masks the APs' timers).
+
+### D8. How a controller is driven (Q1, Q5)
+
+A pure function of what `/sys/bus/pci` already knows and the flashlight:
+MSI if the function offers it; else MSI-X; else the tick. The flashlight
+forces the tick. No INTx. The P5's five offer both and take MSI; QEMU's
+`qemu-xhci` offers MSI-X alone and `nec-usb-xhci,msi=on,msix=off` offers
+MSI alone (read from `/sys/bus/pci` in QEMU, 2026-11-12), so QEMU
+exercises both paths and the P5 proves MSI on hardware.
+
+MSI is programmed as the RTL8125 programs it. That code becomes one
+helper in `pci.c` that both drivers call; the RTL8125 moves to it in X.3,
+and the P5 pass covers both. MSI-X needs its table: the capability names
+a BAR and an offset; the table's pages are mapped at the upper-half alias
+if the register mapping does not already cover them; entry 0 gets the
+address and data and is unmasked, every other entry is masked, then the
+capability's enable bit is set with its function mask clear.
+
+### D9. Moderation (Q4, proposed)
+
+`IMOD`'s interval is written as 1000, which is 250 µs: at most four
+thousand interrupts a second from one controller, and at most a quarter
+of a millisecond added to an event. The reason for a value at all is a
+mouse at a high report rate; the reason for this one is that it is far
+below a tick and far below audio's 15 ms. It is a proposal. X.3.5 measures
+`kusb`'s wakes under the fastest mouse to hand with the value at 0, 1000
+and 4000 (the controller's own default, 1 ms), and Chris rules on Q4 from
+those numbers. QEMU's model may not moderate at all; the P5 is where this
+is measured.
+
+### D10. The report and the flashlight
+
+`/sys/usb` grows; nothing it has is removed. Per controller: `driven=`
+`msi`, `msix` or `tick`, and why when it is the tick (`no capability`,
+`USBPOLL`, `did not take`), and its `fires`. For the daemon, in
+`/sys/net/knet`'s words: wakes, drain rounds, budget spent, longest wake,
+wake and response latency with their late counts, the bell's rings and
+wakes; the handler's spurious entries; and the refusals of the flag with
+the longest wait (D4). The `poll_*` and `event_gap_*` lines keep their
+meaning, with "poll" now a pass of `kusb`: they are what tells case (b)
+from case (c) in § Proof beside `fires`.
+
+The flashlight is the cmdline token `USBPOLL`: no controller is given an
+interrupt. It does not travel to the P5; that is said where it is added
+and in CLAUDE.md's table.
+
+### D11. What each slice proves
+
+- **X.2** ends with `kusb` running, every controller `driven=tick`, and
+  `xhci_poll` gone from `processSignals`. Its proof is that nothing got
+  worse: `/sys/usb`'s gaps no longer than X.1's reading on the same QEMU
+  entry and on the P5; input, Bluetooth pairing, reconnection and bond
+  save and load as before; and D4's refusal path provoked on purpose (a
+  loop of sysfs reads while a mouse moves) with the refusals counted and
+  no event lost.
+- **X.3** adds the handler, the enabling, the choice, moderation and the
+  flashlight, and proves D6's table: the register model on the host for
+  every row, and QEMU with `fires` counted on both controller models.
+
+### D12. What this design does not settle
+
+- The two specification statements in D6, until the builder has read
+  them.
+- Whether a controller that is suspended and resumed exists in this tree
+  at all. If it does, it must leave `IE`, `INTE` and the message
+  programming as it found them; if it does not, the line is dropped.
+- Whether the timeline and the gap buckets stay once the arc is done, or
+  shrink to what `/sys/net/knet` has. They stay through X.3 because they
+  are the proof.
 
 ## Measure first
 
@@ -289,15 +574,16 @@ this arc's neighbour; isochronous endpoints; any change to what a HID
 report means. If one of these turns out to be needed to make the
 interrupt work, it is raised with Chris, not folded in.
 
-## Not decided
+## Decided, and what is still open
 
-1. MSI-X or MSI first, where a controller offers both, and whether the
-   controllers share one vector and one bell or have their own.
-2. Whether the daemon is new, or `knet` grows a second kind of work. (My
-   lean: new. `knet`'s longest wake is a number people read, and USB
-   bring-up is slow work that would spoil it. Quinn leans the same way,
-   for the budgets and the diagnostics, and says to keep the doorbell's
-   take-before-work and park-and-recheck protocol as it is.)
-3. Whether any call to the drain stays on the scheduler's path as a
-   backstop.
-4. The moderation value.
+1. **MSI first** where a controller offers it, MSI-X when that is all it
+   offers; one bell, and one shared vector (Chris, 2026-11-12, for the
+   order and the bell; D7 for the vector).
+2. **A new daemon**, `kusb`, not a second kind of work for `knet` (Chris,
+   2026-11-12; Quinn leaned the same way).
+3. **No call to the drain stays on the scheduler's path.** The tick
+   ringing the daemon is the backstop (Chris, 2026-11-12).
+4. **The moderation value is OPEN.** D9 proposes 250 µs and says how it is
+   measured; Chris rules from the numbers.
+5. **No INTx in this arc** (Chris, 2026-11-12, on condition that the P5's
+   controllers offer MSI or MSI-X; they offer both).
