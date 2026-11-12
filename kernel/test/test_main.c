@@ -3543,6 +3543,25 @@ static bool test_vfs_rename(void)
 // this mount owns a private copy of its block-operation table, so the test can
 // fail one chosen metadata write, restore the real callback immediately, and
 // ask fops->mounted to perform the same replay a boot performs.
+//
+// THE LAYOUT IS MEASURED, NOT ASSUMED. A release publishes one block group's
+// bitmap (then its descriptor and the superblock) at every group switch, so
+// a victim whose blocks cross a group boundary is freed in more steps than
+// one whose blocks do not, and every write number below is computed from
+// where the victim actually landed (ext2_orphan_shape). Which shape a disk
+// produces is the allocator's business and changes as the disk fills, so
+// the drill runs twice and STEERS each run: once with the victim in one
+// group, once with a spacer file leaving its group too little room, so it
+// must cross.
+//
+// A FAILED CLAIM CLEANS UP BEFORE IT RETURNS. In the middle of the drill the
+// real root is writable while an orphan's retry map names blocks the bitmap
+// already calls free — only the private mount was demoted. Returning there
+// leaves those blocks to the next allocation on the root, and the next
+// mount's replay frees them out from under whatever file took them. So
+// every failure runs the orphan through the real mount's replay, which
+// finishes it or demotes the root if it cannot do so safely, and removes
+// the fixtures.
 
 // The ext2 block-write fault seam. These globals are live only around one
 // synchronous filesystem operation; ext2's write_lock keeps another writer
@@ -3690,79 +3709,184 @@ fail:
     return false;
 }
 
-#define OR_FAIL(...) do { \
-        printf("FAIL ext2_orphan: " __VA_ARGS__); \
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - " __VA_ARGS__); \
-        return false; \
+#define ORPHAN_DIR          "/etc/testdata/orph"
+#define ORPHAN_DATA_BLOCKS  13u   // twelve direct blocks and one through the indirect leaf
+#define ORPHAN_SPACER_CHUNK 64u   // blocks per large spacer write
+
+static const char *const kOrphanFixtures[] = {
+    ORPHAN_DIR "/victim", ORPHAN_DIR "/replacement",
+    ORPHAN_DIR "/retry_victim", ORPHAN_DIR "/retry_replacement",
+    ORPHAN_DIR "/spacer", ORPHAN_DIR "/probe",
+};
+
+static void ext2_orphan_remove_fixtures(void)
+{
+    for (unsigned i = 0; i < sizeof(kOrphanFixtures) / sizeof(kOrphanFixtures[0]); i++)
+        kRootFilesystem->fops->rm(kOrphanFixtures[i], kRootFilesystem);
+}
+
+// How a release of `path`'s data blocks publishes. In release order — the
+// direct blocks, then the indirect leaf's children — every change of group
+// is a flush, so the blocks fall into `runs` publications and the first one
+// covers `first_run` of them. The indirect root is released after its leaf
+// and publishes once at the end whatever its group, so it never adds a run.
+static bool ext2_orphan_shape(const char *path, uint32_t *runs, uint32_t *first_run)
+{
+    uint32_t groups[ORPHAN_DATA_BLOCKS];
+    if (ext2_file_block_groups(kRootFilesystem, path, groups, ORPHAN_DATA_BLOCKS) != 0)
+        return false;
+    *runs = 1;
+    *first_run = 0;
+    for (uint32_t i = 0; i < ORPHAN_DATA_BLOCKS; i++) {
+        if (groups[i] == UINT32_MAX)
+            return false;
+        if (i > 0 && groups[i] != groups[i - 1])
+            (*runs)++;
+        if (*runs == 1)
+            (*first_run)++;
+    }
+    return true;
+}
+
+// ORPHAN_DATA_BLOCKS full blocks, so the map crosses the twelve direct slots
+// and a teardown MUST visit an indirect block. `head` starts the first
+// block, for a reader that has to tell this file from another.
+static bool ext2_orphan_write_fixture(const char *path, uint8_t fill,
+                                      const char *head, size_t head_len)
+{
+    vfs_file_t *f = NULL;
+    if (kRootFilesystem->fops->open(&f, path, "c", kRootFilesystem) != 0)
+        return false;
+    size_t bs = (size_t)kRootFilesystem->blockSize;
+    uint8_t *data = kmalloc(bs);
+    bool ok = data != NULL;
+    if (ok) {
+        memset(data, fill, bs);
+        memcpy(data, head, head_len);
+        for (uint32_t i = 0; i < ORPHAN_DATA_BLOCKS && ok; i++)
+            ok = kRootFilesystem->fops->write(f, data, bs) == (int)bs;
+        kfree(data);
+    }
+    kRootFilesystem->fops->close(f);
+    return ok;
+}
+
+// The group the next file made in ORPHAN_DIR takes its first block from.
+// Asked rather than computed: where inodes and blocks go is the allocator's
+// business, and the drill must not hold a copy of its policy.
+static uint32_t ext2_orphan_next_group(void)
+{
+    static const char probe[] = ORPHAN_DIR "/probe";
+    vfs_file_t *f = NULL;
+    uint32_t group = UINT32_MAX;
+    if (kRootFilesystem->fops->open(&f, probe, "c", kRootFilesystem) != 0)
+        return UINT32_MAX;
+    static const char byte[] = "p";
+    int wrote = kRootFilesystem->fops->write(f, byte, 1);
+    kRootFilesystem->fops->close(f);
+    if (wrote != 1 || ext2_file_block_groups(kRootFilesystem, probe, &group, 1) != 0)
+        group = UINT32_MAX;
+    kRootFilesystem->fops->rm(probe, kRootFilesystem);
+    return group;
+}
+
+// Arrange where the next victim lands by appending to the spacer until the
+// group it will start in has the right room. One group: room for all
+// fourteen of its blocks (thirteen data and the indirect root), so a group
+// with less is filled and the next one asked about. Two groups: twelve or
+// fewer — fewer than its data blocks, so they must cross. A group already
+// that short is left alone, and filling stops at ten or more, never at
+// none, which would only move the victim whole to the next group. The
+// spacer stays until the drill ends.
+static bool ext2_orphan_steer(bool straddle)
+{
+    size_t bs = (size_t)kRootFilesystem->blockSize;
+    uint8_t *chunk = kmalloc(bs * ORPHAN_SPACER_CHUNK);
+    if (chunk == NULL)
+        return false;
+    memset(chunk, 0x33, bs * ORPHAN_SPACER_CHUNK);
+    vfs_file_t *spacer = NULL;
+    if (kRootFilesystem->fops->open(&spacer, ORPHAN_DIR "/spacer", "c", kRootFilesystem) != 0) {
+        kfree(chunk);
+        return false;
+    }
+
+    uint32_t fill_to = straddle ? 12 : 0;
+    bool ok = false;
+    // Bounded, and generously: a round of the one-group arm fills one group
+    // that has thirteen blocks or fewer left (groups with none are skipped
+    // by the allocator without costing a round), and a disk that fills up
+    // unevenly can have many of those in a row. 256 of them is at most
+    // 3.3 MB of spacer on a 1 KiB filesystem, all given back at the end.
+    for (uint32_t round = 0; round < 256; round++) {
+        uint32_t g = ext2_orphan_next_group();
+        uint32_t room = g == UINT32_MAX ? 0 : ext2_group_free_blocks(kRootFilesystem, g);
+        if (room == 0)
+            break;
+        if (straddle ? room <= fill_to : room > ORPHAN_DATA_BLOCKS) {
+            ok = true;
+            break;
+        }
+        bool landed = true;
+        while (landed && room > fill_to) {
+            // A large write can also take up to three of the spacer's own
+            // indirect blocks; keeping that much in hand is what stops it
+            // carrying the room below ten.
+            uint32_t n = room > fill_to + ORPHAN_SPACER_CHUNK + 3 ? ORPHAN_SPACER_CHUNK : 1;
+            int wrote = kRootFilesystem->fops->write(spacer, chunk, n * bs);
+            uint32_t now = ext2_group_free_blocks(kRootFilesystem, g);
+            // A write that took nothing from g did not land there, and the
+            // victim would not either.
+            landed = wrote == (int)(n * bs) && now < room;
+            room = now;
+        }
+        if (!landed)
+            break;
+    }
+    kRootFilesystem->fops->close(spacer);
+    kfree(chunk);
+    return ok;
+}
+
+// A failed claim leaves through the drill's cleanup (see the header).
+#define OR_FAIL(fmt, ...) do { \
+        printf("FAIL ext2_orphan (%s): " fmt, arm, ##__VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan (%s) - " fmt, arm, ##__VA_ARGS__); \
+        goto fail; \
     } while (0)
 
-static bool test_ext2_orphan(void)
+// One run of the whole drill, with the victim steered into one block group
+// or across two. *runs_out reports the shape the victim actually had.
+static bool ext2_orphan_drill(bool straddle, uint32_t *runs_out)
 {
-    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
-        kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root not writable)\n");
-        return true;
-    }
-    // ext2 only: FAT has no inode to orphan and no open-inode count. The
-    // op-table identity is the discriminator (same idiom as test_vfs_rename).
-    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root is not ext2)\n");
-        return true;
-    }
-
+    const char *arm = straddle ? "two groups" : "one group";
     static const char oldBytes[] = "THE-OLD-BINARY";
     static const char newBytes[] = "THE-NEW-BINARY";
     char buf[64];
     os64_dirent_t de;
+    vfs_file_t *held = NULL;
+    vfs_file_t *f = NULL;
+    uint32_t runs = 0, first_run = 0;
 
-    static const char *dirs[] = { "/etc", "/etc/testdata", "/etc/testdata/orph" };
-    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
-        char pathbuf[40];
-        sprintf(pathbuf, "%s", dirs[i]);
-        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
-        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
-            || !(de.flags & OS64_DE_DIR))
-            OR_FAIL("provision: %s is not a directory\n", dirs[i]);
-    }
-    kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
-    kRootFilesystem->fops->rm("/etc/testdata/orph/replacement", kRootFilesystem);
-    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_victim", kRootFilesystem);
-    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_replacement", kRootFilesystem);
+    ext2_orphan_remove_fixtures();
+    if (!ext2_orphan_steer(straddle))
+        OR_FAIL("could not steer the victim's blocks into the wanted shape\n");
 
-    // THE BASELINE, taken after that cleanup so a previous boot's leftovers
-    // cannot masquerade as this run's leak.
+    // THE BASELINE, taken after that cleanup and with the spacer in place,
+    // so a previous boot's leftovers cannot masquerade as this run's leak.
     uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
     uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
     if (inodes0 == 0 || blocks0 == 0)
         OR_FAIL("free-space accessors returned 0 — wrong filesystem, or a broken accessor\n");
 
-    // The victim: the file standing in for a running program's binary. Make
-    // it thirteen blocks so its map crosses the twelve direct slots and the
-    // orphan teardown MUST visit an indirect block. The first bytes remain
-    // distinctive for the held-reader assertion below.
-    vfs_file_t *f = NULL;
-    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/victim", "c", kRootFilesystem) != 0)
-        OR_FAIL("could not create the victim\n");
-    uint32_t orphan_data_blocks = 13;
-    uint8_t *orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
-    if (orphan_data == NULL) {
-        kRootFilesystem->fops->close(f);
-        OR_FAIL("could not allocate the indirect-block fixture\n");
-    }
-    memset(orphan_data, 0xA5, (size_t)kRootFilesystem->blockSize);
-    memcpy(orphan_data, oldBytes, sizeof(oldBytes) - 1);
-    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
-        int wrote = kRootFilesystem->fops->write(
-            f, orphan_data, (size_t)kRootFilesystem->blockSize);
-        if (wrote != kRootFilesystem->blockSize) {
-            kRootFilesystem->fops->close(f);
-            kfree(orphan_data);
-            OR_FAIL("could not write indirect-block fixture block %u (wrote %d)\n", i, wrote);
-        }
-    }
-    kfree(orphan_data);
-    kRootFilesystem->fops->close(f);
-    f = NULL;
+    // The victim: the file standing in for a running program's binary. Its
+    // first bytes are distinctive for the held-reader assertion below.
+    if (!ext2_orphan_write_fixture(ORPHAN_DIR "/victim", 0xA5, oldBytes, sizeof(oldBytes) - 1))
+        OR_FAIL("could not write the victim\n");
+    if (!ext2_orphan_shape(ORPHAN_DIR "/victim", &runs, &first_run))
+        OR_FAIL("could not read where the victim's blocks landed\n");
+    if (straddle ? runs < 2 : runs != 1)
+        OR_FAIL("steering missed: the victim's data blocks span %u group run(s)\n", runs);
 
     // Its replacement, staged under another name exactly the way os64get will.
     if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/replacement", "c", kRootFilesystem) != 0)
@@ -3790,60 +3914,48 @@ static bool test_ext2_orphan(void)
     reap_mount.fops = &reap_fops;
     reap_mount.dops = &reap_dops;
 
-    vfs_file_t *held = NULL;
     if (reap_mount.fops->open(&held, "/etc/testdata/orph/victim", "r", &reap_mount) != 0)
         OR_FAIL("could not open the victim to hold it\n");
 
     // The replacement lands on the victim's name while that handle is live.
     // Before 2026-08-16 this refused outright.
     if (kRootFilesystem->fops->rename("/etc/testdata/orph/replacement",
-                                      "/etc/testdata/orph/victim", kRootFilesystem, 0) != 0) {
-        kRootFilesystem->fops->close(held);
+                                      "/etc/testdata/orph/victim", kRootFilesystem, 0) != 0)
         OR_FAIL("rename onto an OPEN destination was refused — the orphan path never ran\n");
-    }
 
     // CLAIM 1: the holder still reads the OLD bytes. Its inode has no name
     // any more; it does not care, and must not.
     int n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
-    if (n < (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0) {
-        kRootFilesystem->fops->close(held);
+    if (n < (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0)
         OR_FAIL("the held handle stopped reading its own bytes (n=%d) — the orphan died early\n", n);
-    }
 
     // CLAIM 3: the NAME already resolves to the new file, and the staging
     // name is gone.
     n = rn_slurp("/etc/testdata/orph/victim", buf, sizeof(buf));
-    if (n != (int)(sizeof(newBytes) - 1) || memcmp(buf, newBytes, sizeof(newBytes) - 1) != 0) {
-        kRootFilesystem->fops->close(held);
+    if (n != (int)(sizeof(newBytes) - 1) || memcmp(buf, newBytes, sizeof(newBytes) - 1) != 0)
         OR_FAIL("the victim's NAME does not hold the new bytes (n=%d)\n", n);
-    }
-    if (kRootFilesystem->dops->stat("/etc/testdata/orph/replacement", &de, kRootFilesystem) == 0) {
-        kRootFilesystem->fops->close(held);
+    if (kRootFilesystem->dops->stat("/etc/testdata/orph/replacement", &de, kRootFilesystem) == 0)
         OR_FAIL("the staged name survived the rename\n");
-    }
 
     // The orphan's storage must still be OUT. Without this check, a rename
     // that simply freed the inode too early could pass Claim 1 on luck (the
     // blocks would not have been overwritten yet).
     if (ext2_free_inodes(kRootFilesystem) == inodes0 &&
-        ext2_free_blocks(kRootFilesystem) == blocks0) {
-        kRootFilesystem->fops->close(held);
+        ext2_free_blocks(kRootFilesystem) == blocks0)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
-    }
 
-    // The program exits. The release runs through one batch: every data
-    // block's bit — twelve direct and the indirect child — clears in the
-    // batch's bitmap copy and lands in ONE bitmap write (write 1) when the
-    // indirect leaf's subtree is published; fail the group-descriptor count
-    // that follows at write 2. Write 3 persists the retry map. The next
-    // replay must see thirteen already-clear bits and reconcile both count
-    // ledgers without counting any of them twice.
+    // The program exits. The release runs through one batch: data bits clear
+    // in the batch's bitmap copy, and the first publication — at the first
+    // change of group, or when the indirect leaf's subtree is published,
+    // whichever comes first — is write 1, carrying the victim's first run of
+    // blocks. Fail the group-descriptor count that follows at write 2, which
+    // stops the release there. Write 3 persists the retry map. The next
+    // replay must see those first_run bits already clear and reconcile both
+    // count ledgers without counting any of them twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!ext2_fault_test_fail_write(kRootFilesystem, 2)) {
-        kRootFilesystem->fops->close(held);
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 2))
         OR_FAIL("could not install the release-write fault seam\n");
-    }
     kRootFilesystem->fops->close(held);
     held = NULL;
     uint32_t injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
@@ -3851,9 +3963,9 @@ static bool test_ext2_orphan(void)
         OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks)
-        OR_FAIL("failed last-close release did not leave exactly the %u data blocks bitmap-completed for replay (freed %u)\n",
-                orphan_data_blocks, ext2_free_blocks(kRootFilesystem) - orphan_blocks);
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + first_run)
+        OR_FAIL("failed last-close release did not leave exactly the first run's %u data blocks bitmap-completed for replay (freed %u)\n",
+                first_run, ext2_free_blocks(kRootFilesystem) - orphan_blocks);
     // THE AMBIGUOUS FREE, asserted: those blocks' bitmap bits are clear on
     // disk while the retry map still names them (the leaf's pointers were
     // never rewritten, the indirect root's own bit never cleared), so the
@@ -3867,21 +3979,24 @@ static bool test_ext2_orphan(void)
         OR_FAIL("last-close demotion escaped onto the real root mount\n");
 
     // Now exercise MOUNT REPLAY itself, including the indirect ordering.
-    // Replay revisits every direct block and the indirect child and finds
-    // each bit already clear, so the leaf's publication is a reconcile:
-    // bitmap (1), GDT (2), superblock (3); the leaf's pointer clear is 4.
-    // The indirect root's own release publishes at the batch's end, 5..7.
-    // The zero map is write 8 and the inode bitmap is 9; fail its GDT count
-    // at write 10. A clean retry must reconcile the already-free inode too.
+    // Each of the victim's runs publishes as bitmap, GDT, superblock — the
+    // first as a reconcile, its bits found already clear — in writes
+    // 1..3*runs. The leaf's pointer clear is the next write, and the
+    // indirect root's own release publishes at the batch's end in the three
+    // after it. Then the zero map and the inode bitmap; fail the inode's GDT
+    // count, write 3*runs + 7 (10 for one group). A clean retry must
+    // reconcile the already-free inode too.
+    uint32_t replay_fail = 3 * runs + 7;
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!ext2_fault_test_fail_write(kRootFilesystem, 10))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, replay_fail))
         OR_FAIL("could not install the replay-write fault seam\n");
-    // Another private mount, for the same reason and a sharper hazard: write 9
-    // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
-    // orphan chain still names it for teardown. Hand it to a new file and the
-    // next replay releases that file's storage. This replay must therefore end
-    // with the mount demoted, not merely with an error returned.
+    // Another private mount, for the same reason and a sharper hazard: the
+    // write before the failed one freed the inode BITMAP BIT, so that inode
+    // NUMBER is allocatable while the orphan chain still names it for
+    // teardown. Hand it to a new file and the next replay releases that
+    // file's storage. This replay must therefore end with the mount demoted,
+    // not merely with an error returned.
     kTestingExpectedNoise = true;   // drill: this replay MUST end demoted
     vfs_filesystem_t replay_mount = *kRootFilesystem;
     vfs_file_operations_t replay_fops = *kRootFilesystem->fops;
@@ -3891,25 +4006,25 @@ static bool test_ext2_orphan(void)
 
     replay_mount.fops->mounted(&replay_mount);
     injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
-    if (injected_writes != 10)
-        OR_FAIL("failed indirect replay made %u metadata writes, expected 10 with orphan still linked\n",
-                injected_writes);
+    if (injected_writes != replay_fail)
+        OR_FAIL("failed indirect replay made %u metadata writes, expected %u with orphan still linked\n",
+                injected_writes, replay_fail);
     if (!replay_mount.read_only)
         OR_FAIL("half-completed orphan inode free did not demote its mount\n");
     if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
         OR_FAIL("replay demotion escaped onto the real root mount\n");
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1)
         OR_FAIL("failed mount replay did not leave exactly one bitmap-completed inode for retry\n");
-    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
+    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + ORPHAN_DATA_BLOCKS + 1)
         OR_FAIL("failed indirect replay freed %u blocks, expected %u data blocks plus indirect root\n",
-                ext2_free_blocks(kRootFilesystem) - orphan_blocks, orphan_data_blocks);
+                ext2_free_blocks(kRootFilesystem) - orphan_blocks, ORPHAN_DATA_BLOCKS);
 
     // A clean retry is the next boot in miniature. It must find the STILL-
     // LINKED orphan, idempotently finish its inode release, and only then
     // remove the durable chain record.
     kRootFilesystem->fops->mounted(kRootFilesystem);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1 ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + ORPHAN_DATA_BLOCKS + 1)
         OR_FAIL("clean mount replay did not finish the retained orphan\n");
 
     // CLAIM 2: exactly what was taken, given back. Drop the surviving name
@@ -3925,34 +4040,22 @@ static bool test_ext2_orphan(void)
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
     // Closed-destination rename failure: the rename's own writes are 1..7;
-    // the release then publishes all thirteen data bits — twelve direct and
-    // the indirect child — as bitmap 8, GDT 9, superblock 10, and write 11
-    // is the parent-pointer clear. Fail that clear after its children are
-    // already free. The retry inode + orphan-head writes MUST be allowed to
-    // land as writes 12 and 13 before the mount publishes read-only state.
-    // (The seam prints its stream under DEBUG_TESTS; re-read it there when
-    // the release path's command stream changes shape.)
-    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_victim", "c",
-                                    kRootFilesystem) != 0)
-        OR_FAIL("could not create the closed retry victim\n");
-    orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
-    if (orphan_data == NULL) {
-        kRootFilesystem->fops->close(f);
-        OR_FAIL("could not allocate the closed retry fixture\n");
-    }
-    memset(orphan_data, 0x5A, (size_t)kRootFilesystem->blockSize);
-    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
-        int wrote = kRootFilesystem->fops->write(
-            f, orphan_data, (size_t)kRootFilesystem->blockSize);
-        if (wrote != kRootFilesystem->blockSize) {
-            kRootFilesystem->fops->close(f);
-            kfree(orphan_data);
-            OR_FAIL("could not write closed retry fixture block %u (wrote %d)\n", i, wrote);
-        }
-    }
-    kfree(orphan_data);
-    kRootFilesystem->fops->close(f);
-    f = NULL;
+    // the release then publishes the retry victim's runs (bitmap, GDT,
+    // superblock each), and the write after them is the parent-pointer
+    // clear — 7 + 3*runs + 1, write 11 for one group. Fail that clear after
+    // its children are already free. The retry inode + orphan-head writes
+    // MUST be allowed to land as the two after it before the mount publishes
+    // read-only state. (The seam prints its stream under DEBUG_TESTS; re-read
+    // it there when the release path's command stream changes shape.)
+    if (!ext2_orphan_write_fixture("/etc/testdata/orph/retry_victim", 0x5A, "", 0))
+        OR_FAIL("could not write the closed retry victim\n");
+    uint32_t retry_runs = 0, retry_first = 0;
+    if (!ext2_orphan_shape("/etc/testdata/orph/retry_victim", &retry_runs, &retry_first))
+        OR_FAIL("could not read where the closed retry victim's blocks landed\n");
+    if (straddle ? retry_runs < 2 : retry_runs != 1)
+        OR_FAIL("steering missed: the closed retry victim's data blocks span %u group run(s)\n",
+                retry_runs);
+    uint32_t clear_fail = 7 + 3 * retry_runs + 1;
 
     if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_replacement", "c",
                                     kRootFilesystem) != 0)
@@ -3968,16 +4071,16 @@ static bool test_ext2_orphan(void)
     shadow.fops = &shadow_fops;
     shadow.dops = &shadow_dops;
 
-    if (!ext2_fault_test_fail_write(kRootFilesystem, 11))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, clear_fail))
         OR_FAIL("could not install the closed-rename release fault seam\n");
     int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
                                         "/etc/testdata/orph/retry_victim", &shadow, 0);
     injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (rename_rc != 0)
         OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
-    if (injected_writes != 13)
-        OR_FAIL("failed closed rename made %u metadata writes, expected 13 (failed parent clear, retry inode, orphan head)\n",
-                injected_writes);
+    if (injected_writes != clear_fail + 2)
+        OR_FAIL("failed closed rename made %u metadata writes, expected %u (failed parent clear, retry inode, orphan head)\n",
+                injected_writes, clear_fail + 2);
     if (!shadow.read_only)
         OR_FAIL("closed rename parent-clear failure did not demote its mount\n");
     if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
@@ -3991,11 +4094,66 @@ static bool test_ext2_orphan(void)
         ext2_free_blocks(kRootFilesystem) != blocks0)
         OR_FAIL("closed-rename retry replay did not return all storage to baseline\n");
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; %u inodes / %u blocks returned exactly)\n",
-           inodes0, blocks0);
+    ext2_orphan_remove_fixtures();   // the spacer, the last one standing
+    *runs_out = runs;
     return true;
+
+fail:
+    // The same steps finish a drill that stopped anywhere, so nothing here
+    // asks which claim failed. The order matters: a seam still installed
+    // would fail the cleanup's own writes, and the held handle's last close
+    // is itself a release.
+    if (sExt2FaultRealWrite != NULL)
+        (void)ext2_fault_test_restore_write(kRootFilesystem);
+    if (held != NULL)
+        kRootFilesystem->fops->close(held);
+    // Any orphan goes through the REAL mount's replay, the same pass a boot
+    // makes: it finishes the release, or stops with the storage still
+    // marked used, or demotes this mount when a retry map is left naming
+    // blocks the bitmap calls free. So nothing allocated after this test
+    // returns can land in storage a retry map still names. A no-op on an
+    // empty chain.
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    ext2_orphan_remove_fixtures();
+    return false;
 }
 #undef OR_FAIL
+
+static bool test_ext2_orphan(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root not writable)\n");
+        return true;
+    }
+    // ext2 only: FAT has no inode to orphan and no open-inode count. The
+    // op-table identity is the discriminator (same idiom as test_vfs_rename).
+    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root is not ext2)\n");
+        return true;
+    }
+
+    static const char *dirs[] = { "/etc", "/etc/testdata", ORPHAN_DIR };
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char pathbuf[40];
+        os64_dirent_t de;
+        sprintf(pathbuf, "%s", dirs[i]);
+        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR)) {
+            printf("FAIL ext2_orphan: provision: %s is not a directory\n", dirs[i]);
+            printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - provision: %s is not a directory\n", dirs[i]);
+            return false;
+        }
+    }
+
+    uint32_t one_runs = 0, two_runs = 0;
+    if (!ext2_orphan_drill(false, &one_runs) || !ext2_orphan_drill(true, &two_runs))
+        return false;
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; victim in %u group run(s), then across %u; storage returned exactly both times)\n",
+           one_runs, two_runs);
+    return true;
+}
 
 // A runtime demotion must be stronger than clearing the obvious operation
 // slots: ext2_open_rw remains installed so reads can still be opened, and a

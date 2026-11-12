@@ -966,20 +966,59 @@ static int ext2_mounted(vfs_filesystem_t *fs)
 // fs_specific means something different to every driver, so "is this one
 // ours?" has to be answered before it is dereferenced — and the honest
 // answer for someone else's mount is zero, not a fault.
+static bool ext2_mount_is_ours(vfs_filesystem_t *fs)
+{
+	return fs != NULL && fs->fs_specific != NULL && fs->fops != NULL &&
+	       (fs->fops->open == ext2_fops.open || fs->fops->open == ext2_rw_fops.open);
+}
+
 uint32_t ext2_free_inodes(vfs_filesystem_t *fs)
 {
-	if (fs == NULL || fs->fs_specific == NULL || fs->fops == NULL ||
-	    (fs->fops->open != ext2_fops.open && fs->fops->open != ext2_rw_fops.open))
+	if (!ext2_mount_is_ours(fs))
 		return 0;
 	return ((ext2_fs_t *)fs->fs_specific)->sb.s_free_inodes_count;
 }
 
 uint32_t ext2_free_blocks(vfs_filesystem_t *fs)
 {
-	if (fs == NULL || fs->fs_specific == NULL || fs->fops == NULL ||
-	    (fs->fops->open != ext2_fops.open && fs->fops->open != ext2_rw_fops.open))
+	if (!ext2_mount_is_ours(fs))
 		return 0;
 	return ((ext2_fs_t *)fs->fs_specific)->sb.s_free_blocks_count;
+}
+
+uint32_t ext2_group_free_blocks(vfs_filesystem_t *fs, uint32_t group)
+{
+	if (!ext2_mount_is_ours(fs))
+		return 0;
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	if (group >= e->groups_count)
+		return 0;
+	return e->groups[group].bg_free_blocks_count;
+}
+
+// Read without write_lock, like the counters above: the caller asks about a
+// file nobody else is writing, and a racing writer would only make the answer
+// describe a moment ago.
+int ext2_file_block_groups(vfs_filesystem_t *fs, const char *path,
+                           uint32_t *groups, uint32_t count)
+{
+	if (!ext2_mount_is_ours(fs) || path == NULL || groups == NULL)
+		return -1;
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	ext2_inode_t node;
+	if (ext2_resolve_path(fs, e, path, &node) == 0)
+		return -1;
+	for (uint32_t i = 0; i < count; i++)
+	{
+		uint32_t block = ext2_bmap(fs, e, &node, i);
+		// Block 0 is a hole whatever s_first_data_block says: on a 4 KiB
+		// filesystem it would otherwise read as group 0.
+		groups[i] = (block == 0 || block < e->sb.s_first_data_block ||
+		             block >= e->sb.s_blocks_count)
+		                ? UINT32_MAX
+		                : (block - e->sb.s_first_data_block) / e->sb.s_blocks_per_group;
+	}
+	return 0;
 }
 
 // ── The op tables (the READ-ONLY pair) ──────────────────────────────────────
