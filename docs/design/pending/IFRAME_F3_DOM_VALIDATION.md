@@ -4,7 +4,8 @@
 [reviewed retirement brief](IFRAME_F3_RETIREMENT.md). This branch starts from
 `e696277f`, the merge of F.3a PR #552 into design PR #546. The F.3a review
 was clean; the six design findings on #546 have evidence replies and are
-resolved. F.3 remains `code`, not complete.
+resolved. Draft PR #553 carries the first DOM checkpoint at `0f9055d3`.
+F.3 remains `code`, not complete.
 
 ## Implemented boundary
 
