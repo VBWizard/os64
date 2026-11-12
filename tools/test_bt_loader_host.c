@@ -16,6 +16,7 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
+#include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -47,6 +48,13 @@ bool bt_bond_save_slot(unsigned slot,const bt_le_bond_t *bond,bool automatic)
 }
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
+// What the driver asks of kusb's side of the kernel: a bell nobody is
+// parked on, a clock that only has to move, and a sleep this harness never
+// reaches (it is kworker's wait for the serializing flag, which is free).
+doorbell_t kUsbDoorbell;
+void doorbell_ring(doorbell_t *db) { db->rings++; }
+uint64_t rdtsc(void) { static uint64_t cycles; return cycles += 1000; }
+void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 volatile uint64_t kSystemCurrentTime;
 // Fixed calendar fixture: exercise captured timestamps and formatting without
 // importing the kernel's scheduler-dependent time module into the transport test.
@@ -125,7 +133,7 @@ static unsigned auth_region;
 
 static void emit(uint64_t pointer, uint32_t status, uint32_t control)
 {
-    xhci_trb_t *event=&s_hc->evt[event_write];
+    xhci_trb_t *event=&s_hc->evt.trb[event_write];
     event->param=pointer; event->status=status;
     event->control=control | (event_cycle ? TRB_CYCLE : 0);
     if (++event_write==RING_TRBS) { event_write=0; event_cycle^=1; }
@@ -377,7 +385,13 @@ static void bond_maintenance(void)
     CHECK(xhci_bluetooth_connection("save",4)); store_fail=false;
     xhci_bluetooth_maintain(); CHECK(!p->host.peers[0].manager.dirty && store_exists && bond_saves==2);
     p->host.peers[0].manager=(bt_manager_t){0}; p->host.peers[0].le=(bt_le_t){.shared_controller=true};
+    uint64_t rings=kUsbDoorbell.rings;
     xhci_bluetooth_maintain(); CHECK(p->host.peers[0].manager.loaded && p->host.peers[0].manager.automatic && p->host.peers[0].le.bond.valid);
+    // The worker publishes the restored bond and rings kusb; the connection
+    // policy is timing, and runs in kusb's pass, not here.
+    CHECK(kUsbDoorbell.rings==rings+1 && !p->host.peers[0].manager.scan_owned);
+    s_hc->control_slot=0; p->tx_done=true;
+    xhci_bt_runtime_poll();
     CHECK(p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     // A completed scan hands off to connection in USB polling, without a worker visit.
     p->host.scan.phase=BT_SCAN_DONE; p->host.scan.count=1;
@@ -473,8 +487,8 @@ int main(void)
         xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
-        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=events;
-        hc.ctx_size=32; hc.evt_cycle=1;
+        hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
+        hc.ctx_size=32;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
         failure_log[0]=0; deferred=false;
         endpoint_resets=halted_enqueue=0;
