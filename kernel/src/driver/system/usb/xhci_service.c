@@ -52,9 +52,12 @@ xhci_erdp_t xhci_evt_erdp(const xhci_evt_ring_t *r, xhci_evt_drain_t drain,
 		// has just wrapped).
 		if (drain.work_left)
 			slot = (slot == 0 ? r->size : slot) - 1;
-		// The one stop with nothing new to publish (xhci_service.h): the
-		// last event handled is the slot the register already names.
-		erdp.write = !(drain.work_left && slot == r->published);
+		// Progress is published when it moves the pointer. It fails to in
+		// one case (xhci_service.h): a deadline stop whose last event
+		// handled is the slot the register already names. An empty stop
+		// always moves it: the controller will not post a full lap past
+		// the pointer it was last given.
+		erdp.write = slot != r->published;
 	} else if (ehb_owed && ehb_reads_set) {
 		erdp.write = true;
 	}
