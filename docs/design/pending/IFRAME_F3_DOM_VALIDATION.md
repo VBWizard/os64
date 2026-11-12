@@ -92,6 +92,21 @@ and conversion iterators remain ordinary execution. This follows Web IDL's
 distinction between [indexed and pair iteration](https://webidl.spec.whatwg.org/#es-iterable);
 the inactive-callback refusal is this foundation's retirement contract.
 
+Streams separate author callbacks from internal continuations. The private
+factory checks the actual function realm for start/size and promise-returning
+pull/cancel/write/close/abort/transform/flush callbacks; an unavailable callback
+throws or rejects with InvalidStateError as its operation requires. Bound and
+proxy callbacks retain that rule, and revoked proxies retain TypeError.
+Retained stream records can invoke live callbacks from another realm.
+
+Internal promise reactions use native neutral wrappers (engine patch 0021),
+and internal microtasks carry explicit neutral ownership. These helpers are
+private to the factory. They preserve budget charging and installation tags,
+while leaving ordinary function-realm identity intact. This repairs a concrete
+failure: a closed Response body could be read after its creator retired, but
+cloning it stranded tee continuations. Default and byte-stream clones now
+finish both branches. Internal neutrality does not bypass the author checks.
+
 ## Evidence
 
 `tools/test_dom_host.sh --realm-retirement` runs a three-binding fixture under
@@ -108,7 +123,7 @@ object access and balanced native teardown.
 
 | Final focused suite | Shipping engine | Instrumented engine |
 |---|---:|---:|
-| Retirement delivery, messages, observers, traversal and retained data | 404 checks | 404 checks |
+| Retirement delivery, messages, observers, traversal, Streams and retained data | 418 checks | 418 checks |
 | Cross-realm binding routing | 678 checks | 678 checks |
 | Events | 1,020 checks | 1,020 checks |
 | Mutation observers | 32 checks | 32 checks |
@@ -118,7 +133,7 @@ object access and balanced native teardown.
 | Intersection observers | 409 checks | 409 checks |
 | Resize observers | 239 checks | 1,309 checks |
 | Traversal | 11 checks | 11 checks |
-| Fetch, Headers, Blob and FormData | 1,591 checks | 10,238 checks |
+| Fetch, Headers, Blob, FormData and Streams | 1,554 checks | 10,526 checks |
 | Modern DOM, including URL and data-iteration coverage | 5,550 checks | 19,948 checks |
 | P2b idle/message/clone and allocation sweeps | 1,174 checks | 13,324 checks |
 | Core DOM, including retained selection | 332 checks | 332 checks |
@@ -137,9 +152,32 @@ message/provider extension rebuilds every DOM host object for its changed
 binding layout, then reruns retirement, cross-realm, P2b and performance suites.
 The observer/traversal/iteration extension reruns the affected suites above
 after rebuilding their changed units and the shared eligibility helper.
-The native `dom-library` target also
-builds successfully from this worktree. No full-suite, WPT, QEMU or P5
-acceptance is claimed for this intermediate checkpoint.
+The Streams extension rebuilds the complete DOM host cohort and both engine
+profiles for patch 0021, then reruns retirement and fetch/Streams coverage.
+Focused engine realm tests pass 3,137 shipping and 32,820 instrumented checks,
+including native continuation identity, bound/proxy ownership, executed-job
+limits and candidate abort. The native `dom-library` target also builds
+successfully. No final full-suite, QEMU or P5 acceptance is claimed for this
+intermediate checkpoint.
+
+The integrated Yonder runner matches the recorded Streams WPT expectations at
+pin `a699fb16767be39ba3e61a8e8b6bef60383f08ee`, with leak checks enabled:
+
+| WPT group | Pass | Existing fail | Not run |
+|---|---:|---:|---:|
+| readable-streams | 349 | 13 | 0 |
+| readable-byte-streams | 245 | 4 | 0 |
+| writable-streams | 197 | 0 | 0 |
+| transform-streams | 133 | 1 | 0 |
+| piping | 230 | 0 | 0 |
+| transferable | 10 | 71 | 1 |
+
+There are no timeout or harness errors. Worker/shadow-realm variants remain
+excluded by the host runner. Existing failures are not claimed as passes.
+Nine Streams mutants are caught: each of the four start paths, size callbacks,
+promise callbacks, reaction ownership, microtask ownership and incorrectly
+using the stream's creation document as callback activity. Together with the
+prior campaigns below, 62 isolated source mutants are caught.
 
 Nine isolated source mutants were compiled and rejected by named assertions:
 restoring first-enqueuer ownership for either shared queue; ignoring callback

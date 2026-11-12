@@ -41,13 +41,13 @@
 'use strict';
 
 // ── The captures ────────────────────────────────────────────────────────
-// The C list (streams.c) and this one must agree: a missing name fails the
+// The C captures/private helpers (streams.c) and this list must agree: a missing name fails the
 // load, which fails the realm's creation, so the DOM host suite fails at its
 // first window.
-const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply',
+const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply', 'RequireCallback',
     'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
     'Object_getOwnPropertyDescriptor', 'Object_create',
-    'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'queueMicrotask',
+    'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'InternalMicrotask', 'InternalReaction',
     'ArrayBuffer', 'DataView', 'Int8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array',
     'Uint32Array', 'Float16Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
     'structuredClone',
@@ -62,6 +62,7 @@ for (let i = 0; i < NEEDED.length; i++)
 
 const Promise_ = I.Promise;
 const then_ = I.Promise_then;
+const requireCallback = I.RequireCallback;
 const reject_ = I.Promise_reject;
 const apply = I.Reflect_apply;
 const defineProperty = I.Object_defineProperty;
@@ -116,7 +117,8 @@ typedArrayKind('Float32Array', I.Float32Array, 4);
 typedArrayKind('Float64Array', I.Float64Array, 8);
 typedArrayKind('BigInt64Array', I.BigInt64Array, 8);
 typedArrayKind('BigUint64Array', I.BigUint64Array, 8);
-const queueMicrotask_ = I.queueMicrotask;
+const queueMicrotask_ = I.InternalMicrotask;
+const internalReaction = I.InternalReaction;
 const structuredClone_ = I.structuredClone;
 const asyncIteratorSymbol = I.Symbol_asyncIterator;
 const iteratorSymbol = I.Symbol_iterator;
@@ -184,19 +186,21 @@ function rejectedWith(reason) { return apply(reject_, Promise_, [reason]); }
 
 function noop() {}
 
-function setHandled(promise) { apply(then_, promise, [undefined, noop]); }
+// Internal reactions operate on retained stream records. Their native wrappers
+// carry neutral job ownership; author calls inside them still use callbackCall.
+function setHandled(promise) { apply(then_, promise, [undefined, internalReaction(noop)]); }
 
 // "Upon fulfillment / rejection": the derived promise is marked handled,
 // so a step that throws is never reported as the page's rejection.
 function uponPromise(promise, onFulfilled, onRejected) {
-    setHandled(apply(then_, promise, [onFulfilled, onRejected]));
+    setHandled(apply(then_, promise, [internalReaction(onFulfilled), internalReaction(onRejected)]));
 }
 function uponFulfillment(promise, onFulfilled) { uponPromise(promise, onFulfilled, undefined); }
 function uponRejection(promise, onRejected) { uponPromise(promise, undefined, onRejected); }
 
 // "The result of reacting to": a new promise the caller hands on.
 function transformPromise(promise, onFulfilled, onRejected) {
-    return apply(then_, promise, [onFulfilled, onRejected]);
+    return apply(then_, promise, [internalReaction(onFulfilled), internalReaction(onRejected)]);
 }
 
 function rejectedDeferred(reason) {
@@ -256,16 +260,23 @@ function extractHighWaterMark(strategy, defaultHWM) {
 function extractSizeAlgorithm(strategy) {
     const size = strategy.size;
     if (size === undefined) return sizeOne;
-    return function (chunk) { return toNumber(apply(size, undefined, [chunk])); };
+    return function (chunk) { return toNumber(callbackCall(size, undefined, [chunk])); };
 }
 
 function sizeOne() { return 1; }
+
+// Author callbacks have separate eligibility from the pure stream algorithms.
+// Keep intrinsic calls and internal body-conversion functions on `apply`.
+function callbackCall(fn, thisArg, args) {
+    requireCallback(fn);
+    return apply(fn, thisArg, args);
+}
 
 // Invoking a callback whose IDL return is a promise: a throw is a rejected
 // promise, and what it returns is resolved into one.
 function promiseCall(fn, thisArg, args) {
     try {
-        return resolvedWith(apply(fn, thisArg, args));
+        return resolvedWith(callbackCall(fn, thisArg, args));
     } catch (e) {
         return rejectedWith(e);
     }
@@ -1205,7 +1216,7 @@ function setUpRSDefaultController(stream, c, startAlgorithm, pullAlgorithm, canc
 function setUpRSDefaultControllerFromSource(stream, source, start, pull, cancel, hwm, sizeAlgorithm) {
     const c = new RSControllerRecord();
     new ReadableStreamDefaultController(INTERNAL, c);
-    const startAlgorithm = start === undefined ? noop : function () { return apply(start, source, [c.pub]); };
+    const startAlgorithm = start === undefined ? noop : function () { return callbackCall(start, source, [c.pub]); };
     const pullAlgorithm = pull === undefined ? resolvedUndefined
         : function () { return promiseCall(pull, source, [c.pub]); };
     const cancelAlgorithm = cancel === undefined ? resolvedUndefined
@@ -2019,7 +2030,7 @@ function setUpRBSController(stream, c, startAlgorithm, pullAlgorithm, cancelAlgo
 function setUpRBSControllerFromSource(stream, source, start, pull, cancel, autoAllocateChunkSize, hwm) {
     const c = new RBSControllerRecord();
     new ReadableByteStreamController(INTERNAL, c);
-    const startAlgorithm = start === undefined ? noop : function () { return apply(start, source, [c.pub]); };
+    const startAlgorithm = start === undefined ? noop : function () { return callbackCall(start, source, [c.pub]); };
     const pullAlgorithm = pull === undefined ? resolvedUndefined
         : function () { return promiseCall(pull, source, [c.pub]); };
     const cancelAlgorithm = cancel === undefined ? resolvedUndefined
@@ -3034,7 +3045,7 @@ function setUpWSDefaultController(stream, c, startAlgorithm, writeAlgorithm, clo
 function setUpWSDefaultControllerFromSink(stream, sink, start, write, close, abort, hwm, sizeAlgorithm) {
     const c = new WSControllerRecord();
     new WritableStreamDefaultController(INTERNAL, c);
-    const startAlgorithm = start === undefined ? noop : function () { return apply(start, sink, [c.pub]); };
+    const startAlgorithm = start === undefined ? noop : function () { return callbackCall(start, sink, [c.pub]); };
     const writeAlgorithm = write === undefined ? resolvedUndefined
         : function (chunk) { return promiseCall(write, sink, [chunk, c.pub]); };
     const closeAlgorithm = close === undefined ? resolvedUndefined
@@ -3176,7 +3187,7 @@ class TransformStream {
         const startDeferred = newDeferred();
         initializeTransformStream(t, startDeferred.promise, writableHWM, writableSize, readableHWM, readableSize);
         setUpTSDefaultControllerFromTransformer(t, transformer, transform, flush, cancel);
-        if (start !== undefined) resolveDeferred(startDeferred, apply(start, transformer, [t.controller.pub]));
+        if (start !== undefined) resolveDeferred(startDeferred, callbackCall(start, transformer, [t.controller.pub]));
         else resolveDeferred(startDeferred, undefined);
     }
 

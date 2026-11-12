@@ -206,6 +206,7 @@ static void dom_retirement_cases(void)
                 "globalThis.resizeLive=()=>A.renderLog.push('resize');"
                 "globalThis.intersectionLive=()=>A.renderLog.push('intersection');"
                 "globalThis.filterLive=()=>{A.walkLog.push('C');return 1};"
+                "globalThis.streamLive=c=>{c.enqueue('live');c.close()};"
                 "globalThis.idleLive=d=>A.taskLog.push(d.didTimeout?'timeout-idle':'idle');",
                 "retirement events: live callback on adopted target");
             realm_script(retirement_realms[0],
@@ -226,6 +227,11 @@ static void dom_retirement_cases(void)
                 "requestAnimationFrame(C.rafLive);requestIdleCallback(C.idleLive);"
                 "globalThis.channel=new MessageChannel();channel.port1.postMessage({kept:'pending'});"
                 "globalThis.retainedResponse=new Response('settled');globalThis.retainedBlob=new Blob(['bytes']);"
+                "globalThis.retainedPull=new ReadableStream({pull:deadTask},{highWaterMark:0});"
+                "globalThis.retainedBytePull=new ReadableStream({type:'bytes',pull:deadTask},{highWaterMark:0});"
+                "globalThis.retainedLivePull=new ReadableStream({pull:C.streamLive},{highWaterMark:0});"
+                "globalThis.retainedByteResponse=new Response(new ReadableStream({type:'bytes',start(c){"
+                "c.enqueue(new TextEncoder().encode('byte-streamed'));c.close()}}));"
                 "globalThis.retainedStreamResponse=new Response(new ReadableStream({start(c){"
                 "c.enqueue(new TextEncoder().encode('streamed'));c.close()}}));"
                 "globalThis.ro=new ResizeObserver(C.resizeLive);ro.observe(C.observed);"
@@ -470,15 +476,70 @@ static void dom_retirement_cases(void)
                 "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle');",
                 "retirement iteration: retained data admits live callbacks without reviving dead callbacks");
             realm_script(retirement_realms[0],
+                "globalThis.streamResults=[];globalThis.streamBad=(name,p)=>p.then("
+                "()=>streamResults.push(name+':unexpected'),e=>streamResults.push(name+':'+e.name));"
+                "assert(refused(()=>new ReadableStream({start:B.deadTask})));"
+                "assert(refused(()=>new ReadableStream({type:'bytes',start:B.deadTask})));"
+                "assert(refused(()=>new WritableStream({start:B.deadTask})));"
+                "assert(refused(()=>new TransformStream({start:B.deadTask})));"
+                "assert(refused(()=>new ReadableStream({start:B.deadTask.bind(null)})));"
+                "assert(refused(()=>new ReadableStream({start:new Proxy(B.deadTask,{})})));"
+                "let revokedStart=false;try{new ReadableStream({start:rev.proxy})}catch(e){revokedStart=e instanceof TypeError}"
+                "assert(revokedStart);"
+                "assert(refused(()=>new ReadableStream({start(c){c.enqueue('x')}},{size:B.deadTask})));"
+                "for(let type of [undefined,'bytes']){let reader=new ReadableStream({type,pull:B.deadTask},{highWaterMark:0}).getReader();"
+                "reader.closed.catch(()=>{});streamBad(type?'byte-pull':'pull',reader.read())}"
+                "streamBad('cancel',new ReadableStream({cancel:B.deadTask}).cancel());",
+                "retirement streams: readable callback refusal");
+            realm_script(retirement_realms[0],
+                "for(let method of ['write','close','abort']){"
+                "let writer=new WritableStream({[method]:B.deadTask}).getWriter();writer.closed.catch(()=>{});"
+                "streamBad(method,writer[method]('x'))}"
+                "for(let method of ['transform','flush']){let ts=new TransformStream({[method]:B.deadTask});"
+                "let reader=ts.readable.getReader(),writer=ts.writable.getWriter();reader.closed.catch(()=>{});"
+                "reader.read().catch(()=>{});writer.closed.catch(()=>{});"
+                "streamBad(method,method==='transform'?writer.write('x'):writer.close())}",
+                "retirement streams: writable and transform callback refusal");
+            realm_script(retirement_realms[0],
+                "streamBad('transform-cancel',new TransformStream({cancel:B.deadTask}).readable.cancel());"
+                "let sizedWriter=new WritableStream({},{size:B.deadTask}).getWriter();sizedWriter.closed.catch(()=>{});"
+                "streamBad('write-size',sizedWriter.write('x'));"
+                "let revokedReader=new ReadableStream({pull:rev.proxy},{highWaterMark:0}).getReader();"
+                "revokedReader.closed.catch(()=>{});streamBad('revoked-pull',revokedReader.read());",
+                "retirement streams: author callbacks refuse retired realms in synchronous and promise paths");
+            realm_script(retirement_realms[0],
+                "for(let [name,stream] of [['retained-pull',B.retainedPull],['retained-byte-pull',B.retainedBytePull]]){"
+                "let reader=stream.getReader();reader.closed.catch(()=>{});streamBad(name,reader.read())}"
+                "B.retainedLivePull.getReader().read().then(v=>globalThis.retainedLiveValue=v.value);",
+                "retirement streams: retained algorithms gate author callbacks and admit live foreign callbacks");
+            realm_script(retirement_realms[0],
+                "assert(retainedLiveValue==='live');"
+                "assert(streamResults.length===13,streamResults.join());"
+                "assert(streamResults.includes('revoked-pull:TypeError'));"
+                "assert(streamResults.filter(v=>v.endsWith(':InvalidStateError')).length===12,streamResults.join());"
+                "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle');"
+                "new B.ReadableStream({start:C.filterLive});assert(walkLog.join()==='C,C,C,C');",
+                "retirement streams: callback refusal settles promises and live callback remains callable");
+            realm_script(retirement_realms[0],
                 "globalThis.retainedReads=[];B.retainedBlob.text().then(v=>retainedReads.push(v));"
                 "B.retainedResponse.text().then(v=>retainedReads.push(v));",
                 "retirement bodies: read settled data retained from B");
             realm_script(retirement_realms[0], "assert(retainedReads.includes('bytes')&&retainedReads.includes('settled'));",
                 "retirement bodies: settled Blob and Response remain readable");
-            realm_script(retirement_realms[0], "B.retainedStreamResponse.text().then(v=>retainedReads.push(v));",
+            realm_script(retirement_realms[0],
+                "globalThis.retainedClone=B.retainedStreamResponse.clone();"
+                "retainedClone.text().then(v=>retainedReads.push('clone:'+v));"
+                "B.retainedStreamResponse.text().then(v=>retainedReads.push(v));",
                 "retirement bodies: read retained closed stream response");
-            realm_script(retirement_realms[0], "assert(retainedReads.includes('streamed'));",
+            realm_script(retirement_realms[0], "assert(retainedReads.includes('streamed')&&retainedReads.includes('clone:streamed'));",
                 "retirement bodies: closed stream response algorithms survive creator retirement");
+            realm_script(retirement_realms[0],
+                "let cloned=B.retainedByteResponse.clone();cloned.text().then(v=>retainedReads.push('clone:'+v));"
+                "B.retainedByteResponse.text().then(v=>retainedReads.push(v));",
+                "retirement bodies: clone retained closed byte stream response");
+            realm_script(retirement_realms[0],
+                "assert(retainedReads.includes('byte-streamed')&&retainedReads.includes('clone:byte-streamed'));",
+                "retirement bodies: byte stream tee algorithms survive creator retirement");
             realm_script(retirement_realms[0],
                 "assert(B.plain()===42,'ordinary retained function remains callable');"
                 "assert(B.adopted.ownerDocument===C.document&&B.adopted instanceof B.HTMLElement);"

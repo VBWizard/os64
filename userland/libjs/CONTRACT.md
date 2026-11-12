@@ -186,6 +186,16 @@ ownership. Binding jobs default to the enqueuing context; native hosts can use
 `JS_EnqueueJobOwned` for explicit or neutral ownership and must gate records
 inside a neutral shared delivery queue themselves.
 
+Patch 0021 adds `JS_NewCFunctionDataNeutral` for trusted native continuations
+used by self-hosted bindings. It retains the ordinary function realm and data
+holds, including `JS_GetFunctionRealm` results, but promise-job discovery treats
+it as neutral through direct, bound and proxy references. It does not exempt a
+job from execution budgets or installation transaction tagging. The binding
+must check author callback eligibility inside the continuation. Libdom uses
+this constructor only behind its private Streams factory; page JavaScript has
+no API for assigning neutral ownership. The generated engine identity changes
+with the patch; the wrapper's public configuration and value layouts do not.
+
 Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
 running a job or settling its promises, preserving surviving FIFO order.
 Foreign contexts are invariant failures, not neutral work. Discarded entries

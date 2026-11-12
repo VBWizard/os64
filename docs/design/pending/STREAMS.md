@@ -43,11 +43,17 @@ yonder would carry `streams.js`:
   (libjs already reads and writes bytecode: `runtime.c`, patch 0015), so a
   page pays a read, not a compile;
 - the INTRINSICS it needs (`Promise`, its `then`, `resolve`, `reject`,
-  `Reflect.apply`, typed-array constructors, `queueMicrotask`) captured
+  `Reflect.apply`, typed-array constructors) captured
   before any page script runs and called only through those captures, so a
   page that patches `Promise.prototype.then` or `Array.prototype.push`
   cannot reach inside a stream (WPT's `patched-global` tests check exactly
   this);
+- private native reaction and microtask helpers keep internal algorithms
+  eligible after the creation realm retires. They retain ordinary function
+  identity, execution budgets and installation transaction tags. Author
+  start/size/pull/cancel/write/close/abort/transform/flush callbacks pass a
+  separate function-realm eligibility check; settled stream data can still
+  be read or teed by a live caller.
 - a small C door for libdom: an internal object the JS hands back at realm
   start, through which `fetch.c` makes a body's stream, enqueues bytes,
   closes it and errors it.

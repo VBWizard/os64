@@ -5,9 +5,9 @@
  * (the .incbin below) and run in each realm by the Modern Web's streams
  * row. This file does three things:
  *
- *   - it captures the INTRINSICS streams.js runs on, from the realm as it
- *     stands at its start, before any page script ran, and hands them over
- *     as one null-prototype object; streams.js refuses to load without any
+ *   - it captures the INTRINSICS streams.js runs on, before page script,
+ *     and supplies private callback and continuation helpers in the same
+ *     null-prototype object; streams.js refuses to load without any
  *     one of them, so this list and its own cannot drift apart unseen;
  *   - it defines the interfaces streams.js returns on the global, as
  *     WebIDL defines an interface object (writable, configurable, not
@@ -147,7 +147,6 @@ static const struct {
     {"Float64Array", "Float64Array", VALUE},
     {"BigInt64Array", "BigInt64Array", VALUE},
     {"BigUint64Array", "BigUint64Array", VALUE},
-    {"queueMicrotask", "queueMicrotask", VALUE},
     {"structuredClone", "structuredClone", VALUE},
     {"Symbol_asyncIterator", "Symbol.asyncIterator", VALUE},
     {"Symbol_iterator", "Symbol.iterator", VALUE},
@@ -233,9 +232,54 @@ static JSValue async_iterator_prototype(JSContext *ctx)
     return iterator_prototype;
 }
 
-/* The intrinsics object, or JS_EXCEPTION. A capture that is missing is
+/* The self-hosted algorithms invoke author callbacks through this private
+ * guard. Pure stream records are not document activity; the actual callback
+ * realm controls invocation, including through a retained constructor. */
+static JSValue require_callback(JSContext *ctx, JSValueConst self, int argc,
+                                 JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected a stream callback");
+    return d_require_callback(dom, ctx, argv[0]) ? JS_UNDEFINED : JS_EXCEPTION;
+}
+
+/* Only the private factory can supply these functions. Their algorithms keep
+ * settled data usable after creator departure; author invocation goes through
+ * RequireCallback inside streams.js, rather than inheriting neutrality. */
+static JSValue internal_reaction_call(JSContext *ctx, JSValueConst self, int argc,
+                                     JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    return JS_Call(ctx, data[0], JS_UNDEFINED, argc, argv);
+}
+
+static JSValue internal_reaction(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (!argc || JS_IsUndefined(argv[0])) return JS_UNDEFINED;
+    if (!JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected an internal stream reaction");
+    return JS_NewCFunctionDataNeutral(ctx, internal_reaction_call, 1, 0, 1, argv);
+}
+
+static JSValue internal_microtask_run(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    (void)argc;
+    return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+}
+
+static JSValue internal_microtask(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (!argc || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected an internal stream microtask");
+    if (JS_EnqueueJobOwned(ctx, NULL, NULL, internal_microtask_run, 1, argv) < 0) return JS_EXCEPTION;
+    return JS_UNDEFINED;
+}
+
+/* The intrinsics object and private callback guard, or JS_EXCEPTION. A capture that is missing is
  * left out, and streams.js names it when it refuses to load. */
-static JSValue intrinsics(JSContext *ctx, JSValueConst global)
+static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue object = JS_NewObjectProto(ctx, JS_NULL);
     if (JS_IsException(object)) return object;
@@ -248,6 +292,13 @@ static JSValue intrinsics(JSContext *ctx, JSValueConst global)
     JSValue prototype = async_iterator_prototype(ctx);
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
+    if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
+    JSValue reaction = JS_NewCFunction(ctx, internal_reaction, "InternalReaction", 1);
+    if (JS_IsException(reaction)) goto fail;
+    if (JS_DefinePropertyValueStr(ctx, object, "InternalReaction", reaction, JS_PROP_C_W_E) < 0) goto fail;
+    JSValue microtask = JS_NewCFunction(ctx, internal_microtask, "InternalMicrotask", 1);
+    if (JS_IsException(microtask)) goto fail;
+    if (JS_DefinePropertyValueStr(ctx, object, "InternalMicrotask", microtask, JS_PROP_C_W_E) < 0) goto fail;
     return object;
 fail:
     JS_FreeValue(ctx, object);
@@ -269,7 +320,7 @@ int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue factory = streams_factory(ctx);
     if (JS_IsException(factory)) return -1;
-    JSValue captured = intrinsics(ctx, global);
+    JSValue captured = intrinsics(dom, ctx, global);
     if (JS_IsException(captured)) {
         JS_FreeValue(ctx, factory);
         return -1;

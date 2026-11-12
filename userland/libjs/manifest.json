@@ -184,6 +184,11 @@
       "path": "patches/0020-job-transactions.patch",
       "sha256": "dcd5874af45a2a960758eda4f7aaaa741ba1c8114a34eaf168e0168e54f7e523",
       "reason": "Keep installation job transactions independently linked so candidate-only execution and abort preserve sibling FIFO, including sibling finalization triggered during setup."
+    },
+    {
+      "path": "patches/0021-neutral-host-continuations.patch",
+      "sha256": "aaa1d6bd740a09dec1ecc3aaa2055b80db040d1f8f2a4438cf7be53d03462695",
+      "reason": "Separate trusted self-hosted Streams continuations from author callback ownership while retaining function realm, job budgets and installation transactions."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

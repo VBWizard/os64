@@ -286,9 +286,57 @@ static void retirement_running_job_budget(unsigned policy)
     os64_js_destroy(runtime);retirement_target=NULL;retirement_outer=NULL;
 }
 
+static unsigned retirement_native_hits;
+static JSValue retirement_native_step(JSContext *context, JSValueConst self,
+                                      int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)context; (void)self; (void)argc; (void)argv; (void)magic; (void)data;
+    retirement_native_hits++;
+    return JS_UNDEFINED;
+}
+
+static void retirement_native_cases(unsigned policy, bool capped)
+{
+    os64_js_realm_t *a, *b, *c;
+    os64_js_runtime_t *runtime = retirement_fixture(policy, capped ? 1 : 100, &a, &b, &c);
+    if (!runtime) return;
+    os64_js_outcome_t out;
+    JSContext *ac = os64_js_realm_context(a, OS64_JS_ABI_ID, &out);
+    JSContext *bc = os64_js_realm_context(b, OS64_JS_ABI_ID, &out);
+    check(os64_js_realm_task_begin(a, OS64_JS_ABI_ID, "native-continuations", &out) == OS64_JS_OK,
+          "native continuation fixture entry opens");
+    JSValue global = JS_GetGlobalObject(ac);
+    JSValue neutral = JS_NewCFunctionDataNeutral(bc, retirement_native_step, 1, 0, 0, NULL);
+    check(!JS_IsException(neutral) && JS_GetFunctionRealm(ac, neutral) == bc,
+          "neutral continuation retains ordinary function realm identity");
+    check(JS_SetPropertyStr(ac, global, "neutral", neutral) >= 0 &&
+          JS_SetPropertyStr(ac, global, "owned", JS_NewCFunctionData(bc, retirement_native_step, 1, 0, 0, NULL)) >= 0,
+          "neutral and realm-owned native functions installed");
+    JS_FreeValue(ac, global);
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+          "native continuation fixture entry closes");
+    check(os64_js_realm_retire(b, OS64_JS_ABI_ID, &out) == OS64_JS_OK, "native creator retired");
+    retirement_native_hits = 0;
+    os64_js_status_t status = realm_execute(a,
+        "Promise.resolve().then(owned);Promise.resolve().then(neutral);"
+        "Promise.resolve().then(neutral.bind(null));Promise.resolve().then(new Proxy(neutral,{}))", &out);
+    if (capped) {
+        check(status == OS64_JS_LIMIT && out.limit == OS64_JS_LIMIT_JOBS &&
+              retirement_native_hits == 1 && out.jobs_executed == 1 && out.jobs_discarded == 1,
+              "neutral continuations consume enclosing job budget after dead owner discard");
+    } else {
+        check(status == OS64_JS_OK && retirement_native_hits == 3 &&
+              out.jobs_executed == 3 && out.jobs_discarded == 1,
+              "neutral direct bound and proxy continuations survive without reviving ordinary native callbacks");
+    }
+    os64_js_destroy(runtime);
+}
+
 static void retirement_cases(void)
 {
     for(unsigned policy=0;policy<2;policy++) {
+        retirement_native_cases(policy, false);
+        retirement_native_cases(policy, true);
         retirement_queue_cases(policy);
         retirement_continuation_cases(policy);
         retirement_budget_cases(policy,false);
