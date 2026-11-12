@@ -1187,10 +1187,12 @@ struct flow_box {
     bool holds_outline;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
-    // block-level box in the flow below full opacity, a stacking context
+    // transformed one, block-level or an atom on a line, in a frame of its
+    // own; and so is one in the flow — block-level, or an atom — below full
+    // opacity, filtered, blended, masked or isolated, a stacking context
     // painted whole where CSS 2.1 Appendix E paints a positioned box of
-    // z-index 0 — and that one stays in its parent's overflow rect, clip
-    // and frame, since it has not left the flow.
+    // z-index 0, which stays in its parent's overflow rect, clip and frame,
+    // since it has not left the flow.
     bool stacked;
     // In a `position: fixed` box's subtree, the fixed box included: its
     // rects, clip and baseline are viewport coordinates (above).
@@ -1572,10 +1574,11 @@ int32_t flow_shadow_blur_reach(int32_t blur);
 // beyond what came before it, cast by its offsets — what the painter
 // spreads, its blurs held at FLOW_FILTER_BLUR_MAX, so a group's bounds and
 // the painter agree. All 0 for none, for a list holding a URL, which
-// draws unfiltered, and where a filter is not drawn (a plain inline).
+// draws unfiltered, and where a filter is not drawn (a plain inline's
+// pieces; an atom's is drawn, whatever its display says).
 // Mirrored (top for bottom, left for right) it is how far from outside a
 // rect what the filter draws in it can come from.
-void flow_filter_reach(const flow_style_t *s, int32_t out[4]);
+void flow_filter_reach(const flow_box_t *box, int32_t out[4]);
 // The same for any list, `n` functions of `list` — a `backdrop-filter`'s —
 // whatever box it is on: 0 for a list holding a URL.
 void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]);
@@ -1710,9 +1713,10 @@ bool flow_background_has_image(const flow_style_t *s);
 // § 7.1).
 int32_t flow_mask_layers(const flow_style_t *s);
 flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i);
-// Whether a mask is granted: a layer has a picture or a gradient, and the
-// box is no plain inline.
-bool flow_masked(const flow_style_t *s);
+// Whether a box's mask is granted: a layer has a picture or a gradient,
+// and the box is no plain inline's piece (an atom never is, a picture's
+// display `inline` though it is).
+bool flow_masked(const flow_box_t *box);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is — in
 // the coordinates it is painted in, out to its drawn-through box, whose own

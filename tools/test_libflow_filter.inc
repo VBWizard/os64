@@ -89,6 +89,18 @@ static void filter_group_cases(void)
                     400);
     expect("filter: an inline-block's filter is a group, its atom whole",
            g.opens == 1 && strcmp(g.log, "( t ) ") == 0, g.log);
+    // So is an inline picture's, though its display is `inline`: an atom is
+    // never a plain inline's piece (the cold read). And its blend and its
+    // mask each make one too.
+    g = filter_walk("<!doctype html><p>a<img src=x.png width=4 height=4"
+                    " style=\"filter:grayscale(1)\">b", 400);
+    expect("filter: an inline picture's filter is a group", g.opens == 1, g.log);
+    g = filter_walk("<!doctype html><p>a<img src=x.png width=4 height=4"
+                    " style=\"mix-blend-mode:multiply\">b", 400);
+    expect("filter: an inline picture's blend is a group", g.opens == 1, g.log);
+    g = filter_walk("<!doctype html><p>a<img src=x.png width=4 height=4"
+                    " style=\"mask-image:linear-gradient(#000,#0000)\">b", 400);
+    expect("filter: an inline picture's mask is a group", g.opens == 1, g.log);
 #undef FILTER_PAGE
 
     // Members a filter's blur reaches into the view from outside it are

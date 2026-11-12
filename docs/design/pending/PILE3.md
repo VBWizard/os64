@@ -291,7 +291,8 @@ list no longer holds it.
 not positioned, painted as one group after the paragraph written after
 it, its bounds, and hit over the flow it overlaps; a positioned group's
 bounds holding an absolute member 50 below it; nested groups; an
-inline-block left unstacked; `opacity: 0` opening nothing. One style dump
+inline-block stacked as its atom once, a group of its own (since the atom
+group, 2026-11-12), and hit where it is; `opacity: 0` opening nothing. One style dump
 changed by rule: a translucent background keeps its alpha in or out of
 the flow (`bg=#000000/128`). `tools/test_yonder_cases.inc`: translucent
 fill and text reach the verbs with their alpha; a group recorded open,

@@ -993,9 +993,10 @@ void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]
         out[k] = (int32_t)(reach[k] < INT32_MAX / 4 ? reach[k] : INT32_MAX / 4);
 }
 
-void flow_filter_reach(const flow_style_t *s, int32_t out[4])
+void flow_filter_reach(const flow_box_t *box, int32_t out[4])
 {
-    flow_filter_list_reach(s->filter, f_group_filter(s) ? s->nfilter : 0, out);
+    const flow_style_t *s = box->style;
+    flow_filter_list_reach(s->filter, f_group_filter(s, f_atom(box)) ? s->nfilter : 0, out);
 }
 
 os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r, flow_point_t scroll)
@@ -1010,7 +1011,7 @@ os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r,
         grew = false;
         for (int32_t i = 0; i < tree->nstacked; i++) {
             const flow_box_t *b = tree->stacked[i];
-            if (b->style->nbackdrop_filter <= 0 || !f_filtered(b->style) || b->unpainted)
+            if (b->style->nbackdrop_filter <= 0 || !f_filtered(b->style, f_atom(b)) || b->unpainted)
                 continue;
             int32_t d[4];
             flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
@@ -1604,9 +1605,9 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
     // so styled is (public_box) — the group its effect is drawn through
     // when it is one (flow_visit_groups).
     const flow_style_t *s = fr->style;
-    bool moved = fr->kind == FF_ATOMIC && f_transforms(s);
-    if (moved || (fr->kind == FF_ATOMIC && (f_opacity_context(s) || f_filtered(s) ||
-                                             f_blended(s) || f_masked(s) || f_isolated(s)))) {
+    bool atom = fr->kind == FF_ATOMIC, moved = atom && f_transforms(s);
+    if (moved || (atom && (f_opacity_context(s) || f_filtered(s, true) || f_blended(s, true) ||
+                           f_masked(s, true) || f_isolated(s, true)))) {
         b->stacked = true;
         if (!push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
             return;
@@ -1683,8 +1684,9 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     // box inside it, its element's again, never a second time: its parent
     // is the atom.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
-                 ((f_opacity_context(src->style) || f_filtered(src->style) ||
-                   f_blended(src->style) || f_masked(src->style) || f_isolated(src->style)) &&
+                 ((f_opacity_context(src->style) || f_filtered(src->style, false) ||
+                   f_blended(src->style, false) || f_masked(src->style, false) ||
+                   f_isolated(src->style, false)) &&
                   parent != NULL && parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
@@ -1848,8 +1850,9 @@ static bool makes_context(const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
-           s->position == FLOW_POSITION_STICKY || f_opacity_context(s) || f_filtered(s) ||
-           f_blended(s) || f_masked(s) || f_isolated(s) ||
+           s->position == FLOW_POSITION_STICKY || f_opacity_context(s) ||
+           f_filtered(s, f_atom(b)) || f_blended(s, f_atom(b)) || f_masked(s, f_atom(b)) ||
+           f_isolated(s, f_atom(b)) ||
            (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
@@ -1877,8 +1880,8 @@ static bool own_through(const flow_box_t *b)
 static bool is_group(const flow_box_t *b)
 {
     return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0 ||
-            f_group_filter(b->style) || f_masked(b->style) ||
-            (f_blended(b->style) && b->style->mix_blend != FLOW_BLEND_PLUS_DARKER && b->parent != NULL)) &&
+            f_group_filter(b->style, f_atom(b)) || f_masked(b->style, f_atom(b)) ||
+            (f_blended(b->style, f_atom(b)) && b->style->mix_blend != FLOW_BLEND_PLUS_DARKER && b->parent != NULL)) &&
            !b->unpainted;
 }
 
@@ -2280,7 +2283,7 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
     int64_t f[4] = {0, 0, 0, 0};
     for (const flow_box_t *a = b; a != NULL; a = a->parent) {
         int32_t one[4];
-        flow_filter_reach(a->style, one);
+        flow_filter_reach(a, one);
         for (int k = 0; k < 4; k++)
             f[k] = f[k] + one[k] < INT32_MAX / 4 ? f[k] + one[k] : INT32_MAX / 4;
     }
@@ -2999,9 +3002,9 @@ flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i)
                                m->mode[i % m->nmode]};
 }
 
-bool flow_masked(const flow_style_t *s)
+bool flow_masked(const flow_box_t *box)
 {
-    return f_masked(s);
+    return f_masked(box->style, f_atom(box));
 }
 
 bool flow_background_has_image(const flow_style_t *s)
@@ -3347,7 +3350,7 @@ static bool nested_reach(const flow_box_t *box, os64_gui_rect_t r, flow_point_t 
 static os64_gui_rect_t filter_grown(const flow_box_t *box, os64_gui_rect_t r)
 {
     int32_t d[4];
-    flow_filter_reach(box->style, d);
+    flow_filter_reach(box, d);
     if (r.w <= 0 || r.h <= 0 || (d[0] | d[1] | d[2] | d[3]) == 0)
         return r;
     return grown(r, d);
@@ -3363,7 +3366,7 @@ static os64_gui_rect_t filter_grown(const flow_box_t *box, os64_gui_rect_t r)
 // coverage, none outside, does.
 static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_point_t scroll)
 {
-    if (!f_masked(box->style) || f_group_filter(box->style))
+    if (!f_masked(box->style, f_atom(box)) || f_group_filter(box->style, f_atom(box)))
         return r;
     for (int32_t i = 0; i < flow_mask_layers(box->style); i++)
         if (flow_mask_layer(box->style, i).layer.clip == FLOW_EDGE_NO_CLIP)
@@ -3378,7 +3381,7 @@ static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_p
 static os64_gui_rect_t filter_sources(const flow_box_t *box, os64_gui_rect_t r)
 {
     int32_t d[4];
-    flow_filter_reach(box->style, d);
+    flow_filter_reach(box, d);
     const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
     if (r.w <= 0 || r.h <= 0 || (in[0] | in[1] | in[2] | in[3]) == 0)
         return r;
@@ -3526,7 +3529,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             double m[6];
             flow_point_t up;
             bool through = flow_box_through(b, scroll, m, NULL, &up);
-            if (through || f_group_filter(b->style)) {
+            if (through || f_group_filter(b->style, f_atom(b))) {
                 if (depth < F_VIEWS) {
                     os64_gui_rect_t in = view;
                     if (through) {
@@ -3550,7 +3553,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             continue;
         }
         if (tree->layers[i].part == PART_CLOSE) {
-            if ((own_through(b) || f_group_filter(b->style)) && depth > 0)
+            if ((own_through(b) || f_group_filter(b->style, f_atom(b))) && depth > 0)
                 depth--;
             if (visitor->close != NULL)
                 visitor->close(ctx, b);
@@ -4151,7 +4154,7 @@ static int32_t filtered_open(const flow_tree_t *t, const flow_box_t *b, FilterMe
 {
     const flow_box_t *g = NULL;
     for (const flow_box_t *a = b; a != NULL; a = a->parent)
-        if (f_group_filter(a->style) && !a->unpainted && (a->stacked || a->parent == NULL))
+        if (f_group_filter(a->style, f_atom(a)) && !a->unpainted && (a->stacked || a->parent == NULL))
             g = a;
     if (g == NULL)
         return -1;
