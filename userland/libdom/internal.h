@@ -1488,6 +1488,7 @@ void d_signal_remove_internal(JSContext *ctx, JSValueConst signal, JSValueConst 
 void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back);
 void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back);
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+void d_signal_remove_fetch_rt(JSRuntime *rt, JSValueConst signal, uint32_t token);
 /* How many dependents a signal's weak set links (the DOM host's bound). */
 size_t d_signal_dependents(JSValueConst signal);
 /* The steps a signal's links took (abort.c): each source followed, each
@@ -1580,6 +1581,8 @@ struct DRequest {
     uint64_t id;
     DAnswer answer;
     DPart part;
+    os64_dom_network_t network; /* original producer, valid until this request ends */
+    void (*depart)(os64_dom_t *, DRequest *); /* native bookkeeping, no author callbacks */
     bool headed;                /* its head came: the body is under way */
     bool asked;                 /* the host has been asked for more and has not answered */
     JSValue held[3];            /* C-held: the registry's fourth list, drain releases them */

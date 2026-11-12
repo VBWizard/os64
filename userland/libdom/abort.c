@@ -326,7 +326,17 @@ void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back)
 
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
 {
-    d_signal_fetch_answered(ctx, signal, token, NULL, NULL);
+    d_signal_remove_fetch_rt(JS_GetRuntime(ctx), signal, token);
+}
+
+void d_signal_remove_fetch_rt(JSRuntime *rt, JSValueConst signal, uint32_t token)
+{
+    DSignal *s = signal_state(signal);
+    for (size_t i = 0; s != NULL && i < s->count; i++)
+        if (s->algorithms[i].token == token) {
+            algorithm_drop(rt, s, i);
+            return;
+        }
 }
 
 /* ── Aborting (DOM § 3.2 "signal abort") ─────────────────────────────── */
@@ -338,7 +348,7 @@ static JSValue default_reason(os64_dom_t *dom, JSContext *ctx, const char *name,
 }
 
 /* Marks `signal` aborted with `reason` (taken); false when it already was. */
-static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue reason)
+static bool mark_aborted(JSContext *ctx, DSignal *s, JSValue reason)
 {
     if (s->aborted) {
         JS_FreeValue(ctx, reason);
@@ -348,7 +358,7 @@ static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue re
     JS_FreeValue(ctx, s->reason);
     s->reason = reason;
     if (s->timer != 0) {
-        d_timer_cancel(dom, s->timer);
+        d_timer_cancel(s->target.dom, s->timer);
         s->timer = 0;
     }
     return true;
@@ -366,6 +376,9 @@ static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 {
     DSignal *s = signal_state(signal);
     if (s == NULL) return 0;
+    /* A source and its dependents can belong to different documents. Tokens
+     * and event activity belong to this signal, not the initiating controller. */
+    dom = s->target.dom;
     JSValue reason = JS_DupValue(ctx, s->reason);
     while (s->count > 0) {
         DAlgorithm a = s->algorithms[0];
@@ -406,7 +419,7 @@ static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JS
     JSValue value = JS_IsUndefined(reason) ? default_reason(dom, ctx, "AbortError", "The operation was aborted.")
                                            : JS_DupValue(ctx, reason);
     if (JS_IsException(value)) return -1;
-    mark_aborted(dom, ctx, s, value);
+    mark_aborted(ctx, s, value);
     size_t count = 0;
     for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) count += !l->dependent->aborted;
     JSValue *gathered = count != 0 ? js_malloc(ctx, count * sizeof(*gathered)) : NULL;
@@ -414,7 +427,7 @@ static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JS
     size_t n = 0;
     for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) {
         DSignal *d = l->dependent;
-        if (n < count && mark_aborted(dom, ctx, d, JS_DupValue(ctx, s->reason)))
+        if (n < count && mark_aborted(ctx, d, JS_DupValue(ctx, s->reason)))
             gathered[n++] = JS_DupValue(ctx, d->target.value);
     }
     /* Release points one and three: each dependent is aborted, and the

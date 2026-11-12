@@ -719,7 +719,11 @@ static void provider_conversion_retirement_cases(void)
         {"store.key={toString(){retire();return 'late'}}", "InvalidStateError", false},
         {"Object.defineProperty(store,'key',{value:{toString(){retire();return 'late'}}})", "InvalidStateError", false},
         {"Object.setPrototypeOf(store,new Proxy({}, {has(){visibilityCalls++;retire();return false}}));Object.keys(store)",
-         "InvalidStateError", true}
+         "InvalidStateError", true},
+        {"x.open('POST',{toString(){retire();return '/late'}})", "InvalidStateError", false},
+        {"x.send({toString(){retire();return 'late'}})", "InvalidStateError", false},
+        {"x.onloadstart=retire;x.send('late')", "InvalidStateError", false},
+        {"x.upload.onloadstart=retire;x.send('late')", "InvalidStateError", false}
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (size_t i = 0; i < sizeof(operations) / sizeof(operations[0]); ++i) {
@@ -765,6 +769,7 @@ static void provider_conversion_retirement_cases(void)
                 "globalThis.link=document.createElement('a');link.href='/late';document.body.appendChild(link);"
                 "form.addEventListener('submit',retire);link.addEventListener('click',retire);"
                 "globalThis.store=localStorage;globalThis.visibilityCalls=0;%s"
+                "globalThis.x=new XMLHttpRequest();x.open('POST','/send');"
                 "let error='';try{%s}catch(e){error=e.name}assert(error==='%s');"
                 "assert(visibilityCalls<=1);",
                 operations[i].memory_storage ? "store.setItem('a','1');store.setItem('b','2');" : "",

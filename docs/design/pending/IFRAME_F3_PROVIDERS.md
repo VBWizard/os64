@@ -43,7 +43,7 @@ alone do not authorize freeing provider storage.
 | `classic.c`: user-agent text | Navigator's window | Provider call through string interpretation/copy. Inactive service refuses; constant Navigator members do not query the provider. |
 | `classic.c`: cookies | Document or Navigator window | Each get/set/enabled call. Setters check after conversion; reads recheck after a response, before retrying with a larger buffer. Inactive cookie service refuses. |
 | `classic.c`, `attr.c`: missing-global and broken-attribute diagnostics | Diagnostic binding | Native callback. Inactive diagnostics are omitted; retained functions and detached Attr records remain usable. |
-| `core.c`: shared millisecond/microsecond reads; callers in timers, idle, animation, events, messages, storage, XHR, intersection and Web Animations | Clock's document | Each host read; inactive reads use binding-owned saved samples. Timer/idle/frame creation and message posting recheck after clock callbacks before publishing work or detaching transfers. Storage settlement rechecks clocks; transport cleanup remains an obligation below. |
+| `core.c`: shared millisecond/microsecond reads; callers in timers, idle, animation, events, messages, storage, XHR, intersection and Web Animations | Clock's document | Each host read; inactive reads use binding-owned saved samples. Timer/idle/frame creation and message posting recheck after clock callbacks before publishing work or detaching transfers. Storage settlement and XHR send/timeout setup recheck clocks. |
 | `performance.c`: current time and navigation timing | Performance object's window | Native clock/timing call through snapshot copy. Live `now()` and implicit mark/measure timestamps refuse retirement; explicit timestamps and previously sampled navigation timing remain usable. |
 | `screen.c`, `view.c`: zoom and media-query sampling | Screen or media-query window | Each zoom call. A media environment uses one sample; post-call retirement refuses script query results and stops native media delivery. Stored screen metadata remains available. |
 | `window.c`: history length/update/fragment | History or Location service's document | Each native call; recheck after argument/state conversion and host completion. Inactive History operations use SecurityError, while exported state objects remain usable. Retirement prevents local completion and fragment fallback even when the host accepted an entry. Pending navigation holds are discarded when taken after retirement; late native moves and history events do no work. |
@@ -56,6 +56,23 @@ inside that callback's loan. The native storage cleanup entry refuses while
 provider borrowers remain; the public finish operation must also establish
 the engine/dispatch/reaction barriers before calling it.
 
+## Guarded transport providers
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `fetch.c`: request start/more/cancel | Request's document | Start and more require active service. An accepted id returned after retirement is cancelled through its original producer before the start loan ends. Each outstanding request retains the producer table; more/cancel cannot switch to a replacement provider. Cleanup unlinks the token and clears fetch signal/XHR timer bookkeeping before cancellation reentry, retaining a cleanup loan even when inactive. |
+| `xhr.c`: synchronous run/release | XHR receiver's document | Original provider loan spans run, response consumption and matching release even when the installed table is cleared. Stop polling observes retirement; retired completion does not deliver events. Borrowed XHR methods follow their receiver's binding. |
+| `fetch.c`: incoming whole/head/body/end | Original binding and token | Inactive, unknown-token and provider-reentrant delivery is discarded before engine entry. Incoming buffers stay caller-owned. A closed binding returns FAILED_RUNTIME. |
+| `abort.c`: dependent fetch algorithms and signal timers | Dependent signal's document | A cross-realm source abort routes each dependent to its own binding, where request tokens and timer ids are meaningful. It cannot cancel a sibling request with the same numeric token. |
+
+The native transport drain refuses outstanding provider loans. At a quiescent
+point it cancels this binding's requests, releases their held values and
+detaches its installed table. It does not signal author abort/error callbacks,
+reset retained XHR bytes, error exported streams, or close shared connections.
+An explicit abort after retirement also cannot settle still-pending transport
+work. Public safe-point finish and module-loading integration remain separate
+obligations; provider snapshots alone do not authorize freeing opaque storage.
+
 ## Entries still to integrate
 
 These are open implementation obligations. They must be handled before a
@@ -64,13 +81,12 @@ successful public finish can promise that opaque storage is no longer borrowed.
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
 | Failed diagnostics, script/module/report hosts and console | `report.c`, libjs host installation | Detach report/loader/output routes without deleting siblings' state. Missing-global and broken-attribute loans are covered above. |
-| Fetch/XHR transport | `fetch.c`, `xhr.c` | Guard start/more/run; keep synchronous response loans through release. Cancel by binding request token, unlink before cancellation reentry, and discard late answers without author abort events. Cleanup release/cancel must remain callable while departing. |
 | CSS animation hosts and effect borrowers | `webanimation.c` | Guard count/at/version/drive; stop timeline scheduling while retaining effect identity and tree generations until acknowledgements. Do not reuse destructive animation drain. |
 | Other synchronous native visitors | `importmap.c`, `pointer.c` | Count callback extent, stop later callbacks on departure, and retain records while a visitor is running. |
 
 Provider replacement contracts and departure cleanup must agree: clearing a
-provider cannot erase the release operation for an existing loan. Image loans
-capture the producer explicitly. The owner-thread finish barrier must protect
+provider cannot erase the release operation for an existing loan. Image and
+transport loans capture the producer explicitly. The owner-thread finish barrier must protect
 other borrowed output and the shared registry walks before clearing callbacks.
 
 Validation and remaining limits are recorded in

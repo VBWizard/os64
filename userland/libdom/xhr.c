@@ -162,6 +162,19 @@ static void terminate(os64_dom_t *dom, DXhr *x)
     }
 }
 
+/* Departure cancels native work without resetting retained response bytes or
+ * running author abort/error events. The request still holds the XHR here. */
+static void xhr_depart(os64_dom_t *dom, DRequest *request)
+{
+    DXhr *x = xhr_state(request->held[0]);
+    if (x == NULL || x->token != request->token) return;
+    x->token = 0;
+    if (x->timer != 0) d_timer_cancel(dom, x->timer);
+    x->timer = 0;
+    x->send_flag = false;
+    x->generation++;
+}
+
 static uint64_t now_ms(const os64_dom_t *dom)
 {
     return d_host_now_ms(dom);
@@ -608,7 +621,9 @@ static int timer_set(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
         x->timer = 0;
     }
     if (x->timeout == 0 || x->sync || !x->send_flag) return 0;
+    if (!d_require_active(dom, ctx)) return -1;
     uint64_t now = now_ms(dom), due = x->send_time + x->timeout;
+    if (!d_require_active(dom, ctx)) return -1;
     JSValue data[2] = {dom->anchor->value, (JSValue)self};
     JSValue fired = JS_NewCFunctionData(ctx, timeout_fired, 0, (int)x->generation, 2, data);
     if (JS_IsException(fired)) return -1;
@@ -671,6 +686,7 @@ static JSValue xhr_open(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
         return d_dom_exception(dom, ctx, "InvalidAccessError",
                                "A synchronous request cannot have a timeout or a response type");
     }
+    if (!d_require_active(dom, ctx)) { d_free(dom, parsed); return JS_EXCEPTION; }
     char *url = engine_copy(ctx, parsed, os64_strlen(parsed));
     d_free(dom, parsed);
     if (url == NULL) return JS_EXCEPTION;
@@ -823,7 +839,7 @@ static bool sync_stop(void *ctx)
 {
     os64_dom_t *dom = ctx;
     os64_js_outcome_t outcome;
-    return os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &outcome) != OS64_JS_OK;
+    return !d_delivery_active(dom) || os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &outcome) != OS64_JS_OK;
 }
 
 /* A synchronous request: run by the host to its end, then the events a
@@ -831,12 +847,19 @@ static bool sync_stop(void *ctx)
  * loadend after), or a NetworkError thrown. */
 static JSValue send_sync(os64_dom_t *dom, JSContext *ctx, JSValueConst self, const os64_dom_request_t *request)
 {
+    if (!d_provider_begin(dom, ctx)) return JS_EXCEPTION;
+    os64_dom_network_t network = dom->network;
     os64_dom_response_t response = {0};
-    bool ran = dom->network.run != NULL &&
-               dom->network.run(dom->network.opaque, request, sync_stop, dom, &response);
+    bool ran = network.run != NULL && network.run(network.opaque, request, sync_stop, dom, &response);
     DXhr *x = xhr_state(self);
-    int taken = ran && response.ok ? response_take(dom, ctx, x, &response) : -1;
-    if (ran && dom->network.release != NULL) dom->network.release(dom->network.opaque, &response);
+    int taken = d_delivery_active(dom) && ran && response.ok ? response_take(dom, ctx, x, &response) : -1;
+    if (ran && network.release != NULL) network.release(network.opaque, &response);
+    d_provider_leave(dom);
+    if (!d_require_active(dom, ctx)) {
+        x->send_flag = false;
+        response_reset(JS_GetRuntime(ctx), x);
+        return JS_EXCEPTION;
+    }
     x->upload_complete = true;
     if (taken < 0) {
         (void)request_error(dom, ctx, self, "error", NULL);
@@ -857,6 +880,7 @@ static JSValue xhr_send(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
     DBytes body = {0};
     bool has_type = false;
     if (has_body && d_body_extract(dom, ctx, value, &body, &has_type) < 0) return JS_EXCEPTION;
+    if (!d_require_active(dom, ctx)) { d_bytes_free(ctx, &body); return JS_EXCEPTION; }
     x = xhr_state(self);            /* extracting ran page code */
     if (x->state != OPENED || x->send_flag) {
         d_bytes_free(ctx, &body);
@@ -897,18 +921,21 @@ static JSValue xhr_send(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
         goto done;
     }
     x = xhr_state(self);
+    if (!d_require_active(dom, ctx)) { x->send_flag = false; result = JS_EXCEPTION; goto done; }
     if (!x->upload_complete && x->upload_listener && upload_target(x) != NULL &&
         fire(dom, ctx, upload_target(x), "loadstart", true, 0, (double)x->request_length, NULL) < 0) {
         result = JS_EXCEPTION;
         goto done;
     }
     x = xhr_state(self);
+    if (!d_require_active(dom, ctx)) { x->send_flag = false; result = JS_EXCEPTION; goto done; }
     if (x->state != OPENED || !x->send_flag || x->generation != generation) goto done;
     /* The URL and method the request names are the object's, which page
      * code during the events above could not have changed without open(). */
     request_of(x, dom, headers, headers_length, &body, has_body, &request);
     DRequest *out = d_request_start(dom, ctx, &request, xhr_answered);
     if (out == NULL) {
+        if (!d_delivery_active(dom)) { x->send_flag = false; result = JS_EXCEPTION; goto done; }
         /* Refused before it began: a network error, which fires as one. */
         JSValue error = JS_GetException(ctx);
         JS_FreeValue(ctx, error);
@@ -917,9 +944,12 @@ static JSValue xhr_send(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
     }
     x->token = out->token;
     out->held[0] = JS_DupValue(ctx, self);
+    out->depart = xhr_depart;
     dom->requests_held++;
     x->send_time = now_ms(dom);
+    if (!d_require_active(dom, ctx)) { terminate(dom, x); result = JS_EXCEPTION; goto done; }
     if (timer_set(dom, ctx, self) < 0) result = JS_EXCEPTION;
+    if (!d_delivery_active(dom)) terminate(dom, x);
 done:
     js_free(ctx, headers);
     d_bytes_free(ctx, &body);
@@ -1094,6 +1124,8 @@ static JSValue xhr_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     magic &= ~D_SET;
     DXhr *x = xhr_state(self);
     if (x == NULL) return JS_ThrowTypeError(ctx, "Expected an XMLHttpRequest");
+    dom = x->target.dom;
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
     switch (magic) {
     case X_READY_STATE: return JS_NewInt32(ctx, x->state);

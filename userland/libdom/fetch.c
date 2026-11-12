@@ -111,6 +111,7 @@ typedef struct {
 } DResp;
 
 static void response_settled(JSContext *ctx, DResp *r);
+static void fetch_depart(os64_dom_t *dom, DRequest *request);
 
 uint64_t d_request_steps;
 
@@ -118,7 +119,7 @@ uint64_t d_request_steps;
 
 void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network)
 {
-    if (dom == NULL) return;
+    if (dom == NULL || (network != NULL && !d_delivery_active(dom))) return;
     if (network != NULL) dom->network = *network;
     else os64_memset(&dom->network, 0, sizeof(dom->network));
 }
@@ -132,7 +133,7 @@ size_t os64_dom_fetches_pending(const os64_dom_t *dom)
 
 bool os64_dom_fetch_waiting(const os64_dom_t *dom, uint32_t token)
 {
-    for (const DRequest *r = dom != NULL && !dom->closed ? dom->requests : NULL; r != NULL; r = r->next)
+    for (const DRequest *r = d_delivery_active(dom) ? dom->requests : NULL; r != NULL; r = r->next)
         if (r->token == token) return true;
     return false;
 }
@@ -146,6 +147,7 @@ DRequest *d_request_find(os64_dom_t *dom, uint32_t token)
 
 DRequest *d_request_start(os64_dom_t *dom, JSContext *ctx, const os64_dom_request_t *request, DAnswer answer)
 {
+    if (!d_require_active(dom, ctx)) return NULL;
     if (dom->network.start == NULL) {
         JS_ThrowTypeError(ctx, "This page cannot fetch");
         return NULL;
@@ -159,9 +161,22 @@ DRequest *d_request_start(os64_dom_t *dom, JSContext *ctx, const os64_dom_reques
     r->token = dom->request_token;
     r->answer = answer;
     r->part = NULL;
+    r->network = dom->network;
+    r->depart = NULL;
     r->headed = r->asked = false;
     for (int i = 0; i < 3; i++) r->held[i] = JS_UNDEFINED;
-    r->id = dom->network.start(dom->network.opaque, request, r->token);
+    if (!d_provider_begin(dom, ctx)) { d_free(dom, r); return NULL; }
+    r->id = r->network.start(r->network.opaque, request, r->token);
+    if (!d_delivery_active(dom)) {
+        /* The producer may have accepted work before marking retirement.
+         * Cancel that unlinked request under the original provider loan. */
+        if (r->id != 0 && r->network.cancel != NULL) r->network.cancel(r->network.opaque, r->id);
+        d_provider_leave(dom);
+        d_free(dom, r);
+        d_require_active(dom, ctx);
+        return NULL;
+    }
+    d_provider_leave(dom);
     if (r->id == 0) {
         d_free(dom, r);
         JS_ThrowTypeError(ctx, "Failed to fetch");
@@ -183,28 +198,44 @@ static void request_hold(os64_dom_t *dom, DRequest *r, int slot, JSValue value)
     if (!JS_IsUndefined(value)) dom->requests_held++;
 }
 
-void d_request_end(os64_dom_t *dom, DRequest *request, bool cancel)
+static void request_dispose(os64_dom_t *dom, DRequest *request, bool cancel, bool departing)
 {
+    bool found = false;
     for (DRequest **link = &dom->requests; *link != NULL; link = &(*link)->next)
         if (*link == request) {
             *link = request->next;
+            found = true;
             break;
         }
-    if (cancel && dom->network.cancel != NULL) dom->network.cancel(dom->network.opaque, request->id);
+    if (!found) return;
+    /* Unlink before callbacks. Cleanup retains a loan even for an inactive
+     * binding; reentrant delivery cannot rediscover the token. */
+    d_provider_hold(dom);
+    if (departing && request->depart != NULL) request->depart(dom, request);
+    if (cancel && request->network.cancel != NULL) request->network.cancel(request->network.opaque, request->id);
     for (int i = 0; i < 3; i++) request_hold(dom, request, i, JS_UNDEFINED);
     d_free(dom, request);
+    d_provider_leave(dom);
+}
+
+void d_request_end(os64_dom_t *dom, DRequest *request, bool cancel)
+{
+    request_dispose(dom, request, cancel, !d_delivery_active(dom));
 }
 
 void d_request_more(os64_dom_t *dom, DRequest *request)
 {
-    if (!request->headed || request->asked || dom->network.more == NULL) return;
+    if (!request->headed || request->asked || request->network.more == NULL || !d_provider_enter(dom)) return;
     request->asked = true;
-    dom->network.more(dom->network.opaque, request->id);
+    request->network.more(request->network.opaque, request->id);
+    d_provider_leave(dom);
 }
 
 void d_fetch_drain(os64_dom_t *dom)
 {
-    while (dom->requests != NULL) d_request_end(dom, dom->requests, true);
+    if (d_provider_busy(dom)) return;
+    while (dom->requests != NULL) request_dispose(dom, dom->requests, true, true);
+    os64_memset(&dom->network, 0, sizeof(dom->network));
 }
 
 /* After the engine is gone: drain has emptied the list, so this frees
@@ -1388,13 +1419,18 @@ static void response_finalizer(JSRuntime *rt, JSValue value)
 /* A fetched body settled (read, errored by an abort, or never there): the
  * signal's algorithm for it goes, and so does the Response's hold on the
  * signal, after. */
-static void response_settled(JSContext *ctx, DResp *r)
+static void response_settled_rt(JSRuntime *rt, DResp *r)
 {
     if (r == NULL) return;
-    if (r->abort_signal != NULL) d_signal_fetch_settled(JS_GetRuntime(ctx), r->abort_signal, &r->abort_signal);
+    if (r->abort_signal != NULL) d_signal_fetch_settled(rt, r->abort_signal, &r->abort_signal);
     JSValue signal = r->signal;
     r->signal = JS_UNDEFINED;
-    JS_FreeValue(ctx, signal);
+    JS_FreeValueRT(rt, signal);
+}
+
+static void response_settled(JSContext *ctx, DResp *r)
+{
+    response_settled_rt(JS_GetRuntime(ctx), r);
 }
 
 static void response_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
@@ -2262,6 +2298,22 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
  * Response. */
 enum { FETCH_RESOLVE, FETCH_REJECT, FETCH_REQUEST, FETCH_BODY = 0, FETCH_RESPONSE = 1 };
 
+/* Cancel transport ownership without rejecting promises, erroring streams or
+ * dispatching abort events. Exported Response/stream storage remains intact. */
+static void fetch_depart(os64_dom_t *dom, DRequest *request)
+{
+    if (request->headed) {
+        DResp *r = response_state(request->held[FETCH_RESPONSE]);
+        if (r != NULL) {
+            d_signal_remove_fetch_rt(dom->engine, r->signal, request->token);
+            response_settled_rt(dom->engine, r);
+        }
+    } else {
+        DReq *q = request_state(request->held[FETCH_REQUEST]);
+        if (q != NULL) d_signal_remove_fetch_rt(dom->engine, q->signal, request->token);
+    }
+}
+
 /* A network answer as the page's Response (engine memory: a body the
  * runtime has no room for fails here, as any allocation does). */
 static JSValue response_from_network(os64_dom_t *dom, JSContext *ctx, const os64_dom_response_t *in)
@@ -2522,6 +2574,13 @@ static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, c
 void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason)
 {
     DRequest *request = d_request_find(dom, token);
+    /* An explicit signal abort may race the native departure finish. Pending
+     * work is already ineligible: release it without settling author promises
+     * or erroring the retained stream. Settled bodies keep their usual rules. */
+    if (request != NULL && !d_delivery_active(dom)) {
+        d_request_end(dom, request, true);
+        return;
+    }
     if (request != NULL && !request->headed) {
         /* Still out: the promise rejects with the reason, and the host
          * stops. */
@@ -2657,6 +2716,7 @@ static JSValue fetch_function(JSContext *ctx, JSValueConst self, int argc, JSVal
     request_hold(dom, out, FETCH_RESOLVE, resolving[0]);
     request_hold(dom, out, FETCH_REJECT, resolving[1]);
     request_hold(dom, out, FETCH_REQUEST, JS_DupValue(ctx, request));
+    out->depart = fetch_depart;
     if (d_signal_add_fetch(ctx, q->signal, out->token) < 0) {
         d_request_end(dom, out, true);
         JS_FreeValue(ctx, request);
@@ -2684,6 +2744,7 @@ static os64_js_status_t request_step(os64_dom_t *dom, uint32_t token, int step, 
         outcome->status = OS64_JS_FAILED_RUNTIME;
         return outcome->status;
     }
+    if (!d_delivery_active(dom) || d_provider_busy(dom)) return OS64_JS_OK;
     DRequest *request = d_request_find(dom, token);
     /* Nothing waits on the token, or the answer is out of its order: a
      * whole answer or a head for a request whose head came, a piece or an

@@ -1388,22 +1388,26 @@ typedef struct {
  * pieces (os64_dom_fetch_head, below).
  * cancel: the id's answer is no longer wanted (a fetch aborted, an XHR's
  * abort(), a body's stream cancelled, a page leaving); a cancelled request
- * never answers, not even the rest of a body.
+ * should stop producing answers, including the rest of a body. Late payloads
+ * already in flight remain the host's to release; they cannot revive a token.
  * run: a synchronous XMLHttpRequest's request, run to its end before this
  * returns, filling `*response`, which stays the host's until `release`;
  * false when it could not be run, which the page sees as a network error.
  * The run asks `stop(stop_ctx)` between its waits and gives up when it says
- * yes: the binding's answer is the script task's own budget (the task's
- * deadline, and libjs's cancel), so a synchronous request ends when the
- * task that made it would, as one mechanism.
+ * yes: the binding checks document activity and the script task's budget
+ * (the task's deadline and libjs's cancel).
  * more: the binding wants the next bytes of the id's body (a streamed
  * answer's, below): a reader waits on it. It is called from inside a
  * task, so the host answers later, never inside the call: a piece through
  * os64_dom_fetch_body once it has one, and the binding asks again when it
  * wants another. Pieces nobody asked for are the host's to send too (the
  * streamed answer below). NULL leaves the host to deliver as it pleases.
- * With no network, every request is a network error. Copied; NULL removes
- * it. Install before the first script. */
+ * With no network, an active document's request is a network error. Copied;
+ * NULL removes the installed table. Each accepted request retains its
+ * producer's callbacks/opaque until completion or cancellation; a synchronous
+ * response retains its original release through the call. Replacing/clearing
+ * the installed table does not release those outstanding producer lifetimes.
+ * Installing a non-NULL table on an inactive document is ignored. */
 typedef struct {
     uint64_t (*start)(void *opaque, const os64_dom_request_t *request, uint32_t token);
     void (*cancel)(void *opaque, uint64_t id);
@@ -1418,8 +1422,11 @@ void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
  * runtime's memory (a body the runtime has no room for is the runtime's
  * memory limit, as any allocation a script makes is), the fetch's promise
  * is settled or the XMLHttpRequest's events fire, and the microtasks run.
- * An answer for a token nothing waits on (aborted, or after drain) does
- * nothing. The outcome is the task's, as os64_dom_dispatch's is. */
+ * An answer for an unknown token or an inactive document is discarded before
+ * engine entry; delivery during a provider callback is also discarded. The
+ * host keeps ownership of these borrowed response buffers on every path.
+ * A closed binding reports FAILED_RUNTIME. Otherwise the outcome is the
+ * task's, as os64_dom_dispatch's is. */
 os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
                                   os64_js_outcome_t *outcome);
 /* A STREAMED ANSWER (STREAMS.md § 5, S3): the answer in pieces, each ONE
@@ -1439,10 +1446,12 @@ os64_js_status_t os64_dom_fetch_head(os64_dom_t *dom, uint32_t token, const os64
 os64_js_status_t os64_dom_fetch_body(os64_dom_t *dom, uint32_t token, const void *bytes, size_t length,
                                      os64_js_outcome_t *outcome);
 os64_js_status_t os64_dom_fetch_end(os64_dom_t *dom, uint32_t token, bool ok, os64_js_outcome_t *outcome);
-/* How many requests the binding has out. os64_dom_drain cancels each
- * through the network's cancel and forgets it. */
+/* How many requests the binding owns, including ineligible work awaiting
+ * native cleanup. Binding/cluster drain cancels these through their original
+ * producer and forgets them. */
 size_t os64_dom_fetches_pending(const os64_dom_t *dom);
-/* Whether request `token` is out, so its answer would run a task. */
+/* Whether request `token` is out on an active binding. Delivery still requires
+ * a quiescent provider boundary and an admissible engine task. */
 bool os64_dom_fetch_waiting(const os64_dom_t *dom, uint32_t token);
 
 #pragma GCC visibility pop

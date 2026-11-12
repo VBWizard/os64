@@ -485,6 +485,58 @@ One mutation-runner anchor needed disambiguation before its remaining cases
 ran. The cumulative caught count is **122**. Full instrumented, guest and
 current pinned-WPT acceptance remain outstanding.
 
+## Transport ownership and cancellation checkpoint
+
+Fetch and XHR providers now hold binding/cluster loans. Each request captures
+its producer table, so replacing or clearing the installed network cannot
+redirect cancellation or body demand to another producer. A start callback
+that accepts an id and retires the document cancels that id before returning;
+synchronous XHR retains the original release callback through response
+consumption, even if run clears the installed provider. Its stop predicate
+also observes document retirement.
+
+Native cleanup unlinks each request before calling cancel, removes fetch
+signal algorithms and XHR timer/send bookkeeping, releases request holds,
+and detaches the installed table. Cancellation can reenter delivery or drain
+without double cancellation or script entry. Incoming whole/head/body/end
+payloads remain host-owned; inactive or provider-reentrant delivery does not
+read them into the engine. Retained XHR bytes, queued stream bytes and settled
+Response clones survive. An explicit signal abort between mark and cleanup
+cannot settle pending retired transport work.
+
+A cross-realm signal source must route each dependent algorithm through the
+dependent's binding. The audit found the previous path used the initiating
+controller's binding: two documents' equal numeric request tokens could cancel
+the wrong request. The collision regression produced **10 failures** before
+the routing correction, then passed for active and retired dependents. Signal
+timer cancellation also uses the signal's owner. Borrowed XHR methods use the
+XHR receiver's binding, and send/open recheck argument conversion, loadstart
+and clock retirement before publishing work.
+
+The transport fixture covers 12 scenarios under both teardown policies,
+including shared native request ids, colliding binding tokens, producer
+replacement, retirement during start/more/run/release/clock callbacks, late
+payloads, abort races, retained data and closed root cleanup. Four added XHR
+conversion/event cases bring that provider fixture to 26 such cases. The final
+transport fixture reports **240 failures** against the preceding transport
+implementation.
+
+The complete shipping-engine DOM suite passes **55,987 checks**, including
+**3,991 native allocation sweeps**. Instrumented transport retirement passes **1,084 checks**, provider retirement
+**9,336**, fetch/Streams **10,526**, and realm routing **678**, with
+ASan/UBSan/LSan enabled. Fourteen isolated transport mutants are caught,
+including wrong-producer cancel/more/release, missing provider loans, late
+retired delivery, pending-promise settlement after retirement, retained abort
+links, omitted XHR bookkeeping and source-binding abort routing. The cumulative
+caught count is **136**. The initial missing-loan mutant also removed its
+matching leave after an unbalanced version obscured the intended failure.
+
+The native DOM library builds. This is a quiescent native-cleanup proof,
+not the public departure finish protocol. HTTP/2 connection ownership was
+inspected separately: the existing cancellation path releases the request's
+stream; no HTTP/2 implementation changes were needed. The fixture does not
+replace real-network, guest, P5 or final pinned-WPT acceptance.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point
@@ -493,8 +545,8 @@ current pinned-WPT acceptance remain outstanding.
   report routing and provider
   entry points. Inventory and detach provider storage only after borrowers
   finish; preserve retained DOM/Canvas/WebAnimation identities.
-- Cancel binding-owned work by its own request tokens, consume late results
-  safely, and release scheduled payloads without closing shared connections.
+- Integrate native request and scheduled-payload cleanup into safe-point
+  finish, including the separate module-loading path.
 - Install a child DOM transactionally with staged engine setup and native
   rollback, preserving siblings and accounting for retained failed shells.
 - Measure installation peak and retained active/departed charges under both
