@@ -15798,8 +15798,9 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     }
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
-    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
-                 g.paint_scratch, &v);
+    os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
+    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL,
+                 g.paint_cache, g.paint_scratch, &v);
     // Filtered and blended groups, and backdrops, painted plain (FILTER.md
     // § 6, MIX_BLEND.md § 4), the most any one paint did.
     if (yonder_paint_layers_refused > 0 && g.page.diag != NULL)
