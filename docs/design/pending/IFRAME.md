@@ -553,8 +553,10 @@ deadline and job count. F.3 retains runtime-wide sticky failures, including
 execution/job limits and cancellation. A timeout in B called from A ends
 the shared script runtime; ordinary departure uses the lifecycle API rather
 than runtime cancellation. A local native admission refusal is distinct from
-an engine allocation failure. `LIMIT` includes memory exhaustion and cannot
-be made child-local by testing that status alone. The
+an engine allocation failure. The outcome already distinguishes EXECUTION,
+JOBS and MEMORY limit reasons. Child-local recovery additionally needs proven
+unwind soundness and attribution of the realms on the interrupted stack; a
+reason code alone does not establish either. The
 [F.3 interrupt decision](IFRAME_F3_RETIREMENT.md#budget-and-interrupt-decision)
 defines the audit and the additional proof required before a future split.
 

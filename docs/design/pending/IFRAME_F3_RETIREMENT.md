@@ -155,20 +155,25 @@ and [NewPromiseResolveThenableJob](https://tc39.es/ecma262/multipage/control-abs
 The host mapping is described by
 [HostEnqueuePromiseJob](https://html.spec.whatwg.org/multipage/webappapis.html#hostenqueuepromisejob).
 Null ownership is explicit; an unrecognized foreign context is an invariant
-failure, not permission to run. Bound functions, callable proxies and revoked
-proxies need cases at enqueue, including the error path of realm discovery.
+failure, not permission to run. Bound functions and callable proxies resolve
+to their underlying function realm. If `GetFunctionRealm` throws (including a
+revoked proxy), use the current realm at enqueue and consume that discovery
+exception; enqueue itself does not throw. The callback fails when executed.
 
 Do not implement eager removal by walking promises and rejecting them.
 Suppressing an ineligible reaction does not synthesize an AbortError or settle
 its derived promise. A live B handler attached to a promise created in A can
 still run after A departs if that promise is settled by a retained resolver.
 A's handler on B's promise is suppressed. Handlerless propagation can still
-reach a later B handler; custom promise capability functions need their own
-callback eligibility check when that neutral job invokes them. The document
+reach a later B handler. Once a job is admitted, its custom promise capability
+resolve/reject functions use ordinary ECMAScript `Call`, without another
+retirement gate. An A-defined resolver wrapper can settle a live B promise
+after A departs, just like another retained ordinary function. Test custom
+species fulfillment and rejection through that wrapper. The document
 retirement policy must not be mistaken for a test of the promise's realm.
 
 Queued jobs predating departure and jobs queued afterward by retained direct
-calls both pass the gate. A currently executing job may finish/unwind; it
+calls are both subject to the gate. A currently executing job may finish/unwind; it
 cannot use retirement to reset its enclosing deadline. Discarded jobs do not
 increment `jobs_executed` or consume the executed-job cap. Count queue visits
 against a manual drain's slice work so discard floods cannot turn a bounded
@@ -242,11 +247,23 @@ wrapper after its creator departed. An aborted child with no public reference
 still consumes its reserved slot in this model.
 
 This is a cumulative admission limit, not merely a live-frame limit. At the
-limit, refuse a new child before context/DOM allocation and keep the previous
-active document and siblings unchanged. Navigating the top-level page creates
+limit, refuse script-realm admission before context/DOM allocation and leave
+existing realms and siblings unchanged. This result means **no script realm
+for the candidate**, not a command to discard a renderable document. F.7 must
+specify and test the visible navigation policy before loading is enabled:
+retain the previous document, or commit the candidate as script-disabled.
+It must distinguish that outcome from a failed document load and expose the
+refusal in diagnostics. F.3 does not select a navigation policy for its caller.
+Navigating the top-level page creates
 a new cluster. Repeated child navigation can exhaust admission even after
 dropping exported references; report that limitation honestly. Reclaiming
 retired slots requires a later reachability design, not resetting a counter.
+Tracker F.15 records reclamation. F.11 requires either that proof or recorded
+Tier 1 browsing-session measurements showing acceptable realm consumption
+and tested refusal behavior. A possible later optimization records whether a
+realm was ever reachable by a same-origin peer at F.4's boundary; it still
+needs proofs for queued jobs, engine references and native owners before
+freeing a context. Cross-origin status alone is not a reclamation proof.
 
 Keep F.2's aggregate foundation limits, including retained and staging bytes:
 64 MiB HTML, 16 MiB page state, 8 MiB DOM, 256 MiB kept bodies and 128 MiB
@@ -255,6 +272,19 @@ profile; the host's configured value otherwise). Per-owner limits remain
 additional checks. No separate departed allowance and no multiplication by
 the number of realms. F.8 owns the shipping frame-tree budget, including
 styles, pictures and integration overhead; these are foundation ceilings.
+
+Engine headroom is part of admission, before `JS_NewContext`. F.3a exposes
+the charged engine bytes and remaining configured allowance without running
+script or latching failure. F.3b measures the retained and peak installation
+cost of an empty fully installed realm in both engine profiles, including
+first-use class/bootstrap costs, and records the figures and build identity.
+Define a named admission reserve from the measured worst peak plus explicit
+sibling operating headroom; document the margin and recheck it when bindings
+grow. Refuse locally when the remaining engine allowance is below that
+reserve, including in a nested setup. The reserve is admission protection,
+not a promise that arbitrary later script or system OOM cannot exhaust memory.
+The repeated empty install/depart proof, with A/C work between admissions,
+must reach local headroom or slot refusal before an engine-memory latch.
 
 Measure active/departing/departed/failed slot counts separately and retain the
 existing byte census across retirement. Report native registry values still
@@ -267,15 +297,22 @@ F.7/F.8 must apply it before parsing/fetch allocation in the integrated host.
 
 Installation uses a fresh, unexposed realm with a candidate document/state
 pair. Healthy siblings cannot observe its global, wrappers, jobs or host
-services before commit. Setup uses a guarded task, with no pending earlier
-turn. Do not evaluate untrusted author code or invoke external providers
+services before commit. Standalone setup opens a guarded task only with no
+pending earlier turn. Nested setup borrows A's existing task, deadline, job
+count and outcome; A may already have queued jobs. It cannot open or close
+A's turn, drain A's jobs, or checkpoint arbitrary siblings. Do not evaluate
+untrusted author code or invoke external providers
 during the transaction; bootstrap code is restricted to installation work.
 
 Preserve F.2's explicit ownership answer and add a result distinguishing a
 local refusal, a failed consumed child, and a failed shared runtime:
 
-1. Preflight refuses invalid membership, duplicate bindings, slots or native
-   charges before consumption. Caller retains the document/state pair.
+1. Preflight refuses invalid membership, duplicate bindings, slots, engine
+   headroom or native charges before consumption. Caller retains the
+   document/state pair. Local nested refusal returns an explicit native
+   admission result with no pending engine exception or sticky latch; A's
+   task continues unchanged. F.7 maps that result to its documented frame
+   API/navigation behavior rather than treating it as shared-runtime failure.
 2. After consumption, keep a valid cleanup shell, owned and charged by the
    cluster, even if installation stops halfway. The failed realm becomes
    ineligible; detach its partial services and discard its owned jobs before
@@ -294,9 +331,13 @@ local refusal, a failed consumed child, and a failed shared runtime:
 5. While Installing, a privileged setup guard may run that candidate's
    bootstrap and tagged jobs under the existing setup budget, without opening
    ordinary task entry or providers. Commit publishes the binding and enables
-   host delivery only after setup and its eligible checkpoint work succeed.
-   Abort discards the candidate's tagged jobs, including neutral propagation,
-   before ending the setup task. Any bootstrap job that can
+   host delivery only after setup and its candidate-tagged work succeed.
+   A candidate-only setup drain can execute tagged jobs without running or
+   reordering A's pre-existing jobs; it charges the enclosing budget. Abort
+   discards only the candidate's tagged jobs, including neutral propagation,
+   before leaving the setup guard. Both commit and abort preserve the order
+   of other queued jobs. Standalone setup then closes its own task; nested
+   setup returns to A without a sibling checkpoint. Any bootstrap job that can
    publish a child reference or call a sibling/provider violates the staging
    contract and must be removed or staged before this path can ship.
 
@@ -334,6 +375,10 @@ loops, nested cross-realm calls, catch/finally, Promise reactions and native
 coercions. Assert sticky refusal after unwind, unchanged outer accounting and
 clean native teardown. Keep results in the validation record. An experiment
 that clears a latch and runs a sibling is not acceptance evidence for recovery.
+End the audit with a written verdict on the generated engine: what unwind
+soundness is established and what interrupted-realm attribution is missing.
+The existing EXECUTION/JOBS/MEMORY limit reasons already distinguish causes;
+the unresolved question is safe recovery, not inventing a new classification.
 
 Per-child timeout recovery requires a separate reviewed extension: distinguish
 recoverable execution/job exhaustion from engine/allocator/clock failure;
@@ -341,7 +386,10 @@ identify interrupted realms across raw JS calls and queued-job execution;
 prevent future entry into failed environments while preserving legitimate
 retained references; prove heap and native invariants after complete unwind.
 Book the runtime-wide fallback in DEBTS/DIVERGENCES when F.3 lands and name
-this proof as its exit condition. Root/global cancellation remains available
+this proof as its exit condition. Tracker F.16 records that recovery work.
+F.11 requires either the recovery proof or P5 measurements showing Tier 1
+frame workloads remain within the shared budget, with the fallback explicitly
+recorded in acceptance. Root/global cancellation remains available
 for emergency stop; document navigation uses departure instead.
 
 ## Required evidence
@@ -360,7 +408,8 @@ that a call survived. Add focused selectors to existing harnesses where useful.
 | Providers | Poison/free provider opaque storage after departure finish; late network/module/image/geometry/report results and borrowed methods never touch it; B/C providers still receive their own calls |
 | Retained objects | Keep a function, unwrapped descendant, Attr/view, range, observer, custom definition, Blob/ArrayBuffer/Response, Canvas context/gradient and borrowed effect across creator departure; check values, identity, destination routing and native charges |
 | Failure isolation | Sweep candidate admission and installation allocations under both teardown profiles; distinguish non-consumed, consumed-local and global-sticky outcomes; no sibling drain or duplicate free |
-| Bounds | Tiny caps and full profile; navigate/depart while retaining objects until byte or cumulative-slot refusal; refusal preserves prior active state; no slot reuse for unwrapped nodes |
+| Nested failure isolation | Install B inside A's task with A jobs already queued; abort at each stage, discard candidate-tagged work only, then verify A's jobs run in order with unchanged task outcome and budget |
+| Bounds | Measure retained and peak installed-empty-realm engine bytes; tiny caps and full profile; repeated install/depart with A/C work reaches local headroom or slot refusal before memory latch; prior realms remain usable; no slot reuse for unwrapped nodes |
 | Budget | A → B → C cannot extend time or job cap; dead jobs are discarded without executing; a flood remains slice/deadline bounded; interruption remains sticky across later entries |
 | Teardown | Departed and failed shells plus live siblings; alternate layout-borrow release order; FATAL and RECLAIM release native payloads, handles and registry roots |
 
