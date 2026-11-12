@@ -255,8 +255,117 @@ static void realm_admission_host_cases(void)
     os64_js_destroy(runtime);
 }
 
+static unsigned retirement_unwind_hits;
+static JSValue retirement_unwind_probe(JSContext *context, JSValueConst self,
+                                        int argc, JSValueConst *argv)
+{
+    (void)context; (void)self; (void)argc; (void)argv;
+    retirement_unwind_hits++;
+    return JS_UNDEFINED;
+}
+static void retirement_interrupt_cases(void)
+{
+    const char *cases[] = {"spinB()", "catchB()", "Promise.resolve().then(spinB)", "+coerceB", "crossB()"};
+    for (unsigned policy=0; policy<2; policy++) for(unsigned n=0;n<sizeof(cases)/sizeof(cases[0]);n++) {
+        size_t before=live;
+        os64_js_realm_t *a,*b,*c;
+        os64_js_runtime_t *runtime=retirement_fixture(policy,100,&a,&b,&c);
+        if(!runtime)return;
+        os64_js_outcome_t out;
+        JSContext *ac=os64_js_realm_context(a,OS64_JS_ABI_ID,&out),*bc=os64_js_realm_context(b,OS64_JS_ABI_ID,&out),*cc=os64_js_realm_context(c,OS64_JS_ABI_ID,&out);
+        check(install_native(runtime,"unwindProbe",retirement_unwind_probe)==1,"interrupt observation hook installed");
+        realm_share(ac,bc,"unwindProbe");
+        check(realm_execute(c,"globalThis.spinC=()=>{while(true){}}",&out)==OS64_JS_OK,"nested interrupted sibling prepared");
+        realm_share(cc,bc,"spinC");
+        check(realm_execute(b,"globalThis.spinB=()=>{let a=[];while(true)a.push({a})};"
+              "globalThis.catchB=()=>{try{while(true){}}catch(e){unwindProbe()}finally{unwindProbe()}};"
+              "globalThis.coerceB={[Symbol.toPrimitive](){while(true){}}};globalThis.crossB=()=>spinC()",&out)==OS64_JS_OK,
+              "interrupt allocation/catch/finally/coercion fixtures installed");
+        const char *names[]={"spinB","catchB","coerceB","crossB"};
+        for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++)realm_share(bc,ac,names[i]);
+        check(os64_js_set_execution_ms(runtime,10,&out)==OS64_JS_OK,"interrupt fixture deadline configured");
+        retirement_unwind_hits=0;clock_step=2500;
+        os64_js_status_t result=realm_execute(a,cases[n],&out);
+        clock_step=0;
+        check(result==OS64_JS_LIMIT && out.limit==OS64_JS_LIMIT_EXECUTION,
+              "cross-realm interruption retains runtime-wide execution outcome");
+        check(retirement_unwind_hits==0,"uncatchable interruption runs neither catch nor finally author work");
+        check(realm_execute(c,"true",&out)==OS64_JS_FAILED_RUNTIME &&
+              os64_js_realm_retire(b,OS64_JS_ABI_ID,&out)==OS64_JS_OK &&
+              realm_execute(a,"true",&out)==OS64_JS_FAILED_RUNTIME,
+              "retirement after interruption cannot clear shared sticky failure");
+        os64_js_destroy(runtime);
+        check(live==before,"interrupted nested heap/native frames release under selected teardown policy");
+    }
+}
+
+static unsigned staging_deadline_calls;
+static os64_js_status_t staging_deadline_install(os64_js_realm_t *realm, JSContext *context, void *opaque)
+{
+    (void)realm; (void)context; (void)opaque;
+    staging_deadline_calls++;
+    return OS64_JS_OK;
+}
+
+static void staging_host_cases(void)
+{
+    for (unsigned policy = 0; policy < 2; policy++) {
+        size_t cuts = 0;
+        for (size_t cut = 0; cut <= cuts; cut++) {
+            size_t before = live;
+            os64_js_config_t config = fixture_config();
+            os64_js_runtime_t *runtime = NULL;
+            os64_js_realm_t *candidate = NULL;
+            os64_js_outcome_t out;
+            check(os64_js_create_with_teardown(&config, policy ? OS64_JS_TEARDOWN_RECLAIM : OS64_JS_TEARDOWN_FATAL,
+                  OS64_JS_ABI_ID, &runtime, &out) == OS64_JS_OK, "setup sweep runtime created");
+            if (!runtime) break;
+            check(os64_js_realm_stage(runtime, OS64_JS_ABI_ID, 256 * 1024, &candidate, &out) == OS64_JS_OK,
+                  "setup sweep private candidate created");
+            if (!candidate) { os64_js_destroy(runtime); break; }
+            size_t start = attempts;
+            unsigned mode = 0;
+            fail_at = cut ? start + cut : 0;
+            os64_js_status_t result = os64_js_realm_setup(candidate, OS64_JS_ABI_ID, staging_install, &mode, &out);
+            fail_at = 0;
+            if (!cut) {
+                cuts = attempts - start;
+                printf("staged setup policy %u: %zu refusal points\n", policy, cuts);
+                check(result == OS64_JS_OK && cuts > 0, "setup sweep measured successful installation");
+            } else {
+                check(result == OS64_JS_HOST_FAILURE && os64_js_realm_is_retired(candidate),
+                      "engine allocation refusal retires candidate and preserves sticky shared failure");
+                check(os64_js_run(runtime, "true", 4, "setup-sweep-parent", &out) == OS64_JS_FAILED_RUNTIME,
+                      "candidate cleanup cannot clear allocation failure");
+            }
+            os64_js_teardown_report_t report;
+            os64_js_destroy_report(runtime, &report);
+            check(!report.leaked && live == before, "setup allocation cutoff releases native and engine holds");
+        }
+        os64_js_config_t config = fixture_config();
+        config.limits.execution_ms = 10;
+        os64_js_runtime_t *runtime = NULL;
+        os64_js_realm_t *candidate = NULL;
+        os64_js_outcome_t out;
+        check(os64_js_create_with_teardown(&config, policy ? OS64_JS_TEARDOWN_RECLAIM : OS64_JS_TEARDOWN_FATAL,
+              OS64_JS_ABI_ID, &runtime, &out) == OS64_JS_OK, "staged deadline runtime created");
+        if (!runtime) continue;
+        check(os64_js_realm_stage(runtime, OS64_JS_ABI_ID, 256 * 1024, &candidate, &out) == OS64_JS_OK &&
+              os64_js_task_begin(runtime, OS64_JS_ABI_ID, "expired-stage-parent", &out) == OS64_JS_OK,
+              "candidate prepared before enclosing deadline expires");
+        monotonic += 10000;
+        staging_deadline_calls = 0;
+        check(os64_js_realm_setup(candidate, OS64_JS_ABI_ID, staging_deadline_install, NULL, &out) == OS64_JS_LIMIT &&
+              out.limit == OS64_JS_LIMIT_EXECUTION && staging_deadline_calls == 0 && os64_js_realm_is_retired(candidate),
+              "setup borrows expired parent deadline without calling installer");
+        os64_js_destroy(runtime);
+    }
+}
+
 static void realm_host_cases(void)
 {
+    staging_host_cases();
+    retirement_interrupt_cases();
     realm_admission_host_cases();
     realm_watcher_cases();
     realm_output_cases();

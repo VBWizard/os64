@@ -1,105 +1,183 @@
-# F.3a engine validation — in progress
+# F.3a engine validation
 
-2026-11-12. Implements the first admission boundary from
+2026-11-12. Implements the engine half of
 [the reviewed F.3 brief](IFRAME_F3_RETIREMENT.md), based on design amendment
-`3a8ceb1c` and the merged F.2b implementation at `37ec284d`.
-This is an implementation checkpoint, not F.3a completion or review readiness.
+`3a8ceb1c` and merged F.2b at `37ec284d`. PR #552 is stacked on design PR #546.
+F.3b owns DOM departure, provider cleanup and failed binding installation;
+F.3 remains in progress after this engine slice.
 
 ## Implemented boundary
 
-Embedding ABI 4 adds an allocation-free engine-headroom query, realm
-preflight and creation with a caller-specified headroom requirement.
-The calculation subtracts the runtime wrapper's reserved storage as well as
-current engine charges. Slot refusal and headroom refusal are non-sticky;
-creation rechecks a preflight snapshot before attempting allocation.
-Pre-existing allocator failure, cancellation and runtime failure cannot be
-reported as harmless admission refusal. The normal creation path still
-observes the enclosing deadline and keeps the original sticky failure rules.
+Embedding ABI 4 adds allocation-free engine-headroom inspection/preflight,
+guarded creation, irreversible realm retirement, and staged creation/setup/
+activation. Retained slots count against the cumulative 65-slot limit.
+Preflight accounts for the runtime wrapper's reservation and current engine
+charges. Slot/headroom refusal does not allocate or poison siblings; creation
+rechecks admission. Pre-existing allocator/cancellation/runtime failure is not
+reported as a harmless local refusal. The caller chooses a positive measured
+installation reserve plus sibling margin. The 256 KiB regression reserve is
+for bare-engine fixtures, not a production DOM admission constant. F.3b must
+measure installed/departed bindings and set that reserve for both profiles.
 
-The host chooses a positive reserve using its measured peak installation
-cost and sibling operating margin. Preflight does not reserve memory and
-cannot guarantee arbitrary future allocations. The 256 KiB reserve in the
-regressions is a fixture value for bare engine realms, not a DOM admission
-constant or a measurement of installed/departed bindings. F.3b supplies that
-measurement and production reserve for both teardown/allocator profiles.
+Retirement marks eligibility without allocating, clearing a failure, destroying
+a context or mutating the queue under an active stack. Existing stacks unwind;
+live scripts can call retained ordinary functions. New host entry checks the
+realm and scheduled callback owner. Reporting, module providers and output
+respect retirement; the DOM host still must stop its own activities and detach
+provider storage at a safe point.
 
-## Evidence scope
+Patch 0019 separates native execution context from job callback/code ownership
+and optional activity ownership. Promise reactions follow handlers, thenables
+follow `then`, handlerless propagation is neutral, and custom capability
+resolve/reject calls remain ordinary calls within an admitted job. Native data
+functions, Promise resolvers, async continuations and generators retain their
+actual realm. Bound/proxy traversal is iterative; revoked-proxy lookup falls
+back without allocating or throwing during enqueue. FinalizationRegistry jobs
+check registry and callback realms. Dynamic imports retain importing context.
 
-The common host/guest realm matrix covers exact headroom and one-byte excess,
-wrapper accounting, stale snapshots, ABI rejection, independent slot limits,
-small-heap exhaustion, both teardown policies, parent/sibling survival and
-state preservation. A parent queues Promise jobs, refuses a child, admits a
-child, then verifies exact queue order without an early checkpoint. A second
-case admits during a running job and verifies the enclosing executed-job cap.
+Manual slices, task checkpoints and private setup drains inspect eligibility
+before executing or charging a job. Discarded entries consume slice visits and
+the original deadline, but not executed-job allowance. Dead heads can be
+removed at the cap; the next live job still fails. Outcomes report executed
+and discarded counts separately. Obsolete rejection/module reporting does not
+surface in a live sibling checkpoint.
 
-Host-specific checks arm allocation refusal and verify preflight attempts no
-allocation, preserve a raw allocator failure before wrapper observation, and
-verify admitted creation cannot renew an expired parent deadline. The guest
-consumer builds these common cases; execution on a guest is not yet claimed.
+Patch 0020 gives candidate work a stable transaction group independent of its
+execution owner. A second intrusive linkage selects candidate jobs in constant
+time without scanning or reordering sibling jobs. Setup borrows the enclosing
+budget/outcome, executes private bootstrap and its tagged descendants, and
+requires explicit activation afterward. Ordinary entry/providers remain closed
+while Installing. Local native refusal, an ordinary exception, or an unhandled
+private rejection retires the candidate and discards its tagged work, including
+neutral jobs. Engine resource failure remains sticky runtime-wide. Sibling
+FinalizationRegistry cleanup triggered by allocation-time GC is not attached
+to the candidate transaction. Native partial-state rollback is F.3b work.
 
-LeakSanitizer's sandbox diagnostic reported thread attachment `errno 1`
-(EPERM), with `TracerPid: 0`. Leak-enabled tests run outside the sandbox;
-ASan and UBSan remain enabled. Evidence logs are bounded test summaries,
-retained outside the tracked source tree.
+## Runtime and allocation evidence
 
-Results for this admission implementation:
+All host runs retain ASan/UBSan and LeakSanitizer. The sandbox denied LSan thread
+attachment with EPERM and `TracerPid: 0`; leak-enabled runs used normal
+execution outside that sandbox. Logs are bounded summaries outside tracked
+source. The target engine uses its shipping allocator; the fully instrumented
+engine bypasses small-object arenas, exposing additional allocation cutoffs.
 
-- Full runtime suite: target engine **11,140 checks**, fully instrumented
-  engine **56,453 checks**; zero failures and zero live allocations. Compiler
-  allocation sweeps and fatal/invariant-path checks also pass. The two final
-  extra admission budget cases were added after this suite compiled and are
-  included in the focused results below.
-- Final focused realm matrix: target engine **1,211 checks**, fully
-  instrumented engine **28,866 checks**, zero failures, with leak detection.
-  The instrumented run reuses the full suite's unchanged engine objects and
-  the final focused run's runtime/test objects.
-- Four admission mutants compile and are caught: ignored headroom,
-  unaccounted wrapper storage, creation without the required recheck, and
-  masking an unobserved allocator failure. The harness restores source bytes.
-- Contract/source-manifest and header syntax checks pass. Target runtime,
-  shared library and CLI link; no guest execution or P5 delivery is claimed.
-- Tracker, diff whitespace and local documentation links pass. The stale-reference
-  scan reports the existing retirement-brief references, verified as live links.
-  F.3 remains in `code`; no implementation completion flip.
+- Full runtime: **12,550 target-engine checks** and **57,870 instrumented-engine
+  checks**, zero failures and zero live fixture allocations. Compiler failure
+  sweeps and fatal/invariant paths also pass.
+- Final focused realm matrix: **2,921 target-engine checks**, **32,604 fully
+  instrumented checks**, zero failures. These include the additional staged
+  allocation/deadline/running-parent-job and retired-slot cases added after the full runtime
+  suite compiled. The instrumented focused run reuses that suite's unchanged
+  engine objects with the final focused runtime/test objects.
+- Staged installation sweeps: **17 shipping allocation cutoffs** and **186
+  instrumented cutoffs**, each under FATAL and RECLAIM. Every refused engine
+  allocation retires the candidate, preserves shared failure, and releases
+  native/engine holds at root teardown. Local refusal/ordinary exception cases
+  separately prove healthy parent and sibling continuation.
+- Eight retirement and five staging mutants compile and are caught against
+  passing focused baselines. They break owner/activity selection, eligibility
+  timing, discard accounting, callback entry, budget preservation, candidate
+  tags, sibling drain/abort, activation ordering and retired-slot reuse. The earlier four admission
+  mutants cover headroom, wrapper accounting, recheck and pending failure.
+- Contract/header syntax, patch preparation tests and the allocation/global/
+  visibility teardown audit pass. Target library, CLI and guest consumer link.
 
-Evidence filenames: `admission-runtime.log`, `admission-realms-final.log`,
-`admission-realms-instrumented.log`, `admission-mutants.log`,
-`admission-target-link.log`, and `admission-lsan-diagnosis.log`.
+The shared host/guest cases cover exact surviving A/B/C job order, nested job
+creation, retained ordinary functions, both Promise directions, neutral custom
+capabilities, bound/proxy/revoked callbacks, async/await and generators, pending
+modules, cross-owned finalizers, reporting hooks, both drain paths and limits.
+Candidate cases cover standalone/nested success and abort, explicit activation,
+private rejections, neutral descendants, sibling queue preservation, allocation
+cutoffs, inherited deadlines and already-consumed parent job allowance.
 
-## Initial interrupt source audit
+Evidence: `staging-runtime.log`, `final-realms.log`,
+`final-realms-instrumented.log`, `staging-mutants.log`,
+`retirement-final-mutants.log`, `slot-mutant.log`, `admission-mutants.log`,
+`staging-prepare-tests.log`, `staging-teardown-audit.log`,
+`staging-headers.log` and `final-target-link.log`.
 
-Prepared engine identity:
-`6f29c6b01f7a9a4150b608e1cc8054c6746ab116c0b102adec7d25bf9246731a`.
-This checkpoint does not change the engine patch series.
+## DOM and guest consumers
 
-- `JS_ThrowInterrupted` creates an internal error and marks the exception
-  uncatchable. The interpreter exception path skips catch-offset handling
-  for that marker. Ordinary function unwind closes variable references,
-  releases locals/stack values and restores `current_stack_frame`; generator
-  frames have a distinct saved-stack path requiring separate scrutiny.
-- The interrupt callback receives `JSRuntime` and opaque runtime state. The
-  wrapper's `interrupt` calls `observe`; neither records the set of realms
-  entered through raw engine calls. `turn_owner` identifies the outer turn,
-  not the realms affected by an interrupted cross-realm stack.
-- Both manual drains and host checkpoints currently call
-  `JS_ExecutePendingJob`, which reveals the context after execution. This
-  does not supply pre-execution eligibility or interrupted-stack attribution.
-- EXECUTION/JOBS/MEMORY limit reasons already distinguish causes. There is
-  no demonstrated generic engine unwind corruption in this inspection, but
-  ordinary reference cleanup does not prove script/native invariants suitable
-  for continuing sibling execution after an uncatchable interrupt.
+The complete shipping DOM suite passes **44,928 checks**, including **3,968
+binding allocation sweep cases**, against the transaction-enabled engine.
+The earlier retirement/ownership engine also passes the complete instrumented
+DOM suite: **309,810 checks**, **36,642 binding allocation sweep cases**. The
+transaction-enabled instrumented rerun is recorded separately when complete.
+No DOM departure or binding rollback implementation is claimed by these runs.
 
-Initial verdict: interrupted-realm attribution is absent from the embedding
-boundary; safe child-local recovery is unproved, rather than known impossible.
-Keep the runtime-wide fallback. The F.3a completion audit must add the planned
-allocation-heavy, cross-realm, catch/finally, Promise and native-coercion cases
-and document their unwind/teardown observations. Clearing a latch is not proof.
+QEMU uses q35, two CPUs, 2 GiB RAM, BIOS boot, no network, an existing kernel,
+and a disposable FAT/ext2 disk. A frozen five-file cohort contains the runtime
+consumer, parent runner and matching libjs/libmath/libos64, with SHA-256 hashes.
+The parent captures bounded consumer output and observes its actual
+`os64_wait` result: **1,879 checks, zero failures, exit `0x4a535254` (JSRT)**.
+The common A/B/C retirement and staged/refused-candidate cases run under both
+teardown profiles, alongside the existing guest heap checks.
 
-## Remaining F.3a work
+Two disposable-image setup errors were corrected without changing realm code:
+the libraries initially went to `/bin` instead of the loader's `/lib`, and the
+reused image lacked `/home`, required by the existing file-helper tests. The
+passing run includes those tests. Its unrelated network-disabled kernel test
+`net_arp_pending_order` fails; this evidence claims the consumer, not a wholly
+passing kernel suite. No P5 acceptance is needed for this engine foundation.
 
-Realm lifecycle and entry refusal; staged setup with stable transaction tags;
-pre-execution job ownership/filtering and candidate-only setup drains;
-Promise/thenable/async/module ownership cases; discard accounting and queue
-bounds; reporting/service eligibility; the complete interrupt audit and
-mutant/guest evidence. F.3b then implements DOM departure and isolated failed
-installation. Neither F.3a nor F.3 is marked done by this checkpoint.
+## Pinned WPT comparison
+
+Both revisions use checkout `a699fb16767be39ba3e61a8e8b6bef60383f08ee` and unchanged
+expectations. Compared with merged F.2b (`37ec284d`), every named verdict,
+required/lost set, and summary matches, not just totals.
+
+| Family | Pass | Fail | Timeout | Not run | Total | Pages |
+|---|---:|---:|---:|---:|---:|---:|
+| `html/webappapis/scripting` | 535 | 1,062 | 35 | 9 | 1,641 | 112 |
+| `html/semantics/scripting-1/the-script-element/module` | 119 | 118 | 6 | 26 | 269 | 114 |
+
+Scripting exits 1 on both revisions for the existing required/pass loss:
+`events/event-handler-handleEvent-ignored.html` → `plain object "mouseenter"
+handler`. Modules exit 0 on both. Exclusions remain 9/25 worker or shadow-realm
+variants and one XML document per family. This comparison does not claim
+unmodified iframe WPT passes. See `wpt-comparison.txt` and the four
+`{baseline,staging}-wpt-{scripting,module}.log` evidence files.
+
+## Interrupt source audit and counterexamples
+
+`JS_ThrowInterrupted` creates an internal error and marks it uncatchable. The
+interpreter exception path skips catch-offset handling for that marker.
+Ordinary unwind closes variable references, releases local/stack values and
+restores `current_stack_frame`. Async/generator frames have separately owned
+state and release paths. These reference-lifetime mechanisms do not roll back
+partially executed JavaScript or native operations.
+
+The interrupt hook receives the runtime and opaque wrapper state. Neither
+records the set of realms traversed by raw engine calls; `turn_owner` names the
+outer turn, not the full interrupted stack. Pre-execution job ownership now
+supports eligibility, but supplies no interrupted-stack attribution or proof
+of per-realm application/native consistency after an uncatchable exception.
+
+Host cases under both teardown profiles interrupt allocation-heavy child
+loops, try/catch/finally, a child Promise job, native coercion, and nested
+A → B → C calls. Each returns LIMIT/EXECUTION, executes neither catch nor
+finally author hooks, blocks later sibling entry, and releases the heap/native
+holds on root teardown. Retirement after interruption cannot clear the latch.
+Job-cap cases likewise preserve the enclosing count through native setup,
+retirement and candidate drains.
+
+Verdict: no generic unwind corruption was observed, but safe child-local
+recovery and affected-realm attribution remain unproved. Keep the whole-runtime
+fallback. F.16 carries the missing recovery proof; clearing a latch is not one.
+
+## Source qualification and next slice
+
+Full runtime/DOM, WPT and initial guest evidence use prepared engine identity
+`24e976fe1cae9be2b338c9ab4bbb5fe7bc27f9cf719111922660e9345ebeaec5`.
+A final header-comment clarification distinguishes allocation-free inspection
+from release/native-finalizer effects; it changes the manifest-derived identity
+to `c1b9fceda7673420cae54717315a442f7b236a2c4297f9a92d30c42cb2815e77`
+without changing engine behavior. Runtime prose likewise names all three drain
+paths. Final target links and focused/guest confirmation use that identity, including
+the added retired-slot regression. Exact patch whitespace is preserved through
+`.gitattributes`; it is required context, not trailing source whitespace.
+
+F.3b must integrate DOM departure and shared delivery eligibility, transactional
+native installation rollback, provider lifetimes and measured admission bounds.
+F.15 reclamation and F.16 recovery remain explicit F.11 gates. F.3a does not
+free departed realms, enable frames, clear sticky overruns or mark F.3 done.

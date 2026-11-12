@@ -20,6 +20,23 @@ external buffers, native handles and host allocations need independent host
 cleanup. No leaked handle may be touched afterward. Other engine aborts and
 active destruction remain fatal. See CONTRACT.md for the complete contract.
 
+## Realm retirement and retained engine roots
+
+Realm retirement marks scheduling ineligible and does not invoke either root
+teardown path. The runtime keeps retired contexts, intrinsic handles and
+module storage until destruction. Queued entries retain their execution,
+callback and optional activity contexts independently; execution, discard
+and root cleanup release those holds. Native data callbacks, Promise resolver
+functions and async state also retain and GC-mark their function/code realm.
+An async state can outlive completion of its suspended stack.
+
+Hosts detach provider hooks only after active entries/checkpoints return,
+and release exported values before root destruction as before. Retirement
+cannot clear cancellation, allocator flags or an interrupt outcome. Tests
+cover surviving siblings, pending retired jobs and modules, retained direct
+functions and clean root teardown in both profiles. DOM-specific departure
+and failed installation cleanup remain separate F.3b work.
+
 ## Detection and reclamation
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original
@@ -127,3 +144,12 @@ Constructor-failure sweeps, tracked resize/refusal/alignment tests and a live
 peer-runtime probe add host coverage. Separate fatal processes retain the full
 JSFA badge for default leaks, raw-engine leaks under reclaiming creation,
 active destruction in both policies and unrelated invariants.
+
+Staged installation keeps its `JSJobGroup` in the same retained realm slot.
+Each queued entry also links into its transaction group; execution, discard
+and runtime destruction unlink both lists before releasing values/contexts.
+The group borrows its owner's context from the wrapper. A failed installer
+releases its candidate queue at guard exit, including neutral entries, and
+marks its slot retired. Sibling finalization scheduled by allocation-triggered
+GC is ungrouped and survives that abort. Native DOM partial-state rollback is
+separate from these engine holds.

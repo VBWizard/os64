@@ -179,6 +179,9 @@ static void realm_capacity_cases(void)
             check(false, "all advertised realm slots fit fixture budget");
             os64_js_destroy(runtime); return;
         }
+        if (i % 2 != 0)
+            check(os64_js_realm_retire(last, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                  "retired descriptors retain their place in the cumulative slot limit");
     }
     size_t before = os64_js_heap_bytes(runtime);
     os64_js_realm_t *extra = last;
@@ -570,8 +573,14 @@ static void realm_failure_order_cases(void)
     os64_js_destroy(runtime);
 }
 
+
+#include "retirement.h"
+#include "staging.h"
+
 static void realm_cases(void)
 {
+    retirement_cases();
+    staging_cases();
     realm_identity_cases();
     realm_rejection_cases();
     realm_capacity_cases();

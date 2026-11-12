@@ -1,6 +1,6 @@
 # JavaScript runtime API contract
 
-Status: embedding ABI 4, including realm admission preflight, 2026-11-12.
+Status: embedding ABI 4, including admission, retirement, staged setup and job ownership, 2026-11-12.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -86,7 +86,7 @@ intrinsics with the same capability profile. Both require the binding ABI.
 `os64_js_realm_context` borrows a realm's context and
 `os64_js_realm_from_context` checks membership without trusting a foreign
 context's opaque slot. A context or realm handle remains borrowed until
-runtime destruction. There is no per-realm retirement operation.
+runtime destruction, including after retirement.
 
 The wrapper reserves a fixed descriptor table in its enclosing allocation,
 charged before the engine memory ceiling is set. Contexts, retained values,
@@ -117,6 +117,82 @@ inside a parent callback. It publishes no handle on refusal. The legacy
 promises that arbitrary later allocations or system OOM are recoverable.
 The DOM installation reserve and its profile-specific measurements belong to
 F.3b; a bare engine realm's size is not the cost of an installed DOM binding.
+
+`os64_js_realm_stage` performs guarded creation and reserves an Installing
+slot. It exposes a native handle for private installation, but ordinary
+source/module/task entry returns non-sticky REALM_INSTALLING. Keep its objects
+unexposed until `os64_js_realm_activate` succeeds. Activation requires a
+successful `os64_js_realm_setup` and no pending candidate work; it does not
+open a turn or change the budget. A slot remains consumed if setup fails. Refusal before guard entry (such as
+BUSY or invalid input) leaves the private candidate unchanged for retry or
+explicit retirement. Once the guard starts, failure retires it.
+
+`os64_js_realm_setup` calls a trusted native installer, permits its private
+bootstrap, and drains its candidate-tagged jobs before returning success.
+The callback returns OK, ADMISSION_REFUSED with no pending engine exception,
+or EXCEPTION with a pending exception. An ordinary exception/native refusal
+retires the candidate without poisoning healthy siblings; engine memory,
+cancellation, clock and budget failures still poison the shared runtime.
+An unhandled candidate rejection is a private setup failure, without calling
+script-host reporting hooks. Native partial-state cleanup belongs to the host.
+
+A standalone setup guard requires no earlier pending turn. Nested setup borrows
+the enclosing task or evaluation's deadline and executed-job count, protects
+its outcome storage, and neither runs nor reorders sibling jobs. Setup cannot
+nest another candidate installation. Installers may use separate outcomes for
+nested installation APIs, but may not call siblings/external providers or
+publish candidate references. Output and module providers remain closed until
+activation, including after their hooks have been installed privately.
+
+Patch 0020 attaches a stable transaction group independently of execution
+ownership. An intrusive second queue permits constant-time selection of the
+next candidate job while preserving the global sibling FIFO. Neutral jobs
+and descendants enqueued under the guard belong to the candidate. Abort
+releases that group's entries without executing them or settling promises.
+GC may enqueue an existing sibling registry's cleanup during a candidate
+allocation; that cleanup stays outside the candidate group. Group storage
+lives in the retained realm slot through engine teardown. The raw group APIs
+are trusted embedding machinery, not a way to bypass wrapper job budgets.
+
+`os64_js_realm_retire` irreversibly marks a realm ineligible. It is owner-thread,
+idempotent and allocation-free, including inside a native callback with a
+separate outcome. It also remains available after failure for native cleanup;
+it does not change the failure latch. `os64_js_realm_is_retired` reads the mark.
+New source/file/bytecode/module execution, installers and realm tasks return
+non-sticky REALM_RETIRED. Host function calls also check the function's realm,
+so selecting A's context cannot schedule a departed B callback. Existing
+JavaScript stacks may finish/unwind, and live scripts may directly call
+retained ordinary functions. Retirement neither frees context/global/native
+storage nor removes queued entries under an active stack.
+
+Script reporting and new module-provider/output activity stop at the mark.
+At the host's safe point after active entries and checkpoints, clear script
+and module hooks before freeing their opaque storage. Context/member queries
+and module release remain available while their ordinary runtime-health rules
+allow them. The libjs mark is not DOM departure: a DOM host must separately
+stop its timers, observers, network activity and binding providers. F.3b owns
+that integration and its cleanup proof.
+
+Queued work carries native execution context, callback/code owner and an
+optional activity owner. Patch 0019 retains these independently. Promise
+reaction ownership follows the handler, thenable work follows `then`, and
+handlerless propagation is explicitly neutral. Custom capability resolve/reject
+functions use ordinary Call inside an admitted job. Native data functions and
+async continuations retain their creation/code realm; bound/proxy traversal is
+iterative, with revoked proxies falling back to the enqueue context without
+allocating or throwing at enqueue. FinalizationRegistry work additionally
+checks the registry's activity realm. Dynamic imports retain importing context
+ownership. Binding jobs default to the enqueuing context; native hosts can use
+`JS_EnqueueJobOwned` for explicit or neutral ownership and must gate records
+inside a neutral shared delivery queue themselves.
+
+Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
+running a job or settling its promises, preserving surviving FIFO order.
+Foreign contexts are invariant failures, not neutral work. Discarded entries
+count against slice visits and the original deadline, but not executed jobs.
+Dead heads can be removed at the job cap; the next eligible entry still fails
+with LIMIT/JOBS. Obsolete reporting records/owed module errors do not surface
+in a live sibling's checkpoint.
 
 Legacy verbs select the primary realm. Explicit realm verbs select the owner
 for source/bytecode execution, task begin/call, module operations, script hosts,
@@ -329,8 +405,8 @@ One turn starts at evaluation and ends when its runnable job queue is empty.
 It has one monotonic execution deadline and one total executed-job cap. Time
 spent between manual job slices counts against that deadline; slicing does not
 refresh either budget. `eval` can return OK with `jobs_pending` true.
-`drain_jobs` executes up to positive `slice_jobs`, returning MORE_JOBS if the
-queue remains nonempty. `run` drains until the queue empties or a non-success
+`drain_jobs` visits up to positive `slice_jobs` entries (executed or discarded),
+returning MORE_JOBS if the queue remains nonempty. `run` drains until the queue empties or a non-success
 outcome occurs.
 No new top-level evaluation is accepted while a turn has runnable jobs; return
 BUSY and preserve the turn. Reaching a slice boundary with an empty queue is OK;
@@ -365,7 +441,8 @@ Outcomes use caller-owned fixed-capacity diagnostic arrays. Each operation
 initializes its outcome, with NUL-terminated fields, even when formatting fails.
 Truncation sets `diagnostic_truncated`; unavailable locations are zero. The
 structured status and limit identify failure without parsing text.
-`jobs_executed` is cumulative for the current turn, not just the last slice. Diagnostics
+`jobs_executed` and `jobs_discarded` are cumulative for the current turn, not
+just the last slice; only executed jobs consume the execution cap. Diagnostics
 may use engine conversions, which can fail or invoke script; the original turn
 budget and entry guard remain active during exception extraction, with a fixed
 fallback when conversion fails. Rejection checkpoint diagnostics avoid executing
