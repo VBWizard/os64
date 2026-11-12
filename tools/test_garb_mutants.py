@@ -29,6 +29,13 @@ args.logs.mkdir(parents=True, exist_ok=True)
 PARSE = 'userland/libgarb/parse.c'
 CASCADE = 'userland/libgarb/cascade.c'
 GARB = 'tools/test_garb_host.sh'
+PROPS = 'userland/libgarb/props.c'
+STYLE = 'userland/libflow/style.c'
+COMPUTED = 'userland/libflow/computed.c'
+PAINT = 'userland/apps/yonder/paint.c'
+FLOW = 'tools/test_libflow_host.sh'
+FLOW_COMPUTED = 'tools/test_libflow_host.sh --computed'
+YON = 'tools/test_yonder_host.sh'
 
 # (name, file, old, new, harness). Each breaks one rule the design states.
 mutants = [
@@ -51,6 +58,49 @@ mutants = [
     ('the-cascade-frees-only-its-arena', CASCADE,
      '    os64_free(c->slots);\n    garb_free(&c->self);',
      '    os64_free(c->slots);\n    os64_arena_destroy(c->self.arena);', GARB),
+    # CSS Images: a stop with two positions, and conic gradients.
+    ('a-two-position-stop-counts-once', PROPS,
+     '        colours += hint ? 0 : positions == 2 ? 2 : 1;',
+     '        colours += !hint;', GARB),
+    ('a-conic-stop-reads-a-length', PROPS,
+     '    return kind == GRADIENT_CONIC ? ap_val(s, c, &v) : length_percentage(s, c);',
+     '    (void)v;\n    (void)kind;\n    return length_percentage(s, c);', GARB),
+    ('a-conic-has-no-prelude', PROPS,
+     '         : kind == GRADIENT_CONIC  ? conic_prelude(s, g)',
+     '         : kind == GRADIENT_CONIC  ? (false && conic_prelude(s, g))', GARB),
+    ('an-angle-calc-costs-the-declaration', PROPS,
+     '                !(angle_calc(t->children, t->nchildren, false) || writes_interpolation(t)))',
+     '                !((false && angle_calc(t->children, t->nchildren, false)) || writes_interpolation(t)))', GARB),
+    ('any-invalid-conic-is-taken-by-name', PROPS,
+     '                !(angle_calc(t->children, t->nchildren, false) || writes_interpolation(t)))',
+     '                ((void)angle_calc(t->children, t->nchildren, false), (void)writes_interpolation(t), false))', GARB),
+    ('a-conic-is-read-as-radial', STYLE,
+     '    } else if (is_word(geo, "conic") && geo->nitems == 3) {',
+     '    } else if (false && is_word(geo, "conic") && geo->nitems == 3) {', FLOW),
+    ('a-conic-stop-in-degrees-is-unwritten', STYLE,
+     '    if (kind != FLOW_GRADIENT_CONIC || v->kind != GARB_V_ANGLE)',
+     '    if (((void)kind, true) || v->kind != GARB_V_ANGLE)', FLOW),
+    ('a-conic-is-written-as-radial', COMPUTED,
+     '    } else if (g->kind == FLOW_GRADIENT_CONIC) {\n        // What the page left',
+     '    } else if (false) {\n        // What the page left', FLOW_COMPUTED),
+    ('a-conic-turns-anticlockwise', PAINT,
+     '    double t = (atan2(u - l->cx, l->cy - v) - l->turn0)',
+     '    double t = (atan2(l->cx - u, l->cy - v) - l->turn0)', YON),
+    ('a-conic-ignores-its-from', PAINT,
+     '        turn0 = g->angle / 1000.0 * 3.14159265358979323846 / 180;',
+     '        turn0 = 0;', YON),
+    ('a-conic-start-is-not-in-the-tile-key', PAINT,
+     '                                line->turn0};',
+     '                                0};', YON),
+    ('an-interpolating-conic-costs-the-declaration', PROPS,
+     '                !(angle_calc(t->children, t->nchildren, false) || writes_interpolation(t)))',
+     '                !(angle_calc(t->children, t->nchildren, false) || (false && writes_interpolation(t))))', GARB),
+    ('a-negative-conic-percentage-is-refused', PROPS,
+     '    return vc_angle(c, true, out) || vc_dim(c, ACCEPT_PERCENT, true, false, &s->a, out);',
+     '    return vc_angle(c, true, out) || vc_dim(c, ACCEPT_PERCENT, false, false, &s->a, out);', GARB),
+    ('a-conic-centre-takes-the-far-side', PAINT,
+     '    double t = (atan2(u - l->cx, l->cy - v) - l->turn0)',
+     '    double t = (atan2(u - l->cx, -(v - l->cy)) - l->turn0)', YON),
 ]
 
 caught, missed, unbuilt = [], [], []

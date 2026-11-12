@@ -1429,20 +1429,32 @@ static double wrap(double x, double size)
 }
 
 // What works a gradient's pixels out, its stops resolved: the line through
-// the tile's middle (cx, cy) along (dx, dy), `len` long, or the ray from
-// the centre (cx, cy) with radii rx and ry.
+// the tile's middle (cx, cy) along (dx, dy), `len` long, the ray from the
+// centre (cx, cy) with radii rx and ry, or the turn about the centre that
+// starts `turn0` radians clockwise from up.
 typedef struct {
     flow_gradient_kind_t kind;
     bool repeating;
-    double dx, dy, len, cx, cy, rx, ry;
+    double dx, dy, len, cx, cy, rx, ry, turn0;
     Stops stops;
 } Line;
+
+// How far round a conic gradient's turn (u, v) is, from where the turn
+// starts, as a fraction of it in [0, 1): clockwise from up, as y runs down.
+// `cy - v`, never `-(v - cy)`: at the centre that is +0, whose atan2 is 0
+// (the turn's start), where -0's is half a turn.
+static double turn_at(const Line *l, double u, double v)
+{
+    double t = (atan2(u - l->cx, l->cy - v) - l->turn0) / (2 * 3.14159265358979323846);
+    return t - floor(t);
+}
 
 // The tile's pixel whose middle is (u, v) in the tile, as the verb takes
 // it: straight alpha on top.
 static uint32_t line_at(const Painter *p, const Line *l, double u, double v)
 {
     double t = l->kind == FLOW_GRADIENT_LINEAR ? ((u - l->cx) * l->dx + (v - l->cy) * l->dy) / l->len + 0.5
+             : l->kind == FLOW_GRADIENT_CONIC  ? turn_at(l, u, v)
                                                : hypot((u - l->cx) / l->rx, (v - l->cy) / l->ry);
     uint32_t c = paper_of(p, stops_colour(&l->stops, t, l->repeating));
     return (uint32_t)flow_alpha(c) << 24 | (c & 0xffffffu);
@@ -1494,7 +1506,8 @@ static bool tile_kept(const Painter *p, const Line *line, const yonder_tile_t *t
     key_put(&bk->key, &dark, 1);
     key_i64(&bk->key, bk->pw);
     key_i64(&bk->key, bk->ph);
-    const double geometry[7] = {line->dx, line->dy, line->len, line->cx, line->cy, line->rx, line->ry};
+    const double geometry[8] = {line->dx, line->dy, line->len, line->cx, line->cy, line->rx, line->ry,
+                                line->turn0};
     key_put(&bk->key, geometry, sizeof(geometry));
     key_i64(&bk->key, line->stops.n);
     for (int32_t i = 0; i < line->stops.n; i++) {
@@ -1546,10 +1559,16 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
     int64_t y1 = min64((int64_t)area.y + area.h, (int64_t)p->view.y + p->view.h);
     if (x1 <= x0 || y1 <= y0 || p->v->pixels == NULL)
         return true;
-    // The line (linear) or the ray (radial) and its length in px.
-    double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1;
+    // The line (linear) or the ray (radial) and its length in px; or the
+    // turn (conic), whose stops are in degrees of it, so 360 long.
+    double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1, turn0 = 0;
     bool flat = false;
-    if (g->kind == FLOW_GRADIENT_LINEAR) {
+    if (g->kind == FLOW_GRADIENT_CONIC) {
+        cx = lp_px(g->centre[0], w);
+        cy = lp_px(g->centre[1], h);
+        turn0 = g->angle / 1000.0 * 3.14159265358979323846 / 180;
+        len = 360;
+    } else if (g->kind == FLOW_GRADIENT_LINEAR) {
         if (g->to_x != 0 || g->to_y != 0) {
             // Toward a corner, the line is square to the diagonal between
             // its two neighbours (§ 3.1.1).
@@ -1612,16 +1631,21 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
         }
         len = rx;
     }
-    Line line = {g->kind, g->repeating, dx, dy, len, cx, cy, rx, ry, {{0}, {0}, {0}, 0}};
+    Line line = {g->kind, g->repeating, dx, dy, len, cx, cy, rx, ry, turn0, {{0}, {0}, {0}, 0}};
     if (!(len > 0) || !stops_resolve(g, len, current, &line.stops))
         return true;
     const Stops *stops = &line.stops;
     // One colour everywhere: the flat ellipse, and a repeating gradient
     // whose repeat is shorter than a pixel along the way it runs — none
     // at all, or one no pixel can show (§ 3.6) — which is its average. A
-    // radial's repeat is shortest along its shorter radius.
+    // radial's repeat is shortest along its shorter radius; a conic's is
+    // longest at the corner farthest from its centre, where a repeat no
+    // pixel there can show is one none can.
+    double far = hypot(fmax(fabs(cx), fabs(w - cx)), fmax(fabs(cy), fabs(h - cy)));
     double pixel_period = (stops->at[stops->n - 1] - stops->at[0]) *
-                          (g->kind == FLOW_GRADIENT_LINEAR ? len : fmin(rx, ry));
+                          (g->kind == FLOW_GRADIENT_LINEAR ? len
+                           : g->kind == FLOW_GRADIENT_CONIC ? 2 * 3.14159265358979323846 * far
+                                                            : fmin(rx, ry));
     bool solid = flat || (g->repeating && !(pixel_period >= 1));
     uint32_t solid_colour = paper_of(p, g->repeating ? stops_average(stops) : stops->colour[stops->n - 1]);
     uint32_t solid_px = (uint32_t)flow_alpha(solid_colour) << 24 | (solid_colour & 0xffffffu);

@@ -8058,19 +8058,20 @@ static void diag_page_cases(void) {
     /* A canvas by its kind; a skipped property. A module script runs now
      * (modules.c), and an import map registers (importmap.c): neither is
      * missing. */
-    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
-        "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+    loop_page("<style>p{contain:paint;background-image:image-set(\"a.png\" 1x);background-clip:text}"
+        "h1{display:inline frob}h2{background-image:conic-gradient(red,blue)}</style><h2>y</h2><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=importmap>{}</script><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING script importmap") && !has(text,"MISSING script module") &&
         !has(text,"MISSING element canvas") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
-        has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
-        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
+        has(text,"MISSING css-value background-image: image-set (1)\n") &&
+        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip") &&
+        !has(text,"conic-gradient"),
         "diag: an element drawn as nothing, a property the cascade skipped and a value it dropped or "
-        "approximated are each recorded; a module, run, an import map, registered, and a clip to the text, "
-        "drawn, are not");
+        "approximated are each recorded; a module, run, an import map, registered, a clip to the text and "
+        "a conic gradient, drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING element canvas"),"diag: supported canvases remain absent from missing elements at departure");
