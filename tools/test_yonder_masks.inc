@@ -115,6 +115,16 @@ static void mask_paint_cases(void)
               "take\n"
               "end filter 0 #101010 255 cover 0\n"
               "0000\n");
+    // A rounded box asks whether a picture is there before it draws one
+    // (round_backdrop): a mask layer answers for itself (the cold read).
+    char *round = mask_paint("<!doctype html><style>body { margin: 0 } .m { width: 4px; height: 4px;"
+                             " border-radius: 1px; background: #00ff00; mask: url(icon.svg) }</style>"
+                             "<div class=m></div>",
+                             200, (os64_gui_rect_t){0, 0, 200, 100});
+    expect("mask: a rounded box's picture mask is drawn",
+           round != NULL && strstr(round, "backdrop ") != NULL && strstr(round, " mask 0 ") != NULL,
+           round);
+    free(round);
     // A mask that hides the box whole paints nothing, and opens no layer.
     mask_case("mask: one that hides the box whole paints nothing",
               "width: 4px; height: 4px; background: #00ff00;"
@@ -133,6 +143,23 @@ static void mask_paint_cases(void)
               "fill 0 0 4 4 #00ff00\n"
               "end group 255\n");
     expect("mask: a reference is not counted refused", yonder_paint_layers_refused == 0, NULL);
+    // Past the deepest group kept (PAINT_GROUPS), a mask that hides its box
+    // whole still hides it: sixty-five groups deep, nothing of "x" is
+    // painted, and "y" beside it is.
+    {
+        char deep[4096];
+        size_t at = (size_t)snprintf(deep, sizeof(deep), "<!doctype html><style>body { margin: 0 }"
+                                     " i { display: block; opacity: 0.9 }"
+                                     " b { display: block } .h { mask: linear-gradient(#0000, #0000) }</style>");
+        for (int k = 0; k < 65; k++)
+            at += (size_t)snprintf(deep + at, sizeof(deep) - at, "<i>");
+        at += (size_t)snprintf(deep + at, sizeof(deep) - at, "<b class=h>x</b><b>y</b>");
+        bool escaped = false;
+        char *got = paint_of(deep, strlen(deep), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+        expect("mask: past the deepest group kept, a hiding mask still hides",
+               got != NULL && strstr(got, "\"x\"") == NULL && strstr(got, "\"y\"") != NULL, got);
+        free(got);
+    }
     // Only `none` is no mask: no group at all.
     mask_case("mask: none is no mask",
               "width: 4px; height: 4px; background: #00ff00; mask: none",

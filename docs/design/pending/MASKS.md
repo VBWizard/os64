@@ -119,9 +119,10 @@ layers and its size; that is a measured follow-up, not this slice.
 - **The shorthand** `mask` (Masking 1 § 7.9): a background's shorthand
   without the colour, plus `mask-mode` and `mask-composite`, and the
   `<geometry-box>` pair as background's is.
-- **`-webkit-` names**: every `-webkit-mask-*` is an alias of its longhand,
-  as the browsers alias them, and `-webkit-mask` of the shorthand.
-  `-webkit-mask-composite` takes the legacy keywords — `source-over`,
+- **`-webkit-` names**: every `-webkit-mask-*` but `-webkit-mask-composite`
+  is an alias of its longhand, as the browsers alias them, and
+  `-webkit-mask` of the shorthand. `-webkit-mask-composite` (slice M2, § 7)
+  takes the legacy keywords — `source-over`,
   `source-in`, `source-out`, `xor`, `destination-in`, `destination-out` —
   which map onto the four standard operators (the destination forms swap
   source and destination); a page's `-webkit-mask-composite: destination-in`

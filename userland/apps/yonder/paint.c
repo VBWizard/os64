@@ -2710,8 +2710,9 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     // same group must not be refused there and drawn filtered beside it.
     // Inside a group laid through its matrix it is charged in that
     // group's own pixels, before the matrix.
-    // A masked group is charged its mask's captures too, one a layer, so a
-    // group the budget takes is drawn masked whole (MASKS.md § 3).
+    // A masked group is charged its mask's captures too, one a layer, so the
+    // budget never takes a group and then runs out under its captures
+    // (MASKS.md § 3); a capture the face refuses is mask_coverage's.
     os64_gui_rect_t shown = cut(layer, p->shown);
     int64_t area = (int64_t)shown.w * shown.h * (masked ? 1 + flow_mask_layers(box->style) : 1);
     if (area > p->groups->filter_left || !p->v->layer_open(p->v->ctx, layer)) {
@@ -2838,7 +2839,8 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     if (d >= PAINT_GROUPS) {
         if (gs->hidden != 0)
             return;
-        if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL))
+        // A mask that hides its box whole hides it here too (MASKS.md § 10).
+        if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) || mask_hides_whole(box))
             gs->hidden = d + 1;
         else if (opacity_verbs(p))
             p->v->group_open(p->v->ctx, cut(shifted(bounds, p->shift), p->view));

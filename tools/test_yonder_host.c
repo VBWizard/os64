@@ -385,6 +385,8 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 {
     (void)clip;
     Rec *rec = ctx;
+    if (area == NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+        return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
     if (area != NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
         out(&rec->out, "backdrop %d %d %d %d mask %d origin %d %d %d %d\n", area->x, area->y,
             area->w, area->h, (int)(layer & ~YONDER_MASK_LAYER), origin.x, origin.y, origin.w,

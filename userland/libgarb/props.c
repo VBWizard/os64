@@ -4593,8 +4593,8 @@ static const struct {
     {"-webkit-animation-delay", "animation-delay", false},
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
     // Every engine reads the prefixed mask names as the standard ones
-    // (MASKS.md § 4) — but -webkit-mask-composite, whose words are the
-    // legacy compositing operators', is a grammar of its own.
+    // (MASKS.md § 4), all but -webkit-mask-composite, whose words are the
+    // legacy compositing operators': it is not read (MASKS.md § 7).
     {"-webkit-mask", "mask", true},
     {"-webkit-mask-image", "mask-image", true},
     {"-webkit-mask-repeat", "mask-repeat", true},

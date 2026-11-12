@@ -6206,8 +6206,11 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         } else if ((k = picture_for(p, url)) < 0) {
             fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+        // The canvas's owner's background is tiled in the root's origin box;
+        // its mask, in its own.
         yonder_tile_t tile;
-        const flow_box_t *in = b == walk->owner && walk->root != NULL ? walk->root : b;
+        const flow_box_t *in = b == walk->owner && walk->root != NULL &&
+                                       i < flow_background_layers(b->style) ? walk->root : b;
         if (k >= 0 && picture_tile(p, &p->pics[k], &l, yonder_box_edge(in, in->rect, l.origin), 0, 0, &tile))
             picture_drawn_at(p, k, tile.at.w, tile.at.h, b->style->pixelated);
     }
@@ -8410,14 +8413,17 @@ typedef struct {
 } SheetPicturesSeen;
 
 // One box of the view's walk: which pictures does a sheet put behind it?
+// The canvas's owner's background is asked apart (pictures_seen); its mask
+// is its box's own, drawn there, so it is asked here.
 static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
 {
     SheetPicturesSeen *look = ctx;
     os64_gui_rect_t meet;
-    if (b == look->owner || !box_draws_background(b) ||
+    if (!box_draws_background(b) ||
         !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
-    for (int32_t i = 0; i < picture_layers(b->style); i++) {
+    for (int32_t i = b == look->owner ? flow_background_layers(b->style) : 0;
+         i < picture_layers(b->style); i++) {
         flow_layer_t l = picture_layer(b->style, i);
         int32_t k = l.image != NULL ? css_picture(&g.page, &l) : -1;
         if (k < 0 || k >= look->n)
@@ -14816,7 +14822,10 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     flow_layer_t l = {0};
     if (area == NULL) {
         // Only asking: a sheet's picture, whether it has come or not, or
-        // an attribute's.
+        // an attribute's — or, for a mask layer, whether that layer names
+        // one (a rounded box asks before it draws, round_backdrop).
+        if (layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+            return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
         for (int32_t i = 0; i < flow_background_layers(b->style); i++)
             if (flow_background_layer(b->style, i).image != NULL)
                 return true;
