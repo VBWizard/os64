@@ -450,10 +450,13 @@ ends a link the saved key had ALREADY encrypted is the radio's and is
 retried by the manager, at most three times running with no input in
 between (`integrity_drop_after_encryption`).
 
-The controller's start-up round is run again when its reset and the reset
-that cleans up after it both go unanswered, three times in all before the
-host is failed, and `/sys/bluetooth/scan` says which half of a timed-out
-command was missing. At run time the event and ACL assemblers are fed
+The controller's start-up round is run again when it ends failed (a first
+error, then a cleanup that does not complete either: on the P5, two
+resets unanswered), three times in all before the host is failed. An
+event that cannot be right fails the round, not the host, until the
+controller is up. `/sys/bluetooth/scan` says which half of a timed-out
+command was missing, and `/sys/bluetooth/connection` keeps what the last
+failed round died of. At run time the event and ACL assemblers are fed
 whole USB packets and empty themselves at the end of a transfer they are
 out of step with (`event framing resyncs`, `ACL framing resyncs`); the
 bootloader's replies are still read as a byte stream. `tools/test_bt_bond_store_host.sh` runs

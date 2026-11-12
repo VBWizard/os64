@@ -125,6 +125,13 @@ static void late_completion(void)
       assert(u.timed_out && !u.timeout_usb_done && u.timeout_reply);
       char text[512]; bt_scan_status(&u,text,sizeof(text));
       assert(strstr(text,"; the USB transfer had not completed")); }
+    // A timeout that is NOT the recorded error is not printed beside it: a
+    // rejected command, then a cleanup reset that goes unanswered.
+    { bt_scan_t r={0}; assert(bt_scan_start(&r,0)); tick(&r,0); complete(&r,0x0c);
+      tick(&r,1); assert(r.phase==BT_SCAN_CLEANUP && !strcmp(r.error,"HCI command rejected"));
+      tick(&r,2); tick(&r,2002); assert(r.phase==BT_SCAN_FAILED);
+      char text[512]; bt_scan_status(&r,text,sizeof(text));
+      assert(!r.timed_out && strstr(text,"HCI command rejected (opcode 0c03 status 0c)\n")); }
     // Nothing timed out: nothing is said.
     { bt_scan_t ok={0}; assert(bt_scan_start(&ok,0)); tick(&ok,0);
       char text[512]; bt_scan_status(&ok,text,sizeof(text));

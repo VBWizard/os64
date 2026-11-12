@@ -7,8 +7,9 @@ typedef struct {
     uint64_t revision_seen, generation, next_attempt, next_save;
     uint32_t backoff_ms;
     // Integrity-check drops (reason 3d) on an encrypted link since input
-    // last flowed, and the drop last counted. Retried, but not for ever: a
-    // few in a row and the slot waits for its user like any key failure.
+    // last flowed or the block was last lifted, and the drop last counted.
+    // Retried, but not for ever: BT_MANAGER_MIC_DROPS in a row and the slot
+    // waits for its user like any key failure.
     uint8_t mic_drops;
     uint64_t mic_seen_ms;
     const char *storage_error;

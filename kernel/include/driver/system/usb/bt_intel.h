@@ -74,12 +74,15 @@ typedef struct {
 // up): the first packet it hands over can be the tail of an event whose
 // head went to the host before.
 //
-// Nothing a byte stream would have delivered is dropped by the packet
-// form: bytes after a complete event in the same packet are still read as
-// the next event. The operational controller's interrupt endpoint is fed
-// this way. The bootloader's replies are not (bt_intel_feed_events): they
-// come over the bulk endpoint, and what is known of their framing is what
-// the loader's tests record.
+// From a controller that keeps to those two rules, the packet form drops
+// nothing a byte stream would have delivered: bytes after a complete event
+// in the same packet are still read as the next event. A tail that ends
+// exactly on a full packet is not seen as one until a short packet comes,
+// so it can still take the event after it; the start-up round's retry
+// (bt_host.h) is what covers that. The operational controller's interrupt
+// endpoint is fed this way. The bootloader's replies are not
+// (bt_intel_feed_events): what is known of their framing is what the
+// loader's tests record.
 void bt_hci_feed(bt_hci_stream_t *stream,
                  void (*event)(void *, const uint8_t *, size_t), void *context,
                  const uint8_t *data, size_t bytes, size_t max_packet);

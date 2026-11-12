@@ -17,11 +17,17 @@ typedef struct {
     uint8_t owner, credits, next_peer, poll_peer;
     uint8_t duplicate_slot; // Last refused peer's owning slot plus one; zero means none.
     uint64_t init_retry_at;
-    // Start-up rounds that ended FAILED (the controller's reset and the
-    // reset that cleans up after it both unanswered). The round is run
+    // Start-up rounds that ended FAILED: a first error, and then a cleanup
+    // that did not complete either (on the P5, the controller's reset
+    // unanswered and the cleanup's reset unanswered too). The round is run
     // again, after the same pause a cleanly stopped one gets, until
     // BT_HOST_INIT_ROUNDS have failed: one bad start is not the boot.
     uint8_t init_failed_rounds;
+    // What the last such round died of. The next round rebuilds the scan,
+    // so it is kept here for the status file.
+    const char *round_error, *round_timeout;
+    uint16_t round_opcode;
+    uint8_t round_status;
     uint8_t wire[BT_LE_ACL_MAX+4];
     size_t wire_used, wire_need;
     // ACL data being discarded until its transfer ends, and how often the

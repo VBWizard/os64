@@ -19,7 +19,7 @@ void bt_manager_observe(bt_manager_t *m,const bt_le_t *s,uint64_t now)
 {
     if(m->revision_seen==s->bond_revision) return;
     m->revision_seen=s->bond_revision; m->generation++; m->dirty=true;
-    m->automatic=s->bond.valid; m->suppressed=false; m->blocked=false;
+    m->automatic=s->bond.valid; m->suppressed=false; m->blocked=false; m->mic_drops=0;
     m->next_attempt=now; m->next_save=now; m->backoff_ms=2000;
 }
 static bool manager_candidate(const bt_le_t *s,const bt_scan_t *scan)
@@ -67,7 +67,7 @@ bool bt_manager_command(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,
     if(manager_word(p,n,"auto on") || manager_word(p,n,"auto off")) {
         bool enabled=manager_word(p,n,"auto on");
         if(enabled && !s->bond.valid) return false;
-        m->automatic=enabled; m->suppressed=false; m->blocked=false;
+        m->automatic=enabled; m->suppressed=false; m->blocked=false; m->mic_drops=0;
         m->generation++; m->dirty=true; m->next_save=now; m->next_attempt=now;
         return true;
     }
@@ -88,7 +88,7 @@ bool bt_manager_command(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,
     bt_manager_observe(m,s,now);
     if(disconnect) m->suppressed=true;
     else if(!manager_word(p,n,"inspect")) {
-        m->suppressed=false; m->blocked=false; m->scan_owned=false;
+        m->suppressed=false; m->blocked=false; m->mic_drops=0; m->scan_owned=false;
         m->next_attempt=now;
         bt_le_reconnect_scan(s,scan);
     }

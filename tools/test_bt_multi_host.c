@@ -277,6 +277,33 @@ static void start_up_rounds(void)
     assert(!host.failed && host.scan.phase>BT_SCAN_RESET && host.scan.phase<BT_SCAN_CLEANUP);
     assert(cmd_n && le_u16(cmd)==0x1003);        // the round moved on to its next command
 
+    // What a failed round died of outlives the round that follows it.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    step(); now=host.init_retry_at; cmd_n=0; step();
+    now+=2000; step(); cmd_n=0; step(); now+=2000; step();
+    step(); now=host.init_retry_at; cmd_n=0; step();     // round two is under way
+    assert(!host.scan.error && host.init_failed_rounds==1);
+    bt_host_status(&host,text,sizeof(text));
+    assert(strstr(text,"last failed start-up round: HCI command timed out (opcode 0c03 status 00); the USB transfer completed, no reply came\n"));
+
+    // An event that cannot be right, during start-up, fails the ROUND: the
+    // assembler can deliver one while it is finding its place after a tail.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    step(); now=host.init_retry_at; cmd_n=0; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
+    const uint8_t hardware[]={0x10,1,0x42}, runt[]={0x0e,1,1}, wrong[]={0x0f,3,0,1,3};
+    multi_event(hardware,sizeof(hardware)); assert(!host.failed && host.scan.hardware_error);
+    host.scan.hardware_error=false;
+    multi_event(runt,sizeof(runt)); assert(!host.failed && host.scan.bad_reply);
+    host.scan.bad_reply=false;
+    multi_event(wrong,sizeof(wrong)); assert(!host.failed && host.scan.bad_reply);
+    step(); assert(host.scan.phase==BT_SCAN_CLEANUP && !host.failed);     // the round fails, the host does not
+    // Between rounds there is nothing for it to belong to.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    multi_event(hardware,sizeof(hardware)); assert(!host.failed && !host.scan.hardware_error);
+    // Once the controller is up, the same event is the end of the host.
+    setup(); multi_event(hardware,sizeof(hardware)); assert(host.failed);
+    setup(); multi_event(runt,sizeof(runt)); assert(host.failed);
+
     // A failed transport is not a round to repeat.
     setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
     step(); now=host.init_retry_at; cmd_n=0; step();
@@ -297,6 +324,14 @@ static void acl_resync(void)
     assert(host.wire_used==0 && host.wire_resyncs==1 && !host.failed);
     bt_host_receive(&host,report,sizeof(report),MPS,multi_report,NULL);
     assert(input_count[0]==1 && host.wire_resyncs==1 && !host.failed);
+    // A tail long enough to read as a whole header with a believable
+    // length: the transfer still ended, inside what it called a body.
+    const uint8_t longer[]={0x55,0x66,0x10,0x00,0x77};
+    setup();
+    bt_host_receive(&host,longer,sizeof(longer),MPS,multi_report,NULL);
+    assert(host.wire_used==0 && host.wire_need==0 && host.wire_resyncs==1 && !host.failed);
+    bt_host_receive(&host,report,sizeof(report),MPS,multi_report,NULL);
+    assert(input_count[0]==1);
     // The byte-stream form would have read the tail as part of a header.
     setup();
     bt_host_receive(&host,tail,sizeof(tail),0,multi_report,NULL);

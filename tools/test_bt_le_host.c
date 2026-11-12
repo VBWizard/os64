@@ -1039,9 +1039,11 @@ static void integrity_drop_after_encryption(void)
     begin_bond(2); run(); stop_session();
     peer_bonding=false; peer_reconnecting=true;
     bt_manager_t manager={.loaded=true,.automatic=true,.revision_seen=session.bond_revision};
+    bt_scan_t scan={0};
+    // The first attempt is the user's; the ones after it are the manager's
+    // own, which is what the cap is on.
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
     for(unsigned drop=1;drop<=BT_MANAGER_MIC_DROPS;drop++) {
-        bt_scan_t scan={0};
-        assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
         // Into HID setup on the encrypted link, and no further.
         for(unsigned i=0;i<2000 && !(session.encrypted && session.phase>=BT_LE_SERVICES);i++) {
             tick(true,true); controller(); peripheral();
@@ -1057,12 +1059,27 @@ static void integrity_drop_after_encryption(void)
         // Stepping again does not count the same drop twice.
         bt_manager_step(&manager,&session,&scan,now);
         assert(manager.mic_drops==drop);
+        if(manager.blocked) break;
+        // The manager's retry: a scan round, the peer found, a reconnect.
+        if(!manager.scan_owned) {
+            if(now<manager.next_attempt) now=manager.next_attempt;
+            bt_manager_step(&manager,&session,&scan,now);
+        }
+        assert(manager.scan_owned);
+        scan.phase=BT_SCAN_DONE; scan.count=1;
+        scan.devices[0].le=true; scan.devices[0].address_type=peer_air_type;
+        memcpy(scan.devices[0].address,peer_air,6);
+        bt_manager_step(&manager,&session,&scan,now);
+        assert(!manager.scan_owned && !bt_le_quiescent(&session) && manager.mic_drops==drop);
     }
-    // Input flowing clears the count: three drops with work between them
-    // are three first drops.
-    bt_scan_t scan={0};
-    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now)); run();
-    assert(session.phase==BT_LE_READY && !manager.blocked);
+    assert(manager.blocked && manager.mic_drops==BT_MANAGER_MIC_DROPS);
+    // Lifting the block starts the count again: the user's reconnect is not
+    // one drop away from being blocked.
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
+    assert(!manager.blocked && manager.mic_drops==0);
+    run(); assert(session.phase==BT_LE_READY);
+    // And so does input flowing: drops with work between them are first drops.
+    manager.mic_drops=2;
     bt_manager_step(&manager,&session,&scan,now);
     assert(manager.mic_drops==0);
     // The same reason BEFORE the saved key has encrypted the link is the

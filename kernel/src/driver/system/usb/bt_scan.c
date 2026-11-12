@@ -200,7 +200,10 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         // The event drain precedes this tick. A late poll can observe a completed
         // command; its wait deadline applies only while either completion is missing.
         bool timed_out=now>=s->deadline && !(usb_done && s->command_done);
-        if (timed_out && !s->timed_out) {
+        // Recorded only when this timeout IS the error the status will
+        // show (scan_fail keeps the first): a later timeout must not be
+        // printed beside an earlier, different failure.
+        if (timed_out && !s->error) {
             s->timed_out=true; s->timeout_usb_done=usb_done; s->timeout_reply=s->command_done;
         }
         if (timed_out || (s->command_done && s->status) || s->bad_reply || s->hardware_error) {
@@ -275,15 +278,21 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
     send(context,op,p,length);
 }
 
+const char *bt_scan_timeout_text(const bt_scan_t *s)
+{
+    // A timeout is one half missing, or both: never neither.
+    return !s->timed_out ? "" :
+        !s->timeout_usb_done ? "; the USB transfer had not completed" :
+        "; the USB transfer completed, no reply came";
+}
+
 size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
 {
     const char *state=s->phase==BT_SCAN_IDLE ? "idle" : s->phase==BT_SCAN_DONE ? "complete" :
         s->phase==BT_SCAN_STOPPED ? "stopped (retry available)" :
         s->phase==BT_SCAN_FAILED ? "failed (reboot required)" : s->phase==BT_SCAN_CLEANUP ? "stopping after error" :
         s->phase<=BT_SCAN_INQUIRY ? "initializing" : s->phase==BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" : "LE scan";
-    const char *timeout=!s->timed_out ? "" :
-        !s->timeout_usb_done ? "; the USB transfer had not completed" :
-        !s->timeout_reply ? "; the USB transfer completed, no reply came" : "; both arrived late";
+    const char *timeout=bt_scan_timeout_text(s);
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"
         "error: %s (opcode %04x status %02x)%s\n"

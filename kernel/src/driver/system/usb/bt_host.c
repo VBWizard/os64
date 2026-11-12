@@ -16,12 +16,23 @@ void bt_host_init(bt_host_t *h,uint64_t now)
     for(unsigned i=0;i<BT_HOST_PEERS;i++) h->peers[i].le.shared_controller=true;
     bt_scan_start_le(&h->scan,now);
 }
+// An event that cannot be right. Once the controller is known to be up that
+// is the end of the host. During start-up it is the end of the ROUND, which
+// bt_host_tick may run again: an adapter taken over while it was running
+// can hand this host the tail of an old event first, and the assembler
+// delivers whatever that tail happens to frame before it is back in step.
+static void host_bad_event(bt_host_t *h,bool hardware)
+{
+    if(h->initialized) { h->failed=true; return; }
+    if(bt_scan_quiescent(&h->scan)) return;    // between rounds: nothing it could belong to
+    if(hardware) h->scan.hardware_error=true; else h->scan.bad_reply=true;
+}
 void bt_host_event(bt_host_t *h,const uint8_t *e,size_t n)
 {
-    if(n<2 || n!=2u+e[1]) { h->failed=true; return; }
+    if(n<2 || n!=2u+e[1]) { host_bad_event(h,false); return; }
     if(e[0]==0x0e || e[0]==0x0f) {
         bool status=e[0]==0x0f;
-        if(n<(status?6u:5u) || (status && n!=6)) { h->failed=true; return; }
+        if(n<(status?6u:5u) || (status && n!=6)) { host_bad_event(h,false); return; }
         h->credits=e[status?3:2];
         uint16_t op=host_u16(e+(status?4:3));
         if(h->owner==1) {
@@ -34,7 +45,7 @@ void bt_host_event(bt_host_t *h,const uint8_t *e,size_t n)
         }
         return;
     }
-    if(e[0]==0x10) { h->failed=true; return; }
+    if(e[0]==0x10) { host_bad_event(h,true); return; }
     if(e[0]==0x3e && n>=3 && e[2]==2) { bt_scan_event(&h->scan,e,n); return; }
     if(e[0]==1 || e[0]==2 || e[0]==0x22 || e[0]==0x2f) {
         bt_scan_event(&h->scan,e,n); return;
@@ -93,7 +104,7 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
             }
         }
         while(n && h->wire_used<h->wire_need) { h->wire[h->wire_used++]=*p++; n--; }
-        if(h->wire_used<h->wire_need) return;
+        if(h->wire_used<h->wire_need) break;   // out of bytes: the end-of-transfer check below decides
         uint16_t handle=host_u16(h->wire)&0xfff;
         for(unsigned i=0;i<BT_HOST_PEERS;i++) {
             bt_le_t *s=&h->peers[i].le;
@@ -170,6 +181,13 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
             // times before the host is called failed (bt_host.h). STOPPED
             // is the state the retry above starts from. A failed transport
             // is not a round to repeat.
+            if(!h->initialized && !h->failed) {
+                // The next round rebuilds the scan from nothing, so what
+                // this one died of is kept here.
+                h->round_error=h->scan.error; h->round_opcode=h->scan.error_opcode;
+                h->round_status=h->scan.error_status;
+                h->round_timeout=bt_scan_timeout_text(&h->scan);
+            }
             if(!h->initialized && !h->failed && ++h->init_failed_rounds<BT_HOST_INIT_ROUNDS) {
                 h->scan.phase=BT_SCAN_STOPPED;
                 // No reply came, so no reply gave the command credit back.
@@ -261,9 +279,12 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
 {
     if(!cap) return 0;
     int n=snprintf(out,cap,"controller: %s\nstart-up rounds failed: %u of %u\n"
+        "last failed start-up round: %s (opcode %04x status %02x)%s\n"
         "ACL framing resyncs: %u\ncommands: slot N COMMAND (default slot 0)\n",
         h->failed?"failed; reboot required":h->initialized?"ready":"initializing",
-        h->init_failed_rounds,BT_HOST_INIT_ROUNDS,h->wire_resyncs);
+        h->init_failed_rounds,BT_HOST_INIT_ROUNDS,
+        h->round_error?h->round_error:"none",h->round_opcode,h->round_status,
+        h->round_timeout?h->round_timeout:"",h->wire_resyncs);
     if(n<0) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;
     if(h->duplicate_slot && used<cap-1) {
