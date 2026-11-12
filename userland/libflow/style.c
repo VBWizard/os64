@@ -2438,6 +2438,23 @@ static int32_t angle_thousandths(double deg)
     return (int32_t)(t >= 360000 ? t - 360000 : t);
 }
 
+// A stop's position as flow keeps it (flow_gradient_stop_t): a
+// length-percentage; round a conic gradient, an angle as degrees in PX, or
+// a percentage of the turn. AUTO for what will not read.
+static flow_length_t stop_at(const Author *a, const garb_val_t *v, flow_gradient_kind_t kind)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    if (kind != FLOW_GRADIENT_CONIC || v->kind != GARB_V_ANGLE)
+        return author_lp(a, v, kUnwritten);
+    double deg = v->unit == GARB_U_TURN ? v->number * 360
+               : v->unit == GARB_U_GRAD ? v->number * 0.9
+               : v->unit == GARB_U_RAD  ? v->number * (180 / 3.14159265358979323846)
+                                        : v->number;
+    // Held to a million degrees either way, so its 64ths fit an int32_t.
+    double held = deg > 1e6 ? 1e6 : deg < -1e6 ? -1e6 : deg;
+    return (flow_length_t){FLOW_LENGTH_PX, (int32_t)(held * 64 + (held < 0 ? -0.5 : 0.5)), 0};
+}
+
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
 // stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
 // is left as it was; a currentColor stop is marked `current`, for the box
@@ -2458,7 +2475,8 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
     os64_memset(g, 0, sizeof(*g));
     const char *name = v->text;             // one of libgarb's own names
     g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
-                                    os64_streq(name, "repeating-radial-gradient"));
+                                    os64_streq(name, "repeating-radial-gradient") ||
+                                    os64_streq(name, "repeating-conic-gradient"));
     const garb_val_t *geo = &v->items[0];
     if (geo->kind == GARB_V_NUMBER) {
         g->kind = FLOW_GRADIENT_LINEAR;
@@ -2477,6 +2495,11 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
                 g->to_x = kTo[k].x;
                 g->to_y = kTo[k].y;
             }
+    } else if (is_word(geo, "conic") && geo->nitems == 3) {
+        g->kind = FLOW_GRADIENT_CONIC;
+        g->angle = angle_thousandths(geo->items[0].number);
+        g->centre[0] = author_lp(a, &geo->items[1], kHalf);
+        g->centre[1] = author_lp(a, &geo->items[2], kHalf);
     } else {
         g->kind = FLOW_GRADIENT_RADIAL;
         g->circle = is_word(geo, "circle");
@@ -2506,13 +2529,13 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
         o->at = kUnwritten;
         if (st->kind != GARB_V_COLOR) {
             o->hint = true;
-            o->at = author_lp(a, st, kUnwritten);
+            o->at = stop_at(a, st, g->kind);
             continue;
         }
         o->current = st->color.current;
         o->colour = st->color.current ? s->color : colour_of(st->color);
         if (st->nitems > 0)
-            o->at = author_lp(a, &st->items[0], kUnwritten);
+            o->at = stop_at(a, &st->items[0], g->kind);
     }
     g->stops = stops;
     g->nstops = n;
@@ -2968,8 +2991,9 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
 // A background property's list, one entry per layer libgarb read (a
 // LAYERS value, or one value for one layer); an entry flow cannot read is
 // the property's initial value. A url() is fetched by the face, a
-// gradient libgarb kept is drawn (values.h); a conic gradient or an
-// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// gradient libgarb kept is drawn (values.h); an image-set, or a conic
+// gradient taken by name, is no picture yet (PILE3.md § Booked, DEBTS.md).
+// Past the lists' budget
 // (list_alloc), the property's list is left as it was.
 static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
 {

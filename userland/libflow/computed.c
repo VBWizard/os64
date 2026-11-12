@@ -731,6 +731,27 @@ static void gradient(const flow_computed_t *c, Out *o, const flow_gradient_t *g)
             puts_(o, "deg");
             any = true;
         }
+    } else if (g->kind == FLOW_GRADIENT_CONIC) {
+        // What the page left at its initial value is left out, as Chrome
+        // writes it: `from 0deg` and `at center`.
+        puts_(o, "conic-gradient(");
+        if (g->angle != 0) {
+            puts_(o, "from ");
+            number(o, g->angle / 1000.0);
+            puts_(o, "deg");
+            any = true;
+        }
+        bool centred = true;
+        for (int k = 0; k < 2; k++)
+            centred = centred && g->centre[k].kind == FLOW_LENGTH_PERCENT && g->centre[k].value == 50 * 64 &&
+                      g->centre[k].offset == 0;
+        if (!centred) {
+            puts_(o, any ? " at " : "at ");
+            length(c, o, g->centre[0], "auto");
+            puts_(o, " ");
+            length(c, o, g->centre[1], "auto");
+            any = true;
+        }
     } else {
         static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
                                               "closest-corner", ""};
@@ -763,8 +784,12 @@ static void gradient(const flow_computed_t *c, Out *o, const flow_gradient_t *g)
             if (st->at.kind != FLOW_LENGTH_AUTO)
                 puts_(o, " ");
         }
-        if (st->at.kind != FLOW_LENGTH_AUTO)
+        if (st->at.kind == FLOW_LENGTH_PX && g->kind == FLOW_GRADIENT_CONIC) {
+            number(o, st->at.value / 64.0);         // degrees round the turn
+            puts_(o, "deg");
+        } else if (st->at.kind != FLOW_LENGTH_AUTO) {
             length(c, o, st->at, "");
+        }
     }
     puts_(o, ")");
 }

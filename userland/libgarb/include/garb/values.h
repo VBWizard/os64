@@ -207,16 +207,20 @@ typedef enum {
     GARB_V_URL,             // `text`, as written: resolved against the SHEET by whoever fetches
     GARB_V_STRING,          // `text`: a family name, a list marker, an animation's name
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
-    // An image named by its function (`text`). A linear or radial gradient
-    // carries itself in `items` (comma): items[0] its geometry, then its
-    // stops. Linear: a NUMBER, the angle in degrees in [0, 360) (taken round
-    // the turn in its own unit, so no unit overflows it), or a KEYWORD, "to top",
-    // "to top right" and the rest. Radial: a KEYWORD "circle" or "ellipse"
-    // whose items are its size — an extent KEYWORD, or a length-percentage
-    // and a second one or "auto" — and its centre, x then y. A stop: a COLOR
+    // An image named by its function (`text`). A gradient carries itself in
+    // `items` (comma): items[0] its geometry, then its stops. Linear: a
+    // NUMBER, the angle in degrees in [0, 360) (taken round the turn in its
+    // own unit, so no unit overflows it), or a KEYWORD, "to top", "to top
+    // right" and the rest. Radial: a KEYWORD "circle" or "ellipse" whose
+    // items are its size — an extent KEYWORD, or a length-percentage and a
+    // second one or "auto" — and its centre, x then y. Conic: a KEYWORD
+    // "conic" whose items are where it starts, a NUMBER in degrees in
+    // [0, 360) clockwise from up, and its centre, x then y. A stop: a COLOR
     // whose items are its one position, or none (a stop written with two is
-    // two stops); a hint: a length-percentage alone. Others (conic,
-    // image-set) carry nothing.
+    // two stops); a hint: a position alone. A position is a
+    // length-percentage, round a conic an ANGLE or a PERCENTAGE of the
+    // turn. image-set, and a conic gradient props.c's bg_image takes by
+    // name, carry nothing.
     GARB_V_IMAGE,
     // A grid track list (Grid 2 § 7.2): its tracks in `items` — each a
     // LENGTH (in GARB_U_FR for a flexible one), a PERCENTAGE, a CALC, a

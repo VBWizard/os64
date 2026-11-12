@@ -2572,6 +2572,7 @@ static yonder_paint_cache_counts_t paint_through(yonder_paint_cache_t *c, const 
 // Boxes alike but for one value each that makes their pixels — a stop's
 // colour, place or hint (a hint's colour is 0, so .g16's black stop where
 // .g4's hint is), the line's angle, a repeat, the ray's shape and centre,
+// a turn's start and centre,
 // currentColor's colour, the tile's size — a ray sized in px is the same
 // ray in any tile — and a shadow's blur, offset, spread, inset and corners
 // — and a small tile placed in from the box's corner, so the box's first
@@ -2603,6 +2604,9 @@ static const char *kCacheKeys =
     " .g18 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); width: 70px }"
     " .g19 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); height: 31px }"
     " .g20 { background: radial-gradient(#ff0000, #0000ff) 7px 5px / 20px 20px }"
+    " .g21 { background: conic-gradient(#ff0000, #0000ff) }"
+    " .g22 { background: conic-gradient(from 90deg, #ff0000, #0000ff) }"
+    " .g23 { background: conic-gradient(at 20% 30%, #ff0000, #0000ff) }"
     " .s0 { box-shadow: 4px 4px 6px #000000 }"
     " .s1 { box-shadow: 4px 4px 10px #000000 }"
     " .s2 { box-shadow: 6px 4px 6px #000000 }"
@@ -2619,7 +2623,7 @@ static const char *kCacheKeys =
     "<div class=g8></div><div class=g9></div><div class=g10></div><div class=g11></div>"
     "<div class=g12></div><div class=g13></div><div class=g14></div><div class=g15></div>"
     "<div class=g16></div><div class=g17></div><div class=g18></div><div class=g19></div>"
-    "<div class=g20></div>"
+    "<div class=g20></div><div class=g21></div><div class=g22></div><div class=g23></div>"
     "<div class=s0></div><div class=s1></div><div class=s2></div><div class=s3></div>"
     "<div class=s4></div><div class=s5></div><div class=s6></div><div class=s7></div>"
     "<div class=s8></div><div class=s9></div>";

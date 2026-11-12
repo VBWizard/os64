@@ -387,9 +387,10 @@ typedef struct {
     uint32_t name_len;
     int32_t row0, row1, col0, col1;
 } flow_grid_area_t;
-// A gradient (Images 3 § 3), as a page wrote it: what it needs to be drawn
-// on a box is the box's size, which a face has and the style has not.
-typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL } flow_gradient_kind_t;
+// A gradient (Images 3 § 3, Images 4 § 3.3 for a conic one), as a page
+// wrote it: what it needs to be drawn on a box is the box's size, which a
+// face has and the style has not.
+typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL, FLOW_GRADIENT_CONIC } flow_gradient_kind_t;
 // How big a radial gradient's ending shape is: to a side or a corner of
 // its box, the nearest or the farthest, or a SIZE written out (`radii`).
 typedef enum {
@@ -401,7 +402,8 @@ typedef enum {
 } flow_extent_t;
 
 // A colour stop at a position along the gradient line (PX, or PERCENT of
-// the line), AUTO where the page left it out; or a HINT, where between its
+// the line; round a conic gradient, PX is degrees and PERCENT is of the
+// whole turn), AUTO where the page left it out; or a HINT, where between its
 // two neighbours their colours meet half and half, its colour unused.
 // `current`: the page wrote currentColor, which is the colour of the box
 // the gradient is drawn on — not of the element that wrote it, since a
@@ -420,12 +422,14 @@ typedef struct {
     // LINEAR: the line's angle in thousandths of a degree, clockwise from
     // up (180000 is the initial, down) — or, when `to_x` or `to_y` is not
     // 0, toward that side or corner: -1 left or top, 1 right or bottom,
-    // which only the box's shape turns into an angle.
+    // which only the box's shape turns into an angle. CONIC: where its
+    // turn starts, in the same thousandths, about `centre`.
     int32_t angle;
     int8_t to_x, to_y;
     // RADIAL: a circle or an ellipse, how big — an extent, or `radii` (a
     // circle's in radii[0]; PX, or for an ellipse PERCENT of its box too)
-    // — and its centre, x then y (PX or PERCENT of the box).
+    // — and its centre, x then y (PX or PERCENT of the box), which a CONIC
+    // one has too.
     bool circle;
     flow_extent_t extent;
     flow_length_t radii[2];

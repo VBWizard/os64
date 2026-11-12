@@ -247,9 +247,9 @@ static const struct {
     {GARB_NPROPS, NULL},
 };
 
-// An image kept by name and drawn as nothing — a conic gradient, an
-// image-set — is approximated the same way; a linear or radial gradient and
-// a url() are drawn.
+// An image kept by name and drawn as nothing — an image-set, or a conic
+// gradient bg_image takes by name — is approximated the same way; a
+// gradient kept whole and a url() are drawn.
 static bool image_drawn(const garb_val_t *v)
 {
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
@@ -1300,9 +1300,12 @@ static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 // Whether a gradient is VALID decides what a `background` does: the
 // pre-standard `linear-gradient(top, …)` (no `to`) is refused by every
 // browser, so the `background: #333` before it stands, and a page that
-// relied on that is dark. So a linear or radial gradient is read against
-// its grammar and kept for drawing; conic gradients and image-set are
-// accepted by name, kept as nothing, and approximated for @supports.
+// relied on that is dark. So a linear, radial or conic gradient is read
+// against its grammar and kept for drawing; image-set, and a conic gradient
+// written with what this library does not read (bg_image), are accepted by
+// name, kept as nothing, and approximated for @supports.
+
+typedef enum { GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_CONIC } GradientKind;
 
 // One comma-separated argument group of a gradient: [from, to) of `v`.
 typedef struct {
@@ -1330,33 +1333,52 @@ static bool length_percentage(Sets *s, VCur *c)
     return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &v);
 }
 
-// `<color> <length-percentage>{0,2}` (a stop), or one length-percentage
-// alone (a hint).
-static bool stop(Sets *s, const Group *g, bool *hint)
+// A conic gradient's position along its stops (Images 4 § 3.3): an angle
+// (a unitless 0 among them) or a percentage of the whole turn, read.
+static bool ap_val(Sets *s, VCur *c, garb_val_t *out)
+{
+    return vc_angle(c, true, out) || vc_dim(c, ACCEPT_PERCENT, true, false, &s->a, out);
+}
+
+// A stop's position as its kind of gradient writes one: an
+// angle-percentage round a conic, else a length-percentage along a line.
+static bool stop_position(Sets *s, VCur *c, GradientKind kind)
+{
+    garb_val_t v;
+    return kind == GRADIENT_CONIC ? ap_val(s, c, &v) : length_percentage(s, c);
+}
+
+// `<color> <position>{0,2}` (a stop; `*positions` how many it wrote), or
+// one position alone (a hint).
+static bool stop(Sets *s, const Group *g, GradientKind kind, bool *hint, int *positions)
 {
     VCur c = {g->v, g->n, 0};
     garb_val_t v;
     *hint = false;
+    *positions = 0;
     if (vc_color(&c, &v)) {
-        for (int k = 0; k < 2 && !vc_done(&c); k++)
-            if (!length_percentage(s, &c))
+        for (; *positions < 2 && !vc_done(&c); (*positions)++)
+            if (!stop_position(s, &c, kind))
                 return false;
         return vc_done(&c);
     }
     *hint = true;
-    return length_percentage(s, &c) && vc_done(&c);
+    return stop_position(s, &c, kind) && vc_done(&c);
 }
 
-// §3.4: at least two stops, a hint only between two of them.
-static bool stops(Sets *s, const Group *g, int32_t n)
+// § 3.4: at least two colour stops, a hint only between two of them. A
+// stop written with two positions is two stops (Images 4 § 3.4.1), so
+// `linear-gradient(orange 0 0)`, the solid-colour idiom, has its two.
+static bool stops(Sets *s, const Group *g, int32_t n, GradientKind kind)
 {
     int32_t colours = 0;
     bool last_hint = true;          // nothing before the first: it may not be a hint
     for (int32_t i = 0; i < n; i++) {
         bool hint;
-        if (!stop(s, &g[i], &hint) || (hint && last_hint))
+        int positions;
+        if (!stop(s, &g[i], kind, &hint, &positions) || (hint && last_hint))
             return false;
-        colours += !hint;
+        colours += hint ? 0 : positions == 2 ? 2 : 1;
         last_hint = hint;
     }
     return colours >= 2 && !last_hint;
@@ -1446,8 +1468,42 @@ static bool radial_prelude(Sets *s, const Group *g)
     return any && vc_done(&c);
 }
 
-// Whether `f`, a linear or radial gradient function, fits its grammar.
-static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
+// [from <angle>]? [at <position>]?, one of them at least (Images 4 §
+// 3.3); a unitless 0 is an angle there.
+static bool conic_prelude(Sets *s, const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kFrom[] = {"from", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    bool any = false;
+    if (vc_keyword(&c, kFrom) != NULL) {
+        if (!angle(&c))
+            return false;
+        any = true;
+    }
+    if (vc_keyword(&c, kAt) != NULL) {
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t x, y;
+        bool ok = position(&strict, &c, false, &x, &y);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        any = true;
+    }
+    return any && vc_done(&c);
+}
+
+// Whether the first group of a gradient of `kind` is its prelude.
+static bool prelude_of(Sets *s, const Group *g, GradientKind kind)
+{
+    return kind == GRADIENT_RADIAL ? radial_prelude(s, g)
+         : kind == GRADIENT_CONIC  ? conic_prelude(s, g)
+                                   : linear_prelude(g);
+}
+
+// Whether `f`, a gradient function of `kind`, fits its grammar.
+static bool gradient_ok(Sets *s, const garb_value_t *f, GradientKind kind)
 {
     Group g[64];
     int32_t n = 0, from = 0;
@@ -1461,9 +1517,9 @@ static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
     for (int32_t i = 0; i < n; i++)
         if (only_ws(&g[i]))
             return false;
-    if (n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0])))
-        return stops(s, g + 1, n - 1);
-    return stops(s, g, n);
+    if (n > 0 && prelude_of(s, &g[0], kind))
+        return stops(s, g + 1, n - 1, kind);
+    return stops(s, g, n, kind);
 }
 
 // ── A gradient kept (values.h's GARB_V_IMAGE) ──
@@ -1483,22 +1539,29 @@ static garb_val_t number_val(double n)
     return v;
 }
 
+// A stop's position, read as its kind of gradient writes one.
+static bool position_val(Sets *s, VCur *c, GradientKind kind, garb_val_t *out)
+{
+    return kind == GRADIENT_CONIC ? ap_val(s, c, out) : lp_val(s, c, out);
+}
+
 // The stops of groups [0, n), each a COLOR with its position or a hint,
 // appended to `out` from `*k`; a stop written with two positions is two.
 // The grammar is already checked.
-static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, int32_t *k)
+static bool gradient_stops(Sets *s, const Group *g, int32_t n, GradientKind kind, garb_val_t *out,
+                           int32_t *k)
 {
     for (int32_t i = 0; i < n; i++) {
         VCur c = {g[i].v, g[i].n, 0};
         garb_val_t colour, pos;
         if (!vc_color(&c, &colour)) {
-            if (!lp_val(s, &c, &out[*k]))
+            if (!position_val(s, &c, kind, &out[*k]))
                 return false;
             (*k)++;
             continue;
         }
         int positions = 0;
-        while (!vc_done(&c) && lp_val(s, &c, &pos)) {
+        while (!vc_done(&c) && position_val(s, &c, kind, &pos)) {
             out[*k] = colour;
             out[*k].items = keep(s, &pos, 1);
             out[*k].nitems = 1;
@@ -1533,6 +1596,21 @@ static double round_the_turn(double v, double whole)
     return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
 }
 
+// An angle token's degrees, taken round its own unit's turn FIRST (`1e307rad`
+// in degrees is past a double, and a direction is the remainder, not the
+// size): in [0, 360). A unitless 0 is 0.
+static double turn_degrees(const garb_value_t *t)
+{
+    double n = t->number;
+    if (t->kind == GARB_DIMENSION) {
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
+    }
+    return n;
+}
+
 // The angle a linear gradient's prelude names, in degrees in [0, 360), or
 // its `to`.
 static garb_val_t linear_geometry(const Group *g, bool have)
@@ -1559,17 +1637,42 @@ static garb_val_t linear_geometry(const Group *g, bool have)
         }
         return kw(kNames[y][x]);
     }
-    const garb_value_t *t = vc_peek(&c);
-    double n = t->number;
-    if (t->kind == GARB_DIMENSION) {
-        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
-        // past a double, and a direction is the remainder, not the size.
-        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
-        bool turn = ieq(t->unit, t->unit_len, "turn");
-        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
-        n = round_the_turn(n, whole) * (360 / whole);
+    return number_val(turn_degrees(vc_peek(&c)));
+}
+
+// A conic gradient's prelude, or its initial one: a KEYWORD "conic" whose
+// items are where it starts, a NUMBER in degrees in [0, 360) clockwise
+// from up, and its centre, x then y.
+static bool conic_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
+{
+    static const char *const kFrom[] = {"from", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    garb_val_t parts[3];
+    parts[0] = number_val(0);
+    garb_val_t half;
+    os64_memset(&half, 0, sizeof(half));
+    half.kind = GARB_V_PERCENTAGE;
+    half.number = 50;
+    parts[1] = parts[2] = half;
+    if (have) {
+        VCur c = {g->v, g->n, 0};
+        if (vc_keyword(&c, kFrom) != NULL) {
+            parts[0] = number_val(turn_degrees(vc_peek(&c)));
+            c.i++;
+        }
+        if (vc_keyword(&c, kAt) != NULL) {
+            Sets strict = *s;
+            strict.quirks = false;
+            bool ok = position(&strict, &c, false, &parts[1], &parts[2]);
+            s->a.short_of_memory |= strict.a.short_of_memory;
+            if (!ok)
+                return false;
+        }
     }
-    return number_val(n);
+    *out = kw("conic");
+    out->items = keep(s, parts, 3);
+    out->nitems = 3;
+    return out->items != NULL;
 }
 
 // A radial gradient's prelude, or its initial one: an ellipse to the
@@ -1624,9 +1727,9 @@ static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
     return out->items != NULL;
 }
 
-// The gradient `f` (its grammar checked) as values.h describes it, into
-// `out`, which vc_image has made its IMAGE.
-static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val_t *out)
+// The gradient `f` of `kind` (its grammar checked) as values.h describes
+// it, into `out`, which vc_image has made its IMAGE.
+static bool gradient_value(Sets *s, const garb_value_t *f, GradientKind kind, garb_val_t *out)
 {
     Group g[64];
     int32_t n = 0, from = 0;
@@ -1637,16 +1740,19 @@ static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val
         }
     // The prelude by gradient_ok's own test, which asks it first: a unitless
     // 0 is an angle there, though it would read as a hint too.
-    bool prelude = n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0]));
+    bool prelude = n > 0 && prelude_of(s, &g[0], kind);
     garb_val_t items[1 + 2 * 64];
     int32_t k = 1;
-    if (radial) {
+    if (kind == GRADIENT_RADIAL) {
         if (!radial_geometry(s, &g[0], prelude, &items[0]))
+            return false;
+    } else if (kind == GRADIENT_CONIC) {
+        if (!conic_geometry(s, &g[0], prelude, &items[0]))
             return false;
     } else {
         items[0] = linear_geometry(&g[0], prelude);
     }
-    if (!gradient_stops(s, g + prelude, n - prelude, items, &k))
+    if (!gradient_stops(s, g + prelude, n - prelude, kind, items, &k))
         return false;
     out->items = keep(s, items, k);
     out->nitems = k;
@@ -1654,23 +1760,71 @@ static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val
     return out->items != NULL;
 }
 
+// Whether tokens [0, n) hold a calc(), min(), max() or clamp() with an
+// angle in it, at any depth.
+static bool angle_calc(const garb_value_t *v, int32_t n, bool in_calc)
+{
+    for (int32_t i = 0; i < n; i++) {
+        const garb_value_t *t = &v[i];
+        if (in_calc && t->kind == GARB_DIMENSION &&
+            (ieq(t->unit, t->unit_len, "deg") || ieq(t->unit, t->unit_len, "grad") ||
+             ieq(t->unit, t->unit_len, "rad") || ieq(t->unit, t->unit_len, "turn")))
+            return true;
+        if (t->kind == GARB_FUNCTION || t->kind == GARB_BLOCK) {
+            bool calc = t->kind == GARB_FUNCTION &&
+                        (ieq(t->text, t->len, "calc") || ieq(t->text, t->len, "min") ||
+                         ieq(t->text, t->len, "max") || ieq(t->text, t->len, "clamp"));
+            if (angle_calc(t->children, t->nchildren, in_calc || calc))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Whether a gradient's prelude, its first argument group, writes a
+// <color-interpolation-method> (Images 4 § 3.1: `in hsl longer hue`).
+static bool writes_interpolation(const garb_value_t *f)
+{
+    for (int32_t i = 0; i < f->nchildren && f->children[i].kind != GARB_COMMA; i++)
+        if (f->children[i].kind == GARB_IDENT && ieq(f->children[i].text, f->children[i].len, "in"))
+            return true;
+    return false;
+}
+
 // An <image>: a url, or a gradient the grammar above admits, kept whole,
-// or one this library takes by name (vc_image).
+// or one this library takes by name (vc_image). A conic gradient that
+// fails the grammar where it writes what this library does not read — a
+// calculation with an angle in it (DEBTS.md), or a colour interpolation
+// method (PILE3.md § Booked, which linear and radial ones are refused for)
+// — is taken by name too and drawn as nothing, as every conic gradient was
+// before they were drawn: refusing it would cost the page the rest of its
+// `background`.
 static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
 {
     const garb_value_t *t = vc_peek(c);
-    bool linear = false, radial = false;
+    bool gradient = false;
+    GradientKind kind = GRADIENT_LINEAR;
     if (t != NULL && t->kind == GARB_FUNCTION) {
-        linear = ieq(t->text, t->len, "linear-gradient") ||
-                 ieq(t->text, t->len, "repeating-linear-gradient");
-        radial = ieq(t->text, t->len, "radial-gradient") ||
-                 ieq(t->text, t->len, "repeating-radial-gradient");
-        if ((linear || radial) && !gradient_ok(s, t, radial))
-            return false;
+        static const struct { const char *name; GradientKind kind; } kGradients[] = {
+            {"linear-gradient", GRADIENT_LINEAR}, {"repeating-linear-gradient", GRADIENT_LINEAR},
+            {"radial-gradient", GRADIENT_RADIAL}, {"repeating-radial-gradient", GRADIENT_RADIAL},
+            {"conic-gradient", GRADIENT_CONIC},   {"repeating-conic-gradient", GRADIENT_CONIC},
+        };
+        for (size_t k = 0; !gradient && k < sizeof(kGradients) / sizeof(kGradients[0]); k++)
+            if (ieq(t->text, t->len, kGradients[k].name)) {
+                gradient = true;
+                kind = kGradients[k].kind;
+            }
+        if (gradient && !gradient_ok(s, t, kind)) {
+            if (kind != GRADIENT_CONIC ||
+                !(angle_calc(t->children, t->nchildren, false) || writes_interpolation(t)))
+                return false;
+            gradient = false;               // by name, as vc_image takes it
+        }
     }
     if (!vc_image(c, out))
         return false;
-    return !(linear || radial) || gradient_value(s, t, radial, out);
+    return !gradient || gradient_value(s, t, kind, out);
 }
 
 static bool repeat(VCur *c, garb_val_t *out)

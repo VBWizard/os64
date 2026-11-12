@@ -95,12 +95,12 @@ p: color: rgb(0, 0, 255); margin-top: 1px; margin-bottom: 4px; margin-left: 2px;
 (end)
 END
 
-# Backgrounds in @supports: SUPPORTED is what is drawn. A gradient, a
-# url(), the boxes it is placed in and cut to and a clip to the text are
-# (by either name, and the text's fill colour with it: PILE3.md § The text
-# clip); a conic gradient and an image-set are read and not drawn (PILE3.md
-# § Booked), so a page takes the fallback it wrote. A list of layers is
-# drawn only when every layer is.
+# Backgrounds in @supports: SUPPORTED is what is drawn. A gradient (a conic
+# one too), a url(), the boxes it is placed in and cut to and a clip to the
+# text are (by either name, and the text's fill colour with it: PILE3.md §
+# The text clip); an image-set is read and not drawn (PILE3.md § Booked),
+# so a page takes the fallback it wrote. A list of layers is drawn only
+# when every layer is.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -119,7 +119,7 @@ PAGE
 </style>
 <p>x
 WANT
-p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-left: 8px; height: 10px; min-width: 11px; max-width: 12px
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-top: 5px; padding-left: 8px; width: 9px; height: 10px; min-width: 11px; max-width: 12px
 (end)
 END
 
