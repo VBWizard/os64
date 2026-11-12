@@ -73,7 +73,8 @@ upstream of the reviewer, not a filter on it.
 **WORKING AN HTTP/2 SLICE?** `docs/design/pending/HTTP2.md` § 0 says how
 `HTTP2_TRACKER.csv` beside it is kept — which rows a branch may touch, when
 a row flips, and that `tools/http2_tracker.py` passes before a push. It is
-that arc's rule alone; no other arc has a tracker.
+that arc's rule alone: an arc with a tracker keeps its own rules beside its
+design (`tools/TRACKERS.md` is the shared format).
 
 ## Project Overview
 
@@ -443,7 +444,11 @@ print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
 virtio because its drain waits for the tick.
 
 **System Drivers:**
-- **PCI** (`pci.c`): PCI device enumeration and configuration
+- **PCI** (`pci.c`): PCI device enumeration and configuration. Each
+  function's capability list is read at enumeration (`pci_caps.c`, pure,
+  `tools/test_pci_caps_host.sh`) and printed by its `/sys/bus/pci` node:
+  `capabilities:` in list order, then `msi:` and `msix:` with what the
+  device can ask for. Read it before planning an interrupt for a device
 - **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
   reachable from Limine's RSDP. **Firmware puts its tables wherever it
   likes**, so each is mapped by its own address and Length (the header
@@ -459,6 +464,15 @@ virtio because its drain waits for the tick.
   boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
   firmware's boot logo, and the walk's problems. Read it FIRST on a machine
   meeting os64 for the first time.
+- **USB** (`usb/xhci.c`): the xHCI controllers, polled from the scheduler's
+  pass (`xhci_poll`). **`/sys/usb`** says which controller carries the
+  keyboard, the mouse and the Bluetooth adapter, how often the poll came
+  round (`event_gap_*`: an event waited no longer than the gap of the poll
+  that drained it), and a timeline of Bluetooth's scans and connection
+  steps with the polls and the longest gap between each. Read it FIRST when
+  a USB or Bluetooth device answers late: it tells an event that sat unread
+  from one that had not happened yet. docs/design/pending/XHCI_INTERRUPT.md
+  is the arc that replaces the poll
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer

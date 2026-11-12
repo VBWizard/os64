@@ -404,6 +404,8 @@ void pci_print_discovery_results()
 	printd(DEBUG_PCI, "\n");
 }
 
+static void pci_caps_capture(void);
+
 void init_PCI()
  {
 
@@ -478,6 +480,7 @@ void init_PCI()
 		printf("PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
 		printd(DEBUG_BOOT, "PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
 	}
+	pci_caps_capture();
 	pci_print_discovery_results();
  }
 
@@ -491,21 +494,63 @@ pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t fu
     return configSpace;
 }
 
+// pci_caps_walk's `read`, over this machine's configuration space.
+typedef struct { uint8_t bus, device, function; } pci_caps_bdf_t;
+
+static uint32_t pci_caps_read_config(void *ctx, uint8_t offset)
+{
+	pci_caps_bdf_t *at = ctx;
+	return readPCIRegister(at->bus, at->device, at->function, offset);
+}
+
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
 {
-	// Status bit 4 says the list exists at all; a function without it may
-	// carry garbage at 0x34, and following garbage is how walks wander.
-	uint32_t status_cmd = readPCIRegister(bus, device, function, 0x04);
-	if (((status_cmd >> 16) & 0x0010) == 0)
-		return 0;
+	pci_caps_bdf_t at = { bus, device, function };
+	pci_caps_t caps;
+	pci_caps_walk(pci_caps_read_config, &at, &caps);
+	return pci_caps_find(&caps, cap_id);
+}
 
-	uint8_t ptr = (uint8_t)(readPCIRegister(bus, device, function, 0x34) & 0xFC);
-	for (int hops = 0; ptr != 0 && hops < 48; hops++)
-	{
-		uint32_t entry = readPCIRegister(bus, device, function, ptr);
-		if ((entry & 0xFF) == cap_id)
-			return ptr;
-		ptr = (uint8_t)((entry >> 8) & 0xFC);
-	}
-	return 0;
+// One row a recorded function: its capability list as enumeration read it.
+typedef struct
+{
+	uint8_t    bus, device, function;
+	pci_caps_t caps;
+} pci_caps_row_t;
+
+static pci_caps_row_t *sPCICaps;
+static uint32_t        sPCICapsCount;
+
+static void pci_caps_record(uint8_t bus, uint8_t device, uint8_t function)
+{
+	pci_caps_row_t *row = &sPCICaps[sPCICapsCount++];
+	pci_caps_bdf_t at = { bus, device, function };
+	row->bus = bus;  row->device = device;  row->function = function;
+	pci_caps_walk(pci_caps_read_config, &at, &row->caps);
+}
+
+// Read every recorded function's capability list into the table
+// pci_caps_of answers from. The lists are read here, while enumeration is
+// reading configuration space anyway, so that a later question about a
+// device touches no hardware.
+static void pci_caps_capture(void)
+{
+	uint32_t total = (uint32_t)kPCIDeviceCount + kPCIFunctionCount + kPCIBridgeCount;
+	if (total == 0)
+		return;
+	sPCICaps = kmalloc(sizeof(pci_caps_row_t) * total);
+	for (int i = 0; i < kPCIDeviceCount; i++)
+		pci_caps_record(kPCIDeviceHeaders[i].busNo, kPCIDeviceHeaders[i].deviceNo, kPCIDeviceHeaders[i].funcNo);
+	for (int i = 0; i < kPCIFunctionCount; i++)
+		pci_caps_record(kPCIDeviceFunctions[i].busNo, kPCIDeviceFunctions[i].deviceNo, kPCIDeviceFunctions[i].funcNo);
+	for (int i = 0; i < kPCIBridgeCount; i++)
+		pci_caps_record(kPCIBridgeHeaders[i].busNo, kPCIBridgeHeaders[i].deviceNo, kPCIBridgeHeaders[i].funcNo);
+}
+
+const pci_caps_t *pci_caps_of(uint8_t bus, uint8_t device, uint8_t function)
+{
+	for (uint32_t i = 0; i < sPCICapsCount; i++)
+		if (sPCICaps[i].bus == bus && sPCICaps[i].device == device && sPCICaps[i].function == function)
+			return &sPCICaps[i].caps;
+	return NULL;
 }

@@ -4,6 +4,7 @@
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #include <stdint.h>
 #include <stddef.h>
+#include "pci_caps.h"
 
 #define PCI_DEVICE_REMAP_BASE 0xFFFFFFFF00000000
 
@@ -237,14 +238,16 @@ void init_PCI();
 
 
 // ── Capabilities ────────────────────────────────────────────────────────────
-// Walk a function's capability list for one capability id (PCI 3.0 §6.7):
-// the pointer at config offset 0x34 names the first entry, each entry's
-// byte 1 names the next, and an entry is a dword whose low byte is the id.
-// Returns the entry's config-space offset, or 0 when the function does not
-// have it. Bounded, because a corrupt list is a loop: a real list is short
-// and a walk that visits the whole 256-byte space has proven the list lies.
-// First customer: the RTL8125's MSI (DOORBELL.md); MSI-X and the xHCI's
-// interrupt wiring are the named next ones.
+// Walk a function's capability list, live, for one capability id. Returns
+// the entry's config-space offset, or 0 when the function does not have it
+// (or its list is damaged before reaching it). pci_caps.h has the list's
+// shape and what the walk refuses to follow. A driver about to program a
+// capability asks this.
 #define PCI_CAP_MSI   0x05
 #define PCI_CAP_MSIX  0x11
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
+
+// The capability list enumeration read from a recorded function, or NULL
+// for an address init_PCI did not record. Touches no hardware, so it is
+// safe wherever a configuration read is not (/sys/bus/pci asks this).
+const pci_caps_t *pci_caps_of(uint8_t bus, uint8_t device, uint8_t function);
