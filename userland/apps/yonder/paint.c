@@ -2600,7 +2600,7 @@ static bool mask_reference(const flow_layer_t *l)
 // and verbs to capture its coverage and lay its layer by it.
 static bool mask_drawn(const Painter *p, const flow_box_t *box)
 {
-    if (!flow_masked(box->style) || p->v->layer_open == NULL || p->v->layer_close == NULL ||
+    if (!flow_masked(box) || p->v->layer_open == NULL || p->v->layer_close == NULL ||
         p->v->layer_take == NULL)
         return false;
     for (int32_t i = 0; i < flow_mask_layers(box->style); i++) {
@@ -2618,7 +2618,7 @@ static bool mask_drawn(const Painter *p, const flow_box_t *box)
 static bool mask_hides_whole(const flow_box_t *box)
 {
     const flow_style_t *s = box->style;
-    if (!flow_masked(s))
+    if (!flow_masked(box))
         return false;
     for (int32_t i = 0; i < flow_mask_layers(s); i++) {
         flow_layer_t l = flow_mask_layer(s, i).layer;
@@ -2698,7 +2698,7 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL && !masked)
         return false;
     int32_t out[4];
-    flow_filter_reach(box->style, out);
+    flow_filter_reach(box, out);
     const int32_t in[4] = {out[FLOW_BOTTOM], out[FLOW_LEFT], out[FLOW_TOP], out[FLOW_RIGHT]};
     os64_gui_rect_t layer = cut(cut(b, grown_by(p->view, in)), outside);
     if (layer.w <= 0 || layer.h <= 0) {
@@ -2890,7 +2890,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         p->shift.x = sum32(p->shift.x, upright.x);
         p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000 && !filter_drawn(p, box) &&
-            blend_of(p, box, d) == FLOW_BLEND_NORMAL && !flow_masked(box->style))
+            blend_of(p, box, d) == FLOW_BLEND_NORMAL && !flow_masked(box))
             return;
         outside = clip;
     } else if (box->clipped) {
