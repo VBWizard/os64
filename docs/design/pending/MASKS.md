@@ -1,6 +1,6 @@
 # Masks (CSS Masking 1 § 7): the spinner arc's third slice
 
-Status: design, for Chris's read before any code (2026-11-11). Opus.
+Status: design, read and ruled by Chris (2026-11-11, § 10). Opus.
 
 ## 1. Why, measured
 
@@ -101,7 +101,8 @@ The cost is honest and bounded: a masked group paints its subtree twice
 (itself two backdrops, of a picture or a gradient). The layers share the
 paint's layer budget with filters and blends (`filter_left`); past it a
 masked group is **drawn plain** and the record names it (`css-value layer:
-drawn plain`), as a filtered one is (§ 9, question 1). A mask that is a
+drawn plain`), as a filtered one is, unless its mask hides it whole
+(§ 10, ruling 1). A mask that is a
 gradient or a picture and does not move is the same bytes every frame, and
 the paint cache (YONDER_PERF.md § perf-2) can keep its coverage keyed by its
 layers and its size; that is a measured follow-up, not this slice.
@@ -154,7 +155,7 @@ layers and its size; that is a measured follow-up, not this slice.
   (`css_picture`), as a background's does; an SVG by `data:` URL is drawn
   as a background's SVG is (`svg_picture_pixels`).
 - **A mask image not yet arrived** is transparent, so the element shows
-  nothing until it comes, which is what the browsers do (§ 9, question 2).
+  nothing until it comes, which is what the browsers do (§ 10, ruling 2).
 
 ## 7. Slices
 
@@ -192,14 +193,17 @@ arc's slices have.
   get an expectations file with what each slice makes pass marked required.
 - Mutants of each rule in `tools/test_garb_mutants.py`, as slice 2's are.
 
-## 10. Questions for Chris
+## 10. Rulings (Chris, 2026-11-11)
 
 1. **Past the layer budget, a masked group is drawn plain** (unmasked) and
-   the record names it, as filtered groups are. The alternative is to draw
-   nothing. Plain shows the icon pattern as a coloured square, nothing
-   shows no icon. My lean: plain, as filters do, so a page with a hundred
-   masked cards degrades the same way a page with a hundred blurred ones
-   does.
+   the record names it, as filtered groups are — "as long as masks aren't
+   used to hide something that shouldn't be displayed". So a mask that
+   hides its element WHOLE is never drawn plain: one whose every layer is a
+   gradient with no stop that is not fully transparent, or is sized to
+   nothing (`mask-size` 0 on an axis), draws nothing past the budget, as
+   it would under it. That test needs no pixels, so it costs nothing where
+   the budget is spent. A mask that hides only part of its element is drawn
+   plain there, the trade the ruling makes.
 2. **A mask image that has not arrived hides its element** until it comes
-   (transparent coverage), as the browsers do. My lean: the browsers'
-   answer; the icons appear as their pictures arrive.
+   (transparent coverage), as the browsers do: the icons appear as their
+   pictures arrive.
