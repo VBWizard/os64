@@ -368,6 +368,8 @@ static void motion_chrome_cases(void)
         "@keyframes vis{from{visibility:hidden}to{visibility:visible}}"
         "@keyframes zi{from{z-index:1}to{z-index:4}}"
         "@keyframes bp{from{background-position:0% 0%}to{background-position:100px 50%}}"
+        "@keyframes mp{from{mask-position:0% 0%}to{mask-position:100px 50%}}"
+        "@keyframes ms{from{mask-size:10px auto,5px 5px}to{-webkit-mask-size:30px auto,15px 25px}}"
         "@keyframes wd{from{width:auto}to{width:200px}}"
         "@keyframes fw{from{font-weight:100}to{font-weight:900}}"
         "@keyframes cc{from{color:currentcolor}to{color:red}}"
@@ -382,6 +384,8 @@ static void motion_chrome_cases(void)
         "<div id=vis style='animation-name:vis;" AT("0.1") "'></div>"
         "<div id=zi style='position:relative;animation-name:zi;" AT("0.5") "'></div>"
         "<div id=bp style='animation-name:bp;" AT("0.5") "'></div>"
+        "<div id=mp style='mask-image:linear-gradient(red,red);animation-name:mp;" AT("0.5") "'></div>"
+        "<div id=ms style='animation-name:ms;" AT("0.5") "'></div>"
         "<div id=wd style='animation-name:wd;" AT("0.49") "'></div>"
         "<div id=fw style='animation-name:fw;" AT("0.3") "'></div>"
         "<div id=cc style='animation-name:cc;" AT("0.5") "'></div>"
@@ -413,6 +417,23 @@ static void motion_chrome_cases(void)
            s->backgrounds.x[0].offset == 50 * 64 && s->backgrounds.ny == 1 &&
            s->backgrounds.y[0].kind == FLOW_LENGTH_PERCENT &&
            s->backgrounds.y[0].value == 25 * 64, NULL);
+    // A mask's position and size mix as a background's (MASKS.md § 5),
+    // into the mask's lists and not the background's.
+    s = moving_style(&m, "mp");
+    expect("motion: mask-position mixes into calc(0% + 50px) 25%",
+           s != NULL && s->masks.layers.nx == 1 &&
+           s->masks.layers.x[0].kind == FLOW_LENGTH_PERCENT && s->masks.layers.x[0].value == 0 &&
+           s->masks.layers.x[0].offset == 50 * 64 && s->masks.layers.ny == 1 &&
+           s->masks.layers.y[0].kind == FLOW_LENGTH_PERCENT &&
+           s->masks.layers.y[0].value == 25 * 64 && s->backgrounds.x[0].offset == 0, NULL);
+    s = moving_style(&m, "ms");
+    expect("motion: mask-size mixes layer by layer, auto by itself",
+           s != NULL && s->masks.layers.nsize == 2 &&
+           s->masks.layers.size[0].size[0].kind == FLOW_LENGTH_PX &&
+           s->masks.layers.size[0].size[0].value == 20 * 64 &&
+           s->masks.layers.size[0].size[1].kind == FLOW_LENGTH_AUTO &&
+           s->masks.layers.size[1].size[0].value == 10 * 64 &&
+           s->masks.layers.size[1].size[1].value == 15 * 64 && s->backgrounds.nsize == 1, NULL);
     expect("motion: auto against a length is discrete",
            (s = moving_style(&m, "wd")) != NULL && s->width.kind == FLOW_LENGTH_AUTO, NULL);
     expect_i64("motion: font-weight is a number",
@@ -3575,6 +3596,14 @@ static void motion_tick_condition_cases(void)
          'l'},
         {"a width is laid out",
          "@keyframes k{to{width:10px}}#x{animation:k 1s infinite}", "<div id=x></div>", true, 'l'},
+        {"a mask's position ticks",
+         "@keyframes k{to{mask-position:10px 50%}}"
+         "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
+        {"a mask's size is laid out, as a background's",
+         "@keyframes k{to{mask-size:10px}}"
+         "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
+         "<div id=x></div>", true, 'l'},
         {"a colour is laid out, inherited",
          "@keyframes k{to{color:red;transform:none}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
          'l'},

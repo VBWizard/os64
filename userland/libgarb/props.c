@@ -514,6 +514,18 @@ static const char *const kMaskClip[] = {"border-box", "padding-box", "content-bo
                                         NULL};
 static const char *const kNoClip[] = {"no-clip", NULL};
 static const char *const kMaskComposite[] = {"add", "subtract", "intersect", "exclude", NULL};
+// `-webkit-mask-composite` (MASKS.md § 4): the standard words, and the
+// legacy compositing operators' that pages write, each read as the
+// standard operator it computes for one channel of coverage — the layer
+// over those below (source-over), cut to them (source-in), cut by them
+// (source-out), or either but not both (xor); destination-in keeps those
+// below where the layer is, which for coverage is source-in.
+static const char *const kWebkitMaskComposite[] = {
+    "add", "subtract", "intersect", "exclude",
+    "source-over", "source-out", "source-in", "xor", "destination-in", NULL};
+static const char *const kWebkitMaskCompositeAs[] = {
+    "add", "subtract", "intersect", "exclude",
+    "add", "subtract", "intersect", "exclude", "intersect"};
 static const char *const kMaskMode[] = {"alpha", "luminance", "match-source", NULL};
 // CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
@@ -2303,6 +2315,7 @@ typedef enum {
     G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_BG_SIZE,
     G_BG_BOX,               // background-origin, -clip, and a mask's: a box from `words`
     G_MASK_KEYWORD,         // mask-composite, -mode: a layer's keyword from `words`
+    G_MASK_LEGACY,          // -webkit-mask-composite: a layer's operator by either name
     G_SPACING,
     G_Z_INDEX,              // auto | <integer>
     G_CLIP,                // auto | rect(top, right, bottom, left)
@@ -3499,6 +3512,7 @@ static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
            l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX || l->g == G_MASK_KEYWORD ||
+           l->g == G_MASK_LEGACY ||
            l->g == G_ANIM_NAME || l->g == G_DURATION || l->g == G_DELAY ||
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
@@ -3657,6 +3671,13 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
         *out = kw(k);
+        return true;
+    case G_MASK_LEGACY:
+        if ((k = vc_keyword(c, l->words)) == NULL)
+            return false;
+        for (int32_t i = 0; l->words[i] != NULL; i++)
+            if (l->words[i] == k)
+                *out = kw(kWebkitMaskCompositeAs[i]);
         return true;
     case G_SVG_CLIP:
         if (vc_url(c, out)) return true;
@@ -4606,8 +4627,10 @@ static const struct {
     {"-webkit-animation-delay", "animation-delay", false},
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
     // Every engine reads the prefixed mask names as the standard ones
-    // (MASKS.md § 4), all but -webkit-mask-composite, whose words are the
-    // legacy compositing operators': it is not read (MASKS.md § 7).
+    // (MASKS.md § 4). -webkit-mask-composite is mask-composite too, read
+    // with the legacy operators' words beside the standard ones
+    // (longhand_named).
+    {"-webkit-mask-composite", "mask-composite", true},
     {"-webkit-mask", "mask", true},
     {"-webkit-mask-image", "mask-image", true},
     {"-webkit-mask-repeat", "mask-repeat", true},
@@ -4695,6 +4718,10 @@ static bool unalias(const char **name, size_t *len, bool modern_off)
 // where `modern_off` takes the marked names away.
 static const Longhand *longhand_named(const char *name, size_t len, bool modern_off)
 {
+    static const Longhand kWebkitComposite = {GARB_MASK_COMPOSITE, G_MASK_LEGACY,
+                                              kWebkitMaskComposite};
+    if (ieq(name, len, "-webkit-mask-composite"))
+        return modern_off ? NULL : &kWebkitComposite;
     if (!unalias(&name, &len, modern_off))
         return NULL;
     for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
