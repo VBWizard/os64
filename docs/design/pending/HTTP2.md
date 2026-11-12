@@ -2802,6 +2802,9 @@ where it had made 31 to 35. One round does not say whether that is the
 page or the pool. A host not yet known to speak h2 is still dialled once
 for each fetch of a burst (§ 2.2), and with the table full each of those
 dials now closes a connection at once where it used to wait its turn.
+A round under yonder's own agent agreed: 254 connections, 145 fetches
+waiting 7.6 seconds summed, that page 40 connections. And `h2probe`
+against a live site: twelve fetches at once, one HTTP/2 connection.
 
 **Not done.** A Firefox Reload's place for `te` beside `Pragma` and
 `Cache-Control`, which was not captured: `te` follows them here.
