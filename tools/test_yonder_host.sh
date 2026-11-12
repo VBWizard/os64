@@ -28,6 +28,7 @@ host_flags=(
 host_sources=(
    userland/libdraw2d/paint.c userland/libdraw2d/blur.c
    tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/paint_cache.c
+   userland/apps/yonder/filter.c
    userland/apps/yonder/scratch.c
    userland/apps/yonder/bar.c userland/apps/yonder/download.c userland/apps/yonder/scale.c
    userland/apps/yonder/mail.c

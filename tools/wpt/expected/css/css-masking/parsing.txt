@@ -1,0 +1,363 @@
+# WPT's css/css-masking/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-masking/parsing --update
+# rewrites [passing].
+[required]
+# Masks M1 (MASKS.md): every mask longhand, the mask shorthand and the
+# -webkit- names read, and getComputedStyle's longhands. Each fails with
+# the switch off.
+mask-composite-computed.html	Property mask-composite value 'add'
+mask-composite-computed.html	Property mask-composite value 'exclude'
+mask-composite-computed.html	Property mask-composite value 'intersect'
+mask-composite-computed.html	Property mask-composite value 'subtract'
+mask-composite-valid.html	e.style['mask-composite'] = "add" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "add, subtract" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "exclude" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "intersect" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "subtract" should set the property value
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 10px 10px, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 25% 75%, red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 10px 10px, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 50% 50%, red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at 10px 10px, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg, white, black, white)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(hsl(0,0%,75%), hsl(0,0%,25%))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red 0%, gold 100%)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red 0deg, gold 1turn)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(white -180deg, black 540deg)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(white -50%, black 150%)'
+mask-image-computed.html	Property mask-image value 'none'
+mask-image-computed.html	Property mask-image value 'none, url("http://{{host}}/")'
+mask-image-computed.html	Property mask-image value 'radial-gradient(farthest-side at 10px 10px, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'repeating-conic-gradient(from 0deg at center, red, gold)'
+mask-image-computed.html	Property mask-image value 'repeating-conic-gradient(red, gold)'
+mask-image-computed.html	Property mask-image value 'url("http://{{host}}/")'
+mask-position-valid.html	e.style['mask-position'] = "-20% -30px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "0% 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "0% center" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "20% 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "30px center" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "40px top" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center 50px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center bottom" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "left bottom" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "right 30% top 60px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "right 40%" should set the property value
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat repeat'
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat-x'
+mask-repeat-computed.html	Property mask-repeat value 'repeat-y'
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat-x" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat-y" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space" should set the property value
+mask-size-computed.html	Property mask-size value '2% 3%'
+mask-size-computed.html	Property mask-size value 'auto 1px, 2% 3%, contain'
+mask-size-computed.html	Property mask-size value 'auto 4%'
+mask-size-computed.html	Property mask-size value 'auto auto'
+mask-size-computed.html	Property mask-size value 'auto'
+mask-size-computed.html	Property mask-size value 'auto' multiple base values
+mask-size-computed.html	Property mask-size value 'auto, auto' multiple base values
+mask-size-computed.html	Property mask-size value 'auto, auto, auto' multiple base values
+mask-size-computed.html	Property mask-size value 'contain'
+mask-size-computed.html	Property mask-size value 'cover'
+mask-size-valid.html	e.style['mask-size'] = "1px auto" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "2% 3%" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto 1px, 2% 3%, contain" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto 4%" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "contain" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "cover" should set the property value
+mask-valid.sub.html	e.style['mask'] = "alpha" should set the property value
+mask-valid.sub.html	e.style['mask'] = "border-box content-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "content-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) 1px 2px" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) exclude" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) luminance" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) padding-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue)" should set the property value
+mask-valid.sub.html	e.style['mask'] = "no-clip" should set the property value
+mask-valid.sub.html	e.style['mask'] = "none" should set the property value
+mask-valid.sub.html	e.style['mask'] = "repeat-y" should set the property value
+mask-valid.sub.html	e.style['mask'] = "subtract" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") 1px 2px / contain" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") alpha" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") intersect" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\")" should set the property value
+[excluded]
+[passing]
+clip-computed.html	Property clip value 'auto'
+clip-computed.html	Property clip value 'rect(10px, -20px, auto, auto)'
+clip-computed.html	Property clip value 'rect(10px, 20px, -30px, 40px)'
+clip-computed.html	Property clip value 'rect(10px, 20px, calc(-1em + 10px), 1em)'
+clip-invalid.html	e.style['clip'] = "none" should not set the property value
+clip-invalid.html	e.style['clip'] = "rect(10%, -20%, auto, auto)" should not set the property value
+clip-invalid.html	e.style['clip'] = "rect(10px 20px, 30px 40px)" should not set the property value
+clip-invalid.html	e.style['clip'] = "rect(10px, 20px, 30px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "auto" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(-10% at 20% 30%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(-10px at 20px 30px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(1% 2% at 0% 100%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(10% 20%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(123)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "circle(at)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(-50px 60px at 70% 80%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(1% 2% top right)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(10% -20% at 30% 40%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(3% at 100% 0%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(3%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(closest-side)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(farthest-side at 100% 0%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ellipse(farthest-side at)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset()" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(0px round / 1px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(0px round 1% 2% 3% 4% 5%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(0px round 123)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(0px round)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(1% 2% 3% 4% 5%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(10px round -20px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(123)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(30% round -40%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "inset(round 0)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(\\" \\")" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(\\"m 20 0 h -100\\", nonzero)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(abc, \\"m 20 0 h -100 z\\")" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(evenodd, \\"\\")" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(nonzero)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "path(nonzero, 'M0 0, L100 0, L0 100, L 0 0');" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(1%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(1px 2px, round 1px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round -1px, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round 1%, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round 1px 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round 1px nonzero, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round 1px round 2px, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round 45deg, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "polygon(round, 1px 2px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "ray(0deg)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "rect(0px 1% auto)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "rect(0px 1%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "rect(0px)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "unknown-box" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "xywh(0px 1% 2em)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "xywh(0px 1%)" should not set the property value
+clip-path-invalid.html	e.style['clip-path'] = "xywh(0px)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape()" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(allkindsofnonsense)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(arc)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(close)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(evenodd from 0px 0px, close path)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 0 0,curve to 5% calc(5% * var(--s,1)) with 5% 5%, vline to 100%)" should set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 0 0,curve to 5% var(--s,1) with 5% 5%, vline to 100%)" should set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 0px 10px)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 0px 20px,)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 0px)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10% 1rem, arc cw to 50px of 20% 1pt large rotate 25deg)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10% 1rem, arc of 20% 1pt to 50px cw large rotate 25deg)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10% 1rem, arc rotate 25deg to 50px 1pt of 20% cw large )" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, curve to 50px 20px via 10rem 1% 12px)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, curve to 50px 20px via 10rem)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, hline byy 10px, vline to 5rem)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, smooth to 50px 20px via 10rem 2px 2pt)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, smooth to 50px 20px via 10rem)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from 10px 10px, vline by 5% hline by 1vw" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(from)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(nonzero, close)" should not set the property value
+clip-path-shape-parsing.html	e.style['clip-path'] = "shape(nonzero, from 0px 0px, line to 10px 10px)" should not set the property value
+clip-path-valid.html	e.style['clip-path'] = "none" should set the property value
+clip-path-valid.html	e.style['clip-path'] = "url(\\"https://example.com/\\")" should set the property value
+clip-path-valid.html	e.style['clip-path'] = "url(https://example.com/)" should set the property value
+clip-rule-computed.html	Property clip-rule value 'evenodd'
+clip-rule-computed.html	Property clip-rule value 'nonzero'
+clip-rule-invalid.html	e.style['clip-rule'] = "1" should not set the property value
+clip-rule-invalid.html	e.style['clip-rule'] = "auto" should not set the property value
+clip-rule-valid.html	e.style['clip-rule'] = "evenodd" should set the property value
+clip-rule-valid.html	e.style['clip-rule'] = "nonzero" should set the property value
+clip-valid.html	e.style['clip'] = "auto" should set the property value
+clip-valid.html	e.style['clip'] = "rect(10px, -20px, auto, auto)" should set the property value
+clip-valid.html	e.style['clip'] = "rect(10px, 20px, -30px, 40px)" should set the property value
+mask-composite-computed.html	Property mask-composite value 'add'
+mask-composite-computed.html	Property mask-composite value 'exclude'
+mask-composite-computed.html	Property mask-composite value 'intersect'
+mask-composite-computed.html	Property mask-composite value 'subtract'
+mask-composite-invalid.html	e.style['mask-composite'] = "add subtract" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "auto" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "clear" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "copy" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "destination-atop" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "destination-in" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "destination-out" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "destination-over" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "plus-lighter" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "source-atop" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "source-in" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "source-out" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "source-over" should not set the property value
+mask-composite-invalid.html	e.style['mask-composite'] = "xor" should not set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "add" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "add, subtract" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "exclude" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "intersect" should set the property value
+mask-composite-valid.html	e.style['mask-composite'] = "subtract" should set the property value
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 10px 10px, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 25% 75%, red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 10px 10px, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 50% 50%, red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 0deg, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at 10px 10px, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at 50%, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg at center, red, blue)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(from 45deg, white, black, white)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(hsl(0,0%,75%), hsl(0,0%,25%))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red 0%, gold 100%)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red 0deg, gold 1turn)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(red, gold)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'conic-gradient(white -180deg, black 540deg)'
+mask-image-computed.html	Property mask-image value 'conic-gradient(white -50%, black 150%)'
+mask-image-computed.html	Property mask-image value 'none'
+mask-image-computed.html	Property mask-image value 'none, url("http://{{host}}/")'
+mask-image-computed.html	Property mask-image value 'radial-gradient(farthest-side at 10px 10px, rgb(255, 0, 0), rgb(0, 0, 255))'
+mask-image-computed.html	Property mask-image value 'repeating-conic-gradient(from 0deg at center, red, gold)'
+mask-image-computed.html	Property mask-image value 'repeating-conic-gradient(red, gold)'
+mask-image-computed.html	Property mask-image value 'url("http://{{host}}/")'
+mask-invalid.html	e.style['mask'] = "1px 2px / contain / cover" should not set the property value
+mask-invalid.html	e.style['mask'] = "1px 2px 3px 4px" should not set the property value
+mask-invalid.html	e.style['mask'] = "1px 2px 3px" should not set the property value
+mask-invalid.html	e.style['mask'] = "add intersect" should not set the property value
+mask-invalid.html	e.style['mask'] = "border-box view-box padding-box" should not set the property value
+mask-invalid.html	e.style['mask'] = "content-box stroke-box no-clip" should not set the property value
+mask-invalid.html	e.style['mask'] = "linear-gradient(to 0% 0%, rgb(0, 0, 0), rgb(0, 0, 255)) url(\\"https://example.com/\\")" should not set the property value
+mask-invalid.html	e.style['mask'] = "margin-box" should not set the property value
+mask-invalid.html	e.style['mask'] = "no-clip border-box content-box" should not set the property value
+mask-invalid.html	e.style['mask'] = "none alpha luminance" should not set the property value
+mask-invalid.html	e.style['mask'] = "none linear-gradient(to 0% 0%, rgb(0, 0, 0), rgb(0, 0, 255))" should not set the property value
+mask-invalid.html	e.style['mask'] = "repeat-y repeat-x" should not set the property value
+mask-invalid.html	e.style['mask'] = "stroke-box no-clip view-box" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "1px 2px 3px" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "auto" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "bottom 10% top 20%" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "bottom 10%" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "bottom 6% center" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "bottom 7% left" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "bottom right 8%" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "center left 1px" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "center top 2px" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "left 4px top" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "left right" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "right 3% center" should not set the property value
+mask-position-invalid.html	e.style['mask-position'] = "right top 5px" should not set the property value
+mask-position-valid.html	e.style['mask-position'] = "-20% -30px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "0% 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "0% center" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "20% 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "30px center" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "40px top" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center 0%" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center 50px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "center bottom" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "left bottom" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "right 30% top 60px" should set the property value
+mask-position-valid.html	e.style['mask-position'] = "right 40%" should set the property value
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat repeat'
+mask-repeat-computed.html	Property mask-repeat value 'no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat no-repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat'
+mask-repeat-computed.html	Property mask-repeat value 'repeat-x'
+mask-repeat-computed.html	Property mask-repeat value 'repeat-y'
+mask-repeat-invalid.html	e.style['mask-repeat'] = "auto" should not set the property value
+mask-repeat-invalid.html	e.style['mask-repeat'] = "repeat undefined" should not set the property value
+mask-repeat-invalid.html	e.style['mask-repeat'] = "repeat-z" should not set the property value
+mask-repeat-invalid.html	e.style['mask-repeat'] = "repeat; round" should not set the property value
+mask-repeat-invalid.html	e.style['mask-repeat'] = "undefined repeat" should not set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat-x" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "repeat-y" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round space" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space no-repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space repeat" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space round" should set the property value
+mask-repeat-valid.html	e.style['mask-repeat'] = "space" should set the property value
+mask-size-computed.html	Property mask-size value '2% 3%'
+mask-size-computed.html	Property mask-size value 'auto 1px, 2% 3%, contain'
+mask-size-computed.html	Property mask-size value 'auto 4%'
+mask-size-computed.html	Property mask-size value 'auto auto'
+mask-size-computed.html	Property mask-size value 'auto'
+mask-size-computed.html	Property mask-size value 'auto' multiple base values
+mask-size-computed.html	Property mask-size value 'auto, auto' multiple base values
+mask-size-computed.html	Property mask-size value 'auto, auto, auto' multiple base values
+mask-size-computed.html	Property mask-size value 'contain'
+mask-size-computed.html	Property mask-size value 'cover'
+mask-size-invalid.html	e.style['mask-size'] = "-1px" should not set the property value
+mask-size-invalid.html	e.style['mask-size'] = "1px 2px 3px" should not set the property value
+mask-size-invalid.html	e.style['mask-size'] = "2% -3%" should not set the property value
+mask-size-valid.html	e.style['mask-size'] = "1px auto" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "2% 3%" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto 1px, 2% 3%, contain" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto 4%" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "auto" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "contain" should set the property value
+mask-size-valid.html	e.style['mask-size'] = "cover" should set the property value
+mask-type-invalid.html	e.style['mask-type'] = "alpha, luminance" should not set the property value
+mask-type-invalid.html	e.style['mask-type'] = "auto" should not set the property value
+mask-type-invalid.html	e.style['mask-type'] = "luminance alpha" should not set the property value
+mask-valid.sub.html	e.style['mask'] = "alpha" should set the property value
+mask-valid.sub.html	e.style['mask'] = "border-box content-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "content-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) 1px 2px" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) exclude" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) luminance" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue) padding-box" should set the property value
+mask-valid.sub.html	e.style['mask'] = "linear-gradient(to left bottom, red, blue)" should set the property value
+mask-valid.sub.html	e.style['mask'] = "no-clip" should set the property value
+mask-valid.sub.html	e.style['mask'] = "none" should not set unrelated longhands
+mask-valid.sub.html	e.style['mask'] = "none" should set the property value
+mask-valid.sub.html	e.style['mask'] = "none, linear-gradient(to left bottom, red, blue) padding-box" should not set unrelated longhands
+mask-valid.sub.html	e.style['mask'] = "repeat-y" should set the property value
+mask-valid.sub.html	e.style['mask'] = "subtract" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") 1px 2px / contain" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") alpha" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\") intersect" should set the property value
+mask-valid.sub.html	e.style['mask'] = "url(\\"https://wpt.test/\\")" should set the property value

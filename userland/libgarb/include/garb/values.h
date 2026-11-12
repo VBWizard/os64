@@ -174,6 +174,15 @@ typedef enum {
     // (MIX_BLEND.md): the KEYWORD normal, one of the sixteen blend modes,
     // plus-lighter or plus-darker; and § 3.3's auto or isolate.
     GARB_MIX_BLEND_MODE, GARB_ISOLATION,
+    // CSS Masking 1 § 7 (MASKS.md): each a LAYERS value, one item a layer,
+    // the top first, read as the `background-*` twin's is — the image, the
+    // repeat, the position as x and y (Values 4's <position>, which has no
+    // three-part form), the size; the origin a KEYWORD box,
+    // the clip a box or no-clip; then the KEYWORD compositing operator
+    // (add, subtract, intersect, exclude) and mode (alpha, luminance,
+    // match-source).
+    GARB_MASK_IMAGE, GARB_MASK_REPEAT, GARB_MASK_POSITION_X, GARB_MASK_POSITION_Y,
+    GARB_MASK_SIZE, GARB_MASK_ORIGIN, GARB_MASK_CLIP, GARB_MASK_COMPOSITE, GARB_MASK_MODE,
     GARB_NPROPS
 } garb_prop_t;
 
