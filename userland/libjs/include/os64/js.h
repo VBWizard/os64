@@ -6,7 +6,7 @@
 
 /* Embedding ABI. Operation contracts, supported symbols and examples are
  * documented in userland/libjs/CONTRACT.md. */
-#define OS64_JS_ABI_ID "os64-js/3;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
+#define OS64_JS_ABI_ID "os64-js/4;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
 #define OS64_JS_MESSAGE_CAP 256
 #define OS64_JS_SOURCE_NAME_CAP 128
 #define OS64_JS_STACK_TRACE_CAP 1024
@@ -32,7 +32,8 @@ typedef enum {
     OS64_JS_ABI_MISMATCH,
     OS64_JS_BUSY,
     OS64_JS_FAILED_RUNTIME,
-    OS64_JS_REALM_LIMIT /* non-sticky admission refusal; no allocation attempted */
+    OS64_JS_REALM_LIMIT, /* non-sticky slot refusal; no allocation attempted */
+    OS64_JS_ADMISSION_REFUSED /* non-sticky engine-headroom refusal */
 } os64_js_status_t;
 
 typedef enum {

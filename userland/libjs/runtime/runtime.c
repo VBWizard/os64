@@ -890,6 +890,41 @@ JS_PUBLIC os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, cons
     return result;
 }
 
+JS_PUBLIC os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime,
+                                                 const char *caller_abi,
+                                                 size_t required_headroom,
+                                                 os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (os64_js_context(runtime, caller_abi, outcome) == NULL) return outcome->status;
+    if (required_headroom == 0)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "positive admission headroom is required");
+    /* Raw engine allocation can fail inside a callback before observe() has
+     * latched it. Do not disguise that failure as a local admission refusal. */
+    if (runtime->allocator.failures != 0)
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "engine allocator has failed");
+    if (runtime->realm_count == OS64_JS_MAX_REALMS)
+        return status(outcome, OS64_JS_REALM_LIMIT, "runtime realm slots are full");
+    if (required_headroom > os64_js_heap_headroom(runtime))
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "insufficient engine admission headroom");
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
+                                                            const char *caller_abi,
+                                                            size_t required_headroom,
+                                                            os64_js_realm_t **out,
+                                                            os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (out != NULL) *out = NULL;
+    os64_js_status_t result = os64_js_realm_preflight(runtime, caller_abi, required_headroom, outcome);
+    if (result != OS64_JS_OK) return result;
+    return os64_js_realm_create(runtime, caller_abi, out, outcome);
+}
+
 JS_PUBLIC os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime,
                                                const char *caller_abi,
                                                os64_js_outcome_t *outcome)
@@ -1520,6 +1555,13 @@ JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
 JS_PUBLIC size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime)
 {
     return runtime != NULL ? runtime->allocator.charged_bytes : 0;
+}
+
+JS_PUBLIC size_t os64_js_heap_headroom(const os64_js_runtime_t *runtime)
+{
+    if (runtime == NULL || runtime->allocator.charged_bytes >= runtime->allocator.allocation_limit)
+        return 0;
+    return runtime->allocator.allocation_limit - runtime->allocator.charged_bytes;
 }
 
 JS_PUBLIC bool os64_js_heap_census(os64_js_runtime_t *runtime, os64_js_heap_census_t *out)

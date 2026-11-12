@@ -213,8 +213,51 @@ static void realm_watcher_cases(void)
     os64_js_destroy(runtime);
 }
 
+static void realm_admission_host_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t out;
+    os64_js_realm_t *child = NULL;
+    size_t start = attempts;
+    fail_at = start + 1;
+    check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, SIZE_MAX, &out) == OS64_JS_ADMISSION_REFUSED &&
+          os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, SIZE_MAX, &child, &out) == OS64_JS_ADMISSION_REFUSED &&
+          attempts == start && child == NULL, "preflight and refusal attempt no host allocation");
+    fail_at = 0;
+    check(os64_js_run(runtime, "true", 4, "after-local-refusal", &out) == OS64_JS_OK,
+          "allocation-free refusal sets no allocator failure flag");
+    JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &out);
+    fail_at = attempts + 1;
+    void *memory = js_malloc(context, 2 * 1024 * 1024);
+    fail_at = 0;
+    check(memory == NULL, "raw allocator refusal reached before wrapper observation");
+    js_free(context, memory);
+    check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, SIZE_MAX, &out) == OS64_JS_FAILED_RUNTIME,
+          "preflight preserves unobserved engine failure instead of local refusal");
+    check(os64_js_run(runtime, "true", 4, "after-engine-refusal", &out) == OS64_JS_HOST_FAILURE,
+          "original allocator failure still becomes sticky at its normal observation");
+    os64_js_destroy(runtime);
+    config.limits.execution_ms = 10;
+    runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "admission-expired-parent", &out) == OS64_JS_OK,
+          "headroom deadline task begins");
+    monotonic += 10000;
+    check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, 256 * 1024, &out) == OS64_JS_OK,
+          "headroom snapshot does not observe or renew task time");
+    check(os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, 256 * 1024, &child, &out) == OS64_JS_LIMIT &&
+          out.limit == OS64_JS_LIMIT_EXECUTION && child == NULL,
+          "admitted creation retains expired parent deadline");
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &out) == OS64_JS_LIMIT,
+          "deadline failure remains sticky after admission");
+    os64_js_destroy(runtime);
+}
+
 static void realm_host_cases(void)
 {
+    realm_admission_host_cases();
     realm_watcher_cases();
     realm_output_cases();
     realm_router_cases();

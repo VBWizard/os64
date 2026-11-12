@@ -19,6 +19,14 @@ args.logs.mkdir(parents=True, exist_ok=True)
 RUNTIME = 'userland/libjs/runtime/runtime.c'
 SUITE = 'tools/test_js_realms_host.sh'
 mutants = [
+    ('admission-ignored-headroom', 'if (required_headroom > os64_js_heap_headroom(runtime))',
+     'if (false && required_headroom > os64_js_heap_headroom(runtime))'),
+    ('admission-wrapper-unaccounted', 'return runtime->allocator.allocation_limit - runtime->allocator.charged_bytes;',
+     'return runtime->limits.memory_bytes - runtime->allocator.charged_bytes;'),
+    ('admission-create-no-recheck', 'os64_js_realm_preflight(runtime, caller_abi, required_headroom, outcome);',
+     'os64_js_realm_preflight(runtime, caller_abi, required_headroom > 0 ? 1 : 0, outcome);'),
+    ('admission-masks-allocator-failure', 'if (runtime->allocator.failures != 0)',
+     'if (false && runtime->allocator.failures != 0)'),
     ('loader-primary', 'char *name = realm->loader.resolve != NULL\n        ? realm->loader.resolve(realm->loader.opaque, base, specifier) : NULL;',
      'char *name = realm->loader.resolve != NULL\n        ? primary(runtime)->loader.resolve(primary(runtime)->loader.opaque, base, specifier) : NULL;'),
     ('module-list-primary', 'for (struct os64_js_module *m = realm->modules; m != NULL; m = m->next)',

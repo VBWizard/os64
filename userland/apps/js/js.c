@@ -237,6 +237,7 @@ static const char *status_name(os64_js_status_t status)
     case OS64_JS_BUSY: return "BUSY";
     case OS64_JS_FAILED_RUNTIME: return "FAILED_RUNTIME";
     case OS64_JS_REALM_LIMIT: return "REALM_LIMIT";
+    case OS64_JS_ADMISSION_REFUSED: return "ADMISSION_REFUSED";
     }
     return "an unknown status";
 }

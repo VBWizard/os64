@@ -1,6 +1,6 @@
 # JavaScript runtime API contract
 
-Status: embedding ABI 3, including F.1's shared-runtime realms, 2026-11-10.
+Status: embedding ABI 4, including realm admission preflight, 2026-11-12.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -92,9 +92,31 @@ The wrapper reserves a fixed descriptor table in its enclosing allocation,
 charged before the engine memory ceiling is set. Contexts, retained values,
 modules and rejection records use the shared engine allocator. A full table
 returns non-sticky `OS64_JS_REALM_LIMIT` before allocation; failed construction
-publishes no handle. Memory, cancellation, clock, stack and job-limit failures
-remain sticky for the entire runtime. A failing child does not isolate its
-parent from those failures.
+publishes no handle. Memory, cancellation, clock, execution and job-limit
+failures remain sticky for the entire runtime. Ordinary engine stack overflow
+remains EXCEPTION unless another sticky condition is observed. A failing child
+does not isolate its parent from shared-runtime failures.
+
+`os64_js_heap_headroom` reports the remaining engine allowance after the
+runtime wrapper's storage and current allocator charge. It is an owner-thread
+snapshot, usable inside callbacks and after failure, with no allocation, GC
+or failure observation. A positive number does not certify runtime health.
+`os64_js_realm_preflight` checks the ABI, runtime health, available slot and
+a positive caller-supplied headroom requirement. An insufficient allowance
+returns non-sticky `OS64_JS_ADMISSION_REFUSED`; a full table returns REALM_LIMIT.
+Neither allocates, consumes a slot, touches the parent's outcome, advances its
+deadline/job count, or drains queued work. A pending allocator failure cannot
+be reported as local refusal. Invalid input and ABI mismatch remain refusals.
+
+The headroom requirement is the host's measured peak installation cost plus
+its sibling operating margin. Preflight does not reserve bytes; subsequent
+allocations can invalidate it. `os64_js_realm_create_with_headroom` repeats
+the check immediately before ordinary realm creation, including when nested
+inside a parent callback. It publishes no handle on refusal. The legacy
+`os64_js_realm_create` keeps its existing slot-only admission. Neither path
+promises that arbitrary later allocations or system OOM are recoverable.
+The DOM installation reserve and its profile-specific measurements belong to
+F.3b; a bare engine realm's size is not the cost of an installed DOM binding.
 
 Legacy verbs select the primary realm. Explicit realm verbs select the owner
 for source/bytecode execution, task begin/call, module operations, script hosts,
@@ -354,8 +376,9 @@ message is parsed. Returned status equals the
 outcome's status. There is no release operation for an outcome.
 
 OK and MORE_JOBS keep the runtime usable. BAD_ARGUMENT and BUSY reject the
-operation without changing its runtime. REALM_LIMIT refuses realm admission
-before allocation and also leaves the runtime usable. ABI_MISMATCH publishes no runtime at
+operation without changing its runtime. REALM_LIMIT and ADMISSION_REFUSED
+refuse realm admission before allocation and leave the runtime usable.
+ABI_MISMATCH publishes no runtime at
 creation and no context at access; an existing runtime stays unchanged.
 
 EXCEPTION and UNHANDLED_REJECTION report script outcomes and keep the runtime

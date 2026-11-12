@@ -71,6 +71,11 @@ size_t os64_js_heap_peak(const os64_js_runtime_t *runtime);
 /* What the heap holds now, in the same bytes. Readable from a runtime that
  * has failed. 0 for NULL. No engine entry. */
 size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
+/* Remaining engine allowance after the runtime wrapper's storage and current
+ * allocator charge. Owner thread, including callbacks; no allocation, GC or
+ * failure observation. Readable after failure, but not evidence of health.
+ * Returns 0 for NULL or exhausted allowance. */
+size_t os64_js_heap_headroom(const os64_js_runtime_t *runtime);
 /* THE HEAP BY KIND OF THING (MEMORY_CENSUS.md § 5): the engine's own count
  * of what it holds. It walks every object, string, shape and function the
  * heap has, so it costs time in proportion to the heap: for a census, not
@@ -243,6 +248,23 @@ os64_js_realm_t *os64_js_realm_from_context(os64_js_runtime_t *runtime, JSContex
 /* Returns no handle on failure. REALM_LIMIT is non-sticky and attempts no
  * allocation; other resource failures affect the shared runtime. */
 os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, const char *caller_abi,
+    os64_js_realm_t **out, os64_js_outcome_t *outcome);
+
+/* Owner-thread admission snapshot, including inside a parent's callback with
+ * queued jobs. Checks slots and a positive caller-measured installation peak
+ * plus sibling headroom; does not allocate, execute jobs, change the enclosing
+ * budget/outcome or reserve bytes. REALM_LIMIT and ADMISSION_REFUSED are local.
+ * Recheck at creation: intervening allocations can invalidate an OK snapshot.
+ * This does not guarantee later allocations or system memory availability. */
+os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime, const char *caller_abi,
+    size_t required_headroom, os64_js_outcome_t *outcome);
+/* Rechecks preflight immediately before the normal realm creation path.
+ * Refusal publishes no handle and consumes no slot. Creation/installation
+ * allocator failures retain the shared runtime's existing sticky behavior.
+ * Hosts choose the reserve for their bindings; this creates the engine realm
+ * only, and does not install or publish DOM services. */
+os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
+    const char *caller_abi, size_t required_headroom,
     os64_js_realm_t **out, os64_js_outcome_t *outcome);
 
 os64_js_status_t os64_js_realm_run(os64_js_realm_t *realm,
