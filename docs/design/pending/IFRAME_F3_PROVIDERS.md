@@ -73,6 +73,17 @@ An explicit abort after retirement also cannot settle still-pending transport
 work. Public safe-point finish and module-loading integration remain separate
 obligations; provider snapshots alone do not authorize freeing opaque storage.
 
+## Guarded native visitors
+
+| Entry sites | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `importmap.c`: normalized-entry visitor | Parsed map's document | Each callback and its borrowed strings hold a provider loan. The walker table is captured for the parse. Retirement stops subsequent entries and returns REALM_RETIRED, including retirement on the last entry, so the host discards its partial map. Native provider reentry cannot open an import task. |
+| `pointer.c`: mouse/activation defaults and quiet-hover default | Input document | Callback and borrowed node/event hold a provider loan. Activity is rechecked after listeners and native callbacks; retirement prevents subsequent defaults, click synthesis and late input tasks. Provider-reentrant input is refused, including quiet hover that opens no script task. |
+
+Pointer activity and capture queries become inactive at mark, before native
+cleanup. New capture is refused; release remains usable, and retained nodes
+remain ordinary DOM objects. Import-map type support remains a pure query.
+
 ## Entries still to integrate
 
 These are open implementation obligations. They must be handled before a
@@ -82,7 +93,6 @@ successful public finish can promise that opaque storage is no longer borrowed.
 |---|---|---|
 | Failed diagnostics, script/module/report hosts and console | `report.c`, libjs host installation | Detach report/loader/output routes without deleting siblings' state. Missing-global and broken-attribute loans are covered above. |
 | CSS animation hosts and effect borrowers | `webanimation.c` | Guard count/at/version/drive; stop timeline scheduling while retaining effect identity and tree generations until acknowledgements. Do not reuse destructive animation drain. |
-| Other synchronous native visitors | `importmap.c`, `pointer.c` | Count callback extent, stop later callbacks on departure, and retain records while a visitor is running. |
 
 Provider replacement contracts and departure cleanup must agree: clearing a
 provider cannot erase the release operation for an existing loan. Image and

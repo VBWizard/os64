@@ -537,6 +537,44 @@ inspected separately: the existing cancellation path releases the request's
 stream; no HTTP/2 implementation changes were needed. The fixture does not
 replace real-network, guest, P5 or final pinned-WPT acceptance.
 
+## Native visitor checkpoint
+
+Import-map entry callbacks now hold provider loans through their borrowed
+strings. The parse captures its visitor table; replacing the caller's table
+during a callback cannot redirect later entries. Retirement stops the walk
+and returns REALM_RETIRED, including after accepting the last entry. The
+host's existing non-success path discards the partial map rather than
+registering it. A callback that both retires and refuses an entry does not
+turn departure into a RangeError.
+
+Pointer defaults hold provider loans in both eventful and quiet-hover paths.
+The latter opens no engine task, so its provider barrier also blocks native
+reentry into a sibling's quiet input or import-map task. Retirement during a
+listener or default stops later host work and click synthesis. Late input is
+discarded before task entry. Pending pointer capture no longer advertises live
+activity after mark; setting capture is refused, release remains usable, and
+retained nodes stay mutable.
+
+The fixture covers 11 scenarios under both teardown policies: import entries,
+scope entries, final-entry retirement, refusal during retirement, walker-table
+replacement, quiet hover, eventful defaults, pointermove/mousemove listener
+retirement, mouseup retirement and capture pending across an external mark.
+It reports **218 failures** against the preceding visitor implementation.
+The complete shipping-engine DOM suite passes **56,959 checks**, including
+**3,991 native allocation sweeps**.
+Instrumented visitor retirement passes **972 checks**, pointer regression
+**603**, import maps including allocation sweeps **786**, and realm routing
+**678**, with ASan/UBSan/LSan enabled. The native DOM library builds.
+
+Eleven isolated mutants are caught: missing map/quiet/event loans, successful
+partial-map return, mutable walker table, map/pointer provider reentry, native
+work after a retiring mousemove listener, late pointer task entry, retired
+pointer activity and retired capture visibility. The initial listener fixture
+retired on pointermove and did not exercise the final native-default guard;
+the mousemove case closes that coverage gap. The cumulative caught count is
+**147**. These remain native lifetime proofs; public departure finish, report
+and animation provider integration, and final guest/WPT acceptance remain open.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

@@ -47,7 +47,12 @@ static JSValue capture_method(JSContext *ctx, JSValueConst self, int argc,
     if (JS_ToInt32(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
     dom = d_owner(dom, node);
     DPointer *p = &dom->pointer;
-    if (magic == 2) return JS_NewBool(ctx, id == 1 && p->available && p->pending == node);
+    if (magic == 2) return JS_NewBool(ctx, d_delivery_active(dom) && id == 1 && p->available && p->pending == node);
+    if (!d_delivery_active(dom)) {
+        if (magic != 1) return d_error(ctx, "NotFoundError", "Unknown active pointer");
+        if (p->pending == node) hold(dom, &p->pending, NULL);
+        return JS_UNDEFINED;
+    }
     if (id != 1 || !p->available) return d_error(ctx, "NotFoundError", "Unknown active pointer");
     if (magic == 0) {
         if (!connected(dom, node)) return d_error(ctx, "InvalidStateError", "Capture needs a connected element");
@@ -66,12 +71,12 @@ void d_pointer_drain(os64_dom_t *dom)
 }
 void os64_dom_pointer_cancel(os64_dom_t *dom)
 {
-    if (dom && !dom->closed && (dom->pointer.buttons || dom->pointer.capture || dom->pointer.pending))
+    if (d_delivery_active(dom) && (dom->pointer.buttons || dom->pointer.capture || dom->pointer.pending))
         dom->pointer.cancel_owed = true;
 }
 bool os64_dom_pointer_active(const os64_dom_t *dom)
 {
-    return dom && !dom->closed && (dom->pointer.buttons || dom->pointer.draining);
+    return d_delivery_active(dom) && (dom->pointer.buttons || dom->pointer.draining);
 }
 typedef struct {
     os64_dom_t *dom;
@@ -87,7 +92,7 @@ static bool emit(Packet *q, const char *type, const os64_html_node_t *node,
                   bool native_default, bool *prevented)
 {
     os64_dom_t *dom = q->dom;
-    if (q->failed || dom->closed || dom->navigation.kind != OS64_DOM_NAVIGATE_NONE) return false;
+    if (q->failed || !d_delivery_active(dom) || dom->navigation.kind != OS64_DOM_NAVIGATE_NONE) return false;
     os64_dom_event_t e = q->event;
     e.type = type; e.kind = pointer ? OS64_DOM_EVENT_POINTER : OS64_DOM_EVENT_MOUSE;
     e.bubbles = bubbles; e.cancelable = cancelable; e.related = related;
@@ -113,12 +118,15 @@ static bool emit(Packet *q, const char *type, const os64_html_node_t *node,
     d_task_settle(dom, q->out);
     if (q->out->status != OS64_JS_OK && q->out->status != OS64_JS_EXCEPTION &&
         q->out->status != OS64_JS_UNHANDLED_REJECTION) q->failed = true;
-    if (!q->failed && !dom->closed && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE &&
-        native_default && q->action && !q->action(q->opaque, node, &e, canceled)) q->failed = true;
+    if (!q->failed && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE &&
+        native_default && q->action && d_provider_enter(dom)) {
+        if (!q->action(q->opaque, node, &e, canceled)) q->failed = true;
+        d_provider_leave(dom);
+    }
     if (related) os64_html_release(dom->document, related);
     if (node) os64_html_release(dom->document, node);
     if (prevented) *prevented = canceled;
-    return !q->failed && !dom->closed && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE &&
+    return !q->failed && d_delivery_active(dom) && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE &&
            (!dom->pointer.cancel_owed || dom->pointer.canceling);
 }
 /* A pointer's ancestor: as a composed event's path climbs (d_event_parent),
@@ -242,6 +250,8 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
         return out->status = OS64_JS_BAD_ARGUMENT;
     DPointer *p = &dom->pointer;
     if (dom->closed || p->running) return out->status = OS64_JS_FAILED_RUNTIME;
+    if (!d_delivery_active(dom)) return OS64_JS_OK;
+    if (d_provider_busy(dom)) return out->status = OS64_JS_BUSY;
     if (!dom->options.modern) return OS64_JS_OK;
     bool hover = s->action == OS64_DOM_POINTER_MOVE || s->action == OS64_DOM_POINTER_BOUNDARY;
     if (hover && !p->buttons && !s->event.buttons && !p->capture && !p->pending &&
@@ -256,10 +266,18 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
             hold(dom, &p->physical, hit); hold(dom, &p->effective, hit); hold(dom, &p->legacy, hit);
             p->last = s->event;
             p->last.type = NULL; p->last.key = NULL; p->last.pointer_type = NULL; p->last.related = NULL;
-            if (action && s->action == OS64_DOM_POINTER_MOVE) {
+            if (action && s->action == OS64_DOM_POINTER_MOVE && d_provider_enter(dom)) {
                 os64_dom_event_t event = s->event;
                 event.type = "mousemove"; event.kind = OS64_DOM_EVENT_MOUSE; event.button = 0;
-                if (!action(opaque, hit, &event, false)) { d_pointer_drain(dom); p->draining = true; }
+                /* The callback can mutate the tree and release pointer state.
+                 * Its borrowed hit must survive those mutations. */
+                if (hit) os64_html_hold(dom->document, hit);
+                bool accepted = action(opaque, hit, &event, false);
+                if (hit) os64_html_release(dom->document, hit);
+                d_provider_leave(dom);
+                if (!accepted || !d_delivery_active(dom)) {
+                    d_pointer_drain(dom); p->draining = !accepted;
+                }
             }
             return OS64_JS_OK;
         }
@@ -325,9 +343,9 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
         }
     }
 done:
-    if (p->cancel_owed && !q.failed && !dom->closed && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE) cancel(&q);
+    if (p->cancel_owed && !q.failed && d_delivery_active(dom) && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE) cancel(&q);
     if (target) os64_html_release(dom->document, target);
-    if (q.failed || dom->closed || dom->navigation.kind != OS64_DOM_NAVIGATE_NONE) {
+    if (q.failed || !d_delivery_active(dom) || dom->navigation.kind != OS64_DOM_NAVIGATE_NONE) {
         bool drain = p->buttons != 0 || p->draining || s->event.buttons != 0;
         d_pointer_drain(dom); p->draining = drain;
     }

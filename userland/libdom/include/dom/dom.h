@@ -1315,7 +1315,10 @@ bool os64_dom_javascript_mime(const char *value, size_t length);
  * that is none, or a scope that is none; each thrown before any entry is
  * walked) is reported at the window as a task's exception is, and is the
  * outcome: the host registers nothing then. Integrity's entries are not
- * walked. Owner thread, between tasks. */
+ * walked. The visitor table is copied for the walk. Retirement stops later
+ * entries and returns REALM_RETIRED, including when the last visited entry
+ * was accepted; the host must discard that partial result. Provider-reentrant
+ * entry is refused. Owner thread, between tasks. */
 typedef struct {
     void *opaque;
     bool (*entry)(void *opaque, const char *scope, const char *key, const char *value);

@@ -13,9 +13,10 @@
  * here. */
 
 struct DImportParse {
+    os64_dom_t *dom;
     const char *text;
     size_t length;
-    const os64_dom_import_map_walk_t *walk;
+    os64_dom_import_map_walk_t walk;
 };
 
 /* An ordered map as JSON makes one: an object that is no array. */
@@ -47,7 +48,7 @@ typedef int (*DEach)(JSContext *ctx, void *opaque, const char *key, JSValueConst
 /* Each of `object`'s own enumerable string-keyed properties, in its order,
  * handed to `each` with its key as UTF-8. A key holding a NUL names
  * nothing the host can keep, and is passed over. 0, or -1 with an
- * exception pending. */
+ * exception pending, or 1 when the visitor's document retires. */
 static int each_entry(JSContext *ctx, JSValueConst object, DEach each, void *opaque)
 {
     JSPropertyEnum *names = NULL;
@@ -101,9 +102,18 @@ static int specifier_entry(JSContext *ctx, void *opaque, const char *key, JSValu
             address = NULL;
         }
     }
-    const os64_dom_import_map_walk_t *walk = entries->parse->walk;
+    os64_dom_t *dom = entries->parse->dom;
+    if (!d_provider_enter(dom)) {
+        if (address != NULL) JS_FreeCString(ctx, address);
+        return 1;
+    }
+    const os64_dom_import_map_walk_t *walk = &entries->parse->walk;
     bool kept = walk->entry(walk->opaque, entries->scope, key, address);
     if (address != NULL) JS_FreeCString(ctx, address);
+    d_provider_leave(dom);
+    /* A retired walk cannot register its partial map, even when the last
+     * callback accepted an entry. Do not turn departure into a RangeError. */
+    if (!d_delivery_active(dom)) return 1;
     if (kept) return 0;
     JS_ThrowRangeError(ctx, "The import map is larger than yonder keeps");
     return -1;
@@ -169,12 +179,14 @@ os64_js_status_t os64_dom_import_map(os64_dom_t *dom, const char *name, const ch
 {
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     os64_memset(outcome, 0, sizeof(*outcome));
-    if (dom == NULL || dom->closed || name == NULL || text == NULL || text[length] != '\0' || walk == NULL ||
-        walk->entry == NULL || dom->import_parse != NULL) {
+    if (dom == NULL || dom->closed || name == NULL || text == NULL || walk == NULL || dom->import_parse != NULL) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return outcome->status;
     }
-    struct DImportParse parse = {text, length, walk};
+    if (!d_delivery_active(dom)) return outcome->status = OS64_JS_REALM_RETIRED;
+    if (d_provider_busy(dom)) return outcome->status = OS64_JS_BUSY;
+    if (text[length] != '\0' || walk->entry == NULL) return outcome->status = OS64_JS_BAD_ARGUMENT;
+    struct DImportParse parse = {dom, text, length, *walk};
     if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
         os64_js_outcome_t access, call;
         JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
@@ -193,6 +205,8 @@ os64_js_status_t os64_dom_import_map(os64_dom_t *dom, const char *name, const ch
         d_task_finish(dom, outcome);
     }
     d_task_close(dom, name, outcome);
+    if (outcome->status == OS64_JS_OK && !d_delivery_active(dom))
+        outcome->status = OS64_JS_REALM_RETIRED;
     return outcome->status;
 }
 
