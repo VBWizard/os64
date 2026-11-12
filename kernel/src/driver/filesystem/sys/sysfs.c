@@ -38,6 +38,10 @@
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
 //   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
+//   /sys/usb                     the xHCI controllers and what is on each, how
+//                                often the poll that serves them came round,
+//                                and what Bluetooth did when. Read it FIRST
+//                                when a USB or Bluetooth device answers late
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it
 //                                gives this screen, and the verdict on the

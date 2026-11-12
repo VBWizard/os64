@@ -68,6 +68,14 @@ Two things are waiting on it:
 - `xhci_bluetooth_maintain` runs from `kworker` and owns Bluetooth's disk
   I/O (bonds) and its policy step (`bt_host_policy`: reconnection scans and
   the like). It takes the same busy flag.
+  It also holds a second flag, `s_bond_io_busy`, across the disk I/O, and
+  after the I/O it SPINS for the poll's flag rather than leaving: the one
+  caller that waits for it.
+- Reconnection is scan-driven, with a backoff (`bt_manager.c`,
+  `manager_retry`): after a scan round that did not connect the peer, the
+  next round waits 2 s, doubling to a ceiling of 30 s. A device switched on
+  just after a round therefore waits out the backoff before anything can
+  see it, however often the poll runs.
 - The DEBTS row "xHCI is polled, and the poll rides dispatch frequency"
   has the measurement: on an idle tickless GUI boot with no logd heartbeat,
   HID reports arrived spaced exactly 1000 ticks apart.
@@ -114,8 +122,8 @@ Two things are waiting on it:
    step, reconnection, later the audio pump's neighbour) runs from the
    daemon; what is disk I/O stays in `kworker`, which the daemon nudges
    when there is a bond to write. The daemon never touches a disk.
-5. **A report**: `/sys/usb/xhci` (or the name that fits what is there),
-   one block a controller: how it is driven (MSI, INTx or tick), fires and
+5. **A report**: `/sys/usb`, which X.1 created with the poll's own
+   numbers, grows one block a controller: how it is driven (MSI, INTx or tick), fires and
    spurious, the daemon's wakes, and how long a ring waited to be answered,
    since boot and since last read. `/sys/net/knet` is the model, down to
    reading it FIRST when a device feels late.
@@ -166,6 +174,25 @@ from "the scan had not yet seen the device" is added FIRST, as its own
 small commit, because it is the before reading. If the time is all in the
 scan cadence and none in the poll, the arc still lands (audio needs it),
 and the slow connection gets a DEBTS row that says what it really is.
+
+### What was measured (X.1)
+
+`/sys/usb` is the instrument: per controller what is on it, the poll's
+counts and gaps, and a timeline of Bluetooth's scans and LE phase changes
+with the polls, events and longest gap between each line.
+
+- **QEMU, 2026-11-12, today's tree** (`qemu-xhci`, USB keyboard and mouse,
+  the `/QEMU GUI Boot` entry: GUI, no logd, `BACKSTOP=10`): 10,815 polls in
+  about 110 s, and every one of the 83 polls that drained an event came
+  within 20 ms of the poll before it (longest 10.3 ms; the longest gap of
+  any poll, 73 ms). The DEBTS row's reports a thousand ticks apart do NOT
+  reproduce: on this entry the poll comes round every tick. The default
+  entry (logd) reads the same. So in QEMU the interrupt will buy about one
+  tick, not seconds, and case (a) of § Proof is this reading.
+- **The P5's controllers** (`/sys/bus/pci`): five xHCI, each offering MSI
+  and MSI-X with one vector, none with an INTx line routed.
+- **The P5's poll gaps and the LE devices' reconnection timeline**: owed
+  (tracker X.1.4).
 
 ## Proof
 

@@ -281,9 +281,10 @@ static uint64_t s_polls_lost;          // callers that found the flag held and l
 static uint64_t s_poll_last_tsc;       // when the previous poll began
 static uint64_t s_poll_gap_max;        // longest gap of any poll, in cycles
 // Gaps of the polls that drained events, by size: how long an event may
-// have sat.
+// have sat. The first edge is two ticks, so a poll that comes round every
+// tick lands in the first bucket and not on its boundary.
 static uint64_t s_event_gap_max;       // cycles
-static uint64_t s_event_gap_10ms, s_event_gap_100ms, s_event_gap_1s, s_event_gap_over_1s;
+static uint64_t s_event_gap_20ms, s_event_gap_200ms, s_event_gap_2s, s_event_gap_over_2s;
 
 typedef enum {
 	XHCI_TL_SCAN_STARTED,
@@ -346,10 +347,10 @@ static void xhci_poll_ended(uint64_t gap, uint32_t events)
 	s_polls_with_events++;
 	if (gap > s_event_gap_max) s_event_gap_max = gap;
 	uint64_t ms = kCPUCyclesPerSecond / 1000;
-	if (gap <= 10 * ms) s_event_gap_10ms++;
-	else if (gap <= 100 * ms) s_event_gap_100ms++;
-	else if (gap <= 1000 * ms) s_event_gap_1s++;
-	else s_event_gap_over_1s++;
+	if (gap <= 20 * ms) s_event_gap_20ms++;
+	else if (gap <= 200 * ms) s_event_gap_200ms++;
+	else if (gap <= 2000 * ms) s_event_gap_2s++;
+	else s_event_gap_over_2s++;
 }
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
@@ -1489,10 +1490,10 @@ size_t xhci_usb_report(char *out, size_t cap)
 	                 __atomic_load_n(&s_polls_lost, __ATOMIC_RELAXED), s_poll_gap_max / per_us);
 	// An event waited no longer than the gap of the poll that drained it.
 	xhci_report_addf(out, cap, &len,
-	                 "event_gap_max_us: %lu\nevent_gap_to_10ms: %lu\nevent_gap_to_100ms: %lu\n"
-	                 "event_gap_to_1s: %lu\nevent_gap_over_1s: %lu\n",
-	                 s_event_gap_max / per_us, s_event_gap_10ms, s_event_gap_100ms,
-	                 s_event_gap_1s, s_event_gap_over_1s);
+	                 "event_gap_max_us: %lu\nevent_gap_to_20ms: %lu\nevent_gap_to_200ms: %lu\n"
+	                 "event_gap_to_2s: %lu\nevent_gap_over_2s: %lu\n",
+	                 s_event_gap_max / per_us, s_event_gap_20ms, s_event_gap_200ms,
+	                 s_event_gap_2s, s_event_gap_over_2s);
 
 	// Oldest first. polls, events and gap_max_us cover the time since the
 	// line above (since boot, for the first line ever written).
