@@ -278,7 +278,9 @@ static void request_backup(os64_dom_t *dom)
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
         JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-        if (ctx != NULL && JS_EnqueueJob(ctx, backup_job, 0, NULL) == 0) {
+        /* Retirement of the first enqueuer must not discard siblings'
+         * reactions. The element's current document gates each delivery. */
+        if (ctx != NULL && JS_EnqueueJobOwned(ctx, NULL, NULL, backup_job, 0, NULL) == 0) {
             s->agent->owed = false;
             return;
         }
@@ -474,6 +476,8 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     os64_js_outcome_t outcome;
     ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
     if (!ctx) return -1;
+    int eligible = d_delivery_eligible(d_owner(dom, element), ctx, d->constructor->value);
+    if (eligible <= 0) return eligible < 0 ? report(dom, ctx, d->constructor_script) : 0;
     /* The wrapper first, so one made now is HTMLElement's and not the
      * failed state's HTMLUnknownElement (d_node_kind). */
     JSValue self = d_wrap(dom, ctx, element);
@@ -552,6 +556,8 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
     if (!ctx) return -1;
     uint32_t script = d->scripts[reaction->kind];
+    int eligible = d_delivery_eligible(d_owner(dom, r->element), ctx, d->callbacks[reaction->kind]->value);
+    if (eligible <= 0) return eligible < 0 ? report(dom, ctx, script) : 0;
     JSValue self = d_wrap(dom, ctx, r->element);
     if (JS_IsException(self)) return report(dom, ctx, script);
     JSValue args[4] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
@@ -803,7 +809,9 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
     DDefinition *d = s != NULL && document == window_document(dom) && s->definitions != NULL
         ? definition_named(s, name) : NULL;
     if (d == NULL || !os64_html_custom_name(name)) return 0;
-    JSValue result = JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
+    int eligible = d_delivery_eligible(d_owner(dom, document), ctx, d->constructor->value);
+    if (eligible == 0) return 0;
+    JSValue result = eligible < 0 ? JS_EXCEPTION : JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
     if (!JS_IsException(result)) {
         const os64_html_node_t *element;
         const char *wrong = constructed_wrong(dom, result, name, &element);

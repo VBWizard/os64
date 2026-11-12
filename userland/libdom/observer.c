@@ -190,7 +190,9 @@ static void request_notify(os64_dom_t *dom)
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
         JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-        if (ctx != NULL && JS_EnqueueJob(ctx, notify_job, 0, NULL) == 0) {
+        /* The shared agent queue outlives its first enqueuer. Each observer
+         * supplies its own activity and callback eligibility at delivery. */
+        if (ctx != NULL && JS_EnqueueJobOwned(ctx, NULL, NULL, notify_job, 0, NULL) == 0) {
             s->owed = false;
             return;
         }
@@ -511,11 +513,12 @@ static int signal_failed(os64_dom_t *dom, JSContext *ctx)
 }
 
 /* DOM's "notify mutation observers": the slots whose assignment changed
- * are taken first (its signal slots); then every observer, in the order
+ * are taken first (its signal slots); then observers, in the order
  * the page made them (those made by a callback meanwhile wait for the next
- * notify), is handed its records if it has any, its transient
- * registrations going either way; then a slotchange fires at each slot
- * taken, so one an observer's callback causes waits for the next notify.
+ * notify), receive their records when their activity and callback remain
+ * eligible. Ineligible records are cleared; transient registrations go
+ * either way. A slotchange then fires at each slot whose current document
+ * remains active, so one a callback causes waits for the next notify.
  * A root left marked for want of memory is reported by a later one; a
  * slot that could not be listed loses its event, and says so. -1 when the
  * runtime must stop. */
@@ -541,7 +544,15 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         JSContext *callback_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
         if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
-        JSValue records = take_records(owner, callback_ctx, o);
+        int eligible = d_delivery_active(owner);
+        if (eligible && any) eligible = d_delivery_eligible(owner, callback_ctx, o->callback);
+        if (eligible <= 0) queue_clear(owner, o);
+        if (eligible == 0) {
+            registrations_drop(dom, transient_for, o);
+            o = next;
+            continue;
+        }
+        JSValue records = eligible < 0 ? JS_EXCEPTION : take_records(owner, callback_ctx, o);
         registrations_drop(dom, transient_for, o);
         if (JS_IsException(records)) {
             if (!d_exception_catchable(callback_ctx)) status = -1;
@@ -578,7 +589,7 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
             os64_js_outcome_t outcome;
             JSContext *event_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
             if (!event_ctx) status = -1;
-            else {
+            else if (d_delivery_active(owner)) {
                 JSValue event = d_event_new(owner, event_ctx, "slotchange", true, false, true);
                 if (JS_IsException(event) || d_dispatch(owner, event_ctx, event, signals.slots[i]) < 0)
                     status = signal_failed(owner, event_ctx);

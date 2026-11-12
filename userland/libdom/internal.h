@@ -790,6 +790,11 @@ typedef struct { char *data; size_t length; } DString;
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
+/* Scheduling eligibility is separate from retained-object usability. */
+bool d_delivery_active(const os64_dom_t *dom);
+/* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
+ * activity is the operation's current document, not the callback's creator. */
+int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
 /* A block of the binding's own, charged to max_bytes and counted under
  * `kind` (MEMORY_CENSUS.md § 4); d_alloc is d_alloc_kind's OTHER. Zeroed.
  * d_free reads the kind back from the block, so nothing else is passed. */

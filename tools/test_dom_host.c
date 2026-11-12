@@ -287,6 +287,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_shadow.inc"
 #include "test_dom_ranges.inc"
 #include "test_dom_realms.inc"
+#include "test_dom_retirement.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -645,8 +646,10 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--cluster-failures")){dom_cluster_failure_cases();printf("DOM cluster failures: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--realms")){dom_realm_cases();dom_cluster_cases();dom_cluster_cap_cases();printf("DOM realm routing: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--realm-retirement")){dom_retirement_cases();printf("DOM retirement queues: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_realm_cases();dom_cluster_cases();dom_cluster_cap_cases();
+    dom_retirement_cases();
     dom_classic_cases();
     dom_modern_cases();
     dom_pointer_cases();
