@@ -523,6 +523,17 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = 0; i < count && !JS_IsException(result); i++) {
         DObserver *o = JS_GetOpaque(notify[i], os64_js_class_id(&observer_slot));
         if (o == NULL || o->count == 0) continue;
+        int eligible = d_delivery_eligible(dom, ctx, o->callback);
+        if (eligible <= 0) {
+            /* Consume obsolete entries without allocating an author-facing
+             * list, retaining the observer itself and its registration. */
+            values_free(dom->engine, o->entries, o->count);
+            o->entries = NULL;
+            o->count = o->cap = 0;
+            o->dropped_owed = false;
+            if (eligible < 0 && !report_pending(dom, ctx, o->script)) result = JS_EXCEPTION;
+            continue;
+        }
         /* This browser drops no entry (marks and measures are kept without
          * limit, and the navigation entry's buffer holds the one there
          * is), so a count owed is 0. */

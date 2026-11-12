@@ -169,20 +169,31 @@ bool d_require_active(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
-int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback)
+int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
 {
-    if (!d_delivery_active(activity)) return 0;
     /* A bound function or callable proxy can belong to a different realm
      * from the registration. A revoked proxy keeps its normal exception. */
     JSContext *function_ctx = JS_GetFunctionRealm(ctx, callback);
     if (!function_ctx) return -1;
     os64_js_outcome_t outcome;
-    os64_js_realm_t *realm = os64_js_realm_from_context(activity->runtime, function_ctx, OS64_JS_ABI_ID, &outcome);
+    os64_js_realm_t *realm = os64_js_realm_from_context(owner->runtime, function_ctx, OS64_JS_ABI_ID, &outcome);
     if (!realm) {
         d_error(ctx, "InvalidStateError", "Callback realm is unavailable");
         return -1;
     }
     return !os64_js_realm_is_retired(realm);
+}
+
+int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback)
+{
+    return d_delivery_active(activity) ? d_callback_eligible(activity, ctx, callback) : 0;
+}
+
+bool d_require_callback(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
+{
+    int eligible = d_callback_eligible(owner, ctx, callback);
+    if (eligible == 0) d_error(ctx, "InvalidStateError", "The host callback is inactive");
+    return eligible > 0;
 }
 
 bool d_exception_catchable(JSContext *ctx)

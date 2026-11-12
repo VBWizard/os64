@@ -163,8 +163,15 @@ size_t os64_dom_resizes_observed(const os64_dom_t *dom)
 
 bool os64_dom_resizes_owed(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->resizes != NULL &&
-           (dom->resizes->owed != 0 || dom->resizes->skipped != 0 || dom->resizes->undone);
+    if (!d_delivery_active(dom) || dom->resizes == NULL) return false;
+    const struct DResizes *s = dom->resizes;
+    for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+        if (o->dead) continue;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next)
+            if (d_delivery_active(d_owner((os64_dom_t *)dom, t->node)) &&
+                (t->last[0] < 0 || t->skipped || s->undone)) return true;
+    }
+    return false;
 }
 
 /* The standard's "calculate depth for node": how many nodes from it to the
@@ -207,6 +214,7 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
     size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
     for (size_t i = 0; i < members; i++) {
         os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        if (!d_delivery_active(owner)) continue;
         size_t n = 0;
         for (DRObserver *o = s->observers; o != NULL; o = o->next) {
             if (o->dead) continue;
@@ -233,8 +241,9 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
         if (o->dead) continue;
         for (DRTarget *t = o->targets; t != NULL; t = t->next) {
             double size[2];
-            observed_size(&t->now, t->box, size);
             t->active = t->skipped = false;
+            if (!d_delivery_active(d_owner(dom, t->node))) continue;
+            observed_size(&t->now, t->box, size);
             if (size[0] == t->last[0] && size[1] == t->last[1]) continue;
             if (node_depth(dom, t->node) > depth) {
                 t->active = true;
@@ -334,11 +343,33 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
     size_t shallowest = SIZE_MAX;
     DRObserver *last = s->observers_last;
     s->walking = true;
-    for (DRObserver *o = s->observers; o != NULL && !dom->closed && !sticky(out);) {
+    for (DRObserver *o = s->observers; o != NULL && d_delivery_active(dom) && !sticky(out);) {
         DRObserver *next = o == last ? NULL : o->next;
         bool any = false;
-        for (DRTarget *t = o->targets; t != NULL && !any; t = t->next) any = t->active;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+            if (!d_delivery_active(d_owner(dom, t->node))) t->active = false;
+            any = any || t->active;
+        }
         if (any && !o->dead && JS_IsObject(o->object)) {
+            int eligible = d_delivery_eligible(dom, ctx, o->callback);
+            if (eligible <= 0) {
+                /* A permanently retired callback cannot consume a later
+                 * resize either. Remember the sample without constructing
+                 * entries or keeping the host awake for the same sizes. */
+                for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+                    if (!t->active) continue;
+                    t->active = false;
+                    if (t->last[0] < 0) s->owed--;
+                    observed_size(&t->now, t->box, t->last);
+                }
+                if (eligible < 0 && d_exception_catchable(ctx)) {
+                    JSValue error = JS_GetException(ctx);
+                    d_report_as(dom, ctx, error, o->script);
+                    JS_FreeValue(ctx, error);
+                }
+                o = next;
+                continue;
+            }
             JSValue entries = JS_NewArray(ctx);
             uint32_t i = 0;
             for (DRTarget *t = o->targets; t != NULL && !JS_IsException(entries); t = t->next) {
@@ -412,7 +443,7 @@ static void loop_error(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 {
     if (out != NULL) os64_memset(out, 0, sizeof(*out));
-    struct DResizes *s = dom != NULL && !dom->closed ? dom->resizes : NULL;
+    struct DResizes *s = d_delivery_active(dom) ? dom->resizes : NULL;
     if (out == NULL || s == NULL) return false;
     sweep(dom);
     if (s->observed == 0) return false;
@@ -431,13 +462,13 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each round's depth is deeper than the last's shallowest, and a
          * tree is finitely deep: the loop ends. */
-        while (ctx != NULL && active > 0 && !dom->closed && !sticky(out)) {
+        while (ctx != NULL && active > 0 && d_delivery_active(dom) && !sticky(out)) {
             size_t depth = broadcast(dom, ctx, out);
-            if (sticky(out) || dom->closed) break;
+            if (sticky(out) || !d_delivery_active(dom)) break;
             active = gather(dom, depth, &skipped);
             if (active < 0) s->undone = true;
         }
-        if (ctx != NULL && skipped != 0 && !dom->closed && !sticky(out)) loop_error(dom, ctx, out);
+        if (ctx != NULL && skipped != 0 && d_delivery_active(dom) && !sticky(out)) loop_error(dom, ctx, out);
         s->skipped = skipped;
         d_task_finish(dom, out);
     }

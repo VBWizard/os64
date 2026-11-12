@@ -1206,6 +1206,7 @@ static JSValue params_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         if (!JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "forEach needs a function");
         JSValueConst that = argc > 1 ? argv[1] : JS_UNDEFINED;
         for (size_t i = 0; i < params->count; i++) {
+            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
             JSValue args[3] = {JS_NewStringLen(ctx, params->pairs[i].value, params->pairs[i].value_length),
                                JS_NewStringLen(ctx, params->pairs[i].name, params->pairs[i].name_length),
                                JS_DupValue(ctx, self)};

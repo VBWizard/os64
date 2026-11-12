@@ -1114,7 +1114,9 @@ size_t os64_dom_intersections_observed(const os64_dom_t *dom);
  * its first observation, or the last step passed one over for its
  * observer's `delay` and that delay has run (options.now_ms's clock), or a
  * required provider or batch allocation refused. And
- * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
+ * when that delay runs out, for the host to wake at; UINT64_MAX for none.
+ * Inactive observer documents and inactive explicit-root documents owe no
+ * measurements; retained registrations can resume after root adoption. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
@@ -1153,7 +1155,9 @@ void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider,
  * first report, the last step's loop passed one over (its loop error),
  * which the next step reports, or the last step left work undone (the
  * provider refused, or a callback's entries could not be made), so what
- * it did not measure or deliver waits for the next. */
+ * it did not measure or deliver waits for the next. Inactive observer or
+ * target documents owe no measurements. Registrations remain intact so
+ * adopting a target into an active document can make it eligible again. */
 size_t os64_dom_resizes_observed(const os64_dom_t *dom);
 bool os64_dom_resizes_owed(const os64_dom_t *dom);
 /* THE RESIZE STEP, the standard's loop as ONE task: gather what moved,

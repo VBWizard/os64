@@ -802,6 +802,11 @@ bool d_require_active(os64_dom_t *dom, JSContext *ctx);
 /* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
  * activity is the operation's current document, not the callback's creator. */
 int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
+/* Function-only eligibility for document-neutral data iteration. `owner`
+ * identifies the runtime, not an activity document. Scheduled work must use
+ * d_delivery_eligible instead. A required inactive callback throws. */
+int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
+bool d_require_callback(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
 /* A block of the binding's own, charged to max_bytes and counted under
  * `kind` (MEMORY_CENSUS.md § 4); d_alloc is d_alloc_kind's OTHER. Zeroed.
  * d_free reads the kind back from the block, so nothing else is passed. */

@@ -1003,6 +1003,7 @@ static JSValue headers_member(JSContext *ctx, JSValueConst self, int argc, JSVal
             h = headers_state(self);
             if (h == NULL || headers_sort(ctx, h) < 0) return JS_EXCEPTION;
             if (i >= h->sorted_count) break;
+            if (!d_require_callback(dom, ctx, argv[0])) return JS_EXCEPTION;
             JSValue args[3] = {d_byte_text(ctx, h->sorted[i].value, h->sorted[i].value_length),
                                d_byte_text(ctx, h->sorted[i].name, h->sorted[i].name_length), JS_DupValue(ctx, self)};
             JSValue done = JS_IsException(args[0]) || JS_IsException(args[1]) ? JS_EXCEPTION

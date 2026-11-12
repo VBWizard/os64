@@ -47,7 +47,7 @@ static JSValue retirement_pulse(JSContext *ctx, JSValueConst self, int argc, JSV
     return JS_UNDEFINED;
 }
 
-static void retirement_message_reentry_cases(void)
+static void retirement_reentry_cases(void)
 {
     static const char *operations[] = {
         "postMessage({get value(){retire();return 1}},'*',[buffer])",
@@ -55,7 +55,11 @@ static void retirement_message_reentry_cases(void)
         "channel.port1.postMessage({get value(){retire();return 1}},[buffer])",
         "channel.port1.postMessage('value',{get transfer(){retire();return [buffer]}})",
         "Reflect.construct(MessageChannel,[],new Proxy(function(){},{get(t,k){"
-        "if(k==='prototype')retire();return Reflect.get(t,k)}}))"
+        "if(k==='prototype')retire();return Reflect.get(t,k)}}))",
+        "new URLSearchParams('a=1&b=2').forEach(()=>{calls++;retire()})",
+        "new Headers({a:'1',b:'2'}).forEach(()=>{calls++;retire()})",
+        "(()=>{let form=new FormData();form.append('a','1');form.append('b','2');"
+        "form.forEach(()=>{calls++;retire()})})()"
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
         for (size_t i = 0; i < sizeof(operations)/sizeof(operations[0]); ++i) {
@@ -65,34 +69,36 @@ static void retirement_message_reentry_cases(void)
             f.runtime = NULL;
             os64_js_outcome_t out;
             check(os64_js_create_with_teardown(&config, policy, OS64_JS_ABI_ID, &f.runtime, &out) == OS64_JS_OK,
-                  "retirement message reentry: runtime created");
+                  "retirement reentry: runtime created");
             retirement_realms[1] = os64_js_primary_realm(f.runtime, OS64_JS_ABI_ID, &out);
             os64_dom_options_t options = p2b_options("https://messages.example/");
             f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &out);
-            check(f.binding != NULL, "retirement message reentry: binding installed");
+            check(f.binding != NULL, "retirement reentry: binding installed");
             if (f.binding) {
-                check(os64_js_realm_task_begin(retirement_realms[1], OS64_JS_ABI_ID, "message reentry", &out) == OS64_JS_OK,
-                      "retirement message reentry: fixture entry opens");
+                check(os64_js_realm_task_begin(retirement_realms[1], OS64_JS_ABI_ID, "retirement reentry", &out) == OS64_JS_OK,
+                      "retirement reentry: fixture entry opens");
                 JSContext *ctx = os64_js_realm_context(retirement_realms[1], OS64_JS_ABI_ID, &out);
                 JSValue global = JS_GetGlobalObject(ctx);
                 check(JS_SetPropertyStr(ctx, global, "retire", JS_NewCFunctionMagic(ctx, retirement_mark,
                       "retire", 0, JS_CFUNC_generic_magic, 1)) >= 0,
-                      "retirement message reentry: native mark installed");
+                      "retirement reentry: native mark installed");
                 JS_FreeValue(ctx, global);
                 check(os64_js_task_end(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
-                      "retirement message reentry: fixture entry closes");
+                      "retirement reentry: fixture entry closes");
                 char source[1600];
                 snprintf(source, sizeof(source), STORAGE_ASSERT
                     "globalThis.channel=new MessageChannel();globalThis.buffer=new ArrayBuffer(16);"
+                    "globalThis.calls=0;"
                     "let refused=false;try{%s}catch(e){refused=e.name==='InvalidStateError'}"
-                    "assert(refused,'conversion or clone retirement must refuse work');"
+                    "assert(refused,'conversion or callback retirement must refuse work');"
                     "assert(buffer.byteLength===16,'refusal must not detach transfers');"
+                    "assert(calls<=1,'later data callbacks must recheck their realm');"
                     "channel.port1.close();channel.port2.close();", operations[i]);
                 char name[100];
-                snprintf(name, sizeof(name), "retirement message reentry: operation %zu refuses without transfer", i);
+                snprintf(name, sizeof(name), "retirement reentry: operation %zu refuses without transfer", i);
                 realm_script(retirement_realms[1], source, name);
                 check(os64_dom_message_next(f.binding) == UINT64_MAX && !os64_dom_message_fire(f.binding, &out),
-                      "retirement message reentry: no host message delivery");
+                      "retirement reentry: no host message delivery");
             }
             fixture_free(&f);
         }
@@ -116,6 +122,7 @@ static void dom_retirement_cases(void)
         if (!cluster) { os64_js_destroy(runtime); continue; }
         retirement_realms[0] = os64_js_primary_realm(runtime, OS64_JS_ABI_ID, &out);
         os64_dom_t *bindings[3] = {0};
+        ClusterProvider render_providers[3] = {0};
         for (size_t i = 0; i < 3; ++i) {
             if (i) check(os64_js_realm_create(runtime, OS64_JS_ABI_ID, &retirement_realms[i], &out) == OS64_JS_OK,
                          "retirement queues: child realm created");
@@ -132,6 +139,11 @@ static void dom_retirement_cases(void)
                   "retirement queues: independent binding installed");
             if (!result.consumed) { os64_page_state_free(f.state); os64_html_document_free(f.document); }
             if (!result.binding) break;
+            render_providers[i] = (ClusterProvider){.document = f.document, .width = 100 + (int)i};
+            os64_dom_set_resizes(bindings[i], cluster_resizes, &render_providers[i]);
+            os64_dom_set_intersections(bindings[i], cluster_intersections, &render_providers[i]);
+            os64_dom_view_provider_t view = {.opaque = &render_providers[i], .read = cluster_view};
+            os64_dom_set_view(bindings[i], &view);
         }
         if (bindings[0] && bindings[1] && bindings[2]) {
             check(os64_js_realm_task_begin(retirement_realms[0], OS64_JS_ABI_ID, "retirement exchange", &out) == OS64_JS_OK,
@@ -162,7 +174,7 @@ static void dom_retirement_cases(void)
                     "retirement queues: retained objects installed");
                 os64_dom_set_global_miss(bindings[i], retirement_missing, &retirement_misses[i]);
             }
-            realm_script(retirement_realms[0], "globalThis.moLog=[];globalThis.ceLog=[];globalThis.upgrades=[];"
+            realm_script(retirement_realms[0], "globalThis.moLog=[];globalThis.ceLog=[];globalThis.upgrades=[];globalThis.renderLog=[];"
                 "globalThis.slots=[];globalThis.stopC=false;"
                 "globalThis.liveA=function(){moLog.push('A');if(stopC)retireC()};",
                 "retirement queues: A callbacks installed");
@@ -190,6 +202,10 @@ static void dom_retirement_cases(void)
                 "globalThis.microLive=()=>A.taskLog.push('micro');"
                 "globalThis.timerLive=()=>A.taskLog.push('timer');"
                 "globalThis.rafLive=()=>A.taskLog.push('raf');"
+                "globalThis.perfLive=()=>A.renderLog.push('performance');"
+                "globalThis.resizeLive=()=>A.renderLog.push('resize');"
+                "globalThis.intersectionLive=()=>A.renderLog.push('intersection');"
+                "globalThis.filterLive=()=>{A.walkLog.push('C');return 1};"
                 "globalThis.idleLive=d=>A.taskLog.push(d.didTimeout?'timeout-idle':'idle');",
                 "retirement events: live callback on adopted target");
             realm_script(retirement_realms[0],
@@ -209,11 +225,26 @@ static void dom_retirement_cases(void)
                 "globalThis.deadTask=()=>A.taskLog.push('dead');setTimeout(C.timerLive,0);"
                 "requestAnimationFrame(C.rafLive);requestIdleCallback(C.idleLive);"
                 "globalThis.channel=new MessageChannel();channel.port1.postMessage({kept:'pending'});"
+                "globalThis.retainedResponse=new Response('settled');globalThis.retainedBlob=new Blob(['bytes']);"
+                "globalThis.retainedStreamResponse=new Response(new ReadableStream({start(c){"
+                "c.enqueue(new TextEncoder().encode('streamed'));c.close()}}));"
+                "globalThis.ro=new ResizeObserver(C.resizeLive);ro.observe(C.observed);"
+                "globalThis.io=new IntersectionObserver(C.intersectionLive,{root:C.document});io.observe(C.observed);"
                 "postMessage('queued','*');onmessage=C.timerLive;assert(missing()==='undefined');",
                 "retirement tasks: pending B activity has live C callbacks");
             check(retirement_misses[1] == 1, "retirement providers: B diagnostic hook receives active lookup");
             realm_script(retirement_realms[0],
                 "globalThis.deadInterval=setInterval(B.deadTask,0);setTimeout(C.timerLive,0);"
+                "globalThis.deadPerf=new PerformanceObserver(B.deadTask);deadPerf.observe({entryTypes:['mark']});"
+                "globalThis.livePerf=new PerformanceObserver(C.perfLive);livePerf.observe({entryTypes:['mark']});"
+                "performance.mark('before-retirement');"
+                "globalThis.deadResize=new ResizeObserver(B.deadTask);deadResize.observe(observed);"
+                "globalThis.liveResize=new ResizeObserver(C.resizeLive);liveResize.observe(B.eventNode);"
+                "globalThis.retainedResize=new ResizeObserver(C.resizeLive);retainedResize.observe(B.observed);"
+                "globalThis.deadIntersection=new IntersectionObserver(B.deadTask);deadIntersection.observe(observed);"
+                "globalThis.liveIntersection=new IntersectionObserver(C.intersectionLive);liveIntersection.observe(observed);"
+                "globalThis.retainedIntersection=new IntersectionObserver(C.intersectionLive,{root:B.document});"
+                "retainedIntersection.observe(B.observed);"
                 "requestAnimationFrame(B.deadTask);requestAnimationFrame(C.rafLive);"
                 "requestIdleCallback(B.deadTask,{timeout:1});requestIdleCallback(C.idleLive,{timeout:1});"
                 "requestIdleCallback(B.deadTask);requestIdleCallback(C.idleLive);",
@@ -372,8 +403,42 @@ static void dom_retirement_cases(void)
                 check(out.status == OS64_JS_OK, "retirement tasks: discarded callback is not a task failure");
                 fired++;
             }
-            check(fired == 4 && os64_dom_timer_next(bindings[0]) == UINT64_MAX,
+            check(fired == 5 && os64_dom_timer_next(bindings[0]) == UINT64_MAX,
                   "retirement tasks: dead interval removed and timeout callbacks consumed");
+            realm_script(retirement_realms[0], "assert(renderLog.join()==='performance');assert(deadPerf.takeRecords().length===0);",
+                "retirement observers: live performance callback follows suppressed callback");
+            check(!os64_dom_resizes_step(bindings[1], &out) && !os64_dom_resizes_owed(bindings[1]) &&
+                  !os64_dom_intersections_update(bindings[1]) && !os64_dom_intersections_owed(bindings[1]) &&
+                  !os64_dom_intersections_due(bindings[1]) && !os64_dom_intersections_fire(bindings[1], &out) &&
+                  os64_dom_intersections_next(bindings[1]) == UINT64_MAX &&
+                  render_providers[1].resize_calls == 0 && render_providers[1].intersection_calls == 0,
+                  "retirement observers: inactive owner neither measures nor delivers");
+            check(os64_dom_resizes_step(bindings[0], &out) && out.status == OS64_JS_OK &&
+                  render_providers[2].resize_calls != 0,
+                  "retirement observers: live resize follows dead callback and measures adopted target in C");
+            check(os64_dom_intersections_update(bindings[0]) && os64_dom_intersections_fire(bindings[0], &out) &&
+                  out.status == OS64_JS_OK && render_providers[1].resize_calls == 0 &&
+                  render_providers[1].intersection_calls == 0,
+                  "retirement observers: live intersection follows dead callback");
+            realm_script(retirement_realms[0],
+                "assert(renderLog.join()==='performance,resize,intersection','observer deliveries: '+renderLog);"
+                "assert(deadIntersection.takeRecords().length===0);"
+                "deadResize.disconnect();liveResize.disconnect();deadIntersection.disconnect();liveIntersection.disconnect();"
+                "B.ro.disconnect();B.io.disconnect();",
+                "retirement observers: obsolete records consumed and exported observers disconnect");
+            check(!os64_dom_resizes_owed(bindings[0]) && !os64_dom_intersections_owed(bindings[0]) &&
+                  os64_dom_intersections_next(bindings[0]) == UINT64_MAX,
+                  "retirement observers: retained inactive targets do not keep measurement work owed");
+            realm_script(retirement_realms[0],
+                "assert(retainedIntersection.takeRecords().length===0);retainedIntersection.disconnect();"
+                "C.document.body.appendChild(C.document.adoptNode(B.observed));",
+                "retirement observers: retained target moves from inactive B into active C");
+            check(os64_dom_resizes_owed(bindings[0]) && os64_dom_resizes_step(bindings[0], &out) &&
+                  out.status == OS64_JS_OK && render_providers[1].resize_calls == 0,
+                  "retirement observers: retained registration resumes with current active target owner");
+            realm_script(retirement_realms[0],
+                "assert(renderLog.join()==='performance,resize,intersection,resize');retainedResize.disconnect();",
+                "retirement observers: adopted retained target receives its first eligible resize");
             check(os64_dom_animation_fire(bindings[0], 1000, &out) && out.status == OS64_JS_OK,
                   "retirement tasks: live rAF follows a dead callback in the same batch");
             for (int i = 0; i < 2; ++i)
@@ -382,6 +447,38 @@ static void dom_retirement_cases(void)
             realm_script(retirement_realms[0],
                 "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle','scheduled delivery: '+taskLog);",
                 "retirement tasks: exact surviving scheduled callback order");
+            realm_script(retirement_realms[0],
+                "globalThis.walkLog=[];let root=document.createElement('div'),child=document.createElement('span');"
+                "root.appendChild(child);let deadWalk=document.createTreeWalker(root,1,B.deadTask);"
+                "assert(refused(()=>deadWalk.nextNode()));"
+                "let liveWalk=B.document.createTreeWalker(root,1,C.filterLive);"
+                "assert(liveWalk.nextNode()===child&&walkLog.join()==='C');"
+                "let inactiveChild=B.document.createElement('span');B.inactiveTarget.appendChild(inactiveChild);"
+                "let plainWalk=B.document.createTreeWalker(B.inactiveTarget,1);assert(plainWalk.nextNode()===inactiveChild);"
+                "let lookups=0;let inactiveWalk=document.createTreeWalker(B.inactiveTarget,1,{get acceptNode(){lookups++;return C.filterLive}});"
+                "assert(refused(()=>inactiveWalk.nextNode())&&lookups===0);"
+                "let movingWalk=document.createTreeWalker(root,1,{get acceptNode(){B.document.adoptNode(child);return C.filterLive}});"
+                "assert(refused(()=>movingWalk.nextNode())&&walkLog.join()==='C');"
+                "let iter=document.createNodeIterator(root,1,B.deadTask);assert(refused(()=>iter.nextNode()));"
+                "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle');",
+                "retirement traversal: gate filters by current target and function realm while pure traversal survives");
+            realm_script(retirement_realms[0],
+                "walkLog=[];let dataSets=[new B.URLSearchParams('x=1'),new B.Headers({x:'1'}),new B.FormData()];"
+                "dataSets[2].append('x','1');for(let data of dataSets){"
+                "assert(refused(()=>data.forEach(B.deadTask)));data.forEach(C.filterLive)}"
+                "assert(walkLog.join()==='C,C,C');"
+                "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle');",
+                "retirement iteration: retained data admits live callbacks without reviving dead callbacks");
+            realm_script(retirement_realms[0],
+                "globalThis.retainedReads=[];B.retainedBlob.text().then(v=>retainedReads.push(v));"
+                "B.retainedResponse.text().then(v=>retainedReads.push(v));",
+                "retirement bodies: read settled data retained from B");
+            realm_script(retirement_realms[0], "assert(retainedReads.includes('bytes')&&retainedReads.includes('settled'));",
+                "retirement bodies: settled Blob and Response remain readable");
+            realm_script(retirement_realms[0], "B.retainedStreamResponse.text().then(v=>retainedReads.push(v));",
+                "retirement bodies: read retained closed stream response");
+            realm_script(retirement_realms[0], "assert(retainedReads.includes('streamed'));",
+                "retirement bodies: closed stream response algorithms survive creator retirement");
             realm_script(retirement_realms[0],
                 "assert(B.plain()===42,'ordinary retained function remains callable');"
                 "assert(B.adopted.ownerDocument===C.document&&B.adopted instanceof B.HTMLElement);"
@@ -417,5 +514,5 @@ static void dom_retirement_cases(void)
         check(live == 0 && dom_live == 0 && !dom_allocations,
               "retirement queues: retained native backing released under both teardown policies");
     }
-    retirement_message_reentry_cases();
+    retirement_reentry_cases();
 }
