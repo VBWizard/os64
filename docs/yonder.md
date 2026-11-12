@@ -246,6 +246,31 @@ Click the Settings icon in the title bar.
 
 When Settings opens, its bottom line says what the cache holds.
 
+## HTTP/2
+
+To a site reached over `https://`, yonder offers HTTP/2, and a site that
+takes it carries a whole page's requests on one connection, all at once.
+A site that does not is spoken to over HTTP/1.1, on up to six connections
+to a host, as is any site reached over plain `http://` or through a proxy.
+Nothing needs setting; most sites take it.
+
+- **Identify as** decides how the connection is opened as well as the
+  name sent. As Chrome or as Firefox, yonder opens an HTTP/2 connection
+  the way that browser does; as yonder, as Safari on an iPhone or under a
+  name you typed, it opens one its own way. As Netscape 4 or as Lynx it
+  speaks HTTP/1.1 only, as those browsers do.
+- **To turn it off**, put `http2 = off` in `net.conf`. That file is the
+  system's and every program that fetches reads it, so the line is not
+  one of yonder.conf's. Each program reads it once, as it starts fetching:
+  start yonder again after changing it. A `/home/net.conf` is read in place
+  of `/etc/net.conf`, not on top of it, so one made for this line needs the
+  `nameserver` line too. The shipped `/etc/net.conf` says the same beside
+  the line, commented out.
+- **To see which a page used**, turn on `diagnostics` (yonder.conf, below).
+  A page's file says `HTTP: 2` with the stream that carried it, or
+  `HTTP: 1.1`, and its `wire` lines count the connections the page made
+  and the requests sent, by which of the two carried them.
+
 ## The cache
 
 yonder keeps the pictures and style sheets it fetches in
