@@ -1,0 +1,357 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Lamplighter</title>
+<!--
+  LAMPLIGHTER: yonder's proving ground, a game that grows a level with every
+  slice. Each level is built from the features its slice made drawable; press
+  ? in the game for the list, a check of each (does the engine READ it), and
+  what to look for (did it DRAW it: your eyes, and Chrome beside it). One
+  file, so it opens from /tests/pages, from os64serve's `pages` lot, and in
+  any other browser alike. A slice that adds a feature adds a level here.
+-->
+<style>
+:root{--night:#0b1630;--deep:#0f2348;--water:#123a5c;--gold:#ffcf5c;--ink:#e9eef7;--dim:#7d8db0}
+body{margin:0;background:var(--night);color:var(--ink);font:17px sans-serif}
+main{max-width:900px;margin:0 auto;padding:8px 14px 12px}
+.eyebrow{color:var(--dim);font-size:12px;letter-spacing:3px;margin:0}
+#top{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 14px}
+h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
+   background:linear-gradient(90deg,#ffe7a3,#ffb347 45%,#ff7f50);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.sub{margin:0;color:var(--dim);font-size:15px}
+#status{margin:6px 0;color:#ffb3a3}
+#level{display:flex;flex-wrap:wrap;gap:0 16px;align-items:baseline;margin:4px 0 0}
+#level b{font-size:19px;color:var(--gold)}
+#level span{font-size:13px;color:var(--dim)}
+#hud{margin:0;font-size:17px;line-height:1.8}
+#hud b{color:var(--gold)}
+/* The HUD's lamps: inline-block icons, masked, faded and softened while
+   unlit (the atom group, #555). */
+.hl{display:inline-block;width:20px;height:22px;margin:0 2px;vertical-align:-4px;background:var(--gold);
+    -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 1h6v2H9zM6 4h12l-1.5 3h-9zM7.5 7h9v10h-9zM6 17h12v2H6zM10 19h4v4h-4z'/%3E%3C/svg%3E") center/contain no-repeat;
+    mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 1h6v2H9zM6 4h12l-1.5 3h-9zM7.5 7h9v10h-9zM6 17h12v2H6zM10 19h4v4h-4z'/%3E%3C/svg%3E") center/contain no-repeat}
+.hl.out{opacity:.3;filter:grayscale(1) blur(.6px)}
+.badge{display:inline-block;padding:0 9px;border-radius:9px;background:#2a4b85;color:#fff;font-size:15px;line-height:24px}
+.badge.done{background:#3c8d5a}
+/* The harbour: 12 x 8 square tiles, its shape kept by aspect-ratio (#545),
+   as wide as the column or as the window's height below the header allows,
+   so the keeper is always in view: the game takes S, so the page cannot be
+   scrolled to find it. */
+#arena{position:relative;width:100%;max-width:calc((100vh - 150px) * 1.5);margin:0 auto;aspect-ratio:3/2;overflow:hidden;border-radius:14px;border:2px solid #29467a;
+       background:repeating-linear-gradient(170deg,#0000 0 18px,#ffffff0d 18px 20px),linear-gradient(#0d2c4f,#123a5c 60%,#0e3150);
+       background-size:240px 240px,auto}
+.tile{position:absolute;width:8.3333%;height:12.5%}
+/* The lighthouse and its beam: a conic wedge (#548) swept round by a CSS
+   animation. */
+/* A wedge of light on a strip pivoting on the tower: the conic gradient's
+   centre is the strip's left middle, which the script puts on the tower's
+   centre (build), so turning the strip about that point sweeps the wedge
+   round. Its 18 degrees fit inside the strip all the way out (the far half
+   height is 20% of the harbour's, tan 9deg of 75% of its width), and a
+   mask fades its end. A strip and not a square the beam's length a side: the painter
+   redraws what a turning box covers every frame. */
+#beam{position:absolute;width:75%;height:40%;pointer-events:none;transform-origin:0 50%;
+      background:conic-gradient(from 81deg at 0 50%,#0000 0deg,#fff3c230 5deg,#fff7d966 9deg,#fff3c230 13deg,#0000 18deg);
+      -webkit-mask:linear-gradient(90deg,#000 55%,#0000);mask:linear-gradient(90deg,#000 55%,#0000);
+      animation:sweep 9s linear infinite}
+@keyframes sweep{to{transform:rotate(360deg)}}
+#tower{background:radial-gradient(circle at 50% 30%,#fff7d0 0 14%,#ffcf5c 15% 22%,#0000 23%),
+       linear-gradient(90deg,#0000 30%,#e8e8e8 30% 70%,#0000 70%) 0 100%/100% 70% no-repeat,
+       repeating-linear-gradient(#0000 0 6px,#c0392b 6px 11px) 0 100%/100% 70% no-repeat}
+/* Rocks, boats and the keeper: SVG silhouettes cut by masks (#551). */
+.rock{color:#41536f;background:currentColor;
+      -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 20l3-9 4-3 3 2 4-5 5 7 1 8z'/%3E%3C/svg%3E") center/86% no-repeat;
+      mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 20l3-9 4-3 3 2 4-5 5 7 1 8z'/%3E%3C/svg%3E") center/86% no-repeat}
+.lane{position:absolute;left:0;width:100%;height:12.5%;pointer-events:none}
+.boat{position:absolute;top:0;width:8.3333%;height:100%;
+      background:linear-gradient(#f4f1e8 0 62%,#b5543c 62%);
+      -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v11H5zM13 5l6 9h-6zM2 15h20l-4 5H6z'/%3E%3C/svg%3E") center/90% no-repeat;
+      mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v11H5zM13 5l6 9h-6zM2 15h20l-4 5H6z'/%3E%3C/svg%3E") center/90% no-repeat}
+.lamp{background:radial-gradient(circle,#5b5f6b 0 16%,#2f3442 17% 24%,#0000 25%)}
+.lamp.lit{background:radial-gradient(circle,#fffbe6 0 14%,#ffcf5c 15% 24%,#ffcf5c55 25% 40%,#0000 41%)}
+/* A lit lamp's rays: a repeating conic gradient, faded out by a radial mask,
+   turning (a pseudo-element's animation). */
+.lamp.lit::after{content:"";position:absolute;inset:-60%;
+      background:repeating-conic-gradient(#ffe9a855 0 7deg,#0000 7deg 30deg);
+      -webkit-mask:radial-gradient(closest-side,#000 30%,#0000);mask:radial-gradient(closest-side,#000 30%,#0000);
+      animation:sweep 6s linear infinite}
+/* Fog: grey banks with soft edges, a radial mask. */
+.fog{position:absolute;background:#aab6cc;opacity:.92;
+     -webkit-mask:radial-gradient(closest-side,#000 55%,#0000);mask:radial-gradient(closest-side,#000 55%,#0000)}
+.fog.clear{opacity:0}
+#keeper{z-index:5}
+#keeper .body{position:absolute;inset:8%;background:linear-gradient(#ffe7a3,#ff9f43);
+     -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 8h18v2H3zM11 3h2v5h-2zM6 11h12l-2 8H8zM9 20h6v2H9z'/%3E%3C/svg%3E") center/contain no-repeat;
+     mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 8h18v2H3zM11 3h2v5h-2zM6 11h12l-2 8H8zM9 20h6v2H9z'/%3E%3C/svg%3E") center/contain no-repeat}
+/* The keeper's lantern ring: the spinners' trick, a box masked by its
+   content box excluded from its border box (mask-composite, #551). */
+#ring{position:absolute;inset:-4%;padding:7%;box-sizing:border-box;border-radius:50%;
+      background:conic-gradient(#ffcf5c,#ff7f50,#ffcf5c00,#ffcf5c);
+      -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+      -webkit-mask-composite:xor;mask-composite:exclude;animation:sweep 2.5s linear infinite}
+#banner{position:absolute;left:10%;right:10%;top:36%;padding:14px;text-align:center;border-radius:12px;
+        background:#0b1630e6;border:2px solid var(--gold);font-size:22px;z-index:9;display:none}
+#banner small{display:block;font-size:15px;color:var(--dim);margin-top:6px}
+#keys{color:var(--dim);font-size:13px;margin:0 0 6px}
+#keys kbd{display:inline-block;min-width:16px;padding:0 5px;border:1px solid #3a5490;border-radius:4px;color:var(--ink);text-align:center}
+/* The self-check lies over the harbour, scrolled within itself. */
+#check{display:none;position:absolute;inset:4%;z-index:10;overflow:auto;padding:10px 14px;border:1px solid #29467a;border-radius:12px;background:#0f1f40f2}
+#check h2{margin:0 0 8px;font-size:20px;color:var(--gold)}
+#check table{border-collapse:collapse;width:100%;font-size:14px}
+#check td{padding:5px 6px;border-top:1px solid #213a68;vertical-align:top}
+#check .ok{color:#7ddc8f;font-weight:bold}#check .no{color:#ff8a80;font-weight:bold}
+#check p{font-size:13px;color:var(--dim);margin:8px 0 0}
+#fps{position:fixed;right:10px;top:10px;padding:4px 10px;border-radius:8px;background:#000a;color:#7ddc8f;font:14px monospace;display:none}
+</style>
+<main>
+<p class="eyebrow">YONDER / THE PROVING GROUND</p>
+<div id="top"><h1>Lamplighter</h1>
+<p class="sub">Light every lamp in the harbour. Mind the boats, and the fog.</p></div>
+<p id="status">Lamplighter needs scripts: turn on Scripts (and Modern Web), then reload.</p>
+<div id="level"><b id="lname">-</b><span id="lshows"></span></div>
+<p id="hud">Lamps <span id="hlamps"></span> &nbsp;<span class="badge" id="hmoves">moves 0</span> <span class="badge" id="hbest">best -</span></p>
+<p id="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>space</kbd> light a lamp &nbsp; <kbd>N</kbd>/<kbd>B</kbd> next/back level &nbsp; <kbd>R</kbd> restart &nbsp; <kbd>?</kbd> self-check &nbsp; <kbd>F</kbd> frames a second</p>
+<div id="arena">
+ <div id="banner"></div>
+ <section id="check"><h2>Self-check</h2><table id="checks"></table>
+ <p>A check says the engine <b>read</b> the feature. Whether it <b>drew</b> it is your eyes' call: each row says what to look for, and the same file opened in another browser is the answer key.</p></section>
+</div>
+</main>
+<div id="fps">-- fps</div>
+<script>
+(function () {
+  'use strict';
+  var COLS = 12, ROWS = 8;
+  var $ = function (id) { return document.getElementById(id); };
+  var arena = $('arena'), banner = $('banner');
+
+  // What each level shows off, keyed for the self-check. A slice that adds
+  // a feature adds a FEATURES entry, a level that uses it, and a check.
+  var FEATURES = {
+    aspect: { name: 'aspect-ratio', from: '#545',
+      look: 'The harbour keeps its 3:2 shape at any window width; tiles stay square.',
+      check: function () { var r = arena.getBoundingClientRect(); return r.height > 0 && Math.abs(r.width / r.height - 1.5) < 0.03; } },
+    conic: { name: 'conic gradients', from: '#548',
+      look: 'The lighthouse throws a soft wedge of light; a lit lamp throws a ring of rays.',
+      check: function () { return cs($('beam'), 'background-image').indexOf('conic-gradient') === 0; } },
+    cssanim: { name: 'CSS animations, a pseudo-element\'s too', from: 'PILE3, #541',
+      look: 'The beam sweeps round, a lit lamp\'s rays turn, the keeper\'s ring spins.',
+      check: function () { return cs($('beam'), 'animation-name') === 'sweep'; } },
+    waapi: { name: 'Web Animations API', from: '#524',
+      look: 'Boats sail their lanes; bump into one and you are sent back to the dock.',
+      check: function () { return boatClock.advanced; } },
+    masks: { name: 'masks', from: '#551',
+      look: 'Rocks, boats and the keeper are silhouettes, not squares; fog banks have soft edges.',
+      check: function () { var r = arena.querySelector('.rock'); return !!r && /^url\(/.test(cs(r, 'mask-image')); } },
+    composite: { name: 'mask-composite', from: '#551',
+      look: 'The keeper\'s lantern ring is a hollow ring, not a disc.',
+      check: function () { return cs($('ring'), 'mask-composite').indexOf('exclude') === 0; } },
+    atom: { name: 'inline-block effects', from: '#555',
+      look: 'In the sentence above the harbour, unlit lamps are faded, grey and soft; lit ones are bright gold.',
+      check: function () { var h = document.querySelector('.hl.out'); return !h || cs(h, 'opacity') === '0.3'; } }
+  };
+
+  // The levels. Tiles are [column, row] from the top left; a lane is a row
+  // boats sail along, `dur` milliseconds a crossing, `dir` 1 rightward.
+  var LEVELS = [
+    { name: 'First Light', shows: ['aspect', 'conic', 'cssanim', 'waapi'],
+      start: [0, 7], tower: [11, 0],
+      lamps: [[2, 1], [8, 2], [5, 6], [10, 6]],
+      rocks: [[4, 2], [9, 4], [1, 5]],
+      fog: [],
+      lanes: [{ row: 4, dur: 11000, dir: 1, boats: [0, 0.5] }] },
+    { name: 'Fog', shows: ['masks', 'composite'],
+      start: [0, 7], tower: [11, 0],
+      lamps: [[1, 1], [6, 0], [10, 3], [3, 4], [7, 6]],
+      rocks: [[3, 1], [8, 1], [5, 3], [0, 3], [10, 5]],
+      fog: [[6, 1, 1], [3, 4, 1], [10, 3, 1]],
+      lanes: [{ row: 2, dur: 9000, dir: -1, boats: [0.1, 0.6] }, { row: 5, dur: 12000, dir: 1, boats: [0, 0.4, 0.75] }] },
+    { name: 'Harbour Lights', shows: ['atom'],
+      start: [6, 7], tower: [11, 0],
+      lamps: [[0, 0], [4, 0], [9, 2], [2, 3], [6, 3], [11, 4], [1, 6], [10, 7]],
+      rocks: [[2, 0], [7, 0], [5, 2], [8, 3], [0, 4], [4, 5], [8, 6]],
+      fog: [[9, 2, 1], [1, 6, 1]],
+      lanes: [{ row: 1, dur: 8000, dir: 1, boats: [0, 0.5] }, { row: 4, dur: 10000, dir: -1, boats: [0.2, 0.7] },
+              { row: 5, dur: 7000, dir: 1, boats: [0.35, 0.85] }] }
+  ];
+
+  function cs(el, prop) { return el ? getComputedStyle(el).getPropertyValue(prop).trim() : ''; }
+  function place(el, x, y) { el.style.left = (x * 100 / COLS) + '%'; el.style.top = (y * 100 / ROWS) + '%'; }
+  function tile(cls, x, y) { var d = document.createElement('div'); d.className = 'tile ' + cls; place(d, x, y); arena.appendChild(d); return d; }
+  function store(key, value) { try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) {} return null; }
+
+  var at = 0, level, keeper, pos, lamps, rocks, fogs, lanes, moves, done, beam;
+  // Whether any boat's animation clock has moved since its last frame,
+  // each lane's against its own last sample (the self-check's Web
+  // Animations row).
+  var boatClock = { advanced: false };
+
+  function build(n) {
+    at = (n + LEVELS.length) % LEVELS.length;
+    level = LEVELS[at];
+    // The outgoing level's boat animations end with it: an animation
+    // outlives its element in a browser, so a lane removed while its
+    // animation runs is kept, and visited, for the page's life.
+    if (lanes) lanes.forEach(function (lane) { if (lane.anim) lane.anim.cancel(); });
+    // Everything but the banner and the self-check, which outlive a level.
+    var check = $('check');
+    Array.prototype.slice.call(arena.children).forEach(function (c) { if (c !== banner && c !== check) arena.removeChild(c); });
+    banner.style.display = 'none';
+    moves = 0; done = false; boatClock.advanced = false;
+    beam = document.createElement('div'); beam.id = 'beam';
+    // Its pivot, the left middle, on the tower's centre: half its height
+    // (20% of the harbour's) above it.
+    beam.style.left = ((level.tower[0] + 0.5) * 100 / COLS) + '%';
+    beam.style.top = ((level.tower[1] + 0.5) * 100 / ROWS - 20) + '%';
+    arena.appendChild(beam);
+    tile('', level.tower[0], level.tower[1]).id = 'tower';
+    rocks = {}; level.rocks.forEach(function (r) { tile('rock', r[0], r[1]); rocks[r[0] + ',' + r[1]] = true; });
+    rocks[level.tower[0] + ',' + level.tower[1]] = true;
+    lamps = level.lamps.map(function (l) { return { x: l[0], y: l[1], lit: false, el: tile('lamp', l[0], l[1]) }; });
+    lanes = level.lanes.map(function (spec) {
+      var lane = document.createElement('div'); lane.className = 'lane'; place(lane, 0, spec.row);
+      spec.boats.forEach(function (off) {
+        [off, off - spec.dir].forEach(function (x) { var b = document.createElement('div'); b.className = 'boat'; b.style.left = (x * 100) + '%'; lane.appendChild(b); });
+      });
+      arena.appendChild(lane);
+      var anim = null;
+      if (lane.animate)
+        anim = lane.animate([{ transform: 'translateX(0%)' }, { transform: 'translateX(' + (spec.dir * 100) + '%)' }],
+                            { duration: spec.dur, iterations: Infinity });
+      return { spec: spec, anim: anim, born: performance.now(), last: -1 };
+    });
+    fogs = level.fog.map(function (f) {
+      var el = document.createElement('div'); el.className = 'fog';
+      var r = f[2];
+      el.style.left = ((f[0] - r - 0.4) * 100 / COLS) + '%'; el.style.top = ((f[1] - r - 0.4) * 100 / ROWS) + '%';
+      el.style.width = ((2 * r + 1.8) * 100 / COLS) + '%'; el.style.height = ((2 * r + 1.8) * 100 / ROWS) + '%';
+      arena.appendChild(el);
+      return { x: f[0], y: f[1], r: r, el: el };
+    });
+    keeper = tile('', level.start[0], level.start[1]); keeper.id = 'keeper';
+    var ring = document.createElement('div'); ring.id = 'ring'; keeper.appendChild(ring);
+    var body = document.createElement('div'); body.className = 'body'; keeper.appendChild(body);
+    pos = level.start.slice();
+    $('lname').textContent = 'Level ' + (at + 1) + ': ' + level.name;
+    $('lshows').textContent = 'shows off ' + level.shows.map(function (k) { return FEATURES[k].name; }).join(', ');
+    hud();
+    clearFog();
+    if ($('check').style.display === 'block') checks();
+  }
+
+  function hud() {
+    var h = $('hlamps');
+    while (h.firstChild) h.removeChild(h.firstChild);
+    lamps.forEach(function (l) { var i = document.createElement('span'); i.className = l.lit ? 'hl' : 'hl out'; h.appendChild(i); });
+    $('hmoves').textContent = 'moves ' + moves;
+    var best = store('lamplighter.best.' + at);
+    $('hbest').textContent = 'best ' + (best || '-');
+    $('hbest').className = best ? 'badge done' : 'badge';
+  }
+
+  function clearFog() {
+    fogs.forEach(function (f) {
+      var near = Math.abs(pos[0] - f.x) <= f.r + 1 && Math.abs(pos[1] - f.y) <= f.r + 1;
+      if (near && f.el.className === 'fog') f.el.className = 'fog clear';
+    });
+  }
+
+  function move(dx, dy) {
+    if (done) return;
+    var x = pos[0] + dx, y = pos[1] + dy;
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS || rocks[x + ',' + y]) return;
+    pos = [x, y]; place(keeper, x, y); moves++;
+    clearFog(); hud();
+  }
+
+  function light() {
+    if (done) return;
+    lamps.forEach(function (l) {
+      if (!l.lit && l.x === pos[0] && l.y === pos[1]) { l.lit = true; l.el.className = 'tile lamp lit'; }
+    });
+    hud();
+    if (lamps.every(function (l) { return l.lit; })) {
+      done = true;
+      var best = parseInt(store('lamplighter.best.' + at) || '0', 10);
+      if (!best || moves < best) store('lamplighter.best.' + at, String(moves));
+      hud();
+      banner.innerHTML = 'The harbour is lit in ' + moves + ' moves!<small>N for the next level, R to play this one again</small>';
+      banner.style.display = 'block';
+    }
+  }
+
+  // Where each boat is now, in harbour widths, from its lane's animation
+  // clock (or the page's, where Element.animate is missing).
+  function boatsAt(lane) {
+    var t = lane.anim && lane.anim.currentTime != null ? lane.anim.currentTime : performance.now() - lane.born;
+    var shift = (t % lane.spec.dur) / lane.spec.dur * lane.spec.dir, out = [];
+    lane.spec.boats.forEach(function (off) { out.push(off + shift, off - lane.spec.dir + shift); });
+    return out;
+  }
+
+  function bumped() {
+    keeper.className = 'tile';
+    pos = level.start.slice(); place(keeper, pos[0], pos[1]);
+    if (keeper.animate) keeper.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 500, iterations: 2 });
+  }
+
+  // The frame loop: boats against the keeper, the boats' clock, and the
+  // meter, which counts the animation frames the browser gives the page —
+  // not its paints, which a browser may take fewer of.
+  var frames = 0, since = performance.now();
+  function frame(now) {
+    lanes.forEach(function (lane) {
+      if (lane.anim && lane.anim.currentTime != null) {
+        if (lane.last >= 0 && lane.anim.currentTime !== lane.last) boatClock.advanced = true;
+        lane.last = lane.anim.currentTime;
+      }
+      if (done || lane.spec.row !== pos[1]) return;
+      var x0 = pos[0] / COLS + 0.15 / COLS, x1 = (pos[0] + 1) / COLS - 0.15 / COLS;
+      boatsAt(lane).forEach(function (b) {
+        if (b + 0.85 / COLS > x0 && b + 0.15 / COLS < x1) bumped();
+      });
+    });
+    frames++;
+    if (now - since >= 500) {
+      if ($('fps').style.display === 'block') $('fps').textContent = Math.round(frames * 1000 / (now - since)) + ' fps';
+      frames = 0; since = now;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function checks() {
+    var t = $('checks');
+    while (t.firstChild) t.removeChild(t.firstChild);
+    LEVELS.forEach(function (lv, i) {
+      lv.shows.forEach(function (k) {
+        var f = FEATURES[k], ok = false;
+        try { ok = !!f.check(); } catch (e) { ok = false; }
+        var row = document.createElement('tr');
+        row.innerHTML = '<td class="' + (ok ? 'ok">reads' : 'no">no') + '</td><td><b>' + f.name + '</b><br>level ' + (i + 1) +
+                        ', ' + f.from + '</td><td>' + f.look + '</td>';
+        t.appendChild(row);
+      });
+    });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var k = (e.key || '').toLowerCase(), handled = true;
+    if (k === 'w') move(0, -1);
+    else if (k === 's') move(0, 1);
+    else if (k === 'a') move(-1, 0);
+    else if (k === 'd') move(1, 0);
+    else if (k === ' ') light();
+    else if (k === 'n') build(at + 1);
+    else if (k === 'b') build(at - 1);
+    else if (k === 'r') build(at);
+    else if (k === '?' || k === '/') { var c = $('check'); c.style.display = c.style.display === 'block' ? 'none' : 'block'; if (c.style.display === 'block') checks(); }
+    else if (k === 'f') { var m = $('fps'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
+    else handled = false;
+    if (handled) e.preventDefault();
+  });
+
+  $('status').style.display = 'none';
+  build(0);
+  requestAnimationFrame(frame);
+})();
+</script>

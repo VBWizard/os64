@@ -259,23 +259,41 @@ static void mask_paint_cases(void)
               "ffffffff\n"
               "ffffffff\n");
     // Past the paint's budget (MASKS.md § 10, ruling 1): a box the size of
-    // the view costs itself and a capture, twice the view, which is all of
-    // it, so the second and the fourth are drawn plain, each counted — but
-    // the third, which hides its box whole, still paints nothing: its text
-    // is cut to no view at all.
+    // the view costs itself and a capture, twice the view, so two of them
+    // spend all YONDER_FILTER_AREA_VIEWS (4) and the fourth and fifth are
+    // drawn plain, each counted — but the third, which hides its box whole,
+    // still paints nothing: its text is cut to no view at all.
     static const char kThree[] =
         "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0;"
         " width: 200px; height: 100px; background: #00ff00; mask: linear-gradient(#000 0 0) }"
         " .h { mask: linear-gradient(#0000, #0000) }</style>"
-        "<div>a</div><div>b</div><div class=h>c</div><div>d</div>";
+        "<div>a</div><div>b</div><div class=h>c</div><div>d</div><div>e</div>";
     yonder_paint_layers_refused = 0;
     bool escaped = false;
     got = paint_of(kThree, strlen(kThree), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
     expect("mask: past the budget, drawn plain and counted; a hiding mask draws nothing",
-           count_of(got, "\nend filter ") == 1 && count_of(got, "take\n") == 1 &&
+           count_of(got, "\nend filter ") == 2 && count_of(got, "take\n") == 2 &&
                count_of(got, "\ngroup ") == 2 &&
                strstr(got, "text \"c\" 0 14 #101010 clip 0 0 0 0\n") != NULL &&
                yonder_paint_layers_refused == 2,
+           got);
+    free(got);
+    yonder_paint_layers_refused = 0;
+    // The budget is the WHOLE view's (Lamplighter's flicker): a 20 x 20
+    // repaint of a corner where three masks stack — each costing twice
+    // what it shows, six times the repaint — draws all three masked inside
+    // a 200 x 100 view, as a repaint of the whole would; measured by the
+    // repaint alone, the third was drawn plain beside where it was masked.
+    static const char kStack[] =
+        "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0; left: 0;"
+        " width: 20px; height: 20px; background: #00ff00; mask: linear-gradient(#000 0 0) }"
+        "</style><div></div><div></div><div></div>";
+    s_paint_whole = (os64_gui_rect_t){0, 0, 200, 100};
+    got = paint_of(kStack, strlen(kStack), 200, (os64_gui_rect_t){0, 0, 20, 20}, &escaped, true);
+    s_paint_whole = (os64_gui_rect_t){0, 0, 0, 0};
+    expect("mask: a small repaint's budget is the whole view's, so stacked masks stay masked",
+           count_of(got, "take\n") == 3 && count_of(got, "\ngroup ") == 0 &&
+               yonder_paint_layers_refused == 0,
            got);
     free(got);
     yonder_paint_layers_refused = 0;
