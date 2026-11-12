@@ -170,10 +170,23 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         uint32_t script = d_callback_script(dom, ctx, argv[0]);
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+        JSContext *owner = JS_GetFunctionRealm(ctx, argv[0]);
+        if (!owner) {
+            /* Enqueueing a revoked proxy keeps the ordinary callback error
+             * for execution. Discovery itself must not throw or hide a
+             * sticky engine failure. */
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            owner = ctx;
+        }
+        os64_js_outcome_t access;
+        JSContext *activity = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+        if (!activity) return JS_EXCEPTION;
         JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, script)};
-        return JS_EnqueueJob(ctx, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        return JS_EnqueueJobOwned(ctx, owner, activity, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:

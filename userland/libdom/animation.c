@@ -47,6 +47,7 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     }
     if(argc<1||!JS_IsFunction(ctx,argv[0]))
         return JS_ThrowTypeError(ctx,"requestAnimationFrame needs a function");
+    if(!d_require_active(dom,ctx))return JS_EXCEPTION;
     uint32_t script=d_callback_script(dom,ctx,argv[0]);
     if(script==D_SCRIPT_FAILED)return JS_EXCEPTION;
     if(dom->animation_count>=FRAME_CALLBACKS_MAX||dom->animation_handle==UINT32_MAX)
@@ -66,13 +67,13 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
 
 uint64_t os64_dom_animation_next(const os64_dom_t *dom)
 {
-    return dom&&!dom->closed&&dom->animations?dom->animation_due:UINT64_MAX;
+    return d_delivery_active(dom)&&dom->animations?dom->animation_due:UINT64_MAX;
 }
 
 bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out)
 {
     if(out)os64_memset(out,0,sizeof(*out));
-    if(!out||!dom||dom->closed||dom->animation_running||!dom->animations||dom->animation_due>now)return false;
+    if(!out||!d_delivery_active(dom)||dom->animation_running||!dom->animations||dom->animation_due>now)return false;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name,sizeof(name),"%.*s#animation-frame",(int)(sizeof(name)-20),dom->url?dom->url:"about:blank");
     uint64_t next=frame_after(now);
@@ -84,7 +85,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
         os64_js_outcome_t access;
         JSContext *ctx=os64_js_realm_context(dom->realm,OS64_JS_ABI_ID,&access);
         if(!ctx)d_outcome_fold(out,&access);
-        while(ctx&&!dom->closed&&dom->animations&&dom->animations->handle<=last) {
+        while(ctx&&d_delivery_active(dom)&&dom->animations&&dom->animations->handle<=last) {
             DAnimation *entry=dom->animations;
             JSValue callback=JS_DupValueRT(dom->engine,entry->callback);
             uint32_t script=entry->script;
@@ -93,6 +94,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
             os64_js_outcome_t call;
             DScripts before=d_script_enter(dom,script);
             os64_js_realm_call(dom->realm,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
+            if(call.status==OS64_JS_REALM_RETIRED)os64_memset(&call,0,sizeof(call));
             d_script_leave(dom,&before,true);
             JS_FreeValueRT(dom->engine,callback);
             d_outcome_fold(out,&call);
@@ -107,7 +109,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     /* Callback/checkpoint work counts toward the interval. An overrun makes
      * one successor ready, not a debt of missed frames. The host still gates
      * that successor on presentation and an opportunity to handle input. */
-    uint64_t finished=dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):now;
+    uint64_t finished=d_delivery_active(dom)&&dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):now;
     if(finished==UINT64_MAX)finished=UINT64_MAX-1;
     dom->animation_due=next>finished?next:finished;
     d_task_close(dom,name,out);

@@ -162,6 +162,13 @@ bool d_delivery_active(const os64_dom_t *dom)
            !os64_js_realm_is_retired(dom->realm);
 }
 
+bool d_require_active(os64_dom_t *dom, JSContext *ctx)
+{
+    if (d_delivery_active(dom)) return true;
+    d_error(ctx, "InvalidStateError", "The document's host service is inactive");
+    return false;
+}
+
 int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback)
 {
     if (!d_delivery_active(activity)) return 0;

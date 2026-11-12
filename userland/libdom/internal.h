@@ -792,6 +792,8 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 /* Scheduling eligibility is separate from retained-object usability. */
 bool d_delivery_active(const os64_dom_t *dom);
+/* Service-creating methods refuse inactive owners after argument conversion. */
+bool d_require_active(os64_dom_t *dom, JSContext *ctx);
 /* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
  * activity is the operation's current document, not the callback's creator. */
 int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);

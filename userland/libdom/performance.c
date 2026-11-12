@@ -564,7 +564,7 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
  * with an exception pending only when the runtime is stopping. */
 static int queue_task(os64_dom_t *dom, JSContext *ctx)
 {
-    if (dom->performance_task_queued) return 0;
+    if (!d_delivery_active(dom) || dom->performance_task_queued) return 0;
     JSValue data[1] = {dom->anchor->value};
     JSValue fired = JS_NewCFunctionData(ctx, observer_task, 0, 0, 1, data);
     if (!JS_IsException(fired) && d_timer_add(dom, ctx, fired, 0) != 0) {

@@ -1,4 +1,4 @@
-# F.3b DOM validation — shared delivery and events
+# F.3b DOM validation — delivery checkpoints
 
 2026-11-12. Work in progress against the
 [reviewed retirement brief](IFRAME_F3_RETIREMENT.md). This branch starts from
@@ -43,6 +43,23 @@ the active target when an object listener's registration realm has retired,
 then resolves and gates its method inside that guarded entry. Suppressed
 handlers neither cancel an event nor increment the host listener-call count.
 
+Timers, requestAnimationFrame, idle callbacks and queueMicrotask refuse
+rearming inactive service owners with InvalidStateError. Timer and idle
+argument conversions precede that check, so reentrant retirement cannot
+install new work. A binding microtask names both the callback function realm
+and the owning document; revoked-proxy discovery falls back at enqueue and
+the callback raises its ordinary error when executed. Host scheduler queries
+and firing APIs omit inactive bindings. A dead callback on a live interval
+removes that interval, while a refused callback in a live rAF/idle batch is
+discarded without failing siblings. Timeout-driven idle callbacks have the
+same callback gate as ordinary idle delivery.
+
+Retained IdleDeadline objects report zero time remaining without calling the
+departed document's clock. Retained input selection can still change, without
+queuing a select task in its inactive document; performance entries likewise
+do not rearm their inactive observer task. Existing queued payloads still
+need the departure-finish cleanup described below.
+
 ## Evidence
 
 `tools/test_dom_host.sh --realm-retirement` runs a three-binding fixture under
@@ -59,19 +76,27 @@ object access and balanced native teardown.
 
 | Final focused suite | Shipping engine | Instrumented engine |
 |---|---:|---:|
-| Retirement queues and events | 112 checks | 112 checks |
+| Retirement queues, events and scheduled work | 146 checks | 146 checks |
 | Cross-realm binding routing | 678 checks | 678 checks |
 | Events | 1,020 checks | 1,020 checks |
 | Mutation observers | 32 checks | 32 checks |
 | Custom elements, including allocation failures | 298 checks | 298 checks |
+| Animation callbacks | 106 checks | 106 checks |
+| Performance and performance observers | 523 checks | 3,169 checks |
+| P2b idle/message/clone and allocation sweeps | 1,174 checks | 13,324 checks |
+| Core DOM, including retained selection | 332 checks | 332 checks |
 
 These runs retain ASan/UBSan and LeakSanitizer, outside the sandbox that denied
 LSan thread attachment during F.3a. Unchanged host/engine objects from the
 final F.3a run were reused; `core.c`, `observer.c`, `custom.c` and the host
 test translation unit were rebuilt for the shared-queue checkpoint. The event
 extension also rebuilds `event.c` and the expanded test translation unit;
-retirement, cross-realm and event suites were rerun on that source. Observer
-and custom-element totals above are from the shared-queue checkpoint. The native `dom-library` target also
+retirement, cross-realm and event suites were rerun on that source. The
+scheduled-work extension rebuilds the affected core, browsing, timer, idle,
+animation, selection and performance units and reruns retirement, cross-realm,
+animation, performance, P2b and core suites. Observer/custom totals are from
+the shared-queue checkpoint and event totals from the event checkpoint.
+The native `dom-library` target also
 builds successfully from this worktree. No full-suite, WPT, QEMU or P5
 acceptance is claimed for this intermediate checkpoint.
 
@@ -90,6 +115,14 @@ event fixture first reproduced retired callback execution and live object
 handler refusal against the preceding checkpoint. Its expected revoked
 observer error is explicitly consumed and checked separately from the host
 event outcome, so an earlier report cannot contaminate the dispatch result.
+
+Ten scheduled-work mutants were caught: wrong microtask callback ownership,
+missing microtask activity ownership, rearming after conversion, retaining a
+dead interval, treating a skipped rAF callback as a task failure, bypassing
+idle timeout eligibility, reading a retired deadline's clock, queuing a
+retired select task, advertising a retired timer as due, and throwing during
+revoked-proxy enqueue discovery. The preceding checkpoint reproduced wrong
+microtask delivery, repeated dead-interval wakeups and batch interruption.
 
 ## Remaining F.3b work
 

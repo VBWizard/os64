@@ -41,6 +41,7 @@ static JSValue retirement_pulse(JSContext *ctx, JSValueConst self, int argc, JSV
 static void dom_retirement_cases(void)
 {
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
+        p2b_ms = 500; p2b_us = 500000;
         os64_js_config_t config = fixture_config();
         config.limits.memory_bytes = 64u << 20;
         os64_js_runtime_t *runtime = NULL;
@@ -106,7 +107,8 @@ static void dom_retirement_cases(void)
                 "globalThis.reaction=function(){A.ceLog.push(this.id)};"
                 "globalThis.liveEvent=function(){A.eventLog.push('C')};",
                 "retirement queues: C callbacks installed");
-            realm_script(retirement_realms[0], "globalThis.eventLog=[];globalThis.getters=0;",
+            realm_script(retirement_realms[0], "globalThis.eventLog=[];globalThis.getters=0;globalThis.taskLog=[];"
+                "globalThis.refused=f=>{try{f();return false}catch(e){return e.name==='InvalidStateError'}};",
                 "retirement events: shared oracle installed");
             realm_script(retirement_realms[1],
                 "globalThis.eventNode=document.createElement('div');eventNode.id='depart-event';"
@@ -121,7 +123,11 @@ static void dom_retirement_cases(void)
                 "globalThis.deadError=()=>{A.eventLog.push('dead-error');return true};",
                 "retirement events: B-created adopted target and B-registered C method");
             realm_script(retirement_realms[2],
-                "B.eventNode.addEventListener('life',liveEvent);",
+                "B.eventNode.addEventListener('life',liveEvent);"
+                "globalThis.microLive=()=>A.taskLog.push('micro');"
+                "globalThis.timerLive=()=>A.taskLog.push('timer');"
+                "globalThis.rafLive=()=>A.taskLog.push('raf');"
+                "globalThis.idleLive=d=>A.taskLog.push(d.didTimeout?'timeout-idle':'idle');",
                 "retirement events: live callback on adopted target");
             realm_script(retirement_realms[0],
                 "globalThis.getterTarget=document.createElement('div');"
@@ -131,6 +137,21 @@ static void dom_retirement_cases(void)
                 "swapTarget.addEventListener('life',{get handleEvent(){getters++;B.document.adoptNode(swapTarget);return C.liveEvent}});"
                 "swapTarget.addEventListener('life',()=>eventLog.push('inactive-tail'));",
                 "retirement events: getter retirement and adoption stimuli installed");
+            realm_script(retirement_realms[1],
+                "globalThis.deadlineSaved=null;requestIdleCallback(d=>deadlineSaved=d);",
+                "retirement tasks: retain an idle deadline from B");
+            check(os64_dom_idle_run(bindings[1], &out) && out.status == OS64_JS_OK,
+                  "retirement tasks: capture deadline while B is active");
+            realm_script(retirement_realms[1],
+                "globalThis.deadTask=()=>A.taskLog.push('dead');setTimeout(C.timerLive,0);"
+                "requestAnimationFrame(C.rafLive);requestIdleCallback(C.idleLive);",
+                "retirement tasks: pending B activity has live C callbacks");
+            realm_script(retirement_realms[0],
+                "globalThis.deadInterval=setInterval(B.deadTask,0);setTimeout(C.timerLive,0);"
+                "requestAnimationFrame(B.deadTask);requestAnimationFrame(C.rafLive);"
+                "requestIdleCallback(B.deadTask,{timeout:1});requestIdleCallback(C.idleLive,{timeout:1});"
+                "requestIdleCallback(B.deadTask);requestIdleCallback(C.idleLive);",
+                "retirement tasks: live owner queues both dead and live callback realms");
             realm_script(retirement_realms[1],
                 "globalThis.dead=function(){A.moLog.push('dead-callback')};"
                 "globalThis.mo=new MutationObserver(C.liveC);mo.observe(observed,{attributes:true});",
@@ -176,8 +197,11 @@ static void dom_retirement_cases(void)
                 "document.body.appendChild(deadCallback);"
                 "B.observed.setAttribute('data-first','1');observed.setAttribute('data-first','1');"
                 "C.observed.setAttribute('data-first','1');"
+                "queueMicrotask(B.deadTask);B.queueMicrotask(C.microLive);queueMicrotask(C.microLive);"
                 "for(const w of [B,A,C])w.host.appendChild(w.document.createElement('i'));pulse();"
-                "getterTarget.dispatchEvent(new Event('life'));"
+                "let converted=0;assert(refused(()=>B.setTimeout(C.timerLive,{valueOf(){"
+                "converted++;getterTarget.dispatchEvent(new Event('life'));return 0}})));"
+                "assert(converted===1,'timer converts delay before checking reentrant departure');"
                 "assert(eventLog.join()==='tail','getter retires returned callback realm: '+eventLog);eventLog=[];"
                 "swapTarget.dispatchEvent(new Event('life'));"
                 "assert(eventLog.length===0&&getters===2,'getter changes activity document');retireB();",
@@ -228,6 +252,38 @@ static void dom_retirement_cases(void)
                 "assert(hostSwap.ownerDocument===B.document&&eventLog.length===0&&getters===3);",
                 "retirement events: host getter and later listener recheck current activity");
             realm_script(retirement_realms[0],
+                "assert(taskLog.join()==='micro','microtask owners: '+taskLog);"
+                "assert(refused(()=>B.queueMicrotask(C.microLive)));"
+                "assert(refused(()=>B.setTimeout(C.timerLive,0)));"
+                "assert(refused(()=>B.requestAnimationFrame(C.rafLive)));"
+                "assert(refused(()=>B.requestIdleCallback(C.idleLive)));"
+                "assert(B.deadlineSaved.timeRemaining()===0&&!B.deadlineSaved.didTimeout);"
+                "const retainedInput=B.document.createElement('input');retainedInput.value='retained';"
+                "retainedInput.setSelectionRange(1,3);assert(retainedInput.selectionStart===1&&retainedInput.selectionEnd===3);",
+                "retirement tasks: microtasks filter callback and activity; dead services refuse rearming");
+            check(os64_dom_timer_next(bindings[1]) == UINT64_MAX &&
+                  os64_dom_animation_next(bindings[1]) == UINT64_MAX &&
+                  os64_dom_idle_next(bindings[1]) == UINT64_MAX &&
+                  !os64_dom_timer_fire(bindings[1], 1000, &out) &&
+                  !os64_dom_animation_fire(bindings[1], 1000, &out) &&
+                  !os64_dom_idle_run(bindings[1], &out),
+                  "retirement tasks: inactive B has no host scheduler opportunity");
+            unsigned fired = 0;
+            while (fired < 10 && os64_dom_timer_fire(bindings[0], 1000, &out)) {
+                check(out.status == OS64_JS_OK, "retirement tasks: discarded callback is not a task failure");
+                fired++;
+            }
+            check(fired == 4 && os64_dom_timer_next(bindings[0]) == UINT64_MAX,
+                  "retirement tasks: dead interval removed and timeout callbacks consumed");
+            check(os64_dom_animation_fire(bindings[0], 1000, &out) && out.status == OS64_JS_OK,
+                  "retirement tasks: live rAF follows a dead callback in the same batch");
+            for (int i = 0; i < 2; ++i)
+                check(os64_dom_idle_run(bindings[0], &out) && out.status == OS64_JS_OK,
+                      "retirement tasks: idle delivery consumes dead callback without failing siblings");
+            realm_script(retirement_realms[0],
+                "assert(taskLog.join()==='micro,timer,timeout-idle,raf,idle','scheduled delivery: '+taskLog);",
+                "retirement tasks: exact surviving scheduled callback order");
+            realm_script(retirement_realms[0],
                 "assert(B.plain()===42,'ordinary retained function remains callable');"
                 "assert(B.adopted.ownerDocument===C.document&&B.adopted instanceof B.HTMLElement);"
                 "assert(B.document.createElement('x-late') instanceof B.HTMLElement);"
@@ -249,6 +305,12 @@ static void dom_retirement_cases(void)
                 "assert(C.mo.takeRecords().length===0);mo.disconnect();foreign.disconnect();"
                 "bound.disconnect();proxied.disconnect();revmo.disconnect();C.mo.disconnect();",
                 "retirement queues: per-record eligibility rechecked at delivery");
+            const char *revoked_job = "globalThis.queuedRevoked=false;queueMicrotask(rev.proxy);queuedRevoked=true";
+            check(os64_js_realm_run(retirement_realms[0], revoked_job, strlen(revoked_job),
+                  "revoked-microtask.js", &out) == OS64_JS_EXCEPTION && strstr(out.message, "revoked") != NULL,
+                  "retirement tasks: revoked microtask fails at execution");
+            realm_script(retirement_realms[0], "assert(queuedRevoked);",
+                "retirement tasks: revoked callback discovery does not throw while enqueueing");
         }
         os64_dom_cluster_drain(cluster);
         os64_js_destroy(runtime);

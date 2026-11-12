@@ -99,6 +99,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_EXCEPTION;
     }
     if (delay < 0) delay = 0;
+    if (!d_require_active(dom, ctx)) { d_free(dom, source.data); return JS_EXCEPTION; }
     uint32_t script = function ? d_callback_script(dom, ctx, handler) : D_SCRIPT_PAGE;
     if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
@@ -141,6 +142,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
 
 uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t delay)
 {
+    if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, callback); return 0; }
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
         JS_FreeValue(ctx, callback);
         d_error(ctx, "QuotaExceededError", "Too many timers");
@@ -183,6 +185,7 @@ int d_timer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
  * made. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom)
 {
+    if (!d_delivery_active(dom)) return UINT64_MAX;
     if (os64_dom_reactions_owed(dom)) return 0;
     return dom != NULL && !dom->closed && dom->timers != NULL ? dom->timers->due : UINT64_MAX;
 }
@@ -197,6 +200,10 @@ static void fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
 
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome)
 {
+    if (!d_delivery_active(dom)) {
+        if (outcome) os64_memset(outcome, 0, sizeof(*outcome));
+        return false;
+    }
     if (os64_dom_reactions_run(dom, outcome)) return true;
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || dom == NULL || dom->closed || dom->timers == NULL || dom->timers->due > now)
@@ -245,7 +252,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         timer->argc = 0;
         timer->source = NULL;
     }
-    uint32_t nesting = timer->nesting, script = timer->script;
+    uint32_t nesting = timer->nesting, script = timer->script, id = timer->id;
+    bool interval = timer->interval, binding = timer->binding;
     if (!timer->interval) d_free(dom, timer);
     dom->timer_nesting = nesting;
     if (refused) {
@@ -260,6 +268,13 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
             /* What the callback throws is its script's (report.c). */
             DScripts before = d_script_enter(dom, script);
             os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+            if (call.status == OS64_JS_REALM_RETIRED) {
+                /* The callback cannot become eligible again. In particular,
+                 * do not leave its interval waking the live document. */
+                DTimer *discarded = interval ? unlink_id(dom, id, binding) : NULL;
+                if (discarded) timer_free(dom, discarded);
+                os64_memset(&call, 0, sizeof(call));
+            }
             d_script_leave(dom, &before, true);
             fold(outcome, &call);
             /* Its exception is reported before the checkpoint after it,
