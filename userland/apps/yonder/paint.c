@@ -7,6 +7,7 @@
 
 #include "paint.h"
 #include "paint_cache.h"
+#include "filter.h"
 #include <draw2d/blur.h>
 #include "html/html.h"
 #include "os64/mem.h"
@@ -26,14 +27,16 @@ typedef struct {
         flow_point_t shift;
         PaintGroupKind kind;
         bool layered;               // a layer is open inside it (layer_try)
+        os64_gui_rect_t layer;      // that layer's bounds, which a mask's captures share
         os64_gui_rect_t shown;      // the Painter's, to put back
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
     // Past the deepest kept, a group drawn through its matrix is not painted
     // at all: the depth it opened at, plus one, or 0.
     int32_t hidden;
-    // What is left of the paint's budget for layers (filtered and blended
-    // groups') and backdrops, in pixels (yonder_paint_layers_refused):
+    // What is left of the paint's budget for layers (filtered, masked and
+    // blended groups', and a mask's captures) and backdrops, in pixels
+    // (yonder_paint_layers_refused):
     // here, where every box's painter shares it, not in the Painter each
     // box is handed a copy of.
     int64_t filter_left;
@@ -2585,6 +2588,41 @@ static bool filter_drawn(const Painter *p, const flow_box_t *box)
     return true;
 }
 
+// Whether a group's mask is drawn (MASKS.md): granted (flow_masked), and
+// verbs to capture its coverage and lay its layer by it.
+static bool mask_drawn(const Painter *p, const flow_box_t *box)
+{
+    return flow_masked(box->style) && p->v->layer_open != NULL && p->v->layer_close != NULL &&
+           p->v->layer_take != NULL;
+}
+
+// Whether a box's mask hides it whole whatever its pictures hold (MASKS.md
+// § 10, ruling 1): every layer no image, a gradient none of whose stops
+// shows any colour, or sized to nothing on an axis — none covers a pixel,
+// and no operator makes coverage out of none (Masking 1 § 7.8).
+static bool mask_hides_whole(const flow_box_t *box)
+{
+    const flow_style_t *s = box->style;
+    if (!flow_masked(s))
+        return false;
+    for (int32_t i = 0; i < flow_mask_layers(s); i++) {
+        flow_layer_t l = flow_mask_layer(s, i).layer;
+        bool nothing = l.fit == FLOW_FIT_LENGTHS &&
+                       ((l.size[0].kind != FLOW_LENGTH_AUTO && l.size[0].value <= 0 && l.size[0].offset <= 0) ||
+                        (l.size[1].kind != FLOW_LENGTH_AUTO && l.size[1].value <= 0 && l.size[1].offset <= 0));
+        if (nothing || (l.image == NULL && l.gradient == NULL))
+            continue;
+        if (l.image != NULL)
+            return false;
+        for (int32_t k = 0; k < l.gradient->nstops; k++) {
+            const flow_gradient_stop_t *st = &l.gradient->stops[k];
+            if (!st->hint && flow_alpha(st->current ? s->color : st->colour) != 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 // Whether the group at depth `d`'s own layer is laid onto a group's
 // sheets: its own matrix's (a group laid through it, open at `d`), or a
 // matrix's or a layer round it (below `d`). Its own layer, open at `d`,
@@ -2630,11 +2668,18 @@ static flow_blend_t blend_of(const Painter *p, const flow_box_t *box, int32_t d)
 static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64_gui_rect_t outside,
                        int32_t d)
 {
+    // A mask that hides its box whole draws nothing, layer or none, budget
+    // or none (MASKS.md § 10).
+    if (mask_hides_whole(box)) {
+        p->view = (os64_gui_rect_t){0, 0, 0, 0};
+        return true;
+    }
     // A blend asked for on sheets is dropped here, counted once, so no
     // layer is opened only to be laid normal.
     if (blend_asked(p, box) != FLOW_BLEND_NORMAL && on_sheets(p, d))
         yonder_paint_layers_refused++;
-    if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL)
+    bool masked = mask_drawn(p, box);
+    if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL && !masked)
         return false;
     int32_t out[4];
     flow_filter_reach(box->style, out);
@@ -2649,16 +2694,106 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     // same group must not be refused there and drawn filtered beside it.
     // Inside a group laid through its matrix it is charged in that
     // group's own pixels, before the matrix.
+    // A masked group is charged its mask's captures too, one a layer, so a
+    // group the budget takes is drawn masked whole (MASKS.md § 3).
     os64_gui_rect_t shown = cut(layer, p->shown);
-    int64_t area = (int64_t)shown.w * shown.h;
+    int64_t area = (int64_t)shown.w * shown.h * (masked ? 1 + flow_mask_layers(box->style) : 1);
     if (area > p->groups->filter_left || !p->v->layer_open(p->v->ctx, layer)) {
         yonder_paint_layers_refused++;
         return false;
     }
     p->groups->filter_left -= area;
     p->groups->open[d].layered = true;
+    p->groups->open[d].layer = layer;
     p->view = layer;
     return true;
+}
+
+// One layer of a box's mask, into the capture open, as frame_layer draws a
+// background's: placed in its origin box and cut to its clip box — rounded
+// as the box is when `outer` is its shape — or to nothing for no-clip. A
+// picture is the face's (backdrop, YONDER_MASK_LAYER). False only when a
+// gradient's pixels found no memory.
+static bool mask_layer(const Painter *p, const flow_box_t *b, const Round *outer, int32_t i)
+{
+    flow_layer_t l = flow_mask_layer(b->style, i).layer;
+    bool clipped = l.clip != FLOW_EDGE_NO_CLIP;
+    os64_gui_rect_t cut = clipped ? yonder_box_edge(b, b->rect, l.clip) : p->view;
+    bool round = outer != NULL && clipped;
+    Round shape = {0};
+    if (round)
+        shape = round_inset(outer, b->rect, cut);
+    yonder_tile_t tile;
+    if (l.gradient != NULL) {
+        if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
+            return gradient(p, l.gradient, &tile, cut, &shape, round, b->style->color);
+    } else if (l.image != NULL) {
+        os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
+        if (round) {
+            round_backdrop(p, b, &shape, i | YONDER_MASK_LAYER, cut, origin);
+        } else {
+            os64_gui_rect_t area = on_page(p, cut);
+            (void)p->v->backdrop(p->v->ctx, b, i | YONDER_MASK_LAYER, &area, origin, area.x,
+                                 area.y, on_page(p, p->view));
+        }
+    }
+    return true;
+}
+
+// A masked group's COVERAGE over its layer `at` (MASKS.md § 3), into
+// `run` (at.w by at.h): each mask layer, the bottom first, painted into a
+// capture over `at` and taken back as its alpha or luminance, then laid
+// onto what the layers below came to by its operator — the bottom one's
+// ignored, as there is nothing below it (Masking 1 § 7.8). A layer with
+// no image is transparent (§ 7.2). False, `run` unfinished, when memory or
+// a capture was not to be had: the group is then laid unmasked.
+static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect_t at,
+                          uint8_t *run)
+{
+    size_t n = (size_t)at.w * (size_t)at.h;
+    uint8_t *one = os64_malloc(n);
+    if (one == NULL)
+        return false;
+    // Painted as the box is (box_painter, without the clip from outside,
+    // which cuts the group's content the same) and in no dark relighting,
+    // which would move the coverage a colour's luminance gives.
+    Painter bp = *p;
+    bp.off = flow_box_doc_offset(box, p->scroll);
+    bp.off.x = sum32(bp.off.x, p->shift.x);
+    bp.off.y = sum32(bp.off.y, p->shift.y);
+    bp.view = (os64_gui_rect_t){sum32(at.x, -(int64_t)bp.off.x), sum32(at.y, -(int64_t)bp.off.y),
+                                at.w, at.h};
+    bp.dark = NULL;
+    bp.penned = false;
+    int32_t radii[4][2];
+    flow_box_radii(box, radii);
+    Round outer, inner;
+    bool round = rounded(radii);
+    if (round) {
+        int32_t w[4] = {0, 0, 0, 0};
+        round_shapes(box, radii, w, &outer, &inner);
+    }
+    bool made = true;
+    int32_t layers = flow_mask_layers(box->style);
+    for (int32_t i = layers - 1; i >= 0 && made; i--) {
+        flow_mask_layer_t m = flow_mask_layer(box->style, i);
+        if (m.layer.image == NULL && m.layer.gradient == NULL) {
+            os64_memset(one, 0, n);
+        } else if (p->v->layer_open(p->v->ctx, at)) {
+            made = mask_layer(&bp, box, round ? &outer : NULL, i);
+            p->v->layer_take(p->v->ctx, one, m.mode == FLOW_MASK_LUMINANCE);
+        } else {
+            made = false;
+        }
+        if (!made)
+            break;
+        if (i == layers - 1)
+            os64_memcpy(run, one, n);
+        else
+            yonder_mask_combine(run, one, n, m.composite);
+    }
+    os64_free(one);
+    return made;
 }
 
 // A group (flow_visit_groups) opens. One below full opacity hands the
@@ -2737,7 +2872,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         p->shift.x = sum32(p->shift.x, upright.x);
         p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000 && !filter_drawn(p, box) &&
-            blend_of(p, box, d) == FLOW_BLEND_NORMAL)
+            blend_of(p, box, d) == FLOW_BLEND_NORMAL && !flow_masked(box->style))
             return;
         outside = clip;
     } else if (box->clipped) {
@@ -2773,13 +2908,25 @@ static void group_close(void *ctx, const flow_box_t *box)
         return;
     }
     // A layer first, inside any matrix: filtered when a filter is drawn,
-    // laid by the group's mode; the matrix lays it at the opacity, else the
-    // layer does.
+    // masked when a mask is, laid by the group's mode; the matrix lays it
+    // at the opacity, else the layer does. A mask whose coverage could not
+    // be made is laid unmasked, and counted (yonder_paint_layers_refused).
     if (gs->open[d].layered) {
         bool filtered = filter_drawn(p, box);
+        os64_gui_rect_t at = gs->open[d].layer;
+        uint8_t *cover = NULL;
+        if (mask_drawn(p, box)) {
+            cover = os64_malloc((size_t)at.w * (size_t)at.h);
+            if (cover == NULL || !mask_coverage(p, box, at, cover)) {
+                os64_free(cover);
+                cover = NULL;
+                yonder_paint_layers_refused++;
+            }
+        }
         p->v->layer_close(p->v->ctx, filtered ? box->style->filter : NULL,
                           filtered ? box->style->nfilter : 0, box->style->color,
-                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d));
+                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d), cover);
+        os64_free(cover);
     }
     if (gs->open[d].kind == G_THROUGH)
         p->v->through_close(p->v->ctx, alpha);

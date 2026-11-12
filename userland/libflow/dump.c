@@ -207,14 +207,17 @@ static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
     return true;
 }
 
-// One background layer; its gradient as its kind, its
-// geometry, then each stop as colour@position (a hint as @position alone).
-static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
+// One background layer, or a mask's (`pre` "mask", its origin's initial
+// box the border box); its gradient as its kind, its geometry, then each
+// stop as colour@position (a hint as @position alone).
+static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l, const char *pre)
 {
     static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-    static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text"};
+    static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text",
+                                        "no-clip"};
+    flow_edge_t origin0 = pre[0] == 'm' ? FLOW_EDGE_BORDER : FLOW_EDGE_PADDING;
     if (l->image != NULL) {
-        puts_(b, " bg-image=\"");
+        putf(b, " %s-image=\"", pre);
         put(b, l->image, l->image_len);
         putf(b, "\"@%d %s ", (int)l->sheet, kRepeat[l->repeat]);
         length(b, l->position[0]);
@@ -222,17 +225,17 @@ static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
         length(b, l->position[1]);
     }
     if (l->fit != FLOW_FIT_LENGTHS) {
-        puts_(b, l->fit == FLOW_FIT_COVER ? " bg-size=cover" : " bg-size=contain");
+        putf(b, " %s-size=%s", pre, l->fit == FLOW_FIT_COVER ? "cover" : "contain");
     } else if (l->size[0].kind != FLOW_LENGTH_AUTO || l->size[1].kind != FLOW_LENGTH_AUTO) {
-        puts_(b, " bg-size=");
+        putf(b, " %s-size=", pre);
         length(b, l->size[0]);
         puts_(b, "/");
         length(b, l->size[1]);
     }
-    if (l->origin != FLOW_EDGE_PADDING)
-        putf(b, " bg-origin=%s", kEdge[l->origin]);
+    if (l->origin != origin0)
+        putf(b, " %s-origin=%s", pre, kEdge[l->origin]);
     if (l->clip != FLOW_EDGE_BORDER)
-        putf(b, " bg-clip=%s", kEdge[l->clip]);
+        putf(b, " %s-clip=%s", pre, kEdge[l->clip]);
     const flow_gradient_t *g = l->gradient;
     if (g == NULL)
         return;
@@ -349,7 +352,25 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         flow_layer_t l = flow_background_layer(s, i);
         if (i > 0)
             putf(b, " layer=%d", (int)i);
-        layer(b, env, &l);
+        layer(b, env, &l, "bg");
+    }
+    // A mask's layers, when one has an image, granted or not: each as a
+    // background's, then its operator and mode when not the initial ones.
+    bool masks = false;
+    for (int32_t i = 0; i < flow_mask_layers(s); i++)
+        masks |= s->masks.layers.image[i].url != NULL || s->masks.layers.image[i].gradient != NULL;
+    if (masks) {
+        static const char *const kComposite[] = {"add", "subtract", "intersect", "exclude"};
+        static const char *const kMode[] = {"alpha", "luminance", "match-source"};
+        for (int32_t i = 0; i < flow_mask_layers(s); i++) {
+            flow_mask_layer_t m = flow_mask_layer(s, i);
+            putf(b, " mask=%d", (int)i);
+            layer(b, env, &m.layer, "mask");
+            if (m.composite != FLOW_COMPOSITE_ADD)
+                putf(b, " mask-composite=%s", kComposite[m.composite]);
+            if (m.mode != FLOW_MASK_MATCH_SOURCE)
+                putf(b, " mask-mode=%s", kMode[m.mode]);
+        }
     }
     bool margins = false, paddings = false, borders = false;
     for (int i = 0; i < 4; i++) {

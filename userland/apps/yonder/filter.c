@@ -468,3 +468,51 @@ void yonder_backdrop_put(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, co
             *d = out;
         }
 }
+
+// ── Masks (MASKS.md § 3) ─────────────────────────────────────────────────
+
+// x / 255, rounded to the nearest, for x up to 255 * 255 * 2.
+static uint32_t over255(uint32_t x)
+{
+    return (x + 127) / 255;
+}
+
+void yonder_mask_take(const uint32_t *layer, size_t n, bool luminance, uint8_t *out)
+{
+    for (size_t i = 0; i < n; i++) {
+        uint32_t p = layer[i];
+        if (!luminance) {
+            out[i] = (uint8_t)chan(p, 24);
+            continue;
+        }
+        // The colour premultiplied, so its luminance is already times its
+        // alpha: Rec. 709's weights, the grayscale filter's, in 10000ths.
+        uint32_t y = (2126 * chan(p, 16) + 7152 * chan(p, 8) + 722 * chan(p, 0) + 5000) / 10000;
+        out[i] = (uint8_t)(y > 255 ? 255 : y);
+    }
+}
+
+void yonder_mask_combine(uint8_t *run, const uint8_t *c, size_t n, flow_composite_t op)
+{
+    for (size_t i = 0; i < n; i++) {
+        uint32_t s = c[i], d = run[i], v;
+        switch (op) {
+        case FLOW_COMPOSITE_SUBTRACT: v = over255(s * (255 - d)); break;
+        case FLOW_COMPOSITE_INTERSECT: v = over255(s * d); break;
+        case FLOW_COMPOSITE_EXCLUDE: v = over255(s * (255 - d) + d * (255 - s)); break;
+        default: v = s + over255(d * (255 - s)); break;
+        }
+        run[i] = (uint8_t)(v > 255 ? 255 : v);
+    }
+}
+
+void yonder_layer_cover(uint32_t *layer, size_t n, const uint8_t *cover)
+{
+    for (size_t i = 0; i < n; i++) {
+        uint32_t c = cover[i], p = layer[i];
+        if (c == 255)
+            continue;
+        layer[i] = pack(over255(chan(p, 24) * c), over255(chan(p, 16) * c),
+                        over255(chan(p, 8) * c), over255(chan(p, 0) * c));
+    }
+}

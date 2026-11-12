@@ -294,8 +294,10 @@ typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_flo
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
 typedef enum { FLOW_FIT_LENGTHS = 0, FLOW_FIT_COVER, FLOW_FIT_CONTAIN } flow_bg_fit_t;
+// A box a layer is placed in or cut to; NO_CLIP is a mask's clip that cuts
+// to nothing (Masking 1 § 7.7), never a background's.
 typedef enum {
-    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT
+    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT, FLOW_EDGE_NO_CLIP
 } flow_edge_t;
 typedef enum {
     FLOW_OVERFLOW_VISIBLE = 0,
@@ -664,6 +666,34 @@ typedef struct {
     int32_t nimage, nrepeat, nx, ny, nsize, norigin, nclip;
 } flow_backgrounds_t;
 
+// How a mask layer is laid onto the layers below it (Masking 1 § 7.8):
+// source-over, source-out, source-in and xor.
+typedef enum {
+    FLOW_COMPOSITE_ADD = 0, FLOW_COMPOSITE_SUBTRACT, FLOW_COMPOSITE_INTERSECT,
+    FLOW_COMPOSITE_EXCLUDE
+} flow_composite_t;
+// What of a mask layer's image is its coverage (§ 7.9): its alpha, or its
+// luminance times its alpha. MATCH_SOURCE is alpha for every image libflow
+// keeps — a gradient's or a picture's, never an SVG <mask>'s.
+typedef enum { FLOW_MASK_ALPHA = 0, FLOW_MASK_LUMINANCE, FLOW_MASK_MATCH_SOURCE } flow_mask_mode_t;
+
+// Each mask property's list (§ 7): the layers placed as a background's
+// are, and how each combines and is read. The images say how many layers
+// there are, as a background's do.
+typedef struct {
+    flow_backgrounds_t layers;
+    const flow_composite_t *composite;
+    const flow_mask_mode_t *mode;
+    int32_t ncomposite, nmode;
+} flow_masks_t;
+
+// One mask layer (flow_mask_layer).
+typedef struct {
+    flow_layer_t layer;
+    flow_composite_t composite;
+    flow_mask_mode_t mode;
+} flow_mask_layer_t;
+
 typedef struct {
     flow_display_t display;
 
@@ -735,6 +765,12 @@ typedef struct {
     // where its atom is — both as their opacity is. Neither inherited.
     flow_blend_t mix_blend;
     bool isolate;
+    // The mask (Masking 1 § 7; MASKS.md): a list per property, as the
+    // backgrounds' are, each at least one long. A layer with an image makes
+    // a box a stacking context and a group whose bounds are cut to its
+    // border box (flow_masked); a plain inline's is not drawn and makes
+    // nothing, as its opacity is painted opaque. Not inherited.
+    flow_masks_t masks;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
     // size, or the smaller of those two, placed by `object_position` — x
@@ -1668,6 +1704,14 @@ int32_t flow_background_layers(const flow_style_t *s);
 flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
 // Whether any layer has a picture or a gradient from the page's sheets.
 bool flow_background_has_image(const flow_style_t *s);
+// A style's mask layers, as its background layers: how many, and layer
+// `i` (0 the top). A layer with no image is a transparent one (Masking 1
+// § 7.2).
+int32_t flow_mask_layers(const flow_style_t *s);
+flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i);
+// Whether a mask is granted: a layer has a picture or a gradient, and the
+// box is no plain inline.
+bool flow_masked(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is — in
 // the coordinates it is painted in, out to its drawn-through box, whose own

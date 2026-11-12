@@ -17,10 +17,12 @@ static const char kComputedPage[] =
     "#flt{float:left;margin:auto;width:10px;height:10px;box-sizing:border-box;padding:1px}"
     "#shadow{box-shadow:2px 3px rgb(1,2,3);text-shadow:1px 1px 2px currentcolor;color:rgb(9,9,9)}"
     "#anim{animation:spin 2s linear infinite;will-change:transform}"
+    "#mask{-webkit-mask:url(icon.svg) right 2px top 0/10px no-repeat content-box,"
+    "linear-gradient(#000,transparent) exclude luminance no-clip}"
     "</style>"
     "<div id=box>box</div><div id=hidden><p id=inner>x<span id=deep>y</span></p></div>"
     "<div id=pos>p</div><div id=grid></div><span id=face>s</span><div id=flt></div>"
-    "<div id=shadow>t</div><div id=anim>a</div>";
+    "<div id=shadow>t</div><div id=anim>a</div><div id=mask>m</div>";
 
 static const os64_html_node_t *computed_find(const os64_html_node_t *n, const char *id)
 {
@@ -172,6 +174,29 @@ static void computed_cases(void)
     computed_is(c, "computed: a keyword easing", GARB_ANIMATION_TIMING_FUNCTION, "linear");
     computed_is(c, "computed: infinite", GARB_ANIMATION_ITERATION_COUNT, "infinite");
     computed_is(c, "computed: will-change", GARB_WILL_CHANGE, "transform");
+    flow_computed_free(c);
+
+    // A mask's longhands as its background twins are written, each list
+    // a layer an item; its origin and clip start at the border box.
+    c = flow_computed_new(tree, &p.env, computed_find(root, "box"), NULL);
+    computed_is(c, "computed: mask-image none", GARB_MASK_IMAGE, "none");
+    computed_is(c, "computed: mask-origin starts at the border box", GARB_MASK_ORIGIN, "border-box");
+    computed_is(c, "computed: mask-clip too", GARB_MASK_CLIP, "border-box");
+    computed_is(c, "computed: mask-composite add", GARB_MASK_COMPOSITE, "add");
+    computed_is(c, "computed: mask-mode match-source", GARB_MASK_MODE, "match-source");
+    computed_is(c, "computed: mask-size auto", GARB_MASK_SIZE, "auto");
+    flow_computed_free(c);
+    c = flow_computed_new(tree, &p.env, computed_find(root, "mask"), NULL);
+    computed_is(c, "computed: mask-image, a picture and a gradient", GARB_MASK_IMAGE,
+                "url(\"icon.svg\"), linear-gradient(rgb(0, 0, 0), rgba(0, 0, 0, 0))");
+    computed_is(c, "computed: mask-position-x", GARB_MASK_POSITION_X, "calc(100% - 2px), 0%");
+    computed_is(c, "computed: mask-position-y", GARB_MASK_POSITION_Y, "0px, 0%");
+    computed_is(c, "computed: mask-size", GARB_MASK_SIZE, "10px, auto");
+    computed_is(c, "computed: mask-repeat", GARB_MASK_REPEAT, "no-repeat, repeat");
+    computed_is(c, "computed: mask-origin", GARB_MASK_ORIGIN, "content-box, border-box");
+    computed_is(c, "computed: mask-clip, no-clip", GARB_MASK_CLIP, "content-box, no-clip");
+    computed_is(c, "computed: mask-composite", GARB_MASK_COMPOSITE, "add, exclude");
+    computed_is(c, "computed: mask-mode", GARB_MASK_MODE, "match-source, luminance");
     flow_computed_free(c);
 
     // A node that is no element, and an element no layout of this document

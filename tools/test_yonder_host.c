@@ -26,6 +26,7 @@
 #include "download.h"
 #include "mail.h"
 #include "paint.h"
+#include "filter.h"
 #include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
@@ -270,12 +271,44 @@ static bool inside(os64_gui_rect_t r, os64_gui_rect_t clip)
            (int64_t)r.y + r.h <= (int64_t)clip.y + clip.h;
 }
 
+// A layer the recorder holds while it is open (rec_layer_open): its
+// bounds and its painting, premultiplied 0xAARRGGBB — the fills and the
+// painter's pixels laid into it — so a mask's capture taken back
+// (rec_layer_take) is the coverage the painter really drew.
+#define REC_LAYERS 8
+typedef struct {
+    os64_gui_rect_t at;
+    uint32_t *px;
+} RecLayer;
+
 typedef struct {
     Out out;
     os64_gui_rect_t view;
     bool escaped;           // a fill reached past the viewport
     const os64_page_t *page;
+    RecLayer layers[REC_LAYERS];
+    int32_t nlayers;
 } Rec;
+
+// Straight `argb` laid over the open layer's pixel at page (x, y), if it
+// has one there.
+static void rec_lay(Rec *rec, int32_t x, int32_t y, uint32_t argb)
+{
+    if (rec->nlayers <= 0 || rec->nlayers > REC_LAYERS)
+        return;
+    RecLayer *l = &rec->layers[rec->nlayers - 1];
+    if (l->px == NULL || x < l->at.x || y < l->at.y || x >= l->at.x + l->at.w || y >= l->at.y + l->at.h)
+        return;
+    uint32_t *d = &l->px[(size_t)(y - l->at.y) * (size_t)l->at.w + (size_t)(x - l->at.x)];
+    uint32_t a = argb >> 24, keep = 255 - a, o = 0;
+    for (int k = 0; k < 4; k++) {
+        uint32_t sc = k == 3 ? a : ((argb >> (8 * k)) & 0xff) * a / 255;
+        uint32_t dc = (*d >> (8 * k)) & 0xff;
+        uint32_t v = sc + (dc * keep + 127) / 255;
+        o |= (v > 255 ? 255 : v) << (8 * k);
+    }
+    *d = o;
+}
 
 // A colour as its RGB, and its alpha after a slash when it is not opaque.
 static void colour_note(Rec *rec, uint32_t colour)
@@ -293,6 +326,9 @@ static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
     out(&rec->out, "fill %d %d %d %d", r.x, r.y, r.w, r.h);
     colour_note(rec, colour);
     out(&rec->out, "\n");
+    for (int32_t y = r.y; rec->nlayers > 0 && y < r.y + r.h; y++)
+        for (int32_t x = r.x; x < r.x + r.w; x++)
+            rec_lay(rec, x, y, colour);
 }
 
 // A text is drawn whole and cut by its verb, so a clip narrower than the
@@ -349,6 +385,12 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 {
     (void)clip;
     Rec *rec = ctx;
+    if (area != NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
+        out(&rec->out, "backdrop %d %d %d %d mask %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, (int)(layer & ~YONDER_MASK_LAYER), origin.x, origin.y, origin.w,
+            origin.h);
+        return true;
+    }
     bool sheet = false;
     for (int32_t i = 0; i < flow_background_layers(b->style); i++)
         sheet |= flow_background_layer(b->style, i).image != NULL;
@@ -429,6 +471,11 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
+// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask, a
+// layer's coverage and a picture are recorded whole, every alpha and every
+// pixel, so two paintings of one page compare pixel for pixel (paint_of).
+static bool s_record_all;
+
 // A layer (FILTER.md, MIX_BLEND.md): its bounds when it opens, and its
 // list's length, its currentColor, its alpha and — when not normal — its
 // mode when it closes. Refused when the case says the face cannot make one
@@ -441,18 +488,62 @@ static bool rec_layer_open(void *ctx, os64_gui_rect_t bounds)
     if (s_filter_refused)
         return false;
     out(&rec->out, "filter %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+    if (rec->nlayers < REC_LAYERS)
+        rec->layers[rec->nlayers] =
+            (RecLayer){bounds, calloc((size_t)bounds.w * (size_t)bounds.h, sizeof(uint32_t))};
+    rec->nlayers++;
     return true;
 }
 
+static void rec_layer_pop(Rec *rec)
+{
+    if (rec->nlayers <= 0)
+        return;
+    if (--rec->nlayers < REC_LAYERS) {
+        free(rec->layers[rec->nlayers].px);
+        rec->layers[rec->nlayers].px = NULL;
+    }
+}
+
+// A layer's close, and with a mask its coverage: its sum, and with
+// s_record_all each row in hex, as a shadow's mask is recorded.
 static void rec_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                            uint8_t alpha, flow_blend_t mode)
+                            uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     Rec *rec = ctx;
     (void)filter;
     out(&rec->out, "end filter %d #%06x %d", (int)n, current, (int)alpha);
     if (mode != FLOW_BLEND_NORMAL)
         out(&rec->out, " mode %d", (int)mode);
+    os64_gui_rect_t at = rec->nlayers > 0 && rec->nlayers <= REC_LAYERS
+                             ? rec->layers[rec->nlayers - 1].at : (os64_gui_rect_t){0, 0, 0, 0};
+    if (cover != NULL) {
+        long sum = 0;
+        for (int32_t k = 0; k < at.w * at.h; k++)
+            sum += cover[k];
+        out(&rec->out, " cover %ld", sum);
+    }
     out(&rec->out, "\n");
+    for (int32_t k = 0; cover != NULL && s_record_all && k < at.w * at.h; k++)
+        out(&rec->out, "%02x%s", cover[k], (k + 1) % at.w == 0 ? "\n" : "");
+    rec_layer_pop(rec);
+}
+
+// A mask's capture taken back: its coverage read from what was laid into
+// it, as the face reads it (filter.h).
+static void rec_layer_take(void *ctx, uint8_t *cover, bool luminance)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "take%s\n", luminance ? " luminance" : "");
+    if (rec->nlayers > 0 && rec->nlayers <= REC_LAYERS) {
+        RecLayer *l = &rec->layers[rec->nlayers - 1];
+        size_t n = (size_t)l->at.w * (size_t)l->at.h;
+        if (l->px != NULL)
+            yonder_mask_take(l->px, n, luminance, cover);
+        else
+            memset(cover, 0, n);
+    }
+    rec_layer_pop(rec);
 }
 
 // A backdrop (FILTER.md § 7): its rect, its coverage (the mask's sum, or
@@ -475,10 +566,6 @@ static bool rec_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *
     return true;
 }
 
-// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
-// a picture are recorded whole, every alpha and every pixel, so two
-// paintings of one page compare pixel for pixel (paint_of).
-static bool s_record_all;
 
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
@@ -520,6 +607,8 @@ static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
         if (n <= 16 || k == 0 || k == n - 1 || s_record_all)
             out(&rec->out, " %08x", argb[k]);
     out(&rec->out, "\n");
+    for (int32_t k = 0; rec->nlayers > 0 && k < n; k++)
+        rec_lay(rec, r.x + k % r.w, r.y + k / r.w, argb[k]);
 }
 
 static const char *kPage = "http://host/dir/page.html";
@@ -552,7 +641,8 @@ static yonder_verbs_t verbs_of(Rec *rec)
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
                             rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL,
-                            rec_layer_open, rec_layer_close, rec_backdrop_filter};
+                            rec_layer_open, rec_layer_close, rec_backdrop_filter,
+                            rec_layer_take};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -579,7 +669,7 @@ static yonder_scratch_t *s_suite_scratch;
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
@@ -661,7 +751,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     if (t != NULL && s_paint_scrolls)
         (void)flow_scroll_set(t, 0, s_paint_scroll);
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
@@ -887,6 +977,8 @@ static void blend_paint_cases(void)
            layers == 1 && yonder_paint_layers_refused == 1 && strstr(got, " mode ") == NULL, got);
     free(got);
 }
+
+#include "test_yonder_masks.inc"
 
 // A backdrop (FILTER.md § 7): asked before the box's own background, with
 // its border box cut to the view; a rounded box hands over its coverage
@@ -3125,6 +3217,7 @@ int main(int argc, char **argv)
         filter_paint_cases();
         backdrop_paint_cases();
         blend_paint_cases();
+        mask_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

@@ -2,7 +2,7 @@
  * sharing within the new arena; no pointer into the old tree is retained. */
 // Size changes require reviewing both the copy and equality inventories.
 // This tripwire does not replace checking pointer fields in a same-size edit.
-_Static_assert(sizeof(flow_style_t) == 1296, "review style copy/equality fields");
+_Static_assert(sizeof(flow_style_t) == 1408, "review style copy/equality fields");
 typedef struct { void *data; size_t bytes; } FCopySlice;
 typedef struct { FArena *arena; FMap slices; size_t bytes; bool budget; } FStyleCopy;
 static void *style_copy_bytes(FStyleCopy *c, const void *from, size_t bytes, bool *fresh)
@@ -60,6 +60,30 @@ static bool style_copy_gradient(FStyleCopy *c, const flow_gradient_t **value)
     }
     return true;
 }
+// A background's or a mask's lists.
+static bool style_copy_layers(FStyleCopy *c, flow_backgrounds_t *l)
+{
+    bool fresh;
+#define COPY(field, count) do { \
+    if(l->field && (count)) { \
+        l->field=style_copy_bytes(c,l->field,(size_t)(count)*sizeof(*l->field),&fresh); \
+        if(!l->field)return false; \
+    } else fresh=false; \
+} while(0)
+    COPY(image,l->nimage);
+    if(fresh)for(int32_t i=0;i<l->nimage;i++) {
+        flow_bg_image_t *b=(flow_bg_image_t *)&l->image[i];
+        if(!style_copy_string(c,&b->url,b->len) || !style_copy_gradient(c,&b->gradient))return false;
+    }
+    COPY(repeat,l->nrepeat);
+    COPY(x,l->nx);
+    COPY(y,l->ny);
+    COPY(size,l->nsize);
+    COPY(origin,l->norigin);
+    COPY(clip,l->nclip);
+#undef COPY
+    return true;
+}
 static bool style_copy_value(FStyleCopy *c, flow_style_t *s)
 {
     bool fresh;
@@ -79,17 +103,9 @@ static bool style_copy_value(FStyleCopy *c, flow_style_t *s)
         flow_family_written_t *n=(flow_family_written_t *)&s->family.written[i];
         if(!style_copy_string(c,&n->name,n->len))return false;
     }
-    COPY(backgrounds.image,s->backgrounds.nimage);
-    if(fresh)for(int32_t i=0;i<s->backgrounds.nimage;i++) {
-        flow_bg_image_t *b=(flow_bg_image_t *)&s->backgrounds.image[i];
-        if(!style_copy_string(c,&b->url,b->len) || !style_copy_gradient(c,&b->gradient))return false;
-    }
-    COPY(backgrounds.repeat,s->backgrounds.nrepeat);
-    COPY(backgrounds.x,s->backgrounds.nx);
-    COPY(backgrounds.y,s->backgrounds.ny);
-    COPY(backgrounds.size,s->backgrounds.nsize);
-    COPY(backgrounds.origin,s->backgrounds.norigin);
-    COPY(backgrounds.clip,s->backgrounds.nclip);
+    if(!style_copy_layers(c,&s->backgrounds) || !style_copy_layers(c,&s->masks.layers))return false;
+    COPY(masks.composite,s->masks.ncomposite);
+    COPY(masks.mode,s->masks.nmode);
     COPY(box_shadows,s->nbox_shadows);
     COPY(text_shadows,s->ntext_shadows);
     COPY(filter,s->nfilter);
@@ -175,18 +191,38 @@ static bool style_gradients_equal(const flow_gradient_t *a,const flow_gradient_t
     flow_gradient_t x=*a,y=*b;x.stops=y.stops=NULL;
     return !os64_memcmp(&x,&y,sizeof(x)) && style_bytes_equal(a->stops,b->stops,(size_t)a->nstops*sizeof(*a->stops));
 }
+// A background's or a mask's lists: their addresses left out, and their
+// contents compared, once the counts (compared with the rest) agree.
+static void style_layers_unaddressed(flow_backgrounds_t *l)
+{
+    l->image=NULL;l->repeat=NULL;l->x=l->y=NULL;l->size=NULL;l->origin=l->clip=NULL;
+}
+static bool style_layers_equal(const flow_backgrounds_t *a,const flow_backgrounds_t *b)
+{
+    if(!style_bytes_equal(a->repeat,b->repeat,(size_t)(a->nrepeat)*sizeof(*a->repeat)))return false;
+    if(!style_bytes_equal(a->x,b->x,(size_t)(a->nx)*sizeof(*a->x)))return false;
+    if(!style_bytes_equal(a->y,b->y,(size_t)(a->ny)*sizeof(*a->y)))return false;
+    if(!style_bytes_equal(a->size,b->size,(size_t)(a->nsize)*sizeof(*a->size)))return false;
+    if(!style_bytes_equal(a->origin,b->origin,(size_t)(a->norigin)*sizeof(*a->origin)))return false;
+    if(!style_bytes_equal(a->clip,b->clip,(size_t)(a->nclip)*sizeof(*a->clip)))return false;
+    for(int32_t i=0;i<a->nimage;i++) {
+        flow_bg_image_t u=a->image[i],v=b->image[i];
+        if(u.len!=v.len || u.sheet!=v.sheet || !style_string_equal(u.url,v.url,u.len) ||
+           !style_gradients_equal(u.gradient,v.gradient))return false;
+    }
+    return true;
+}
 bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
 {
     flow_style_t x=*a,y=*b;
     x.family.names=y.family.names=NULL;
     x.family.written=y.family.written=NULL;
-    x.backgrounds.image=y.backgrounds.image=NULL;
-    x.backgrounds.repeat=y.backgrounds.repeat=NULL;
-    x.backgrounds.x=y.backgrounds.x=NULL;
-    x.backgrounds.y=y.backgrounds.y=NULL;
-    x.backgrounds.size=y.backgrounds.size=NULL;
-    x.backgrounds.origin=y.backgrounds.origin=NULL;
-    x.backgrounds.clip=y.backgrounds.clip=NULL;
+    style_layers_unaddressed(&x.backgrounds);
+    style_layers_unaddressed(&y.backgrounds);
+    style_layers_unaddressed(&x.masks.layers);
+    style_layers_unaddressed(&y.masks.layers);
+    x.masks.composite=y.masks.composite=NULL;
+    x.masks.mode=y.masks.mode=NULL;
     x.box_shadows=y.box_shadows=NULL;
     x.text_shadows=y.text_shadows=NULL;
     x.filter=y.filter=NULL;
@@ -215,12 +251,10 @@ bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
     if(os64_memcmp(&x,&y,sizeof(x)))return false;
     if(!style_filters_equal(a->filter,b->filter,a->nfilter) ||
        !style_filters_equal(a->backdrop_filter,b->backdrop_filter,a->nbackdrop_filter))return false;
-    if(!style_bytes_equal(a->backgrounds.repeat,b->backgrounds.repeat,(size_t)(a->backgrounds.nrepeat)*sizeof(*a->backgrounds.repeat)))return false;
-    if(!style_bytes_equal(a->backgrounds.x,b->backgrounds.x,(size_t)(a->backgrounds.nx)*sizeof(*a->backgrounds.x)))return false;
-    if(!style_bytes_equal(a->backgrounds.y,b->backgrounds.y,(size_t)(a->backgrounds.ny)*sizeof(*a->backgrounds.y)))return false;
-    if(!style_bytes_equal(a->backgrounds.size,b->backgrounds.size,(size_t)(a->backgrounds.nsize)*sizeof(*a->backgrounds.size)))return false;
-    if(!style_bytes_equal(a->backgrounds.origin,b->backgrounds.origin,(size_t)(a->backgrounds.norigin)*sizeof(*a->backgrounds.origin)))return false;
-    if(!style_bytes_equal(a->backgrounds.clip,b->backgrounds.clip,(size_t)(a->backgrounds.nclip)*sizeof(*a->backgrounds.clip)))return false;
+    if(!style_layers_equal(&a->backgrounds,&b->backgrounds) ||
+       !style_layers_equal(&a->masks.layers,&b->masks.layers))return false;
+    if(!style_bytes_equal(a->masks.composite,b->masks.composite,(size_t)(a->masks.ncomposite)*sizeof(*a->masks.composite)))return false;
+    if(!style_bytes_equal(a->masks.mode,b->masks.mode,(size_t)(a->masks.nmode)*sizeof(*a->masks.mode)))return false;
     if(!style_bytes_equal(a->box_shadows,b->box_shadows,(size_t)(a->nbox_shadows)*sizeof(*a->box_shadows)))return false;
     if(!style_bytes_equal(a->text_shadows,b->text_shadows,(size_t)(a->ntext_shadows)*sizeof(*a->text_shadows)))return false;
     if(!style_bytes_equal(a->grid_template_columns.tracks,b->grid_template_columns.tracks,(size_t)(a->grid_template_columns.n)*sizeof(*a->grid_template_columns.tracks)))return false;
@@ -241,11 +275,6 @@ bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
     for(uint32_t i=0;i<a->family.nwritten;i++) {
         flow_family_written_t u=a->family.written[i],v=b->family.written[i];
         if(u.len!=v.len || u.keyword!=v.keyword || !style_string_equal(u.name,v.name,u.len))return false;
-    }
-    for(int32_t i=0;i<a->backgrounds.nimage;i++) {
-        flow_bg_image_t u=a->backgrounds.image[i],v=b->backgrounds.image[i];
-        if(u.len!=v.len || u.sheet!=v.sheet || !style_string_equal(u.url,v.url,u.len) ||
-           !style_gradients_equal(u.gradient,v.gradient))return false;
     }
     for(int32_t i=0;i<a->animations.nname;i++) {
         flow_name_t u=a->animations.name[i],v=b->animations.name[i];

@@ -38,7 +38,9 @@ typedef struct {
     // drawn if it has arrived, nothing yet if not. `origin` is the
     // painter's answer to which box: the layer's origin box of the box, or
     // for the canvas the ROOT's, whichever element the picture came from
-    // (Backgrounds 3 § 2.11.2).
+    // (Backgrounds 3 § 2.11.2). A `layer` with YONDER_MASK_LAYER set names
+    // that layer of the box's MASK (flow_mask_layer), drawn the same way,
+    // into the capture its coverage is taken from (layer_take).
     bool (*backdrop)(void *ctx, const flow_box_t *box, int32_t layer, const os64_gui_rect_t *area,
                      os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
     // A GROUP below full opacity (flow_visit_groups) and not laid through
@@ -94,20 +96,22 @@ typedef struct {
     void (*clip_close)(void *ctx);
     // Optional retained Canvas pixels; absent, the stand-in route applies.
     void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
-    // A LAYER: a filtered or blended group (flow_style_t.filter,
-    // .mix_blend; FILTER.md, MIX_BLEND.md). Everything painted until its
-    // close goes into a layer, `bounds` of the coordinates being painted,
-    // which do not change; at the close the list `filter` (n functions,
-    // none a URL; 0 for none) is run over it (filter.h) and the result is
-    // laid onto what was under it at `alpha` of 255 by `mode`, `current`
-    // the colour of a drop shadow in currentColor. A face that cannot
+    // A LAYER: a filtered, masked or blended group (flow_style_t.filter,
+    // .masks, .mix_blend; FILTER.md, MASKS.md, MIX_BLEND.md). Everything
+    // painted until its close goes into a layer, `bounds` of the
+    // coordinates being painted, which do not change; at the close the
+    // list `filter` (n functions, none a URL; 0 for none) is run over it
+    // (filter.h), the result multiplied by the coverage `cover` gives each
+    // of its pixels (bounds.w a row; NULL for all of it), and laid onto
+    // what was under it at `alpha` of 255 by `mode`, `current` the colour
+    // of a drop shadow in currentColor. A face that cannot
     // blend there — what is under the layer is a group's sheets, not the
     // page — lays it normal and counts it (yonder_paint_layers_refused).
     // False when it cannot be made (no memory, too large): the painter
     // paints the group plain. Either NULL: no layer is drawn.
     bool (*layer_open)(void *ctx, os64_gui_rect_t bounds);
     void (*layer_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                        uint8_t alpha, flow_blend_t mode);
+                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover);
     // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
     // painted under `rect` (a border box cut to the view, in the
     // coordinates being painted) — read with the list's reach round it —
@@ -119,7 +123,17 @@ typedef struct {
     // (inside a group's sheets). NULL: no backdrop is filtered.
     bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
                             const flow_filter_t *filter, int32_t n, uint32_t current);
+    // A CAPTURE closed (MASKS.md § 3): a layer opened with layer_open, its
+    // painting not laid anywhere but taken back as COVERAGE into `out` (its
+    // bounds.w by bounds.h, a row bounds.w) — each pixel's alpha, or with
+    // `luminance` its colour's luminance times its alpha (Masking 1
+    // § 7.9) — and discarded. NULL: no mask is drawn, and the painter
+    // never opens a layer for one.
+    void (*layer_take)(void *ctx, uint8_t *out, bool luminance);
 } yonder_verbs_t;
+
+// Set in a `layer` handed to `backdrop`: the index is of a mask layer.
+#define YONDER_MASK_LAYER ((int32_t)0x40000000)
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
 // one, colour or picture, else the body's when it has one, else none. The

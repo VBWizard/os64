@@ -1561,3 +1561,71 @@ IN: isolation: auto
 OUT: isolation: auto
 IN: isolation: none
 OUT: invalid
+
+# ── Masks (Masking 1 § 7; MASKS.md) ──
+IN: mask-image: linear-gradient(#000, transparent)
+OUT: mask-image: linear-gradient(...)
+IN: mask-image: url(icon.svg), none
+OUT: mask-image: url(icon.svg), none
+IN: mask-image: red
+OUT: invalid
+IN: -webkit-mask-image: radial-gradient(circle, #0000 40%, #000 41%)
+OUT: mask-image: radial-gradient(...)
+IN: mask-repeat: no-repeat, space round
+OUT: mask-repeat: no-repeat, repeat
+IN: mask-position: right 4px bottom 2px
+OUT: mask-position-x: calc(100% - 4px); mask-position-y: calc(100% - 2px)
+IN: mask-position: left 4px bottom
+OUT: invalid
+IN: background-position: left 4px bottom
+OUT: background-position-x: 4px; background-position-y: 100%
+IN: quirks mask-position: 5 5
+OUT: invalid
+IN: quirks -webkit-mask-position-x: 5
+OUT: invalid
+IN: -webkit-mask-position-y: center
+OUT: mask-position-y: 50%
+IN: mask-size: 50% auto, cover
+OUT: mask-size: 50% auto, cover
+IN: mask-origin: content-box
+OUT: mask-origin: content-box
+IN: mask-origin: no-clip
+OUT: invalid
+IN: mask-clip: no-clip, padding-box
+OUT: mask-clip: no-clip, padding-box
+IN: mask-clip: text
+OUT: invalid
+IN: mask-composite: intersect, add
+OUT: mask-composite: intersect, add
+IN: mask-composite: source-in
+OUT: invalid
+IN: -webkit-mask-composite: intersect
+OUT: unknown
+IN: mask-mode: luminance
+OUT: mask-mode: luminance
+IN: mask: none
+OUT: mask-image: none; mask-repeat: repeat; mask-position-x: 0%; mask-position-y: 0%; mask-size: auto auto; mask-origin: border-box; mask-clip: border-box; mask-composite: add; mask-mode: match-source
+IN: mask: url(a.svg) center / contain no-repeat
+OUT: mask-image: url(a.svg); mask-repeat: no-repeat; mask-position-x: 50%; mask-position-y: 50%; mask-size: contain; mask-origin: border-box; mask-clip: border-box; mask-composite: add; mask-mode: match-source
+IN: -webkit-mask: conic-gradient(#000 0 0) content-box, linear-gradient(#000 0 0) exclude luminance
+OUT: mask-image: conic-gradient(...), linear-gradient(...); mask-repeat: repeat, repeat; mask-position-x: 0%, 0%; mask-position-y: 0%, 0%; mask-size: auto auto, auto auto; mask-origin: content-box, border-box; mask-clip: content-box, border-box; mask-composite: add, exclude; mask-mode: match-source, luminance
+IN: mask: padding-box content-box
+OUT: mask-image: none; mask-repeat: repeat; mask-position-x: 0%; mask-position-y: 0%; mask-size: auto auto; mask-origin: padding-box; mask-clip: content-box; mask-composite: add; mask-mode: match-source
+IN: mask: content-box no-clip
+OUT: mask-image: none; mask-repeat: repeat; mask-position-x: 0%; mask-position-y: 0%; mask-size: auto auto; mask-origin: content-box; mask-clip: no-clip; mask-composite: add; mask-mode: match-source
+IN: mask: no-clip padding-box
+OUT: mask-image: none; mask-repeat: repeat; mask-position-x: 0%; mask-position-y: 0%; mask-size: auto auto; mask-origin: padding-box; mask-clip: no-clip; mask-composite: add; mask-mode: match-source
+IN: mask: no-clip padding-box content-box
+OUT: invalid
+IN: mask: red
+OUT: invalid
+IN: mask: url(a.svg) fixed
+OUT: invalid
+IN: mask: url(a.svg),
+OUT: invalid
+IN: mask: url(a.svg) url(b.svg)
+OUT: invalid
+IN: mask: right 4px bottom url(a.svg)
+OUT: invalid
+IN: mask: inherit
+OUT: mask-image: inherit; mask-repeat: inherit; mask-position-x: inherit; mask-position-y: inherit; mask-size: inherit; mask-origin: inherit; mask-clip: inherit; mask-composite: inherit; mask-mode: inherit

@@ -39,6 +39,15 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BACKDROP_FILTER] = {"backdrop-filter", false, true},
     [GARB_MIX_BLEND_MODE] = {"mix-blend-mode", false, true},
     [GARB_ISOLATION] = {"isolation", false, true},
+    [GARB_MASK_IMAGE] = {"mask-image", false, true},
+    [GARB_MASK_REPEAT] = {"mask-repeat", false, true},
+    [GARB_MASK_POSITION_X] = {"mask-position-x", false, true},
+    [GARB_MASK_POSITION_Y] = {"mask-position-y", false, true},
+    [GARB_MASK_SIZE] = {"mask-size", false, true},
+    [GARB_MASK_ORIGIN] = {"mask-origin", false, true},
+    [GARB_MASK_CLIP] = {"mask-clip", false, true},
+    [GARB_MASK_COMPOSITE] = {"mask-composite", false, true},
+    [GARB_MASK_MODE] = {"mask-mode", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -499,6 +508,13 @@ static const char *const kBlendModes[] = {
     "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color",
     "luminosity", "plus-lighter", "plus-darker", NULL};
 static const char *const kIsolation[] = {"auto", "isolate", NULL};
+// Masking 1 § 7.5-7.8: a mask's clip may also be no box at all, and its
+// layers combine by an operator and are read by a mode.
+static const char *const kMaskClip[] = {"border-box", "padding-box", "content-box", "no-clip",
+                                        NULL};
+static const char *const kNoClip[] = {"no-clip", NULL};
+static const char *const kMaskComposite[] = {"add", "subtract", "intersect", "exclude", NULL};
+static const char *const kMaskMode[] = {"alpha", "luminance", "match-source", NULL};
 // CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
@@ -2024,6 +2040,108 @@ static bool background(Sets *s, VCur *c)
     return true;
 }
 
+// The longhands each layer of the `mask` shorthand sets, in the order
+// they are set.
+enum { M_IMAGE, M_REPEAT, M_X, M_Y, M_SIZE, M_ORIGIN, M_CLIP, M_COMPOSITE, M_MODE, M_N };
+static const garb_prop_t kMaskProps[M_N] = {
+    GARB_MASK_IMAGE, GARB_MASK_REPEAT, GARB_MASK_POSITION_X, GARB_MASK_POSITION_Y,
+    GARB_MASK_SIZE, GARB_MASK_ORIGIN, GARB_MASK_CLIP, GARB_MASK_COMPOSITE, GARB_MASK_MODE,
+};
+
+// The `mask` shorthand's layers (Masking 1 § 7.11), each one's values added
+// to `lists`: a background's layer without the colour or the attachment,
+// with an operator and a mode, its position Values 4's <position>, and
+// `no-clip` the clip's own word. The longhands are all marked together, so
+// a reading that knows the shorthand knows every one of them.
+static bool mask_layers(Sets *s, VCur *c, Layers lists[M_N])
+{
+    for (;;) {
+        bool have_img = false, have_pos = false, have_rep = false, have_comp = false,
+             have_mode = false, no_clip = false;
+        int boxes = 0;
+        const char *box[2] = {NULL, NULL}, *k;
+        garb_val_t l[M_N] = {kw("none"),       kw("repeat"),     percent(0),
+                             percent(0),       auto_size(s),     kw("border-box"),
+                             kw("border-box"), kw("add"),        kw("match-source")};
+        if (l[M_SIZE].items == NULL)
+            return false;
+        for (;;) {
+            const garb_value_t *t = vc_peek(c);
+            if (t == NULL || t->kind == GARB_COMMA)
+                break;
+            garb_val_t v, x, y;
+            Sets strict = *s;           // a mask's position is never quirky
+            strict.quirks = false;
+            strict.a.short_of_memory = false;
+            if (!have_img && vc_keyword(c, kNone) != NULL) {
+                have_img = true;
+            } else if (!have_img && bg_image(s, c, &v)) {
+                l[M_IMAGE] = v;
+                have_img = true;
+            } else if (!have_pos && position(&strict, c, false, &x, &y)) {
+                l[M_X] = x;
+                l[M_Y] = y;
+                have_pos = true;
+                if (is_delim_v(vc_peek(c), '/')) {
+                    c->i++;
+                    if (!bg_size(s, c, &l[M_SIZE]))
+                        return false;
+                }
+            } else if (strict.a.short_of_memory) {
+                s->a.short_of_memory = true;
+                return false;
+            } else if (!have_rep && repeat(c, &v)) {
+                l[M_REPEAT] = v;
+                have_rep = true;
+            } else if (boxes < (no_clip ? 1 : 2) && (box[boxes] = vc_keyword(c, kBox)) != NULL) {
+                boxes++;
+            } else if (!no_clip && boxes < 2 && vc_keyword(c, kNoClip) != NULL) {
+                no_clip = true;
+            } else if (!have_comp && (k = vc_keyword(c, kMaskComposite)) != NULL) {
+                l[M_COMPOSITE] = kw(k);
+                have_comp = true;
+            } else if (!have_mode && (k = vc_keyword(c, kMaskMode)) != NULL) {
+                l[M_MODE] = kw(k);
+                have_mode = true;
+            } else {
+                return false;
+            }
+        }
+        bool last = vc_peek(c) == NULL;
+        if (!have_img && !have_pos && !have_rep && boxes == 0 && !no_clip && !have_comp &&
+            !have_mode)
+            return false;               // an empty layer
+        // One box sets the origin and the clip, two set one each; with
+        // `no-clip` a box is the origin's alone.
+        if (boxes > 0)
+            l[M_ORIGIN] = kw(box[0]);
+        if (no_clip)
+            l[M_CLIP] = kw("no-clip");
+        else if (boxes > 0)
+            l[M_CLIP] = kw(box[boxes - 1]);
+        for (int j = 0; j < M_N; j++)
+            if (!layers_add(s, &lists[j], &l[j]))
+                return false;
+        if (last)
+            return true;
+        c->i++;                         // the comma
+    }
+}
+
+static bool mask(Sets *s, VCur *c)
+{
+    Layers lists[M_N] = {{0}};
+    garb_val_t v[M_N];
+    bool ok = mask_layers(s, c, lists);
+    for (int k = 0; k < M_N; k++)
+        ok = layers_done(s, &lists[k], &v[k]) && ok;    // each list freed, whatever
+    if (!ok)
+        return false;
+    for (int k = 0; k < M_N; k++)
+        set(s, kMaskProps[k], &v[k]);
+    return true;
+}
+
 // ── Text decoration and lists ───────────────────────────────────────────
 
 // <text-decoration-line>: none, or any of the lines, each once.
@@ -2170,7 +2288,8 @@ typedef enum {
     G_FAMILY, G_FONT_SIZE, G_FONT_WEIGHT, G_FONT_STYLE, G_LINE_HEIGHT,
     G_VALIGN, G_DECORATION_LINE, G_INDENT, G_LIST_TYPE, G_LIST_IMAGE, G_BG_IMAGE,
     G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_BG_SIZE,
-    G_BG_BOX,               // background-origin, -clip: a box from `words`
+    G_BG_BOX,               // background-origin, -clip, and a mask's: a box from `words`
+    G_MASK_KEYWORD,         // mask-composite, -mode: a layer's keyword from `words`
     G_SPACING,
     G_Z_INDEX,              // auto | <integer>
     G_CLIP,                // auto | rect(top, right, bottom, left)
@@ -2266,6 +2385,12 @@ static const Longhand kLonghands[] = {
     {GARB_BACKGROUND_REPEAT, G_BG_REPEAT, NULL}, {GARB_BACKGROUND_POSITION_X, G_BG_POS_X, NULL},
     {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL}, {GARB_BACKGROUND_SIZE, G_BG_SIZE, NULL},
     {GARB_BACKGROUND_ORIGIN, G_BG_BOX, kBox}, {GARB_BACKGROUND_CLIP, G_BG_BOX, kClipBox},
+    // A mask layer is placed as a background layer is (Masking 1 § 7).
+    {GARB_MASK_IMAGE, G_BG_IMAGE, NULL}, {GARB_MASK_REPEAT, G_BG_REPEAT, NULL},
+    {GARB_MASK_POSITION_X, G_BG_POS_X, NULL}, {GARB_MASK_POSITION_Y, G_BG_POS_Y, NULL},
+    {GARB_MASK_SIZE, G_BG_SIZE, NULL}, {GARB_MASK_ORIGIN, G_BG_BOX, kBox},
+    {GARB_MASK_CLIP, G_BG_BOX, kMaskClip}, {GARB_MASK_COMPOSITE, G_MASK_KEYWORD, kMaskComposite},
+    {GARB_MASK_MODE, G_MASK_KEYWORD, kMaskMode},
     {GARB_MARGIN_TOP, G_MARGIN, NULL}, {GARB_MARGIN_RIGHT, G_MARGIN, NULL},
     {GARB_MARGIN_BOTTOM, G_MARGIN, NULL}, {GARB_MARGIN_LEFT, G_MARGIN, NULL},
     {GARB_PADDING_TOP, G_PADDING, NULL}, {GARB_PADDING_RIGHT, G_PADDING, NULL},
@@ -3360,7 +3485,7 @@ static bool content(Sets *s, VCur *c, garb_val_t *out)
 static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
-           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX ||
+           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX || l->g == G_MASK_KEYWORD ||
            l->g == G_ANIM_NAME || l->g == G_DURATION || l->g == G_DELAY ||
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
@@ -3514,6 +3639,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     switch (l->g) {
     case G_KEYWORDS:
     case G_BG_BOX:
+    case G_MASK_KEYWORD:
     case G_ANIM_KEYWORD:
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
@@ -3642,7 +3768,10 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
                 op = &off;
             return edge_offset(s, k, op, out);
         }
-        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+        // The Quirks standard's unitless lengths are a background's
+        // position's, not a mask's (§ 3.2).
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true,
+                      s->quirks && l->prop == GARB_BACKGROUND_POSITION_X, &s->a, out);
     case G_BG_POS_Y:
         if ((k = vc_keyword(c, kPosY)) != NULL) {
             garb_val_t off, *op = NULL;
@@ -3650,7 +3779,10 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
                 op = &off;
             return edge_offset(s, k, op, out);
         }
-        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+        // The Quirks standard's unitless lengths are a background's
+        // position's, not a mask's (§ 3.2).
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true,
+                      s->quirks && l->prop == GARB_BACKGROUND_POSITION_Y, &s->a, out);
     case G_SPACING: {
         garb_val_t two[2];
         int n = 0;
@@ -3863,7 +3995,7 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
+    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE, SH_MASK, SH_MASK_POSITION,
     // CSS Logical 1's flow-relative pairs, each a start and an end.
     SH_MARGIN_INLINE, SH_MARGIN_BLOCK, SH_PADDING_INLINE, SH_PADDING_BLOCK, SH_INSET_INLINE,
     SH_INSET_BLOCK, SH_BORDER_INLINE, SH_BORDER_BLOCK, SH_BORDER_INLINE_WIDTH,
@@ -3890,6 +4022,7 @@ static const struct { const char *name; Shorthand sh; bool modern; } kShorthands
     {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
     {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
     {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
+    {"mask", SH_MASK, true}, {"mask-position", SH_MASK_POSITION, true},
     {"margin-inline", SH_MARGIN_INLINE, true}, {"margin-block", SH_MARGIN_BLOCK, true},
     {"padding-inline", SH_PADDING_INLINE, true}, {"padding-block", SH_PADDING_BLOCK, true},
     {"inset-inline", SH_INSET_INLINE, true}, {"inset-block", SH_INSET_BLOCK, true},
@@ -3974,6 +4107,8 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_BORDER_COLOR: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + k); break;
     case SH_BACKGROUND: for (size_t k = 0; k < sizeof(kBg) / sizeof(kBg[0]); k++) out[n++] = kBg[k]; break;
     case SH_BACKGROUND_POSITION: out[n++] = GARB_BACKGROUND_POSITION_X; out[n++] = GARB_BACKGROUND_POSITION_Y; break;
+    case SH_MASK: for (int k = 0; k < M_N; k++) out[n++] = kMaskProps[k]; break;
+    case SH_MASK_POSITION: out[n++] = GARB_MASK_POSITION_X; out[n++] = GARB_MASK_POSITION_Y; break;
     case SH_FONT: for (int k = 0; k < 6; k++) out[n++] = kFont[k]; break;
     case SH_LIST_STYLE: for (int k = 0; k < 3; k++) out[n++] = kList[k]; break;
     case SH_TEXT_DECORATION: out[n++] = GARB_TEXT_DECORATION_LINE; break;
@@ -4274,6 +4409,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
+    case SH_MASK: return mask(s, c);
     case SH_ANIMATION: return animation(s, c);
     case SH_OUTLINE: return outline_shorthand(s, c);
     case SH_BORDER_INLINE: case SH_BORDER_BLOCK: {
@@ -4291,12 +4427,20 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         return logical_pair(s, c, pair_of(sh), bstyle_one);
     case SH_BORDER_INLINE_COLOR: case SH_BORDER_BLOCK_COLOR:
         return logical_pair(s, c, pair_of(sh), bcolor_one);
-    case SH_BACKGROUND_POSITION: {
-        // A position per layer, each split into its two longhands' lists.
+    case SH_BACKGROUND_POSITION: case SH_MASK_POSITION: {
+        // A position per layer, each split into its two longhands' lists:
+        // a background's <bg-position>, with the quirks' unitless lengths,
+        // or a mask's Values 4 <position>, without them.
+        bool bg = sh == SH_BACKGROUND_POSITION;
+        garb_prop_t px = bg ? GARB_BACKGROUND_POSITION_X : GARB_MASK_POSITION_X,
+                    py = bg ? GARB_BACKGROUND_POSITION_Y : GARB_MASK_POSITION_Y;
+        Sets strict = *s;
+        strict.quirks = s->quirks && bg;
         Layers xs = {0}, ys = {0};
-        bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
+        bool ok = knows(s, px) || knows(s, py);
         while (ok) {
-            if (!position(s, c, true, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+            if (!position(&strict, c, bg, &x, &y) || !layers_add(s, &xs, &x) ||
+                !layers_add(s, &ys, &y)) {
                 ok = false;
                 break;
             }
@@ -4304,13 +4448,14 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
                 break;
             c->i++;
         }
+        s->a.short_of_memory |= strict.a.short_of_memory;
         ok = ok && vc_done(c);
         ok = layers_done(s, &xs, &x) && ok;     // each list freed, whatever
         ok = layers_done(s, &ys, &y) && ok;
         if (!ok)
             return false;
-        set(s, GARB_BACKGROUND_POSITION_X, &x);
-        set(s, GARB_BACKGROUND_POSITION_Y, &y);
+        set(s, px, &x);
+        set(s, py, &y);
         return true;
     }
     case SH_FONT: return font_shorthand(s, c);
@@ -4447,6 +4592,18 @@ static const struct {
     {"-webkit-animation-play-state", "animation-play-state", false},
     {"-webkit-animation-delay", "animation-delay", false},
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
+    // Every engine reads the prefixed mask names as the standard ones
+    // (MASKS.md § 4) — but -webkit-mask-composite, whose words are the
+    // legacy compositing operators', is a grammar of its own.
+    {"-webkit-mask", "mask", true},
+    {"-webkit-mask-image", "mask-image", true},
+    {"-webkit-mask-repeat", "mask-repeat", true},
+    {"-webkit-mask-position", "mask-position", true},
+    {"-webkit-mask-position-x", "mask-position-x", true},
+    {"-webkit-mask-position-y", "mask-position-y", true},
+    {"-webkit-mask-size", "mask-size", true},
+    {"-webkit-mask-origin", "mask-origin", true},
+    {"-webkit-mask-clip", "mask-clip", true},
 };
 
 // CSS Logical 1's flow-relative longhands (§ 4) and the border sides'
