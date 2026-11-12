@@ -668,6 +668,16 @@ static yonder_scratch_t *s_suite_scratch;
 
 // `t` painted through `view`, every pixel recorded, through `cache` and
 // `scratch` (NULL for none).
+// When set (w > 0), the whole view a paint's `view` is a part of, whose
+// pixels the layers' budget is measured by (yonder_paint's `whole`);
+// otherwise the view painted is the whole.
+static os64_gui_rect_t s_paint_whole;
+
+static os64_gui_rect_t whole_of(os64_gui_rect_t view)
+{
+    return s_paint_whole.w > 0 ? s_paint_whole : view;
+}
+
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
@@ -676,8 +686,8 @@ static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
     s_alloc_starved = s_paint_starved;
-    yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, cache, scratch,
-                 &v);
+    yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint,
+                 cache, scratch, &v);
     s_alloc_starved = false;
     s_record_all = false;
     if (scratch != NULL) {
@@ -761,8 +771,8 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     size_t bytes = s_alloc_bytes;
     uint64_t big = s_big_mallocs;
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through,
-                     s_through_scratch, &v);
+        yonder_paint(t, view, whole_of(view), (flow_point_t){view.x, view.y}, kEnv.paper,
+                     s_dark_paint, s_through, s_through_scratch, &v);
     yonder_scratch_paint_end(s_through_scratch);
     s_paint_bytes = s_alloc_bytes - bytes;
     s_paint_big = s_big_mallocs - big;
@@ -858,13 +868,13 @@ static void filter_paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
     s_filter_refused = false;
     expect("filter: a refused layer is counted", yonder_paint_layers_refused == 1, NULL);
-    // Each layer is charged the pixels it shows in the view: three boxes
-    // filling the 200 x 100 view spend 2 x 200 x 100 with two, and the
-    // third is a plain group.
+    // Each layer is charged the pixels it shows in the view: five boxes
+    // filling the 200 x 100 view spend YONDER_FILTER_AREA_VIEWS (4) x 200
+    // x 100 with four, and the fifth is a plain group.
     static const char kThree[] =
         "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0;"
         " width: 200px; height: 100px; filter: grayscale(1) }</style>"
-        "<div>a</div><div>b</div><div>c</div>";
+        "<div>a</div><div>b</div><div>c</div><div>d</div><div>e</div>";
     bool escaped = false;
     char *got = paint_of(kThree, strlen(kThree), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped,
                          true);
@@ -874,7 +884,7 @@ static void filter_paint_cases(void)
     for (const char *at = got; at != NULL && (at = strstr(at, "\ngroup ")) != NULL; at++)
         groups++;
     expect("filter: past the paint's budget, a plain group",
-           filters == 2 && groups == 1 && yonder_paint_layers_refused == 1, got);
+           filters == 4 && groups == 1 && yonder_paint_layers_refused == 1, got);
     free(got);
     // A filter inside a filter is charged what it shows in the repaint,
     // not in the outer layer's margin (Codex #445 round 1): a 10 x 10

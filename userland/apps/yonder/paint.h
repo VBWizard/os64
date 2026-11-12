@@ -199,7 +199,10 @@ yonder_paint_cache_counts_t yonder_paint_cache_counts(const yonder_paint_cache_t
 void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 
 // Paints every box that meets `viewport`, canvas first, the page scrolled
-// to `scroll` (flow_visit's). `paper` is the canvas when neither the root
+// to `scroll` (flow_visit's). `whole` is all of the view `viewport` is a
+// part of (equal to it for a whole repaint): the layers' budget is
+// measured by its pixels, so a repaint of a part gives a group its layer
+// whenever a repaint of the whole would (yonder_paint_layers_refused). `paper` is the canvas when neither the root
 // nor the body has a background, colour or picture; `dark`, when not NULL,
 // paints the page dark (above) and its paper is the canvas instead.
 // `cache`, when not NULL, keeps what the painter works out between paints
@@ -217,17 +220,18 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
-// How many filtered or blended groups and backdrops the last yonder_paint
-// drew plain: past its
-// budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
-// viewport's pixels, each layer charged the pixels it shows in the
-// viewport, FILTER.md § 6 — or a layer the verbs refused or found no
-// memory to filter. The caller's to name in the record; the verbs count
+// How many filtered, masked or blended groups and backdrops the last
+// yonder_paint drew plain: past its budget for layers —
+// YONDER_FILTER_AREA_VIEWS times the WHOLE view's pixels, each layer (and
+// a mask's captures) charged the pixels it shows in the part painted,
+// FILTER.md § 6 — or a layer the verbs refused or found no memory to
+// filter. The caller's to name in the record; the verbs count
 // what they refuse at the close themselves.
 extern uint32_t yonder_paint_layers_refused;
-#define YONDER_FILTER_AREA_VIEWS 2
+#define YONDER_FILTER_AREA_VIEWS 4
 
-void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                  flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
 
