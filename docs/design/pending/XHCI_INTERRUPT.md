@@ -191,8 +191,36 @@ with the polls, events and longest gap between each line.
   tick, not seconds, and case (a) of § Proof is this reading.
 - **The P5's controllers** (`/sys/bus/pci`): five xHCI, each offering MSI
   and MSI-X with one vector, none with an INTx line routed.
-- **The P5's poll gaps and the LE devices' reconnection timeline**: owed
-  (tracker X.1.4).
+- **The P5's poll, 2026-11-12** (`/sys/usb`, about 20 minutes of uptime
+  on the `Bosgame GUI` entry, logd running): 118,474 polls, and of the
+  1,834 that drained an event, 1,833 came within 20 ms of the poll before
+  and the other within 27 ms. The poll comes round every tick on the P5
+  too. The AX210 sits on controller `64:00.4`, with the USB mouse; the USB
+  keyboard is on `64:00.3`.
+- **Where a reconnection's time goes on the P5** (the same reading's
+  timeline; four reconnections of the LE keyboard and trackball after Chris
+  re-paired the keyboard, each 5 to 10 s by his watch):
+  - the scan round that finds the device: 2.03 s, every time;
+  - connecting and encrypting with the saved key: 0.25 to 0.36 s;
+  - finding the HID service again over the air: 1.4 to 3.2 s, about a
+    hundred events at roughly one every 30 ms, which is the link's own
+    pace and three times slower than the poll;
+  - the steps that only wait for a command to complete take two polls
+    each, 10 ms apiece, about 60 ms in all.
+  One reconnection failed to resolve the keyboard's address, stopped, and
+  went round again: 4 s lost to a second scan.
+
+**The verdict (X.1.5).** The poll is not why the LE devices are slow to
+connect. On the P5 an event waits at most one tick, and what an interrupt
+would remove from a reconnection is that tick at each step: by this
+reading a few tenths of a second out of five to ten. The time is in the
+scan round, in the backoff before it when a round has just missed the
+device, and in discovering the HID service on every reconnection although
+the device is bonded. Those are Bluetooth's own and are booked in DEBTS,
+not folded into this arc. The arc still lands for the reason that never
+depended on this: audio needs a packet out every 15 to 20 ms and its
+credits back as they return, and a 10 ms poll that can slip to 27 is not
+a clock to build that on.
 
 ## Proof
 

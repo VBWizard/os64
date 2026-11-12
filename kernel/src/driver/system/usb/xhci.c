@@ -194,6 +194,7 @@ typedef struct {
 	} scan_history;
 	hid_keyboard_t keyboards[BT_HOST_PEERS];
 	input_pointer_source_t pointers[BT_HOST_PEERS];
+	uint8_t timeline_phase[BT_HOST_PEERS];   // each slot's phase as /sys/usb's timeline last wrote it
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -1274,8 +1275,14 @@ static void xhci_bt_runtime_poll(void)
         const bt_le_t *s = &p->host.peers[i].le;
         if(s->mouse && bt_le_input_active(s)) xhci_bt_pointer_register(p,i);
         else if(p->pointers[i].settings_slot || p->pointers[i].settings_key[0]) input_pointer_unregister(&p->pointers[i]);
-        if (s->phase != before[i])
-            xhci_timeline_add(XHCI_TL_LE_PHASE, i, before[i], s->phase);
+        // Against the phase the timeline last wrote, not this pass's
+        // `before`: a phase also moves while events are drained, outside
+        // the tick above, and a line must not miss an arrival at ready.
+        // Phases passed through between two looks are not listed.
+        if (s->phase != p->timeline_phase[i]) {
+            xhci_timeline_add(XHCI_TL_LE_PHASE, i, p->timeline_phase[i], s->phase);
+            p->timeline_phase[i] = (uint8_t)s->phase;
+        }
         if (s->phase != before[i])
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
