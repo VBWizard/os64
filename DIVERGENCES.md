@@ -275,6 +275,13 @@ itself.
 Parts from the DOM Standard rather than from Unix, recorded here because a
 page's script can see them.
 
+- **A history state is at most 2 MiB of JSON** (`OS64_DOM_STATE_MAX`): a
+  `pushState` or `replaceState` with more is a QuotaExceededError. The
+  standard sets no number and other browsers allow more (Firefox 16 MiB).
+  Two is sixteen times the largest a page has been seen to keep (a photo
+  site's list of what it has loaded, about 125 KiB), and what a session's
+  sixty-four entries can then hold is bounded at 128 MiB. It was 64 KiB
+  until 2026-11-11, which that site passed. `dom.h` § HISTORY.
 - **A Node member called on an Attr through `Node.prototype` itself**
   (`Node.prototype.appendChild.call(attr, x)`) is a TypeError, "an Attr is
   a Node with no place in the tree", where the standard would answer as

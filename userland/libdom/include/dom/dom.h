@@ -677,8 +677,15 @@ void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provide
  * strings, arrays without holes and plain objects of them; `undefined` in
  * an object is left out, as JSON leaves it, and in an array it is null),
  * anything else a DataCloneError, and at most OS64_DOM_STATE_MAX bytes, a
- * QuotaExceededError past that. */
-#define OS64_DOM_STATE_MAX ((size_t)64 * 1024)
+ * QuotaExceededError past that.
+ *
+ * TWO MEBIBYTES, because sites keep real data there: a photo site's search
+ * page leaves the list of every photo it has loaded with the entry (about
+ * 125 KiB after one click, measured in Firefox), and a script whose
+ * pushState throws stops in the middle of the click it was handling. The
+ * limit is what bounds a session's history: WAY_HISTORY_MAX entries of it.
+ * Other browsers allow more (Firefox 16 MiB): DIVERGENCES. */
+#define OS64_DOM_STATE_MAX ((size_t)2 * 1024 * 1024)
 typedef struct {
     /* pushState (push) or replaceState: the session's current entry
      * becomes `url` (absolute, and a URL the document may rewrite its own
