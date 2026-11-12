@@ -2,6 +2,15 @@
  * or a browser navigation. It does not stand in for DOM departure cleanup. */
 static os64_js_realm_t *retirement_realms[3];
 static os64_html_document_t *retirement_documents[3];
+static size_t retirement_misses[3];
+/* Task-payload cleanup seam; public departure finish will coordinate it with
+ * engine, DOM-dispatch and provider-borrow safe points. */
+void d_message_cancel(os64_dom_t *dom);
+
+static void retirement_missing(void *opaque, const char *name)
+{
+    if (!strcmp(name, "retirementMissingName")) (*(size_t *)opaque)++;
+}
 
 static JSValue retirement_mark(JSContext *ctx, JSValueConst self, int argc,
                                JSValueConst *argv, int magic)
@@ -38,10 +47,63 @@ static JSValue retirement_pulse(JSContext *ctx, JSValueConst self, int argc, JSV
     return JS_UNDEFINED;
 }
 
+static void retirement_message_reentry_cases(void)
+{
+    static const char *operations[] = {
+        "postMessage({get value(){retire();return 1}},'*',[buffer])",
+        "postMessage('value',{transfer:[buffer],get targetOrigin(){retire();return '*'}})",
+        "channel.port1.postMessage({get value(){retire();return 1}},[buffer])",
+        "channel.port1.postMessage('value',{get transfer(){retire();return [buffer]}})",
+        "Reflect.construct(MessageChannel,[],new Proxy(function(){},{get(t,k){"
+        "if(k==='prototype')retire();return Reflect.get(t,k)}}))"
+    };
+    for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
+        for (size_t i = 0; i < sizeof(operations)/sizeof(operations[0]); ++i) {
+            os64_js_config_t config = fixture_config();
+            DomFixture f = fixture_configured(0, 0, &config);
+            os64_js_destroy(f.runtime);
+            f.runtime = NULL;
+            os64_js_outcome_t out;
+            check(os64_js_create_with_teardown(&config, policy, OS64_JS_ABI_ID, &f.runtime, &out) == OS64_JS_OK,
+                  "retirement message reentry: runtime created");
+            retirement_realms[1] = os64_js_primary_realm(f.runtime, OS64_JS_ABI_ID, &out);
+            os64_dom_options_t options = p2b_options("https://messages.example/");
+            f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &out);
+            check(f.binding != NULL, "retirement message reentry: binding installed");
+            if (f.binding) {
+                check(os64_js_realm_task_begin(retirement_realms[1], OS64_JS_ABI_ID, "message reentry", &out) == OS64_JS_OK,
+                      "retirement message reentry: fixture entry opens");
+                JSContext *ctx = os64_js_realm_context(retirement_realms[1], OS64_JS_ABI_ID, &out);
+                JSValue global = JS_GetGlobalObject(ctx);
+                check(JS_SetPropertyStr(ctx, global, "retire", JS_NewCFunctionMagic(ctx, retirement_mark,
+                      "retire", 0, JS_CFUNC_generic_magic, 1)) >= 0,
+                      "retirement message reentry: native mark installed");
+                JS_FreeValue(ctx, global);
+                check(os64_js_task_end(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                      "retirement message reentry: fixture entry closes");
+                char source[1600];
+                snprintf(source, sizeof(source), STORAGE_ASSERT
+                    "globalThis.channel=new MessageChannel();globalThis.buffer=new ArrayBuffer(16);"
+                    "let refused=false;try{%s}catch(e){refused=e.name==='InvalidStateError'}"
+                    "assert(refused,'conversion or clone retirement must refuse work');"
+                    "assert(buffer.byteLength===16,'refusal must not detach transfers');"
+                    "channel.port1.close();channel.port2.close();", operations[i]);
+                char name[100];
+                snprintf(name, sizeof(name), "retirement message reentry: operation %zu refuses without transfer", i);
+                realm_script(retirement_realms[1], source, name);
+                check(os64_dom_message_next(f.binding) == UINT64_MAX && !os64_dom_message_fire(f.binding, &out),
+                      "retirement message reentry: no host message delivery");
+            }
+            fixture_free(&f);
+        }
+    }
+}
+
 static void dom_retirement_cases(void)
 {
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy) {
         p2b_ms = 500; p2b_us = 500000;
+        memset(retirement_misses, 0, sizeof(retirement_misses));
         os64_js_config_t config = fixture_config();
         config.limits.memory_bytes = 64u << 20;
         os64_js_runtime_t *runtime = NULL;
@@ -96,8 +158,9 @@ static void dom_retirement_cases(void)
             for (size_t i = 0; i < 3; ++i) {
                 realm_script(retirement_realms[i], STORAGE_ASSERT
                     "globalThis.observed=document.createElement('div');document.body.appendChild(observed);"
-                    "globalThis.plain=()=>42;",
+                    "globalThis.plain=()=>42;globalThis.missing=()=>typeof retirementMissingName;",
                     "retirement queues: retained objects installed");
+                os64_dom_set_global_miss(bindings[i], retirement_missing, &retirement_misses[i]);
             }
             realm_script(retirement_realms[0], "globalThis.moLog=[];globalThis.ceLog=[];globalThis.upgrades=[];"
                 "globalThis.slots=[];globalThis.stopC=false;"
@@ -144,8 +207,11 @@ static void dom_retirement_cases(void)
                   "retirement tasks: capture deadline while B is active");
             realm_script(retirement_realms[1],
                 "globalThis.deadTask=()=>A.taskLog.push('dead');setTimeout(C.timerLive,0);"
-                "requestAnimationFrame(C.rafLive);requestIdleCallback(C.idleLive);",
+                "requestAnimationFrame(C.rafLive);requestIdleCallback(C.idleLive);"
+                "globalThis.channel=new MessageChannel();channel.port1.postMessage({kept:'pending'});"
+                "postMessage('queued','*');onmessage=C.timerLive;assert(missing()==='undefined');",
                 "retirement tasks: pending B activity has live C callbacks");
+            check(retirement_misses[1] == 1, "retirement providers: B diagnostic hook receives active lookup");
             realm_script(retirement_realms[0],
                 "globalThis.deadInterval=setInterval(B.deadTask,0);setTimeout(C.timerLive,0);"
                 "requestAnimationFrame(B.deadTask);requestAnimationFrame(C.rafLive);"
@@ -257,10 +323,43 @@ static void dom_retirement_cases(void)
                 "assert(refused(()=>B.setTimeout(C.timerLive,0)));"
                 "assert(refused(()=>B.requestAnimationFrame(C.rafLive)));"
                 "assert(refused(()=>B.requestIdleCallback(C.idleLive)));"
+                "assert(refused(()=>B.postMessage('late','*')));"
+                "assert(refused(()=>B.channel.port1.postMessage('late')));"
+                "let serialized=0;let payload={get value(){serialized++;return 1}};"
+                "assert(refused(()=>B.postMessage(payload,'*')));"
+                "assert(refused(()=>B.channel.port1.postMessage(payload)));assert(serialized===0);"
+                "assert(refused(()=>new B.MessageChannel()));"
+                "B.channel.port2.start();assert(B.missing()==='undefined');assert(C.missing()==='undefined');"
                 "assert(B.deadlineSaved.timeRemaining()===0&&!B.deadlineSaved.didTimeout);"
                 "const retainedInput=B.document.createElement('input');retainedInput.value='retained';"
                 "retainedInput.setSelectionRange(1,3);assert(retainedInput.selectionStart===1&&retainedInput.selectionEnd===3);",
                 "retirement tasks: microtasks filter callback and activity; dead services refuse rearming");
+            check(retirement_misses[1] == 1 && retirement_misses[2] == 1,
+                  "retirement providers: retained B function skips old diagnostic provider while C remains active");
+            check(os64_dom_message_next(bindings[1]) == UINT64_MAX && !os64_dom_message_fire(bindings[1], &out),
+                  "retirement messages: inactive target does not deliver queued window or port messages");
+            size_t queued_bytes = os64_dom_bytes(bindings[1]);
+            d_message_cancel(bindings[1]);
+            size_t cancelled_bytes = os64_dom_bytes(bindings[1]);
+            d_message_cancel(bindings[1]);
+            check(cancelled_bytes < queued_bytes && os64_dom_bytes(bindings[1]) == cancelled_bytes,
+                  "retirement messages: task cleanup releases payloads idempotently");
+            realm_script(retirement_realms[0],
+                "assert(B.channel.port1 instanceof B.MessagePort);"
+                "B.channel.port1.close();B.channel.port2.close();",
+                "retirement messages: exported ports remain usable after task cleanup");
+            check(os64_dom_bytes(bindings[1]) == cancelled_bytes,
+                  "retirement messages: unstarted port payloads were released before retained close");
+            realm_script(retirement_realms[0],
+                "globalThis.liveChannel=new MessageChannel();globalThis.portHeard=[];"
+                "liveChannel.port2.onmessage=e=>portHeard.push(e.data);"
+                "B.MessagePort.prototype.postMessage.call(liveChannel.port1,'live');"
+                "assert(refused(()=>MessagePort.prototype.postMessage.call(B.channel.port1,'dead')));",
+                "retirement messages: borrowed methods follow receiver activity");
+            check(os64_dom_message_fire(bindings[0], &out) && out.status == OS64_JS_OK,
+                  "retirement messages: borrowed live port delivery succeeds");
+            realm_script(retirement_realms[0], "assert(portHeard.join()==='live');",
+                "retirement messages: borrowed post keeps live target and payload");
             check(os64_dom_timer_next(bindings[1]) == UINT64_MAX &&
                   os64_dom_animation_next(bindings[1]) == UINT64_MAX &&
                   os64_dom_idle_next(bindings[1]) == UINT64_MAX &&
@@ -318,4 +417,5 @@ static void dom_retirement_cases(void)
         check(live == 0 && dom_live == 0 && !dom_allocations,
               "retirement queues: retained native backing released under both teardown policies");
     }
+    retirement_message_reentry_cases();
 }

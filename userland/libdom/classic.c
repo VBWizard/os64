@@ -492,14 +492,24 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies)
     else os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
 }
 
+static void global_miss(void *opaque, const char *name)
+{
+    os64_dom_t *dom = opaque;
+    if (d_delivery_active(dom) && dom->global_miss != NULL)
+        dom->global_miss(dom->global_miss_opaque, name);
+}
+
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque)
 {
+    if (dom == NULL || dom->closed || (heard != NULL && !d_delivery_active(dom))) return;
     os64_js_outcome_t outcome;
-    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome)
-                                                 : NULL;
-    if (ctx != NULL)
-        JS_SetGlobalMissHandler(ctx, heard, opaque);
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (ctx != NULL) {
+        dom->global_miss = heard;
+        dom->global_miss_opaque = heard != NULL ? opaque : NULL;
+        JS_SetGlobalMissHandler(ctx, heard != NULL ? global_miss : NULL, heard != NULL ? dom : NULL);
+    }
 }
 
 /* An interface object: there to be named, never to be called. */

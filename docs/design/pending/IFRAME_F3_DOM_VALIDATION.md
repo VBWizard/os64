@@ -60,6 +60,18 @@ queuing a select task in its inactive document; performance entries likewise
 do not rearm their inactive observer task. Existing queued payloads still
 need the departure-finish cleanup described below.
 
+Window and port messages refuse inactive posting activity before serialization
+and recheck after clone getters, before detaching transfer buffers. Channel
+construction rechecks after reading the new target's prototype. Borrowed port
+methods follow the port's owner, and inactive targets have no message scheduler
+opportunity. A weak port list lets task cleanup release payloads waiting on
+unstarted ports, as well as the window queue, without destroying exported port
+objects. This internal cleanup seam is not yet a public departure finish.
+
+The missing-global diagnostic hook goes through a binding-owned bridge, so an
+ordinary retained function can still run without calling its retired document's
+provider. The broader provider detachment and borrow protocol remains below.
+
 ## Evidence
 
 `tools/test_dom_host.sh --realm-retirement` runs a three-binding fixture under
@@ -76,7 +88,7 @@ object access and balanced native teardown.
 
 | Final focused suite | Shipping engine | Instrumented engine |
 |---|---:|---:|
-| Retirement queues, events and scheduled work | 146 checks | 146 checks |
+| Retirement queues, events, scheduled work and messages | 284 checks | 284 checks |
 | Cross-realm binding routing | 678 checks | 678 checks |
 | Events | 1,020 checks | 1,020 checks |
 | Mutation observers | 32 checks | 32 checks |
@@ -95,7 +107,9 @@ retirement, cross-realm and event suites were rerun on that source. The
 scheduled-work extension rebuilds the affected core, browsing, timer, idle,
 animation, selection and performance units and reruns retirement, cross-realm,
 animation, performance, P2b and core suites. Observer/custom totals are from
-the shared-queue checkpoint and event totals from the event checkpoint.
+the shared-queue checkpoint and event totals from the event checkpoint. The
+message/provider extension rebuilds every DOM host object for its changed
+binding layout, then reruns retirement, cross-realm, P2b and performance suites.
 The native `dom-library` target also
 builds successfully from this worktree. No full-suite, WPT, QEMU or P5
 acceptance is claimed for this intermediate checkpoint.
@@ -123,6 +137,14 @@ idle timeout eligibility, reading a retired deadline's clock, queuing a
 retired select task, advertising a retired timer as due, and throwing during
 revoked-proxy enqueue discovery. The preceding checkpoint reproduced wrong
 microtask delivery, repeated dead-interval wakeups and batch interruption.
+
+Nine message/provider mutants were caught: missing pre-serialization or
+post-clone checks for window/port messages, routing a borrowed method by its
+creation realm, permitting channel construction after retirement, leaving
+unstarted-port payloads behind, advertising retired messages as due, and
+calling the retired diagnostic provider. Tests cover five reentrant conversion
+or clone paths under both teardown policies, intact transfer buffers on
+refusal, idempotent payload release and retained-port use afterward.
 
 ## Remaining F.3b work
 

@@ -535,7 +535,8 @@ bool os64_dom_storage_walk(const void *bytes, size_t length,
  * name a lookup on window did not find, before the lookup answers as it
  * always does, so what the page sees is unchanged. The name is borrowed
  * for the call; `heard` must not enter JS. NULL stops it. Install outside
- * callbacks. */
+ * callbacks. Inactive documents neither call the hook nor accept a new one;
+ * NULL can still clear it while the binding remains open. */
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque);
 

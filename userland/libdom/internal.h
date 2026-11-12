@@ -774,6 +774,11 @@ struct os64_dom {
     struct DKept *kept;
     size_t body_bytes;
     uint64_t bodies_refused;
+    /* Ports remain reachable after their activity stops; this weak list lets
+     * cleanup release messages waiting on ports that have not started. */
+    struct DPort *ports;
+    void (*global_miss)(void *opaque, const char *name);
+    void *global_miss_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1846,6 +1851,7 @@ int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */
 void d_message_drain(os64_dom_t *dom);
+void d_message_cancel(os64_dom_t *dom);
 void d_idle_drain(os64_dom_t *dom);
 void d_idle_free(os64_dom_t *dom);
 /* MessageEvent (event.c): the interface, and one made for a dispatch:
