@@ -314,6 +314,39 @@ static void test_wait_stamp_precedes_the_look(void)
 	CHECK(d.empty_at == 0 && !d.work_left, "a clockless drain stamped %lu", (unsigned long)d.empty_at);
 }
 
+// A clock that moves on every reading, and a producer that posts whatever
+// has come due at the START of a reading: so an event can arrive after one
+// reading (and the look that follows it) and before the next.
+static uint64_t stepping_clock(void *ctx)
+{
+	(void)ctx;
+	model_tick();
+	uint64_t t = now;
+	now += 2;
+	return t;
+}
+
+// The same rule against the drain itself: the stamp is the reading taken
+// before the look, not one taken after it. An event due between the two
+// readings arrives after the look; a stamp from the second reading would be
+// later than the event.
+static void test_wait_stamp_is_the_reading_before_the_look(void)
+{
+	model_reset(1, 16);
+	controller_t *k = &hc[0];
+	now = 100;
+	schedule(101, 0);
+	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k, stepping_clock, NULL, UINT64_MAX);
+	CHECK(d.handled == 0 && !d.work_left, "setup: the look should find the ring empty");
+	CHECK(d.empty_at == 100, "the stamp is %lu, not the reading before the look (100)",
+	      (unsigned long)d.empty_at);
+	xhci_wait_account(&k->wait, d, now, kEdges);
+	d = xhci_evt_drain(&k->ring, model_handle, k, stepping_clock, NULL, UINT64_MAX);
+	CHECK(d.handled == 1 && k->posted_at[0] >= k->wait.seen_empty,
+	      "the event posted at %lu is older than the seen-empty stamp %lu",
+	      (unsigned long)k->posted_at[0], (unsigned long)k->wait.seen_empty);
+}
+
 // The ring was last published empty at slot N; the next drain handles the
 // one event at N and its deadline stops it with another waiting. The last
 // event handled is slot N, which the register already names: writing it
@@ -617,6 +650,7 @@ int main(int argc, char **argv)
 	test_early_stop();
 	test_wait_includes_the_drain();
 	test_wait_stamp_precedes_the_look();
+	test_wait_stamp_is_the_reading_before_the_look();
 	test_one_event_partial_drain();
 	test_deadline_already_passed();
 	test_wrap();
