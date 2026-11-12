@@ -443,7 +443,11 @@ print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
 virtio because its drain waits for the tick.
 
 **System Drivers:**
-- **PCI** (`pci.c`): PCI device enumeration and configuration
+- **PCI** (`pci.c`): PCI device enumeration and configuration. Each
+  function's capability list is read at enumeration (`pci_caps.c`, pure,
+  `tools/test_pci_caps_host.sh`) and printed by its `/sys/bus/pci` node:
+  `capabilities:` in list order, then `msi:` and `msix:` with what the
+  device can ask for. Read it before planning an interrupt for a device
 - **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
   reachable from Limine's RSDP. **Firmware puts its tables wherever it
   likes**, so each is mapped by its own address and Length (the header

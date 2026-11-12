@@ -715,6 +715,36 @@ static void sys_gen_pci_device(synth_text_t *t, const sys_pci_view_t *v)
 	// INTx", line is whatever firmware routed (255 = none/unknown).
 	synth_text_addf(t, "irq_line: %u\n", v->irq_line);
 	synth_text_addf(t, "irq_pin: %u\n", v->irq_pin);
+	// The capability list as enumeration read it: `name@offset` for each
+	// entry in list order, the id in hex where it has no name, "none" for a
+	// function without a list. It is what says whether a device can be
+	// given MSI or MSI-X before a driver is written for it.
+	const pci_caps_t *caps = pci_caps_of(v->bus, v->dev, v->fn);
+	if (caps)
+	{
+		synth_text_addf(t, "capabilities:");
+		for (uint8_t i = 0; i < caps->count; i++)
+		{
+			const char *cap = pci_cap_name(caps->entry[i].id);
+			if (cap)
+				synth_text_addf(t, " %s@%02x", cap, caps->entry[i].offset);
+			else
+				synth_text_addf(t, " 0x%02x@%02x", caps->entry[i].id, caps->entry[i].offset);
+		}
+		if (caps->count == 0 && !caps->damaged)
+			synth_text_addf(t, " none");
+		// The list pointed into the header or back on itself; what is
+		// printed before this word is what was read before it did.
+		if (caps->damaged)
+			synth_text_addf(t, " damaged");
+		synth_text_addf(t, "\n");
+		// What the device CAN ask for, not what a driver has enabled.
+		if (caps->has_msi)
+			synth_text_addf(t, "msi: vectors=%u address=%s masking=%s\n", caps->msi_vectors,
+			                caps->msi_64bit ? "64" : "32", caps->msi_masking ? "yes" : "no");
+		if (caps->has_msix)
+			synth_text_addf(t, "msix: vectors=%u\n", caps->msix_vectors);
+	}
 	// Names last: the parseable facts above never move when a name is long,
 	// absent, or grows a comma.
 	synth_text_addf(t, "vendor_name: %s\n", pci_get_vendor_by_id(v->vendor));
