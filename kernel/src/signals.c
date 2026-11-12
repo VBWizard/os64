@@ -23,6 +23,7 @@
 #include "doorbell.h"   // the net drainer's bell — rung once per tick
 #include "random.h"     // the entropy pool's tick source — stirred once per tick
 #include "knet.h"
+#include "kusb.h"                // kUsbDoorbell — the tick rings it
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
@@ -898,12 +899,17 @@ void processSignals()
 		qSleep = nextSleeper;
 	}
 
-	// Drain USB input BEFORE the console wake check below, so a keyboard HID
-	// report that just completed becomes a ring event the same pass its
-	// reader wakes for. Polling here rides the exact liveness path the PS/2
-	// wake uses — no interrupt wiring, ~one-pass latency. Cheap when idle
-	// (guard branch + one cached-RAM read); does nothing before USB init.
-	xhci_poll();
+	// USB LEFT THIS PASS (XHCI_INTERRUPT.md § The design). The event rings
+	// are drained by kusb, a kernel thread parked on a doorbell, and input
+	// is delivered from that thread. The tick rings its bell here, once per
+	// tick and not once per pass, for the reason given at the network's
+	// bell below.
+	static uint64_t s_usb_rung_at_tick;
+	if (kKusbTask != NULL && kTicksSinceStart != s_usb_rung_at_tick)
+	{
+		s_usb_rung_at_tick = kTicksSinceStart;
+		doorbell_ring_in_pass(&kUsbDoorbell);
+	}
 
 	// THE NETWORK LEFT THIS PASS (2026-09-05, DOORBELL.md). The NIC drains,
 	// the protocol stack they feed and the TCP/DHCP timers all used to run

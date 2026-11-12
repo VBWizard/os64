@@ -7,8 +7,7 @@
 // from kmalloc_aligned — zeroed at the allocator choke point, physically
 // contiguous, HHDM-addressed (phys = virt - kHHDMOffset). The controller's
 // MMIO BAR is mapped at (kHHDMOffset | bar_phys) — an UPPER-HALF VA — so
-// xhci_poll() can touch the doorbells from ANY CR3 (processSignals runs
-// under whatever task was interrupted). Mapped with PAGE_PCD: this is
+// the registers are reachable under ANY CR3. Mapped with PAGE_PCD: this is
 // device memory, caching it would be lying to ourselves.
 
 #include <stdint.h>
@@ -26,6 +25,8 @@
 #include "driver/system/hid_keyboard.h"   // the boot-keyboard interpreter every HID keyboard shares
 #include "gui/input.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/system/usb/xhci_service.h"   // the TRB, the event ring's consumer side, the visit
+#include "kusb.h"                              // kUsbDoorbell — a holder's release rings it for a refused daemon
 #include "driver/system/usb/bt_intel.h"
 #include "driver/system/usb/bt_scan.h"
 #include "driver/system/usb/bt_le.h"
@@ -34,7 +35,9 @@
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
-#include "x86_64.h"          // rdtsc — the poll's measurements
+#include "x86_64.h"          // rdtsc — a pass's deadline and measurements
+#include "smp_core.h"        // get_core_local_storage — the thread that sleeps for the flag
+#include "signals.h"         // SIGSLEEP
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern const uint8_t bt_ax210_sfi[], bt_ax210_sfi_end[];
@@ -98,7 +101,7 @@ extern volatile uint64_t kSystemCurrentTime;
 #define TRB_EV_CMD_COMPLETE  33
 #define TRB_EV_PORT_STATUS   34
 
-#define TRB_CYCLE            (1u << 0)
+#define TRB_CYCLE            XHCI_TRB_CYCLE
 #define TRB_TOGGLE_CYCLE     (1u << 1)
 #define TRB_IOC              (1u << 5)
 #define TRB_ISP              (1u << 2)   // event on short packet
@@ -109,12 +112,6 @@ extern volatile uint64_t kSystemCurrentTime;
 #define TRB_CC_SUCCESS       1
 #define TRB_CC_USB_TRANSACTION_ERROR 4
 #define TRB_CC_SHORT_PACKET  13
-
-typedef struct {
-	uint64_t param;
-	uint32_t status;
-	uint32_t control;
-} __attribute__((packed)) xhci_trb_t;
 
 #define RING_TRBS 256   // one 4KB page per ring, last TRB is the Link
 
@@ -210,10 +207,8 @@ typedef struct {
 	uint32_t     max_ports;
 	uint64_t    *dcbaa;           // device context base address array
 	xhci_ring_t  cmd;             // command ring
-	xhci_trb_t  *evt;             // event ring segment (consumer side)
-	uint64_t     evt_phys;
-	uint32_t     evt_dequeue;
-	uint32_t     evt_cycle;
+	xhci_evt_ring_t evt;          // event ring segment (consumer side)
+	xhci_wait_t  wait;            // how long an event on it may have waited (/sys/usb)
 
 	// last command completion (filled by the event drain, consumed by
 	// xhci_run_command's synchronous wait)
@@ -238,7 +233,7 @@ typedef struct {
 	uint64_t          control_status_trb;
 	volatile uint16_t xfer_actual;
 
-	// Events xhci_poll has drained from this controller (/sys/usb).
+	// Events kusb's passes have drained from this controller (/sys/usb).
 	uint64_t          events_polled;
 } xhci_t;
 
@@ -251,41 +246,81 @@ static uint32_t s_controller_count;
 static bool s_keyboard_claimed;
 static bool s_mouse_claimed;
 static uint32_t s_ax210_described;
-// Active controller while boot-time setup runs, or while xhci_poll owns its
-// global serialization lock. It is never changed concurrently.
+// The controller being worked on: by the boot thread during setup, by kusb
+// during a pass. Nothing else reads or writes it, so it is never changed
+// concurrently.
 static xhci_t *s_hc;
 static xhci_t *s_bluetooth_hc; // First operational AX210 retained for /sys/bluetooth.
+// THE SERIALIZING FLAG. Whoever holds it owns the Bluetooth host state and,
+// if it is kusb, the event rings. kusb's pass, a sysfs read or request and
+// kworker's bond work take it by test-and-set and never wait for it, with
+// one exception (kworker publishing a bond it has read or written).
+// s_kusb_waiting is how a refused kusb is brought back: it sets the mark
+// BEFORE it tries the flag, and every other holder releases through
+// xhci_serial_release, which rings kusb's bell if the mark is up. Set then
+// try on one side, release then look on the other: either kusb's try
+// succeeds or the releaser sees the mark.
 static volatile uint32_t s_poll_busy;
+static volatile uint32_t s_kusb_waiting;
+
+// Every holder but kusb lets go of the serializing flag here.
+static void xhci_serial_release(void)
+{
+	__sync_lock_release(&s_poll_busy);
+	if (__atomic_exchange_n(&s_kusb_waiting, 0, __ATOMIC_SEQ_CST))
+		doorbell_ring(&kUsbDoorbell);
+}
 static volatile uint32_t s_bond_io_busy;
 static bool s_bond_manager_ready;
 
 extern volatile uint64_t kTicksSinceStart;   // Typematic and USB/Bluetooth deadlines.
 extern uint64_t kCPUCyclesPerSecond;         // TSC cycles to time, for the poll's measurements.
 
-// ── What the poll measures about itself (/sys/usb) ──────────────────────────
+// ── What a pass measures about itself (/sys/usb) ────────────────────────────
 //
 // A device that is slow to answer has two possible causes that look alike
-// from a chair: the controller held an event and the poll did not come round
-// to read it, or the event had not happened yet (a Bluetooth scan that has
-// not seen the device). These numbers tell them apart. A poll's GAP is the
-// time since the poll before it; an event a poll drains waited no longer
-// than that poll's gap, so the gaps of the polls that found events bound
-// how long anything sat unread. The TIMELINE lists what Bluetooth did and
-// when, each line with the polls, events and longest gap since the line
-// before, so a slow step can be laid beside how often the poll ran during
-// it. Everything here is written by the poll's owner under s_poll_busy,
-// except s_polls_lost, which the callers that lose the flag count.
+// from a chair: the controller held an event and nobody came round to read
+// it, or the event had not happened yet (a Bluetooth scan that has not seen
+// the device). These numbers tell them apart.
+//
+// A PASS is one visit by kusb that held the flag. Its GAP is the time since
+// the pass before it began. The gap is a CADENCE: how often kusb comes
+// round. It does not bound how long an event waited, because a pass can
+// begin on time and reach a controller late, and work carried over from one
+// pass to the next is older than any gap. That bound is kept per controller
+// (xhci_t.wait, xhci_service.h): from the last time the controller's ring
+// was seen empty to the drain that found events on it.
+//
+// The TIMELINE lists what Bluetooth did and when, each line with the
+// passes, events and longest gap since the line before, so a slow step can
+// be laid beside how often kusb came round during it.
+//
+// Everything here is written by kusb under s_poll_busy, on the one core it
+// is pinned to, which is what makes the TSC differences meaningful.
 
-static uint64_t s_polls;               // polls that took the flag
+static uint64_t s_polls;               // passes
 static uint64_t s_polls_with_events;   // of those, the ones that drained an event
-static uint64_t s_polls_lost;          // callers that found the flag held and left
-static uint64_t s_poll_last_tsc;       // when the previous poll began
-static uint64_t s_poll_gap_max;        // longest gap of any poll, in cycles
-// Gaps of the polls that drained events, by size: how long an event may
-// have sat. The first edge is two ticks, so a poll that comes round every
-// tick lands in the first bucket and not on its boundary.
+static uint64_t s_poll_last_tsc;       // when the previous pass began
+static uint64_t s_poll_gap_max;        // longest gap of any pass, in cycles
+// Gaps of the passes that drained events, by size. The first edge is two
+// ticks, so a pass every tick lands in the first bucket and not on its
+// boundary. The per-controller waits use the same edges.
 static uint64_t s_event_gap_max;       // cycles
 static uint64_t s_event_gap_20ms, s_event_gap_200ms, s_event_gap_2s, s_event_gap_over_2s;
+// kusb turned away by a held flag: how often, when the wait in hand began
+// (0: none), and the longest from a refusal to the pass that did the work.
+static uint64_t s_refusals;
+static uint64_t s_refused_at;
+static uint64_t s_refusal_wait_max;    // cycles
+// The longest time from a wake's start to the Bluetooth step that follows
+// the drains: the deadline's bound, as it turned out (cycles).
+static uint64_t s_step_delay_max;
+// Passes that ended with a controller stopped by the deadline or not
+// reached.
+static uint64_t s_passes_left_work;
+// Where the next pass starts, so the controller that used the time is
+// served last.
+static xhci_visit_t s_visit;
 
 typedef enum {
 	XHCI_TL_SCAN_STARTED,
@@ -296,8 +331,8 @@ typedef enum {
 typedef struct {
 	uint64_t at_ms;          // uptime
 	uint8_t  kind, slot, from, to;
-	uint32_t polls;          // polls since the previous line
-	uint32_t events;         // events those polls drained
+	uint32_t polls;          // passes since the previous line
+	uint32_t events;         // events those passes drained
 	uint64_t gap_max;        // the longest gap among them, in cycles
 } xhci_timeline_entry_t;
 
@@ -323,14 +358,13 @@ static void xhci_timeline_add(xhci_timeline_kind_t kind, unsigned slot, unsigned
 	s_interval_gap_max = 0;
 }
 
-// A poll begins: its gap is known at once, and counted before any work, so
-// that a timeline line written during this poll includes it. The event
-// that moves Bluetooth on is drained by the poll that writes the line.
-// Returns the gap in cycles; the first poll has no poll before it and so
-// no gap.
-static uint64_t xhci_poll_began(void)
+// A pass begins at `now`: its gap is known at once, and counted before any
+// work, so that a timeline line written during this pass includes it. The
+// event that moves Bluetooth on is drained by the pass that writes the
+// line. Returns the gap in cycles; the first pass has no pass before it and
+// so no gap.
+static uint64_t xhci_pass_began(uint64_t now)
 {
-	uint64_t now = rdtsc();
 	uint64_t gap = s_poll_last_tsc ? now - s_poll_last_tsc : 0;
 	s_poll_last_tsc = now;
 	s_polls++;
@@ -340,8 +374,8 @@ static uint64_t xhci_poll_began(void)
 	return gap;
 }
 
-// A poll ends having drained `events` after a gap of `gap` cycles.
-static void xhci_poll_ended(uint64_t gap, uint32_t events)
+// A pass ends having drained `events` after a gap of `gap` cycles.
+static void xhci_pass_ended(uint64_t gap, uint32_t events)
 {
 	if (events == 0)
 		return;
@@ -415,76 +449,85 @@ static uint64_t ring_push(xhci_ring_t *r, uint64_t param, uint32_t status, uint3
 
 // ── Event ring drain ────────────────────────────────────────────────────────
 
-static void xhci_handle_transfer_event(xhci_trb_t *ev);
+static void xhci_handle_transfer_event(const xhci_trb_t *ev);
 static void xhci_hid_lost(xhci_device_t *dev);
 
-// Consume every event the controller has posted. Returns the count.
-// This is the whole "interrupt handler", minus the interrupt.
+// Handle one event of s_hc's ring. This is the whole "interrupt handler",
+// minus the interrupt.
+static void xhci_handle_event(void *ctx, const xhci_trb_t *ev)
+{
+	(void)ctx;
+	uint32_t control = ev->control;
+	switch (TRB_GET_TYPE(control)) {
+		case TRB_EV_CMD_COMPLETE:
+			// A late completion must not authorize freeing another slot's DMA.
+			if (ev->param != s_hc->command_trb)
+				break;
+			s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
+			s_hc->cmd_slot = (control >> 24) & 0xFF;
+			s_hc->cmd_done = true;
+			break;
+		case TRB_EV_TRANSFER:
+			xhci_handle_transfer_event(ev);
+			break;
+		case TRB_EV_PORT_STATUS: {
+			// v1: no hotplug, so nothing is enumerated here. A port that
+			// has LOST its device still matters: whatever that device
+			// held is released (xhci_hid_lost).
+			uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
+			if (port < 1 || port > s_hc->max_ports)
+				break;   // not a port this controller has
+			bool connected = (mmio_r32(s_hc->op, XHCI_OP_PORTSC(port)) & PORTSC_CCS) != 0;
+			printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
+			       connected ? "connected" : "disconnected");
+			if (!connected) {
+				if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
+					s_hc->bt_probe->failed = true;
+					s_hc->bt_probe->listening = false;
+				}
+				if (s_hc->keyboard.present && s_hc->keyboard.port == port)
+					xhci_hid_lost(&s_hc->keyboard);
+				if (s_hc->mouse.present && s_hc->mouse.port == port)
+					xhci_hid_lost(&s_hc->mouse);
+			}
+			break;
+		}
+		default:
+			printd(DEBUG_USB, "xhci: unhandled event type %u cc %u\n",
+			       TRB_GET_TYPE(control), TRB_CC(ev->status));
+			break;
+	}
+}
+
+static uint64_t xhci_clock(void *ctx)
+{
+	(void)ctx;
+	return rdtsc();
+}
+
+// Drain s_hc's event ring until it is empty or the TSC passes `deadline`
+// (0: no deadline, drain to empty), then write ERDP if the drain made
+// progress: the empty slot when it drained to empty, the last event handled
+// when the deadline stopped it (xhci_service.h says why they differ). A
+// drain that handled nothing writes nothing.
+static xhci_evt_drain_t xhci_drain_until(uint64_t deadline)
+{
+	xhci_evt_drain_t drain = xhci_evt_drain(&s_hc->evt, xhci_handle_event, NULL,
+	                                        deadline ? xhci_clock : NULL, NULL, deadline);
+	// No interrupt is ever acknowledged for this ring (interrupter 0 is
+	// left off), so nothing is owed for the busy bit and ERDP is never read.
+	xhci_erdp_t erdp = xhci_evt_erdp(&s_hc->evt, drain, false, false);
+	if (erdp.write)
+		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp.value);
+	return drain;
+}
+
+// Consume every event the controller has posted. Returns the count. The
+// boot-time waits call this; the scheduler is not running then, so there is
+// nothing a deadline would be making room for.
 static uint32_t xhci_drain_events(void)
 {
-	uint32_t handled = 0;
-
-	for (;;) {
-		xhci_trb_t *ev = &s_hc->evt[s_hc->evt_dequeue];
-		uint32_t control = ev->control;
-		if ((control & TRB_CYCLE) != (s_hc->evt_cycle ? TRB_CYCLE : 0))
-			break;   // controller hasn't written this slot yet
-
-		switch (TRB_GET_TYPE(control)) {
-			case TRB_EV_CMD_COMPLETE:
-				// A late completion must not authorize freeing another slot's DMA.
-				if (ev->param != s_hc->command_trb)
-					break;
-				s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
-				s_hc->cmd_slot = (control >> 24) & 0xFF;
-				s_hc->cmd_done = true;
-				break;
-			case TRB_EV_TRANSFER:
-				xhci_handle_transfer_event(ev);
-				break;
-			case TRB_EV_PORT_STATUS: {
-				// v1: no hotplug, so nothing is enumerated here. A port that
-				// has LOST its device still matters: whatever that device
-				// held is released (xhci_hid_lost).
-				uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
-				if (port < 1 || port > s_hc->max_ports)
-					break;   // not a port this controller has
-				bool connected = (mmio_r32(s_hc->op, XHCI_OP_PORTSC(port)) & PORTSC_CCS) != 0;
-				printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
-				       connected ? "connected" : "disconnected");
-				if (!connected) {
-					if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
-						s_hc->bt_probe->failed = true;
-						s_hc->bt_probe->listening = false;
-					}
-					if (s_hc->keyboard.present && s_hc->keyboard.port == port)
-						xhci_hid_lost(&s_hc->keyboard);
-					if (s_hc->mouse.present && s_hc->mouse.port == port)
-						xhci_hid_lost(&s_hc->mouse);
-				}
-				break;
-			}
-			default:
-				printd(DEBUG_USB, "xhci: unhandled event type %u cc %u\n",
-				       TRB_GET_TYPE(control), TRB_CC(ev->status));
-				break;
-		}
-
-		s_hc->evt_dequeue++;
-		if (s_hc->evt_dequeue == RING_TRBS) {
-			s_hc->evt_dequeue = 0;
-			s_hc->evt_cycle ^= 1;
-		}
-		handled++;
-	}
-
-	if (handled > 0) {
-		// Tell the controller where our dequeue pointer is now (EHB set to
-		// clear the busy flag — harmless in polling mode, required form).
-		uint64_t erdp = s_hc->evt_phys + s_hc->evt_dequeue * sizeof(xhci_trb_t);
-		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp | (1u << 3));
-	}
-	return handled;
+	return xhci_drain_until(0).handled;
 }
 
 // ── Synchronous command execution (boot-time enumeration) ───────────────────
@@ -700,7 +743,7 @@ static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t by
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
 
-static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_t cc)
+static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_t cc)
 {
 	xhci_bt_probe_t *probe = s_hc->bt_probe;
 	if (!probe || slot != probe->device->slot)
@@ -772,7 +815,7 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 	return false;
 }
 
-static void xhci_handle_transfer_event(xhci_trb_t *ev)
+static void xhci_handle_transfer_event(const xhci_trb_t *ev)
 {
 	uint32_t slot = (ev->control >> 24) & 0xFF;
 	uint32_t dci  = (ev->control >> 16) & 0x1F;
@@ -1298,7 +1341,7 @@ bool xhci_bluetooth_scan(void)
     if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
     bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
         bt_host_scan(&s_bluetooth_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-    __sync_lock_release(&s_poll_busy);
+    xhci_serial_release();
     return ok;
 }
 
@@ -1308,7 +1351,7 @@ bool xhci_bluetooth_connection(const char *data, size_t bytes)
     xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
     bool ok = p && bt_host_command(&p->host, data, bytes,
                                    kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-    __sync_lock_release(&s_poll_busy);
+    xhci_serial_release();
     return ok;
 }
 
@@ -1318,7 +1361,9 @@ void xhci_bluetooth_start_manager(void)
 void xhci_bluetooth_maintain(void)
 {
 	// The maintenance worker owns disk I/O; USB keeps progressing while it is
-	// outside the poll lock. A generation prevents stale saves acknowledging forget.
+	// outside the serializing flag. A generation prevents stale saves
+	// acknowledging forget. The connection policy is not run here: it is
+	// timing, and kusb runs it every pass (bt_host_tick).
 	if (!__atomic_load_n(&s_bond_manager_ready, __ATOMIC_ACQUIRE)) return;
 	if (__sync_lock_test_and_set(&s_bond_io_busy, 1)) return;
 	if (__sync_lock_test_and_set(&s_poll_busy, 1)) {
@@ -1327,29 +1372,34 @@ void xhci_bluetooth_maintain(void)
 	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
 	uint64_t now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 	if (!p || !p->runtime) {
-		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
 	}
-    bt_host_policy(&p->host, now);
     unsigned slot;
     for (slot = 0; slot < BT_HOST_PEERS; slot++) {
         bt_manager_t *candidate = &p->host.peers[slot].manager;
         if (!candidate->loaded || (candidate->dirty && now >= candidate->next_save)) break;
     }
     if (slot == BT_HOST_PEERS) {
-        __sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+        xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
     }
     bt_host_peer_t *peer = &p->host.peers[slot];
     bt_manager_t *m = &peer->manager;
 	bool loading = !m->loaded;
 	if (!loading && (!m->dirty || now < m->next_save)) {
-		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+		xhci_serial_release(); __sync_lock_release(&s_bond_io_busy); return;
 	}
 	uint64_t generation = m->generation;
 	bt_le_bond_t snapshot = peer->le.bond;
 	bool automatic = m->automatic;
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	bool good = loading ? bt_bond_load_slot(slot, &snapshot, &automatic) : bt_bond_save_slot(slot, &snapshot, automatic);
-	while (__sync_lock_test_and_set(&s_poll_busy, 1)) __asm__ volatile("pause");
+	// The result must be published, so this waits for the flag where every
+	// other holder gives up. It sleeps between tries: kusb may hold the flag
+	// for a tick, which is too long to spin a core through.
+	while (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		thread_t *self = get_core_local_storage()->currentThread;
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
 	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 	bt_manager_observe(m, &peer->le, now);
 	if (loading) {
@@ -1358,15 +1408,17 @@ void xhci_bluetooth_maintain(void)
 			peer->le.bond = snapshot; m->automatic = automatic;
 		}
 		m->storage_error = good ? NULL : "saved bond unavailable or invalid";
-		// Start discovery as soon as the restored bond is published. Commands
-		// are submitted by USB polling; no additional worker sleep is needed.
-		bt_host_policy(&p->host, now);
+		// The restored bond is published. Discovery for it starts on kusb's
+		// next pass, which runs the connection policy; the release below
+		// rings kusb if this hold turned it away, and this ring brings it
+		// round if it did not.
+		doorbell_ring(&kUsbDoorbell);
 	} else {
 		if (good && m->generation == generation) m->dirty = false;
 		m->storage_error = good ? NULL : "save failed; RAM bond retained";
 		m->next_save = m->generation == generation ? now + 10000 : now;
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	crypto_wipe(&snapshot, sizeof(snapshot));
 	__sync_lock_release(&s_bond_io_busy);
 }
@@ -1422,7 +1474,7 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 		if (file == 0 && n < capacity - 1)
 			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	return n;
 }
 
@@ -1477,7 +1529,7 @@ size_t xhci_usb_report(char *out, size_t cap)
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		const xhci_t *hc = &s_controllers[i];
 		xhci_report_addf(out, cap, &len,
-		                 "controller %u: %02x:%02x.%x driven=poll ports=%u events=%lu devices:",
+		                 "controller %u: %02x:%02x.%x driven=tick ports=%u events=%lu devices:",
 		                 i, hc->pci_bus, hc->pci_device, hc->pci_function, hc->max_ports,
 		                 hc->events_polled);
 		if (hc->keyboard.present)
@@ -1489,13 +1541,45 @@ size_t xhci_usb_report(char *out, size_t cap)
 		if (!hc->keyboard.present && !hc->mouse.present && !hc->bt_probe)
 			xhci_report_addf(out, cap, &len, " none");
 		xhci_report_addf(out, cap, &len, "\n");
+		// How long an event found on this controller may have waited: from
+		// the last time its ring was seen empty to the drain that found it.
+		xhci_report_addf(out, cap, &len,
+		                 "controller %u wait: max_us=%lu to_20ms=%lu to_200ms=%lu to_2s=%lu over_2s=%lu\n",
+		                 i, hc->wait.max / per_us, hc->wait.within[0], hc->wait.within[1],
+		                 hc->wait.within[2], hc->wait.over);
 	}
 
+	// kusb, in /sys/net/knet's words (kusb.h).
 	xhci_report_addf(out, cap, &len,
-	                 "polls: %lu\npolls_with_events: %lu\npolls_lost_busy: %lu\npoll_gap_max_us: %lu\n",
-	                 s_polls, s_polls_with_events,
-	                 __atomic_load_n(&s_polls_lost, __ATOMIC_RELAXED), s_poll_gap_max / per_us);
-	// An event waited no longer than the gap of the poll that drained it.
+	                 "kusb: %s\nwakes: %lu\nwake_cycles_max: %lu\n"
+	                 "wake_latency_samples: %lu\nwake_latency_max_us: %lu\nwake_latency_avg_us: %lu\n"
+	                 "wake_latency_late_1ms: %lu\nwake_latency_late_10ms: %lu\n"
+	                 "response_latency_samples: %lu\nresponse_latency_max_us: %lu\n"
+	                 "response_latency_late_10ms: %lu\n",
+	                 kKusbTask != NULL ? "running" : "none",
+	                 kKusbWakes, kKusbWakeCyclesMax,
+	                 kKusbWakeLatencySamples, kKusbWakeLatencyMax / per_us,
+	                 kKusbWakeLatencySamples != 0
+	                     ? (kKusbWakeLatencyTotal / per_us) / kKusbWakeLatencySamples : 0,
+	                 kKusbWakeLatencyLate1ms, kKusbWakeLatencyLate10ms,
+	                 kKusbResponseLatencySamples, kKusbResponseLatencyMax / per_us,
+	                 kKusbResponseLatencyLate10ms);
+	xhci_report_addf(out, cap, &len, "bell_rings: %lu\nbell_wakes: %lu\nbell_rung_runnable: %lu\n",
+	                 kUsbDoorbell.rings, kUsbDoorbell.wakes, kUsbDoorbell.rung_runnable);
+	// A pass is a wake that held the serializing flag. passes_refused are
+	// the wakes that did not; refusal_wait is from a refusal to the pass
+	// that did the work. step_delay is from a wake's start to the Bluetooth
+	// step after the drains: one tick plus one event's handling at most.
+	xhci_report_addf(out, cap, &len,
+	                 "polls: %lu\npolls_with_events: %lu\npasses_left_work: %lu\n"
+	                 "passes_refused: %lu\nrefusal_wait_max_us: %lu\nstep_delay_max_us: %lu\n"
+	                 "poll_gap_max_us: %lu\n",
+	                 s_polls, s_polls_with_events, s_passes_left_work,
+	                 s_refusals, s_refusal_wait_max / per_us, s_step_delay_max / per_us,
+	                 s_poll_gap_max / per_us);
+	// The gap of the passes that drained events: how often kusb comes
+	// round when there is something to find. A cadence, not a wait (the
+	// per-controller lines above are the wait).
 	xhci_report_addf(out, cap, &len,
 	                 "event_gap_max_us: %lu\nevent_gap_to_20ms: %lu\nevent_gap_to_200ms: %lu\n"
 	                 "event_gap_to_2s: %lu\nevent_gap_over_2s: %lu\n",
@@ -1519,7 +1603,7 @@ size_t xhci_usb_report(char *out, size_t cap)
 			xhci_report_addf(out, cap, &len, "slot %u %s -> %s\n", e->slot,
 			                 xhci_le_phase_name(e->from), xhci_le_phase_name(e->to));
 	}
-	__sync_lock_release(&s_poll_busy);
+	xhci_serial_release();
 	return len;
 }
 
@@ -1897,8 +1981,8 @@ static bool xhci_init_controller(pci_device_t *dev)
 	                 dev->command | 0x6);
 
 	// Map the register file at an UPPER-half alias (kHHDMOffset | phys) so
-	// it is reachable from every task's CR3 — xhci_poll runs from the
-	// scheduler pass under whoever's page tables were live. PCD: MMIO.
+	// it is reachable from every task's CR3: a sysfs request reaches the
+	// driver under its caller's page tables. PCD: MMIO.
 	uint64_t map_base = bar & ~(uint64_t)(PAGE_SIZE - 1);
 	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + map_base,
 	                 map_base, 0x10000 / PAGE_SIZE,
@@ -1999,18 +2083,20 @@ static bool xhci_init_controller(pci_device_t *dev)
 		return false;
 	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
 
-	s_hc->evt = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc->evt == NULL)
+	s_hc->evt.trb = kmalloc_aligned(PAGE_SIZE);
+	if (s_hc->evt.trb == NULL)
 		return false;
-	s_hc->evt_phys = virt_to_phys(s_hc->evt);
-	s_hc->evt_cycle = 1;
+	s_hc->evt.phys = virt_to_phys(s_hc->evt.trb);
+	s_hc->evt.size = RING_TRBS;
+	s_hc->evt.dequeue = 0;
+	s_hc->evt.cycle = 1;
 	uint64_t *erst = kmalloc_aligned(PAGE_SIZE);   // segment table (1 entry)
 	if (erst == NULL)
 		return false;
-	erst[0] = s_hc->evt_phys;
+	erst[0] = s_hc->evt.phys;
 	erst[1] = RING_TRBS;                            // segment size in TRBs
 	mmio_w32(s_hc->rt, XHCI_IR0_ERSTSZ, 1);
-	mmio_w64(s_hc->rt, XHCI_IR0_ERDP, s_hc->evt_phys);
+	mmio_w64(s_hc->rt, XHCI_IR0_ERDP, s_hc->evt.phys);
 	mmio_w64(s_hc->rt, XHCI_IR0_ERSTBA, virt_to_phys(erst));
 
 	mmio_w32(s_hc->op, XHCI_OP_CONFIG, max_slots < 16 ? max_slots : 16);
@@ -2186,29 +2272,67 @@ void init_xHCI(void)
 	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
 }
 
-void xhci_poll(void)
+uint32_t xhci_controller_count(void)
 {
-	// Called every scheduler pass, potentially from any core. Serialize event
-	// consumption and scan commands with sysfs snapshots/requests using a
-	// non-blocking busy flag. A losing caller leaves work for a later pass.
-	if (s_controller_count == 0)
-		return;
+	return s_controller_count;
+}
+
+// One controller's turn in a pass: drain it against the deadline and
+// account for how long what was found may have waited.
+static xhci_evt_drain_t xhci_pass_drain(void *ctx, uint32_t index, uint64_t deadline)
+{
+	(void)ctx;
+	s_hc = &s_controllers[index];
+	uint64_t ms = kCPUCyclesPerSecond / 1000;
+	const uint64_t edges[3] = { 20 * ms, 200 * ms, 2000 * ms };
+	uint64_t began = rdtsc();
+	xhci_evt_drain_t drain = xhci_drain_until(deadline);
+	xhci_wait_account(&s_hc->wait, drain, began, rdtsc(), edges);
+	s_hc->events_polled += drain.handled;
+	s_interval_events += drain.handled;
+	return drain;
+}
+
+bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left)
+{
+	*work_left = false;
+	// The mark goes up BEFORE the try (see s_kusb_waiting).
+	__atomic_store_n(&s_kusb_waiting, 1, __ATOMIC_SEQ_CST);
 	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0) {
-		__atomic_fetch_add(&s_polls_lost, 1, __ATOMIC_RELAXED);
-		return;
+		s_refusals++;
+		if (s_refused_at == 0)
+			s_refused_at = wake_began;
+		return false;
 	}
-	uint64_t gap = xhci_poll_began();
-	uint32_t events = 0;
+	__atomic_store_n(&s_kusb_waiting, 0, __ATOMIC_SEQ_CST);
+	if (s_refused_at != 0) {
+		if (wake_began - s_refused_at > s_refusal_wait_max)
+			s_refusal_wait_max = wake_began - s_refused_at;
+		s_refused_at = 0;
+	}
+
+	uint64_t gap = xhci_pass_began(wake_began);
+	s_visit.count = s_controller_count;
+	xhci_visit_result_t visit = xhci_visit(&s_visit, xhci_pass_drain, NULL, deadline);
+	if (visit.work_left) {
+		s_passes_left_work++;
+		*work_left = true;
+	}
+
+	// Once per pass, after the drains, whatever the deadline did: Bluetooth's
+	// clockwork (which is also what re-arms the adapter's receive
+	// endpoints) and the keyboards' typematic repeat.
+	uint64_t step_delay = rdtsc() - wake_began;
+	if (step_delay > s_step_delay_max)
+		s_step_delay_max = step_delay;
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		s_hc = &s_controllers[i];
-		uint32_t drained = xhci_drain_events();
-		s_hc->events_polled += drained;
-		s_interval_events += drained;
-		events += drained;
 		xhci_bt_runtime_poll();
 		if (s_hc->keyboard.present)
 			hid_keyboard_tick(&s_hc->keyboard.kbd);
 	}
-	xhci_poll_ended(gap, events);
+	xhci_pass_ended(gap, visit.handled);
+	// kusb's own release: there is nobody to ring.
 	__sync_lock_release(&s_poll_busy);
+	return true;
 }

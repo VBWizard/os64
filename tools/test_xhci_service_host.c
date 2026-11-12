@@ -1,0 +1,507 @@
+// test_xhci_service_host.c — drive kernel/src/driver/system/usb/xhci_service.c
+// against a model of xHCI controllers.
+//
+// THE MODEL. Time is a counter that moves only when a handler "costs" some.
+// Each controller has an event ring, a producer that posts events at
+// scheduled times (stamping each, which a real controller does not), and a
+// register file that records every ERDP write. model_pass() is the glue the
+// kernel's xhci.c wraps round a drain: drain, ask what ERDP is owed, read
+// the register if asked, write it if told, account the wait.
+//
+// WHAT IS ASSERTED is XHCI_INTERRUPT.md § The design, D11's list: the
+// deadline bounds a visit to itself plus one handler; the cursor rotates;
+// idle passes write ERDP zero times; an early stop names the last event
+// handled and what is left survives, across a wrap; an empty stop names the
+// empty slot; the busy bit is retired once and only when it reads set; and
+// the reported wait covers every event's real wait, a late visit after a
+// prompt wake among them.
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "driver/system/usb/xhci_service.h"
+
+static int failures;
+#define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+#define MAX_CONTROLLERS 4
+#define MAX_EVENTS      4096
+#define MAX_WRITES      4096
+
+typedef struct {
+	xhci_evt_ring_t ring;
+	xhci_wait_t     wait;
+	// The producer.
+	uint32_t enqueue;        // next slot it writes
+	uint32_t prod_cycle;
+	uint32_t posted;         // events ever posted
+	uint64_t posted_at[MAX_EVENTS];
+	// The consumer's record.
+	uint32_t handled;        // events ever handled, which is also the next id expected
+	uint64_t handled_at[MAX_EVENTS];
+	uint64_t cost;           // what one handler costs
+	// The register file.
+	uint64_t erdp;           // as last written (EHB bit as the model holds it)
+	bool     ehb;            // the busy bit
+	uint32_t writes;
+	uint64_t write_value[MAX_WRITES];
+	uint32_t reads;
+	// A flood: whenever the ring has room, the producer posts.
+	bool     flood;
+} controller_t;
+
+static controller_t hc[MAX_CONTROLLERS];
+static uint32_t     hc_count;
+static uint64_t     now;                    // model time
+static const uint64_t kEdges[3] = { 20, 200, 2000 };
+
+// Scheduled posts: (time, controller), in time order.
+typedef struct { uint64_t at; uint32_t c; } post_t;
+static post_t  posts[MAX_EVENTS];
+static uint32_t post_count, post_next;
+
+static void model_reset(uint32_t controllers, uint32_t ring_size)
+{
+	for (uint32_t c = 0; c < MAX_CONTROLLERS; c++)
+		free(hc[c].ring.trb);
+	memset(hc, 0, sizeof(hc));
+	hc_count = controllers;
+	now = 1;   // 0 means "never" to xhci_wait_t
+	post_count = post_next = 0;
+	for (uint32_t c = 0; c < controllers; c++) {
+		hc[c].ring.trb = calloc(ring_size, sizeof(xhci_trb_t));
+		if (!hc[c].ring.trb) { perror("calloc"); exit(2); }
+		hc[c].ring.phys = 0x10000000ull * (c + 1);
+		hc[c].ring.size = ring_size;
+		hc[c].ring.cycle = 1;
+		hc[c].prod_cycle = 1;
+		hc[c].erdp = hc[c].ring.phys;
+		hc[c].cost = 1;
+	}
+}
+
+// Slots the consumer has not been handed back: full when one free slot is left.
+static bool ring_has_room(const controller_t *k)
+{
+	return k->posted - k->handled < k->ring.size - 1;
+}
+
+static void produce(uint32_t c, uint64_t at)
+{
+	controller_t *k = &hc[c];
+	CHECK(ring_has_room(k), "model posted into a full ring on controller %u", c);
+	CHECK(k->posted < MAX_EVENTS, "model ran out of event slots");
+	xhci_trb_t *t = &k->ring.trb[k->enqueue];
+	t->param = k->posted;                       // the event's id
+	t->status = 0;
+	t->control = (k->prod_cycle ? XHCI_TRB_CYCLE : 0);
+	k->posted_at[k->posted++] = at;
+	if (++k->enqueue == k->ring.size) { k->enqueue = 0; k->prod_cycle ^= 1; }
+	k->ehb = true;                              // an event sets the busy bit
+}
+
+// Post everything due, and top up any flooding controller.
+static void model_tick(void)
+{
+	while (post_next < post_count && posts[post_next].at <= now) {
+		produce(posts[post_next].c, posts[post_next].at);
+		post_next++;
+	}
+	for (uint32_t c = 0; c < hc_count; c++)
+		while (hc[c].flood && ring_has_room(&hc[c]) && hc[c].posted < MAX_EVENTS)
+			produce(c, now);
+}
+
+static void schedule(uint64_t at, uint32_t c)
+{
+	posts[post_count].at = at;
+	posts[post_count].c = c;
+	post_count++;
+}
+
+static uint64_t model_clock(void *ctx)
+{
+	(void)ctx;
+	model_tick();
+	return now;
+}
+
+static void model_handle(void *ctx, const xhci_trb_t *ev)
+{
+	controller_t *k = ctx;
+	CHECK(ev->param == k->handled, "controller handled event %lu, expected %u",
+	      (unsigned long)ev->param, k->handled);
+	if (k->handled < MAX_EVENTS)
+		k->handled_at[k->handled] = now;
+	k->handled++;
+	now += k->cost;
+	model_tick();
+}
+
+// The glue xhci.c wraps round a drain. `owed`: the top half acknowledged an
+// interrupt since ERDP was last written.
+static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadline, bool owed)
+{
+	controller_t *k = &hc[c];
+	model_tick();
+	uint64_t began = now;
+	uint32_t before = k->handled;
+	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k,
+	                                    use_deadline ? model_clock : NULL, NULL, deadline);
+	CHECK(d.handled == k->handled - before, "drain said %u handled, the handler ran %u times",
+	      d.handled, k->handled - before);
+
+	bool reads_set = false;
+	if (xhci_evt_erdp_wants_read(d, owed)) {
+		k->reads++;
+		reads_set = k->ehb;
+	}
+	xhci_erdp_t e = xhci_evt_erdp(&k->ring, d, owed, reads_set);
+	if (e.write) {
+		CHECK(k->writes < MAX_WRITES, "model ran out of write slots");
+		CHECK((e.value & XHCI_ERDP_EHB) != 0, "an ERDP write without the busy bit");
+		// The acknowledgement must not cover an event nobody handled. The
+		// slot written is the empty slot (every posted event handled) or
+		// the last event handled.
+		uint64_t slot = ((e.value & ~0xFull) - k->ring.phys) / sizeof(xhci_trb_t);
+		if (d.handled > 0 && d.work_left)
+			CHECK(slot == (k->handled - 1) % k->ring.size,
+			      "early stop wrote slot %lu, last handled is in slot %u",
+			      (unsigned long)slot, (k->handled - 1) % k->ring.size);
+		else
+			CHECK(slot == k->handled % k->ring.size,
+			      "wrote slot %lu, the next slot is %u", (unsigned long)slot,
+			      k->handled % k->ring.size);
+		k->write_value[k->writes++] = e.value;
+		k->erdp = e.value & ~XHCI_ERDP_EHB;
+		k->ehb = false;
+		// A ring not empty at the write would signal again; the model's
+		// producer sets the bit again on its next event either way.
+		if (k->posted != k->handled)
+			k->ehb = true;
+	}
+
+	// The wait bound must cover every event this drain handled.
+	uint64_t seen_empty = k->wait.seen_empty;
+	uint64_t max_before = k->wait.max;
+	xhci_wait_account(&k->wait, d, began, now, kEdges);
+	if (d.handled > 0 && seen_empty != 0) {
+		for (uint32_t id = before; id < k->handled && id < MAX_EVENTS; id++)
+			CHECK(k->posted_at[id] >= seen_empty,
+			      "event %u was posted at %lu, before the ring was seen empty at %lu",
+			      id, (unsigned long)k->posted_at[id], (unsigned long)seen_empty);
+		CHECK(k->wait.max >= began - seen_empty && k->wait.max >= max_before,
+		      "the reported maximum went backwards");
+	}
+	return d;
+}
+
+// ── The cases ───────────────────────────────────────────────────────────────
+
+static void test_drain_to_empty(void)
+{
+	model_reset(1, 8);
+	for (int i = 0; i < 5; i++) produce(0, now);
+	xhci_evt_drain_t d = model_pass(0, false, 0, false);
+	CHECK(d.handled == 5 && !d.work_left, "handled %u work_left %d", d.handled, d.work_left);
+	CHECK(hc[0].writes == 1, "%u ERDP writes for one drain", hc[0].writes);
+	CHECK(hc[0].write_value[0] == (hc[0].ring.phys + 5 * 16) + XHCI_ERDP_EHB, "empty stop names slot 5");
+	CHECK(hc[0].reads == 0, "a drain that made progress read ERDP");
+}
+
+static void test_idle_passes_write_nothing(void)
+{
+	model_reset(1, 8);
+	for (int i = 0; i < 100; i++) {
+		xhci_evt_drain_t d = model_pass(0, true, now + 10, false);
+		CHECK(d.handled == 0 && !d.work_left, "an idle pass handled something");
+		now += 10;
+	}
+	CHECK(hc[0].writes == 0 && hc[0].reads == 0, "100 idle passes: %u writes, %u reads",
+	      hc[0].writes, hc[0].reads);
+	// And after real work, idle passes still write nothing more.
+	produce(0, now);
+	model_pass(0, true, now + 10, false);
+	for (int i = 0; i < 100; i++) { now += 10; model_pass(0, true, now + 10, false); }
+	CHECK(hc[0].writes == 1, "idle passes after one event: %u writes", hc[0].writes);
+}
+
+static void test_early_stop(void)
+{
+	model_reset(1, 8);
+	hc[0].cost = 4;
+	for (int i = 0; i < 5; i++) produce(0, now);
+	uint64_t deadline = now + 10;
+	xhci_evt_drain_t d = model_pass(0, true, deadline, false);
+	// Handlers at +0, +4, +8; the clock reads +12 before the fourth.
+	CHECK(d.handled == 3 && d.work_left, "handled %u work_left %d", d.handled, d.work_left);
+	CHECK(hc[0].writes == 1 && hc[0].write_value[0] == (hc[0].ring.phys + 2 * 16) + XHCI_ERDP_EHB,
+	      "early stop names slot 2, the last handled");
+	CHECK(now <= deadline + hc[0].cost, "the drain overran its deadline by more than one handler");
+	// What was left survives, in order.
+	d = model_pass(0, false, 0, false);
+	CHECK(d.handled == 2 && !d.work_left && hc[0].handled == 5, "the events left did not survive");
+	CHECK(hc[0].write_value[1] == (hc[0].ring.phys + 5 * 16) + XHCI_ERDP_EHB, "then the empty slot");
+}
+
+static void test_deadline_already_passed(void)
+{
+	model_reset(1, 8);
+	produce(0, now);
+	xhci_evt_drain_t d = model_pass(0, true, now, false);
+	CHECK(d.handled == 0 && d.work_left, "a passed deadline handled %u", d.handled);
+	CHECK(hc[0].writes == 0, "nothing handled, nothing owed, yet ERDP was written");
+	// Not seen empty: the stamp does not move.
+	CHECK(hc[0].wait.seen_empty == 0, "a drain stopped by its deadline moved the seen-empty stamp");
+}
+
+static void test_wrap(void)
+{
+	// Early stop with the cursor just wrapped: the last handled event is in
+	// the segment's last slot.
+	model_reset(1, 4);
+	hc[0].cost = 5;
+	for (int i = 0; i < 3; i++) produce(0, now);          // slots 0,1,2
+	model_pass(0, false, 0, false);                        // drained; cursor 3
+	produce(0, now); produce(0, now);                      // slots 3 and 0 (cycle flipped)
+	xhci_evt_drain_t d = model_pass(0, true, now + 1, false);
+	CHECK(d.handled == 1 && d.work_left, "wrap early stop: handled %u work_left %d", d.handled, d.work_left);
+	CHECK(hc[0].ring.dequeue == 0 && hc[0].ring.cycle == 0, "the cursor did not wrap");
+	CHECK(hc[0].write_value[hc[0].writes - 1] == (hc[0].ring.phys + 3 * 16) + XHCI_ERDP_EHB,
+	      "early stop after a wrap names the last slot");
+	d = model_pass(0, false, 0, false);
+	CHECK(d.handled == 1 && hc[0].handled == 5, "the event past the wrap did not survive");
+
+	// Empty stop exactly at the wrap: the empty slot is slot 0.
+	model_reset(1, 4);
+	for (int i = 0; i < 3; i++) produce(0, now);
+	model_pass(0, false, 0, false);
+	produce(0, now);                                       // slot 3
+	d = model_pass(0, false, 0, false);
+	CHECK(d.handled == 1 && !d.work_left && hc[0].ring.dequeue == 0, "did not stop empty at the wrap");
+	CHECK(hc[0].write_value[hc[0].writes - 1] == hc[0].ring.phys + XHCI_ERDP_EHB,
+	      "empty stop at the wrap names slot 0");
+
+	// A full ring drained to empty, many times round.
+	model_reset(1, 4);
+	for (int lap = 0; lap < 50; lap++) {
+		for (int i = 0; i < 3; i++) produce(0, now);
+		d = model_pass(0, false, 0, false);
+		CHECK(d.handled == 3 && !d.work_left, "lap %d handled %u", lap, d.handled);
+	}
+	CHECK(hc[0].writes == 50 && hc[0].handled == 150, "50 full laps: %u writes, %u handled",
+	      hc[0].writes, hc[0].handled);
+}
+
+static void test_busy_bit(void)
+{
+	// An interrupt was acknowledged, but an earlier pass already took its
+	// event and wrote ERDP: the bit reads clear, so nothing is written.
+	model_reset(1, 8);
+	produce(0, now);
+	model_pass(0, false, 0, false);
+	CHECK(hc[0].writes == 1 && !hc[0].ehb, "setup");
+	xhci_evt_drain_t d = model_pass(0, false, 0, true);
+	CHECK(d.handled == 0 && hc[0].reads == 1 && hc[0].writes == 1,
+	      "owed, bit clear: %u reads %u writes", hc[0].reads, hc[0].writes);
+
+	// The bit set with nothing to handle (boot leftovers): one read, one
+	// write of the unchanged pointer, and the bit is retired.
+	hc[0].ehb = true;
+	model_pass(0, false, 0, true);
+	CHECK(hc[0].reads == 2 && hc[0].writes == 2 && !hc[0].ehb, "owed, bit set: not retired");
+	CHECK(hc[0].write_value[1] == hc[0].write_value[0], "retiring the bit moved the pointer");
+
+	// Not owed: the register is not even read.
+	hc[0].ehb = true;
+	model_pass(0, false, 0, false);
+	CHECK(hc[0].reads == 2 && hc[0].writes == 2, "not owed, yet ERDP was read or written");
+
+	// Owed and progress: progress decides, no read.
+	produce(0, now);
+	model_pass(0, false, 0, true);
+	CHECK(hc[0].reads == 2 && hc[0].writes == 3, "owed with progress: %u reads %u writes",
+	      hc[0].reads, hc[0].writes);
+}
+
+static xhci_evt_drain_t visit_drain(void *ctx, uint32_t index, uint64_t deadline)
+{
+	(void)ctx;
+	return model_pass(index, true, deadline, false);
+}
+
+// The review's counterexample: three controllers, 4 ms of work each, a
+// 10 ms budget. Checked between whole rounds the timers were reached at
+// 12 ms; checked before every event they are reached by the deadline plus
+// one handler.
+static void test_visit_deadline(void)
+{
+	for (uint64_t cost = 1; cost <= 4; cost++) {
+		model_reset(3, 16);
+		for (uint32_t c = 0; c < 3; c++) {
+			hc[c].cost = cost;
+			for (uint64_t i = 0; i < 4 / cost + (4 % cost != 0); i++) produce(c, now);
+		}
+		xhci_visit_t v = { 3, 0 };
+		uint64_t began = now, deadline = now + 10;
+		xhci_visit_result_t r = xhci_visit(&v, visit_drain, NULL, deadline);
+		CHECK(now - began <= 10 + cost, "cost %lu: the visit took %lu against a budget of 10",
+		      (unsigned long)cost, (unsigned long)(now - began));
+		CHECK(r.work_left == (hc[0].posted + hc[1].posted + hc[2].posted != r.handled),
+		      "cost %lu: work_left %d with %u of %u handled", (unsigned long)cost, r.work_left,
+		      r.handled, hc[0].posted + hc[1].posted + hc[2].posted);
+	}
+}
+
+// A flooded controller must not starve the others.
+static void test_visit_rotation(void)
+{
+	model_reset(3, 16);
+	hc[0].flood = true;
+	produce(1, now);
+	produce(2, now);
+	xhci_visit_t v = { 3, 0 };
+	xhci_visit_result_t r = xhci_visit(&v, visit_drain, NULL, now + 10);
+	CHECK(r.work_left && r.visited == 1 && v.cursor == 1, "flood: visited %u cursor %u", r.visited, v.cursor);
+	CHECK(hc[1].handled == 0 && hc[2].handled == 0, "setup: the others were reached under a flood");
+	r = xhci_visit(&v, visit_drain, NULL, now + 10);
+	CHECK(hc[1].handled == 1 && hc[2].handled == 1, "the second visit did not serve the others first");
+	CHECK(r.work_left && v.cursor == 1, "the flooded controller was not last: cursor %u", v.cursor);
+
+	// Two flooded controllers take turns; the third is served every other visit at worst.
+	model_reset(3, 16);
+	hc[0].flood = hc[1].flood = true;
+	v = (xhci_visit_t){ 3, 0 };
+	for (int i = 0; i < 6; i++) {
+		if (i % 2 == 0) produce(2, now);
+		xhci_visit(&v, visit_drain, NULL, now + 10);
+	}
+	CHECK(hc[0].handled > 0 && hc[1].handled > 0, "a flooded controller was never served");
+	CHECK(hc[2].handled >= 2, "the quiet controller was served %u times in six visits", hc[2].handled);
+
+	// No controllers, and a cursor past the end.
+	v = (xhci_visit_t){ 0, 0 };
+	r = xhci_visit(&v, visit_drain, NULL, now + 10);
+	CHECK(r.visited == 0 && !r.work_left, "a visit of nothing did something");
+	model_reset(2, 8);
+	v = (xhci_visit_t){ 2, 7 };
+	r = xhci_visit(&v, visit_drain, NULL, now + 10);
+	CHECK(r.visited == 2, "a cursor past the end visited %u", r.visited);
+}
+
+// The review's trace: wakes at 0 and 10, an event at 9, its controller
+// reached at 22. The gap between the wakes is 10; the event waited 13; the
+// reported bound must cover it.
+static void test_wait_covers_late_visit(void)
+{
+	model_reset(2, 16);
+	now = 100;
+	model_pass(0, true, now + 10, false);      // both seen empty at 100
+	model_pass(1, true, now + 10, false);
+	schedule(109, 1);
+	hc[0].cost = 12;
+	now = 110;                                 // the wake is on time
+	produce(0, now);                           // and controller 0 has 12 ms of work
+	model_pass(0, true, now + 20, false);
+	CHECK(now == 122, "setup: controller 1 reached at %lu", (unsigned long)now);
+	model_pass(1, true, now + 20, false);
+	uint64_t waited = hc[1].handled_at[0] - hc[1].posted_at[0];
+	CHECK(waited == 13, "setup: the event waited %lu", (unsigned long)waited);
+	CHECK(hc[1].wait.max >= waited, "the reported bound %lu does not cover a wait of %lu",
+	      (unsigned long)hc[1].wait.max, (unsigned long)waited);
+	CHECK(hc[1].wait.max == 22, "the bound is from seen-empty (100) to the drain (122): %lu",
+	      (unsigned long)hc[1].wait.max);
+	CHECK(hc[1].wait.within[1] == 1 && hc[1].wait.within[0] == 0, "22 belongs in the second bucket");
+}
+
+// Work carried over is as old as it was: a drain stopped by its deadline
+// does not move the stamp.
+static void test_wait_carries_over(void)
+{
+	model_reset(1, 16);
+	now = 100;
+	model_pass(0, true, now + 10, false);      // seen empty at 100
+	hc[0].cost = 6;
+	produce(0, 101); produce(0, 101); produce(0, 101);
+	now = 105;
+	model_pass(0, true, now + 10, false);      // handles two (105, 111), stops at 117
+	CHECK(hc[0].handled == 2 && hc[0].wait.seen_empty == 100, "the stamp moved: %lu",
+	      (unsigned long)hc[0].wait.seen_empty);
+	now = 3000;
+	model_pass(0, true, now + 10, false);
+	CHECK(hc[0].handled == 3 && hc[0].wait.max == 2900 && hc[0].wait.over == 1,
+	      "carried-over work reported as %lu", (unsigned long)hc[0].wait.max);
+	CHECK(hc[0].wait.seen_empty == now, "an empty stop did not move the stamp");
+}
+
+// Random load: every event handled once and in order (model_handle), no
+// acknowledgement past what was handled and every wait covered
+// (model_pass), every visit within its deadline plus one handler.
+static void test_random(int rounds)
+{
+	uint32_t seed = 0x00C0FFEE;
+#define RND(n) ((seed = seed * 1664525u + 1013904223u) >> 8) % (n)
+	for (int round = 0; round < rounds; round++) {
+		uint32_t controllers = 1 + RND(MAX_CONTROLLERS);
+		uint32_t size = 4 + RND(13);
+		model_reset(controllers, size);
+		uint64_t max_cost = 1;
+		for (uint32_t c = 0; c < controllers; c++) {
+			hc[c].cost = 1 + RND(6);
+			if (hc[c].cost > max_cost) max_cost = hc[c].cost;
+		}
+		xhci_visit_t v = { controllers, RND(controllers) };
+		uint32_t posted = 0;
+		for (int step = 0; step < 200; step++) {
+			// A burst now and then, never past a ring's room.
+			if (RND(3) == 0) {
+				uint32_t c = RND(controllers);
+				uint32_t burst = 1 + RND(size);
+				for (uint32_t i = 0; i < burst && ring_has_room(&hc[c]); i++) { produce(c, now); posted++; }
+			}
+			uint64_t budget = 1 + RND(20);
+			uint64_t began = now;
+			xhci_visit_result_t r = xhci_visit(&v, visit_drain, NULL, now + budget);
+			CHECK(now - began <= budget + max_cost, "round %d: a visit of budget %lu took %lu",
+			      round, (unsigned long)budget, (unsigned long)(now - began));
+			uint32_t handled = 0;
+			for (uint32_t c = 0; c < controllers; c++) handled += hc[c].handled;
+			CHECK(r.work_left || handled == posted, "round %d: no work left, yet %u of %u handled",
+			      round, handled, posted);
+			now += RND(15);
+		}
+		// Drain to empty: nothing was lost.
+		for (uint32_t c = 0; c < controllers; c++) {
+			model_pass(c, false, 0, false);
+			CHECK(hc[c].handled == hc[c].posted, "round %d: controller %u lost events (%u of %u)",
+			      round, c, hc[c].handled, hc[c].posted);
+		}
+	}
+#undef RND
+}
+
+int main(int argc, char **argv)
+{
+	int rounds = argc > 1 ? atoi(argv[1]) : 2000;
+	test_drain_to_empty();
+	test_idle_passes_write_nothing();
+	test_early_stop();
+	test_deadline_already_passed();
+	test_wrap();
+	test_busy_bit();
+	test_visit_deadline();
+	test_visit_rotation();
+	test_wait_covers_late_visit();
+	test_wait_carries_over();
+	test_random(rounds);
+	for (uint32_t c = 0; c < MAX_CONTROLLERS; c++)
+		free(hc[c].ring.trb);
+	if (failures) {
+		printf("xhci_service: %d FAILURE(S)\n", failures);
+		return 1;
+	}
+	printf("xhci_service: all checks passed (%d random rounds)\n", rounds);
+	return 0;
+}
