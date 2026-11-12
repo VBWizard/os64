@@ -40,6 +40,7 @@ typedef struct {
 	uint64_t posted_at[MAX_EVENTS];
 	// The consumer's record.
 	uint32_t handled;        // events ever handled, which is also the next id expected
+	uint32_t acked;          // events the controller knows are consumed: those before the slot ERDP names
 	uint64_t handled_at[MAX_EVENTS];
 	uint64_t cost;           // what one handler costs
 	// The register file.
@@ -82,10 +83,12 @@ static void model_reset(uint32_t controllers, uint32_t ring_size)
 	}
 }
 
-// Slots the consumer has not been handed back: full when one free slot is left.
+// The controller's view of the ring is ERDP, not what the software has
+// handled: a slot is free again only once ERDP has moved past it. Full when
+// one free slot is left.
 static bool ring_has_room(const controller_t *k)
 {
-	return k->posted - k->handled < k->ring.size - 1;
+	return k->posted - k->acked < k->ring.size - 1;
 }
 
 static void produce(uint32_t c, uint64_t at)
@@ -146,7 +149,6 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 {
 	controller_t *k = &hc[c];
 	model_tick();
-	uint64_t began = now;
 	uint32_t before = k->handled;
 	xhci_evt_drain_t d = xhci_evt_drain(&k->ring, model_handle, k,
 	                                    use_deadline ? model_clock : NULL, NULL, deadline);
@@ -174,7 +176,17 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 			CHECK(slot == k->handled % k->ring.size,
 			      "wrote slot %lu, the next slot is %u", (unsigned long)slot,
 			      k->handled % k->ring.size);
+		// An unchanged pointer is rewritten for one reason only: retiring
+		// the busy bit after an acknowledged interrupt.
+		if (k->writes > 0 && k->write_value[k->writes - 1] == e.value)
+			CHECK(d.handled == 0 && owed, "the same ERDP value %lx was written twice running",
+			      (unsigned long)e.value);
 		k->write_value[k->writes++] = e.value;
+		xhci_evt_published(&k->ring, e);
+		// An early stop names the last event handled, which the controller
+		// therefore still counts as occupying its slot.
+		if (d.handled > 0)
+			k->acked = d.work_left ? k->handled - 1 : k->handled;
 		k->erdp = e.value & ~XHCI_ERDP_EHB;
 		k->ehb = false;
 		// A ring not empty at the write would signal again; the model's
@@ -186,13 +198,18 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 	// The wait bound must cover every event this drain handled.
 	uint64_t seen_empty = k->wait.seen_empty;
 	uint64_t max_before = k->wait.max;
-	xhci_wait_account(&k->wait, d, began, now, kEdges);
+	xhci_wait_account(&k->wait, d, now, kEdges);
 	if (d.handled > 0 && seen_empty != 0) {
-		for (uint32_t id = before; id < k->handled && id < MAX_EVENTS; id++)
+		for (uint32_t id = before; id < k->handled && id < MAX_EVENTS; id++) {
 			CHECK(k->posted_at[id] >= seen_empty,
 			      "event %u was posted at %lu, before the ring was seen empty at %lu",
 			      id, (unsigned long)k->posted_at[id], (unsigned long)seen_empty);
-		CHECK(k->wait.max >= began - seen_empty && k->wait.max >= max_before,
+			// The event's REAL wait, post to handler, is inside the bound.
+			CHECK(k->handled_at[id] - k->posted_at[id] <= k->wait.max,
+			      "event %u waited %lu, the reported maximum is %lu", id,
+			      (unsigned long)(k->handled_at[id] - k->posted_at[id]), (unsigned long)k->wait.max);
+		}
+		CHECK(k->wait.max >= now - seen_empty && k->wait.max >= max_before,
 		      "the reported maximum went backwards");
 	}
 	return d;
@@ -244,6 +261,54 @@ static void test_early_stop(void)
 	d = model_pass(0, false, 0, false);
 	CHECK(d.handled == 2 && !d.work_left && hc[0].handled == 5, "the events left did not survive");
 	CHECK(hc[0].write_value[1] == (hc[0].ring.phys + 5 * 16) + XHCI_ERDP_EHB, "then the empty slot");
+}
+
+// A drain's later events wait through the handlers ahead of them: the
+// bound runs to the drain's end, not its start. (Codex, #559: seen empty at
+// 100, two events at 101, the drain begins at 105, handlers cost 6; the
+// second event is handled at 111 and waited 10, where a bound to the
+// drain's start said 5.)
+static void test_wait_includes_the_drain(void)
+{
+	model_reset(1, 16);
+	now = 100;
+	model_pass(0, false, 0, false);            // seen empty at 100
+	hc[0].cost = 6;
+	produce(0, 101); produce(0, 101);
+	now = 105;
+	model_pass(0, false, 0, false);
+	CHECK(hc[0].handled_at[1] - hc[0].posted_at[1] == 10, "setup: the second event waited %lu",
+	      (unsigned long)(hc[0].handled_at[1] - hc[0].posted_at[1]));
+	CHECK(hc[0].wait.max == 17, "the bound runs from 100 to the drain's end at 117: %lu",
+	      (unsigned long)hc[0].wait.max);
+}
+
+// The ring was last published empty at slot N; the next drain handles the
+// one event at N and its deadline stops it with another waiting. The last
+// event handled is slot N, which the register already names: writing it
+// again would be the same ERDP value twice running (xHCI 1.2b § 4.9.4).
+// Nothing is written, and the next drain publishes past it. (Codex, #559.)
+static void test_one_event_partial_drain(void)
+{
+	model_reset(1, 8);
+	hc[0].cost = 20;
+	for (int i = 0; i < 3; i++) produce(0, now);
+	model_pass(0, false, 0, false);            // drained: ERDP names slot 3, empty
+	CHECK(hc[0].writes == 1 && hc[0].ring.published == 3, "setup: published slot %u", hc[0].ring.published);
+	produce(0, now); produce(0, now);          // slots 3 and 4
+	xhci_evt_drain_t d = model_pass(0, true, now + 1, false);
+	CHECK(d.handled == 1 && d.work_left, "setup: handled %u work_left %d", d.handled, d.work_left);
+	CHECK(hc[0].writes == 1, "the unchanged pointer was written again (%u writes)", hc[0].writes);
+	// The next drain goes on and publishes: the empty slot, 5.
+	d = model_pass(0, false, 0, false);
+	CHECK(d.handled == 1 && hc[0].writes == 2 && hc[0].ring.published == 5,
+	      "after the partial drain: %u writes, published %u", hc[0].writes, hc[0].ring.published);
+	// And a partial drain that DID move past the published slot is written.
+	produce(0, now); produce(0, now); produce(0, now);   // slots 5, 6, 7
+	hc[0].cost = 1;
+	d = model_pass(0, true, now + 2, false);   // handles two, stops with one left
+	CHECK(d.handled == 2 && d.work_left && hc[0].writes == 3 && hc[0].ring.published == 6,
+	      "a partial drain of two: %u writes, published %u", hc[0].writes, hc[0].ring.published);
 }
 
 static void test_deadline_already_passed(void)
@@ -419,16 +484,16 @@ static void test_wait_covers_late_visit(void)
 	CHECK(waited == 13, "setup: the event waited %lu", (unsigned long)waited);
 	CHECK(hc[1].wait.max >= waited, "the reported bound %lu does not cover a wait of %lu",
 	      (unsigned long)hc[1].wait.max, (unsigned long)waited);
-	CHECK(hc[1].wait.max == 22, "the bound is from seen-empty (100) to the drain (122): %lu",
+	CHECK(hc[1].wait.max == 23, "the bound is from seen-empty (100) to the drain's end (123): %lu",
 	      (unsigned long)hc[1].wait.max);
-	CHECK(hc[1].wait.within[1] == 1 && hc[1].wait.within[0] == 0, "22 belongs in the second bucket");
+	CHECK(hc[1].wait.within[1] == 1 && hc[1].wait.within[0] == 0, "23 belongs in the second bucket");
 	// The recent maximum is the owner's to zero; the lifetime one is not touched by that.
-	CHECK(hc[1].wait.recent_max == 22, "recent_max %lu", (unsigned long)hc[1].wait.recent_max);
+	CHECK(hc[1].wait.recent_max == 23, "recent_max %lu", (unsigned long)hc[1].wait.recent_max);
 	hc[1].wait.recent_max = 0;
 	produce(1, now);
 	now += 3;
 	model_pass(1, true, now + 20, false);
-	CHECK(hc[1].wait.recent_max == 3 && hc[1].wait.max == 22, "after a reset: recent %lu max %lu",
+	CHECK(hc[1].wait.recent_max == 4 && hc[1].wait.max == 23, "after a reset: recent %lu max %lu",
 	      (unsigned long)hc[1].wait.recent_max, (unsigned long)hc[1].wait.max);
 }
 
@@ -462,7 +527,7 @@ static void test_wait_carries_over(void)
 	      (unsigned long)hc[0].wait.seen_empty);
 	now = 3000;
 	model_pass(0, true, now + 10, false);
-	CHECK(hc[0].handled == 3 && hc[0].wait.max == 2900 && hc[0].wait.over == 1,
+	CHECK(hc[0].handled == 3 && hc[0].wait.max == 2906 && hc[0].wait.over == 1,
 	      "carried-over work reported as %lu", (unsigned long)hc[0].wait.max);
 	CHECK(hc[0].wait.seen_empty == now, "an empty stop did not move the stamp");
 }
@@ -519,6 +584,8 @@ int main(int argc, char **argv)
 	test_drain_to_empty();
 	test_idle_passes_write_nothing();
 	test_early_stop();
+	test_wait_includes_the_drain();
+	test_one_event_partial_drain();
 	test_deadline_already_passed();
 	test_wrap();
 	test_busy_bit();

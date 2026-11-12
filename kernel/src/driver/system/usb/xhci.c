@@ -531,8 +531,10 @@ static xhci_evt_drain_t xhci_drain_until(uint64_t deadline)
 	// No interrupt is ever acknowledged for this ring (interrupter 0 is
 	// left off), so nothing is owed for the busy bit and ERDP is never read.
 	xhci_erdp_t erdp = xhci_evt_erdp(&s_hc->evt, drain, false, false);
-	if (erdp.write)
+	if (erdp.write) {
 		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp.value);
+		xhci_evt_published(&s_hc->evt, erdp);
+	}
 	return drain;
 }
 
@@ -2115,6 +2117,7 @@ static bool xhci_init_controller(pci_device_t *dev)
 	s_hc->evt.size = RING_TRBS;
 	s_hc->evt.dequeue = 0;
 	s_hc->evt.cycle = 1;
+	s_hc->evt.published = 0;   // ERDP is written with the segment's start just below
 	uint64_t *erst = kmalloc_aligned(PAGE_SIZE);   // segment table (1 entry)
 	if (erst == NULL)
 		return false;
@@ -2310,9 +2313,8 @@ static xhci_evt_drain_t xhci_pass_drain(void *ctx, uint32_t index, uint64_t dead
 	s_hc = &s_controllers[index];
 	uint64_t ms = kCPUCyclesPerSecond / 1000;
 	const uint64_t edges[3] = { 20 * ms, 200 * ms, 2000 * ms };
-	uint64_t began = rdtsc();
 	xhci_evt_drain_t drain = xhci_drain_until(deadline);
-	xhci_wait_account(&s_hc->wait, drain, began, rdtsc(), edges);
+	xhci_wait_account(&s_hc->wait, drain, rdtsc(), edges);
 	s_hc->events_polled += drain.handled;
 	s_interval_events += drain.handled;
 	return drain;

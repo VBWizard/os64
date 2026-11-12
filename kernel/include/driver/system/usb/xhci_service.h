@@ -33,6 +33,7 @@ typedef struct {
 	uint32_t    size;     // TRBs in the segment
 	uint32_t    dequeue;  // the next slot to look at
 	uint32_t    cycle;    // 1 or 0: the cycle bit a slot carries once the controller has written it
+	uint32_t    published; // the slot ERDP was last written with (0 at setup, where ERDP names the segment's start)
 } xhci_evt_ring_t;
 
 // Handle one event. The event is the consumer's until this returns.
@@ -70,21 +71,29 @@ bool xhci_evt_erdp_wants_read(xhci_evt_drain_t drain, bool ehb_owed);
 // drain handled events. The pointer names the empty slot when the ring was
 // drained to empty, and the LAST EVENT HANDLED when the deadline stopped it
 // with work left, so the acknowledgement never covers an event nobody has
-// handled. RETIRING THE BUSY BIT: nothing was handled, an interrupt was
-// acknowledged (`ehb_owed`), and the bit reads set (`ehb_reads_set`); the
-// pointer is written back unchanged, with the bit, once. Otherwise nothing:
-// a pass that found nothing must not rewrite an unchanged pointer.
+// handled. One such stop has nothing new to say: the ring was last
+// published empty at slot N and the drain handled the one event at N
+// before its deadline. The last event handled IS slot N, the pointer the
+// register already holds, and it is not written again; the next drain
+// publishes further. RETIRING THE BUSY BIT: nothing was handled, an
+// interrupt was acknowledged (`ehb_owed`), and the bit reads set
+// (`ehb_reads_set`); the pointer is written back unchanged, with the bit,
+// once. Otherwise nothing: an unchanged pointer is not rewritten.
 xhci_erdp_t xhci_evt_erdp(const xhci_evt_ring_t *r, xhci_evt_drain_t drain,
                           bool ehb_owed, bool ehb_reads_set);
+
+// The caller wrote `erdp` to the register: remember what it names.
+void xhci_evt_published(xhci_evt_ring_t *r, xhci_erdp_t erdp);
 
 // ── How long an event may have waited ───────────────────────────────────────
 //
 // The controller does not stamp its events, so the wait is bounded, not
 // measured: an event found by a drain arrived after the last moment this
-// ring was SEEN EMPTY. That interval includes whatever the daemon did
-// before it reached this ring, and it keeps growing across wakes while work
-// is carried over, because a drain stopped by its deadline does not move
-// the stamp.
+// ring was SEEN EMPTY and was handled before the drain ENDED. That interval
+// includes whatever the daemon did before it reached this ring and the
+// handlers that ran ahead of the event inside the drain, and it keeps
+// growing across wakes while work is carried over, because a drain stopped
+// by its deadline does not move the stamp.
 typedef struct {
 	uint64_t seen_empty;    // when a drain last found this ring empty (0 = never)
 	uint64_t max;           // the longest bound of any drain that handled events
@@ -93,9 +102,9 @@ typedef struct {
 	uint64_t over;          // and beyond the last edge
 } xhci_wait_t;
 
-// Account for one drain that began at `began` and ended at `ended` on the
-// clock the edges are in. `edge` is three ascending bounds.
-void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t began, uint64_t ended,
+// Account for one drain that ended at `ended` on the clock the edges are
+// in. `edge` is three ascending bounds.
+void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t ended,
                        const uint64_t edge[3]);
 
 // ── The order of a visit ────────────────────────────────────────────────────

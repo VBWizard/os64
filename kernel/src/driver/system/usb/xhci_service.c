@@ -52,7 +52,9 @@ xhci_erdp_t xhci_evt_erdp(const xhci_evt_ring_t *r, xhci_evt_drain_t drain,
 		// has just wrapped).
 		if (drain.work_left)
 			slot = (slot == 0 ? r->size : slot) - 1;
-		erdp.write = true;
+		// The one stop with nothing new to publish (xhci_service.h): the
+		// last event handled is the slot the register already names.
+		erdp.write = !(drain.work_left && slot == r->published);
 	} else if (ehb_owed && ehb_reads_set) {
 		erdp.write = true;
 	}
@@ -61,13 +63,20 @@ xhci_erdp_t xhci_evt_erdp(const xhci_evt_ring_t *r, xhci_evt_drain_t drain,
 	return erdp;
 }
 
-void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t began, uint64_t ended,
+void xhci_evt_published(xhci_evt_ring_t *r, xhci_erdp_t erdp)
+{
+	r->published = (uint32_t)(((erdp.value & ~0xFull) - r->phys) / sizeof(xhci_trb_t));
+}
+
+void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t ended,
                        const uint64_t edge[3])
 {
 	// A ring never yet seen empty has no bound to give: boot left events
 	// on it for an unknown time.
 	if (drain.handled > 0 && w->seen_empty != 0) {
-		uint64_t bound = began - w->seen_empty;
+		// To the drain's END: the last event it handled waited through the
+		// handlers ahead of it.
+		uint64_t bound = ended - w->seen_empty;
 		if (bound > w->max)
 			w->max = bound;
 		if (bound > w->recent_max)

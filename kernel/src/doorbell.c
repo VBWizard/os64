@@ -22,16 +22,22 @@ void doorbell_register(doorbell_t* db, thread_t* thread, const char* name)
 	db->rung_runnable = 0;
 	db->name   = name;
 
-	// Find a free slot, then publish the pointer LAST so a service pass on
-	// another core sees either nothing or a whole bell.
+	// Claim a free slot with the pointer itself, published LAST so a service
+	// pass on another core sees either nothing or a whole bell. The claim is
+	// a compare-and-swap, and the count only ever rises, by one too: two
+	// daemons register at once when the scheduler starts (a thread can be
+	// preempted between looking at a slot and taking it), and a plain store
+	// let the second overwrite the first, whose bell no pass then answered.
 	for (uint32_t i = 0; i < DOORBELL_MAX; i++)
 	{
-		if (s_bells[i] != NULL)
+		if (!__sync_bool_compare_and_swap(&s_bells[i], NULL, db))
 			continue;
-		s_bells[i] = db;
-		__sync_synchronize();
-		if (i >= s_bell_count)
-			s_bell_count = i + 1;
+		for (;;)
+		{
+			uint32_t count = s_bell_count;
+			if (i < count || __sync_bool_compare_and_swap(&s_bell_count, count, i + 1))
+				break;
+		}
 		return;
 	}
 	panic("doorbell_register: no slot for '%s' — DOORBELL_MAX is %u\n", name, DOORBELL_MAX);
