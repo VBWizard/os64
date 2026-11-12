@@ -1,0 +1,38 @@
+id,task,depends_on,status,done_in,notes
+Q1,"MSI or MSI-X first where a controller offers both, and one shared vector or one per controller",,ruled,,"RULED 2026-11-12 by Chris: Fable's lean. MSI where offered (the RTL8125 precedent), MSI-X only when it is all there is; one bell whatever the vectors. The design (X.2.1) settles shared or separate vectors"
+Q2,"A new USB daemon, or knet grows a second kind of work",,ruled,,RULED 2026-11-12 by Chris: new
+Q3,Whether any call to the drain stays on the scheduler's path as a backstop,,ruled,,RULED 2026-11-12 by Chris: none. The tick ringing the daemon is the backstop
+Q4,The interrupt moderation value (IMOD),,open,,Chris 2026-11-12: not answerable yet. The design proposes a value with its reason; X.3.5 measures the wakes; the ruling follows the measurement
+Q5,"INTx: built in this arc, or left until a machine has a controller with neither MSI nor MSI-X",,ruled,,"RULED 2026-11-12 by Chris: left out, PROVIDED the P5's xHCI controllers offer MSI or MSI-X (X.1.6 checks). Read from the P5 the same day: five Rembrandt xHCI controllers (64:00.3 64:00.4 65:00.0 65:00.3 65:00.4), every one with irq_line 255, so firmware routed no INTx line to any of them and INTx could not serve the P5 anyway. /sys/bus/pci does not print capabilities, so MSI itself is not yet confirmed"
+
+X.1,Measure first: the instrument and the before readings,,code,,"XHCI_INTERRUPT.md § Measure first. No behaviour changes. Its commits ride in with the arc's first PR or as a small one of their own"
+X.1.1,"Check every anchor in the brief against the source and correct the page where they disagree",,todo,,"The brief was written from a partial read of xhci.c"
+X.1.2,"The instrument: what /sys/bluetooth lacks to tell 'the controller had the event and nobody looked' from 'the scan had not yet seen the device'",,todo,,"Its own small commit: it is the before reading"
+X.1.3,"QEMU case (a): today's tree with qemu-xhci keyboard and mouse on an idle GUI boot with no logd; the spacing of reports recorded",X.1.2,todo,,"DEBTS's thousand ticks is August's number"
+X.1.4,"P5 before: LE keyboard and trackball each, switch-on to first report, several times, and where the time goes",X.1.2,todo,,"Chris's hands. One agent on the P5 at a time"
+X.1.5,"The verdict written down: the poll, the scan cadence, or both; a DEBTS row for the slow connection if it is not the poll",X.1.3 X.1.4,todo,,"The arc lands either way: audio needs it"
+X.1.6,"Every /sys/bus/pci node gains a capabilities line (Chris, 2026-11-12), captured at enumeration; then the P5's five xHCI controllers read back for MSI and MSI-X, and the controller the AX210 sits behind named",,doing,,"The line is built and read in QEMU; the P5 reading waits for this build to be installed there. QEMU's qemu-xhci offers MSI-X alone (16 vectors) and no MSI, so under Q1's MSI-first rule QEMU proves the MSI-X path and only hardware proves MSI: the design (X.2.1) says how each is covered. Q5's condition.The AX210's Bluetooth half is a USB device: the interrupt that matters is its xHCI controller's, not the adapter's. If a controller offers neither, Q5 reopens"
+
+X.2,The daemon: a bottom half the tick wakes and xhci_poll off the scheduler's path,X.1,todo,,"Kernel concurrency: Fable reads the design before code and Codex reads the code. After this slice every controller is tick-driven by the daemon which alone answers the DEBTS row's symptom"
+X.2.1,"The design: the brief becomes the concurrency design for X.2 and X.3 and answers every item of § What the design must prove and Q1 to Q5; Fable read",X.1,todo,,"One design and one read for both slices"
+X.2.2,"The USB daemon in knet's shape: a doorbell and a daemon pinned to the BSP that drains every controller then runs the Bluetooth poll and the typematic tick and parks; the tick rings it",X.2.1,todo,,"The doorbell's take-before-work and park-and-recheck protocol kept as it is"
+X.2.3,"xhci_poll leaves processSignals; the busy flag stays for the callers that remain",X.2.2,todo,,"Backstop per Q3"
+X.2.4,"Bounded work and work kept: a budget of time and rounds with a re-ring; the next controller and Bluetooth's timers served when one is busy; the retry when the busy flag was held",X.2.2,todo,,
+X.2.5,"Bluetooth's clockwork: bt_host_policy reconciled to one timing caller; kworker keeps the disk (bond load at startup and the generation check and the retry after failed I/O) and is nudged",X.2.2,todo,,"Do not add a third caller"
+X.2.6,"Boot to running: enumeration and the AX210's firmware load stay serialized with whoever consumes events",X.2.2,todo,,
+X.2.7,"The report: /sys/usb/xhci with one block a controller; driven by (tick for now); the daemon's wakes; how long a ring waited; the busy-flag delay; since boot and since last read",X.2.2,todo,,"/sys/net/knet is the model"
+X.2.8,"Host harness with mutants for what is new and pure (the 'is there work' test and the budget)",X.2.4,todo,,
+X.2.9,"QEMU: the idle no-logd GUI boot shows reports at the tick's cadence; make run; make run-sparse; several controllers; no xHCI controller at all",X.2.3 X.2.7,todo,,
+X.2.10,"The books: the DEBTS row rewritten with what is left; CLAUDE.md's driver section gains the daemon and the report; DOORBELL.md gains its second ringer",X.2.9,todo,,
+
+X.3,The interrupt: a top half per controller and the flashlight,X.2,todo,,"Kernel ring-boundary work: Codex reads the code. Designed in X.2.1"
+X.3.1,"How a controller is driven, decided from what it offers (per Q1 and Q5; otherwise tick and it says so); pure; host-tested with mutants",X.2.1,todo,,
+X.3.2,"The top half: its own controller from state that never changes after bring-up (never s_hc); USBSTS.EINT then IMAN.IP with IE kept; rings the bell; no lock and no event ring; the upper-half register mapping stays",X.3.1,todo,,"xHCI 1.2 § 5.4.2 for the order"
+X.3.3,"A register model on the host: the order of the two writes; IE kept; an event arriving between acknowledgement and re-arm; ERDP's busy bit as the bottom half's; an interrupt and a tick overlapping; a drain that stops at its budget with events left",X.3.2,todo,,
+X.3.4,"Enabling: handler state and a working wake published before the unmask; events boot-time polling left on a ring; an event pending at enable; the vector and the BSP; suspend and resume leave the interrupt as found if the tree does either",X.3.2,todo,,
+X.3.5,"Moderation: the value written with its reason and the daemon's wakes measured under a fast mouse",X.3.4,todo,,"Q4"
+X.3.6,"The flashlight: a cmdline token that leaves every controller tick-driven; said where it is added that it does not travel to the P5",X.3.4,todo,,"Not the old behaviour: a third case to measure"
+X.3.7,"The report gains MSI or tick per controller with fires and spurious",X.3.4,todo,,
+X.3.8,"QEMU: case (b) interrupts with fires counted and completion-to-drain time; case (c) the token with no fires and progress at the tick; USB interrupts while a ring-3 program runs; make run; make run-sparse; several controllers with an event pending at enable; no xHCI controller",X.3.6 X.3.7,todo,,"The counters tell (b) from (c): working input proves neither"
+X.3.9,"P5 after: the X.1.4 measurement again; USB mouse and keyboard on every port combination Chris uses; the LE keyboard typing while the trackball moves; a reboot and a cold boot and the adapter's firmware load",X.3.8,todo,,"Chris's hands. The rear-ports DEBTS row must not get worse"
+X.3.10,"The books: the DEBTS row struck or rewritten; CLAUDE.md's cmdline table and driver section; DOORBELL.md; the slow-connection verdict from X.1.5 closed out",X.3.9,todo,,
