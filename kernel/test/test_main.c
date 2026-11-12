@@ -3821,9 +3821,11 @@ typedef enum { STEER_OK, STEER_UNAVAILABLE, STEER_FAILED } orphan_steer_t;
 // forced, because forcing it would fail a fixture write:
 //   - fewer free inodes than the drill has files to create;
 //   - more short groups in a row than the bound below allows;
-//   - a crossing with nowhere to cross to: when the rest of the disk holds
-//     fewer free blocks than the fixtures need, leaving the victim's group
-//     short would only make the victim's own write fail;
+//   - too few free blocks left for the fixtures once the layout is built.
+//     Filling a group spends it on the spacer, so it is filled only when
+//     the rest of the disk still holds the fixtures — in either arm: a
+//     crossing needs somewhere to cross to, and a group the one-group arm
+//     accepts must not be the last room the replacements had;
 //   - a spacer that does not land where the victim will. A file's blocks
 //     are taken from the first group with room at or after its INODE's
 //     group, so the spacer and the victim agree only when their inodes
@@ -3865,11 +3867,14 @@ static orphan_steer_t ext2_orphan_steer(bool straddle, const char **why)
             *why = "a one-byte probe file could not be written";
             break;
         }
-        if (straddle && ext2_free_blocks(kRootFilesystem) < room + ORPHAN_FIXTURE_BLOCKS) {
-            *why = "no other group has room for the victim to cross into";
+        bool fits = straddle ? room <= fill_to : room > ORPHAN_DATA_BLOCKS;
+        // Accepting g leaves its room to the fixtures; filling it spends it
+        // on the spacer, so the rest of the disk must hold them alone.
+        if (ext2_free_blocks(kRootFilesystem) < (fits ? 0 : room) + ORPHAN_FIXTURE_BLOCKS) {
+            *why = "too few free blocks would be left for the drill's files";
             break;
         }
-        if (straddle ? room <= fill_to : room > ORPHAN_DATA_BLOCKS) {
+        if (fits) {
             verdict = STEER_OK;
             break;
         }
