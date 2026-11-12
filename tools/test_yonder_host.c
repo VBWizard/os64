@@ -26,6 +26,7 @@
 #include "download.h"
 #include "mail.h"
 #include "paint.h"
+#include "filter.h"
 #include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
@@ -270,12 +271,44 @@ static bool inside(os64_gui_rect_t r, os64_gui_rect_t clip)
            (int64_t)r.y + r.h <= (int64_t)clip.y + clip.h;
 }
 
+// A layer the recorder holds while it is open (rec_layer_open): its
+// bounds and its painting, premultiplied 0xAARRGGBB — the fills and the
+// painter's pixels laid into it — so a mask's capture taken back
+// (rec_layer_take) is the coverage the painter really drew.
+#define REC_LAYERS 8
+typedef struct {
+    os64_gui_rect_t at;
+    uint32_t *px;
+} RecLayer;
+
 typedef struct {
     Out out;
     os64_gui_rect_t view;
     bool escaped;           // a fill reached past the viewport
     const os64_page_t *page;
+    RecLayer layers[REC_LAYERS];
+    int32_t nlayers;
 } Rec;
+
+// Straight `argb` laid over the open layer's pixel at page (x, y), if it
+// has one there.
+static void rec_lay(Rec *rec, int32_t x, int32_t y, uint32_t argb)
+{
+    if (rec->nlayers <= 0 || rec->nlayers > REC_LAYERS)
+        return;
+    RecLayer *l = &rec->layers[rec->nlayers - 1];
+    if (l->px == NULL || x < l->at.x || y < l->at.y || x >= l->at.x + l->at.w || y >= l->at.y + l->at.h)
+        return;
+    uint32_t *d = &l->px[(size_t)(y - l->at.y) * (size_t)l->at.w + (size_t)(x - l->at.x)];
+    uint32_t a = argb >> 24, keep = 255 - a, o = 0;
+    for (int k = 0; k < 4; k++) {
+        uint32_t sc = k == 3 ? a : ((argb >> (8 * k)) & 0xff) * a / 255;
+        uint32_t dc = (*d >> (8 * k)) & 0xff;
+        uint32_t v = sc + (dc * keep + 127) / 255;
+        o |= (v > 255 ? 255 : v) << (8 * k);
+    }
+    *d = o;
+}
 
 // A colour as its RGB, and its alpha after a slash when it is not opaque.
 static void colour_note(Rec *rec, uint32_t colour)
@@ -293,6 +326,9 @@ static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
     out(&rec->out, "fill %d %d %d %d", r.x, r.y, r.w, r.h);
     colour_note(rec, colour);
     out(&rec->out, "\n");
+    for (int32_t y = r.y; rec->nlayers > 0 && y < r.y + r.h; y++)
+        for (int32_t x = r.x; x < r.x + r.w; x++)
+            rec_lay(rec, x, y, colour);
 }
 
 // A text is drawn whole and cut by its verb, so a clip narrower than the
@@ -349,6 +385,14 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 {
     (void)clip;
     Rec *rec = ctx;
+    if (area == NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+        return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
+    if (area != NULL && layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
+        out(&rec->out, "backdrop %d %d %d %d mask %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, (int)(layer & ~YONDER_MASK_LAYER), origin.x, origin.y, origin.w,
+            origin.h);
+        return true;
+    }
     bool sheet = false;
     for (int32_t i = 0; i < flow_background_layers(b->style); i++)
         sheet |= flow_background_layer(b->style, i).image != NULL;
@@ -429,6 +473,11 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
+// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask, a
+// layer's coverage and a picture are recorded whole, every alpha and every
+// pixel, so two paintings of one page compare pixel for pixel (paint_of).
+static bool s_record_all;
+
 // A layer (FILTER.md, MIX_BLEND.md): its bounds when it opens, and its
 // list's length, its currentColor, its alpha and — when not normal — its
 // mode when it closes. Refused when the case says the face cannot make one
@@ -441,18 +490,62 @@ static bool rec_layer_open(void *ctx, os64_gui_rect_t bounds)
     if (s_filter_refused)
         return false;
     out(&rec->out, "filter %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+    if (rec->nlayers < REC_LAYERS)
+        rec->layers[rec->nlayers] =
+            (RecLayer){bounds, calloc((size_t)bounds.w * (size_t)bounds.h, sizeof(uint32_t))};
+    rec->nlayers++;
     return true;
 }
 
+static void rec_layer_pop(Rec *rec)
+{
+    if (rec->nlayers <= 0)
+        return;
+    if (--rec->nlayers < REC_LAYERS) {
+        free(rec->layers[rec->nlayers].px);
+        rec->layers[rec->nlayers].px = NULL;
+    }
+}
+
+// A layer's close, and with a mask its coverage: its sum, and with
+// s_record_all each row in hex, as a shadow's mask is recorded.
 static void rec_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                            uint8_t alpha, flow_blend_t mode)
+                            uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     Rec *rec = ctx;
     (void)filter;
     out(&rec->out, "end filter %d #%06x %d", (int)n, current, (int)alpha);
     if (mode != FLOW_BLEND_NORMAL)
         out(&rec->out, " mode %d", (int)mode);
+    os64_gui_rect_t at = rec->nlayers > 0 && rec->nlayers <= REC_LAYERS
+                             ? rec->layers[rec->nlayers - 1].at : (os64_gui_rect_t){0, 0, 0, 0};
+    if (cover != NULL) {
+        long sum = 0;
+        for (int32_t k = 0; k < at.w * at.h; k++)
+            sum += cover[k];
+        out(&rec->out, " cover %ld", sum);
+    }
     out(&rec->out, "\n");
+    for (int32_t k = 0; cover != NULL && s_record_all && k < at.w * at.h; k++)
+        out(&rec->out, "%02x%s", cover[k], (k + 1) % at.w == 0 ? "\n" : "");
+    rec_layer_pop(rec);
+}
+
+// A mask's capture taken back: its coverage read from what was laid into
+// it, as the face reads it (filter.h).
+static void rec_layer_take(void *ctx, uint8_t *cover, bool luminance)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "take%s\n", luminance ? " luminance" : "");
+    if (rec->nlayers > 0 && rec->nlayers <= REC_LAYERS) {
+        RecLayer *l = &rec->layers[rec->nlayers - 1];
+        size_t n = (size_t)l->at.w * (size_t)l->at.h;
+        if (l->px != NULL)
+            yonder_mask_take(l->px, n, luminance, cover);
+        else
+            memset(cover, 0, n);
+    }
+    rec_layer_pop(rec);
 }
 
 // A backdrop (FILTER.md § 7): its rect, its coverage (the mask's sum, or
@@ -475,10 +568,6 @@ static bool rec_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *
     return true;
 }
 
-// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
-// a picture are recorded whole, every alpha and every pixel, so two
-// paintings of one page compare pixel for pixel (paint_of).
-static bool s_record_all;
 
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
@@ -520,6 +609,8 @@ static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
         if (n <= 16 || k == 0 || k == n - 1 || s_record_all)
             out(&rec->out, " %08x", argb[k]);
     out(&rec->out, "\n");
+    for (int32_t k = 0; rec->nlayers > 0 && k < n; k++)
+        rec_lay(rec, r.x + k % r.w, r.y + k / r.w, argb[k]);
 }
 
 static const char *kPage = "http://host/dir/page.html";
@@ -552,7 +643,8 @@ static yonder_verbs_t verbs_of(Rec *rec)
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
                             rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL,
-                            rec_layer_open, rec_layer_close, rec_backdrop_filter};
+                            rec_layer_open, rec_layer_close, rec_backdrop_filter,
+                            rec_layer_take};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -579,7 +671,7 @@ static yonder_scratch_t *s_suite_scratch;
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
@@ -661,7 +753,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     if (t != NULL && s_paint_scrolls)
         (void)flow_scroll_set(t, 0, s_paint_scroll);
-    Rec rec = {{0}, view, false, page};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
@@ -887,6 +979,8 @@ static void blend_paint_cases(void)
            layers == 1 && yonder_paint_layers_refused == 1 && strstr(got, " mode ") == NULL, got);
     free(got);
 }
+
+#include "test_yonder_masks.inc"
 
 // A backdrop (FILTER.md § 7): asked before the box's own background, with
 // its border box cut to the view; a rounded box hands over its coverage
@@ -2058,8 +2152,11 @@ static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t 
 }
 
 // EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
-// capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
-// Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
+// capture files, raw request bytes Chris's Chrome and Firefox 158 on
+// Windows sent a local listener (WIRE.md § 1 as built names them), with
+// Chrome's string and client hints as Chrome 157 sent them a month later
+// (HTTP2.md § 4 H2.5, capture C1): the lines and their order did not
+// change between the two. Chrome:
 // capture-01-chrome-win-get-root (a typed navigation),
 // capture-25-chrome-win-get-clicked (a link clicked),
 // capture-26-chrome-win-get-clicked (the browser's Reload of it),
@@ -2081,9 +2178,9 @@ static void agent_identity_cases(void)
         return;
     expect_text("identity: Chrome's agent, captured",
                 chrome->agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/156.0.0.0 Safari/537.36");
+                               "Chrome/157.0.0.0 Safari/537.36");
     expect_text("identity: Chrome's client hints, captured", chrome->identity.hints,
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n");
     expect_text("identity: Chrome's language, captured", chrome->identity.language, "en-US,en;q=0.9");
@@ -2128,6 +2225,9 @@ static void agent_identity_cases(void)
     expect("identity: a saved Chrome 154 preset is Chrome's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                                 "Chrome/154.0.0.0 Safari/537.36") == chrome->agent, NULL);
+    expect("identity: a saved Chrome 156 preset is Chrome's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/156.0.0.0 Safari/537.36") == chrome->agent, NULL);
     expect("identity: a saved Firefox 156 preset is Firefox's preset now",
            yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0") ==
                firefox->agent, NULL);
@@ -2145,7 +2245,7 @@ static void agent_identity_cases(void)
     expect_text("identity: Chrome, the browser's Reload of a clicked link",
                 reload_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
                 "Cache-Control: max-age=0\r\n"
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2165,7 +2265,7 @@ static void agent_identity_cases(void)
                 "Priority: u=0, i\r\n");
     expect_text("identity: Chrome, an address given",
                 navigation_block(chrome, WAY_BY_BROWSER, NULL, "https://a.test/"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2176,7 +2276,7 @@ static void agent_identity_cases(void)
                 "Accept-Language: en-US,en;q=0.9\r\n");
     expect_text("identity: Chrome, a link clicked",
                 navigation_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n"
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -2297,14 +2397,14 @@ static void wire_request_cases(void)
     char extra[512];
 
 #define CHROME_HINTS_NAV                                                                       \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
 #define CHROME_UA "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
-                  "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\r\n"
+                  "(KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36\r\n"
 #define CHROME_NAV_ACCEPT "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
 #define CHROME_SUB_HEAD(path, host) "GET " path " HTTP/1.1\r\nHost: " host "\r\nConnection: keep-alive\r\n" \
     "sec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA \
-    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n" \
     "sec-ch-ua-mobile: ?0\r\n"
 #define CHROME_TAIL "Referer: http://localhost:8765/\r\nAccept-Encoding: gzip, identity\r\n" \
                     "Accept-Language: en-US,en;q=0.9\r\n\r\n"
@@ -2372,7 +2472,7 @@ static void wire_request_cases(void)
                 wire_request(chrome, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight", NULL, extra),
                 "PUT /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: keep-alive\r\n"
                 "Content-Length: 0\r\nsec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA
-                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua: \"Not-A.Brand\";v=\"99\", \"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\"\r\n"
                 "sec-ch-ua-mobile: ?0\r\nAccept: */*\r\nOrigin: http://localhost:8765\r\n"
                 "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
     snprintf(extra, sizeof(extra), "X-W1: 1\r\n%s%s", ref, origin);
@@ -2566,6 +2666,7 @@ static yonder_paint_cache_counts_t paint_through(yonder_paint_cache_t *c, const 
 // Boxes alike but for one value each that makes their pixels — a stop's
 // colour, place or hint (a hint's colour is 0, so .g16's black stop where
 // .g4's hint is), the line's angle, a repeat, the ray's shape and centre,
+// a turn's start and centre,
 // currentColor's colour, the tile's size — a ray sized in px is the same
 // ray in any tile — and a shadow's blur, offset, spread, inset and corners
 // — and a small tile placed in from the box's corner, so the box's first
@@ -2597,6 +2698,9 @@ static const char *kCacheKeys =
     " .g18 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); width: 70px }"
     " .g19 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); height: 31px }"
     " .g20 { background: radial-gradient(#ff0000, #0000ff) 7px 5px / 20px 20px }"
+    " .g21 { background: conic-gradient(#ff0000, #0000ff) }"
+    " .g22 { background: conic-gradient(from 90deg, #ff0000, #0000ff) }"
+    " .g23 { background: conic-gradient(at 20% 30%, #ff0000, #0000ff) }"
     " .s0 { box-shadow: 4px 4px 6px #000000 }"
     " .s1 { box-shadow: 4px 4px 10px #000000 }"
     " .s2 { box-shadow: 6px 4px 6px #000000 }"
@@ -2613,7 +2717,7 @@ static const char *kCacheKeys =
     "<div class=g8></div><div class=g9></div><div class=g10></div><div class=g11></div>"
     "<div class=g12></div><div class=g13></div><div class=g14></div><div class=g15></div>"
     "<div class=g16></div><div class=g17></div><div class=g18></div><div class=g19></div>"
-    "<div class=g20></div>"
+    "<div class=g20></div><div class=g21></div><div class=g22></div><div class=g23></div>"
     "<div class=s0></div><div class=s1></div><div class=s2></div><div class=s3></div>"
     "<div class=s4></div><div class=s5></div><div class=s6></div><div class=s7></div>"
     "<div class=s8></div><div class=s9></div>";
@@ -3121,6 +3225,7 @@ int main(int argc, char **argv)
         filter_paint_cases();
         backdrop_paint_cases();
         blend_paint_cases();
+        mask_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

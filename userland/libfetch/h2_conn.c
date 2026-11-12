@@ -61,6 +61,7 @@ struct h2_stream {
     uint32_t room, at, len;
     int64_t recv_window, send_window;
     uint32_t credit;                // consumed since the stream's last WINDOW_UPDATE
+    uint32_t weight;                // its priority weight, 1 to 256, for the streams opened after it
 };
 
 struct h2_conn {
@@ -81,12 +82,18 @@ struct h2_conn {
 
     h2_stream_t *streams[H2_STREAMS_MOST];
     uint32_t stream_count, next_id;
+    uint32_t first_id;              // the id its first stream took: no stream of ours is below it
 
     uint32_t peer_max_streams, peer_max_frame;
     int64_t peer_initial_window;
     bool peer_settings_seen;
     uint32_t our_max_frame, our_table;
     int64_t our_initial_window, our_window;
+    // What a stream's receive window is once its opening WINDOW_UPDATE has
+    // gone: our_initial_window and the greeting's stream increment.
+    int64_t our_stream_window;
+    uint32_t stream_increment;
+    h2_priority_mode_t priority;
     bool our_settings_acked;
     int64_t send_window, recv_window;
     uint64_t recv_credit;           // consumed or discarded since the connection's last WINDOW_UPDATE
@@ -96,6 +103,7 @@ struct h2_conn {
     uint8_t scratch[H2_FRAME_HEADER_LEN + OUR_FRAME];   // one small frame or one DATA frame, under the lock
 
     bool dying, dead, goaway, quiet;
+    bool wants_h1;                  // a GOAWAY said HTTP_1_1_REQUIRED
     uint32_t goaway_last;
     uint32_t die_code;              // the error code that ended it, when one did
     uint64_t frames_in;
@@ -287,8 +295,12 @@ static h2_stream_t *find(h2_conn_t *c, uint32_t id)
     return NULL;
 }
 
-// A stream we opened at some time: odd, and below the next id to give out.
-static bool was_ours(const h2_conn_t *c, uint32_t id) { return (id & 1u) != 0 && id < c->next_id; }
+// A stream we opened at some time: odd, at or above the first id this
+// connection gave out, and below the next.
+static bool was_ours(const h2_conn_t *c, uint32_t id)
+{
+    return (id & 1u) != 0 && id >= c->first_id && id < c->next_id;
+}
 
 static bool over(const h2_stream_t *s) { return s->ending.how != H2_END_NOT_YET; }
 
@@ -323,7 +335,7 @@ static void credit_stream(h2_conn_t *c, h2_stream_t *s, uint32_t bytes)
 {
     s->credit += bytes;
     // A stream the peer has finished, or that is over, wants no more window.
-    if (s->got_end || over(s) || s->credit == 0 || (int64_t)s->credit < c->our_initial_window / 2)
+    if (s->got_end || over(s) || s->credit == 0 || (int64_t)s->credit < c->our_stream_window / 2)
         return;
     size_t n = h2_write_window_update(c->scratch, sizeof(c->scratch), s->id, s->credit);
     if (emit_owed(c, c->scratch, n)) {
@@ -616,6 +628,7 @@ static void deliver(h2_conn_t *c, const h2_frame_t *f, bool *more_room)
     case H2_FRAME_GOAWAY:
         c->goaway = true;
         c->goaway_last = f->last_stream;
+        c->wants_h1 = c->wants_h1 || f->value == H2_ERR_HTTP_1_1_REQUIRED;
         for (uint32_t i = 0; i < H2_STREAMS_MOST; i++) {
             s = c->streams[i];
             if (s != NULL && s->id > f->last_stream && !over(s)) {
@@ -998,11 +1011,9 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
     c->our_max_frame = H2_FRAME_SIZE_LEAST;
     c->our_table = H2_HPACK_TABLE_DEFAULT;
     c->our_initial_window = 65535;
-    bool sound = unread_len <= sizeof(c->unread) && greeting->count <= 64;
+    bool sound = unread_len <= sizeof(c->unread) && h2_greeting_ok(greeting);
     for (uint32_t i = 0; sound && i < greeting->count; i++) {
-        h2_fault_t fault;
         h2_setting_t setting = greeting->settings[i];
-        sound = h2_setting_check(setting, &fault);
         if (setting.identifier == H2_SETTING_MAX_FRAME_SIZE)
             c->our_max_frame = setting.value;
         else if (setting.identifier == H2_SETTING_INITIAL_WINDOW_SIZE)
@@ -1010,8 +1021,7 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
         else if (setting.identifier == H2_SETTING_HEADER_TABLE_SIZE)
             c->our_table = setting.value;
     }
-    sound = sound && c->our_max_frame <= GREETING_MOST && c->our_table <= GREETING_MOST &&
-            (uint64_t)65535 + greeting->window_increment <= H2_STREAM_MOST;
+    uint32_t first = greeting->first_stream != 0 ? greeting->first_stream : 1;
     uint32_t table_room = c->our_table > H2_HPACK_TABLE_DEFAULT ? c->our_table : H2_HPACK_TABLE_DEFAULT;
     // One literal field at a time passes through the scratch, and a field
     // may be as large as a head, whatever the table holds.
@@ -1038,7 +1048,11 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
         c->tls = engine;
         c->socket = socket;
         c->hooks = *hooks;
-        c->next_id = 1;
+        c->next_id = first;
+        c->first_id = first;
+        c->stream_increment = greeting->stream_increment;
+        c->our_stream_window = c->our_initial_window + greeting->stream_increment;
+        c->priority = greeting->priority;
         c->peer_max_streams = UINT32_MAX;       // no limit until its SETTINGS give one (§ 6.5.2)
         c->peer_max_frame = H2_FRAME_SIZE_LEAST;
         c->peer_initial_window = 65535;
@@ -1090,6 +1104,14 @@ bool h2_conn_room(h2_conn_t *c)
     bool room = room_locked(c);
     os64_lock_release(&c->lock);
     return room;
+}
+
+bool h2_conn_wants_h1(h2_conn_t *c)
+{
+    os64_lock_acquire(&c->lock);
+    bool wants = c->wants_h1;
+    os64_lock_release(&c->lock);
+    return wants;
 }
 
 uint32_t h2_conn_streams(h2_conn_t *c)
@@ -1180,16 +1202,56 @@ static h2_result_t park(h2_conn_t *c, h2_wait_t *w, waiting_t *st)
     return rung == OS64_ERR_TIMEOUT ? silent(c, st) : H2_FAILED;
 }
 
+bool h2_greeting_ok(const h2_greeting_t *greeting)
+{
+    if (greeting->count > 64)
+        return false;
+    uint32_t frame = H2_FRAME_SIZE_LEAST, table = H2_HPACK_TABLE_DEFAULT;
+    uint64_t initial = 65535;
+    for (uint32_t i = 0; i < greeting->count; i++) {
+        h2_fault_t fault;
+        h2_setting_t setting = greeting->settings[i];
+        if (!h2_setting_check(setting, &fault))
+            return false;
+        if (setting.identifier == H2_SETTING_MAX_FRAME_SIZE)
+            frame = setting.value;
+        else if (setting.identifier == H2_SETTING_INITIAL_WINDOW_SIZE)
+            initial = setting.value;
+        else if (setting.identifier == H2_SETTING_HEADER_TABLE_SIZE)
+            table = setting.value;
+    }
+    uint32_t first = greeting->first_stream != 0 ? greeting->first_stream : 1;
+    return frame <= GREETING_MOST && table <= GREETING_MOST &&
+           (uint64_t)65535 + greeting->window_increment <= H2_STREAM_MOST &&
+           initial + greeting->stream_increment <= H2_STREAM_MOST && (first & 1u) != 0 && first <= H2_STREAM_MOST;
+}
+
 // ── Streams, from the fetch's side ──────────────────────────────────────
 
+// The stream a new one of `weight` depends on under H2_PRIORITY_CHAINED.
+static uint32_t chained_parent(const h2_conn_t *c, uint32_t weight)
+{
+    const h2_stream_t *parent = NULL;
+    for (uint32_t i = 0; i < H2_STREAMS_MOST; i++) {
+        const h2_stream_t *s = c->streams[i];
+        if (s == NULL || s->weight < weight)
+            continue;
+        if (parent == NULL || s->weight < parent->weight || (s->weight == parent->weight && s->id > parent->id))
+            parent = s;
+    }
+    return parent != NULL ? parent->id : 0;
+}
+
 h2_result_t h2_stream_open(h2_conn_t *c, const h2_field_t *fields, size_t count, bool ends, bool bodiless,
-                           h2_wait_t *wait, h2_stream_t **stream)
+                           uint32_t weight, h2_wait_t *wait, h2_stream_t **stream)
 {
     *stream = NULL;
+    if (weight < 1 || weight > 256)
+        weight = 16;                    // RFC 9113 § 5.3.5's default, for a caller that states none
     size_t bound = h2_hpack_encode_bound(fields, count);
     if (bound > H2_HEAD_MOST)
         return H2_TOO_LARGE;
-    size_t frames_room = h2_headers_size(bound, OUR_FRAME, false);
+    size_t frames_room = h2_headers_size(bound, OUR_FRAME, true) + H2_FRAME_HEADER_LEN + 4;
     uint8_t *block = os64_malloc(bound);
     uint8_t *frames = os64_malloc(frames_room);
     h2_stream_t *s = os64_malloc(sizeof(*s));
@@ -1217,10 +1279,23 @@ h2_result_t h2_stream_open(h2_conn_t *c, const h2_field_t *fields, size_t count,
             s->sent_end = ends;
             s->recv_window = c->our_initial_window;
             s->send_window = c->peer_initial_window;
+            s->weight = weight;
+            h2_priority_t priority = {.weight = (uint8_t)(weight - 1)};
+            if (c->priority == H2_PRIORITY_CHAINED) {
+                priority.exclusive = true;
+                priority.depends_on = chained_parent(c, weight);    // before this stream is among them
+            }
             c->streams[slot] = s;
             c->stream_count++;
             hold(c);
-            size_t n = h2_write_headers(frames, frames_room, s->id, block, len, ends, NULL, OUR_FRAME);
+            size_t n = h2_write_headers(frames, frames_room, s->id, block, len, ends,
+                                        c->priority != H2_PRIORITY_NONE ? &priority : NULL, OUR_FRAME);
+            if (c->stream_increment != 0) {
+                // In the same write as the HEADERS, so nothing of ours comes
+                // between them.
+                n += h2_write_window_update(frames + n, frames_room - n, s->id, c->stream_increment);
+                s->recv_window += c->stream_increment;
+            }
             emit(c, frames, n);         // a connection that would not take it is dying, and ends this stream
             os64_lock_release(&c->lock);
             drain(c, true);

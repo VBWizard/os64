@@ -60,6 +60,7 @@ bool peer_records_sound(void);      // every record so far was whole and in orde
 void peer_stall(bool stalled);      // the socket takes no bytes from the client
 void peer_write_cap(size_t most);   // and takes at most this many a write when it does (0 = all)
 void peer_hang_up(void);            // the server closes: the client reads end of input
+void peer_hold_closes(bool held);   // a close made on a thread os64_thread started (a reader's) waits until this is let go
 // The next `times` waiting writes to a stalled socket each end twenty
 // seconds later (by the clock) with OS64_INTERRUPTED and nothing written.
 void peer_interrupt_writes(unsigned times);

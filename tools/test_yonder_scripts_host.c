@@ -614,6 +614,10 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 }
 /* A download's fetch rides the fake network, which reads no hooks. */
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
+void os64_fetch_forget_idle(void) {}
+/* libfetch's counters, as a case sets them. */
+static os64_fetch_counts_t fake_counts;
+void os64_fetch_counts(os64_fetch_counts_t *out) { *out = fake_counts; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
     if(len>=6 && !memcmp(bytes,"GIF8",4))return image_decode_gif(bytes,len,out);
@@ -1374,7 +1378,7 @@ static void switch_cases(void) {
     strcpy(saved_agent,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/154.0.0.0 Safari/537.36");
     const char *started=starting_agent();
-    check(started!=NULL && strstr(started,"Chrome/156.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
+    check(started!=NULL && strstr(started,"Chrome/157.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
           "agent: a saved Chrome 154 preset starts as today's Chrome preset, its lines with it");
     strcpy(saved_agent,"Mozilla/3.0 (compatible)");
     started=starting_agent();
@@ -4650,6 +4654,27 @@ static void loop_view_identity(void) {
         "identity: a stopped traversal leaves the change the page made, as its entry");
     loop_drop();
 }
+/* A history state of the size a site really keeps (a photo site's search
+ * page leaves about 125 KiB with its entry) is taken and read back whole,
+ * and the script that left it runs on; one past the limit is still refused
+ * by name, and the entry keeps the state it had. */
+static void history_state_size_case(void) {
+    loop_page("<p id=out>-</p><p id=big>-</p><script>"
+        "var list=[];for(var i=0;i<2500;i++)list.push({id:i,src:'https://images.fixture.test/photos/'+i+'/photo-'+i+'.jpeg'});"
+        "history.pushState({allMedia:list},'','/photo');"
+        "var kept=JSON.stringify(history.state);"
+        "document.getElementById('out').textContent=kept.length>130000&&history.state.allMedia.length===2500&&"
+        "history.state.allMedia[2499].id===2499?'kept':'lost '+kept.length;"
+        "var wide='x'.repeat(1100000);"
+        "try{history.replaceState({a:wide,b:wide},'','/photo');document.getElementById('big').textContent='taken';}"
+        "catch(e){document.getElementById('big').textContent=e.name+':'+history.state.allMedia.length;}"
+        "</script>");
+    check(loop_settle() && probe_text_is("out","kept"),
+        "history state: 130 KiB of a site's own data is kept and read back whole");
+    check(probe_text_is("big","QuotaExceededError:2500"),
+        "history state: one past two mebibytes is refused, and the entry keeps the state it had");
+    loop_drop();
+}
 static void unshown_back_case(const char *when, const char *script) {
     char body[512];
     loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
@@ -4697,6 +4722,7 @@ static void loop_view_unshown_back(void) {
     unshown_back_past();
     // One rule wherever the page is in its arrival: its navigation
     // committed when its response came, so Back from it is P.
+    history_state_size_case();
     unshown_back_case("during the parse","history.back()");
     unshown_back_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.back()})");
     unshown_back_case("at load","onload=function(){history.back()}");
@@ -7542,6 +7568,39 @@ static void diag_data_short_case(void) {
           "diag: a long data: run keeps its start and its end, and a short one or a word that ends in it is whole");
     yonder_diag_free(d);
 }
+/* The record's wire facts are what libfetch counted SINCE the load began,
+ * not since yonder did: a load that begins with the counters already
+ * moved says only its own, and says them again, larger, when read later. */
+static void diag_wire_case(void) {
+    fake_counts=(os64_fetch_counts_t){.connections_h1=40,.connections_h2=2,.handshakes=41,.handshakes_resumed=30,
+                                      .requests_h1=300,.requests_h2=7,.waits=9,.wait_ms=1234};
+    yonder_diag_t *d=diag_begin("http://fixture.test/wire");
+    check(d!=NULL,"diag: a record begins");
+    if(d==NULL)return;
+    diag_wire(d);
+    const char *made=yonder_diag_fact_value(d,"wire connections");
+    check(made!=NULL && strcmp(made,"0 made (0 HTTP/1.1, 0 HTTP/2)")==0,
+          "diag: a load that has made nothing says so, whatever was made before it began");
+    fake_counts.connections_h1+=5; fake_counts.connections_h2+=1; fake_counts.handshakes+=6;
+    fake_counts.handshakes_resumed+=4; fake_counts.requests_h1+=20; fake_counts.requests_h2+=3;
+    fake_counts.waits+=2; fake_counts.wait_ms+=750;
+    diag_wire(d);
+    const char *v;
+    check((v=yonder_diag_fact_value(d,"wire connections"))!=NULL && strcmp(v,"6 made (5 HTTP/1.1, 1 HTTP/2)")==0,
+          "diag: the connections a load made, by what they spoke");
+    check((v=yonder_diag_fact_value(d,"wire TLS handshakes"))!=NULL && strcmp(v,"6 (4 resumed)")==0,
+          "diag: its handshakes, and how many resumed");
+    check((v=yonder_diag_fact_value(d,"wire requests"))!=NULL && strcmp(v,"23 sent (20 HTTP/1.1, 3 HTTP/2)")==0,
+          "diag: its requests, by what carried them");
+    check((v=yonder_diag_fact_value(d,"wire waits"))!=NULL &&
+              strcmp(v,"2 fetches waited for a connection, 750 ms in all")==0,
+          "diag: the fetches that waited for a connection, and for how long");
+    check((v=yonder_diag_fact_value(d,"wire cache"))!=NULL &&
+              strcmp(v,"0 answered whole, 0 confirmed by the server, 0 served stale")==0,
+          "diag: what the cache spared the wire, none with no cache");
+    yonder_diag_free(d);
+    memset(&fake_counts,0,sizeof(fake_counts));
+}
 /* A page let go before it was shown takes the families staged for it. */
 static void diag_arriving_released_case(void) {
     static Page p;
@@ -8022,19 +8081,20 @@ static void diag_page_cases(void) {
     /* A canvas by its kind; a skipped property. A module script runs now
      * (modules.c), and an import map registers (importmap.c): neither is
      * missing. */
-    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
-        "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+    loop_page("<style>p{contain:paint;background-image:image-set(\"a.png\" 1x);background-clip:text}"
+        "h1{display:inline frob}h2{background-image:conic-gradient(red,blue)}</style><h2>y</h2><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=importmap>{}</script><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING script importmap") && !has(text,"MISSING script module") &&
         !has(text,"MISSING element canvas") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
-        has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
-        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
+        has(text,"MISSING css-value background-image: image-set (1)\n") &&
+        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip") &&
+        !has(text,"conic-gradient"),
         "diag: an element drawn as nothing, a property the cascade skipped and a value it dropped or "
-        "approximated are each recorded; a module, run, an import map, registered, and a clip to the text, "
-        "drawn, are not");
+        "approximated are each recorded; a module, run, an import map, registered, a clip to the text and "
+        "a conic gradient, drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING element canvas"),"diag: supported canvases remain absent from missing elements at departure");
@@ -11338,6 +11398,7 @@ static void diag_cases(void) {
     diag_lost_overflow_case();
     diag_lookup_bound_case();
     diag_data_short_case();
+    diag_wire_case();
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
@@ -11720,11 +11781,21 @@ static uint8_t *bytecode_blob_of(const char *source, size_t *length) {
 }
 /* A `src` script whose body the cache holds runs through its compiled
  * form when one is kept, and a compile's form goes to a job of its own. */
-/* A page whose window has a cache, one the fakes never open: keeping asks
- * only that there is one. The window is made afresh with each page. */
+/* A page whose window has a cache: keeping asks that there is one, and the
+ * page's record reads what it has served. The window is made afresh with
+ * each page; the cache is this case's, on the fake disk, until it ends. */
+static way_cache_t *bytecode_cache;
 static void bytecode_page(void) {
     loop_page("<p id=out>-</p><script src=app.js></script>");
-    g.cache=(way_cache_t *)&nbytecode_jobs;
+    if(bytecode_cache==NULL)
+        bytecode_cache=way_cache_open("/tmp/bytecode-case-cache",1u<<20);
+    g.cache=bytecode_cache;
+}
+static void bytecode_cache_done(void) {
+    g.cache=NULL;
+    if(bytecode_cache!=NULL)
+        way_cache_close(bytecode_cache);
+    bytecode_cache=NULL;
 }
 static void bytecode_cases(void) {
     script_land_kept=true;
@@ -11742,7 +11813,7 @@ static void bytecode_cases(void) {
         bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
         "bytecode: the compile's form goes to a job of its own, beside the entry's key, under its tag");
     if(nbytecode_jobs!=1) {
-        script_land_kept=false; loop_drop(); g.cache=NULL; return;
+        script_land_kept=false; loop_drop(); bytecode_cache_done(); return;
     }
     reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
     nbytecode_jobs=0;
@@ -11793,7 +11864,7 @@ static void bytecode_cases(void) {
     got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
     got->bytecode->blob=os64_malloc(8);
     reaped(0,job,got);
-    g.cache=NULL;
+    bytecode_cache_done();
 }
 
 static bool never_cancelled(void *ctx) { (void)ctx; return false; }

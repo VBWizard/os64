@@ -2790,9 +2790,67 @@ static void diag_cookies_short(yonder_diag_t *d, const way_cookies_short_t *s)
     yonder_diag_failed_most(d, "cookies", message, (uint32_t)s->left);
 }
 
+// What libfetch's counters and the cache's read, in the order the record
+// keeps them as its marks.
+static void wire_read(uint64_t v[YONDER_DIAG_MARKS])
+{
+    v[8] = v[9] = v[10] = 0;
+    if (g.cache != NULL)
+        way_cache_served(g.cache, &v[8], &v[9], &v[10]);
+    os64_fetch_counts_t c;
+    os64_fetch_counts(&c);
+    v[0] = c.connections_h1;
+    v[1] = c.connections_h2;
+    v[2] = c.handshakes;
+    v[3] = c.handshakes_resumed;
+    v[4] = c.requests_h1;
+    v[5] = c.requests_h2;
+    v[6] = c.waits;
+    v[7] = c.wait_ms;
+}
+_Static_assert(YONDER_DIAG_MARKS == 11, "the record keeps one mark for each number read here");
+
+// WHAT THE LOAD HAS COST THE WIRE SO FAR, and what the cache spared it:
+// libfetch's counters and the cache's now, less what they read when the
+// load began (diag_begin). They count every fetch this yonder made in that
+// time, which is this page's and, where another page was still loading
+// beside it, that one's too. Nothing here is the page's content, so a
+// replay does not compare it.
+static void diag_wire(yonder_diag_t *d)
+{
+    if (d == NULL)
+        return;
+    uint64_t then[YONDER_DIAG_MARKS], now[YONDER_DIAG_MARKS];
+    yonder_diag_marks(d, then);
+    wire_read(now);
+    for (int i = 0; i < YONDER_DIAG_MARKS; i++)
+        now[i] -= then[i];
+    char v[160];
+    os64_snprintf(v, sizeof(v), "%lu made (%lu HTTP/1.1, %lu HTTP/2)", (unsigned long)(now[0] + now[1]),
+                  (unsigned long)now[0], (unsigned long)now[1]);
+    yonder_diag_fact(d, "wire connections", v);
+    os64_snprintf(v, sizeof(v), "%lu (%lu resumed)", (unsigned long)now[2], (unsigned long)now[3]);
+    yonder_diag_fact(d, "wire TLS handshakes", v);
+    os64_snprintf(v, sizeof(v), "%lu sent (%lu HTTP/1.1, %lu HTTP/2)", (unsigned long)(now[4] + now[5]),
+                  (unsigned long)now[4], (unsigned long)now[5]);
+    yonder_diag_fact(d, "wire requests", v);
+    os64_snprintf(v, sizeof(v), "%lu fetches waited for a connection, %lu ms in all", (unsigned long)now[6],
+                  (unsigned long)now[7]);
+    yonder_diag_fact(d, "wire waits", v);
+    // An answer the cache gave whole cost the wire nothing, and one it
+    // confirmed cost a request and no body: a load to be measured against
+    // another needs these to be the same in both.
+    os64_snprintf(v, sizeof(v), "%lu answered whole, %lu confirmed by the server, %lu served stale",
+                  (unsigned long)now[8], (unsigned long)now[9], (unsigned long)now[10]);
+    yonder_diag_fact(d, "wire cache", v);
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    uint64_t marks[YONDER_DIAG_MARKS];
+    wire_read(marks);
+    yonder_diag_marks_set(d, marks);
     // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
     // (REPLAY.md § 3): the agent first; the clock and its zone (the agent,
     // the cookies, the clock and the zone are what make a record version
@@ -3536,6 +3594,7 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
+    diag_wire(d);
     diag_census(p, false);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
@@ -3659,6 +3718,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    diag_wire(p->diag);
     diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
                   (unsigned long)laid_ms);
@@ -4029,6 +4089,10 @@ static void agent_use(const char *agent)
 {
     g.way.agent = agent;
     g.way.identity = yonder_agent_identity(agent);
+    // The connections kept under the last identity go now. One still in use
+    // is left to its fetches, and no fetch under the new identity is given
+    // it (libfetch matches an HTTP/2 connection to who is asking).
+    os64_fetch_forget_idle();
     if (g.page.tree != NULL)
         say_laid_out(g.laid_ms);
 }
@@ -6024,11 +6088,32 @@ static int32_t css_picture(const Page *p, const flow_layer_t *l)
     return picture_find(p, url);
 }
 
+// The layers that may name a picture: a style's background layers, then
+// its mask's (MASKS.md § 6) — a mask's picture is fetched, sized and
+// repainted on arrival as a background's is. A mask's reference to an SVG
+// <mask> (`url(#id)`) names none: it is not drawn (MASKS.md § 8), and its
+// address is the page's own.
+static int32_t picture_layers(const flow_style_t *s)
+{
+    return flow_background_layers(s) + flow_mask_layers(s);
+}
+
+static flow_layer_t picture_layer(const flow_style_t *s, int32_t i)
+{
+    int32_t n = flow_background_layers(s);
+    if (i < n)
+        return flow_background_layer(s, i);
+    flow_layer_t l = flow_mask_layer(s, i - n).layer;
+    if (l.image != NULL && l.image_len > 0 && l.image[0] == '#')
+        l.image = NULL;
+    return l;
+}
+
 // Whether any of a style's layers shows picture `k`.
 static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
 {
-    for (int32_t i = 0; i < flow_background_layers(s); i++) {
-        flow_layer_t l = flow_background_layer(s, i);
+    for (int32_t i = 0; i < picture_layers(s); i++) {
+        flow_layer_t l = picture_layer(s, i);
         if (l.image != NULL && css_picture(p, &l) == k)
             return true;
     }
@@ -6098,8 +6183,8 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
     if (!walk->sheets)
         return false;
     bool fresh = false;             // a refusal the record had not met
-    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
-        flow_layer_t l = flow_background_layer(b->style, i);
+    for (int32_t i = 0; i < picture_layers(b->style); i++) {
+        flow_layer_t l = picture_layer(b->style, i);
         char url[OS64_FETCH_URL_MAX];
         if (l.image == NULL)
             continue;
@@ -6125,8 +6210,11 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         } else if ((k = picture_for(p, url)) < 0) {
             fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+        // The canvas's owner's background is tiled in the root's origin box;
+        // its mask, in its own.
         yonder_tile_t tile;
-        const flow_box_t *in = b == walk->owner && walk->root != NULL ? walk->root : b;
+        const flow_box_t *in = b == walk->owner && walk->root != NULL &&
+                                       i < flow_background_layers(b->style) ? walk->root : b;
         if (k >= 0 && picture_tile(p, &p->pics[k], &l, yonder_box_edge(in, in->rect, l.origin), 0, 0, &tile))
             picture_drawn_at(p, k, tile.at.w, tile.at.h, b->style->pixelated);
     }
@@ -8329,15 +8417,18 @@ typedef struct {
 } SheetPicturesSeen;
 
 // One box of the view's walk: which pictures does a sheet put behind it?
+// The canvas's owner's background is asked apart (pictures_seen); its mask
+// is its box's own, drawn there, so it is asked here.
 static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
 {
     SheetPicturesSeen *look = ctx;
     os64_gui_rect_t meet;
-    if (b == look->owner || !box_draws_background(b) ||
+    if (!box_draws_background(b) ||
         !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
-    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
-        flow_layer_t l = flow_background_layer(b->style, i);
+    for (int32_t i = b == look->owner ? flow_background_layers(b->style) : 0;
+         i < picture_layers(b->style); i++) {
+        flow_layer_t l = picture_layer(b->style, i);
         int32_t k = l.image != NULL ? css_picture(&g.page, &l) : -1;
         if (k < 0 || k >= look->n)
             continue;
@@ -13695,6 +13786,17 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
                 (g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2") :
                 g.stream.head.tls_resumed ? "1.3 (resumed)" : "1.3");
         }
+        // Which HTTP carried the page, for one that came over a network and
+        // not from bytes kept here: over HTTP/2, the stream it was on its
+        // connection, which says whether the connection was new (a client's
+        // first stream) or one an earlier request had made. A plain line:
+        // it is how the page came, and a replay rebuilds nothing from it.
+        if (g.stream.local == NULL && g.stream.head.http2) {
+            char spoke[40];
+            os64_snprintf(spoke, sizeof(spoke), "2 (stream %u)", (unsigned)g.stream.head.h2_stream);
+            yonder_diag_fact(fresh.diag, "HTTP", spoke);
+        } else if (g.stream.local == NULL && g.stream.head.status != 0)
+            yonder_diag_fact(fresh.diag, "HTTP", "1.1");
         // The server's answer, for every page from the network (0 when its
         // protocol has none), which a replay requires rather than assumes.
         // One that is an error is shown, as a browser shows it, and is a
@@ -14721,7 +14823,10 @@ static void svg_picture_pixels_free(yonder_svg_pixels_t *out)
 // whether there is one, and one that has arrived is tiled across `area`
 // over what is under it — sheet layer `layer`'s at the size, position and
 // repeat it says, in the origin box the painter names, or (`layer` -1) an
-// attribute's natural size at the page zoom, from (ox, oy).
+// attribute's natural size at the page zoom, from (ox, oy). A mask layer's
+// (YONDER_MASK_LAYER) is drawn as a sheet layer's is; one not yet arrived
+// draws nothing, so its coverage hides the box until it comes (MASKS.md
+// § 10, ruling 2).
 static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
                            const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip)
@@ -14732,13 +14837,19 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     flow_layer_t l = {0};
     if (area == NULL) {
         // Only asking: a sheet's picture, whether it has come or not, or
-        // an attribute's.
+        // an attribute's — or, for a mask layer, whether that layer names
+        // one (a rounded box asks before it draws, round_backdrop).
+        if (layer >= 0 && (layer & YONDER_MASK_LAYER) != 0)
+            return flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer.image != NULL;
         for (int32_t i = 0; i < flow_background_layers(b->style); i++)
             if (flow_background_layer(b->style, i).image != NULL)
                 return true;
         return b->node != NULL && b->pseudo == 0 && os64_page_background_for(page_model(p), b->node) >= 0;
     }
-    if (layer >= 0) {
+    if (layer >= 0 && (layer & YONDER_MASK_LAYER) != 0) {
+        l = flow_mask_layer(b->style, layer & ~YONDER_MASK_LAYER).layer;
+        k = css_picture(p, &l);
+    } else if (layer >= 0) {
         l = flow_background_layer(b->style, layer);
         k = css_picture(p, &l);
     } else {
@@ -15364,7 +15475,8 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 }
 
 // Its pixels recovered from the two sheets, into the black one, filtered
-// (filter.h) and laid onto each target outside at `alpha` by `mode`: a
+// (filter.h), times its coverage `cover` (NULL for all), and laid onto
+// each target outside at `alpha` by `mode`: a
 // sheet pixel (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the
 // target's offset taking that onto its pixels, inside what the target
 // paints. Laid normal where the targets outside are a group's sheets,
@@ -15374,7 +15486,7 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 // for the filter's work, laid unfiltered; either counted once
 // (yonder_paint_layers_refused).
 static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                             uint8_t alpha, flow_blend_t mode)
+                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     GlassPane *gp = ctx;
     GlassThrough *t = pane_sheets_close(gp);
@@ -15394,6 +15506,8 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
             plain = true;
         }
     }
+    if (cover != NULL)
+        yonder_layer_cover(layer, (size_t)w * (size_t)h, cover);
     if (mode != FLOW_BLEND_NORMAL && (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)) {
         mode = FLOW_BLEND_NORMAL;
         plain = true;
@@ -15405,6 +15519,20 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
         yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
                          t->bounds.x + on->dx, t->bounds.y + on->dy, alpha, mode);
     }
+    through_free(t);
+}
+
+// A capture's coverage (MASKS.md § 3): its pixels recovered from its two
+// sheets, read as alpha or luminance into `out`, and the sheets freed,
+// laid nowhere.
+static void pane_layer_take(void *ctx, uint8_t *out, bool luminance)
+{
+    GlassThrough *t = pane_sheets_close(ctx);
+    if (t == NULL)
+        return;
+    yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
+    yonder_layer_recover(&s, t->surf[0].pixels);
+    yonder_mask_take(t->surf[0].pixels, (size_t)t->bounds.w * (size_t)t->bounds.h, luminance, out);
     through_free(t);
 }
 
@@ -15600,10 +15728,17 @@ static bool timed_layer_open(void *ctx, os64_gui_rect_t bounds)
 }
 
 static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                              uint8_t alpha, flow_blend_t mode)
+                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
 {
     cost_begin(PS_FILTERS);
-    pane_layer_close(ctx, filter, n, current, alpha, mode);
+    pane_layer_close(ctx, filter, n, current, alpha, mode, cover);
+    cost_end(PS_FILTERS);
+}
+
+static void timed_layer_take(void *ctx, uint8_t *out, bool luminance)
+{
+    cost_begin(PS_FILTERS);
+    pane_layer_take(ctx, out, luminance);
     cost_end(PS_FILTERS);
 }
 
@@ -15647,7 +15782,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
-                        timed_layer_open, timed_layer_close, timed_backdrop_filter};
+                        timed_layer_open, timed_layer_close, timed_backdrop_filter,
+                        timed_layer_take};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;

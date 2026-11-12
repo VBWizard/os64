@@ -332,6 +332,48 @@ static void blend_cases(void)
     expect("blend: plus-darker is laid as normal", a == b, NULL);
 }
 
+// Masks (MASKS.md § 3): a capture's coverage, the four operators worked
+// by hand in 255ths (rounded to the nearest), and a layer times coverage.
+static void mask_cases(void)
+{
+    // Alpha, and luminance: premultiplied half-white is 128 of luminance
+    // as of alpha; pure green is feColorMatrix's 0.7154 of 255, 182.
+    const uint32_t layer[3] = {0x80808080u, 0xff00ff00u, 0x00000000u};
+    uint8_t got[3];
+    yonder_mask_take(layer, 3, false, got);
+    expect("mask: alpha is the coverage", got[0] == 128 && got[1] == 255 && got[2] == 0, NULL);
+    yonder_mask_take(layer, 3, true, got);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "got %d %d %d", got[0], got[1], got[2]);
+    expect("mask: luminance of the premultiplied colour", got[0] == 128 && got[1] == 182 && got[2] == 0,
+           detail);
+    // Source 204 (0.8) over destination 102 (0.4): add 0.8 + 0.4 * 0.2 =
+    // 0.88 (224); subtract 0.8 * 0.6 = 0.48 (122); intersect 0.8 * 0.4 =
+    // 0.32 (82); exclude 0.48 + 0.4 * 0.2 = 0.56 (143).
+    static const struct { flow_composite_t op; uint8_t want; const char *name; } kOps[] = {
+        {FLOW_COMPOSITE_ADD, 224, "mask: add is source-over"},
+        {FLOW_COMPOSITE_SUBTRACT, 122, "mask: subtract is source-out"},
+        {FLOW_COMPOSITE_INTERSECT, 82, "mask: intersect is source-in"},
+        {FLOW_COMPOSITE_EXCLUDE, 143, "mask: exclude is xor"},
+    };
+    for (size_t k = 0; k < sizeof(kOps) / sizeof(kOps[0]); k++) {
+        uint8_t run = 102, c = 204;
+        yonder_mask_combine(&run, &c, 1, kOps[k].op);
+        snprintf(detail, sizeof(detail), "got %d", run);
+        expect(kOps[k].name, run == kOps[k].want, detail);
+    }
+    // The ends: anything over full is full; exclude of two fulls is none.
+    uint8_t full = 255, one = 255;
+    yonder_mask_combine(&full, &one, 1, FLOW_COMPOSITE_EXCLUDE);
+    expect("mask: exclude of two fulls is none", full == 0, NULL);
+    // Every channel times the coverage: 0x80 of each at 128 is 64.
+    uint32_t px[2] = {0x80808080u, 0xff102030u};
+    const uint8_t cover[2] = {128, 255};
+    yonder_layer_cover(px, 2, cover);
+    expect("mask: a layer is multiplied through, full coverage untouched",
+           px[0] == 0x40404040u && px[1] == 0xff102030u, NULL);
+}
+
 int main(void)
 {
     colour_cases();
@@ -342,6 +384,7 @@ int main(void)
     shadow_cases();
     backdrop_cases();
     blend_cases();
+    mask_cases();
     printf("yonder filter: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

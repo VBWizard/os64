@@ -31,7 +31,7 @@
 #include "tls/tls.h"
 
 // HTTP2.md § 4 H2.4's table gives each number its reason.
-#define H2_READER_SLICE_MS   500u
+#define H2_READER_SLICE_MS   100u
 #define H2_WRITE_PATIENCE_MS 30000u
 #define H2_OUT_MARK          (256u * 1024u)
 #define H2_OUT_CONTROL_MOST  (1024u * 1024u)
@@ -45,13 +45,31 @@
 typedef struct h2_conn h2_conn_t;
 typedef struct h2_stream h2_stream_t;
 
-// What the client says first: its SETTINGS in the order given, and the
-// WINDOW_UPDATE that raises the connection's receive window from the
-// protocol's 65,535 (0 sends none). A preset's, from H2.5.
+// How a new stream's HEADERS states a priority (RFC 9113 § 5.3.2 calls the
+// scheme deprecated; browsers still send it, and it is part of what a
+// server can tell one from another by).
+typedef enum {
+    H2_PRIORITY_NONE = 0,   // HEADERS carries none
+    H2_PRIORITY_FLAT,       // depends on stream 0, not exclusive: Firefox's
+    // Exclusive, on a stream this connection still has: of those whose
+    // weight is at least the new one's, the lightest, and of those the most
+    // recently opened; stream 0 when there is none. Chromium's rule
+    // (HTTP2.md § 4 H2.5, capture C3).
+    H2_PRIORITY_CHAINED,
+} h2_priority_mode_t;
+
+// What the client says first and how it opens streams: its SETTINGS in the
+// order given; the WINDOW_UPDATE that raises the connection's receive
+// window from the protocol's 65,535 (0 sends none); the id of its first
+// stream (odd; 0 means 1); a WINDOW_UPDATE sent on each new stream straight
+// after its HEADERS (0 sends none); and how HEADERS states a priority.
 typedef struct {
     const h2_setting_t *settings;
     uint32_t count;
     uint32_t window_increment;
+    uint32_t first_stream;
+    uint32_t stream_increment;
+    h2_priority_mode_t priority;
 } h2_greeting_t;
 
 // The pool's side. Each is called by the connection with NONE of its own
@@ -116,6 +134,13 @@ typedef struct {
     uint32_t reset_code;
 } h2_ending_t;
 
+// Whether a connection can say `greeting`: at most 64 settings, each value
+// in the range RFC 9113 § 6.5.2 gives it, a frame size and a header table
+// this will hold, an odd first stream, and no receive window, the
+// connection's or a stream's, past 2^31 - 1. h2_conn_adopt refuses one that
+// is not.
+bool h2_greeting_ok(const h2_greeting_t *greeting);
+
 // Take over a TLS engine whose handshake is done and its socket (libtls's
 // os64_tls_transport_release), with the ciphertext that came with them;
 // plaintext the engine already holds is read first too.
@@ -129,6 +154,10 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
 // no GOAWAY, has not gone quiet, has fewer streams than the peer and
 // H2_STREAMS_MOST allow, and has a stream id left to give.
 bool h2_conn_room(h2_conn_t *conn);
+// Whether the server ended it with a GOAWAY that said HTTP_1_1_REQUIRED: a
+// fact of the connection, there to be asked whether or not the asker had a
+// stream on it when the GOAWAY came.
+bool h2_conn_wants_h1(h2_conn_t *conn);
 // How many streams it has now, how many bytes wait in its out queue, and
 // how many bytes its streams' receive buffers are allocated to hold.
 uint32_t h2_conn_streams(h2_conn_t *conn);
@@ -143,9 +172,11 @@ void h2_conn_release(h2_conn_t *conn);
 // `ends` (no body follows). `bodiless` says the request is a HEAD: its
 // response states a length and carries no content. Content on such a
 // response, or on a 204 or a 304, resets the stream (H2_END_BAD_LENGTH). Waits, under `wait`, while the
-// out queue is past its mark. On H2_OK `*stream` is the caller's to close.
+// out queue is past its mark. `weight` is the stream's priority weight, 1 to
+// 256, used when the connection's greeting says HEADERS states one.
+// On H2_OK `*stream` is the caller's to close.
 h2_result_t h2_stream_open(h2_conn_t *conn, const h2_field_t *fields, size_t count, bool ends, bool bodiless,
-                           h2_wait_t *wait, h2_stream_t **stream);
+                           uint32_t weight, h2_wait_t *wait, h2_stream_t **stream);
 
 // Request body bytes, with END_STREAM after the last when `ends`. Waits for
 // the stream's and the connection's send windows and at the out queue's

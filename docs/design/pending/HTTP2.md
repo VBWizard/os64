@@ -559,7 +559,10 @@ fields as a LIST: pseudo-headers (`:method`, `:authority`, `:scheme`,
   `Proxy-Connection`, `Transfer-Encoding`, `Upgrade`) are not rendered on
   h2, whatever `keep_alive` says — a preset's `Connection: keep-alive`
   describes its browser's h1 request, and its browser does not send it on
-  h2 either. `TE` is not sent at all.
+  h2 either. `TE` is sent only as `trailers`, the one value HTTP/2
+  allows, and only by a caller whose browser sends it (Firefox does, on
+  every request: capture C2; the connection reads trailers, so the line
+  is true). A caller's own lines cannot hold a TE.
 - **Cookies are crumbled on send and joined on receipt** (RFC 9113
   § 8.2.3): a `Cookie` line is sent as one `cookie` field per
   cookie-pair, as Chrome does, which is what lets HPACK index them
@@ -1437,7 +1440,7 @@ deadline and its resumption plumbing written a second time.
 
 | Name | Value | Why |
 |---|---|---|
-| `H2_READER_SLICE_MS` | 500 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, and it costs two wakes a second for each h2 connection, 32 at the pool's sixteen. A second doubles the linger; a quarter doubles the wakes for a delay nobody sees. |
+| `H2_READER_SLICE_MS` | 100 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, which a fetch needing that socket's place waits out, and it costs ten wakes a second for each h2 connection. It was 500 until the P5 measurement (H2.5, as built): a page of thirty hosts evicts on nearly every new host, and the linger was seen. |
 | `H2_WRITE_PATIENCE_MS` | 30000 | How long the socket may refuse the queue's head before the connection dies: `FETCH_IDLE_MS_DEFAULT`, since the bytes are every stream's and no one fetch's deadline is theirs. |
 | `H2_OUT_MARK` | 256 KiB | Past this much queued ciphertext, a sender with DATA or with a new stream to open parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the sender and not by memory. |
 | `H2_OUT_CONTROL_MOST` | 1 MiB | Past this much queued, the frames a PEER makes us owe (PING and SETTINGS acks, resets, credits) end the connection with ENHANCE_YOUR_CALM. A peer that floods pings at a socket it will not read is otherwise a way to grow the queue without bound. |
@@ -1978,8 +1981,15 @@ which is the thing to get right before any code:
      the slot at once let evictions pile up closing sockets past any
      bound). The price is that a fetch may wait, for at most a slice,
      on an h2 connection that was idle: § 2.2's "an idle connection
-     never makes a fetch wait" is exact for h1 and within half a second
-     for h2. The `dead` hook rings the waiters. The key's own cap does
+     never makes a fetch wait" is exact for h1 and within a slice
+     for h2. With the table holding no place, the least recently kept
+     idle h1 connection goes before any h2 one, since it closes at
+     once; with none, one idle h2 connection is condemned for each
+     fetch that wants a place, so a burst waits one slice together and
+     not one behind another. Fetches to one key that last answered h2
+     want one place between them: the first to wait asks for it, and
+     the rest wait for the connection it dials. The `dead` hook rings
+     the waiters. The key's own cap does
      not count the closing: they are leaving, and a server sees them
      go;
   5. otherwise wait, as today.
@@ -2629,6 +2639,176 @@ them. It gives the P5 a before-and-after on one build, which § 5's table
 wants, and a way round a site that breaks. `/sys/conf` shows which file
 answered, as for any reader.
 
+#### H2.5, as built (2026-11-11, Fable)
+
+What the build made of the brief, and where it left it.
+
+- **The offer.** `fetch_h2_offer` is gone. `dial` (fetch.c) offers
+  `h2, http/1.1` on an encrypted hop unless the fetch speaks HTTP/1.1
+  alone: its caller's `http1`, or `http2 = off` in net.conf, which
+  `h2_switched_off` reads once per process at the first fetch. The shipped
+  `/etc/net.conf` documents the line, commented out, and says that a
+  `/home/net.conf` is read in place of it and not on top of it.
+- **The greeting.** `os64_fetch_h2_t` (fetch.h) as the brief has it, with
+  one more member, `te_trailers`. A fetch copies its caller's at open, or
+  libfetch's own (`kOwnGreeting`), into a `fetch_pool_say_t` (pool.h): the
+  greeting by value and `http1`. That one value is what the pool compares
+  and what a dial hands `h2_conn_adopt`.
+- **A departure: typed fields, not lines.** The brief gave a caller
+  `h2_lines`, whole lines sent only over HTTP/2. The request model refuses
+  a caller's own `TE` line (it is libfetch's to say), so what a browser
+  adds over HTTP/2 is two typed things: `h2_priority` in the options (a
+  Priority value, per request) and `te_trailers` in the greeting (the
+  preset's, on every request). http.c walks them after every other line
+  unless `order` names them (`head_lines_next`), only for the HTTP/2
+  rendering, and no longer drops `te` there.
+- **The connection** (h2_conn.c): the greeting's `first_stream`,
+  `stream_increment` and `priority` mode; `h2_stream_open` takes a weight.
+  `chained_parent` is Chromium's rule as capture C3 shows it. A stream's
+  receive window is the SETTINGS' and the increment together
+  (`our_stream_window`), and its credit is given back at half of that. A
+  frame for a stream below the first is a frame for one this client never
+  opened, and the connection's error.
+- **The pool** (Quinn's finding): `same_say` compares two says value for
+  value, and `fetch_pool_take` shares an HTTP/2 connection, or waits on a
+  dial in flight, only for a fetch whose say is the same. A record keeps
+  its dialler's say from the moment its slot is reserved. A dial that
+  offered HTTP/1.1 alone leaves what is remembered of its host as it was
+  (`fetch_pool_dialled`): its answer says nothing of what the host speaks,
+  and the builder's own re-read found it forgetting hosts that speak
+  HTTP/2.
+- **A greeting is judged at open**, before any dial: at most eight
+  settings, a pseudo-header order that is the four letters once each
+  (`http_h2_pseudo_ok`, shared with the renderer), and what HTTP/2 itself
+  forbids of one (an even first stream, a window past 2^31 - 1, a
+  setting's value out of range), by the connection's own judgement
+  (`h2_greeting_ok`, which adoption asks too).
+- **A server that requires HTTP/1.1** (the cold read's finding: HTTP/2 is
+  on for every program now, and IIS answers this way for its Windows
+  sign-in). A stream reset, or a connection ended, with `HTTP_1_1_REQUIRED`
+  before the head (a GOAWAY that took up no stream among them: Codex's
+  round 1; and one heard before the fetch has a stream at all, which the
+  connection keeps as `h2_conn_wants_h1` for a fetch it then has no room
+  for: round 2) is remembered of the server's key
+  (`fetch_pool_require_h1`), and the request goes again; that try and
+  every later fetch to the key dial HTTP/1.1 (`hop_http1` in `acquire`),
+  for as long as the pool remembers the key.
+- **A page's own Priority stands.** Under a preset that adds a Priority
+  over HTTP/2, a request whose page headers carry one sends the page's
+  alone (`opt_base`, fetch_job.c), as over HTTP/1.1.
+- **net.conf's switch is kept only when the file was read or is absent.**
+  A read that failed otherwise leaves the question open for the next
+  fetch.
+- **An HTTP/1.1 connection is anyone's**, whatever ALPN its dial offered:
+  a costume may ride one a browser preset dialled, and the other way
+  round. The TLS handshake is not matched (§ 2.9); booked in DEBTS.
+- **libway and yonder.** `way_identity_t` carries the greeting, a weight
+  and an HTTP/2-only Priority for each destination, and `http1`;
+  `way_identity_h2` gives a destination with none the fetch row's.
+  `agent.c` holds the two greetings and the rows, from C1, C2 and C3; the
+  costumes say `http1`. The Chrome preset is 157's string and hints, and
+  its 156 string is retired to it. `os64_fetch_forget_idle` (new, public)
+  closes the kept connections, and yonder calls it when the agent changes.
+- **The head's fact, and the record.** `os64_fetch_head_t.http2`, and the
+  detail's `h2` and `h2_stream` on every head that came over HTTP/2.
+  **A departure:** yonder's record has no line for each request, so it
+  cannot say the protocol of each. It gains one fact for the page, `HTTP`:
+  `2 (stream N)` or `1.1`. A page's other requests are seen in a server's
+  log, or by `h2probe`.
+- **`/tests/h2probe`** links `libfetch.so`, sets no flag, and no longer
+  waits for the connection's reader before it returns (#543 made a
+  program's exit code its own).
+- **`tools/host_suites.py`** lists `test_tracker.py`, which was in tools/
+  and in no list, so the runner refused to start.
+
+**Proof, host.** `tools/test_fetch_h2_host.sh`: every row of the capture
+table for yonder's own, Chrome's and Firefox's presets, read by a scripted
+server from the client's frames, with the presets taken from `agent.c`
+itself; Chrome's dependencies on C3's streams; a font under Chrome; a
+greeting that cannot be sent; Quinn's two cases (a response still
+arriving, a dial still in flight), in which Firefox and Lynx each get a
+connection of their own and neither waits on Chrome's dial; seven
+greetings that differ from a held connection's in one thing each; `http1`
+beside a live HTTP/2 connection; and, in a process of its own, net.conf's
+switch. `tools/test_h2_conn_host.sh`: the three shapes of opening a
+stream, the stream window and its credit, a greeting the connection
+refuses. `tools/test_http_host.sh fields`: the pseudo-header orders, the
+two HTTP/2-only lines and their place, what is refused. The wire counters
+(#547) are counted on the HTTP/2 path at the same places.
+
+**Mutants.** `tools/test_fetch_h2_mutants.py` (125) and
+`tools/test_h2_conn_mutants.py` (140), through `tools/mutants_parallel.py`:
+the full run, before the cold read, caught 248 of 253. Three did not
+build and were rewritten; two were missed and each got a case (a
+greeting with one more setting than a held connection's; a third stream
+of a weight two open streams share). Those, the ones written after the
+run and the ones whose lines the cold read's fixes moved were then run
+alone, and each was caught: every mutant in both lists is caught on its
+latest run, and the two lists have not been run whole since the fixes.
+
+**Proof, QEMU** (headless, against `nghttpd -v` with the libtls fixture
+certificate; the logs and the comparison script are in the kit's
+`h2cap/proof/`). yonder loaded the capture page under the Chrome preset
+and under the Firefox preset, each on the e1000 and on virtio: one
+HTTP/2 connection and six streams every time, and no row of the capture
+table differing from that browser's capture (the SETTINGS, the
+connection's window, the first stream, each request's field names in
+order, its priority's weight and exclusive bit, its stream's window, and
+every value but Accept, Accept-Encoding, the host and the User-Agent's
+platform; which earlier stream a chained priority depends on is not
+compared, being a matter of what was still open). Under yonder's own
+preset, libfetch's own greeting. Under Lynx, and under Chrome with
+`http2 = off` in net.conf, the dial offered `http/1.1` alone; that server
+speaks HTTP/2 only and turned them away, so a page loading over HTTP/1.1
+with the switch off is proved on the host and not in the guest. The
+record of the Chrome load: `HTTP: 2 (stream 1)`, one connection made,
+six requests sent over HTTP/2, no fetch waited.
+
+**Codex.** Three rounds. The first two each found one way a server's `HTTP_1_1_REQUIRED` went unheard (above); the third was clean, at `e8dd1d0f`.
+
+**The P5 measurement** (2026-11-12, Chris: nine sites, thirty-two page
+loads a round, three rounds before the switch and three after, the Chrome
+preset, the cache off, the records' `wire` facts summed a round).
+Connections made: 423, 417, 406 before; 230, 206, 227 after. The load
+events summed: 37.8, 35.4 and 38.9 seconds before; 35.3, 36.8 and 36.3
+after, which is inside the spread of either. The switch removes
+handshakes, and on these pages the time to load is parsing, script and
+layout.
+
+It also showed a cost this brief had priced wrongly. Fetches that waited
+for a connection: 52, 74 and 97 a round before, under 3.5 seconds summed;
+about 200 a round after, 91 to 101 seconds summed, nearly all on two
+sites whose pages speak to about thirty hosts. With sixteen places and
+every one an idle HTTP/2 connection, each new host evicted one and waited
+for its reader's look, half a second at the most, and a second fetch
+waited behind the first: the table condemned one connection at a time.
+Two changes, made after the measurement and before the merge. A fetch
+the table has no place for now has an idle HTTP/1.1 connection closed
+before any HTTP/2 one, which admits it at once, and with none an idle
+HTTP/2 one is condemned for each fetch that wants a place, so a burst
+waits one look together; fetches to one host that speaks h2 want one
+place between them (`fetch_pool_take`). And `H2_READER_SLICE_MS` is 100,
+so that look is a tenth of a second at the most. Three cases hold the
+reader's closes back to prove each rule, and mutants of each. The cure is the kernel
+verb DEBTS names; until it exists the reader's wakes are the price.
+
+One round on the P5 with both changes: 144 fetches waited, 7.3 seconds
+summed, about 50 ms a wait where it had been about 500; the three pages
+of the thirty-host site 107 waits and 5.7 seconds, where they had been
+about 135 and 80. Connections made, 245, and the load events summed,
+35.7 seconds, are where the three rounds before the changes were, with
+one page apart: the thirty-host site's first page made 50 connections
+where it had made 31 to 35. One round does not say whether that is the
+page or the pool. A host not yet known to speak h2 is still dialled once
+for each fetch of a burst (§ 2.2), and with the table full each of those
+dials now closes a connection at once where it used to wait its turn.
+A round under yonder's own agent agreed: 254 connections, 145 fetches
+waiting 7.6 seconds summed, that page 40 connections. And `h2probe`
+against a live site: twelve fetches at once, one HTTP/2 connection.
+
+**Not done.** A Firefox Reload's place for `te` beside `Pragma` and
+`Cache-Control`, which was not captured: `te` follows them here.
+
 ## 5. Proof, across the arc
 
 - **Host first, always.** H2.3 and most of H2.4 are pure or scripted and
@@ -2651,6 +2831,17 @@ answered, as for any reader.
   them; arrival time following on the pages whose wait was connections,
   and not on the one whose wait is QuickJS under TCG. The P5's storefront
   is the figure QEMU cannot stand in for, and Chris reads it.
+- **How it is read.** yonder's record of a page (`diagnostics =` in
+  yonder.conf) carries five `wire` facts beside `arrived after`: the
+  connections the load made and what each spoke, its TLS handshakes and
+  how many resumed, its requests and what carried them, how many fetches
+  waited for a connection and for how long in all, and what the cache
+  answered without the wire. They are libfetch's counters
+  (`os64_fetch_counts`, every fetch in the process) and the cache's, read
+  when the load begins and subtracted each time the record is written, so
+  the last writing of a record has the whole load. A before and an after
+  are comparable when their `wire cache` lines agree: a load the cache
+  answered did not cost what it would have.
 
 ## 6. The books
 

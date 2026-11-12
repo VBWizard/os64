@@ -228,6 +228,48 @@ static void gradient_style_cases(void)
         "    div block color=#008000 gradient=linear:90000:#ff0000@auto,currentColor@auto\n"
         "    div block gradient=radial:ellipse farthest-corner at 50%/50%:"
         "#ff0000@auto,#0000ff@auto\n");
+    // A conic gradient (Images 4 § 3.3): where its turn starts, its centre,
+    // and stops in degrees (PX) or percentages of the turn; and one colour
+    // with two positions, which is two stops.
+    cascade_case("gradients: conic, and one colour with two positions", 400,
+        "<!doctype html><style>"
+        ".a{background-image:conic-gradient(red,blue)}"
+        ".b{color:green;background-image:conic-gradient(from 90deg at 4px 4px,#0000 90deg,currentColor 0)}"
+        ".c{background-image:repeating-conic-gradient(#0000 0 35deg,#514b82 0 90deg)}"
+        ".d{background-image:conic-gradient(from 0.25turn,red 25%,blue 1turn)}"
+        ".e{background-image:linear-gradient(orange 0 0)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=conic:from 0 at 50%/50%:#ff0000@auto,#0000ff@auto\n"
+        "    div block color=#008000 gradient=conic:from 90000 at 4/4:#000000/0@90,currentColor@0\n"
+        "    div block gradient=repeating-conic:from 0 at 50%/50%:#000000/0@0,#000000/0@35,#514b82@0,#514b82@90\n"
+        "    div block gradient=conic:from 90000 at 50%/50%:#ff0000@25%,#0000ff@360\n"
+        "    div block gradient=linear:180000:#ffa500@0,#ffa500@0\n");
+    // A mask's layers (MASKS.md § 5), each as a background's with its
+    // origin's initial box the border box, then its operator and mode when
+    // not the initial ones; a mask of `none` layers dumps none, and a
+    // plain inline's is dumped though it is not drawn.
+    cascade_case("masks: each layer, its operator and its mode", 400,
+        "<!doctype html><style>"
+        ".a{mask:url(i.svg) center/50% no-repeat padding-box no-clip}"
+        ".b{-webkit-mask:linear-gradient(#000 0 0) content-box,conic-gradient(red,blue) exclude luminance}"
+        ".c{mask:none,none}"
+        "span{mask-image:linear-gradient(red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div><span>s</span>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block mask=0 mask-image=\"i.svg\"@0 no-repeat 50%/50% mask-size=50%/auto"
+        " mask-origin=padding-box mask-clip=no-clip\n"
+        "    div block mask=0 mask-origin=content-box mask-clip=content-box"
+        " gradient=linear:180000:#000000@0,#000000@0 mask=1"
+        " gradient=conic:from 0 at 50%/50%:#ff0000@auto,#0000ff@auto mask-composite=exclude"
+        " mask-mode=luminance\n"
+        "    div block\n"
+        "    span inline mask=0 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
     // An angle is taken round the circle before it is scaled: 1e20 degrees
     // is fmod's 280, not whatever an overflowed integer makes of it.
     cascade_case("gradients: an angle of any size", 400,

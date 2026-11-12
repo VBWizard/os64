@@ -1292,6 +1292,21 @@ bool way_identity_keep_alive(const way_identity_t *id)
     return id != NULL && id->keep_alive;
 }
 
+void way_identity_h2(const way_identity_t *id, way_dest_t dest, const struct os64_fetch_h2 **greeting,
+                     uint32_t *weight, const char **priority, bool *http1)
+{
+    bool known = id != NULL && dest < WAY_DESTS;
+    if (greeting != NULL)
+        *greeting = id != NULL ? id->h2 : NULL;
+    if (weight != NULL)
+        *weight = !known ? 0 : id->h2_weight[dest] != 0 ? id->h2_weight[dest] : id->h2_weight[WAY_DEST_EMPTY];
+    if (priority != NULL)
+        *priority = !known ? NULL
+                  : id->h2_priority[dest] != NULL ? id->h2_priority[dest] : id->h2_priority[WAY_DEST_EMPTY];
+    if (http1 != NULL)
+        *http1 = id != NULL && id->http1;
+}
+
 // UNKNOWN has no token: a request whose site is unknown says none of it.
 static const char *site_token(way_site_t site)
 {

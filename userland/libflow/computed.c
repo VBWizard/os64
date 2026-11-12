@@ -213,7 +213,9 @@ static const char *const kPlace[] = {"normal", "auto", "stretch", "flex-start", 
                                      "self-end", "left", "right", "space-between",
                                      "space-around", "space-evenly"};
 static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text"};
+static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text", "no-clip"};
+static const char *const kComposite[] = {"add", "subtract", "intersect", "exclude"};
+static const char *const kMaskMode[] = {"alpha", "luminance", "match-source"};
 static const char *const kGeneric[] = {"serif", "sans-serif", "monospace"};
 static const char *const kAnimDirection[] = {"normal", "reverse", "alternate", "alternate-reverse"};
 static const char *const kFill[] = {"none", "forwards", "backwards", "both"};
@@ -247,7 +249,9 @@ _Static_assert(F_ARRAY(kDirection) == FLOW_FLEX_COLUMN_REVERSE + 1, "kDirection"
 _Static_assert(F_ARRAY(kWrap) == FLOW_FLEX_WRAP_REVERSE + 1, "kWrap");
 _Static_assert(F_ARRAY(kPlace) == FLOW_PLACE_SPACE_EVENLY + 1, "kPlace");
 _Static_assert(F_ARRAY(kRepeat) == FLOW_NO_REPEAT + 1, "kRepeat");
-_Static_assert(F_ARRAY(kEdge) == FLOW_EDGE_TEXT + 1, "kEdge");
+_Static_assert(F_ARRAY(kEdge) == FLOW_EDGE_NO_CLIP + 1, "kEdge");
+_Static_assert(F_ARRAY(kComposite) == FLOW_COMPOSITE_EXCLUDE + 1, "kComposite");
+_Static_assert(F_ARRAY(kMaskMode) == FLOW_MASK_MATCH_SOURCE + 1, "kMaskMode");
 _Static_assert(F_ARRAY(kGeneric) == FLOW_GENERIC_MONO + 1, "kGeneric");
 _Static_assert(F_ARRAY(kAnimDirection) == GARB_DIRECTION_ALTERNATE_REVERSE + 1, "kAnimDirection");
 _Static_assert(F_ARRAY(kFill) == GARB_FILL_BOTH + 1, "kFill");
@@ -731,6 +735,27 @@ static void gradient(const flow_computed_t *c, Out *o, const flow_gradient_t *g)
             puts_(o, "deg");
             any = true;
         }
+    } else if (g->kind == FLOW_GRADIENT_CONIC) {
+        // What the page left at its initial value is left out, as Chrome
+        // writes it: `from 0deg` and `at center`.
+        puts_(o, "conic-gradient(");
+        if (g->angle != 0) {
+            puts_(o, "from ");
+            number(o, g->angle / 1000.0);
+            puts_(o, "deg");
+            any = true;
+        }
+        bool centred = true;
+        for (int k = 0; k < 2; k++)
+            centred = centred && g->centre[k].kind == FLOW_LENGTH_PERCENT && g->centre[k].value == 50 * 64 &&
+                      g->centre[k].offset == 0;
+        if (!centred) {
+            puts_(o, any ? " at " : "at ");
+            length(c, o, g->centre[0], "auto");
+            puts_(o, " ");
+            length(c, o, g->centre[1], "auto");
+            any = true;
+        }
     } else {
         static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
                                               "closest-corner", ""};
@@ -763,8 +788,12 @@ static void gradient(const flow_computed_t *c, Out *o, const flow_gradient_t *g)
             if (st->at.kind != FLOW_LENGTH_AUTO)
                 puts_(o, " ");
         }
-        if (st->at.kind != FLOW_LENGTH_AUTO)
+        if (st->at.kind == FLOW_LENGTH_PX && g->kind == FLOW_GRADIENT_CONIC) {
+            number(o, st->at.value / 64.0);         // degrees round the turn
+            puts_(o, "deg");
+        } else if (st->at.kind != FLOW_LENGTH_AUTO) {
             length(c, o, st->at, "");
+        }
     }
     puts_(o, ")");
 }
@@ -1210,7 +1239,16 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         return o.len;
     const flow_style_t *s = c->style;
     int side = 0;
-    switch (prop) {
+    // A mask's placing longhands are written as their background twins
+    // are, from the mask's lists; its origin starts at the border box.
+    static const garb_prop_t kTwin[] = {
+        GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+        GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+        GARB_BACKGROUND_CLIP};
+    bool mask = prop >= GARB_MASK_IMAGE && prop <= GARB_MASK_CLIP;
+    const flow_backgrounds_t *bg = mask ? &s->masks.layers : &s->backgrounds;
+    int32_t twin = mask ? (int32_t)kTwin[prop - GARB_MASK_IMAGE] : prop;
+    switch (twin) {
     case GARB_DISPLAY:
         if (s->display == FLOW_DISPLAY_BLOCK && s->flow_root)
             puts_(&o, "flow-root");
@@ -1225,28 +1263,28 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
             puts_(&o, "rgba(0, 0, 0, 0)");
         break;
     case GARB_BACKGROUND_IMAGE:
-        if (s->backgrounds.nimage <= 0)
+        if (bg->nimage <= 0)
             puts_(&o, "none");
-        for (int32_t i = 0; i < s->backgrounds.nimage; i++) {
+        for (int32_t i = 0; i < bg->nimage; i++) {
             if (i > 0)
                 puts_(&o, ", ");
-            image(c, &o, &s->backgrounds.image[i]);
+            image(c, &o, &bg->image[i]);
         }
         break;
     case GARB_BACKGROUND_REPEAT:
-        if (s->backgrounds.nrepeat <= 0)
+        if (bg->nrepeat <= 0)
             puts_(&o, "repeat");
-        for (int32_t i = 0; i < s->backgrounds.nrepeat; i++) {
+        for (int32_t i = 0; i < bg->nrepeat; i++) {
             if (i > 0)
                 puts_(&o, ", ");
-            WORD(&o, kRepeat, s->backgrounds.repeat[i]);
+            WORD(&o, kRepeat, bg->repeat[i]);
         }
         break;
     case GARB_BACKGROUND_POSITION_X:
     case GARB_BACKGROUND_POSITION_Y: {
-        bool x = prop == GARB_BACKGROUND_POSITION_X;
-        const flow_length_t *list = x ? s->backgrounds.x : s->backgrounds.y;
-        int32_t n = x ? s->backgrounds.nx : s->backgrounds.ny;
+        bool x = twin == GARB_BACKGROUND_POSITION_X;
+        const flow_length_t *list = x ? bg->x : bg->y;
+        int32_t n = x ? bg->nx : bg->ny;
         if (n <= 0)
             puts_(&o, "0%");
         for (int32_t i = 0; i < n; i++) {
@@ -1257,10 +1295,10 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         break;
     }
     case GARB_BACKGROUND_SIZE:
-        if (s->backgrounds.nsize <= 0)
+        if (bg->nsize <= 0)
             puts_(&o, "auto");
-        for (int32_t i = 0; i < s->backgrounds.nsize; i++) {
-            const flow_bg_size_t *z = &s->backgrounds.size[i];
+        for (int32_t i = 0; i < bg->nsize; i++) {
+            const flow_bg_size_t *z = &bg->size[i];
             if (i > 0)
                 puts_(&o, ", ");
             if (z->fit == FLOW_FIT_COVER) {
@@ -1278,11 +1316,11 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         break;
     case GARB_BACKGROUND_ORIGIN:
     case GARB_BACKGROUND_CLIP: {
-        bool origin = prop == GARB_BACKGROUND_ORIGIN;
-        const flow_edge_t *list = origin ? s->backgrounds.origin : s->backgrounds.clip;
-        int32_t n = origin ? s->backgrounds.norigin : s->backgrounds.nclip;
+        bool origin = twin == GARB_BACKGROUND_ORIGIN;
+        const flow_edge_t *list = origin ? bg->origin : bg->clip;
+        int32_t n = origin ? bg->norigin : bg->nclip;
         if (n <= 0)
-            puts_(&o, origin ? "padding-box" : "border-box");
+            puts_(&o, origin && !mask ? "padding-box" : "border-box");
         for (int32_t i = 0; i < n; i++) {
             if (i > 0)
                 puts_(&o, ", ");
@@ -1290,6 +1328,20 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         }
         break;
     }
+    case GARB_MASK_COMPOSITE:
+        for (int32_t i = 0; i < s->masks.ncomposite; i++) {
+            if (i > 0)
+                puts_(&o, ", ");
+            WORD(&o, kComposite, s->masks.composite[i]);
+        }
+        break;
+    case GARB_MASK_MODE:
+        for (int32_t i = 0; i < s->masks.nmode; i++) {
+            if (i > 0)
+                puts_(&o, ", ");
+            WORD(&o, kMaskMode, s->masks.mode[i]);
+        }
+        break;
     case GARB_MARGIN_LEFT: side++; /* fall through */
     case GARB_MARGIN_BOTTOM: side++; /* fall through */
     case GARB_MARGIN_RIGHT: side++; /* fall through */

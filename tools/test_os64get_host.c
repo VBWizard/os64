@@ -363,12 +363,15 @@ const char *os64_tls_error_description(os64_tls_status_t s, os64_tls_policy_reas
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
     const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
 {
-    assert(limits && limits->handshake_ms == FETCH_IDLE_MS_DEFAULT && c->trust == &host_trust && c->alpn_count == 1);
+    assert(limits && limits->handshake_ms == FETCH_IDLE_MS_DEFAULT && c->trust == &host_trust && c->alpn_count == 2);
     const char *hostname = is("url-tls-ip") ? "10.0.2.2" :
         is("url-tls-name") ? "bad_name" :
         is("url-tls-other") && tls_created ? "other" : "host";
     assert(c->hostname.length == strlen(hostname) && !memcmp(c->hostname.data, hostname, strlen(hostname)));
-    assert(c->alpn[0].length == 8 && !memcmp(c->alpn[0].data, "http/1.1", 8));
+    // os64get offers HTTP/2 ahead of HTTP/1.1, as every libfetch caller that
+    // does not say otherwise; this server answers HTTP/1.1.
+    assert(c->alpn[0].length == 2 && !memcmp(c->alpn[0].data, "h2", 2));
+    assert(c->alpn[1].length == 8 && !memcmp(c->alpn[1].data, "http/1.1", 8));
     *out = NULL;
     if (is("url-tls-cert")) return OS64_TLS_CERTIFICATE;
     if (is("url-tls-ip")) return OS64_TLS_UNSUPPORTED;

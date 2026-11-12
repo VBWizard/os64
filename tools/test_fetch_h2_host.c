@@ -1,7 +1,8 @@
-// test_fetch_h2_host.c — libfetch's driver and pool with HTTP/2 offered
-// (fetch_h2_offer), against scripted servers, with real threads:
-// tools/test_fetch_h2_host.sh builds it under ASan and UBSan, then TSan.
-// HTTP2.md § 4 H2.6 lists the cases.
+// test_fetch_h2_host.c — libfetch's driver and pool over HTTP/2, against
+// scripted servers, with real threads: tools/test_fetch_h2_host.sh builds
+// it under ASan and UBSan, then TSan. HTTP2.md § 4 H2.6 and H2.5 list the
+// cases. Run with H2_SWITCH_OFF set, it is a process whose net.conf says
+// `http2 = off`, and runs the cases for that alone.
 //
 // THE SEAM is the one tools/test_fetch_host.c cuts (libos64's calls and
 // libtls's transport), with tools/h2_peer.c under it: every dial is a wire
@@ -23,10 +24,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "agent.h"
 #include "fetch/fetch.h"
 #include "fetch/transport.h"
 #include "h2_peer.h"
 #include "host_bell.h"
+#include "os64/conf.h"
 #include "os64/os64.h"
 #include "pool.h"
 #include "fixtures.h"
@@ -73,6 +76,9 @@ typedef enum {
     R_ECHO,             // the request's body back, once it has all come
     R_REFUSE_ONCE_HELD, // RST_STREAM(REFUSED_STREAM) the first time; then the head, and no body
     R_UNENDED,          // the head and the whole body, and the stream left open after it
+    R_WANTS_H1,         // over HTTP/2, RST_STREAM(HTTP_1_1_REQUIRED); over HTTP/1.1, the reply
+    R_WANTS_H1_GOAWAY,  // ...the same, said as the connection's GOAWAY, this stream among those it took up
+    R_WANTS_H1_GOAWAY_0,// ...and as a GOAWAY that took up no stream at all
 } route_kind_t;
 
 typedef struct {
@@ -113,16 +119,32 @@ static route_t *route_for(const char *path, size_t len)
 
 // ── The dials, and the servers behind them ──────────────────────────────
 
+#define ASKED_MOST 8
+typedef struct {
+    uint32_t stream, window;
+    char priority[32];
+    char fields[1200];
+} asked_t;
+
 typedef struct {
     char host[64];
     int port, wire;
     const char *alpn;               // set by the TLS stand-in; NULL until then, and for a plain dial
     atomic_bool tls, served;
     atomic_int requests, resets, bodies;    // what its server saw
+    // What an HTTP/2 client said, under `said_mu`: its SETTINGS and its
+    // connection WINDOW_UPDATEs in order ("S4=65535 W=100 "), and for each
+    // request its stream, what its HEADERS said of priority ("none", or
+    // dependency/x-or-dash/weight as nghttpd prints one), its fields as
+    // "name: value" lines, and the WINDOW_UPDATE sent for its stream.
+    char greeting[256];
+    asked_t asked[ASKED_MOST];
+    int nasked;
     pthread_t thread;
 } dial_t;
 
 #define DIALS_MOST 64
+static pthread_mutex_t said_mu = PTHREAD_MUTEX_INITIALIZER;
 static dial_t dials[DIALS_MOST];
 static atomic_int ndials;
 static atomic_bool stopping;
@@ -136,6 +158,8 @@ static struct {
     atomic_int hang_up_at_handshake;   // this many dials are hung up on as their handshake ends
     atomic_int refuse;                 // this many dials fail
     int handshake_ms;                  // how long its handshake takes
+    bool resumes;                      // its handshakes say they resumed a kept session
+    bool h1_at_once;                   // its HTTP/2 server's first word after SETTINGS is GOAWAY(HTTP_1_1_REQUIRED)
 } hosts[8];
 static int nhosts;
 
@@ -191,10 +215,19 @@ static void serve_h2(dial_t *d)
     int at = host_at(d->host);
     uint32_t most = at >= 0 ? hosts[at].max_streams : 0;
     peer_use(d->wire);
-    if (!peer_preface(3000))
-        return;
     h2_setting_t limit = {H2_SETTING_MAX_CONCURRENT_STREAMS, most};
-    peer_send_settings(&limit, most != 0 ? 1 : 0);
+    if (at >= 0 && hosts[at].h1_at_once) {
+        // Said without waiting to hear the client at all, so that a client
+        // whose reader runs first has heard it before it asks for a stream.
+        peer_send_settings(&limit, 0);
+        peer_send_goaway(0, H2_ERR_HTTP_1_1_REQUIRED);
+        if (!peer_preface(3000))
+            return;
+    } else {
+        if (!peer_preface(3000))
+            return;
+        peer_send_settings(&limit, most != 0 ? 1 : 0);
+    }
     while (!atomic_load(&stopping) && peer_closes() == 0) {
         if (atomic_load(&release_held) && nheld != 0) {
             for (int i = 0; i < nheld; i++)
@@ -205,6 +238,30 @@ static void serve_h2(dial_t *d)
             continue;
         if (h.type == H2_FRAME_RST_STREAM)
             atomic_fetch_add(&d->resets, 1);
+        if (h.type == H2_FRAME_SETTINGS && !(h.flags & H2_FLAG_ACK)) {
+            pthread_mutex_lock(&said_mu);
+            for (uint32_t i = 0; i + 6 <= h.length; i += 6) {
+                size_t len = strlen(d->greeting);
+                snprintf(d->greeting + len, sizeof(d->greeting) - len, "S%u=%u ",
+                         (unsigned)(payload[i] << 8 | payload[i + 1]),
+                         (unsigned)((uint32_t)payload[i + 2] << 24 | (uint32_t)payload[i + 3] << 16 |
+                                    (uint32_t)payload[i + 4] << 8 | payload[i + 5]));
+            }
+            pthread_mutex_unlock(&said_mu);
+        }
+        if (h.type == H2_FRAME_WINDOW_UPDATE && h.length == 4) {
+            uint32_t by = (uint32_t)(payload[0] & 0x7f) << 24 | (uint32_t)payload[1] << 16 |
+                          (uint32_t)payload[2] << 8 | payload[3];
+            pthread_mutex_lock(&said_mu);
+            if (h.stream == 0) {
+                size_t len = strlen(d->greeting);
+                snprintf(d->greeting + len, sizeof(d->greeting) - len, "W=%u ", (unsigned)by);
+            }
+            for (int i = 0; i < d->nasked; i++)
+                if (d->asked[i].stream == h.stream)
+                    d->asked[i].window += by;
+            pthread_mutex_unlock(&said_mu);
+        }
         if (h.type == H2_FRAME_DATA && h.stream == echo_stream) {
             size_t n = h.length < sizeof(echo) - echo_len ? h.length : sizeof(echo) - echo_len;
             memcpy(echo + echo_len, payload, n);
@@ -221,12 +278,33 @@ static void serve_h2(dial_t *d)
             continue;
         const h2_field_t *fields;
         size_t count;
-        if (!peer_decode(payload, h.length, &fields, &count))
+        // A HEADERS that states a priority carries it ahead of the block.
+        size_t skip = (h.flags & H2_FLAG_PRIORITY) ? 5 : 0;
+        if (h.length < skip || !peer_decode(payload + skip, h.length - skip, &fields, &count))
             continue;
         const route_t *r = NULL;
         for (size_t i = 0; i < count; i++)
             if (fields[i].name_len == 5 && memcmp(fields[i].name, ":path", 5) == 0)
                 r = route_for((const char *)fields[i].value, fields[i].value_len);
+        pthread_mutex_lock(&said_mu);
+        if (d->nasked < ASKED_MOST) {
+            d->asked[d->nasked].stream = h.stream;
+            if (skip != 0)
+                snprintf(d->asked[d->nasked].priority, sizeof(d->asked[0].priority), "%u/%c/%u",
+                         (unsigned)((uint32_t)(payload[0] & 0x7f) << 24 | (uint32_t)payload[1] << 16 |
+                                    (uint32_t)payload[2] << 8 | payload[3]),
+                         (payload[0] & 0x80) ? 'x' : '-', (unsigned)payload[4] + 1);
+            else
+                snprintf(d->asked[d->nasked].priority, sizeof(d->asked[0].priority), "none");
+            char *out = d->asked[d->nasked].fields;
+            size_t room = sizeof(d->asked[0].fields), len = 0;
+            for (size_t i = 0; i < count && len < room; i++)
+                len += (size_t)snprintf(out + len, room - len, "%.*s: %.*s\n", (int)fields[i].name_len,
+                                        (const char *)fields[i].name, (int)fields[i].value_len,
+                                        (const char *)fields[i].value);
+            d->nasked++;
+        }
+        pthread_mutex_unlock(&said_mu);
         atomic_fetch_add(&d->requests, 1);
         if (r == NULL) {
             static const route_t kNone = {.status = "404"};
@@ -266,6 +344,15 @@ static void serve_h2(dial_t *d)
         case R_CANCEL:
             peer_send_rst(h.stream, H2_ERR_CANCEL);
             break;
+        case R_WANTS_H1:
+            peer_send_rst(h.stream, H2_ERR_HTTP_1_1_REQUIRED);
+            break;
+        case R_WANTS_H1_GOAWAY:
+        case R_WANTS_H1_GOAWAY_0:
+            peer_send_goaway(r->kind == R_WANTS_H1_GOAWAY ? h.stream : 0, H2_ERR_HTTP_1_1_REQUIRED);
+            nap_ms(50);
+            peer_hang_up();
+            return;
         case R_OPEN:
             send_reply_h2(h.stream, r, true);
             break;
@@ -406,6 +493,18 @@ static void *server(void *x)
 // ── The OS and TLS, as libfetch reaches them ────────────────────────────
 
 const char *os64_getenv(const char *key) { (void)key; return NULL; }
+
+// net.conf, as libfetch reads it once: absent, or with HTTP/2 switched off
+// when this process was started to be that machine.
+int64_t os64_conf_find_read(const char *name, os64_conf_fn fn, void *user, char *path_out, size_t cap)
+{
+    (void)path_out; (void)cap;
+    if (strcmp(name, "net.conf") != 0 || getenv("H2_SWITCH_OFF") == NULL)
+        return OS64_CONF_NO_FILE;
+    fn("nameserver", "10.0.2.3", user);
+    fn("HTTP2", "Off", user);       // a setting's name and its word are matched without case
+    return 2;
+}
 int64_t os64_write(int32_t h, const void *buf, size_t len) { (void)h; (void)buf; return (int64_t)len; }
 const char *os64_dial_reason(int64_t err) { (void)err; return "connection refused"; }
 
@@ -453,7 +552,7 @@ struct os64_tls_transport {
     int32_t handle;
     const char *alpn;
     os64_tls_status_t status;
-    bool closing;
+    bool closing, resumed;
 };
 static atomic_int tls_made, tls_freed, tls_released;
 static os64_tls_trust *const kTrust = (os64_tls_trust *)"trust";
@@ -474,6 +573,7 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     t->handle = h;
     t->alpn = offered ? answer : "http/1.1";
     t->status = OS64_TLS_OK;
+    t->resumed = at >= 0 && hosts[at].resumes;
     d->alpn = t->alpn;
     atomic_store(&d->tls, true);
     atomic_fetch_add(&tls_made, 1);
@@ -489,6 +589,8 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 {
     unsigned flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN;
+    if (t->resumed)
+        flags |= OS64_TLS_RESUMED;
     if (t->status == OS64_TLS_OK && peer_readable(t->handle, 0))
         flags |= OS64_TLS_RECV_PLAIN;
     return (os64_tls_state_t){.status = t->status, .flags = flags, .alpn = t->alpn, .version = 0x0304};
@@ -570,6 +672,7 @@ typedef struct {
     os64_fetch_status_t ended;          // after the body
     int32_t http_status;
     bool encrypted;
+    bool http2;                         // the head's fact
     uint32_t hops;
     size_t body_len;
     char body[4096];
@@ -577,6 +680,7 @@ typedef struct {
     char reason[512];
     os64_fetch_detail_t detail;
     char cookies[512];                  // "E:value\n" or "P:value\n", by whether the hop was encrypted
+    char extra[128];                    // a line the case composed for it
     atomic_bool cancel, done;
     bool keep_open;                     // stop after the head; `f` is the case's to read and close
     os64_fetch_t *f;
@@ -628,6 +732,7 @@ static void *job_run(void *x)
     if (head != NULL) {
         j->http_status = head->status;
         j->encrypted = head->encrypted;
+        j->http2 = head->http2;
         j->hops = head->hops;
     }
     j->ended = j->status;
@@ -1299,7 +1404,7 @@ static void pool_cases(void)
         job_go(&j, "https://idle.test/page");
         CHECK(j.ended == OS64_FETCH_OK);
         peer_clock_skip(FETCH_POOL_IDLE_MS + 1);
-        nap_ms(round * 110);    // the reader looks every half second: before, at and after its look
+        nap_ms(round * H2_READER_SLICE_MS / 4);    // before, at and after the reader's look
     }
     CHECK(atomic_load(&ndials) >= 2 && requests_seen() == 6);
     settle();
@@ -1350,6 +1455,111 @@ static void pool_cases(void)
     CHECK(atomic_load(&ndials) == FETCH_POOL_TOTAL + 4 && atomic_load(&sockets_most) == FETCH_POOL_TOTAL);
     settle();
 
+    // A BURST WAITS ONE CLOSE TOGETHER: the table is full of idle HTTP/2
+    // connections, no reader can close, and four more hosts are fetched,
+    // each known to speak HTTP/2 from a visit whose connection has gone.
+    // One connection is condemned for each of the four and none of them
+    // dials; with the closes let go, all four do.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(many, 0, sizeof(many));
+    for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
+        snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {            // the last four evict the first visits'
+        snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    memset(&many[FETCH_POOL_TOTAL], 0, 4 * sizeof(many[0]));
+    peer_hold_closes(true);
+    for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
+        snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
+        job_start(&many[i], urls[i]);
+    }
+    for (int i = 0; i < 1000 && fetch_pool_closing() != 4; i++)
+        nap_ms(5);
+    nap_ms(FETCH_POOL_LOOK_MS + 300);   // each has looked and asked again: no fifth is condemned
+    fetch_pool_counts(&kept, &live);
+    CHECK(fetch_pool_closing() == 4 && kept == FETCH_POOL_TOTAL - 4 && atomic_load(&ndials) == FETCH_POOL_TOTAL + 4);
+    peer_hold_closes(false);
+    for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
+        job_join(&many[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    CHECK(atomic_load(&ndials) == FETCH_POOL_TOTAL + 8 && atomic_load(&sockets_most) == FETCH_POOL_TOTAL);
+    settle();
+
+    // AN IDLE HTTP/1.1 CONNECTION GOES BEFORE ANY HTTP/2 ONE: the table is
+    // full, its oldest idle connection is HTTP/2 and one HTTP/1.1
+    // connection is idle too. With no reader able to close, a fetch to a
+    // new host still dials: the HTTP/1.1 connection was closed for it, and
+    // no HTTP/2 connection was condemned.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    host_says("mixed0.test", "http/1.1", 0);
+    memset(many, 0, sizeof(many));
+    for (int i = FETCH_POOL_TOTAL - 1; i >= 0; i--) {     // the HTTP/1.1 one last: the most recently kept
+        snprintf(urls[i], sizeof(urls[i]), "https://mixed%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    peer_hold_closes(true);
+    job_go(&many[FETCH_POOL_TOTAL], "https://mixed-new.test/page");
+    CHECK(many[FETCH_POOL_TOTAL].ended == OS64_FETCH_OK && atomic_load(&ndials) == FETCH_POOL_TOTAL + 1);
+    CHECK(fetch_pool_closing() == 0);
+    peer_hold_closes(false);
+    settle();
+
+    // FETCHES TO ONE HOST THAT SPEAKS HTTP/2 WANT ONE PLACE BETWEEN THEM: a
+    // host answered h2 and its connection has since been evicted; the
+    // table is full of idle HTTP/2 connections; four fetches go to that
+    // host at once. One connection is condemned, not four; a fetch to
+    // another host then has one condemned for itself and no more; and
+    // when they close, one dial carries the four.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(many, 0, sizeof(many));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://same.test/page");
+    CHECK(j.ended == OS64_FETCH_OK);
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {            // the sixteenth evicts same.test's
+        snprintf(urls[i], sizeof(urls[i]), "https://other%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    peer_hold_closes(true);
+    static job_t same[4];
+    memset(same, 0, sizeof(same));
+    for (int i = 0; i < 4; i++)
+        job_start(&same[i], "https://same.test/page");
+    for (int i = 0; i < 1000 && fetch_pool_closing() != 1; i++)
+        nap_ms(5);
+    nap_ms(FETCH_POOL_LOOK_MS + 300);
+    fetch_pool_counts(&kept, &live);
+    CHECK(fetch_pool_closing() == 1 && kept == FETCH_POOL_TOTAL - 1 && atomic_load(&ndials) == FETCH_POOL_TOTAL + 1);
+    memset(&k, 0, sizeof(k));
+    job_start(&k, "https://another.test/page");
+    for (int i = 0; i < 1000 && fetch_pool_closing() != 2; i++)
+        nap_ms(5);
+    nap_ms(FETCH_POOL_LOOK_MS + 300);
+    fetch_pool_counts(&kept, &live);
+    CHECK(fetch_pool_closing() == 2 && kept == FETCH_POOL_TOTAL - 2);
+    peer_hold_closes(false);
+    for (int i = 0; i < 4; i++) {
+        job_join(&same[i]);
+        CHECK(same[i].ended == OS64_FETCH_OK);
+    }
+    job_join(&k);
+    CHECK(k.ended == OS64_FETCH_OK && atomic_load(&ndials) == FETCH_POOL_TOTAL + 3);
+    settle();
+
     // FREED BY THE LAST OF THREE: the connection is struck, its last fetch
     // leaves, and its reader says its last word, in each order a fetch can
     // meet. (settle's engine check is the proof it was freed, and ASan's
@@ -1388,39 +1598,664 @@ static void pool_cases(void)
     settle();
 }
 
-// With the offer off, every one of these hosts is dialled as HTTP/1.1 and
-// nothing of HTTP/2's is touched.
-static void offer_off_cases(void)
+// ── How each client speaks HTTP/2 (HTTP2.md § 4 H2.5) ───────────────────
+
+// What dial `i`'s client said first, and its `k`th request (false: none yet).
+static void greeting_of(int i, char *out, size_t room)
 {
-    static job_t j[3];
+    pthread_mutex_lock(&said_mu);
+    snprintf(out, room, "%s", dials[i].greeting);
+    pthread_mutex_unlock(&said_mu);
+}
+
+static bool asked_of(int i, int k, asked_t *out)
+{
+    pthread_mutex_lock(&said_mu);
+    bool there = k < dials[i].nasked;
+    if (there)
+        *out = dials[i].asked[k];
+    pthread_mutex_unlock(&said_mu);
+    return there;
+}
+
+// The same, once the WINDOW_UPDATE its client sends after it has been read:
+// that frame follows the HEADERS, and the server answers the HEADERS first.
+static bool asked_with_window(int i, int k, uint32_t window, asked_t *out)
+{
+    for (int tries = 0; tries < 200; tries++) {
+        if (asked_of(i, k, out) && out->window == window)
+            return true;
+        nap_ms(5);
+    }
+    return false;
+}
+
+static bool ends_with(const char *s, const char *tail)
+{
+    size_t n = strlen(s), m = strlen(tail);
+    return n >= m && strcmp(s + n - m, tail) == 0;
+}
+
+static const yonder_agent_preset_t *preset(const char *name)
+{
+    for (size_t i = 0; i < yonder_agent_npresets(); i++)
+        if (strcmp(yonder_agent_preset(i)->name, name) == 0)
+            return yonder_agent_preset(i);
+    abort();
+}
+
+// A job that asks as `p` asks for something of `dest`: what libway hands
+// libfetch for it (way_fetch_hooks), from yonder's own table.
+static void as_preset(job_t *j, const yonder_agent_preset_t *p, way_dest_t dest, way_order_t order)
+{
+    const way_identity_t *id = &p->identity;
+    memset(j, 0, sizeof(*j));
+    j->opt.user_agent = p->agent;
+    j->opt.order = id->order[order];
+    j->opt.keep_alive = id->keep_alive;
+    j->opt.h2 = id->h2;
+    j->opt.h2_weight = id->h2_weight[dest] != 0 ? id->h2_weight[dest] : id->h2_weight[WAY_DEST_EMPTY];
+    j->opt.h2_priority = id->h2_priority[dest] != NULL ? id->h2_priority[dest] : id->h2_priority[WAY_DEST_EMPTY];
+    j->opt.http1 = id->http1;
+    // A Priority the browser sends over either protocol goes as a line.
+    if (id->priority[dest] != NULL) {
+        snprintf(j->extra, sizeof(j->extra), "Priority: %s\r\n", id->priority[dest]);
+        j->opt.extra_headers = j->extra;
+    }
+}
+
+static void greeting_cases(void)
+{
+    // EVERY ROW OF THE BRIEF'S CAPTURE TABLE, for each browser preset and
+    // for the greeting a caller gets who names none (yonder's own preset
+    // names none). The numbers here are the captures', typed a second time:
+    // agent.c's are the first.
+    static const struct {
+        const char *preset, *host;
+        const char *greeting;
+        const char *pseudo;                 // the request's first four lines
+        uint32_t first, window;
+        const char *document, *picture;     // what each HEADERS says of priority
+        const char *document_ends, *picture_ends;
+    } kWant[] = {
+        {"yonder", "own.test", "S2=0 S4=1048576 S6=65536 W=4128769 ",
+         ":method: GET\n:authority: own.test\n:scheme: https\n:path: /page\n", 1, 0, "none", "none", NULL, NULL},
+        {"Chrome on Windows", "chrome.test", "S1=65536 S2=0 S4=6291456 S6=262144 W=15663105 ",
+         ":method: GET\n:authority: chrome.test\n:scheme: https\n:path: /page\n", 1, 0, "0/x/256", "0/x/183",
+         "priority: u=0, i\n", "priority: u=2, i\n"},
+        {"Firefox on Windows", "firefox.test", "S1=65536 S2=0 S4=131072 S5=16384 W=12517377 ",
+         ":method: GET\n:path: /page\n:authority: firefox.test\n:scheme: https\n", 3, 12451840, "0/-/42", "0/-/12",
+         "priority: u=0, i\nte: trailers\n", "priority: u=5, i\nte: trailers\n"},
+    };
+    for (size_t w = 0; w < sizeof(kWant) / sizeof(kWant[0]); w++) {
+        static job_t j;
+        char url[96], said[256];
+        asked_t a;
+        begin();
+        route("/page", R_REPLY, "200", kPage);
+        snprintf(url, sizeof(url), "https://%s/page", kWant[w].host);
+        as_preset(&j, preset(kWant[w].preset), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+        job_go(&j, url);
+        JOB_OK(&j);
+        CHECK(j.http2 && j.detail.h2 && j.detail.h2_stream == kWant[w].first && atomic_load(&ndials) == 1);
+        greeting_of(0, said, sizeof(said));
+        if (strcmp(said, kWant[w].greeting) != 0)
+            fprintf(stderr, "%s said first: %s\n", kWant[w].preset, said);
+        CHECK(strcmp(said, kWant[w].greeting) == 0);
+        CHECK(asked_with_window(0, 0, kWant[w].window, &a));
+        if (a.stream != kWant[w].first || strcmp(a.priority, kWant[w].document) != 0 ||
+            strncmp(a.fields, kWant[w].pseudo, strlen(kWant[w].pseudo)) != 0)
+            fprintf(stderr, "%s asked on stream %u, priority %s:\n%s", kWant[w].preset, (unsigned)a.stream, a.priority,
+                    a.fields);
+        CHECK(a.stream == kWant[w].first && strcmp(a.priority, kWant[w].document) == 0);
+        CHECK(strncmp(a.fields, kWant[w].pseudo, strlen(kWant[w].pseudo)) == 0);
+        // Nothing that speaks of the connection, whatever the preset says
+        // over HTTP/1.1; and the lines HTTP/2 adds, last.
+        CHECK(strstr(a.fields, "connection:") == NULL && strstr(a.fields, "host:") == NULL);
+        if (kWant[w].document_ends != NULL)
+            CHECK(ends_with(a.fields, kWant[w].document_ends));
+        else
+            CHECK(strstr(a.fields, "priority:") == NULL && strstr(a.fields, "te:") == NULL);
+        // A picture next, on the same connection: the next stream, its own
+        // weight and line, its own window.
+        as_preset(&j, preset(kWant[w].preset), WAY_DEST_IMAGE, WAY_ORDER_NO_CORS);
+        job_go(&j, url);
+        JOB_OK(&j);
+        CHECK(atomic_load(&ndials) == 1 && asked_with_window(0, 1, kWant[w].window, &a));
+        CHECK(a.stream == kWant[w].first + 2 && strcmp(a.priority, kWant[w].picture) == 0);
+        if (kWant[w].picture_ends != NULL)
+            CHECK(ends_with(a.fields, kWant[w].picture_ends));
+        settle();
+    }
+
+    // A DESTINATION THE CAPTURES DID NOT ASK FOR takes the fetch row's
+    // weight and line: a font under Chrome.
+    {
+        static job_t j;
+        asked_t a;
+        begin();
+        route("/page", R_REPLY, "200", kPage);
+        as_preset(&j, preset("Chrome on Windows"), WAY_DEST_FONT, WAY_ORDER_CORS);
+        job_go(&j, "https://font.test/page");
+        JOB_OK(&j);
+        CHECK(asked_of(0, 0, &a) && strcmp(a.priority, "0/x/220") == 0 && ends_with(a.fields, "priority: u=1, i\n"));
+        settle();
+    }
+
+    // CHROME'S DEPENDENCIES, on capture C3's streams: a script and then a
+    // sheet, both still arriving, and a picture, which depends on the
+    // script (the nearer weight) and not on the newer, heavier sheet.
+    {
+        static job_t held[3];
+        asked_t a;
+        begin();
+        route("/held", R_HELD, "200", NULL);
+        const way_dest_t kinds[3] = {WAY_DEST_SCRIPT, WAY_DEST_STYLE, WAY_DEST_IMAGE};
+        const char *const want[3] = {"0/x/220", "0/x/256", "1/x/183"};
+        for (int i = 0; i < 3; i++) {
+            as_preset(&held[i], preset("Chrome on Windows"), kinds[i], WAY_ORDER_NO_CORS);
+            held[i].keep_open = true;
+            job_go(&held[i], "https://chain.test/held");
+            CHECK(held[i].status == OS64_FETCH_OK && asked_of(0, i, &a));
+            if (strcmp(a.priority, want[i]) != 0)
+                fprintf(stderr, "chain: request %d on stream %u said %s\n", i, (unsigned)a.stream, a.priority);
+            CHECK(strcmp(a.priority, want[i]) == 0);
+        }
+        CHECK(atomic_load(&ndials) == 1);
+        atomic_store(&release_held, true);
+        for (int i = 0; i < 3; i++) {
+            job_read(&held[i]);
+            CHECK(held[i].ended == OS64_FETCH_OK && held[i].body_len == 9);
+            os64_fetch_close(held[i].f);
+        }
+        settle();
+    }
+
+    // A GREETING THIS WILL NOT SEND is refused before any dial.
+    {
+        static job_t j;
+        static const os64_fetch_h2_t kNine = {.count = 9};
+        static const os64_fetch_h2_t kThree = {.count = 0, .pseudo = "map"};
+        static const os64_fetch_h2_t kTwice = {.count = 0, .pseudo = "mmas"};
+        // What HTTP/2 itself forbids: an even first stream, a stream window
+        // past 2^31 - 1, a setting out of its range (ENABLE_PUSH 2).
+        static const os64_fetch_h2_t kEven = {.count = 0, .first_stream = 2};
+        static const os64_fetch_h2_t kWide = {.settings = {{4, 0x7fffffffu}}, .count = 1, .stream_increment = 1};
+        static const os64_fetch_h2_t kPush = {.settings = {{2, 2}}, .count = 1};
+        const os64_fetch_h2_t *const bad[6] = {&kNine, &kThree, &kTwice, &kEven, &kWide, &kPush};
+        begin();
+        route("/page", R_REPLY, "200", kPage);
+        for (int i = 0; i < 6; i++) {
+            memset(&j, 0, sizeof(j));
+            j.opt.h2 = bad[i];
+            job_go(&j, "https://bad.test/page");
+            CHECK(j.ended == OS64_FETCH_REQUEST_FAILED);
+        }
+        CHECK(requests_seen() == 0 && atomic_load(&ndials) == 0);
+        settle();
+    }
+}
+
+// The kept connections closed now, mid-case, and their sockets with them.
+static void drain_now(void)
+{
+    fetch_pool_drain();
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    CHECK(fetch_pool_closing() == 0);
+}
+
+// WHO MAY SHARE A CONNECTION (HTTP2.md § 4 H2.5; Quinn's read of the
+// brief). An HTTP/2 connection carries only the fetches that would have
+// greeted it the same, and a client that speaks HTTP/1.1 alone is given
+// none: with a response still arriving, and with a dial still in flight.
+static void identity_cases(void)
+{
+    static job_t chrome, firefox, lynx, again;
+    char said[256];
+    asked_t a;
+
+    // A RESPONSE STILL ARRIVING on Chrome's connection. Firefox dials its
+    // own, greeted as Firefox greets; Lynx dials HTTP/1.1; a second Chrome
+    // fetch shares the first's; and the first ends whole.
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    as_preset(&chrome, preset("Chrome on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    chrome.keep_open = true;
+    job_go(&chrome, "https://who.test/held");
+    CHECK(chrome.status == OS64_FETCH_OK && chrome.http2 && atomic_load(&ndials) == 1);
+    as_preset(&firefox, preset("Firefox on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    job_go(&firefox, "https://who.test/page");
+    JOB_OK(&firefox);
+    CHECK(firefox.http2 && atomic_load(&ndials) == 2 && strcmp(dials[1].alpn, "h2") == 0);
+    greeting_of(1, said, sizeof(said));
+    CHECK(strncmp(said, "S1=65536 S2=0 S4=131072 S5=16384 ", 33) == 0);
+    CHECK(asked_of(1, 0, &a) && a.stream == 3 && strcmp(a.priority, "0/-/42") == 0);
+    as_preset(&lynx, preset("Lynx"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    job_go(&lynx, "https://who.test/page");
+    JOB_OK(&lynx);
+    CHECK(!lynx.http2 && !lynx.detail.h2 && atomic_load(&ndials) == 3 && strcmp(dials[2].alpn, "http/1.1") == 0);
+    as_preset(&again, preset("Chrome on Windows"), WAY_DEST_IMAGE, WAY_ORDER_NO_CORS);
+    job_go(&again, "https://who.test/page");
+    JOB_OK(&again);
+    CHECK(again.http2 && atomic_load(&ndials) == 3 && atomic_load(&dials[0].requests) == 2);
+    // Each HTTP/2 connection heard one client's shape alone.
+    greeting_of(0, said, sizeof(said));
+    CHECK(strncmp(said, "S1=65536 S2=0 S4=6291456 S6=262144 ", 35) == 0);
+    for (int k = 0; asked_of(0, k, &a); k++)
+        CHECK(strstr(a.priority, "/x/") != NULL && strstr(a.fields, "te:") == NULL);
+    for (int k = 0; asked_of(1, k, &a); k++)
+        CHECK(strstr(a.priority, "/-/") != NULL && strstr(a.fields, "te: trailers") != NULL);
+    CHECK(atomic_load(&dials[1].requests) == 1 && atomic_load(&dials[2].requests) == 1);
+    atomic_store(&release_held, true);
+    job_read(&chrome);
+    CHECK(chrome.ended == OS64_FETCH_OK && chrome.body_len == 9 && memcmp(chrome.body, "held body", 9) == 0);
+    os64_fetch_close(chrome.f);
+    settle();
+
+    // A DIAL STILL IN FLIGHT to a host remembered as HTTP/2. A fetch that
+    // says the same waits for it and shares its connection; Firefox and
+    // Lynx do not wait on Chrome's dial, and each dials for itself.
+    begin();
+    int slow = host_says("flight.test", "h2", 0);
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    as_preset(&again, preset("Chrome on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    job_go(&again, "https://flight.test/page");     // the host is met, and remembered
+    JOB_OK(&again);
+    drain_now();
+    CHECK(atomic_load(&ndials) == 1);
+    hosts[slow].handshake_ms = 400;
+    as_preset(&chrome, preset("Chrome on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    chrome.keep_open = true;
+    job_start(&chrome, "https://flight.test/held");
+    for (int i = 0; i < 200 && atomic_load(&ndials) < 2; i++)
+        nap_ms(2);
+    CHECK(atomic_load(&ndials) == 2);                // Chrome's dial is in flight
+    as_preset(&again, preset("Chrome on Windows"), WAY_DEST_IMAGE, WAY_ORDER_NO_CORS);
+    as_preset(&firefox, preset("Firefox on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    as_preset(&lynx, preset("Lynx"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    job_start(&again, "https://flight.test/page");
+    job_start(&firefox, "https://flight.test/page");
+    job_start(&lynx, "https://flight.test/page");
+    // Their dials begin while Chrome's handshake is still going: neither
+    // waited for a verdict that is not theirs.
+    for (int i = 0; i < 100 && atomic_load(&ndials) < 4; i++)
+        nap_ms(2);
+    CHECK(atomic_load(&ndials) == 4 && !atomic_load(&chrome.done));
+    job_join(&chrome);
+    job_join(&again);
+    job_join(&firefox);
+    job_join(&lynx);
+    JOB_OK(&again);
+    JOB_OK(&firefox);
+    JOB_OK(&lynx);
+    CHECK(chrome.status == OS64_FETCH_OK && again.http2 && firefox.http2 && !lynx.http2);
+    // Four dials in all: the first visit's, Chrome's (which carried both
+    // of Chrome's fetches), Firefox's and Lynx's.
+    CHECK(atomic_load(&ndials) == 4 && h2_dials() == 3 && atomic_load(&dials[1].requests) == 2);
+    int firefoxs = -1, lynxs = -1;
+    for (int i = 2; i < 4; i++) {
+        if (strcmp(dials[i].alpn, "h2") == 0)
+            firefoxs = i;
+        else
+            lynxs = i;
+    }
+    CHECK(firefoxs >= 0 && lynxs >= 0);
+    if (firefoxs >= 0 && lynxs >= 0) {
+        greeting_of(firefoxs, said, sizeof(said));
+        CHECK(strncmp(said, "S1=65536 S2=0 S4=131072 S5=16384 ", 33) == 0);
+        CHECK(atomic_load(&dials[firefoxs].requests) == 1 && atomic_load(&dials[lynxs].requests) == 1);
+    }
+    greeting_of(1, said, sizeof(said));
+    CHECK(strncmp(said, "S1=65536 S2=0 S4=6291456 S6=262144 ", 35) == 0);
+    atomic_store(&release_held, true);
+    job_read(&chrome);
+    CHECK(chrome.ended == OS64_FETCH_OK && chrome.body_len == 9);
+    os64_fetch_close(chrome.f);
+    settle();
+}
+
+// ONE DIFFERENCE IS A DIFFERENT GREETING: with a connection held under one
+// greeting, a fetch whose greeting differs from it in a single thing dials
+// a connection of its own (eight such things), and one that says the very
+// same shares.
+static void difference_cases(void)
+{
+    static job_t held, j;
+    static const os64_fetch_h2_t kBase = {.settings = {{2, 0}, {4, 100000}}, .count = 2, .window_increment = 1000,
+                                          .first_stream = 1, .stream_increment = 0,
+                                          .priority = OS64_FETCH_H2_PRIORITY_FLAT};
+    os64_fetch_h2_t other[8];
+    for (int i = 0; i < 8; i++)
+        other[i] = kBase;
+    other[0].settings[1].value = 100001;
+    other[1].settings[1].id = 3;
+    other[2].count = 1;
+    other[3].window_increment = 1001;
+    other[4].first_stream = 3;
+    other[5].stream_increment = 1;
+    other[6].priority = OS64_FETCH_H2_PRIORITY_CHAINED;
+    // One more setting than the connection's, the two they share the same:
+    // a greeting is its whole list, not the part another has too.
+    other[7].settings[2].id = 6;
+    other[7].settings[2].value = 65536;
+    other[7].count = 3;
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&held, 0, sizeof(held));
+    held.opt.h2 = &kBase;
+    held.keep_open = true;
+    job_go(&held, "https://differ.test/held");
+    CHECK(held.status == OS64_FETCH_OK && atomic_load(&ndials) == 1);
+    // The same greeting from another copy of it: values are compared, not
+    // where the caller keeps them.
+    os64_fetch_h2_t same = kBase;
+    memset(&j, 0, sizeof(j));
+    j.opt.h2 = &same;
+    job_go(&j, "https://differ.test/page");
+    JOB_OK(&j);
+    CHECK(atomic_load(&ndials) == 1);
+    for (int i = 0; i < 8; i++) {
+        memset(&j, 0, sizeof(j));
+        j.opt.h2 = &other[i];
+        job_go(&j, "https://differ.test/page");
+        JOB_OK(&j);
+        if (atomic_load(&ndials) != 2 + i)
+            fprintf(stderr, "difference %d: %d dials\n", i, atomic_load(&ndials));
+        CHECK(j.http2 && atomic_load(&ndials) == 2 + i);
+        // Its own connection goes before the next asks, so that the key's
+        // cap is never what makes a fetch dial.
+        drain_now();
+    }
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK && held.body_len == 9);
+    os64_fetch_close(held.f);
+    settle();
+}
+
+// A fetch that says http1 is dialled as HTTP/1.1, whatever the host would
+// answer, and nothing of HTTP/2's is touched.
+static void http1_cases(void)
+{
+    static job_t j[3], held;
     begin();
     route("/page", R_REPLY, "200", kPage);
-    fetch_h2_offer = false;
     int released = atomic_load(&tls_released);
     memset(j, 0, sizeof(j));
     for (int i = 0; i < 3; i++) {
+        j[i].opt.http1 = true;
         job_go(&j[i], "https://off.test/page");
-        CHECK(j[i].ended == OS64_FETCH_OK && j[i].body_len == sizeof(kPage) - 1 && !j[i].detail.h2);
+        CHECK(j[i].ended == OS64_FETCH_OK && j[i].body_len == sizeof(kPage) - 1 && !j[i].detail.h2 && !j[i].http2);
     }
     CHECK(h2_dials() == 0 && atomic_load(&tls_released) == released && requests_seen() == 3);
-    fetch_h2_offer = true;
+    settle();
+
+    // ...and with an HTTP/2 connection to the host live, greeted exactly as
+    // this fetch would greet one but for that word, it is given none of it.
+    begin();
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&held, 0, sizeof(held));
+    held.keep_open = true;
+    job_go(&held, "https://both.test/held");
+    CHECK(held.status == OS64_FETCH_OK && held.http2 && h2_dials() == 1);
+    memset(&j[0], 0, sizeof(j[0]));
+    j[0].opt.http1 = true;
+    job_go(&j[0], "https://both.test/page");
+    CHECK(j[0].ended == OS64_FETCH_OK && !j[0].http2 && atomic_load(&ndials) == 2 && h2_dials() == 1 &&
+          atomic_load(&dials[0].requests) == 1);
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
+    settle();
+
+    // AN HTTP/1.1-ONLY DIAL TEACHES THE POOL NOTHING ABOUT ITS HOST. The
+    // host is remembered as HTTP/2; a fetch that says http1 dials it and is
+    // answered HTTP/1.1, having offered nothing else; and the host is still
+    // remembered as HTTP/2, so a second fetch waits for the first's dial
+    // and shares its connection.
+    begin();
+    int slow = host_says("known.test", "h2", 0);
+    route("/held", R_HELD, "200", NULL);
+    route("/page", R_REPLY, "200", kPage);
+    memset(j, 0, sizeof(j));
+    job_go(&j[0], "https://known.test/page");
+    CHECK(j[0].ended == OS64_FETCH_OK && j[0].http2);
+    j[1].opt.http1 = true;
+    job_go(&j[1], "https://known.test/page");
+    CHECK(j[1].ended == OS64_FETCH_OK && !j[1].http2 && atomic_load(&ndials) == 2);
+    drain_now();
+    hosts[slow].handshake_ms = 300;
+    memset(&held, 0, sizeof(held));
+    held.keep_open = true;
+    job_start(&held, "https://known.test/held");
+    for (int i = 0; i < 200 && atomic_load(&ndials) < 3; i++)
+        nap_ms(2);
+    memset(&j[2], 0, sizeof(j[2]));
+    job_go(&j[2], "https://known.test/page");
+    job_join(&held);
+    CHECK(j[2].ended == OS64_FETCH_OK && j[2].http2 && atomic_load(&ndials) == 3 &&
+          atomic_load(&dials[2].requests) == 2);
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
+    settle();
+}
+
+// A SERVER THAT REQUIRES HTTP/1.1 for what was asked (RFC 9113 § 7,
+// HTTP_1_1_REQUIRED) is asked again over HTTP/1.1, whatever the method, and
+// is remembered: the next fetch to it dials no HTTP/2 at all.
+static void wants_h1_cases(void)
+{
+    static job_t j;
+    const struct { const char *host, *url; route_kind_t kind; } kWays[3] = {
+        {"wants1.test", "https://wants1.test/signin", R_WANTS_H1},
+        {"wants2.test", "https://wants2.test/signin", R_WANTS_H1_GOAWAY},
+        {"wants3.test", "https://wants3.test/signin", R_WANTS_H1_GOAWAY_0},
+    };
+    for (int w = 0; w < 3; w++) {
+        begin();
+        route("/signin", kWays[w].kind, "200", kPage);
+        memset(&j, 0, sizeof(j));
+        j.opt.method = OS64_FETCH_METHOD_POST;      // not a request the retry rule would send twice by itself
+        j.opt.body = "name=a";
+        j.opt.body_len = 6;
+        job_go(&j, kWays[w].url);
+        JOB_OK(&j);
+        CHECK(!j.http2 && j.body_len == sizeof(kPage) - 1 && atomic_load(&ndials) == 2 && h2_dials() == 1);
+        CHECK(atomic_load(&dials[0].requests) == 1 && atomic_load(&dials[1].requests) == 1 &&
+              strcmp(dials[1].alpn, "http/1.1") == 0);
+        // The next: no HTTP/2 dial, and no request to the HTTP/2 server.
+        memset(&j, 0, sizeof(j));
+        job_go(&j, kWays[w].url);
+        JOB_OK(&j);
+        CHECK(!j.http2 && h2_dials() == 1 && atomic_load(&dials[0].requests) == 1 && requests_seen() == 3);
+        settle();
+    }
+}
+
+// ...AND SAID BEFORE ANY REQUEST: the server's first word on the connection
+// is GOAWAY(HTTP_1_1_REQUIRED), heard before this fetch has a stream (the
+// connection's reader is given a head start, so the stream is asked for
+// after it). The fetch still ends whole, over HTTP/1.1, and the server is
+// remembered.
+static void wants_h1_at_once_cases(void)
+{
+    static job_t j;
+    begin();
+    int host = host_says("atonce.test", "h2", 0);
+    hosts[host].h1_at_once = true;
+    peer_thread_head_start(150);
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://atonce.test/page");
+    JOB_OK(&j);
+    CHECK(!j.http2 && j.body_len == sizeof(kPage) - 1 && h2_dials() == 1 && atomic_load(&ndials) == 2);
+    CHECK(atomic_load(&dials[0].requests) == 0);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://atonce.test/page");
+    JOB_OK(&j);
+    CHECK(!j.http2 && h2_dials() == 1);
+    peer_thread_head_start(0);
+    settle();
+}
+
+// net.conf says `http2 = off` (this process was started so): no fetch
+// offers HTTP/2, whoever it asks as.
+static void switch_off_cases(void)
+{
+    static job_t j;
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://switch.test/page");
+    CHECK(j.ended == OS64_FETCH_OK && j.body_len == sizeof(kPage) - 1 && !j.http2);
+    as_preset(&j, preset("Chrome on Windows"), WAY_DEST_DOCUMENT, WAY_ORDER_NAVIGATE);
+    job_go(&j, "https://switch.test/page");
+    CHECK(j.ended == OS64_FETCH_OK && !j.http2 && !j.detail.h2);
+    CHECK(h2_dials() == 0 && requests_seen() == 2);
+    for (int i = 0; i < atomic_load(&ndials); i++)
+        CHECK(strcmp(dials[i].alpn, "http/1.1") == 0);
+    settle();
+}
+
+// ── What the fetches cost the wire (os64_fetch_counts) ──────────────────
+
+// What the counters have moved by since `then`, which is brought up to now.
+static os64_fetch_counts_t since(os64_fetch_counts_t *then)
+{
+    os64_fetch_counts_t now, by;
+    os64_fetch_counts(&now);
+    by = (os64_fetch_counts_t){
+        .connections_h1 = now.connections_h1 - then->connections_h1,
+        .connections_h2 = now.connections_h2 - then->connections_h2,
+        .handshakes = now.handshakes - then->handshakes,
+        .handshakes_resumed = now.handshakes_resumed - then->handshakes_resumed,
+        .requests_h1 = now.requests_h1 - then->requests_h1,
+        .requests_h2 = now.requests_h2 - then->requests_h2,
+        .waits = now.waits - then->waits,
+        .wait_ms = now.wait_ms - then->wait_ms,
+    };
+    *then = now;
+    return by;
+}
+
+static bool counted(os64_fetch_counts_t by, uint64_t c1, uint64_t c2, uint64_t hs, uint64_t resumed, uint64_t r1,
+                    uint64_t r2, uint64_t waits)
+{
+    bool same = by.connections_h1 == c1 && by.connections_h2 == c2 && by.handshakes == hs &&
+                by.handshakes_resumed == resumed && by.requests_h1 == r1 && by.requests_h2 == r2 && by.waits == waits;
+    if (!same)
+        fprintf(stderr, "counts moved by: connections %lu h1 %lu h2, handshakes %lu (%lu resumed), requests %lu h1 "
+                "%lu h2, %lu waits of %lu ms\n", (unsigned long)by.connections_h1, (unsigned long)by.connections_h2,
+                (unsigned long)by.handshakes, (unsigned long)by.handshakes_resumed, (unsigned long)by.requests_h1,
+                (unsigned long)by.requests_h2, (unsigned long)by.waits, (unsigned long)by.wait_ms);
+    return same && (waits != 0) == (by.wait_ms != 0);
+}
+
+static void counts_cases(void)
+{
+    static job_t j, held, second;
+    os64_fetch_counts_t then;
+    os64_fetch_counts(&then);
+
+    // HTTP/2: the first fetch makes a connection (one handshake) and sends
+    // a request; the second sends a request and makes nothing.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count2.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 1, 1, 0, 0, 1, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count2.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 0, 0, 0, 0, 1, 0));
+    settle();
+
+    // HTTP/1.1 under TLS, on a host whose handshakes resume: the same, by
+    // its own counters, and the handshake is counted as resumed. A plain
+    // http fetch makes a connection and no handshake.
+    begin();
+    int h1 = host_says("count1.test", "http/1.1", 0);
+    hosts[h1].resumes = true;
+    route("/page", R_REPLY, "200", kPage);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count1.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 1, 0, 1, 1, 1, 0, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://count1.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 0, 0, 0, 0, 1, 0, 0));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "http://plain.test/page");
+    JOB_OK(&j);
+    CHECK(counted(since(&then), 1, 0, 0, 0, 1, 0, 0));
+    settle();
+
+    // A FETCH THAT WAITS: the host is remembered as HTTP/2 and its
+    // handshake is slow, so a second fetch waits for the first's dial. One
+    // connection, two requests, one fetch that waited, and for some time.
+    begin();
+    int slow = host_says("countw.test", "h2", 0);
+    route("/page", R_REPLY, "200", kPage);
+    route("/held", R_HELD, "200", NULL);
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://countw.test/page");
+    JOB_OK(&j);
+    fetch_pool_drain();
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    since(&then);
+    hosts[slow].handshake_ms = 200;
+    memset(&held, 0, sizeof(held));
+    memset(&second, 0, sizeof(second));
+    held.keep_open = true;
+    job_start(&held, "https://countw.test/held");
+    for (int i = 0; i < 200 && atomic_load(&ndials) < 2; i++)
+        nap_ms(2);
+    job_go(&second, "https://countw.test/page");
+    job_join(&held);
+    JOB_OK(&second);
+    CHECK(counted(since(&then), 0, 1, 1, 0, 0, 2, 1));
+    atomic_store(&release_held, true);
+    job_read(&held);
+    CHECK(held.ended == OS64_FETCH_OK);
+    os64_fetch_close(held.f);
     settle();
 }
 
 int main(void)
 {
     alarm(SECONDS_MOST);
-    fetch_h2_offer = true;
-    basic_cases();
-    sharing_cases();
-    retry_cases();
-    leaving_cases();
-    pool_cases();
-    offer_off_cases();
+    if (getenv("H2_SWITCH_OFF") != NULL)
+        switch_off_cases();
+    else {
+        basic_cases();
+        sharing_cases();
+        retry_cases();
+        leaving_cases();
+        pool_cases();
+        counts_cases();
+        greeting_cases();
+        identity_cases();
+        difference_cases();
+        http1_cases();
+        wants_h1_cases();
+        wants_h1_at_once_cases();
+    }
     if (atomic_load(&failures) != 0) {
         fprintf(stderr, "test_fetch_h2_host: %d of %d checks failed\n", atomic_load(&failures), atomic_load(&checks));
         return 1;
     }
-    printf("test_fetch_h2_host: %d checks passed\n", atomic_load(&checks));
+    printf("test_fetch_h2_host: %d checks passed%s\n", atomic_load(&checks),
+           getenv("H2_SWITCH_OFF") != NULL ? " with net.conf's switch off" : "");
     return 0;
 }

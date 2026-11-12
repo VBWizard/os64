@@ -391,6 +391,42 @@ static void paint_cases(void)
                     "pixels 0 0 4 4 ff0000ff ff3500ca ff3500ca ff0000ff"
                     " ff3500ca ffa5005a ffa5005a ff3500ca ff3500ca ffa5005a ffa5005a ff3500ca"
                     " ff0000ff ff3500ca ff3500ca ff0000ff\n");
+    // A conic gradient's turn starts at the top and runs clockwise about
+    // the centre: hard stops at the quarters fill each quadrant with one
+    // colour, no pixel's middle on a boundary.
+    paint_page_case("a conic gradient, quadrant by quadrant",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " background: conic-gradient(#ff0000 0 25%, #0000ff 25% 50%, #00ff00 50% 75%,"
+                    " #ffff00 75%) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 ffffff00 ffffff00 ffff0000 ffff0000 ffffff00 ffffff00 ffff0000 ffff0000"
+                    " ff00ff00 ff00ff00 ff0000ff ff0000ff ff00ff00 ff00ff00 ff0000ff ff0000ff\n");
+    paint_page_case("a conic gradient's turn starts where `from` says",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " background: conic-gradient(from 90deg, #ff0000 0 25%, #0000ff 25% 50%,"
+                    " #00ff00 50% 75%, #ffff00 75%) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 ff00ff00 ff00ff00 ffffff00 ffffff00 ff00ff00 ff00ff00 ffffff00 ffffff00"
+                    " ff0000ff ff0000ff ffff0000 ffff0000 ff0000ff ff0000ff ffff0000 ffff0000\n");
+    // A pixel whose middle is the centre is at the turn's start, whatever
+    // the sign of zero its offset works out to: red here, not the blue of
+    // half a turn on.
+    paint_page_case("a conic gradient's centre pixel is at its start",
+                    "<!doctype html><style>body { margin: 0 } div { width: 1px; height: 1px;"
+                    " background: conic-gradient(#ff0000 0 50%, #0000ff 50%) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 1 1 ffff0000\n");
+    paint_page_case("a repeating conic gradient repeats round the turn",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " background: repeating-conic-gradient(#ff0000 0 25%, #0000ff 25% 50%) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 ff0000ff ff0000ff ffff0000 ffff0000 ff0000ff ff0000ff ffff0000 ffff0000"
+                    " ffff0000 ffff0000 ff0000ff ff0000ff ffff0000 ffff0000 ff0000ff ff0000ff\n");
     // A rounded box cuts its gradient to its corners: each pixel's alpha
     // times how much of it the row's span covers. A 2px radius in a 4px
     // square: the top and bottom rows' spans start 174/256 px in (82/256

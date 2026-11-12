@@ -39,6 +39,15 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BACKDROP_FILTER] = {"backdrop-filter", false, true},
     [GARB_MIX_BLEND_MODE] = {"mix-blend-mode", false, true},
     [GARB_ISOLATION] = {"isolation", false, true},
+    [GARB_MASK_IMAGE] = {"mask-image", false, true},
+    [GARB_MASK_REPEAT] = {"mask-repeat", false, true},
+    [GARB_MASK_POSITION_X] = {"mask-position-x", false, true},
+    [GARB_MASK_POSITION_Y] = {"mask-position-y", false, true},
+    [GARB_MASK_SIZE] = {"mask-size", false, true},
+    [GARB_MASK_ORIGIN] = {"mask-origin", false, true},
+    [GARB_MASK_CLIP] = {"mask-clip", false, true},
+    [GARB_MASK_COMPOSITE] = {"mask-composite", false, true},
+    [GARB_MASK_MODE] = {"mask-mode", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -247,9 +256,9 @@ static const struct {
     {GARB_NPROPS, NULL},
 };
 
-// An image kept by name and drawn as nothing — a conic gradient, an
-// image-set — is approximated the same way; a linear or radial gradient and
-// a url() are drawn.
+// An image kept by name and drawn as nothing — an image-set, or a conic
+// gradient bg_image takes by name — is approximated the same way; a
+// gradient kept whole and a url() are drawn.
 static bool image_drawn(const garb_val_t *v)
 {
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
@@ -499,6 +508,13 @@ static const char *const kBlendModes[] = {
     "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color",
     "luminosity", "plus-lighter", "plus-darker", NULL};
 static const char *const kIsolation[] = {"auto", "isolate", NULL};
+// Masking 1 § 7.5, § 7.8, § 7.2: a mask's clip may also be no box at all, and its
+// layers combine by an operator and are read by a mode.
+static const char *const kMaskClip[] = {"border-box", "padding-box", "content-box", "no-clip",
+                                        NULL};
+static const char *const kNoClip[] = {"no-clip", NULL};
+static const char *const kMaskComposite[] = {"add", "subtract", "intersect", "exclude", NULL};
+static const char *const kMaskMode[] = {"alpha", "luminance", "match-source", NULL};
 // CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
@@ -1204,8 +1220,21 @@ static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, gar
 // A position, x and y (Values 4 § 8.3): one keyword or length-percentage, two,
 // or two keywords each with an offset. `three` also takes Backgrounds 3's
 // three-part form, a keyword pair with one offset (`<bg-position>`), which
-// only a background's position may be written in.
+// only a background's position may be written in. Refused, it leaves the
+// cursor where it was, so a shorthand reads what follows as something else
+// and never takes part of a bad position as nothing.
+static bool position_read(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y);
+
 static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
+{
+    int32_t at = c->i;
+    if (position_read(s, c, three, x, y))
+        return true;
+    c->i = at;
+    return false;
+}
+
+static bool position_read(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 {
     // Up to four parts, each a keyword or a length-percentage.
     const char *word[4] = {NULL, NULL, NULL, NULL};
@@ -1300,9 +1329,12 @@ static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 // Whether a gradient is VALID decides what a `background` does: the
 // pre-standard `linear-gradient(top, …)` (no `to`) is refused by every
 // browser, so the `background: #333` before it stands, and a page that
-// relied on that is dark. So a linear or radial gradient is read against
-// its grammar and kept for drawing; conic gradients and image-set are
-// accepted by name, kept as nothing, and approximated for @supports.
+// relied on that is dark. So a linear, radial or conic gradient is read
+// against its grammar and kept for drawing; image-set, and a conic gradient
+// written with what this library does not read (bg_image), are accepted by
+// name, kept as nothing, and approximated for @supports.
+
+typedef enum { GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_CONIC } GradientKind;
 
 // One comma-separated argument group of a gradient: [from, to) of `v`.
 typedef struct {
@@ -1330,33 +1362,52 @@ static bool length_percentage(Sets *s, VCur *c)
     return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &v);
 }
 
-// `<color> <length-percentage>{0,2}` (a stop), or one length-percentage
-// alone (a hint).
-static bool stop(Sets *s, const Group *g, bool *hint)
+// A conic gradient's position along its stops (Images 4 § 3.3): an angle
+// (a unitless 0 among them) or a percentage of the whole turn, read.
+static bool ap_val(Sets *s, VCur *c, garb_val_t *out)
+{
+    return vc_angle(c, true, out) || vc_dim(c, ACCEPT_PERCENT, true, false, &s->a, out);
+}
+
+// A stop's position as its kind of gradient writes one: an
+// angle-percentage round a conic, else a length-percentage along a line.
+static bool stop_position(Sets *s, VCur *c, GradientKind kind)
+{
+    garb_val_t v;
+    return kind == GRADIENT_CONIC ? ap_val(s, c, &v) : length_percentage(s, c);
+}
+
+// `<color> <position>{0,2}` (a stop; `*positions` how many it wrote), or
+// one position alone (a hint).
+static bool stop(Sets *s, const Group *g, GradientKind kind, bool *hint, int *positions)
 {
     VCur c = {g->v, g->n, 0};
     garb_val_t v;
     *hint = false;
+    *positions = 0;
     if (vc_color(&c, &v)) {
-        for (int k = 0; k < 2 && !vc_done(&c); k++)
-            if (!length_percentage(s, &c))
+        for (; *positions < 2 && !vc_done(&c); (*positions)++)
+            if (!stop_position(s, &c, kind))
                 return false;
         return vc_done(&c);
     }
     *hint = true;
-    return length_percentage(s, &c) && vc_done(&c);
+    return stop_position(s, &c, kind) && vc_done(&c);
 }
 
-// §3.4: at least two stops, a hint only between two of them.
-static bool stops(Sets *s, const Group *g, int32_t n)
+// § 3.4: at least two colour stops, a hint only between two of them. A
+// stop written with two positions is two stops (Images 4 § 3.4.1), so
+// `linear-gradient(orange 0 0)`, the solid-colour idiom, has its two.
+static bool stops(Sets *s, const Group *g, int32_t n, GradientKind kind)
 {
     int32_t colours = 0;
     bool last_hint = true;          // nothing before the first: it may not be a hint
     for (int32_t i = 0; i < n; i++) {
         bool hint;
-        if (!stop(s, &g[i], &hint) || (hint && last_hint))
+        int positions;
+        if (!stop(s, &g[i], kind, &hint, &positions) || (hint && last_hint))
             return false;
-        colours += !hint;
+        colours += hint ? 0 : positions == 2 ? 2 : 1;
         last_hint = hint;
     }
     return colours >= 2 && !last_hint;
@@ -1446,8 +1497,42 @@ static bool radial_prelude(Sets *s, const Group *g)
     return any && vc_done(&c);
 }
 
-// Whether `f`, a linear or radial gradient function, fits its grammar.
-static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
+// [from <angle>]? [at <position>]?, one of them at least (Images 4 §
+// 3.3); a unitless 0 is an angle there.
+static bool conic_prelude(Sets *s, const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kFrom[] = {"from", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    bool any = false;
+    if (vc_keyword(&c, kFrom) != NULL) {
+        if (!angle(&c))
+            return false;
+        any = true;
+    }
+    if (vc_keyword(&c, kAt) != NULL) {
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t x, y;
+        bool ok = position(&strict, &c, false, &x, &y);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        any = true;
+    }
+    return any && vc_done(&c);
+}
+
+// Whether the first group of a gradient of `kind` is its prelude.
+static bool prelude_of(Sets *s, const Group *g, GradientKind kind)
+{
+    return kind == GRADIENT_RADIAL ? radial_prelude(s, g)
+         : kind == GRADIENT_CONIC  ? conic_prelude(s, g)
+                                   : linear_prelude(g);
+}
+
+// Whether `f`, a gradient function of `kind`, fits its grammar.
+static bool gradient_ok(Sets *s, const garb_value_t *f, GradientKind kind)
 {
     Group g[64];
     int32_t n = 0, from = 0;
@@ -1461,9 +1546,9 @@ static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
     for (int32_t i = 0; i < n; i++)
         if (only_ws(&g[i]))
             return false;
-    if (n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0])))
-        return stops(s, g + 1, n - 1);
-    return stops(s, g, n);
+    if (n > 0 && prelude_of(s, &g[0], kind))
+        return stops(s, g + 1, n - 1, kind);
+    return stops(s, g, n, kind);
 }
 
 // ── A gradient kept (values.h's GARB_V_IMAGE) ──
@@ -1483,22 +1568,29 @@ static garb_val_t number_val(double n)
     return v;
 }
 
+// A stop's position, read as its kind of gradient writes one.
+static bool position_val(Sets *s, VCur *c, GradientKind kind, garb_val_t *out)
+{
+    return kind == GRADIENT_CONIC ? ap_val(s, c, out) : lp_val(s, c, out);
+}
+
 // The stops of groups [0, n), each a COLOR with its position or a hint,
 // appended to `out` from `*k`; a stop written with two positions is two.
 // The grammar is already checked.
-static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, int32_t *k)
+static bool gradient_stops(Sets *s, const Group *g, int32_t n, GradientKind kind, garb_val_t *out,
+                           int32_t *k)
 {
     for (int32_t i = 0; i < n; i++) {
         VCur c = {g[i].v, g[i].n, 0};
         garb_val_t colour, pos;
         if (!vc_color(&c, &colour)) {
-            if (!lp_val(s, &c, &out[*k]))
+            if (!position_val(s, &c, kind, &out[*k]))
                 return false;
             (*k)++;
             continue;
         }
         int positions = 0;
-        while (!vc_done(&c) && lp_val(s, &c, &pos)) {
+        while (!vc_done(&c) && position_val(s, &c, kind, &pos)) {
             out[*k] = colour;
             out[*k].items = keep(s, &pos, 1);
             out[*k].nitems = 1;
@@ -1533,6 +1625,21 @@ static double round_the_turn(double v, double whole)
     return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
 }
 
+// An angle token's degrees, taken round its own unit's turn FIRST (`1e307rad`
+// in degrees is past a double, and a direction is the remainder, not the
+// size): in [0, 360). A unitless 0 is 0.
+static double turn_degrees(const garb_value_t *t)
+{
+    double n = t->number;
+    if (t->kind == GARB_DIMENSION) {
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
+    }
+    return n;
+}
+
 // The angle a linear gradient's prelude names, in degrees in [0, 360), or
 // its `to`.
 static garb_val_t linear_geometry(const Group *g, bool have)
@@ -1559,17 +1666,42 @@ static garb_val_t linear_geometry(const Group *g, bool have)
         }
         return kw(kNames[y][x]);
     }
-    const garb_value_t *t = vc_peek(&c);
-    double n = t->number;
-    if (t->kind == GARB_DIMENSION) {
-        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
-        // past a double, and a direction is the remainder, not the size.
-        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
-        bool turn = ieq(t->unit, t->unit_len, "turn");
-        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
-        n = round_the_turn(n, whole) * (360 / whole);
+    return number_val(turn_degrees(vc_peek(&c)));
+}
+
+// A conic gradient's prelude, or its initial one: a KEYWORD "conic" whose
+// items are where it starts, a NUMBER in degrees in [0, 360) clockwise
+// from up, and its centre, x then y.
+static bool conic_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
+{
+    static const char *const kFrom[] = {"from", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    garb_val_t parts[3];
+    parts[0] = number_val(0);
+    garb_val_t half;
+    os64_memset(&half, 0, sizeof(half));
+    half.kind = GARB_V_PERCENTAGE;
+    half.number = 50;
+    parts[1] = parts[2] = half;
+    if (have) {
+        VCur c = {g->v, g->n, 0};
+        if (vc_keyword(&c, kFrom) != NULL) {
+            parts[0] = number_val(turn_degrees(vc_peek(&c)));
+            c.i++;
+        }
+        if (vc_keyword(&c, kAt) != NULL) {
+            Sets strict = *s;
+            strict.quirks = false;
+            bool ok = position(&strict, &c, false, &parts[1], &parts[2]);
+            s->a.short_of_memory |= strict.a.short_of_memory;
+            if (!ok)
+                return false;
+        }
     }
-    return number_val(n);
+    *out = kw("conic");
+    out->items = keep(s, parts, 3);
+    out->nitems = 3;
+    return out->items != NULL;
 }
 
 // A radial gradient's prelude, or its initial one: an ellipse to the
@@ -1624,9 +1756,9 @@ static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
     return out->items != NULL;
 }
 
-// The gradient `f` (its grammar checked) as values.h describes it, into
-// `out`, which vc_image has made its IMAGE.
-static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val_t *out)
+// The gradient `f` of `kind` (its grammar checked) as values.h describes
+// it, into `out`, which vc_image has made its IMAGE.
+static bool gradient_value(Sets *s, const garb_value_t *f, GradientKind kind, garb_val_t *out)
 {
     Group g[64];
     int32_t n = 0, from = 0;
@@ -1637,16 +1769,19 @@ static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val
         }
     // The prelude by gradient_ok's own test, which asks it first: a unitless
     // 0 is an angle there, though it would read as a hint too.
-    bool prelude = n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0]));
+    bool prelude = n > 0 && prelude_of(s, &g[0], kind);
     garb_val_t items[1 + 2 * 64];
     int32_t k = 1;
-    if (radial) {
+    if (kind == GRADIENT_RADIAL) {
         if (!radial_geometry(s, &g[0], prelude, &items[0]))
+            return false;
+    } else if (kind == GRADIENT_CONIC) {
+        if (!conic_geometry(s, &g[0], prelude, &items[0]))
             return false;
     } else {
         items[0] = linear_geometry(&g[0], prelude);
     }
-    if (!gradient_stops(s, g + prelude, n - prelude, items, &k))
+    if (!gradient_stops(s, g + prelude, n - prelude, kind, items, &k))
         return false;
     out->items = keep(s, items, k);
     out->nitems = k;
@@ -1654,23 +1789,71 @@ static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val
     return out->items != NULL;
 }
 
+// Whether tokens [0, n) hold a calc(), min(), max() or clamp() with an
+// angle in it, at any depth.
+static bool angle_calc(const garb_value_t *v, int32_t n, bool in_calc)
+{
+    for (int32_t i = 0; i < n; i++) {
+        const garb_value_t *t = &v[i];
+        if (in_calc && t->kind == GARB_DIMENSION &&
+            (ieq(t->unit, t->unit_len, "deg") || ieq(t->unit, t->unit_len, "grad") ||
+             ieq(t->unit, t->unit_len, "rad") || ieq(t->unit, t->unit_len, "turn")))
+            return true;
+        if (t->kind == GARB_FUNCTION || t->kind == GARB_BLOCK) {
+            bool calc = t->kind == GARB_FUNCTION &&
+                        (ieq(t->text, t->len, "calc") || ieq(t->text, t->len, "min") ||
+                         ieq(t->text, t->len, "max") || ieq(t->text, t->len, "clamp"));
+            if (angle_calc(t->children, t->nchildren, in_calc || calc))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Whether a gradient's prelude, its first argument group, writes a
+// <color-interpolation-method> (Images 4 § 3.1: `in hsl longer hue`).
+static bool writes_interpolation(const garb_value_t *f)
+{
+    for (int32_t i = 0; i < f->nchildren && f->children[i].kind != GARB_COMMA; i++)
+        if (f->children[i].kind == GARB_IDENT && ieq(f->children[i].text, f->children[i].len, "in"))
+            return true;
+    return false;
+}
+
 // An <image>: a url, or a gradient the grammar above admits, kept whole,
-// or one this library takes by name (vc_image).
+// or one this library takes by name (vc_image). A conic gradient that
+// fails the grammar where it writes what this library does not read — a
+// calculation with an angle in it (DEBTS.md), or a colour interpolation
+// method (PILE3.md § Booked, which linear and radial ones are refused for)
+// — is taken by name too and drawn as nothing, as every conic gradient was
+// before they were drawn: refusing it would cost the page the rest of its
+// `background`.
 static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
 {
     const garb_value_t *t = vc_peek(c);
-    bool linear = false, radial = false;
+    bool gradient = false;
+    GradientKind kind = GRADIENT_LINEAR;
     if (t != NULL && t->kind == GARB_FUNCTION) {
-        linear = ieq(t->text, t->len, "linear-gradient") ||
-                 ieq(t->text, t->len, "repeating-linear-gradient");
-        radial = ieq(t->text, t->len, "radial-gradient") ||
-                 ieq(t->text, t->len, "repeating-radial-gradient");
-        if ((linear || radial) && !gradient_ok(s, t, radial))
-            return false;
+        static const struct { const char *name; GradientKind kind; } kGradients[] = {
+            {"linear-gradient", GRADIENT_LINEAR}, {"repeating-linear-gradient", GRADIENT_LINEAR},
+            {"radial-gradient", GRADIENT_RADIAL}, {"repeating-radial-gradient", GRADIENT_RADIAL},
+            {"conic-gradient", GRADIENT_CONIC},   {"repeating-conic-gradient", GRADIENT_CONIC},
+        };
+        for (size_t k = 0; !gradient && k < sizeof(kGradients) / sizeof(kGradients[0]); k++)
+            if (ieq(t->text, t->len, kGradients[k].name)) {
+                gradient = true;
+                kind = kGradients[k].kind;
+            }
+        if (gradient && !gradient_ok(s, t, kind)) {
+            if (kind != GRADIENT_CONIC ||
+                !(angle_calc(t->children, t->nchildren, false) || writes_interpolation(t)))
+                return false;
+            gradient = false;               // by name, as vc_image takes it
+        }
     }
     if (!vc_image(c, out))
         return false;
-    return !(linear || radial) || gradient_value(s, t, radial, out);
+    return !gradient || gradient_value(s, t, kind, out);
 }
 
 static bool repeat(VCur *c, garb_val_t *out)
@@ -1870,6 +2053,108 @@ static bool background(Sets *s, VCur *c)
     return true;
 }
 
+// The longhands each layer of the `mask` shorthand sets, in the order
+// they are set.
+enum { M_IMAGE, M_REPEAT, M_X, M_Y, M_SIZE, M_ORIGIN, M_CLIP, M_COMPOSITE, M_MODE, M_N };
+static const garb_prop_t kMaskProps[M_N] = {
+    GARB_MASK_IMAGE, GARB_MASK_REPEAT, GARB_MASK_POSITION_X, GARB_MASK_POSITION_Y,
+    GARB_MASK_SIZE, GARB_MASK_ORIGIN, GARB_MASK_CLIP, GARB_MASK_COMPOSITE, GARB_MASK_MODE,
+};
+
+// The `mask` shorthand's layers (Masking 1 § 7.9), each one's values added
+// to `lists`: a background's layer without the colour or the attachment,
+// with an operator and a mode, its position Values 4's <position>, and
+// `no-clip` the clip's own word. The longhands are all marked together, so
+// a reading that knows the shorthand knows every one of them.
+static bool mask_layers(Sets *s, VCur *c, Layers lists[M_N])
+{
+    for (;;) {
+        bool have_img = false, have_pos = false, have_rep = false, have_comp = false,
+             have_mode = false, no_clip = false;
+        int boxes = 0;
+        const char *box[2] = {NULL, NULL}, *k;
+        garb_val_t l[M_N] = {kw("none"),       kw("repeat"),     percent(0),
+                             percent(0),       auto_size(s),     kw("border-box"),
+                             kw("border-box"), kw("add"),        kw("match-source")};
+        if (l[M_SIZE].items == NULL)
+            return false;
+        for (;;) {
+            const garb_value_t *t = vc_peek(c);
+            if (t == NULL || t->kind == GARB_COMMA)
+                break;
+            garb_val_t v, x, y;
+            Sets strict = *s;           // a mask's position is never quirky
+            strict.quirks = false;
+            strict.a.short_of_memory = false;
+            if (!have_img && vc_keyword(c, kNone) != NULL) {
+                have_img = true;
+            } else if (!have_img && bg_image(s, c, &v)) {
+                l[M_IMAGE] = v;
+                have_img = true;
+            } else if (!have_pos && position(&strict, c, false, &x, &y)) {
+                l[M_X] = x;
+                l[M_Y] = y;
+                have_pos = true;
+                if (is_delim_v(vc_peek(c), '/')) {
+                    c->i++;
+                    if (!bg_size(s, c, &l[M_SIZE]))
+                        return false;
+                }
+            } else if (strict.a.short_of_memory) {
+                s->a.short_of_memory = true;
+                return false;
+            } else if (!have_rep && repeat(c, &v)) {
+                l[M_REPEAT] = v;
+                have_rep = true;
+            } else if (boxes < (no_clip ? 1 : 2) && (box[boxes] = vc_keyword(c, kBox)) != NULL) {
+                boxes++;
+            } else if (!no_clip && boxes < 2 && vc_keyword(c, kNoClip) != NULL) {
+                no_clip = true;
+            } else if (!have_comp && (k = vc_keyword(c, kMaskComposite)) != NULL) {
+                l[M_COMPOSITE] = kw(k);
+                have_comp = true;
+            } else if (!have_mode && (k = vc_keyword(c, kMaskMode)) != NULL) {
+                l[M_MODE] = kw(k);
+                have_mode = true;
+            } else {
+                return false;
+            }
+        }
+        bool last = vc_peek(c) == NULL;
+        if (!have_img && !have_pos && !have_rep && boxes == 0 && !no_clip && !have_comp &&
+            !have_mode)
+            return false;               // an empty layer
+        // One box sets the origin and the clip, two set one each; with
+        // `no-clip` a box is the origin's alone.
+        if (boxes > 0)
+            l[M_ORIGIN] = kw(box[0]);
+        if (no_clip)
+            l[M_CLIP] = kw("no-clip");
+        else if (boxes > 0)
+            l[M_CLIP] = kw(box[boxes - 1]);
+        for (int j = 0; j < M_N; j++)
+            if (!layers_add(s, &lists[j], &l[j]))
+                return false;
+        if (last)
+            return true;
+        c->i++;                         // the comma
+    }
+}
+
+static bool mask(Sets *s, VCur *c)
+{
+    Layers lists[M_N] = {{0}};
+    garb_val_t v[M_N];
+    bool ok = mask_layers(s, c, lists);
+    for (int k = 0; k < M_N; k++)
+        ok = layers_done(s, &lists[k], &v[k]) && ok;    // each list freed, whatever
+    if (!ok)
+        return false;
+    for (int k = 0; k < M_N; k++)
+        set(s, kMaskProps[k], &v[k]);
+    return true;
+}
+
 // ── Text decoration and lists ───────────────────────────────────────────
 
 // <text-decoration-line>: none, or any of the lines, each once.
@@ -2016,7 +2301,8 @@ typedef enum {
     G_FAMILY, G_FONT_SIZE, G_FONT_WEIGHT, G_FONT_STYLE, G_LINE_HEIGHT,
     G_VALIGN, G_DECORATION_LINE, G_INDENT, G_LIST_TYPE, G_LIST_IMAGE, G_BG_IMAGE,
     G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_BG_SIZE,
-    G_BG_BOX,               // background-origin, -clip: a box from `words`
+    G_BG_BOX,               // background-origin, -clip, and a mask's: a box from `words`
+    G_MASK_KEYWORD,         // mask-composite, -mode: a layer's keyword from `words`
     G_SPACING,
     G_Z_INDEX,              // auto | <integer>
     G_CLIP,                // auto | rect(top, right, bottom, left)
@@ -2112,6 +2398,12 @@ static const Longhand kLonghands[] = {
     {GARB_BACKGROUND_REPEAT, G_BG_REPEAT, NULL}, {GARB_BACKGROUND_POSITION_X, G_BG_POS_X, NULL},
     {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL}, {GARB_BACKGROUND_SIZE, G_BG_SIZE, NULL},
     {GARB_BACKGROUND_ORIGIN, G_BG_BOX, kBox}, {GARB_BACKGROUND_CLIP, G_BG_BOX, kClipBox},
+    // A mask layer is placed as a background layer is (Masking 1 § 7).
+    {GARB_MASK_IMAGE, G_BG_IMAGE, NULL}, {GARB_MASK_REPEAT, G_BG_REPEAT, NULL},
+    {GARB_MASK_POSITION_X, G_BG_POS_X, NULL}, {GARB_MASK_POSITION_Y, G_BG_POS_Y, NULL},
+    {GARB_MASK_SIZE, G_BG_SIZE, NULL}, {GARB_MASK_ORIGIN, G_BG_BOX, kBox},
+    {GARB_MASK_CLIP, G_BG_BOX, kMaskClip}, {GARB_MASK_COMPOSITE, G_MASK_KEYWORD, kMaskComposite},
+    {GARB_MASK_MODE, G_MASK_KEYWORD, kMaskMode},
     {GARB_MARGIN_TOP, G_MARGIN, NULL}, {GARB_MARGIN_RIGHT, G_MARGIN, NULL},
     {GARB_MARGIN_BOTTOM, G_MARGIN, NULL}, {GARB_MARGIN_LEFT, G_MARGIN, NULL},
     {GARB_PADDING_TOP, G_PADDING, NULL}, {GARB_PADDING_RIGHT, G_PADDING, NULL},
@@ -3206,7 +3498,7 @@ static bool content(Sets *s, VCur *c, garb_val_t *out)
 static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
-           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX ||
+           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX || l->g == G_MASK_KEYWORD ||
            l->g == G_ANIM_NAME || l->g == G_DURATION || l->g == G_DELAY ||
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
@@ -3360,6 +3652,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     switch (l->g) {
     case G_KEYWORDS:
     case G_BG_BOX:
+    case G_MASK_KEYWORD:
     case G_ANIM_KEYWORD:
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
@@ -3488,7 +3781,10 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
                 op = &off;
             return edge_offset(s, k, op, out);
         }
-        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+        // The Quirks standard's unitless lengths are a background's
+        // position's, not a mask's (§ 3.2).
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true,
+                      s->quirks && l->prop == GARB_BACKGROUND_POSITION_X, &s->a, out);
     case G_BG_POS_Y:
         if ((k = vc_keyword(c, kPosY)) != NULL) {
             garb_val_t off, *op = NULL;
@@ -3496,7 +3792,10 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
                 op = &off;
             return edge_offset(s, k, op, out);
         }
-        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out);
+        // The Quirks standard's unitless lengths are a background's
+        // position's, not a mask's (§ 3.2).
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true,
+                      s->quirks && l->prop == GARB_BACKGROUND_POSITION_Y, &s->a, out);
     case G_SPACING: {
         garb_val_t two[2];
         int n = 0;
@@ -3709,7 +4008,7 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
+    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE, SH_MASK, SH_MASK_POSITION,
     // CSS Logical 1's flow-relative pairs, each a start and an end.
     SH_MARGIN_INLINE, SH_MARGIN_BLOCK, SH_PADDING_INLINE, SH_PADDING_BLOCK, SH_INSET_INLINE,
     SH_INSET_BLOCK, SH_BORDER_INLINE, SH_BORDER_BLOCK, SH_BORDER_INLINE_WIDTH,
@@ -3736,6 +4035,7 @@ static const struct { const char *name; Shorthand sh; bool modern; } kShorthands
     {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
     {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
     {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
+    {"mask", SH_MASK, true}, {"mask-position", SH_MASK_POSITION, true},
     {"margin-inline", SH_MARGIN_INLINE, true}, {"margin-block", SH_MARGIN_BLOCK, true},
     {"padding-inline", SH_PADDING_INLINE, true}, {"padding-block", SH_PADDING_BLOCK, true},
     {"inset-inline", SH_INSET_INLINE, true}, {"inset-block", SH_INSET_BLOCK, true},
@@ -3820,6 +4120,8 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_BORDER_COLOR: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + k); break;
     case SH_BACKGROUND: for (size_t k = 0; k < sizeof(kBg) / sizeof(kBg[0]); k++) out[n++] = kBg[k]; break;
     case SH_BACKGROUND_POSITION: out[n++] = GARB_BACKGROUND_POSITION_X; out[n++] = GARB_BACKGROUND_POSITION_Y; break;
+    case SH_MASK: for (int k = 0; k < M_N; k++) out[n++] = kMaskProps[k]; break;
+    case SH_MASK_POSITION: out[n++] = GARB_MASK_POSITION_X; out[n++] = GARB_MASK_POSITION_Y; break;
     case SH_FONT: for (int k = 0; k < 6; k++) out[n++] = kFont[k]; break;
     case SH_LIST_STYLE: for (int k = 0; k < 3; k++) out[n++] = kList[k]; break;
     case SH_TEXT_DECORATION: out[n++] = GARB_TEXT_DECORATION_LINE; break;
@@ -4120,6 +4422,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
+    case SH_MASK: return mask(s, c);
     case SH_ANIMATION: return animation(s, c);
     case SH_OUTLINE: return outline_shorthand(s, c);
     case SH_BORDER_INLINE: case SH_BORDER_BLOCK: {
@@ -4137,12 +4440,20 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         return logical_pair(s, c, pair_of(sh), bstyle_one);
     case SH_BORDER_INLINE_COLOR: case SH_BORDER_BLOCK_COLOR:
         return logical_pair(s, c, pair_of(sh), bcolor_one);
-    case SH_BACKGROUND_POSITION: {
-        // A position per layer, each split into its two longhands' lists.
+    case SH_BACKGROUND_POSITION: case SH_MASK_POSITION: {
+        // A position per layer, each split into its two longhands' lists:
+        // a background's <bg-position>, with the quirks' unitless lengths,
+        // or a mask's Values 4 <position>, without them.
+        bool bg = sh == SH_BACKGROUND_POSITION;
+        garb_prop_t px = bg ? GARB_BACKGROUND_POSITION_X : GARB_MASK_POSITION_X,
+                    py = bg ? GARB_BACKGROUND_POSITION_Y : GARB_MASK_POSITION_Y;
+        Sets strict = *s;
+        strict.quirks = s->quirks && bg;
         Layers xs = {0}, ys = {0};
-        bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
+        bool ok = knows(s, px) || knows(s, py);
         while (ok) {
-            if (!position(s, c, true, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+            if (!position(&strict, c, bg, &x, &y) || !layers_add(s, &xs, &x) ||
+                !layers_add(s, &ys, &y)) {
                 ok = false;
                 break;
             }
@@ -4150,13 +4461,14 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
                 break;
             c->i++;
         }
+        s->a.short_of_memory |= strict.a.short_of_memory;
         ok = ok && vc_done(c);
         ok = layers_done(s, &xs, &x) && ok;     // each list freed, whatever
         ok = layers_done(s, &ys, &y) && ok;
         if (!ok)
             return false;
-        set(s, GARB_BACKGROUND_POSITION_X, &x);
-        set(s, GARB_BACKGROUND_POSITION_Y, &y);
+        set(s, px, &x);
+        set(s, py, &y);
         return true;
     }
     case SH_FONT: return font_shorthand(s, c);
@@ -4293,6 +4605,18 @@ static const struct {
     {"-webkit-animation-play-state", "animation-play-state", false},
     {"-webkit-animation-delay", "animation-delay", false},
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
+    // Every engine reads the prefixed mask names as the standard ones
+    // (MASKS.md § 4), all but -webkit-mask-composite, whose words are the
+    // legacy compositing operators': it is not read (MASKS.md § 7).
+    {"-webkit-mask", "mask", true},
+    {"-webkit-mask-image", "mask-image", true},
+    {"-webkit-mask-repeat", "mask-repeat", true},
+    {"-webkit-mask-position", "mask-position", true},
+    {"-webkit-mask-position-x", "mask-position-x", true},
+    {"-webkit-mask-position-y", "mask-position-y", true},
+    {"-webkit-mask-size", "mask-size", true},
+    {"-webkit-mask-origin", "mask-origin", true},
+    {"-webkit-mask-clip", "mask-clip", true},
 };
 
 // CSS Logical 1's flow-relative longhands (§ 4) and the border sides'

@@ -785,7 +785,7 @@ typedef struct {
 static int json_put(DJson *j, JSContext *ctx, const char *s, size_t n)
 {
     if (n > OS64_DOM_STATE_MAX - j->used) {
-        d_error(ctx, "QuotaExceededError", "A history state may be at most 64 KiB of JSON");
+        d_error(ctx, "QuotaExceededError", "A history state may be at most 2 MiB of JSON");
         return -1;
     }
     if (j->used + n + 1 > j->cap) {

@@ -374,6 +374,13 @@ static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE
 static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
                                                 &kOwnSize, &kPaddingBox, &kBorderBox,
                                                 1, 1, 1, 1, 1, 1, 1};
+// One mask layer of nothing — no mask: a background's empty layer but
+// placed in the border box, added, its mode matching its image's.
+static const flow_composite_t kAdd = FLOW_COMPOSITE_ADD;
+static const flow_mask_mode_t kMatchSource = FLOW_MASK_MATCH_SOURCE;
+static const flow_masks_t kMasks = {{&kNoImage, &kRepeat, &kAtStart, &kAtStart, &kOwnSize,
+                                     &kBorderBox, &kBorderBox, 1, 1, 1, 1, 1, 1, 1},
+                                    &kAdd, &kMatchSource, 1, 1};
 
 static flow_style_t initial(const Ctx *c)
 {
@@ -388,6 +395,7 @@ static flow_style_t initial(const Ctx *c)
     s.fill = s.color;
     s.current_colours = FLOW_CURRENT_FILL;
     s.backgrounds = kBackgrounds;
+    s.masks = kMasks;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -2092,6 +2100,11 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
     case GARB_ISOLATION: d->isolate = s->isolate; break;
+    case GARB_MASK_IMAGE: case GARB_MASK_REPEAT: case GARB_MASK_POSITION_X:
+    case GARB_MASK_POSITION_Y: case GARB_MASK_SIZE: case GARB_MASK_ORIGIN: case GARB_MASK_CLIP:
+    case GARB_MASK_COMPOSITE: case GARB_MASK_MODE:
+        f_take_mask(prop, d, s);
+        break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;
@@ -2438,6 +2451,23 @@ static int32_t angle_thousandths(double deg)
     return (int32_t)(t >= 360000 ? t - 360000 : t);
 }
 
+// A stop's position as flow keeps it (flow_gradient_stop_t): a
+// length-percentage; round a conic gradient, an angle as degrees in PX, or
+// a percentage of the turn. AUTO for what will not read.
+static flow_length_t stop_at(const Author *a, const garb_val_t *v, flow_gradient_kind_t kind)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    if (kind != FLOW_GRADIENT_CONIC || v->kind != GARB_V_ANGLE)
+        return author_lp(a, v, kUnwritten);
+    double deg = v->unit == GARB_U_TURN ? v->number * 360
+               : v->unit == GARB_U_GRAD ? v->number * 0.9
+               : v->unit == GARB_U_RAD  ? v->number * (180 / 3.14159265358979323846)
+                                        : v->number;
+    // Held to a million degrees either way, so its 64ths fit an int32_t.
+    double held = deg > 1e6 ? 1e6 : deg < -1e6 ? -1e6 : deg;
+    return (flow_length_t){FLOW_LENGTH_PX, (int32_t)(held * 64 + (held < 0 ? -0.5 : 0.5)), 0};
+}
+
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
 // stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
 // is left as it was; a currentColor stop is marked `current`, for the box
@@ -2458,7 +2488,8 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
     os64_memset(g, 0, sizeof(*g));
     const char *name = v->text;             // one of libgarb's own names
     g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
-                                    os64_streq(name, "repeating-radial-gradient"));
+                                    os64_streq(name, "repeating-radial-gradient") ||
+                                    os64_streq(name, "repeating-conic-gradient"));
     const garb_val_t *geo = &v->items[0];
     if (geo->kind == GARB_V_NUMBER) {
         g->kind = FLOW_GRADIENT_LINEAR;
@@ -2477,6 +2508,11 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
                 g->to_x = kTo[k].x;
                 g->to_y = kTo[k].y;
             }
+    } else if (is_word(geo, "conic") && geo->nitems == 3) {
+        g->kind = FLOW_GRADIENT_CONIC;
+        g->angle = angle_thousandths(geo->items[0].number);
+        g->centre[0] = author_lp(a, &geo->items[1], kHalf);
+        g->centre[1] = author_lp(a, &geo->items[2], kHalf);
     } else {
         g->kind = FLOW_GRADIENT_RADIAL;
         g->circle = is_word(geo, "circle");
@@ -2506,13 +2542,13 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
         o->at = kUnwritten;
         if (st->kind != GARB_V_COLOR) {
             o->hint = true;
-            o->at = author_lp(a, st, kUnwritten);
+            o->at = stop_at(a, st, g->kind);
             continue;
         }
         o->current = st->color.current;
         o->colour = st->color.current ? s->color : colour_of(st->color);
         if (st->nitems > 0)
-            o->at = author_lp(a, &st->items[0], kUnwritten);
+            o->at = stop_at(a, &st->items[0], g->kind);
     }
     g->stops = stops;
     g->nstops = n;
@@ -2965,11 +3001,12 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
     return true;
 }
 
-// A background property's list, one entry per layer libgarb read (a
-// LAYERS value, or one value for one layer); an entry flow cannot read is
-// the property's initial value. A url() is fetched by the face, a
-// gradient libgarb kept is drawn (values.h); a conic gradient or an
-// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// A background or mask property's list, one entry per layer libgarb read
+// (a LAYERS value, or one value for one layer); an entry flow cannot read
+// is the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); an image-set, or a conic
+// gradient taken by name, is no picture yet (PILE3.md § Booked, DEBTS.md).
+// Past the lists' budget
 // (list_alloc), the property's list is left as it was.
 static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
 {
@@ -2977,7 +3014,16 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
     if (n <= 0)
         return true;
-    flow_backgrounds_t *b = &s->backgrounds;
+    // A mask's placing longhand is read as its background twin is, into
+    // the mask's lists; its origin starts at the border box.
+    static const garb_prop_t kTwin[] = {
+        GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+        GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+        GARB_BACKGROUND_CLIP};
+    bool mask = p >= GARB_MASK_IMAGE && p <= GARB_MASK_CLIP;
+    flow_backgrounds_t *b = mask ? &s->masks.layers : &s->backgrounds;
+    if (mask)
+        p = kTwin[p - GARB_MASK_IMAGE];
     Len l, two[2];
     int32_t w;
     bool spent;                             // past the lists' budget: the list as it was
@@ -3049,14 +3095,17 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
         return true;
     }
     case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
-        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        // flow_edge_t's order; libgarb gives `text` to a background's clip
+        // alone and `no-clip` to a mask's.
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text",
+                                            "no-clip"};
         bool origin = p == GARB_BACKGROUND_ORIGIN;
         flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
             return spent;
         for (int32_t k = 0; k < n; k++)
             list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
-                      : origin ? kPaddingBox : kBorderBox;
+                      : origin && !mask ? kPaddingBox : kBorderBox;
         *(origin ? &b->origin : &b->clip) = list;
         *(origin ? &b->norigin : &b->nclip) = n;
         return true;
@@ -3064,6 +3113,42 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     default:
         return true;
     }
+}
+
+// `mask-composite` or `mask-mode`'s list (Masking 1 § 7.8, § 7.2), one entry
+// per layer, in flow_composite_t's or flow_mask_mode_t's order; an entry
+// flow cannot read is the initial value. Past the lists' budget, the list
+// is left as it was.
+static bool author_mask_words(const Author *a, flow_style_t *s, garb_prop_t p,
+                              const garb_val_t *v)
+{
+    static const char *const composites[] = {"add", "subtract", "intersect", "exclude"};
+    static const char *const modes[] = {"alpha", "luminance", "match-source"};
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1, w;
+    bool spent;
+    if (n <= 0)
+        return true;
+    if (p == GARB_MASK_COMPOSITE) {
+        flow_composite_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], composites, F_ARRAY(composites))) >= 0
+                          ? (flow_composite_t)w : kAdd;
+        s->masks.composite = list;
+        s->masks.ncomposite = n;
+        return true;
+    }
+    flow_mask_mode_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+    if (list == NULL)
+        return spent;
+    for (int32_t k = 0; k < n; k++)
+        list[k] = (w = pick(&items[k], modes, F_ARRAY(modes))) >= 0 ? (flow_mask_mode_t)w
+                                                                   : kMatchSource;
+    s->masks.mode = list;
+    s->masks.nmode = n;
+    return true;
 }
 
 // A time, in milliseconds (libgarb held it to the domain, values.h).
@@ -3219,7 +3304,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
     case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
     case GARB_BACKGROUND_CLIP:
+    case GARB_MASK_IMAGE: case GARB_MASK_REPEAT: case GARB_MASK_POSITION_X:
+    case GARB_MASK_POSITION_Y: case GARB_MASK_SIZE: case GARB_MASK_ORIGIN: case GARB_MASK_CLIP:
         if (!author_layers(a, s, p, v))
+            return false;
+        break;
+    case GARB_MASK_COMPOSITE: case GARB_MASK_MODE:
+        if (!author_mask_words(a, s, p, v))
             return false;
         break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:

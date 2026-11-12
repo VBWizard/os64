@@ -125,6 +125,70 @@ static inline bool f_blended(const flow_style_t *s)
     return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
 }
 
+// Whether a mask is granted (MASKS.md § 3): a layer has a picture or a
+// gradient — a mask of only `none` layers is no mask — on a box that is no
+// plain inline, whose mask does nothing, as its opacity is painted opaque.
+// A stacking context and a group; an inline-block's is neither, being no
+// stacked box (flow_style_t.masks).
+static inline bool f_masked(const flow_style_t *s)
+{
+    if (s->display == FLOW_DISPLAY_INLINE)
+        return false;
+    for (int32_t i = 0; i < s->masks.layers.nimage; i++)
+        if (s->masks.layers.image[i].url != NULL || s->masks.layers.image[i].gradient != NULL)
+            return true;
+    return false;
+}
+
+// Copies a mask longhand's list from `s` to `d`, shared and not copied, as
+// a list is the style's and lives as long as any style does; false for any
+// other property.
+static inline bool f_take_mask(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
+{
+    flow_masks_t *dm = &d->masks;
+    const flow_masks_t *sm = &s->masks;
+    switch (p) {
+    case GARB_MASK_IMAGE:
+        dm->layers.image = sm->layers.image;
+        dm->layers.nimage = sm->layers.nimage;
+        return true;
+    case GARB_MASK_REPEAT:
+        dm->layers.repeat = sm->layers.repeat;
+        dm->layers.nrepeat = sm->layers.nrepeat;
+        return true;
+    case GARB_MASK_POSITION_X:
+        dm->layers.x = sm->layers.x;
+        dm->layers.nx = sm->layers.nx;
+        return true;
+    case GARB_MASK_POSITION_Y:
+        dm->layers.y = sm->layers.y;
+        dm->layers.ny = sm->layers.ny;
+        return true;
+    case GARB_MASK_SIZE:
+        dm->layers.size = sm->layers.size;
+        dm->layers.nsize = sm->layers.nsize;
+        return true;
+    case GARB_MASK_ORIGIN:
+        dm->layers.origin = sm->layers.origin;
+        dm->layers.norigin = sm->layers.norigin;
+        return true;
+    case GARB_MASK_CLIP:
+        dm->layers.clip = sm->layers.clip;
+        dm->layers.nclip = sm->layers.nclip;
+        return true;
+    case GARB_MASK_COMPOSITE:
+        dm->composite = sm->composite;
+        dm->ncomposite = sm->ncomposite;
+        return true;
+    case GARB_MASK_MODE:
+        dm->mode = sm->mode;
+        dm->nmode = sm->nmode;
+        return true;
+    default:
+        return false;
+    }
+}
+
 // Whether `isolation: isolate` is granted: a stacking context, no group.
 static inline bool f_isolated(const flow_style_t *s)
 {

@@ -3,9 +3,8 @@
 //
 //     h2probe [--cold] [--fixture] https://host/path [fetches]
 //
-// libfetch does not offer HTTP/2 yet (its switch is H2.5), so this program
-// is built from libfetch's SOURCES, not against libfetch.so, and turns the
-// library's private offer on for itself. Nothing else can.
+// It reads the pool's counts through libfetch's private header, which no
+// other program has reason to.
 //
 // It makes one fetch first, so the server's ALPN answer is known and its
 // connection is in the pool, then that many more at once (six unless told
@@ -138,8 +137,6 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    fetch_h2_offer = true;
-
     bool failed = false, differ = false;
     if (!cold) {
         fetch_one(&s_outcome[FETCHES_MAX]);
@@ -177,15 +174,6 @@ int main(int argc, char **argv)
                 (unsigned long)count, (long)(all / 1000), (unsigned long)(kept + live), kept + live == 1 ? "" : "s",
                 (unsigned long)live, (unsigned long)h2, (unsigned long)queued, (unsigned long)buffered);
     fetch_pool_drain();
-    // Outlive the connection's reader. The kernel kills whatever threads are
-    // alive when a program exits and reports the program as killed (exit
-    // 137) in place of the code it returned (DEBTS.md), and a drained
-    // HTTP/2 connection's reader takes up to a slice to see that it was
-    // condemned. The last sleep covers the reader's few steps between
-    // telling the pool it is gone and returning.
-    for (int waited = 0; fetch_pool_closing() != 0 && waited < 2000; waited += 20)
-        os64_sleep(20);
-    os64_sleep(50);
     if (failed) {
         os64_printf("h2probe: FAIL: a fetch failed\n");
         return 1;

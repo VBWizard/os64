@@ -121,12 +121,19 @@ _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within th
 // its whole life (HTTP2.md § 2.1).
 typedef enum { FETCH_PROTO_H1 = 1, FETCH_PROTO_H2 } fetch_proto_t;
 
-// WHETHER A DIAL OFFERS HTTP/2. False at rest, and nothing in the library
-// sets it. Its visibility is hidden, so libfetch.so does not export it and
-// no function it does export writes it: a program linked against the
-// library speaks HTTP/1.1. The host harness and /tests/h2probe compile
-// these sources into themselves and set it (HTTP2.md § 4 H2.6).
-extern bool fetch_h2_offer __attribute__((visibility("hidden")));
+// WHAT A FETCH WOULD SAY FIRST on an HTTP/2 connection of its own: the
+// greeting (h2_conn.h), held by value, and whether it speaks HTTP/1.1 alone.
+// A server can tell one greeting from another, so an HTTP/2 connection, and
+// a dial that may become one, belong to the fetches that would have said
+// the same (fetch_pool_take).
+#define FETCH_H2_SETTINGS_MOST 8
+typedef struct {
+    h2_setting_t settings[FETCH_H2_SETTINGS_MOST];
+    uint32_t count;
+    uint32_t window_increment, first_stream, stream_increment;
+    h2_priority_mode_t priority;
+    bool http1;                 // offers http/1.1 alone, and takes no HTTP/2 connection
+} fetch_pool_say_t;
 
 typedef struct fetch_conn fetch_conn_t;
 
@@ -141,6 +148,11 @@ typedef struct fetch_pool_wait {
     uint64_t waited_ms;                     // out: how long the take did wait
     bool for_the_table;                     // out: its last wait was for a place in the whole
                                             // table, its key being under its own cap
+    // The pool's, while a take is waiting: what the take asked for, and
+    // whether an idle connection is to be closed on its account.
+    const fetch_pool_key_t *key;
+    const fetch_pool_say_t *say;
+    bool wants_place;
     struct {
         struct fetch_pool_wait *next;
     } node;
@@ -166,22 +178,31 @@ typedef enum {
     FETCH_POOL_FAILED           // no bell, no memory or no clock to wait by
 } fetch_pool_take_t;
 
-// A connection for `key`, in this order (HTTP2.md § 2.2):
-//   1. a live HTTP/2 connection with room for a stream, the one longest
-//      live first (FETCH_POOL_SHARED);
+// A connection for `key`, for a fetch that would say `say`, in this order
+// (HTTP2.md § 2.2, and § 4 H2.5 for `say`):
+//   1. a live HTTP/2 connection with room for a stream that was greeted as
+//      `say` greets, the one longest live first (FETCH_POOL_SHARED); never
+//      for a fetch that says http1;
 //   2. unless `fresh`, a kept HTTP/1.1 one given back less than
 //      `idle_most_ms` ago (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a
-//      request sent once), the most recently kept first;
-//   3. when the key last answered ALPN with h2 and a dial to it is in
+//      request sent once), the most recently kept first, whoever dialled
+//      it: an HTTP/1.1 connection has no greeting;
+//   3. when the key last answered ALPN with h2, the fetch does not say
+//      http1, and a dial to the key by a fetch that says the same is in
 //      flight, a WAIT for that dial's verdict, even under the key's cap;
 //   4. a slot to dial in, when the key holds fewer than FETCH_POOL_PER_KEY
 //      connections of every kind and the sockets libfetch holds, closing
 //      ones among them, are under FETCH_POOL_TOTAL. AN IDLE CONNECTION
 //      NEVER MAKES A FETCH WAIT FOR ONE longer than a closing HTTP/2
 //      connection's reader takes to look (H2_READER_SLICE_MS): with the
-//      table full, the least recently kept of any key is closed for the
-//      slot; with the key at its cap and holding a kept connection this
-//      fetch may not take (`fresh`, or kept too long for it), that one is;
+//      key at its cap and holding a kept connection this fetch may not
+//      take (`fresh`, or kept too long for it), that one is closed for the
+//      slot; with the table holding no place, the least recently kept
+//      HTTP/1.1 connection of any key is closed, which makes one at once,
+//      or with none the least recently kept HTTP/2 one is condemned,
+//      until as many are closing as fetches want a place. A fetch whose
+//      key last answered h2 wants none while another fetch that says the
+//      same already wants one for that key: one connection carries both;
 //   5. otherwise the fetch WAITS, on its bell, until a connection is given
 //      back, goes, finishes its dial or gains room, and asks again from
 //      the top.
@@ -189,8 +210,8 @@ typedef enum {
 // key. Every waiter is rung at every put and every departure: a ring is a
 // hint, and each one woken asks again under the lock. No order is promised
 // among waiters.
-fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, bool fresh,
-                                  fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io);
+fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_say_t *say, uint32_t idle_most_ms,
+                                  bool fresh, fetch_pool_wait_t *wait, fetch_conn_t **conn, fetch_transport_t *io);
 
 // The dial a FETCH_POOL_DIAL slot was reserved for succeeded: the
 // connection is in use, by the fetch that dialled it.
@@ -212,6 +233,12 @@ void fetch_pool_dialled_h2(fetch_conn_t *conn, h2_conn_t *h2, uint16_t tls_versi
 // The HTTP/2 connection a fetch holding `conn` opens its stream on; NULL
 // for an HTTP/1.1 connection.
 h2_conn_t *fetch_pool_h2(fetch_conn_t *conn);
+// The server behind `conn` answered a request with HTTP_1_1_REQUIRED (RFC
+// 9113 § 7): its key is asked over HTTP/1.1 from here on, for as long as the
+// key is remembered, and fetch_pool_h1_required says so to a fetch about to
+// ask for a connection to it. Per process, like everything remembered.
+void fetch_pool_require_h1(fetch_conn_t *conn);
+bool fetch_pool_h1_required(const fetch_pool_key_t *key);
 void fetch_pool_tls_facts(fetch_conn_t *conn, uint16_t *version, bool *resumed);
 
 // Give a connection in use back. HTTP/1.1: to be kept, with its transport,
