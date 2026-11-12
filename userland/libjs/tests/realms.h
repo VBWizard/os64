@@ -179,15 +179,135 @@ static void realm_capacity_cases(void)
             check(false, "all advertised realm slots fit fixture budget");
             os64_js_destroy(runtime); return;
         }
+        if (i % 2 != 0)
+            check(os64_js_realm_retire(last, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                  "retired descriptors retain their place in the cumulative slot limit");
     }
     size_t before = os64_js_heap_bytes(runtime);
     os64_js_realm_t *extra = last;
     check(os64_js_realm_create(runtime, OS64_JS_ABI_ID, &extra, &out) == OS64_JS_REALM_LIMIT &&
           extra == NULL && os64_js_heap_bytes(runtime) == before, "realm cap refuses without allocating");
+    check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, 1, &out) == OS64_JS_REALM_LIMIT &&
+          os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, 1, &extra, &out) == OS64_JS_REALM_LIMIT &&
+          extra == NULL && os64_js_heap_bytes(runtime) == before,
+          "headroom admission retains the independent slot limit");
     check(realm_execute(last, "true", &out) == OS64_JS_OK &&
           os64_js_run(runtime, "true", 4, "primary", &out) == OS64_JS_OK,
           "realm admission refusal leaves both realms usable");
     os64_js_destroy(runtime);
+}
+
+/* Admission runs inside an existing parent entry, without taking its outcome
+ * storage or checkpoint. The JavaScript fixture checks FIFO delivery after it. */
+static os64_js_runtime_t *admission_runtime;
+static os64_js_realm_t *admission_child;
+static os64_js_outcome_t *admission_outer;
+static JSValue realm_admission_nested(JSContext *context, JSValueConst self,
+                                      int argc, JSValueConst *argv)
+{
+    (void)context; (void)self; (void)argc; (void)argv;
+    os64_js_outcome_t out, saved = *admission_outer;
+    os64_js_realm_t *child = NULL;
+    size_t bytes = os64_js_heap_bytes(admission_runtime);
+    check(os64_js_realm_preflight(admission_runtime, OS64_JS_ABI_ID, 1, admission_outer) == OS64_JS_BUSY &&
+          os64_memcmp(&saved, admission_outer, sizeof(saved)) == 0,
+          "admission protects enclosing outcome storage");
+    check(os64_js_realm_create_with_headroom(admission_runtime, OS64_JS_ABI_ID, SIZE_MAX,
+              &child, admission_outer) == OS64_JS_BUSY &&
+          os64_memcmp(&saved, admission_outer, sizeof(saved)) == 0,
+          "guarded creation protects enclosing outcome storage");
+    check(os64_js_realm_create_with_headroom(admission_runtime, OS64_JS_ABI_ID, SIZE_MAX,
+              &child, &out) == OS64_JS_ADMISSION_REFUSED && child == NULL &&
+          out.limit == OS64_JS_LIMIT_NONE && os64_js_heap_bytes(admission_runtime) == bytes,
+          "nested headroom refusal consumes no engine memory");
+    check(os64_js_realm_create_with_headroom(admission_runtime, OS64_JS_ABI_ID, 256 * 1024,
+              &admission_child, &out) == OS64_JS_OK && out.jobs_pending,
+          "nested admitted child leaves earlier parent jobs pending");
+    check(os64_memcmp(&saved, admission_outer, sizeof(saved)) == 0,
+          "refused and admitted child setup preserve parent outcome");
+    return JS_UNDEFINED;
+}
+
+static void realm_admission_cases(void)
+{
+    check(os64_js_heap_headroom(NULL) == 0, "null runtime has no headroom");
+    for (unsigned policy = 0; policy < 2; policy++) {
+        os64_js_config_t config = fixture_config();
+        config.limits.memory_bytes = 1024 * 1024;
+        os64_js_runtime_t *runtime = NULL;
+        os64_js_outcome_t out;
+        check(os64_js_create_with_teardown(&config, policy ? OS64_JS_TEARDOWN_RECLAIM : OS64_JS_TEARDOWN_FATAL,
+                  OS64_JS_ABI_ID, &runtime, &out) == OS64_JS_OK, "admission fixture created");
+        if (!runtime) continue;
+        size_t headroom = os64_js_heap_headroom(runtime), bytes = os64_js_heap_bytes(runtime);
+        check(headroom > 0 && headroom + bytes < config.limits.memory_bytes,
+              "engine headroom accounts for wrapper storage outside engine charge");
+        check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, headroom, &out) == OS64_JS_OK &&
+              os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, headroom + 1, &out) == OS64_JS_ADMISSION_REFUSED &&
+              os64_js_heap_bytes(runtime) == bytes && os64_js_heap_headroom(runtime) == headroom,
+              "exact headroom accepted and one byte beyond refused without allocation");
+        check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, 0, &out) == OS64_JS_BAD_ARGUMENT &&
+              os64_js_realm_preflight(runtime, "os64-js/3;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0", 1, &out) == OS64_JS_ABI_MISMATCH,
+              "preflight requires positive reserve and current ABI");
+        os64_js_realm_t *child = NULL;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &out);
+        const uint8_t byte = 1;
+        JSValue held = JS_NewArrayBufferCopy(context, &byte, 1);
+        check(!JS_IsException(held) && os64_js_heap_headroom(runtime) < headroom,
+              "new retained allocation consumes preflight headroom");
+        check(os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, headroom, &child, &out) == OS64_JS_ADMISSION_REFUSED && child == NULL,
+              "creation rechecks a stale admission snapshot");
+        JS_FreeValue(context, held);
+        check(os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, 1, NULL, &out) == OS64_JS_BAD_ARGUMENT,
+              "guarded creation requires handle output");
+        admission_runtime = runtime; admission_child = NULL; admission_outer = &out;
+        check(install_native(runtime, "admitChild", realm_admission_nested) == 1,
+              "nested admission fixture installed");
+        const char *source = "globalThis.order=[];Promise.resolve().then(()=>order.push(1));"
+                             "admitChild();if(order.length)throw 'early checkpoint';"
+                             "Promise.resolve().then(()=>order.push(2));order.push(0)";
+        check(os64_js_run(runtime, source, os64_strlen(source), "admission-parent", &out) == OS64_JS_OK &&
+              out.jobs_executed == 2, "parent jobs use one enclosing turn after nested admission");
+        check(os64_js_run(runtime, "if(order.join()!=='0,1,2')throw order", sizeof("if(order.join()!=='0,1,2')throw order") - 1,
+                  "admission-order", &out) == OS64_JS_OK,
+              "parent queue order survives nested refusal and successful admission");
+        if (admission_child)
+            check(realm_execute(admission_child, "globalThis.sibling=42", &out) == OS64_JS_OK,
+                  "admitted sibling runs after parent task");
+        unsigned admitted = 0;
+        os64_js_status_t result = OS64_JS_OK;
+        while (admitted < OS64_JS_MAX_REALMS) {
+            result = os64_js_realm_create_with_headroom(runtime, OS64_JS_ABI_ID, 256 * 1024, &child, &out);
+            if (result != OS64_JS_OK) break;
+            admitted++;
+        }
+        check(result == OS64_JS_ADMISSION_REFUSED && child == NULL && admitted > 0,
+              "small heap reaches local headroom refusal before sticky OOM or slot limit");
+        check(os64_js_run(runtime, "true", 4, "admission-survivor", &out) == OS64_JS_OK &&
+              admission_child && realm_execute(admission_child, "if(sibling!==42)throw 1", &out) == OS64_JS_OK,
+              "headroom exhaustion preserves primary and existing sibling state");
+        os64_js_cancel(runtime);
+        check(os64_js_realm_preflight(runtime, OS64_JS_ABI_ID, SIZE_MAX, &out) == OS64_JS_FAILED_RUNTIME &&
+              os64_js_heap_headroom(runtime) > 0,
+              "available headroom does not hide runtime cancellation");
+        os64_js_destroy(runtime);
+        admission_runtime = NULL; admission_child = NULL; admission_outer = NULL;
+    }
+    os64_js_config_t config = fixture_config();
+    config.limits.jobs_per_turn = 2;
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t out;
+    admission_runtime = runtime; admission_child = NULL; admission_outer = &out;
+    check(install_native(runtime, "admitChild", realm_admission_nested) == 1,
+          "checkpoint admission fixture installed");
+    const char *source = "Promise.resolve().then(()=>admitChild());"
+                         "Promise.resolve().then(()=>1);Promise.resolve().then(()=>2)";
+    check(os64_js_run(runtime, source, os64_strlen(source), "admission-job-budget", &out) == OS64_JS_LIMIT &&
+          out.limit == OS64_JS_LIMIT_JOBS && out.jobs_executed == 2,
+          "nested admission during a job cannot reset enclosing executed-job count");
+    os64_js_destroy(runtime);
+    admission_runtime = NULL; admission_child = NULL; admission_outer = NULL;
 }
 
 typedef struct { const char *source; unsigned resolves, loads; const char *prefix; } RealmLoader;
@@ -453,11 +573,18 @@ static void realm_failure_order_cases(void)
     os64_js_destroy(runtime);
 }
 
+
+#include "retirement.h"
+#include "staging.h"
+
 static void realm_cases(void)
 {
+    retirement_cases();
+    staging_cases();
     realm_identity_cases();
     realm_rejection_cases();
     realm_capacity_cases();
+    realm_admission_cases();
     realm_module_cases();
     realm_nested_cases();
     realm_turn_cases();

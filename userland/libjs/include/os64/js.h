@@ -6,7 +6,7 @@
 
 /* Embedding ABI. Operation contracts, supported symbols and examples are
  * documented in userland/libjs/CONTRACT.md. */
-#define OS64_JS_ABI_ID "os64-js/3;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
+#define OS64_JS_ABI_ID "os64-js/4;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
 #define OS64_JS_MESSAGE_CAP 256
 #define OS64_JS_SOURCE_NAME_CAP 128
 #define OS64_JS_STACK_TRACE_CAP 1024
@@ -32,7 +32,10 @@ typedef enum {
     OS64_JS_ABI_MISMATCH,
     OS64_JS_BUSY,
     OS64_JS_FAILED_RUNTIME,
-    OS64_JS_REALM_LIMIT /* non-sticky admission refusal; no allocation attempted */
+    OS64_JS_REALM_LIMIT, /* non-sticky slot refusal; no allocation attempted */
+    OS64_JS_ADMISSION_REFUSED, /* non-sticky admission/native installation refusal */
+    OS64_JS_REALM_RETIRED, /* non-sticky entry refusal; retained objects remain valid */
+    OS64_JS_REALM_INSTALLING /* ordinary entry refused until successful activation */
 } os64_js_status_t;
 
 typedef enum {
@@ -60,6 +63,7 @@ typedef struct {
     int64_t host_error;
     uint32_t line, column;
     uint64_t jobs_executed;
+    uint64_t jobs_discarded; /* ineligible or aborted queue entries released this turn */
     bool jobs_pending;
     bool diagnostic_truncated;
     char message[OS64_JS_MESSAGE_CAP];
@@ -155,7 +159,8 @@ os64_js_status_t os64_js_run_bytecode(os64_js_runtime_t *runtime,
                                       const char *source_name,
                                       os64_js_bytecode_t *bytecode,
                                       os64_js_outcome_t *outcome);
-/* A slice yields MORE_JOBS without resetting the turn's deadline or job cap.
+/* A slice bounds visited entries, including retired jobs discarded without
+ * execution, and yields MORE_JOBS without resetting the deadline or job cap.
  * An empty runnable queue is OK; unresolved promises are not external work.
  * With no job exception, the outcome may be a module's late failure that
  * the slice's jobs surfaced (CONTRACT.md § Modules). */

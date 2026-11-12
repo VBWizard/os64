@@ -33,6 +33,9 @@ struct os64_js_realm {
     os64_js_module_loader_t loader;
     struct os64_js_module *modules;
     JSValue promise_then;
+    bool retired; /* eligibility only; contexts and values stay retained */
+    bool staged, setup_complete;
+    JSJobGroup setup_jobs; /* stable until engine teardown releases entries */
     bool hosted, host_configured, loader_configured;
     bool evaluated, output_installed, args_installed, intl_installed;
     unsigned installing;
@@ -54,6 +57,7 @@ struct os64_js_runtime {
     os64_js_limits_t limits;
     os64_js_outcome_t *active_outcome;
     SetupCall *setup_calls;
+    os64_js_realm_t *setup_realm;
     os64_js_realm_t realms[OS64_JS_MAX_REALMS];
     size_t realm_count;
     os64_js_realm_t *turn_owner;
@@ -64,7 +68,7 @@ struct os64_js_runtime {
     Rejection **rejection_table;
     size_t rejection_capacity, rejection_count, rejection_used;
     int64_t deadline, host_error;
-    uint64_t jobs;
+    uint64_t jobs, discarded_jobs;
     os64_js_status_t failure;
     os64_js_limit_t failed_limit;
     unsigned cancelled;
@@ -386,7 +390,7 @@ static void module_owed_fold(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
     struct os64_js_module *first = NULL;
     for (size_t r = 0; r < runtime->realm_count; r++)
       for (struct os64_js_module *m = runtime->realms[r].modules; m != NULL; m = m->next)
-        if (m->owed != 0 && (first == NULL || m->owed < first->owed)) first = m;
+        if (!runtime->realms[r].retired && m->owed != 0 && (first == NULL || m->owed < first->owed)) first = m;
     if (first == NULL) return;
     first->owed = 0;
     out->status = OS64_JS_EXCEPTION;
@@ -420,16 +424,17 @@ static void rejection(JSContext *context, JSValueConst promise,
         }
         return;
     }
-    os64_js_realm_t *realm = runtime->router.select != NULL
-        ? runtime->router.select(runtime->router.opaque, context, promise, handled)
-        : realm_for_context(runtime, context);
+    os64_js_realm_t *realm = realm_for_context(runtime, context);
+    if (realm != NULL && !realm->staged && runtime->router.select != NULL)
+        realm = runtime->router.select(runtime->router.opaque, context, promise, handled);
     if (observe(runtime) || realm == NULL) return;
     if (!realm_member(runtime, realm)) {
         latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
         return;
     }
+    if (realm->retired) return;
     if (handled) {
-        if (realm->hosted && realm->host.handled != NULL)
+        if (!realm->staged && realm->hosted && realm->host.handled != NULL)
             realm->host.handled(realm->host.opaque, context, promise);
         return;
     }
@@ -451,7 +456,7 @@ static void rejection(JSContext *context, JSValueConst promise,
     runtime->rejection_count++;
     /* Asked now, while the script that rejected may still be on the stack;
      * kept with the rejection for the host that takes it. */
-    if (realm->hosted && realm->host.rejected != NULL)
+    if (!realm->staged && realm->hosted && realm->host.rejected != NULL)
         item->tag = realm->host.rejected(realm->host.opaque, context, promise);
 }
 
@@ -461,7 +466,7 @@ static void caught(os64_js_runtime_t *runtime, JSContext *context, JSValueConst 
 {
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (realm == NULL) jsport_fatal("exception context membership", __FILE__, __LINE__);
-    if (realm->hosted && realm->host.exception != NULL && !observe(runtime))
+    if (!realm->retired && !realm->staged && realm->hosted && realm->host.exception != NULL && !observe(runtime))
         realm->host.exception(realm->host.opaque, context, error);
 }
 
@@ -560,6 +565,7 @@ static os64_js_status_t refuse(os64_js_runtime_t *runtime, os64_js_outcome_t *ou
 {
     out->jobs_pending = JS_IsJobPending(runtime->engine);
     out->jobs_executed = runtime->jobs;
+    out->jobs_discarded = runtime->discarded_jobs;
     runtime->active_outcome = NULL;
     runtime->active = false;
     return status(out, value, message);
@@ -576,6 +582,45 @@ static void sticky(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
     out->host_error = runtime->host_error;
 }
 
+static bool job_context_eligible(os64_js_runtime_t *runtime, JSContext *context)
+{
+    if (context == NULL) return true;
+    os64_js_realm_t *realm = realm_for_context(runtime, context);
+    if (realm == NULL) jsport_fatal("job owner membership", __FILE__, __LINE__);
+    return !realm->retired && (!realm->staged || runtime->setup_realm == realm);
+}
+
+static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info)
+{
+    if (realm_for_context(runtime, info->context) == NULL)
+        jsport_fatal("job execution context membership", __FILE__, __LINE__);
+    bool owner = job_context_eligible(runtime, info->owner);
+    bool activity = job_context_eligible(runtime, info->activity);
+    return owner && activity;
+}
+
+/* One visit: 2 discarded, 1 executed, -1 exception, 0 empty/limited.
+ * Manual, task and candidate drains charge live execution after eligibility. */
+static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSContext **context)
+{
+    JSJobInfo info;
+    if (!JS_PeekJobGroup(runtime->engine, group, &info)) return 0;
+    if (!job_eligible(runtime, &info)) {
+        JS_DiscardJobGroup(runtime->engine, group);
+        runtime->discarded_jobs++;
+        return 2;
+    }
+    if (runtime->jobs == runtime->limits.jobs_per_turn) {
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
+        return 0;
+    }
+    runtime->jobs++;
+    runtime->ran_jobs = true;
+    int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
+    *context = info.owner != NULL ? info.owner : info.context;
+    return result;
+}
+
 /* A turn ends at queue exhaustion, except that an open task keeps its turn
  * (and so its deadline and job count) until os64_js_task_end closes it.
  * Without a script host, that is where rejections are judged; with one,
@@ -583,16 +628,19 @@ static void sticky(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 {
     bool pending = JS_IsJobPending(runtime->engine);
-    if (pending && runtime->jobs == runtime->limits.jobs_per_turn)
-        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
+    if (pending && runtime->jobs == runtime->limits.jobs_per_turn) {
+        JSJobInfo info;
+        if (JS_PeekPendingJob(runtime->engine, &info) && job_eligible(runtime, &info))
+            latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
+    }
     if (!observe(runtime) && !pending && runtime->turn &&
         (!runtime->task || runtime->checkpointing)) {
         Rejection *item = runtime->rejections;
         while (item != NULL && !observe(runtime)) {
             Rejection *next = item->next;
             os64_js_realm_t *realm = &runtime->realms[item->realm_index];
-            if (!realm->hosted) {
-                if (out->status == OS64_JS_OK) {
+            if (realm->retired || !realm->hosted) {
+                if (!realm->retired && out->status == OS64_JS_OK) {
                     out->status = OS64_JS_UNHANDLED_REJECTION;
                     rejection_diagnostic(runtime, realm->context, item->reason, out);
                 }
@@ -608,6 +656,7 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     if (observe(runtime)) sticky(runtime, out);
     out->jobs_pending = pending;
     out->jobs_executed = runtime->jobs;
+    out->jobs_discarded = runtime->discarded_jobs;
     out->diagnostic_truncated |= runtime->source_truncated |
         copy_text(out->source_name, sizeof(out->source_name), runtime->source_name);
     if (runtime->ran_jobs || runtime->checkpointing) module_owed_fold(runtime, out);
@@ -649,6 +698,10 @@ static os64_js_status_t setup_enter(os64_js_realm_t *realm, os64_js_outcome_t *o
     if (runtime == NULL) return status(out, OS64_JS_BAD_ARGUMENT, "realm is required");
     if (runtime->destroying || runtime->failure != OS64_JS_OK)
         return status(out, OS64_JS_FAILED_RUNTIME, "runtime has failed");
+    if (realm->retired)
+        return status(out, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged && runtime->setup_realm != realm)
+        return status(out, OS64_JS_REALM_INSTALLING, "realm requires its setup guard");
     bool borrowed = runtime->active;
     if (borrowed && (!nested || !runtime->turn))
         return status(out, OS64_JS_BUSY, "runtime is executing");
@@ -676,6 +729,7 @@ static os64_js_status_t setup_leave(SetupCall *call)
         if (call->prepared && observe(runtime)) sticky(runtime, out);
         out->jobs_pending = JS_IsJobPending(runtime->engine);
         out->jobs_executed = runtime->jobs;
+        out->jobs_discarded = runtime->discarded_jobs;
         if (call->name != NULL)
             out->diagnostic_truncated |= copy_text(out->source_name, sizeof(out->source_name), call->name);
         if (!call->borrowed) {
@@ -713,6 +767,7 @@ static os64_js_status_t setup_prepare(SetupCall *call, bool installed, unsigned 
             runtime->turn = true;
             runtime->turn_owner = realm;
             runtime->jobs = 0;
+            runtime->discarded_jobs = 0;
             runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), name);
         }
     }
@@ -861,6 +916,8 @@ JS_PUBLIC os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, cons
     if (out != NULL) *out = NULL;
     if (os64_js_context(runtime, caller_abi, outcome) == NULL) return outcome->status;
     if (out == NULL) return status(outcome, OS64_JS_BAD_ARGUMENT, "realm output is required");
+    if (runtime->setup_realm != NULL)
+        return status(outcome, OS64_JS_BUSY, "realm installation is executing");
     if (runtime->realm_count == OS64_JS_MAX_REALMS)
         return status(outcome, OS64_JS_REALM_LIMIT, "runtime realm slots are full");
     os64_js_realm_t *realm = &runtime->realms[runtime->realm_count];
@@ -888,6 +945,179 @@ JS_PUBLIC os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, cons
         *out = realm;
     }
     return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_retire(os64_js_realm_t *realm,
+                                              const char *caller_abi,
+                                              os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL || !realm_member(runtime, realm))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "member realm and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (runtime->destroying) return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is destroying");
+    realm->retired = true;
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC bool os64_js_realm_is_retired(const os64_js_realm_t *realm)
+{
+    return realm != NULL && realm->retired;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime,
+                                                 const char *caller_abi,
+                                                 size_t required_headroom,
+                                                 os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (os64_js_context(runtime, caller_abi, outcome) == NULL) return outcome->status;
+    if (required_headroom == 0)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "positive admission headroom is required");
+    /* Raw engine allocation can fail inside a callback before observe() has
+     * latched it. Do not disguise that failure as a local admission refusal. */
+    if (runtime->allocator.failures != 0)
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "engine allocator has failed");
+    if (runtime->realm_count == OS64_JS_MAX_REALMS)
+        return status(outcome, OS64_JS_REALM_LIMIT, "runtime realm slots are full");
+    if (required_headroom > os64_js_heap_headroom(runtime))
+        return status(outcome, OS64_JS_ADMISSION_REFUSED, "insufficient engine admission headroom");
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
+                                                            const char *caller_abi,
+                                                            size_t required_headroom,
+                                                            os64_js_realm_t **out,
+                                                            os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (out != NULL) *out = NULL;
+    os64_js_status_t result = os64_js_realm_preflight(runtime, caller_abi, required_headroom, outcome);
+    if (result != OS64_JS_OK) return result;
+    return os64_js_realm_create(runtime, caller_abi, out, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_stage(os64_js_runtime_t *runtime,
+                                              const char *caller_abi,
+                                              size_t required_headroom,
+                                              os64_js_realm_t **out,
+                                              os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_realm_create_with_headroom(runtime, caller_abi,
+                                                              required_headroom, out, outcome);
+    if (result == OS64_JS_OK) {
+        (*out)->staged = true;
+        JS_InitJobGroup(&(*out)->setup_jobs, (*out)->context);
+    }
+    return result;
+}
+
+/* Candidate rejections are private installation failures, not host reports.
+ * Releasing them must not consume a sibling's pending rejection record. */
+static void setup_rejections(os64_js_realm_t *realm, os64_js_outcome_t *out)
+{
+    os64_js_runtime_t *runtime = realm->runtime;
+    Rejection *item = runtime->rejections;
+    while (item != NULL) {
+        Rejection *next = item->next;
+        if (&runtime->realms[item->realm_index] == realm) {
+            if (out->status == OS64_JS_OK && !observe(runtime)) {
+                out->status = OS64_JS_UNHANDLED_REJECTION;
+                rejection_diagnostic(runtime, realm->context, item->reason, out);
+            }
+            rejection_unlink(runtime, rejection_place(runtime, JS_VALUE_GET_PTR(item->promise)));
+            JS_FreeValueRT(runtime->engine, item->promise);
+            JS_FreeValueRT(runtime->engine, item->reason);
+            js_free_rt(runtime->engine, item);
+        }
+        item = next;
+    }
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
+                                              const char *caller_abi,
+                                              os64_js_realm_setup_fn installer,
+                                              void *opaque,
+                                              os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
+    if (realm->retired) return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (!realm->staged || realm->setup_complete || installer == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "unused staged realm and installer are required");
+    if (runtime->setup_realm != NULL)
+        return status(outcome, OS64_JS_BUSY, "realm installation is executing");
+    runtime->setup_realm = realm;
+    SetupCall call;
+    os64_js_status_t result = setup_enter(realm, outcome, true, &call);
+    if (result != OS64_JS_OK) { runtime->setup_realm = NULL; return result; }
+    result = setup_prepare(&call, false, 0, "<staged realm setup>");
+    if (result != OS64_JS_OK) { runtime->setup_realm = NULL; return result; }
+    JSJobGroup *previous = JS_SetJobGroup(runtime->engine, &realm->setup_jobs);
+    if (!observe(runtime)) {
+        result = installer(realm, realm->context, opaque);
+        if (result == OS64_JS_EXCEPTION) {
+            JSValue error = JS_GetException(realm->context);
+            outcome->status = result;
+            diagnostic(runtime, realm->context, error, outcome);
+            JS_FreeValue(realm->context, error);
+        } else if (result != OS64_JS_OK) {
+            status(outcome, result == OS64_JS_ADMISSION_REFUSED ? result : OS64_JS_BAD_ARGUMENT,
+                   "native candidate installation refused");
+        }
+    }
+    JSJobInfo info;
+    while (outcome->status == OS64_JS_OK && !realm->retired && !observe(runtime) &&
+           JS_PeekJobGroup(runtime->engine, &realm->setup_jobs, &info)) {
+        JSContext *context = NULL;
+        if (step_job_group(runtime, &realm->setup_jobs, &context) < 0) {
+            JSValue error = JS_GetException(context);
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, context, error, outcome);
+            JS_FreeValue(context, error);
+        }
+    }
+    setup_rejections(realm, outcome);
+    if (observe(runtime)) sticky(runtime, outcome);
+    else if (realm->retired && outcome->status == OS64_JS_OK)
+        status(outcome, OS64_JS_REALM_RETIRED, "candidate retired during installation");
+    if (outcome->status != OS64_JS_OK) {
+        realm->retired = true;
+        while (JS_DiscardJobGroup(runtime->engine, &realm->setup_jobs)) runtime->discarded_jobs++;
+    } else {
+        realm->setup_complete = true;
+    }
+    JS_SetJobGroup(runtime->engine, previous);
+    runtime->setup_realm = NULL;
+    return setup_leave(&call);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm,
+                                                 const char *caller_abi,
+                                                 os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
+    if (realm->retired) return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (!realm->staged || !realm->setup_complete || runtime->setup_realm != NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "candidate setup has not completed");
+    JSJobInfo info;
+    if (JS_PeekJobGroup(runtime->engine, &realm->setup_jobs, &info))
+        return status(outcome, OS64_JS_BUSY, "candidate setup has queued work");
+    if (observe(runtime)) { sticky(runtime, outcome); return outcome->status; }
+    realm->staged = false;
+    return OS64_JS_OK;
 }
 
 JS_PUBLIC os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime,
@@ -1138,6 +1368,7 @@ static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
         return OS64_JS_BAD_ARGUMENT;
     else {
         runtime->jobs = 0;
+        runtime->discarded_jobs = 0;
         runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
         runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
         runtime->turn = true;
@@ -1176,6 +1407,10 @@ static os64_js_status_t eval_text(os64_js_realm_t *realm, const void *source, si
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if ((source == NULL && length != 0) || source_name == NULL) {
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "source bytes and name are required");
     }
@@ -1184,6 +1419,7 @@ static os64_js_status_t eval_text(os64_js_realm_t *realm, const void *source, si
     }
     if (length > runtime->limits.source_bytes) {
         runtime->jobs = 0;
+        runtime->discarded_jobs = 0;
         runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
         latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
         return leave(runtime, outcome);
@@ -1224,15 +1460,9 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
         jsport_fatal("jobs outside a runtime turn", __FILE__, __LINE__);
     uint64_t count = 0;
     while (JS_IsJobPending(runtime->engine) && count < slice_jobs && !observe(runtime)) {
-        if (runtime->jobs == runtime->limits.jobs_per_turn) {
-            latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
-            break;
-        }
-        runtime->jobs++;
         count++;
-        runtime->ran_jobs = true;
         JSContext *context = NULL;
-        if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
+        if (step_job_group(runtime, NULL, &context) < 0) {
             if (context == NULL) jsport_fatal("job context lifetime", __FILE__, __LINE__);
             JSValue error = JS_GetException(context);
             caught(runtime, context, error);
@@ -1294,6 +1524,10 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
     os64_js_realm_t *realm = primary(runtime);
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (path == NULL || path[0] == 0)
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "file path is required");
     if (runtime->turn || JS_IsJobPending(runtime->engine))
@@ -1303,6 +1537,7 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
     if (opened < 0) {
         latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, opened);
         runtime->jobs = 0;
+        runtime->discarded_jobs = 0;
         runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), path);
         return leave(runtime, outcome);
     }
@@ -1363,6 +1598,7 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
         return refuse(runtime, outcome, result, "deadline is not representable");
     if (runtime->failure != OS64_JS_OK && !runtime->turn) {
         runtime->jobs = 0;
+        runtime->discarded_jobs = 0;
         runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), path);
     }
     return complete_run(runtime, leave(runtime, outcome), outcome);
@@ -1391,6 +1627,10 @@ JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, cons
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (source_name == NULL)
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task name is required");
     if (runtime->turn || JS_IsJobPending(runtime->engine))
@@ -1404,6 +1644,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, cons
     if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now))
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
     runtime->jobs = 0;
+    runtime->discarded_jobs = 0;
     runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
     runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
     runtime->turn = true;
@@ -1422,11 +1663,19 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
     if (returned_false != NULL) *returned_false = false;
     os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (argc < 0 || (argc != 0 && argv == NULL))
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "argument array is invalid");
     if (observe(runtime)) return leave(runtime, outcome);
     realm->evaluated = true;
-    JSValue value = JS_Call(realm->context, function, this_value, argc, argv);
+    JSContext *callback_context = JS_GetFunctionRealm(realm->context, function);
+    if (callback_context != NULL && !job_context_eligible(runtime, callback_context))
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "callback realm has retired");
+    JSValue value = callback_context != NULL
+        ? JS_Call(realm->context, function, this_value, argc, argv) : JS_EXCEPTION;
     if (JS_IsException(value)) {
         JSValue error = JS_GetException(realm->context);
         caught(runtime, realm->context, error);
@@ -1447,11 +1696,8 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
 static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
 {
     while (JS_IsJobPending(runtime->engine) && !observe(runtime)) {
-        if (runtime->jobs == runtime->limits.jobs_per_turn) break;
-        runtime->jobs++;
-        runtime->ran_jobs = true;
         JSContext *context = NULL;
-        if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
+        if (step_job_group(runtime, NULL, &context) < 0) {
             if (context == NULL) jsport_fatal("job context lifetime", __FILE__, __LINE__);
             JSValue error = JS_GetException(context);
             caught(runtime, context, error);
@@ -1489,6 +1735,7 @@ JS_PUBLIC os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const ch
         runtime->turn = false;
         sticky(runtime, outcome);
         outcome->jobs_executed = runtime->jobs;
+        outcome->jobs_discarded = runtime->discarded_jobs;
         copy_text(outcome->source_name, sizeof(outcome->source_name), runtime->source_name);
         return outcome->status;
     }
@@ -1520,6 +1767,13 @@ JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
 JS_PUBLIC size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime)
 {
     return runtime != NULL ? runtime->allocator.charged_bytes : 0;
+}
+
+JS_PUBLIC size_t os64_js_heap_headroom(const os64_js_runtime_t *runtime)
+{
+    if (runtime == NULL || runtime->allocator.charged_bytes >= runtime->allocator.allocation_limit)
+        return 0;
+    return runtime->allocator.allocation_limit - runtime->allocator.charged_bytes;
 }
 
 JS_PUBLIC bool os64_js_heap_census(os64_js_runtime_t *runtime, os64_js_heap_census_t *out)
@@ -1567,6 +1821,8 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm,
     if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
         return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
     if (runtime->destroying) return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
+    if (realm->retired && host != NULL)
+        return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
     if (runtime->active && (host == NULL || realm->evaluated || realm->host_configured)) return status(outcome, OS64_JS_BUSY, "runtime is executing");
     realm->hosted = host != NULL;
     realm->host_configured |= host != NULL;
@@ -1583,7 +1839,7 @@ JS_PUBLIC bool os64_js_realm_take_rejection(os64_js_realm_t *realm, const char *
     if (reason != NULL) *reason = JS_UNDEFINED;
     if (tag != NULL) *tag = 0;
     if (runtime == NULL || caller_abi == NULL || promise == NULL || reason == NULL ||
-        os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0 || !realm->hosted || runtime->active ||
+        os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0 || realm->retired || realm->staged || !realm->hosted || runtime->active ||
         runtime->failure != OS64_JS_OK || runtime->rejections == NULL || JS_IsJobPending(runtime->engine))
         return false;
     Rejection *item = runtime->rejections;
@@ -1600,7 +1856,7 @@ JS_PUBLIC bool os64_js_realm_take_rejection(os64_js_realm_t *realm, const char *
 static bool write_output(os64_js_realm_t *realm, const char *bytes, size_t size)
 {
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
-    while (size != 0 && !observe(runtime)) {
+    while (size != 0 && !realm->retired && !realm->staged && !observe(runtime)) {
         int64_t n = os64_write(realm->output_handle, bytes, size);
         if (n <= 0 || (uint64_t)n > size) {
             latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n < 0 ? n : 0);
@@ -1609,7 +1865,7 @@ static bool write_output(os64_js_realm_t *realm, const char *bytes, size_t size)
         bytes += (size_t)n;
         size -= (size_t)n;
     }
-    return !observe(runtime);
+    return !realm->retired && !realm->staged && !observe(runtime);
 }
 
 /* Deeper console groups still count; their lines stop moving right. */
@@ -1807,6 +2063,8 @@ static JSValue output_ready(os64_js_realm_t *realm, JSContext *context)
         jsport_fatal("output outside a runtime turn", __FILE__, __LINE__);
     /* Property traps can see a staged function before setup commits. It must
      * not use a borrowed handle until the entire installation succeeds. */
+    if (realm->retired || realm->staged)
+        return JS_ThrowTypeError(context, "output realm is not active");
     if (!realm->output_installed)
         return JS_ThrowTypeError(context, "output installation is incomplete");
     return JS_UNDEFINED;
@@ -2246,6 +2504,10 @@ static char *module_normalize(JSContext *context, const char *base, const char *
     os64_js_runtime_t *runtime = opaque;
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (realm == NULL) jsport_fatal("module context membership", __FILE__, __LINE__);
+    if (realm->retired || realm->staged) {
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
     char *name = realm->loader.resolve != NULL
         ? realm->loader.resolve(realm->loader.opaque, base, specifier) : NULL;
     if (name == NULL) {
@@ -2267,6 +2529,10 @@ static JSModuleDef *module_load(JSContext *context, const char *name, void *opaq
     os64_js_runtime_t *runtime = opaque;
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (realm == NULL) jsport_fatal("module context membership", __FILE__, __LINE__);
+    if (realm->retired || realm->staged) {
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
     const char *bytes = NULL;
     size_t length = 0;
     if (realm->loader.source == NULL ||
@@ -2307,6 +2573,8 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *real
         return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
     if (runtime->destroying)
         return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
+    if (realm->retired && loader != NULL)
+        return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
     if (runtime->active && (loader == NULL || realm->evaluated || realm->loader_configured))
         return status(outcome, OS64_JS_BUSY, "runtime is executing");
     if (loader != NULL) realm->loader = *loader;
@@ -2355,6 +2623,10 @@ static os64_js_status_t module_compile(os64_js_realm_t *realm, const char *calle
     if (module != NULL) *module = NULL;
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (caller_abi == NULL || os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
         return refuse(runtime, outcome, caller_abi == NULL ? OS64_JS_BAD_ARGUMENT : OS64_JS_ABI_MISMATCH,
                       "binding header ABI mismatch");
@@ -2471,6 +2743,10 @@ JS_PUBLIC os64_js_status_t os64_js_realm_module_run(os64_js_realm_t *realm, cons
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
     if (result != OS64_JS_OK) return result;
+    if (realm->retired)
+        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->staged)
+        return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (!module_owned(realm, module) || module->run)
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "a module is run once");
     if (observe(runtime)) return leave(runtime, outcome);
