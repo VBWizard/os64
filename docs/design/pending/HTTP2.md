@@ -2792,6 +2792,17 @@ so that look is a tenth of a second at the most. Three cases hold the
 reader's closes back to prove each rule, and mutants of each. The cure is the kernel
 verb DEBTS names; until it exists the reader's wakes are the price.
 
+One round on the P5 with both changes: 144 fetches waited, 7.3 seconds
+summed, about 50 ms a wait where it had been about 500; the three pages
+of the thirty-host site 107 waits and 5.7 seconds, where they had been
+about 135 and 80. Connections made, 245, and the load events summed,
+35.7 seconds, are where the three rounds before the changes were, with
+one page apart: the thirty-host site's first page made 50 connections
+where it had made 31 to 35. One round does not say whether that is the
+page or the pool. A host not yet known to speak h2 is still dialled once
+for each fetch of a burst (§ 2.2), and with the table full each of those
+dials now closes a connection at once where it used to wait its turn.
+
 **Not done.** A Firefox Reload's place for `te` beside `Pragma` and
 `Cache-Control`, which was not captured: `te` follows them here.
 
