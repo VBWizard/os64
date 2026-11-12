@@ -594,22 +594,26 @@ wait from a refusal to the pass that did the work was 1.6 ms, so the
 holder's release is what brings it back (D4). No event was lost in any
 run. The GUI entry's 47.7 ms is the terminal switch above.
 
-**Against D11's "nothing got worse": two things did, in QEMU.**
+**Against D11's "nothing got worse": one thing did, in QEMU.** After
+boot the worst gap between passes is 20 ms where the poll's was 10 ms: now
+and then a tick passes without a pass of `kusb`, and about one event in a
+hundred waits a second tick. That is the price of a thread that has to be
+picked where the poll ran inside the pass itself, and it is what X.3's
+interrupt takes off the common path. The P5's reading decides whether it
+is felt there; DEBTS has the row.
 
-1. ONCE DURING BOOT the gap between passes is 1.0 to 1.4 s on every run.
-   The BSP makes no scheduler pass for that long (the bell is rung from
-   the BSP's pass and `kusb` runs on the BSP), where the old poll was
-   carried by whichever core passed next and its worst gap on the same
-   entry was 10.6 ms. `knet` sits through the same stall. No USB event
-   happened to arrive in it in these runs. What the BSP is doing then is
-   not looked into.
-2. AFTER BOOT the worst gap is 20 ms where the poll's was 10 ms: now and
-   then a tick passes without a pass of `kusb`. One event in about a
-   hundred waits a second tick.
-
-Both are the price of one consumer on one core driven by that core's
-tick, and both are what X.3's interrupt takes off the common path. The
-P5's reading decides whether either is felt there; DEBTS has the row.
+**A second regression was recorded here and was not one.** Early runs
+showed a single gap of 1.0 to 1.4 s during boot, and this section said the
+BSP made no scheduler pass for that long while the old poll was carried by
+other cores. Both halves were wrong, and the cold read caught the second:
+`processSignals` has only ever run on the BSP (`scheduler.S`), so the old
+poll was never carried by another core. Instrumenting the gap showed what
+it is: `kernel_init` enables the scheduler, WAITS ONE SECOND, wakes the
+APs and only then sets `kProcessSignals`. `kusb` gets its first pass
+before that wait, nothing rings its bell during it (112 ticks, one ring),
+and the old poll did not run in it either; its gap never showed the second
+only because its first poll came after. The measurement now starts when
+signal processing does.
 
 ## Measure first
 

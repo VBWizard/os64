@@ -101,7 +101,7 @@ typedef struct {
 typedef void (*bt_le_report_t)(void *, const bt_le_input_t *);
 bool bt_le_request(bt_le_t *, const char *, size_t, uint64_t);
 // Copy completed discovery results immediately after an accepted reconnect,
-// before its first tick. The caller serializes this with requests and polling.
+// before its first tick. The caller holds USB's serializing flag (xhci.c).
 void bt_le_reconnect_scan(bt_le_t *, const bt_scan_t *);
 // IDLE and cleanup-confirmed STOPPED permit another session for this peer.
 bool bt_le_quiescent(const bt_le_t *);

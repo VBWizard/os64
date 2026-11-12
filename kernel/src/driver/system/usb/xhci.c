@@ -263,10 +263,13 @@ static xhci_t *s_bluetooth_hc; // First operational AX210 retained for /sys/blue
 static volatile uint32_t s_poll_busy;
 static volatile uint32_t s_kusb_waiting;
 
-// Every holder but kusb lets go of the serializing flag here.
+// Every holder but kusb lets go of the serializing flag here. The clearing
+// store is sequentially consistent, like the exchange after it and kusb's
+// two stores before its try: the handshake's claim is about the order of
+// those four, and a weaker store would make it true of x86 only.
 static void xhci_serial_release(void)
 {
-	__sync_lock_release(&s_poll_busy);
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
 	if (__atomic_exchange_n(&s_kusb_waiting, 0, __ATOMIC_SEQ_CST))
 		doorbell_ring(&kUsbDoorbell);
 }
@@ -366,6 +369,15 @@ static void xhci_timeline_add(xhci_timeline_kind_t kind, unsigned slot, unsigned
 // so no gap.
 static uint64_t xhci_pass_began(uint64_t now)
 {
+	// Until the kernel turns signal processing on, nothing rings kusb's
+	// bell: boot waits a second after it enables the scheduler, and a pass
+	// that slips in before that wait would record the wait as a gap. There
+	// is no cadence to measure yet, so none is.
+	if (!kProcessSignals) {
+		s_polls++;
+		s_interval_polls++;
+		return 0;
+	}
 	uint64_t gap = s_poll_last_tsc ? now - s_poll_last_tsc : 0;
 	s_poll_last_tsc = now;
 	s_polls++;
@@ -1240,7 +1252,8 @@ cleanup:
 
 // Runtime EP0 and ACL use disjoint regions of the retained transmit DMA page.
 // Runtime HCI submits after USB Status and the preceding HCI reply agree;
-// it never waits or allocates while processSignals owns the scheduler lock.
+// it never waits or allocates: it runs inside kusb's pass, against that
+// pass's deadline.
 static void xhci_bt_runtime_send(void *context, uint16_t opcode,
                               const uint8_t *params, uint8_t length)
 {
@@ -1404,6 +1417,7 @@ void xhci_bluetooth_maintain(void)
 	}
 	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 	bt_manager_observe(m, &peer->le, now);
+	bool loaded = false;
 	if (loading) {
 		m->loaded = true;
 		if (good && m->generation == generation) {
@@ -1411,16 +1425,19 @@ void xhci_bluetooth_maintain(void)
 		}
 		m->storage_error = good ? NULL : "saved bond unavailable or invalid";
 		// The restored bond is published. Discovery for it starts on kusb's
-		// next pass, which runs the connection policy; the release below
-		// rings kusb if this hold turned it away, and this ring brings it
-		// round if it did not.
-		doorbell_ring(&kUsbDoorbell);
+		// next pass, which runs the connection policy.
+		loaded = true;
 	} else {
 		if (good && m->generation == generation) m->dirty = false;
 		m->storage_error = good ? NULL : "save failed; RAM bond retained";
 		m->next_save = m->generation == generation ? now + 10000 : now;
 	}
 	xhci_serial_release();
+	// Bring kusb round for the restored bond now, not at the next tick.
+	// After the release: a ring while the flag is held would wake kusb only
+	// to be refused.
+	if (loaded)
+		doorbell_ring(&kUsbDoorbell);
 	crypto_wipe(&snapshot, sizeof(snapshot));
 	__sync_lock_release(&s_bond_io_busy);
 }
@@ -2341,6 +2358,6 @@ bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left)
 	}
 	xhci_pass_ended(gap, visit.handled);
 	// kusb's own release: there is nobody to ring.
-	__sync_lock_release(&s_poll_busy);
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
 	return true;
 }

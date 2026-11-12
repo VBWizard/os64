@@ -11,8 +11,9 @@
 // SHAPE OF V1 (each limit is a decision, not an accident):
 //   - TICK-DRIVEN, not interrupts: no MSI/IOAPIC wiring. The event rings
 //     live in ordinary RAM and a daemon, kusb (kusb.h), drains them when
-//     the tick rings its bell, so an event waits a tick at most
-//     (docs/design/pending/XHCI_INTERRUPT.md is the arc that adds the
+//     the tick rings its bell, so an event waits about a tick, and longer
+//     when a pass's deadline carries work over (/sys/usb measures it;
+//     docs/design/pending/XHCI_INTERRUPT.md is the arc that adds the
 //     interrupt).
 //   - ROOT PORTS ONLY, no hubs: input devices must be plugged straight into
 //     the machine. (Devices with built-in hubs enumerate AS hubs — those
