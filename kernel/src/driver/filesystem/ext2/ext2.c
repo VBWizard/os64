@@ -965,7 +965,8 @@ static int ext2_mounted(vfs_filesystem_t *fs)
 // caller may well be holding a FAT mount (the test suite iterates mounts).
 // fs_specific means something different to every driver, so "is this one
 // ours?" has to be answered before it is dereferenced — and the honest
-// answer for someone else's mount is zero, not a fault.
+// answer for someone else's mount is a refusal (zero from a counter, -1
+// from a lookup), not a fault.
 static bool ext2_mount_is_ours(vfs_filesystem_t *fs)
 {
 	return fs != NULL && fs->fs_specific != NULL && fs->fops != NULL &&

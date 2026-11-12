@@ -44,8 +44,8 @@ uint32_t ext2_free_blocks(vfs_filesystem_t *fs);
 // count of `group` (0 for a group that does not exist or a mount that is
 // not ext2), and the
 // group holding each of `path`'s first `count` data blocks (UINT32_MAX for
-// a hole). The second returns -1 when the path does not resolve or the
-// mount is not ext2.
+// a hole, or for a block number outside the filesystem). The second
+// returns -1 when the path does not resolve or the mount is not ext2.
 uint32_t ext2_group_free_blocks(vfs_filesystem_t *fs, uint32_t group);
 int      ext2_file_block_groups(vfs_filesystem_t *fs, const char *path,
                                 uint32_t *groups, uint32_t count);

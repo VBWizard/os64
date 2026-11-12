@@ -3560,8 +3560,8 @@ static bool test_vfs_rename(void)
 // leaves those blocks to the next allocation on the root, and the next
 // mount's replay frees them out from under whatever file took them. So
 // every failure runs the orphan through the real mount's replay, which
-// finishes it or demotes the root if it cannot do so safely, and removes
-// the fixtures.
+// finishes it, stops with its storage still marked used, or demotes the
+// root, and removes the fixtures.
 
 // The ext2 block-write fault seam. These globals are live only around one
 // synchronous filesystem operation; ext2's write_lock keeps another writer
@@ -3719,8 +3719,12 @@ static const char *const kOrphanFixtures[] = {
     ORPHAN_DIR "/spacer", ORPHAN_DIR "/probe",
 };
 
+// A root demoted along the way has no rm to call; its fixtures stay for the
+// next run's opening cleanup.
 static void ext2_orphan_remove_fixtures(void)
 {
+    if (kRootFilesystem->fops->rm == NULL)
+        return;
     for (unsigned i = 0; i < sizeof(kOrphanFixtures) / sizeof(kOrphanFixtures[0]); i++)
         kRootFilesystem->fops->rm(kOrphanFixtures[i], kRootFilesystem);
 }
@@ -3796,8 +3800,10 @@ static uint32_t ext2_orphan_next_group(void)
 // with less is filled and the next one asked about. Two groups: twelve or
 // fewer — fewer than its data blocks, so they must cross. A group already
 // that short is left alone, and filling stops at ten or more, never at
-// none, which would only move the victim whole to the next group. The
-// spacer stays until the drill ends.
+// none, which would only move the victim whole to the next group. That is
+// one round, and it can cost up to a whole group of spacer (8 MiB on a
+// 1 KiB filesystem with an empty group), given back when the drill ends.
+// The spacer stays until then.
 static bool ext2_orphan_steer(bool straddle)
 {
     size_t bs = (size_t)kRootFilesystem->blockSize;
@@ -4112,8 +4118,11 @@ fail:
     // marked used, or demotes this mount when a retry map is left naming
     // blocks the bitmap calls free. So nothing allocated after this test
     // returns can land in storage a retry map still names. A no-op on an
-    // empty chain.
-    kRootFilesystem->fops->mounted(kRootFilesystem);
+    // empty chain. The drill is over, so its alarms are real ones again: a
+    // demotion of the REAL root belongs on the glass.
+    kTestingExpectedNoise = false;
+    if (kRootFilesystem->fops->mounted != NULL)
+        kRootFilesystem->fops->mounted(kRootFilesystem);
     ext2_orphan_remove_fixtures();
     return false;
 }
