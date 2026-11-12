@@ -41,9 +41,11 @@ static size_t s_closing;            // connections struck whose reader has yet t
 static uint64_t s_order;
 
 // What a key's last TLS dial answered ALPN with: h2 or not. It decides one
-// thing, whether a fetch waits for a dial in flight to the key (take), so a
-// wrong or forgotten answer costs a wait or a dial and nothing else.
-#define REMEMBERED 16
+// thing, whether a fetch waits for the key's one connection or dials one
+// of its own (take), so a wrong or forgotten answer costs a wait or a dial
+// and nothing else. More keys than the table has places: a page speaks to
+// more hosts than it holds connections to, and comes back to them.
+#define REMEMBERED 64
 static struct {
     fetch_pool_key_t key;
     bool used, h2;
@@ -256,6 +258,9 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
     *conn = NULL;
     wait->waited_ms = 0;
     wait->for_the_table = false;
+    wait->wants_place = false;
+    wait->key = key;
+    wait->say = say;
     for (;;) {
         if (spare == NULL) {
             spare = os64_malloc(sizeof(*spare));
@@ -267,7 +272,7 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
         fetch_conn_t *best = NULL, *slot_conn = NULL, *shared = NULL;
         bool dial_in_flight = false;
         size_t of_key = 0, in_all = 0, free_slot = FETCH_POOL_TOTAL;
-        size_t oldest_idle = FETCH_POOL_TOTAL, oldest_idle_of_key = FETCH_POOL_TOTAL;
+        size_t oldest_idle_of_key = FETCH_POOL_TOTAL;
         fetch_pool_take_t answer = FETCH_POOL_FAILED;
         bool wait_now = false;
 
@@ -302,8 +307,6 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
                 shared = c;
             if (!idle(c))
                 continue;
-            if (oldest_idle == FETCH_POOL_TOTAL || c->kept_at < s_conns[oldest_idle]->kept_at)
-                oldest_idle = i;
             if (!mine)
                 continue;
             if (oldest_idle_of_key == FETCH_POOL_TOTAL || c->kept_at < s_conns[oldest_idle_of_key]->kept_at)
@@ -330,44 +333,48 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
             // its verdict is worth waiting for, since one connection will
             // carry this fetch too. The dial's end, either way, rings.
             wait->for_the_table = false;
+            wait->wants_place = false;
             wait_now = wait->bell != NULL && wait->bell->handle >= 0;
             if (wait_now)
                 waiter_add(wait);
         } else {
-            // A slot to dial in. An idle connection is closed for one rather
-            // than waited on: at the key's cap the key's own (which this
-            // fetch may not take, or it would have above), and with the
-            // table full the least recently kept of any key. (An HTTP/2 one
-            // so closed still holds its socket until its reader looks, and
-            // the admission below waits for that.)
-            size_t slot = FETCH_POOL_TOTAL;
-            if (of_key >= FETCH_POOL_PER_KEY) {
-                if (oldest_idle_of_key != FETCH_POOL_TOTAL) {
-                    leave(&out, oldest_idle_of_key);
-                    slot = oldest_idle_of_key;
-                }
-            } else if (free_slot != FETCH_POOL_TOTAL)
-                slot = free_slot;
-            else if (in_all >= FETCH_POOL_TOTAL && oldest_idle != FETCH_POOL_TOTAL) {
-                leave(&out, oldest_idle);
-                slot = oldest_idle;
+            // A slot to dial in, which the fetch may have when its key is
+            // under its cap, or at it with a kept connection of its own
+            // that this fetch may not take (or it would have above): that
+            // one is closed for the slot.
+            bool may = of_key < FETCH_POOL_PER_KEY;
+            size_t slot = may ? free_slot : FETCH_POOL_TOTAL;
+            size_t in_table = in_all;
+            if (!may && oldest_idle_of_key != FETCH_POOL_TOTAL) {
+                leave(&out, oldest_idle_of_key);
+                slot = oldest_idle_of_key;
+                in_table--;
+                may = true;
             }
             // A connection whose socket is still open counts, in the table
             // or not: one struck and not yet closed by its reader holds a
             // handle, and the table's total is a promise about handles.
-            size_t in_table = in_all - (slot != FETCH_POOL_TOTAL && slot != free_slot ? 1 : 0);
-            bool admitted = in_table + s_closing < FETCH_POOL_TOTAL;
-            // Held back by sockets alone. An idle HTTP/1.1 connection closes
-            // within this call, so one goes first and may admit the fetch
-            // at once. An idle HTTP/2 one closes when its reader looks, so
-            // one goes for each fetch waiting on the table, this one among
-            // them: a burst of fetches then waits one look together rather
-            // than one behind another.
-            if (slot != FETCH_POOL_TOTAL && !admitted) {
+            bool admitted = slot != FETCH_POOL_TOTAL && in_table + s_closing < FETCH_POOL_TOTAL;
+            // Held back by the table alone: an idle connection of any key
+            // is closed rather than waited on. An HTTP/1.1 one closes
+            // within this call, so one goes before any HTTP/2 one and may
+            // admit the fetch at once. An HTTP/2 one closes when its reader
+            // looks, so one goes for each fetch that wants a place, this
+            // one among them: a burst of fetches then waits one look
+            // together rather than one behind another. A fetch whose key
+            // answers h2 and already has a fetch wanting a place asks for
+            // none: the one connection that fetch dials will carry both.
+            bool behind = false;
+            if (may && !admitted) {
                 size_t wanting = 1;
-                for (fetch_pool_wait_t *w = s_waiters; w != NULL; w = w->node.next)
-                    wanting += w->for_the_table;
-                while (!admitted) {
+                bool expects_h2 = !say->http1 && remembered_h2(key);
+                for (fetch_pool_wait_t *w = s_waiters; w != NULL; w = w->node.next) {
+                    if (!w->wants_place)
+                        continue;
+                    wanting++;
+                    behind = behind || (expects_h2 && same_key(w->key, key) && same_say(w->say, say));
+                }
+                while (!behind && !admitted) {
                     size_t h1 = FETCH_POOL_TOTAL, h2 = FETCH_POOL_TOTAL;
                     for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
                         fetch_conn_t *c = s_conns[i];
@@ -382,6 +389,8 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
                         break;
                     leave(&out, going);
                     in_table--;
+                    if (slot == FETCH_POOL_TOTAL)
+                        slot = going;
                     admitted = in_table + s_closing < FETCH_POOL_TOTAL;
                 }
             }
@@ -396,12 +405,13 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
                 *conn = spare;
                 answer = FETCH_POOL_DIAL;
             } else {
-                // Every connection in the way is in use, being dialled, or
-                // an HTTP/2 one closing whose socket is still open.
-                // Registered in the same hold that found it so, so that a
-                // put or a departure either came before (and was seen
-                // above) or rings this bell.
-                wait->for_the_table = of_key < FETCH_POOL_PER_KEY || slot != FETCH_POOL_TOTAL;
+                // Its key is at its cap with every connection in use, or
+                // the table has no place until a socket closes or a
+                // connection is given back. Registered in the same hold
+                // that found it so, so that a put or a departure either
+                // came before (and was seen above) or rings this bell.
+                wait->for_the_table = may;
+                wait->wants_place = may && !behind;
                 wait_now = wait->bell != NULL && wait->bell->handle >= 0;
                 if (wait_now)
                     waiter_add(wait);

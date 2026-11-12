@@ -1456,17 +1456,26 @@ static void pool_cases(void)
     settle();
 
     // A BURST WAITS ONE CLOSE TOGETHER: the table is full of idle HTTP/2
-    // connections, no socket can close, and four more hosts are fetched.
+    // connections, no reader can close, and four more hosts are fetched,
+    // each known to speak HTTP/2 from a visit whose connection has gone.
     // One connection is condemned for each of the four and none of them
     // dials; with the closes let go, all four do.
     begin();
     route("/page", R_REPLY, "200", kPage);
     memset(many, 0, sizeof(many));
-    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {
+    for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
         snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
         job_go(&many[i], urls[i]);
         CHECK(many[i].ended == OS64_FETCH_OK);
     }
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {            // the last four evict the first visits'
+        snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    memset(&many[FETCH_POOL_TOTAL], 0, 4 * sizeof(many[0]));
     peer_hold_closes(true);
     for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
         snprintf(urls[i], sizeof(urls[i]), "https://burst%d.test/page", i);
@@ -1474,21 +1483,22 @@ static void pool_cases(void)
     }
     for (int i = 0; i < 1000 && fetch_pool_closing() != 4; i++)
         nap_ms(5);
-    nap_ms(2 * H2_READER_SLICE_MS);     // a fifth would have been condemned by now
+    nap_ms(FETCH_POOL_LOOK_MS + 300);   // each has looked and asked again: no fifth is condemned
     fetch_pool_counts(&kept, &live);
-    CHECK(fetch_pool_closing() == 4 && kept == FETCH_POOL_TOTAL - 4 && atomic_load(&ndials) == FETCH_POOL_TOTAL);
+    CHECK(fetch_pool_closing() == 4 && kept == FETCH_POOL_TOTAL - 4 && atomic_load(&ndials) == FETCH_POOL_TOTAL + 4);
     peer_hold_closes(false);
     for (int i = FETCH_POOL_TOTAL; i < FETCH_POOL_TOTAL + 4; i++) {
         job_join(&many[i]);
         CHECK(many[i].ended == OS64_FETCH_OK);
     }
-    CHECK(atomic_load(&ndials) == FETCH_POOL_TOTAL + 4 && atomic_load(&sockets_most) == FETCH_POOL_TOTAL);
+    CHECK(atomic_load(&ndials) == FETCH_POOL_TOTAL + 8 && atomic_load(&sockets_most) == FETCH_POOL_TOTAL);
     settle();
 
-    // AN IDLE HTTP/1.1 CONNECTION GOES BEFORE A FETCH WAITS ON A CLOSE: the
-    // table is full, its oldest idle connection is HTTP/2 and one HTTP/1.1
-    // connection is idle too. With no socket able to close, a fetch to a
-    // new host still dials: the HTTP/1.1 connection was closed for it.
+    // AN IDLE HTTP/1.1 CONNECTION GOES BEFORE ANY HTTP/2 ONE: the table is
+    // full, its oldest idle connection is HTTP/2 and one HTTP/1.1
+    // connection is idle too. With no reader able to close, a fetch to a
+    // new host still dials: the HTTP/1.1 connection was closed for it, and
+    // no HTTP/2 connection was condemned.
     begin();
     route("/page", R_REPLY, "200", kPage);
     host_says("mixed0.test", "http/1.1", 0);
@@ -1501,7 +1511,53 @@ static void pool_cases(void)
     peer_hold_closes(true);
     job_go(&many[FETCH_POOL_TOTAL], "https://mixed-new.test/page");
     CHECK(many[FETCH_POOL_TOTAL].ended == OS64_FETCH_OK && atomic_load(&ndials) == FETCH_POOL_TOTAL + 1);
+    CHECK(fetch_pool_closing() == 0);
     peer_hold_closes(false);
+    settle();
+
+    // FETCHES TO ONE HOST THAT SPEAKS HTTP/2 WANT ONE PLACE BETWEEN THEM: a
+    // host answered h2 and its connection has since been evicted; the
+    // table is full of idle HTTP/2 connections; four fetches go to that
+    // host at once. One connection is condemned, not four; a fetch to
+    // another host then has one condemned for itself and no more; and
+    // when they close, one dial carries the four.
+    begin();
+    route("/page", R_REPLY, "200", kPage);
+    memset(many, 0, sizeof(many));
+    memset(&j, 0, sizeof(j));
+    job_go(&j, "https://same.test/page");
+    CHECK(j.ended == OS64_FETCH_OK);
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {            // the sixteenth evicts same.test's
+        snprintf(urls[i], sizeof(urls[i]), "https://other%d.test/page", i);
+        job_go(&many[i], urls[i]);
+        CHECK(many[i].ended == OS64_FETCH_OK);
+    }
+    for (int i = 0; i < 600 && fetch_pool_closing() != 0; i++)
+        nap_ms(5);
+    peer_hold_closes(true);
+    static job_t same[4];
+    memset(same, 0, sizeof(same));
+    for (int i = 0; i < 4; i++)
+        job_start(&same[i], "https://same.test/page");
+    for (int i = 0; i < 1000 && fetch_pool_closing() != 1; i++)
+        nap_ms(5);
+    nap_ms(FETCH_POOL_LOOK_MS + 300);
+    fetch_pool_counts(&kept, &live);
+    CHECK(fetch_pool_closing() == 1 && kept == FETCH_POOL_TOTAL - 1 && atomic_load(&ndials) == FETCH_POOL_TOTAL + 1);
+    memset(&k, 0, sizeof(k));
+    job_start(&k, "https://another.test/page");
+    for (int i = 0; i < 1000 && fetch_pool_closing() != 2; i++)
+        nap_ms(5);
+    nap_ms(FETCH_POOL_LOOK_MS + 300);
+    fetch_pool_counts(&kept, &live);
+    CHECK(fetch_pool_closing() == 2 && kept == FETCH_POOL_TOTAL - 2);
+    peer_hold_closes(false);
+    for (int i = 0; i < 4; i++) {
+        job_join(&same[i]);
+        CHECK(same[i].ended == OS64_FETCH_OK);
+    }
+    job_join(&k);
+    CHECK(k.ended == OS64_FETCH_OK && atomic_load(&ndials) == FETCH_POOL_TOTAL + 3);
     settle();
 
     // FREED BY THE LAST OF THREE: the connection is struck, its last fetch

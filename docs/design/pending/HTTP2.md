@@ -1982,10 +1982,14 @@ which is the thing to get right before any code:
      bound). The price is that a fetch may wait, for at most a slice,
      on an h2 connection that was idle: § 2.2's "an idle connection
      never makes a fetch wait" is exact for h1 and within a slice
-     for h2. An idle h1 connection goes first, since it closes at once;
-     with none, one idle h2 connection is condemned for each fetch
-     waiting on the table, so a burst waits one slice together and not
-     one behind another. The `dead` hook rings the waiters. The key's own cap does
+     for h2. With the table holding no place, the least recently kept
+     idle h1 connection goes before any h2 one, since it closes at
+     once; with none, one idle h2 connection is condemned for each
+     fetch that wants a place, so a burst waits one slice together and
+     not one behind another. Fetches to one key that last answered h2
+     want one place between them: the first to wait asks for it, and
+     the rest wait for the connection it dials. The `dead` hook rings
+     the waiters. The key's own cap does
      not count the closing: they are leaving, and a server sees them
      go;
   5. otherwise wait, as today.
@@ -2779,12 +2783,13 @@ every one an idle HTTP/2 connection, each new host evicted one and waited
 for its reader's look, half a second at the most, and a second fetch
 waited behind the first: the table condemned one connection at a time.
 Two changes, made after the measurement and before the merge. A fetch
-held back by closing sockets now has an idle HTTP/1.1 connection closed
-first, which admits it at once, and with none an idle HTTP/2 one is
-condemned for each fetch waiting on the table, so a burst waits one look
-together (`fetch_pool_take`). And `H2_READER_SLICE_MS` is 100, so that
-look is a tenth of a second at the most. Two cases hold the reader's
-closes back to prove each rule, and four mutants. The cure is the kernel
+the table has no place for now has an idle HTTP/1.1 connection closed
+before any HTTP/2 one, which admits it at once, and with none an idle
+HTTP/2 one is condemned for each fetch that wants a place, so a burst
+waits one look together; fetches to one host that speaks h2 want one
+place between them (`fetch_pool_take`). And `H2_READER_SLICE_MS` is 100,
+so that look is a tenth of a second at the most. Three cases hold the
+reader's closes back to prove each rule, and mutants of each. The cure is the kernel
 verb DEBTS names; until it exists the reader's wakes are the price.
 
 **Not done.** A Firefox Reload's place for `te` beside `Pragma` and

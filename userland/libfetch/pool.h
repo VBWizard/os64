@@ -148,6 +148,11 @@ typedef struct fetch_pool_wait {
     uint64_t waited_ms;                     // out: how long the take did wait
     bool for_the_table;                     // out: its last wait was for a place in the whole
                                             // table, its key being under its own cap
+    // The pool's, while a take is waiting: what the take asked for, and
+    // whether an idle connection is to be closed on its account.
+    const fetch_pool_key_t *key;
+    const fetch_pool_say_t *say;
+    bool wants_place;
     struct {
         struct fetch_pool_wait *next;
     } node;
@@ -190,13 +195,14 @@ typedef enum {
 //      ones among them, are under FETCH_POOL_TOTAL. AN IDLE CONNECTION
 //      NEVER MAKES A FETCH WAIT FOR ONE longer than a closing HTTP/2
 //      connection's reader takes to look (H2_READER_SLICE_MS): with the
-//      table full, the least recently kept of any key is closed for the
-//      slot; with the key at its cap and holding a kept connection this
-//      fetch may not take (`fresh`, or kept too long for it), that one is.
-//      A fetch still held back by closing sockets has an idle HTTP/1.1
-//      connection closed, which admits it at once, or with none an idle
-//      HTTP/2 one condemned, until as many are closing as fetches wait
-//      on the table;
+//      key at its cap and holding a kept connection this fetch may not
+//      take (`fresh`, or kept too long for it), that one is closed for the
+//      slot; with the table holding no place, the least recently kept
+//      HTTP/1.1 connection of any key is closed, which makes one at once,
+//      or with none the least recently kept HTTP/2 one is condemned,
+//      until as many are closing as fetches want a place. A fetch whose
+//      key last answered h2 wants none while another fetch that says the
+//      same already wants one for that key: one connection carries both;
 //   5. otherwise the fetch WAITS, on its bell, until a connection is given
 //      back, goes, finishes its dial or gains room, and asks again from
 //      the top.
