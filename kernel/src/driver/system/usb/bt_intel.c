@@ -130,8 +130,10 @@ malformed:
 
 void bt_hci_feed(bt_hci_stream_t *stream,
                  void (*event)(void *, const uint8_t *, size_t), void *context,
-                 const uint8_t *data, size_t bytes)
+                 const uint8_t *data, size_t bytes, size_t max_packet)
 {
+    // A packet shorter than the endpoint's maximum ends its transfer.
+    bool ends_transfer = max_packet != 0 && bytes < max_packet;
     while (bytes) {
         // Filling the two-byte header first bounds the ensuing event length.
         size_t target = stream->used < 2 ? 2 : 2 + stream->bytes[1];
@@ -142,7 +144,19 @@ void bt_hci_feed(bt_hci_stream_t *stream,
         if (stream->used >= 2 && stream->used == 2 + stream->bytes[1]) {
             event(context, stream->bytes, stream->used);
             stream->used = 0;
+            // An event is the whole of its transfer: bytes after it in the
+            // same packet are not the start of another.
+            if (max_packet != 0 && bytes != 0) {
+                stream->resyncs++;
+                return;
+            }
         }
+    }
+    // The transfer is over and the event is not: what is held was never the
+    // start of one.
+    if (ends_transfer && stream->used != 0) {
+        stream->used = 0;
+        stream->resyncs++;
     }
 }
 
@@ -155,7 +169,7 @@ static void version_event(void *context, const uint8_t *event, size_t bytes)
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes)
 {
-    bt_hci_feed(stream, version_event, reply, data, bytes);
+    bt_hci_feed(stream, version_event, reply, data, bytes, 0);
 }
 
 static void decode_loader_event(void *context, const uint8_t *event, size_t bytes)
@@ -209,9 +223,9 @@ static void loader_event(void *context, const uint8_t *event, size_t bytes)
 }
 
 void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,
-                          const uint8_t *data, size_t bytes)
+                          const uint8_t *data, size_t bytes, size_t max_packet)
 {
-    bt_hci_feed(stream, loader_event, events, data, bytes);
+    bt_hci_feed(stream, loader_event, events, data, bytes, max_packet);
 }
 
 static uint16_t firmware_id(uint32_t top)

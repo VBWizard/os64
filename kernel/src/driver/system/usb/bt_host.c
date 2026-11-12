@@ -60,8 +60,22 @@ static void host_report(void *context,const bt_le_input_t *input)
 {
     host_call_t *c=context; c->report(c->context,c->peer,input);
 }
-void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,bt_host_report_t report,void *ctx)
+static void host_wire_empty(bt_host_t *h)
 {
+    volatile uint8_t *wipe=h->wire;
+    for(size_t i=0;i<h->wire_used;i++) wipe[i]=0;
+    h->wire_used=h->wire_need=0;
+}
+void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
+                     bt_host_report_t report,void *ctx)
+{
+    // A packet shorter than the endpoint's maximum ends its transfer.
+    bool ends_transfer=max_packet!=0 && n<max_packet;
+    if(h->wire_skip) {
+        // The rest of a transfer whose header could not be real.
+        if(ends_transfer) h->wire_skip=false;
+        return;
+    }
     // Assemble USB fragments once, then route complete ACL packets by handle.
     // Per-peer L2CAP reassembly allows interleaved continuation fragments.
     while(n && !h->failed) {
@@ -69,7 +83,14 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,bt_host_report_t rep
             h->wire[h->wire_used++]=*p++; n--;
             if(h->wire_used<4) continue;
             h->wire_need=4u+host_u16(h->wire+2);
-            if(h->wire_need>sizeof(h->wire)) { h->failed=true; return; }
+            if(h->wire_need>sizeof(h->wire)) {
+                if(!max_packet) { h->failed=true; return; }
+                // Not a header: the assembler was out of step with the
+                // transfers (bt_host.h). Drop to the end of this one.
+                host_wire_empty(h); h->wire_resyncs++;
+                h->wire_skip=!ends_transfer;
+                return;
+            }
         }
         while(n && h->wire_used<h->wire_need) { h->wire[h->wire_used++]=*p++; n--; }
         if(h->wire_used<h->wire_need) return;
@@ -81,10 +102,14 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,bt_host_report_t rep
             bt_le_receive(s,h->wire,h->wire_need,host_report,&call);
             break;
         }
-        volatile uint8_t *wipe=h->wire;
-        for(size_t i=0;i<h->wire_used;i++) wipe[i]=0;
-        h->wire_used=h->wire_need=0;
+        host_wire_empty(h);
+        // An ACL packet is the whole of its transfer: bytes after it in the
+        // same USB packet are not the start of another.
+        if(max_packet && n) { h->wire_resyncs++; return; }
     }
+    // The transfer is over and the packet is not: what is held was never
+    // the start of one.
+    if(ends_transfer && h->wire_used) { host_wire_empty(h); h->wire_resyncs++; }
 }
 static void host_command(void *context,uint16_t op,const uint8_t *p,uint8_t n)
 {
@@ -143,7 +168,20 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
         h->scan.credits=h->credits;
         bt_scan_tick(&h->scan,now,host_control(h,1,usb_done),h->failed,host_command,&call);
         host_retire(h,usb_done);
-        if(h->scan.phase==BT_SCAN_FAILED) h->failed=true;
+        if(h->scan.phase==BT_SCAN_FAILED) {
+            // A start-up round that failed outright is run again a few
+            // times before the host is called failed (bt_host.h). STOPPED
+            // is the state the retry above starts from. A failed transport
+            // is not a round to repeat.
+            if(!h->initialized && !h->failed && ++h->init_failed_rounds<BT_HOST_INIT_ROUNDS) {
+                h->scan.phase=BT_SCAN_STOPPED;
+                // No reply came, so no reply gave the command credit back.
+                // The next round opens with a reset, which a host may send
+                // whatever it believes about credit.
+                h->credits=1;
+            }
+            else h->failed=true;
+        }
         if(!h->initialized && h->scan.phase==BT_SCAN_DONE) {
             h->initialized=true; h->scan.shared_controller=true;
         }
@@ -225,8 +263,10 @@ bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
 size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
 {
     if(!cap) return 0;
-    int n=snprintf(out,cap,"controller: %s\ncommands: slot N COMMAND (default slot 0)\n",
-        h->failed?"failed; reboot required":h->initialized?"ready":"initializing");
+    int n=snprintf(out,cap,"controller: %s\nstart-up rounds failed: %u of %u\n"
+        "ACL framing resyncs: %u\ncommands: slot N COMMAND (default slot 0)\n",
+        h->failed?"failed; reboot required":h->initialized?"ready":"initializing",
+        h->init_failed_rounds,BT_HOST_INIT_ROUNDS,h->wire_resyncs);
     if(n<0) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;
     if(h->duplicate_slot && used<cap-1) {

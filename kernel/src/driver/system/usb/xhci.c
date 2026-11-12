@@ -798,9 +798,10 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 			// Re-arm after the drain so radio traffic cannot monopolize a pass.
 			if (i == 0)
 				bt_hci_feed(&rx->stream, xhci_bt_runtime_event, probe, rx->buffer,
-				            rx->endpoint.packet_bytes - residual);
+				            rx->endpoint.packet_bytes - residual, rx->endpoint.packet_bytes);
 			else
 				bt_host_receive(&probe->host, rx->buffer, rx->endpoint.packet_bytes - residual,
+				              rx->endpoint.packet_bytes,
 				              xhci_bt_input_report, probe);
 			crypto_wipe(rx->buffer, rx->endpoint.packet_bytes);
 			rx->rearm_pending = true;
@@ -808,7 +809,7 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 		}
 		probe->packets++;
 		bt_intel_feed_events(&rx->stream, &probe->events, rx->buffer,
-		                     rx->endpoint.packet_bytes - residual);
+		                     rx->endpoint.packet_bytes - residual, rx->endpoint.packet_bytes);
 		// Bound unsolicited traffic as well as time: a continuously ready
 		// device must not keep the boot-time event drain spinning indefinitely.
 		if (!probe->events.malformed && !probe->events.download_failed && probe->packets < 64)
@@ -1485,6 +1486,14 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 
 		if (file == 0 && n < capacity - 1)
 			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
+		// How often the event assembler was found out of step with the
+		// transfers and emptied (bt_intel.h). Not zero after a warm reboot
+		// is the adapter handing over the tail of an event from before.
+		if (file == 0 && n < capacity - 1) {
+			int more = snprintf(out + n, capacity - n, "event framing resyncs: %u\n",
+			                    s_bluetooth_hc->bluetooth.rx[0].stream.resyncs);
+			if (more > 0) n += (size_t)more < capacity - n ? (size_t)more : capacity - n - 1;
+		}
 	}
 	xhci_serial_release();
 	return n;

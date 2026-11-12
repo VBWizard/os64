@@ -55,11 +55,27 @@ typedef struct {
 typedef struct {
     uint8_t bytes[BT_HCI_EVENT_BYTES];
     uint16_t used;
+    // Times the accumulator was found out of step with the transfer
+    // boundaries and thrown away (bt_hci_feed).
+    uint32_t resyncs;
 } bt_hci_stream_t;
 
+// Feed received bytes; each complete event is passed to `event`.
+//
+// `max_packet` is the endpoint's maximum packet size when `data` is ONE USB
+// packet, and 0 when it is an arbitrary slice of a byte stream. The packet
+// form knows where transfers end, and uses it: an event begins a transfer
+// and a packet shorter than the maximum ends one, so an event that is still
+// incomplete when a short packet has been taken in, or bytes left in a
+// packet after an event completed, mean the accumulator is out of step. It
+// is emptied and counted, and the next transfer starts clean. Without that
+// a length taken from the wrong byte swallows every event after it. The
+// way in is an adapter that was already running when this host took it
+// over (a warm reboot with links up): the first packet it hands over can be
+// the tail of an event whose head went to the host before.
 void bt_hci_feed(bt_hci_stream_t *stream,
                  void (*event)(void *, const uint8_t *, size_t), void *context,
-                 const uint8_t *data, size_t bytes);
+                 const uint8_t *data, size_t bytes, size_t max_packet);
 
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes);
@@ -79,8 +95,9 @@ typedef struct {
     uint8_t failure_event[16];
 } bt_intel_events_t;
 
+// `max_packet` as bt_hci_feed takes it.
 void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,
-                          const uint8_t *data, size_t bytes);
+                          const uint8_t *data, size_t bytes, size_t max_packet);
 bool bt_intel_is_ax210_bootloader(const bt_intel_reply_t *version);
 
 #define BT_INTEL_SFI_PAYLOAD 964u

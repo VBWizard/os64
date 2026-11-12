@@ -32,6 +32,11 @@ typedef struct {
     uint8_t credits, status, error_status, address[6], features[8];
     bool pending, command_done, bad_reply, hardware_error, inquiry_done, radio_active;
     bool le_only, shared_controller;
+    // At the first command timeout: had the USB transfer that carries the
+    // command completed, and had the controller's reply arrived? They fail
+    // differently (a command that never left, a reply that never came or
+    // was not recognised), and the error line says which.
+    bool timed_out, timeout_usb_done, timeout_reply;
     uint8_t inquiry_status;
     const char *error;
     unsigned count, dropped, malformed_reports;

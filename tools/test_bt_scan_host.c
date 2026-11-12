@@ -38,8 +38,8 @@ static void reports(void)
     const uint8_t adv[]={0x3e,19,2,1,0,1,1,2,3,4,5,6,7,6,9,'B','o','a','r','d',0xd6};
     for(unsigned split=0;split<=sizeof(adv);split++) {
         bt_scan_t s={.phase=BT_SCAN_LE_WAIT}; bt_hci_stream_t stream={0};
-        bt_hci_feed(&stream,bt_scan_event,&s,adv,split);
-        bt_hci_feed(&stream,bt_scan_event,&s,adv+split,sizeof(adv)-split);
+        bt_hci_feed(&stream,bt_scan_event,&s,adv,split,0);
+        bt_hci_feed(&stream,bt_scan_event,&s,adv+split,sizeof(adv)-split,0);
         assert(s.count==1 && s.devices[0].le && s.devices[0].address_type==1);
         assert(s.devices[0].rssi==-42 && !strcmp(s.devices[0].name,"Board"));
         bt_scan_event(&s,adv,sizeof(adv)); assert(s.count==1);
@@ -74,7 +74,7 @@ static void reports(void)
         classic=(bt_scan_t){.phase=BT_SCAN_CLASSIC_WAIT};bt_hci_stream_t stream={0};
         for(size_t off=0;off<sizeof(eir);off+=chunk) {
             size_t n=sizeof(eir)-off;if(n>chunk)n=chunk;
-            bt_hci_feed(&stream,bt_scan_event,&classic,eir+off,n);
+            bt_hci_feed(&stream,bt_scan_event,&classic,eir+off,n,0);
         }
         assert(classic.count==1 && !classic.devices[0].le && classic.devices[0].rssi==-50);
         assert(!strcmp(classic.devices[0].name,"Mouse") && classic.devices[0].device_class[0]==0x40);
@@ -115,6 +115,20 @@ static void late_completion(void)
     tick(&s,2001); complete(&s,0); tick(&s,4002);
     assert(bt_scan_quiescent(&s) && !s.radio_active && !strcmp(s.error,"HCI command timed out"));
     char out[512]; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"stopped (retry available)"));
+    // The error says which half of the timed-out command was missing: here
+    // the USB transfer had completed and the controller never replied.
+    assert(s.timed_out && s.timeout_usb_done && !s.timeout_reply);
+    assert(strstr(out,"HCI command timed out (opcode 0c03 status 00); the USB transfer completed, no reply came"));
+    // The other half: the reply is there and the transfer is not.
+    { bt_scan_t u={0}; assert(bt_scan_start(&u,0)); tick(&u,0); complete(&u,0);
+      bt_scan_tick(&u,2000,false,false,send_command,NULL);
+      assert(u.timed_out && !u.timeout_usb_done && u.timeout_reply);
+      char text[512]; bt_scan_status(&u,text,sizeof(text));
+      assert(strstr(text,"; the USB transfer had not completed")); }
+    // Nothing timed out: nothing is said.
+    { bt_scan_t ok={0}; assert(bt_scan_start(&ok,0)); tick(&ok,0);
+      char text[512]; bt_scan_status(&ok,text,sizeof(text));
+      assert(!ok.timed_out && strstr(text,"error: none (opcode 0000 status 00)\n")); }
     unsigned before=sends; tick(&s,9000); assert(sends==before && s.error);
     assert(bt_scan_start(&s,9001) && !s.error);
     for(unsigned kind=0;kind<3;kind++) {

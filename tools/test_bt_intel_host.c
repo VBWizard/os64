@@ -13,8 +13,89 @@ static bt_intel_reply_t decode(const uint8_t *event, size_t bytes)
     return reply;
 }
 
+static unsigned seen_events;
+static uint8_t seen_last[BT_HCI_EVENT_BYTES];
+static size_t seen_bytes;
+static void seen(void *context, const uint8_t *event, size_t bytes)
+{
+    (void)context; seen_events++; seen_bytes = bytes; memcpy(seen_last, event, bytes);
+}
+
+// The packet form of bt_hci_feed knows where transfers end and uses it to
+// get back in step. The way out of step is an adapter that was already
+// running when the host took it over: the first packet can be the tail of
+// an event whose head went to the host before.
+static void packet_resync(void)
+{
+    const uint8_t reset_done[] = {0x0e, 4, 1, 0x03, 0x0c, 0};   // Command Complete: Reset
+    enum { MPS = 16 };
+    bt_hci_stream_t stream = {0};
+
+    // A tail: three bytes that read as a header asking for 0x41 more.
+    const uint8_t tail[] = {0x3e, 0x41, 0x07};
+    seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, tail, sizeof(tail), MPS);
+    assert(!seen_events && stream.used == 0 && stream.resyncs == 1);
+    // In step again: the reply to the reset is seen, where the byte-stream
+    // form would have swallowed it into the 0x41 it was waiting for.
+    bt_hci_feed(&stream, seen, NULL, reset_done, sizeof(reset_done), MPS);
+    assert(seen_events == 1 && seen_bytes == sizeof(reset_done) && !memcmp(seen_last, reset_done, sizeof(reset_done)));
+    assert(stream.resyncs == 1 && stream.used == 0);
+    bt_hci_stream_t plain = {0};
+    seen_events = 0;
+    bt_hci_feed(&plain, seen, NULL, tail, sizeof(tail), 0);
+    bt_hci_feed(&plain, seen, NULL, reset_done, sizeof(reset_done), 0);
+    assert(!seen_events && plain.used == sizeof(tail) + sizeof(reset_done) && plain.resyncs == 0);
+
+    // A tail that fills whole packets is held until the short one that ends it.
+    uint8_t full[MPS]; memset(full, 0x77, sizeof(full));
+    stream = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, full, sizeof(full), MPS);
+    assert(stream.used == MPS && stream.resyncs == 0);
+    bt_hci_feed(&stream, seen, NULL, tail, 1, MPS);
+    assert(!seen_events && stream.used == 0 && stream.resyncs == 1);
+
+    // An event longer than a packet still assembles: full packets, then a short one.
+    uint8_t large[2 + 40]; large[0] = 0x3e; large[1] = 40;
+    for (unsigned i = 2; i < sizeof(large); i++) large[i] = (uint8_t)i;
+    stream = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, large, MPS, MPS);
+    bt_hci_feed(&stream, seen, NULL, large + MPS, MPS, MPS);
+    assert(!seen_events && stream.resyncs == 0);
+    bt_hci_feed(&stream, seen, NULL, large + 2 * MPS, sizeof(large) - 2 * MPS, MPS);
+    assert(seen_events == 1 && seen_bytes == sizeof(large) && !memcmp(seen_last, large, sizeof(large)) && stream.resyncs == 0);
+
+    // An event that ends exactly on a full packet is complete by its length,
+    // and the next transfer starts clean.
+    uint8_t exact[MPS]; exact[0] = 0x3e; exact[1] = MPS - 2; memset(exact + 2, 1, MPS - 2);
+    stream = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, exact, sizeof(exact), MPS);
+    bt_hci_feed(&stream, seen, NULL, reset_done, sizeof(reset_done), MPS);
+    assert(seen_events == 2 && stream.resyncs == 0 && stream.used == 0);
+
+    // Bytes after a complete event in the same packet are not another event.
+    uint8_t two[2 * sizeof(reset_done)];
+    memcpy(two, reset_done, sizeof(reset_done)); memcpy(two + sizeof(reset_done), reset_done, sizeof(reset_done));
+    stream = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, two, sizeof(two), MPS);
+    assert(seen_events == 1 && stream.resyncs == 1 && stream.used == 0);
+    // The byte-stream form has no packets to go by and takes both.
+    plain = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&plain, seen, NULL, two, sizeof(two), 0);
+    assert(seen_events == 2 && plain.resyncs == 0);
+
+    // An empty packet ends a transfer too.
+    stream = (bt_hci_stream_t){0}; seen_events = 0;
+    bt_hci_feed(&stream, seen, NULL, tail, 2, MPS);     // resynced at once: short
+    assert(stream.resyncs == 1);
+    bt_hci_feed(&stream, seen, NULL, full, sizeof(full), MPS);
+    bt_hci_feed(&stream, seen, NULL, full, 0, MPS);
+    assert(stream.used == 0 && stream.resyncs == 2 && !seen_events);
+}
+
 int main(void)
 {
+    packet_resync();
     // P5's reported configuration: HCI plus seven isochronous alternate settings.
     uint8_t cfg[200] = {9,2,200,0,2,1,0,0x80,50,
         9,4,0,0,3,0xe0,1,1,0,
@@ -108,43 +189,43 @@ int main(void)
     for (unsigned split = 0; split <= sizeof(notify); split++) {
         bt_intel_events_t e = {.opcode=0xfc09,.watch_download=true,.watch_boot=true};
         bt_hci_stream_t stream = {0};
-        bt_intel_feed_events(&stream,&e,notify,split);
-        bt_intel_feed_events(&stream,&e,notify+split,sizeof(notify)-split);
+        bt_intel_feed_events(&stream,&e,notify,split,0);
+        bt_intel_feed_events(&stream,&e,notify+split,sizeof(notify)-split,0);
         assert(e.command_done && e.download_done && e.booted && e.credits==1);
         assert(!e.status && !e.malformed && !e.download_failed);
     }
     bt_intel_events_t e = {.opcode=0xfc09,.watch_download=true};
     bt_hci_stream_t stream = {0};
     const uint8_t failure[] = {0xff,5,6,1,9,0xfc,0};
-    bt_intel_feed_events(&stream,&e,failure,sizeof(failure));
+    bt_intel_feed_events(&stream,&e,failure,sizeof(failure),0);
     assert(e.download_done && e.download_failed);
     const uint8_t malformed[] = {0xff,4,6,0,9,0xfc};
     e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
-    bt_intel_feed_events(&stream,&e,malformed,sizeof(malformed));
+    bt_intel_feed_events(&stream,&e,malformed,sizeof(malformed),0);
     assert(e.malformed && !e.download_done);
     assert(e.failure_bytes==sizeof(malformed) && !memcmp(e.failure_event,malformed,sizeof(malformed)));
     // A later event cannot replace the evidence for the original rejection.
-    bt_intel_feed_events(&stream,&e,notify,sizeof(notify));
+    bt_intel_feed_events(&stream,&e,notify,sizeof(notify),0);
     assert(e.failure_bytes==sizeof(malformed) && !memcmp(e.failure_event,malformed,sizeof(malformed)));
     // The P5's AX210 reports secure success with a zero opcode field.
     const uint8_t p5_secure_success[]={0xff,5,6,0,0,0,0};
     for (unsigned split=0; split<=sizeof(p5_secure_success); split++) {
         e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
-        bt_intel_feed_events(&stream,&e,p5_secure_success,split);
-        bt_intel_feed_events(&stream,&e,p5_secure_success+split,sizeof(p5_secure_success)-split);
+        bt_intel_feed_events(&stream,&e,p5_secure_success,split,0);
+        bt_intel_feed_events(&stream,&e,p5_secure_success+split,sizeof(p5_secure_success)-split,0);
         assert(e.download_done && !e.download_failed && !e.malformed && !e.failure_bytes);
     }
     const uint8_t zero_opcode_failure[]={0xff,5,6,1,0,0,0};
     e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
-    bt_intel_feed_events(&stream,&e,zero_opcode_failure,sizeof(zero_opcode_failure));
+    bt_intel_feed_events(&stream,&e,zero_opcode_failure,sizeof(zero_opcode_failure),0);
     assert(e.download_done && e.download_failed && !e.malformed);
     assert(e.failure_bytes==sizeof(zero_opcode_failure));
     assert(!memcmp(e.failure_event,zero_opcode_failure,sizeof(zero_opcode_failure)));
     e=(bt_intel_events_t){0}; stream=(bt_hci_stream_t){0};
-    bt_intel_feed_events(&stream,&e,p5_secure_success,sizeof(p5_secure_success));
+    bt_intel_feed_events(&stream,&e,p5_secure_success,sizeof(p5_secure_success),0);
     assert(!e.download_done && !e.malformed);
     e=(bt_intel_events_t){.opcode=0xfc09}; stream=(bt_hci_stream_t){0};
-    bt_intel_feed_events(&stream,&e,rejected,sizeof(rejected));
+    bt_intel_feed_events(&stream,&e,rejected,sizeof(rejected),0);
     assert(!e.command_done); // fc05 cannot complete fc09.
 
     bt_intel_reply_t identity = {.result=BT_INTEL_VERSION,.image=1,

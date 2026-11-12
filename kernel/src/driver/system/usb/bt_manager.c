@@ -39,9 +39,14 @@ void bt_manager_step(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,uint64_t now)
     bt_manager_observe(m,s,now);
     if(!m->loaded || !m->automatic || m->suppressed || !s->bond.valid || m->blocked) return;
     if(s->phase==BT_LE_FAILED || scan->phase==BT_SCAN_FAILED) { m->blocked=true; return; }
-    if(bt_le_input_active(s)) { m->backoff_ms=2000; return; }
+    if(bt_le_input_active(s)) { m->backoff_ms=2000; m->mic_drops=0; return; }
     if(!bt_le_quiescent(s)) return;
     if(s->phase==BT_LE_STOPPED && !s->retryable) { m->blocked=true; return; }
+    // Each integrity-check drop is counted once, by the time it happened.
+    if(s->phase==BT_LE_STOPPED && s->disconnect_reason==0x3d && m->mic_seen_ms!=s->disconnected_ms) {
+        m->mic_seen_ms=s->disconnected_ms;
+        if(++m->mic_drops>=BT_MANAGER_MIC_DROPS) { m->blocked=true; return; }
+    }
     if(m->scan_owned) {
         if(scan->phase!=BT_SCAN_DONE && scan->phase!=BT_SCAN_STOPPED) return;
         m->scan_owned=false;
