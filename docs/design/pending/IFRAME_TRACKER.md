@@ -66,3 +66,20 @@ review: F.2a for native ownership and F.2b for bindings. Keep the row in
 progress after F.2a and name its evidence in notes. F.2b's completion flip
 records both PRs; merging the brief or the native half alone does not finish
 the slice.
+
+F.3's [retirement brief](IFRAME_F3_RETIREMENT.md) proposes two implementation
+PRs under its row: F.3a for libjs lifecycle/job ownership and F.3b for DOM
+departure and failed-child isolation. Keep the row in progress between them;
+its final completion records both implementation PRs. The brief selects
+bounded retained slots and the design's runtime-wide overrun fallback, with
+explicit proof obligations for a future recovery extension. It enables no
+frame loading or independent reclamation of departed contexts.
+
+F.15 and F.16 track the retained-realm reclamation and child-local overrun
+recovery follow-ups. They are not prerequisites for F.3. F.11 has explicit
+alternative evidence gates: reclamation proof or accepted Tier 1 session
+realm-consumption/refusal measurements; recovery proof or accepted Tier 1
+frame-budget measurements on the P5. Record the chosen evidence and retained
+limitations in F.11 acceptance. Measurements satisfy the shipping gate but
+do not mark an unimplemented reclamation/recovery row done. These alternatives
+are in notes rather than unconditional dependency edges.

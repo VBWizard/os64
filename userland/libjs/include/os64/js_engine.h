@@ -35,7 +35,9 @@ os64_js_status_t os64_js_task_begin(os64_js_runtime_t *runtime, const char *call
 /* Calls a function value inside the open task, with eval's outcomes. The
  * host owns function, this and argv. The return value is discarded; a
  * strict `false` is reported through returned_false (may be NULL), which is
- * what an event handler's `return false` needs. Refused outside a task and
+ * what an event handler's `return false` needs. The function realm must also
+ * remain eligible; choosing a live context does not revive a retired callback.
+ * Refused outside a task and
  * from inside a callback; a binding nested under a call uses JS_Call. */
 os64_js_status_t os64_js_call(os64_js_runtime_t *runtime, const char *caller_abi,
                               JSValue function, JSValue this_value, int argc,
@@ -71,6 +73,11 @@ size_t os64_js_heap_peak(const os64_js_runtime_t *runtime);
 /* What the heap holds now, in the same bytes. Readable from a runtime that
  * has failed. 0 for NULL. No engine entry. */
 size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
+/* Remaining engine allowance after the runtime wrapper's storage and current
+ * allocator charge. Owner thread, including callbacks; no allocation, GC or
+ * failure observation. Readable after failure, but not evidence of health.
+ * Returns 0 for NULL or exhausted allowance. */
+size_t os64_js_heap_headroom(const os64_js_runtime_t *runtime);
 /* THE HEAP BY KIND OF THING (MEMORY_CENSUS.md § 5): the engine's own count
  * of what it holds. It walks every object, string, shape and function the
  * heap has, so it costs time in proportion to the heap: for a census, not
@@ -244,6 +251,57 @@ os64_js_realm_t *os64_js_realm_from_context(os64_js_runtime_t *runtime, JSContex
  * allocation; other resource failures affect the shared runtime. */
 os64_js_status_t os64_js_realm_create(os64_js_runtime_t *runtime, const char *caller_abi,
     os64_js_realm_t **out, os64_js_outcome_t *outcome);
+
+/* Irreversible, idempotent owner-thread eligibility mark. Allowed inside a
+ * native callback with a separate outcome, and after a sticky failure for
+ * cleanup. No allocation, queue mutation, context destruction or cancellation.
+ * Existing stacks may unwind; exported ordinary functions remain callable
+ * through raw JS_Call under a live caller's budget. New realm entry is refused.
+ * Hosts keep provider records alive through active calls and checkpoints, then
+ * clear script/module hooks at their safe point. This is not DOM departure. */
+os64_js_status_t os64_js_realm_retire(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_outcome_t *outcome);
+/* Borrowed handle lifetime is unchanged; false for NULL. No engine entry. */
+bool os64_js_realm_is_retired(const os64_js_realm_t *realm);
+
+/* Owner-thread admission snapshot, including inside a parent's callback with
+ * queued jobs. Checks slots and a positive caller-measured installation peak
+ * plus sibling headroom; does not allocate, execute jobs, change the enclosing
+ * budget/outcome or reserve bytes. REALM_LIMIT and ADMISSION_REFUSED are local.
+ * Recheck at creation: intervening allocations can invalidate an OK snapshot.
+ * This does not guarantee later allocations or system memory availability. */
+os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime, const char *caller_abi,
+    size_t required_headroom, os64_js_outcome_t *outcome);
+/* Rechecks preflight immediately before the normal realm creation path.
+ * Refusal publishes no handle and consumes no slot. Creation/installation
+ * allocator failures retain the shared runtime's existing sticky behavior.
+ * Hosts choose the reserve for their bindings; this creates the engine realm
+ * only, and does not install or publish DOM services. */
+os64_js_status_t os64_js_realm_create_with_headroom(os64_js_runtime_t *runtime,
+    const char *caller_abi, size_t required_headroom,
+    os64_js_realm_t **out, os64_js_outcome_t *outcome);
+
+/* Private installation: stage consumes a stable slot but refuses ordinary
+ * execution/host delivery. Keep its objects unexposed until activation.
+ * Setup invokes trusted native installation/private bootstrap only; it may
+ * not call siblings, external providers, or publish candidate references.
+ * Return OK, ADMISSION_REFUSED (local native refusal), or EXCEPTION with a
+ * pending engine exception. Engine resource failures remain runtime-wide.
+ * Setup borrows an enclosing turn's deadline/job count and preserves sibling
+ * queues; standalone setup requires no prior pending turn. Its own queued
+ * work is drained before success, discarded on failure (including neutral
+ * jobs). Refusal before guard entry leaves the candidate unchanged; failure
+ * after entry retires its slot. Native backing cleanup belongs to the caller.
+ * Installers use separate outcomes for nested API calls. Activate enables ordinary entry after successful setup; it does
+ * not open a new budget or checkpoint siblings. */
+typedef os64_js_status_t (*os64_js_realm_setup_fn)(os64_js_realm_t *realm,
+    JSContext *context, void *opaque);
+os64_js_status_t os64_js_realm_stage(os64_js_runtime_t *runtime, const char *caller_abi,
+    size_t required_headroom, os64_js_realm_t **out, os64_js_outcome_t *outcome);
+os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_realm_setup_fn installer, void *opaque, os64_js_outcome_t *outcome);
+os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm, const char *caller_abi,
+    os64_js_outcome_t *outcome);
 
 os64_js_status_t os64_js_realm_run(os64_js_realm_t *realm,
                                      const void *source, size_t length,

@@ -1,0 +1,410 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -801,6 +801,7 @@
+ 
+ typedef struct JSAsyncFunctionState {
+     JSGCObjectHeader header;
++    JSContext *realm; /* code owner, retained after the frame completes */
+     JSValue this_val; /* 'this' argument */
+     int argc; /* number of function arguments */
+     BOOL throw_flag; /* used to throw an exception in JS_CallInternal() */
+@@ -958,6 +959,7 @@
+ typedef struct JSJobEntry {
+     struct list_head link;
+     JSContext *realm;
++    JSContext *owner, *activity; /* eligibility, independent of execution context */
+     JSJobFunc *job_func;
+     int argc;
+     JSValue argv[0];
+@@ -2291,8 +2293,12 @@
+     return rt->strip_flags;
+ }
+ 
+-static int JS_EnqueueJob2(JSContext *ctx, JSJobFunc *job_func,
+-                          int argc, JSValueConst *argv, BOOL no_exception)
++static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function);
++static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function);
++
++static int JS_EnqueueJob2(JSContext *ctx, JSContext *owner, JSContext *activity,
++                          JSJobFunc *job_func, int argc, JSValueConst *argv,
++                          BOOL no_exception)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSJobEntry *e;
+@@ -2305,6 +2311,8 @@
+     if (!e)
+         return -1;
+     e->realm = JS_DupContext(ctx);
++    e->owner = owner ? JS_DupContext(owner) : NULL;
++    e->activity = activity ? JS_DupContext(activity) : NULL;
+     e->job_func = job_func;
+     e->argc = argc;
+     for(i = 0; i < argc; i++) {
+@@ -2318,7 +2326,43 @@
+ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+                   int argc, JSValueConst *argv)
+ {
+-    return JS_EnqueueJob2(ctx, job_func, argc, argv, FALSE);
++    return JS_EnqueueJob2(ctx, ctx, NULL, job_func, argc, argv, FALSE);
++}
++
++int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
++                       JSJobFunc *job_func, int argc, JSValueConst *argv)
++{
++    assert((!owner || owner->rt == ctx->rt) && (!activity || activity->rt == ctx->rt));
++    return JS_EnqueueJob2(ctx, owner, activity, job_func, argc, argv, FALSE);
++}
++
++/* The head's contexts are borrowed until execution/discard. Inspection runs
++   no code; release uses the same retained values as ordinary job completion. */
++BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info)
++{
++    JSJobEntry *e;
++    if (list_empty(&rt->job_list))
++        return FALSE;
++    e = list_entry(rt->job_list.next, JSJobEntry, link);
++    *info = (JSJobInfo){ e->realm, e->owner, e->activity };
++    return TRUE;
++}
++
++int JS_DiscardPendingJob(JSRuntime *rt)
++{
++    JSJobEntry *e;
++    int i;
++    if (list_empty(&rt->job_list))
++        return 0;
++    e = list_entry(rt->job_list.next, JSJobEntry, link);
++    list_del(&e->link);
++    for (i = 0; i < e->argc; i++)
++        JS_FreeValueRT(rt, e->argv[i]);
++    if (e->owner) JS_FreeContext(e->owner);
++    if (e->activity) JS_FreeContext(e->activity);
++    JS_FreeContext(e->realm);
++    js_free_rt(rt, e);
++    return 1;
+ }
+ 
+ BOOL JS_IsJobPending(JSRuntime *rt)
+@@ -2356,6 +2400,8 @@
+     else
+         ret = 1;
+     JS_FreeValue(ctx, res);
++    if (e->owner) JS_FreeContext(e->owner);
++    if (e->activity) JS_FreeContext(e->activity);
+     js_free(ctx, e);
+     if (pctx) {
+         if (js_rc(ctx)->ref_count > 1)
+@@ -2444,6 +2490,8 @@
+         JSJobEntry *e = list_entry(el, JSJobEntry, link);
+         for(i = 0; i < e->argc; i++)
+             JS_FreeValueRT(rt, e->argv[i]);
++        if (e->owner) JS_FreeContext(e->owner);
++        if (e->activity) JS_FreeContext(e->activity);
+         JS_FreeContext(e->realm);
+         js_free_rt(rt, e);
+     }
+@@ -6054,6 +6102,7 @@
+ }
+ 
+ typedef struct JSCFunctionDataRecord {
++    JSContext *realm;
+     JSCFunctionData *func;
+     uint8_t length;
+     uint8_t data_len;
+@@ -6070,6 +6119,7 @@
+         for(i = 0; i < s->data_len; i++) {
+             JS_FreeValueRT(rt, s->data[i]);
+         }
++        JS_FreeContext(s->realm);
+         js_free_rt(rt, s);
+     }
+ }
+@@ -6084,6 +6134,7 @@
+         for(i = 0; i < s->data_len; i++) {
+             JS_MarkValue(rt, s->data[i], mark_func);
+         }
++        mark_func(rt, &s->realm->header);
+     }
+ }
+ 
+@@ -6126,6 +6177,7 @@
+         JS_FreeValue(ctx, func_obj);
+         return JS_EXCEPTION;
+     }
++    s->realm = JS_DupContext(ctx);
+     s->func = func;
+     s->length = length;
+     s->data_len = data_len;
+@@ -6720,6 +6772,7 @@
+                         JS_MarkValue(rt, *sp, mark_func);
+                 }
+             }
++            mark_func(rt, &s->realm->header);
+             JS_MarkValue(rt, s->resolving_funcs[0], mark_func);
+             JS_MarkValue(rt, s->resolving_funcs[1], mark_func);
+         }
+@@ -20807,52 +20860,61 @@
+ 
+ /* warning: the refcount of the context is not incremented. Return
+    NULL in case of exception (case of revoked proxy only) */
+-JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
+-{
+-    JSObject *p;
+-    JSContext *realm;
+-
+-    if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+-        return ctx;
+-    p = JS_VALUE_GET_OBJ(func_obj);
+-    switch(p->class_id) {
+-    case JS_CLASS_C_FUNCTION:
+-        realm = p->u.cfunc.realm;
+-        break;
+-    case JS_CLASS_BYTECODE_FUNCTION:
+-    case JS_CLASS_GENERATOR_FUNCTION:
+-    case JS_CLASS_ASYNC_FUNCTION:
+-    case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
+-        {
+-            JSFunctionBytecode *b;
+-            b = p->u.func.function_bytecode;
+-            realm = b->realm;
+-        }
+-        break;
+-    case JS_CLASS_PROXY:
+-        {
++/* Job realm discovery is non-throwing, including during finalization GC.
++   A revoked proxy uses the current realm, without allocating a TypeError.
++   Walking wrappers iteratively avoids spending native stack on bound chains. */
++static JSContext *js_function_realm(JSContext *ctx, JSValueConst func_obj,
++                                    BOOL revoked_fallback)
++{
++    for (;;) {
++        JSObject *p;
++        if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
++            return ctx;
++        p = JS_VALUE_GET_OBJ(func_obj);
++        switch (p->class_id) {
++        case JS_CLASS_C_FUNCTION:
++            return p->u.cfunc.realm;
++        case JS_CLASS_C_FUNCTION_DATA:
++            return p->u.c_function_data_record ? p->u.c_function_data_record->realm : ctx;
++        case JS_CLASS_ASYNC_FUNCTION_RESOLVE:
++        case JS_CLASS_ASYNC_FUNCTION_REJECT:
++            return p->u.async_function_data ? p->u.async_function_data->realm : ctx;
++        case JS_CLASS_PROMISE_RESOLVE_FUNCTION:
++        case JS_CLASS_PROMISE_REJECT_FUNCTION:
++            return js_promise_function_realm(ctx, func_obj);
++        case JS_CLASS_BYTECODE_FUNCTION:
++        case JS_CLASS_GENERATOR_FUNCTION:
++        case JS_CLASS_ASYNC_FUNCTION:
++        case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++            return p->u.func.function_bytecode->realm;
++        case JS_CLASS_PROXY: {
+             JSProxyData *s = p->u.opaque;
+-            if (!s)
+-                return ctx;
++            if (!s) return ctx;
+             if (s->is_revoked) {
++                if (revoked_fallback) return ctx;
+                 JS_ThrowTypeErrorRevokedProxy(ctx);
+                 return NULL;
+-            } else {
+-                realm = JS_GetFunctionRealm(ctx, s->target);
+-            }
+-        }
+-        break;
+-    case JS_CLASS_BOUND_FUNCTION:
+-        {
+-            JSBoundFunction *bf = p->u.bound_function;
+-            realm = JS_GetFunctionRealm(ctx, bf->func_obj);
+-        }
+-        break;
+-    default:
+-        realm = ctx;
+-        break;
+-    }
+-    return realm;
++            }
++            func_obj = s->target;
++            break;
++        }
++        case JS_CLASS_BOUND_FUNCTION:
++            func_obj = p->u.bound_function->func_obj;
++            break;
++        default:
++            return ctx;
++        }
++    }
++}
++
++JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
++{
++    return js_function_realm(ctx, func_obj, FALSE);
++}
++
++static JSContext *js_job_function_realm(JSContext *ctx, JSValueConst function)
++{
++    return JS_IsUndefined(function) ? NULL : js_function_realm(ctx, function, TRUE);
+ }
+ 
+ static JSValue js_create_from_ctor(JSContext *ctx, JSValueConst ctor,
+@@ -20984,6 +21046,7 @@
+     memset(s, 0, sizeof(*s));
+     js_rc(s)->ref_count = 1;
+     add_gc_object(ctx->rt, &s->header, JS_GC_OBJ_TYPE_ASYNC_FUNCTION);
++    s->realm = JS_DupContext(b->realm);
+ 
+     sf = &s->frame;
+     sf->js_mode = b->js_mode | JS_MODE_ASYNC;
+@@ -21071,6 +21134,7 @@
+     JS_FreeValueRT(rt, s->resolving_funcs[0]);
+     JS_FreeValueRT(rt, s->resolving_funcs[1]);
+ 
++    JS_FreeContext(s->realm);
+     remove_gc_object(&s->header);
+     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && js_rc(s)->ref_count != 0) {
+         list_add_tail(&s->header.link, &rt->gc_zero_ref_count_list);
+@@ -21437,6 +21501,7 @@
+ } JSAsyncGeneratorRequest;
+ 
+ typedef struct JSAsyncGeneratorData {
++    JSContext *realm;
+     JSObject *generator; /* back pointer to the object (const) */
+     JSAsyncGeneratorStateEnum state;
+     /* func_state is NULL is state AWAITING_RETURN and COMPLETED */
+@@ -21460,6 +21525,7 @@
+     }
+     if (s->func_state)
+         async_func_free(rt, s->func_state);
++    if (s->realm) JS_FreeContext(s->realm);
+     js_free_rt(rt, s);
+ }
+ 
+@@ -21486,6 +21552,7 @@
+             JS_MarkValue(rt, req->resolving_funcs[0], mark_func);
+             JS_MarkValue(rt, req->resolving_funcs[1], mark_func);
+         }
++        if (s->realm) mark_func(rt, &s->realm->header);
+         if (s->func_state) {
+             mark_func(rt, &s->func_state->header);
+         }
+@@ -21506,7 +21573,8 @@
+     JSValue func;
+ 
+     for(i = 0; i < 2; i++) {
+-        func = JS_NewCFunctionData(ctx, js_async_generator_resolve_function, 1,
++        JSAsyncGeneratorData *s = JS_GetOpaque(generator, JS_CLASS_ASYNC_GENERATOR);
++        func = JS_NewCFunctionData(s->realm, js_async_generator_resolve_function, 1,
+                                    i + is_resume_next * 2, 1, &generator);
+         if (JS_IsException(func)) {
+             if (i == 1)
+@@ -21837,6 +21905,7 @@
+     s->func_state = async_func_init(ctx, func_obj, this_obj, argc, argv);
+     if (!s->func_state)
+         goto fail;
++    s->realm = JS_DupContext(s->func_state->realm);
+     /* execute the function up to 'OP_initial_yield' (no yield nor
+        await are possible) */
+     func_ret = async_func_resume(ctx, s->func_state);
+@@ -53608,9 +53677,16 @@
+ } JSPromiseFunctionDataResolved;
+ 
+ typedef struct JSPromiseFunctionData {
++    JSContext *realm;
+     JSValue promise;
+     JSPromiseFunctionDataResolved *presolved;
+ } JSPromiseFunctionData;
++
++static JSContext *js_promise_function_realm(JSContext *ctx, JSValueConst function)
++{
++    JSPromiseFunctionData *s = JS_VALUE_GET_OBJ(function)->u.promise_function_data;
++    return s ? s->realm : ctx;
++}
+ 
+ typedef struct JSPromiseReactionData {
+     struct list_head link; /* not used in promise_reaction_job */
+@@ -53726,7 +53802,8 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, is_reject);
+         args[4] = value;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, args[2]), NULL,
++                           promise_reaction_job, 5, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -53811,6 +53888,7 @@
+         }
+         sr->ref_count++;
+         s->presolved = sr;
++        s->realm = JS_DupContext(ctx);
+         s->promise = JS_DupValue(ctx, promise);
+         JS_SetOpaque(obj, s);
+         js_function_set_properties(ctx, obj, JS_ATOM_empty_string, 1);
+@@ -53825,6 +53903,7 @@
+     JSPromiseFunctionData *s = JS_VALUE_GET_OBJ(val)->u.promise_function_data;
+     if (s) {
+         js_promise_resolve_function_free_resolved(rt, s->presolved);
++        JS_FreeContext(s->realm);
+         JS_FreeValueRT(rt, s->promise);
+         js_free_rt(rt, s);
+     }
+@@ -53835,6 +53914,7 @@
+ {
+     JSPromiseFunctionData *s = JS_VALUE_GET_OBJ(val)->u.promise_function_data;
+     if (s) {
++        mark_func(rt, &s->realm->header);
+         JS_MarkValue(rt, s->promise, mark_func);
+     }
+ }
+@@ -53886,7 +53966,8 @@
+         args[0] = s->promise;
+         args[1] = resolution;
+         args[2] = then;
+-        JS_EnqueueJob(ctx, js_promise_resolve_thenable_job, 3, args);
++        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, then), NULL,
++                           js_promise_resolve_thenable_job, 3, args);
+         JS_FreeValue(ctx, then);
+     }
+     return JS_UNDEFINED;
+@@ -54498,7 +54579,8 @@
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, i);
+         args[4] = s->promise_result;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        JS_EnqueueJobOwned(ctx, js_job_function_realm(ctx, args[2]), NULL,
++                           promise_reaction_job, 5, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -61539,7 +61621,8 @@
+             args[0] = frd->cb;
+             args[1] = fre->held_val;
+             /* no exception is raised to avoid recursing into the GC */
+-            JS_EnqueueJob2(frd->realm, js_finrec_job, 2, args, TRUE);
++            JS_EnqueueJob2(frd->realm, js_job_function_realm(frd->realm, frd->cb),
++                           frd->realm, js_finrec_job, 2, args, TRUE);
+                 
+             js_weakref_free(rt, fre->target);
+             js_weakref_free(rt, fre->token);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -997,6 +997,19 @@
+ typedef JSValue JSJobFunc(JSContext *ctx, int argc, JSValueConst *argv);
+ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func, int argc, JSValueConst *argv);
+ 
++/* Eligibility is separate from the native execution context. NULL owners
++ * explicitly represent neutral work; activity adds an owning-host gate.
++ * Contexts must belong to the same runtime. Queue entries retain them. */
++typedef struct JSJobInfo {
++    JSContext *context, *owner, *activity;
++} JSJobInfo;
++int JS_EnqueueJobOwned(JSContext *ctx, JSContext *owner, JSContext *activity,
++                      JSJobFunc *job_func, int argc, JSValueConst *argv);
++/* Peek allocates nothing and borrows until a queue mutation. Discard
++ * releases the head's holds (including native finalizers), not its body. */
++JS_BOOL JS_PeekPendingJob(JSRuntime *rt, JSJobInfo *info);
++int JS_DiscardPendingJob(JSRuntime *rt);
++
+ JS_BOOL JS_IsJobPending(JSRuntime *rt);
+ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx);
+ 
