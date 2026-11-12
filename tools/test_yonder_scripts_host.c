@@ -4653,6 +4653,27 @@ static void loop_view_identity(void) {
         "identity: a stopped traversal leaves the change the page made, as its entry");
     loop_drop();
 }
+/* A history state of the size a site really keeps (a photo site's search
+ * page leaves about 125 KiB with its entry) is taken and read back whole,
+ * and the script that left it runs on; one past the limit is still refused
+ * by name, and the entry keeps the state it had. */
+static void history_state_size_case(void) {
+    loop_page("<p id=out>-</p><p id=big>-</p><script>"
+        "var list=[];for(var i=0;i<2500;i++)list.push({id:i,src:'https://images.fixture.test/photos/'+i+'/photo-'+i+'.jpeg'});"
+        "history.pushState({allMedia:list},'','/photo');"
+        "var kept=JSON.stringify(history.state);"
+        "document.getElementById('out').textContent=kept.length>130000&&history.state.allMedia.length===2500&&"
+        "history.state.allMedia[2499].id===2499?'kept':'lost '+kept.length;"
+        "var wide='x'.repeat(1100000);"
+        "try{history.replaceState({a:wide,b:wide},'','/photo');document.getElementById('big').textContent='taken';}"
+        "catch(e){document.getElementById('big').textContent=e.name+':'+history.state.allMedia.length;}"
+        "</script>");
+    check(loop_settle() && probe_text_is("out","kept"),
+        "history state: 130 KiB of a site's own data is kept and read back whole");
+    check(probe_text_is("big","QuotaExceededError:2500"),
+        "history state: one past two mebibytes is refused, and the entry keeps the state it had");
+    loop_drop();
+}
 static void unshown_back_case(const char *when, const char *script) {
     char body[512];
     loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
@@ -4700,6 +4721,7 @@ static void loop_view_unshown_back(void) {
     unshown_back_past();
     // One rule wherever the page is in its arrival: its navigation
     // committed when its response came, so Back from it is P.
+    history_state_size_case();
     unshown_back_case("during the parse","history.back()");
     unshown_back_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.back()})");
     unshown_back_case("at load","onload=function(){history.back()}");
