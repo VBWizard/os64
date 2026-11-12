@@ -1631,5 +1631,11 @@ IN: mask: url(a.svg) url(b.svg)
 OUT: invalid
 IN: mask: right 4px bottom url(a.svg)
 OUT: invalid
+IN: mask: url(a.svg) right 4px bottom no-repeat
+OUT: invalid
+IN: mask: linear-gradient(#0000, #0000) left left no-repeat
+OUT: invalid
+IN: background: url(a.png) left left no-repeat
+OUT: invalid
 IN: mask: inherit
 OUT: mask-image: inherit; mask-repeat: inherit; mask-position-x: inherit; mask-position-y: inherit; mask-size: inherit; mask-origin: inherit; mask-clip: inherit; mask-composite: inherit; mask-mode: inherit

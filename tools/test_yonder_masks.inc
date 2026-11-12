@@ -178,6 +178,20 @@ static void mask_paint_cases(void)
               "take\n"
               "end filter 0 #101010 128 cover 510\n"
               "ffff\n");
+    // A filtered mask is not cut before its filter (Codex #551 rd1): a
+    // child beyond the left edge is painted into the layer, so its blur
+    // reaches into the box, and the coverage cuts the result.
+    char *blurred = mask_paint("<!doctype html><style>body { margin: 0 } .m { position: relative;"
+                               " margin-left: 20px; width: 10px; height: 10px;"
+                               " filter: blur(2px); mask: linear-gradient(#000 0 0) }"
+                               " .m i { position: absolute; left: -4px; width: 4px; height: 10px;"
+                               " background: red }</style><div class=m><i></i></div>",
+                               200, (os64_gui_rect_t){0, 0, 200, 100});
+    expect("mask: a filtered mask keeps the filter's sources outside the box",
+           blurred != NULL && strstr(blurred, "fill 16 0 4 10 #ff0000\n") != NULL &&
+               strstr(blurred, "end filter 1 ") != NULL,
+           blurred);
+    free(blurred);
     // A layer cut to no box lets the group reach past its border box: the
     // shadow 1px all round is in the layer, and the mask's one layer
     // repeated covers it.

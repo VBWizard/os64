@@ -1220,8 +1220,21 @@ static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, gar
 // A position, x and y (Values 4 § 8.3): one keyword or length-percentage, two,
 // or two keywords each with an offset. `three` also takes Backgrounds 3's
 // three-part form, a keyword pair with one offset (`<bg-position>`), which
-// only a background's position may be written in.
+// only a background's position may be written in. Refused, it leaves the
+// cursor where it was, so a shorthand reads what follows as something else
+// and never takes part of a bad position as nothing.
+static bool position_read(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y);
+
 static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
+{
+    int32_t at = c->i;
+    if (position_read(s, c, three, x, y))
+        return true;
+    c->i = at;
+    return false;
+}
+
+static bool position_read(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 {
     // Up to four parts, each a keyword or a length-percentage.
     const char *word[4] = {NULL, NULL, NULL, NULL};

@@ -3345,12 +3345,14 @@ static os64_gui_rect_t filter_grown(const flow_box_t *box, os64_gui_rect_t r)
 // A group's bounds `r`, filtered, cut to what its mask leaves (Masking 1
 // § 7.5): nothing of a masked box shows outside its border box — the
 // largest of the boxes a layer is cut to — unless a layer cuts to no box.
-// The cut comes after the filter's spread, as the mask comes after the
-// filter, and before the matrix, in the coordinates the group is painted
-// in.
+// Before the matrix, in the coordinates the group is painted in. A
+// filtered group is not cut: the bounds are also what its layer holds, and
+// the filter reads what is outside the border box — a blur draws a child
+// beyond it into the box — before the mask cuts the result, which its
+// coverage, none outside, does.
 static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_point_t scroll)
 {
-    if (!f_masked(box->style))
+    if (!f_masked(box->style) || f_group_filter(box->style))
         return r;
     for (int32_t i = 0; i < flow_mask_layers(box->style); i++)
         if (flow_mask_layer(box->style, i).layer.clip == FLOW_EDGE_NO_CLIP)
