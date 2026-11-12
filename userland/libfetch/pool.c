@@ -357,6 +357,34 @@ fetch_pool_take_t fetch_pool_take(const fetch_pool_key_t *key, const fetch_pool_
             // handle, and the table's total is a promise about handles.
             size_t in_table = in_all - (slot != FETCH_POOL_TOTAL && slot != free_slot ? 1 : 0);
             bool admitted = in_table + s_closing < FETCH_POOL_TOTAL;
+            // Held back by sockets alone. An idle HTTP/1.1 connection closes
+            // within this call, so one goes first and may admit the fetch
+            // at once. An idle HTTP/2 one closes when its reader looks, so
+            // one goes for each fetch waiting on the table, this one among
+            // them: a burst of fetches then waits one look together rather
+            // than one behind another.
+            if (slot != FETCH_POOL_TOTAL && !admitted) {
+                size_t wanting = 1;
+                for (fetch_pool_wait_t *w = s_waiters; w != NULL; w = w->node.next)
+                    wanting += w->for_the_table;
+                while (!admitted) {
+                    size_t h1 = FETCH_POOL_TOTAL, h2 = FETCH_POOL_TOTAL;
+                    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
+                        fetch_conn_t *c = s_conns[i];
+                        if (c == NULL || !idle(c))
+                            continue;
+                        size_t *oldest = c->protocol == FETCH_PROTO_H1 ? &h1 : &h2;
+                        if (*oldest == FETCH_POOL_TOTAL || c->kept_at < s_conns[*oldest]->kept_at)
+                            *oldest = i;
+                    }
+                    size_t going = h1 != FETCH_POOL_TOTAL ? h1 : s_closing < wanting ? h2 : FETCH_POOL_TOTAL;
+                    if (going == FETCH_POOL_TOTAL)
+                        break;
+                    leave(&out, going);
+                    in_table--;
+                    admitted = in_table + s_closing < FETCH_POOL_TOTAL;
+                }
+            }
             if (slot != FETCH_POOL_TOTAL && admitted) {
                 os64_memset(spare, 0, sizeof(*spare));
                 spare->key = *key;

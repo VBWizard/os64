@@ -31,7 +31,7 @@
 #include "tls/tls.h"
 
 // HTTP2.md § 4 H2.4's table gives each number its reason.
-#define H2_READER_SLICE_MS   500u
+#define H2_READER_SLICE_MS   100u
 #define H2_WRITE_PATIENCE_MS 30000u
 #define H2_OUT_MARK          (256u * 1024u)
 #define H2_OUT_CONTROL_MOST  (1024u * 1024u)

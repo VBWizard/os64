@@ -35,6 +35,18 @@ IO = 'tools/test_fetch_transport_host.sh'
 # (name, file, old, new, harness). Each breaks one rule the brief states;
 # none supplies a replacement expectation.
 mutants = [
+    ('burst-condemns-one-at-a-time', POOL_C,
+     'h1 : s_closing < wanting ? h2 : FETCH_POOL_TOTAL;',
+     'h1 : s_closing < 1 ? h2 : FETCH_POOL_TOTAL;', H2),
+    ('burst-condemns-without-bound', POOL_C,
+     'h1 : s_closing < wanting ? h2 : FETCH_POOL_TOTAL;',
+     'h1 : true ? h2 : FETCH_POOL_TOTAL;', H2),
+    ('burst-waiters-not-counted', POOL_C,
+     '                    wanting += w->for_the_table;',
+     '                    wanting += 0;', H2),
+    ('burst-idle-h1-not-first', POOL_C,
+     'size_t going = h1 != FETCH_POOL_TOTAL ? h1 :',
+     'size_t going = false ? h1 :', H2),
     ('take-never-shares', POOL_C,
      '        if (shared != NULL) {\n            shared->refs++;',
      '        if (false && shared != NULL) {\n            shared->refs++;', H2),

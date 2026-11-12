@@ -192,7 +192,11 @@ typedef enum {
 //      connection's reader takes to look (H2_READER_SLICE_MS): with the
 //      table full, the least recently kept of any key is closed for the
 //      slot; with the key at its cap and holding a kept connection this
-//      fetch may not take (`fresh`, or kept too long for it), that one is;
+//      fetch may not take (`fresh`, or kept too long for it), that one is.
+//      A fetch still held back by closing sockets has an idle HTTP/1.1
+//      connection closed, which admits it at once, or with none an idle
+//      HTTP/2 one condemned, until as many are closing as fetches wait
+//      on the table;
 //   5. otherwise the fetch WAITS, on its bell, until a connection is given
 //      back, goes, finishes its dial or gains room, and asks again from
 //      the top.

@@ -1440,7 +1440,7 @@ deadline and its resumption plumbing written a second time.
 
 | Name | Value | Why |
 |---|---|---|
-| `H2_READER_SLICE_MS` | 500 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, and it costs two wakes a second for each h2 connection, 32 at the pool's sixteen. A second doubles the linger; a quarter doubles the wakes for a delay nobody sees. |
+| `H2_READER_SLICE_MS` | 100 | How long the reader sleeps in one read. It is the most a connection condemned from outside lingers, which a fetch needing that socket's place waits out, and it costs ten wakes a second for each h2 connection. It was 500 until the P5 measurement (H2.5, as built): a page of thirty hosts evicts on nearly every new host, and the linger was seen. |
 | `H2_WRITE_PATIENCE_MS` | 30000 | How long the socket may refuse the queue's head before the connection dies: `FETCH_IDLE_MS_DEFAULT`, since the bytes are every stream's and no one fetch's deadline is theirs. |
 | `H2_OUT_MARK` | 256 KiB | Past this much queued ciphertext, a sender with DATA or with a new stream to open parks. Sixteen full frames: enough that a fast socket never parks a sender, little enough that a stalled one is felt by the sender and not by memory. |
 | `H2_OUT_CONTROL_MOST` | 1 MiB | Past this much queued, the frames a PEER makes us owe (PING and SETTINGS acks, resets, credits) end the connection with ENHANCE_YOUR_CALM. A peer that floods pings at a socket it will not read is otherwise a way to grow the queue without bound. |
@@ -1981,8 +1981,11 @@ which is the thing to get right before any code:
      the slot at once let evictions pile up closing sockets past any
      bound). The price is that a fetch may wait, for at most a slice,
      on an h2 connection that was idle: § 2.2's "an idle connection
-     never makes a fetch wait" is exact for h1 and within half a second
-     for h2. The `dead` hook rings the waiters. The key's own cap does
+     never makes a fetch wait" is exact for h1 and within a slice
+     for h2. An idle h1 connection goes first, since it closes at once;
+     with none, one idle h2 connection is condemned for each fetch
+     waiting on the table, so a burst waits one slice together and not
+     one behind another. The `dead` hook rings the waiters. The key's own cap does
      not count the closing: they are leaving, and a server sees them
      go;
   5. otherwise wait, as today.
@@ -2759,12 +2762,33 @@ six requests sent over HTTP/2, no fetch waited.
 
 **Codex.** Three rounds. The first two each found one way a server's `HTTP_1_1_REQUIRED` went unheard (above); the third was clean, at `e8dd1d0f`.
 
-**Not done.** § 5's table on live pages. Connections and waits per page
-are the numbers that mean something, the off switch gives them on one
-build, and a QEMU timing would say nothing of the saving: it is the P5
-pass's to take, from the record's `wire` facts. And a Firefox Reload's
-place for `te` beside `Pragma` and `Cache-Control`, which was not
-captured: `te` follows them here.
+**The P5 measurement** (2026-11-12, Chris: nine sites, thirty-two page
+loads a round, three rounds before the switch and three after, the Chrome
+preset, the cache off, the records' `wire` facts summed a round).
+Connections made: 423, 417, 406 before; 230, 206, 227 after. The load
+events summed: 37.8, 35.4 and 38.9 seconds before; 35.3, 36.8 and 36.3
+after, which is inside the spread of either. The switch removes
+handshakes, and on these pages the time to load is parsing, script and
+layout.
+
+It also showed a cost this brief had priced wrongly. Fetches that waited
+for a connection: 52, 74 and 97 a round before, under 3.5 seconds summed;
+about 200 a round after, 91 to 101 seconds summed, nearly all on two
+sites whose pages speak to about thirty hosts. With sixteen places and
+every one an idle HTTP/2 connection, each new host evicted one and waited
+for its reader's look, half a second at the most, and a second fetch
+waited behind the first: the table condemned one connection at a time.
+Two changes, made after the measurement and before the merge. A fetch
+held back by closing sockets now has an idle HTTP/1.1 connection closed
+first, which admits it at once, and with none an idle HTTP/2 one is
+condemned for each fetch waiting on the table, so a burst waits one look
+together (`fetch_pool_take`). And `H2_READER_SLICE_MS` is 100, so that
+look is a tenth of a second at the most. Two cases hold the reader's
+closes back to prove each rule, and four mutants. The cure is the kernel
+verb DEBTS names; until it exists the reader's wakes are the price.
+
+**Not done.** A Firefox Reload's place for `te` beside `Pragma` and
+`Cache-Control`, which was not captured: `te` follows them here.
 
 ## 5. Proof, across the arc
 
