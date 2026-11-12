@@ -30,6 +30,20 @@ alone do not authorize freeing provider storage.
 | `canvas_text.c`: font layout | Canvas node's current document | From layout entry through retained-run inspection, outline use and run release, including refusal paths. Inactive font service refuses; pixel drawing without fonts remains available. |
 | `canvas.c`: damage visitor | Current document whose damage is visited | Entire native walk, including visitor calls and borrowed node/damage arguments. Stop after retirement; retained bitmap storage is not drained. |
 
+## Guarded synchronous services
+
+| Entry sites in `userland/libdom` | Activity owner | Loan extent and inactive behavior |
+|---|---|---|
+| `core.c`: alert | Dialog's window | After message conversion, through native notice. Inactive provider entry throws; an already delivered notice may finish unwinding. Constant confirm/prompt fallback results use no provider. |
+| `window.c`: parser write/open | Document's window | Native parser call after argument conversion. An inactive write answers the existing InvalidStateError path; no parser call occurs. |
+| `window.c`, `validity.c`: activation and validation reporting | Node's current document | Native notice and borrowed node. Inactive focus/blur/reset/report notices are omitted, including retirement in a preceding invalid event. Validation data remains usable. |
+| `window.c`: connected-script notices | Script's current document | Mark-started and native notice under the loan. Eligibility is checked for each script; a provider that marks retirement prevents later notices in the same tree change. Pure tree mutation remains available. |
+| `crypto.c`: entropy | Crypto service's window | Entropy call through scratch consumption and erasure. Refuse inactive service; if the provider marks retirement, erase scratch and leave the caller's buffer unchanged. Empty fills and cryptography that needs no entropy remain usable. |
+| `document.c`: focus | Queried document | Native call and returned-node validation. Departed window documents answer null activeElement and false hasFocus without querying the host. |
+| `classic.c`: user-agent text | Navigator's window | Provider call through string interpretation/copy. Inactive service refuses; constant Navigator members do not query the provider. |
+| `classic.c`: cookies | Document or Navigator window | Each get/set/enabled call. Setters check after conversion; reads recheck after a response, before retrying with a larger buffer. Inactive cookie service refuses. |
+| `classic.c`, `attr.c`: missing-global and broken-attribute diagnostics | Diagnostic binding | Native callback. Inactive diagnostics are omitted; retained functions and detached Attr records remain usable. |
+
 ## Entries still to integrate
 
 These are open implementation obligations. They must be handled before a
@@ -38,11 +52,8 @@ successful public finish can promise that opaque storage is no longer borrowed.
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
 | Host clocks and navigation timing | `timer.c`, `idle.c`, `animation.c`, `performance.c`, `event.c`, `message.c`, `xhr.c`, `storage.c`, `intersection.c`, `webanimation.c` | Guard native clock reads; distinguish inactive script requests from pure stored timestamps and scheduler no-work answers. |
-| Alert, parser write, activation and script connection | `core.c`, `window.c`, `validity.c` | Check service owner after conversions; guard each native call and stop repeated writes/delivery after retirement. |
-| Focus and zoom | `document.c`, `screen.c` | Resolve current document, apply inactive-document behavior, and borrow through returned-node consumption. |
-| Entropy | `crypto.c` | Guard entropy request after validating output; preserve pure cryptographic operations that use no provider. |
-| Broken/failed diagnostics, global miss, script/module/report hosts and console | `attr.c`, `report.c`, `classic.c`, libjs host installation | The global-miss bridge already gates activity; add loan accounting and detach report/loader/output routes without deleting siblings' state. |
-| User agent and cookies | `classic.c` | Borrow through copying returned text; guard retrying reads and setters. |
+| Zoom | `screen.c`, `view.c` media-query callers | Guard native zoom reads and stop queries/delivery after retirement. Stored screen metadata remains separate. |
+| Failed diagnostics, script/module/report hosts and console | `report.c`, libjs host installation | Detach report/loader/output routes without deleting siblings' state. Missing-global and broken-attribute loans are covered above. |
 | Storage identity/load/commit and walkers | `storage.c` | Guard normal service entry; settle owed changes once while provider remains valid. Cleanup must also work during root drain, which has set `closed`. |
 | History length/update/fragment | `window.c` | Guard after URL/state conversions and through host completion; retained serialized data is separate from navigation activity. |
 | Fetch/XHR transport | `fetch.c`, `xhr.c` | Guard start/more/run; keep synchronous response loans through release. Cancel by binding request token, unlink before cancellation reentry, and discard late answers without author abort events. Cleanup release/cancel must remain callable while departing. |

@@ -163,12 +163,14 @@ static int report(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     dom = d_owner(dom, node);
     uint32_t flags = 0;
     if (flags_of(dom, ctx, node, &flags) < 0) return -1;
-    if (dom->options.activate == NULL || !d_window_document(dom, node)) return 0;
+    if (!d_delivery_active(dom) || dom->options.activate == NULL || !d_window_document(dom, node)) return 0;
     int64_t status = os64_page_node_validation_message(d_owner(dom, node)->state, node, flags, dom->reported_message,
                                                        sizeof(dom->reported_message));
     if (status < 0) { d_page_error(ctx, status); return -1; }
+    if (!d_provider_enter(dom)) return 0;
     dom->reported = node;
     dom->options.activate(dom->options.host_opaque, node, OS64_DOM_ACTIVATE_REPORT);
+    d_provider_leave(dom);
     return 0;
 }
 

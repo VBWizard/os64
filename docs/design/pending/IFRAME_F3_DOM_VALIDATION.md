@@ -304,6 +304,48 @@ one-byte overflow refusal and preserved state. They use a fresh binding so
 the preceding large media-query fixtures do not exhaust native storage before
 the JSON boundary is reached. This changes tests, not the merged history limit.
 
+## Synchronous-service checkpoint
+
+Dialogs, parser write/open, activation/validation notices, script-connected
+notices, focus, entropy, user-agent text, cookies and two diagnostic hooks
+now participate in provider loan accounting. Entry checks follow argument
+conversion where conversions can run script. A cookie response that retires
+its document cannot start a larger retry; a script-connected callback that
+retires its document prevents later notices in that tree change. Focus reads
+on a departed window document return null/false without host calls.
+
+Entropy supplied during retirement is erased from scratch and does not change
+the caller's output. Empty fills and SHA-256 on retained Crypto objects still
+work. Constant Navigator values no longer query the user-agent provider;
+agent-derived values borrow the text through copying. Retained Attr records
+still detach safely when their native attribute disappears, without calling
+an inactive diagnostic hook.
+
+The new native-provider scenarios failed against the preceding implementation
+before these guards were built. The final fixture has 29 native-callback
+scenarios and five conversion/invalid-event scenarios, each under both teardown
+policies. The complete shipping-engine DOM suite passes **47,551 checks** and
+3,991 native binding allocation sweeps. The instrumented combined retirement
+suite passes **2,418 checks**. The affected focused suites also pass:
+
+| Coverage | Shipping | Instrumented |
+|---|---:|---:|
+| Cross-realm routing | 678 | 678 |
+| Core DOM | 332 | 332 |
+| Window, including crypto | 648 | 820 |
+| Document | 986 | 1,502 |
+| Attributes | 2,499 | 3,426 |
+
+ASan/UBSan/LSan remain enabled; the native target library builds. The final
+diagnostic extension is covered by the complete shipping run and instrumented
+retirement run; focused-suite totals above precede that fixture extension.
+Eleven additional isolated mutants are caught: late alert/write/activation,
+an unborrowed validation notice, continued script notifications, publication
+of entropy after retirement, late focus/cookie-set/broken-attribute/global-miss
+calls, and unborrowed user-agent text. The cumulative caught count is **85**.
+These are service-entry proofs, not a public departure/finish guarantee or
+full instrumented/guest acceptance.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

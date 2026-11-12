@@ -380,8 +380,11 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
         }
         d_string_free(dom, &initial);
     }
-    if (magic == 0 && dom->options.alert != NULL)
+    if (magic == 0 && dom->options.alert != NULL) {
+        if (!d_provider_begin(dom, ctx)) { d_string_free(dom, &message); return JS_EXCEPTION; }
         dom->options.alert(dom->options.alert_opaque, message.data != NULL ? message.data : "", message.length);
+        d_provider_leave(dom);
+    }
     d_string_free(dom, &message);
     return magic == 1 ? JS_FALSE : magic == 2 ? JS_NULL : JS_UNDEFINED;
 }

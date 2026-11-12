@@ -99,8 +99,10 @@ static bool windowless(os64_dom_t *dom, JSValueConst self)
 
 static int64_t host_write(os64_dom_t *dom, const char *utf8, size_t length)
 {
-    return dom->options.write != NULL ? dom->options.write(dom->options.host_opaque, utf8, length)
-                                      : OS64_HTML_BAD_ARGUMENT;
+    if (dom->options.write == NULL || !d_provider_enter(dom)) return OS64_HTML_BAD_ARGUMENT;
+    int64_t status = dom->options.write(dom->options.host_opaque, utf8, length);
+    d_provider_leave(dom);
+    return status;
 }
 
 static JSValue document_write(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, bool line)
@@ -484,8 +486,10 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
     dom = d_owner(dom, node);
-    if (dom->options.activate != NULL && d_window_document(dom, node))
+    if (dom->options.activate != NULL && d_window_document(dom, node) && d_provider_enter(dom)) {
         dom->options.activate(dom->options.host_opaque, node, what);
+        d_provider_leave(dom);
+    }
 }
 
 enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
@@ -1758,11 +1762,10 @@ size_t d_script_collect(const os64_html_node_t *node,
     return count;
 }
 
-/* HTML prepares a script element when it becomes connected: one that has
- * not started, of a kind that runs, is marked started and handed to the
- * host, which runs it or registers it (or records one it does not).
- * Connected to a document with no window, it is marked started all the
- * same and runs nowhere, then or after it is moved into the page (HTML's
+/* Connecting an unstarted executable script to an active window document
+ * marks it started and notifies the host, which runs or registers it.
+ * Connected to a document with no window, it is marked started and runs
+ * nowhere, then or after it is moved into the page (HTML's
  * "prepare the script element": scripting is disabled for it), unless the
  * binding has no memory left to mark it with. */
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count)
@@ -1770,8 +1773,13 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
     for (size_t i = 0; i < count; i++) {
         const os64_html_node_t *script = scripts[i];
         if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;
-        if (d_in_window_tree(dom, script)) {
-            if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
+        os64_dom_t *owner = d_owner(dom, script);
+        if (d_in_window_tree(owner, script)) {
+            if (owner->options.script_connected != NULL && d_provider_enter(owner)) {
+                if (d_script_mark(owner, script) == 1)
+                    owner->options.script_connected(owner->options.host_opaque, script);
+                d_provider_leave(owner);
+            }
         } else if (d_connected(script)) {
             (void)d_script_mark(dom, script);
         }
