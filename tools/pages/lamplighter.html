@@ -181,16 +181,23 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   function store(key, value) { try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) {} return null; }
 
   var at = 0, level, keeper, pos, lamps, rocks, fogs, lanes, moves, done, beam;
-  var boatClock = { advanced: false, last: -1 };
+  // Whether any boat's animation clock has moved since its last frame,
+  // each lane's against its own last sample (the self-check's Web
+  // Animations row).
+  var boatClock = { advanced: false };
 
   function build(n) {
     at = (n + LEVELS.length) % LEVELS.length;
     level = LEVELS[at];
+    // The outgoing level's boat animations end with it: an animation
+    // outlives its element in a browser, so a lane removed while its
+    // animation runs is kept, and visited, for the page's life.
+    if (lanes) lanes.forEach(function (lane) { if (lane.anim) lane.anim.cancel(); });
     // Everything but the banner and the self-check, which outlive a level.
     var check = $('check');
     Array.prototype.slice.call(arena.children).forEach(function (c) { if (c !== banner && c !== check) arena.removeChild(c); });
     banner.style.display = 'none';
-    moves = 0; done = false; boatClock.advanced = false; boatClock.last = -1;
+    moves = 0; done = false; boatClock.advanced = false;
     beam = document.createElement('div'); beam.id = 'beam';
     // Its pivot, the left middle, on the tower's centre: half its height
     // (20% of the harbour's) above it.
@@ -211,7 +218,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       if (lane.animate)
         anim = lane.animate([{ transform: 'translateX(0%)' }, { transform: 'translateX(' + (spec.dir * 100) + '%)' }],
                             { duration: spec.dur, iterations: Infinity });
-      return { spec: spec, anim: anim, born: performance.now() };
+      return { spec: spec, anim: anim, born: performance.now(), last: -1 };
     });
     fogs = level.fog.map(function (f) {
       var el = document.createElement('div'); el.className = 'fog';
@@ -295,8 +302,8 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   function frame(now) {
     lanes.forEach(function (lane) {
       if (lane.anim && lane.anim.currentTime != null) {
-        if (boatClock.last >= 0 && lane.anim.currentTime !== boatClock.last) boatClock.advanced = true;
-        boatClock.last = lane.anim.currentTime;
+        if (lane.last >= 0 && lane.anim.currentTime !== lane.last) boatClock.advanced = true;
+        lane.last = lane.anim.currentTime;
       }
       if (done || lane.spec.row !== pos[1]) return;
       var x0 = pos[0] / COLS + 0.15 / COLS, x1 = (pos[0] + 1) / COLS - 0.15 / COLS;
