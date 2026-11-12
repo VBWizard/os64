@@ -751,26 +751,26 @@ typedef struct {
     // than none makes a box a stacking context and the containing block of
     // its absolute and fixed descendants, as a transform does; a `filter`
     // makes it a group (flow_visit_groups), its bounds grown by what the
-    // filter spreads (flow_filter_reach). A plain inline's is neither drawn
-    // nor makes anything; an inline-block's makes a containing block and is
-    // not drawn, its content painted where its atom is — both booked as
-    // their opacity is (FILTER.md § 10).
+    // filter spreads (flow_filter_reach) — an inline-block's or an inline
+    // picture's too, its atom stacked whole. A plain inline's is neither
+    // drawn nor makes anything, as its opacity is painted opaque (FILTER.md
+    // § 10).
     const flow_filter_t *filter, *backdrop_filter;
     int32_t nfilter, nbackdrop_filter;
     // `mix-blend-mode` and `isolation: isolate` (MIX_BLEND.md): a mode
     // other than normal makes a box a stacking context and a group laid
     // onto what is under it by that mode; `isolate` makes a stacking
-    // context. Neither does anything on a plain inline; an inline-block's
-    // blend makes a stacking context and is not drawn, its content painted
-    // where its atom is — both as their opacity is. Neither inherited.
+    // context — an atom's (an inline-block, an inline picture) as a
+    // block's, the atom whole. Neither does anything on a plain inline, as
+    // its opacity does not. Neither inherited.
     flow_blend_t mix_blend;
     bool isolate;
     // The mask (Masking 1 § 7; MASKS.md): a list per property, as the
     // backgrounds' are, each at least one long. A layer with an image makes
     // a box a stacking context and a group whose bounds are cut to its
-    // border box unless a layer is cut to no box (flow_masked); a plain
-    // inline's does nothing, and an inline-block's is not drawn (it is no
-    // stacked box), as their opacity is painted opaque. Not inherited.
+    // border box unless a layer is cut to no box (flow_masked) — an
+    // atom's as a block's, the atom whole; a plain inline's does nothing,
+    // as its opacity is painted opaque. Not inherited.
     flow_masks_t masks;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
@@ -863,8 +863,9 @@ typedef struct {
     // In thousandths: 1000 is opaque, the initial value. 0 is not painted,
     // and neither is anything inside it. What is between makes a stacking
     // context that a face composites WHOLE at this opacity — one GROUP,
-    // not each thing in it (flow_visit_groups) — but for an inline box
-    // and an inline-block, which are painted opaque (PILE3.md § Booked).
+    // not each thing in it (flow_visit_groups); an atom (an inline-block,
+    // an inline picture) is one group, the atom whole. A plain inline box,
+    // pieces on lines, is painted opaque (PILE3.md § Booked).
     uint16_t opacity;
     // Transforms (PILE3.md § Transforms): the `transform` list, NULL and 0
     // for none, and the individual `translate`, `rotate` and `scale`, each
@@ -1584,9 +1585,8 @@ void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]
 // mirrored, meets `r` or anything already joined, until nothing more
 // joins: so the box is drawn again whole (FILTER.md § 7), its backdrop
 // blurring what lies that far outside any pixel that changed, a box drawn
-// again being a change too. `r` itself when none does. An inline-block's
-// backdrop is not stacked and not seen (DEBTS § Filters); the root's is
-// not drawn.
+// again being a change too. `r` itself when none does. The root's is not
+// drawn.
 os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r, flow_point_t scroll);
 // Whether an outer box shadow of `box` casts anything: its shape, the
 // border box grown by its spread, is not empty. One a negative spread
@@ -1711,8 +1711,7 @@ bool flow_background_has_image(const flow_style_t *s);
 int32_t flow_mask_layers(const flow_style_t *s);
 flow_mask_layer_t flow_mask_layer(const flow_style_t *s, int32_t i);
 // Whether a mask is granted: a layer has a picture or a gradient, and the
-// box is no plain inline (an inline-block's is granted and still not drawn:
-// flow_style_t.masks).
+// box is no plain inline.
 bool flow_masked(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is — in

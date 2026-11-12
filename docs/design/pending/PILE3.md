@@ -309,7 +309,7 @@ through the card AND through its green, the in-flow block over the card.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `opacity` on an inline box or an inline-block | an inline box is pieces on lines and an inline-block's content is painted where its atom is, so neither is one layer to group; both are painted opaque | a page whose faded link or badge matters |
+| `opacity` on a plain inline box | an inline box is pieces on lines, no one layer to group; it is painted opaque. (An inline-block's, and an inline picture's, is drawn since 2026-11-12: the atom on its line is stacked whole, `public_frag`.) | a page whose faded link matters |
 | Form widgets and a box's scroll bars in a group | libui widgets are windows' children drawn after the page, and the bars are drawn after it too; both stay opaque | a faded form, or a faded scrolling panel |
 | The root's own opacity over the canvas | the canvas is painted before the walk, so a translucent `html` fades the page over its own background, not over nothing | a page that fades `html` |
 | Groups past 32 deep, or a group whose copy finds no memory | painted opaque | a page that nests them that deep |

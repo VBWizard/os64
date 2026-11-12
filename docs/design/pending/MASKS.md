@@ -181,12 +181,10 @@ arc's slices have.
 - `url(#id)`, a mask from an SVG `<mask>` element (2 hosts): an SVG-side
   feature, taken by name and drawn as no mask until then.
 - `mask-border` and `-webkit-mask-box-image`.
-- A mask on a plain inline box, or on an inline-block: neither is a group
-  in libflow (an inline-block's content is painted where its atom is on
-  its line, and its opacity and filter are not drawn either; PILE3.md §
-  Booked), so its mask is not drawn — and the icon pattern laid out
-  inline-block draws its plain square of `currentColor`. An icon that is
-  a block, a flex item or a grid item (blockified) is drawn masked.
+- A mask on a plain inline box: pieces on lines, no one layer to group,
+  as its opacity is not (PILE3.md § Booked). An inline-block's is drawn
+  since the atom group (2026-11-12): the atom on its line is stacked
+  whole, so the icon pattern laid out inline-block is drawn masked.
 - The SVG geometry boxes `fill-box`, `stroke-box` and `view-box` in
   `mask-origin` and `mask-clip`, and `-webkit-mask-clip: text`: not read,
   so the declaration is dropped.

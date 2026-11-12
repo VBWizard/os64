@@ -12,10 +12,10 @@
 // is still the document's, but it is STACKED — reached from the layers
 // and never through its tree ancestors, whose walks skip it — and their
 // overflow rects leave it out, and its clip is what its containing blocks
-// allow. A block-level box in the flow below full opacity is stacked too
-// (PILE3.md § The blend), and keeps its parent's overflow, clip and frame;
-// so is a transformed one, block-level or an atom on a line, in a frame of
-// its own.
+// allow. A box in the flow below full opacity — block-level, or an atom on
+// a line, the atom whole — is stacked too (PILE3.md § The blend), and keeps
+// its parent's overflow, clip and frame, as one filtered, blended, masked
+// or isolated is; so is a transformed one, in a frame of its own.
 // A STICKY box is where the flow put it, and the door works out, at each
 // scroll, how far to draw it moved (flow_box_doc_offset). So is a SCROLL
 // CONTAINER's content, drawn moved back by the container's scroll position,
@@ -1599,11 +1599,19 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
         return;
     // A transformed atom — a replaced box or an inline-block — is a
     // stacking context, painted whole with its content, in a frame of its
-    // own.
-    if (fr->kind == FF_ATOMIC && f_transforms(fr->style)) {
+    // own; and one below full opacity, filtered, blended, masked or
+    // isolated is a stacking context painted whole, as a block-level box
+    // so styled is (public_box) — the group its effect is drawn through
+    // when it is one (flow_visit_groups).
+    const flow_style_t *s = fr->style;
+    bool moved = fr->kind == FF_ATOMIC && f_transforms(s);
+    if (moved || (fr->kind == FF_ATOMIC && (f_opacity_context(s) || f_filtered(s) ||
+                                             f_blended(s) || f_masked(s) || f_isolated(s)))) {
         b->stacked = true;
         if (!push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
             return;
+    }
+    if (moved) {
         b->frame = transform_new(bd, fr->style, fr->x, fr->y, fr->w, fr->h, b, clip);
         if (b->frame == NULL)
             return;
@@ -1671,7 +1679,9 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     // blended (f_blended), masked (f_masked) or isolated (f_isolated), a box its block-level
     // parent's walks would reach is a stacking context of its own, painted
     // whole; and so is one transformed. The root is the first context
-    // already, and an inline-block's content is painted where its atom is.
+    // already. An atom on a line is stacked as itself (public_frag), and the
+    // box inside it, its element's again, never a second time: its parent
+    // is the atom.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
                  ((f_opacity_context(src->style) || f_filtered(src->style) ||
                    f_blended(src->style) || f_masked(src->style) || f_isolated(src->style)) &&
@@ -1732,8 +1742,9 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             if (fr->kind == FF_PLACEHOLDER)
                 continue;
             public_frag(bd, fr, line, &pieces, in);
-            // A transformed atom reaches where it is drawn (reach_stacked).
-            if (pieces != NULL && !pieces->stacked)
+            // A transformed atom reaches where it is drawn (reach_stacked);
+            // any other, stacked or not, where its line is.
+            if (pieces != NULL && !(fr->kind == FF_ATOMIC && f_transforms(fr->style)))
                 line->overflow = join(line->overflow, pieces->overflow);
         }
         b->overflow = join(b->overflow, line->overflow);

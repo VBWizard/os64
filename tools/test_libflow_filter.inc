@@ -87,7 +87,8 @@ static void filter_group_cases(void)
     expect("filter: a plain inline's filter opens no group", g.opens == 0, g.log);
     g = filter_walk("<!doctype html><p><span style=\"display:inline-block;filter:blur(1px)\">t</span>",
                     400);
-    expect("filter: an inline-block's filter opens no group", g.opens == 0, g.log);
+    expect("filter: an inline-block's filter is a group, its atom whole",
+           g.opens == 1 && strcmp(g.log, "( t ) ") == 0, g.log);
 #undef FILTER_PAGE
 
     // Members a filter's blur reaches into the view from outside it are
@@ -290,6 +291,21 @@ static void filter_backdrop_damage_cases(void)
     expect("backdrop: a box's own shadow is joined with it", rect_is(shadowed, 90, 90, 120, 120), detail);
     flow_free(t3);
     sheeted_close(&sh);
+    // An inline-block's backdrop is a stacked atom's, and joined as a
+    // block's is: a 20 x 20 frosted atom at the start of a line, blur(2px)
+    // reaching 6, takes in a change 3 to its right.
+    Sheeted ib;
+    sheeted_open(&ib, "<!doctype html><style>body{margin:0}"
+                      "span{display:inline-block;width:20px;height:20px;backdrop-filter:blur(2px)}"
+                      "</style><span></span>",
+                 400, 600);
+    flow_tree_t *t4 = flow_layout(ib.doc, ib.page, 400, &ib.env);
+    os64_gui_rect_t frosted = flow_backdrop_damage(t4, (os64_gui_rect_t){23, 5, 1, 1}, top);
+    snprintf(detail, sizeof(detail), "%d %d %d %d", frosted.x, frosted.y, frosted.w, frosted.h);
+    expect("backdrop: an inline-block's is joined as a block's is",
+           frosted.x == 0 && frosted.w == 24 && frosted.h >= 20, detail);
+    flow_free(t4);
+    sheeted_close(&ib);
     // Scrolled, the fixed header is where the scroll puts it.
     os64_gui_rect_t scrolled = flow_backdrop_damage(t, (os64_gui_rect_t){10, 565, 20, 5}, (flow_point_t){0, 500});
     expect("backdrop: a fixed box's damage at the scroll", rect_is(scrolled, 0, 500, 400, 70), NULL);

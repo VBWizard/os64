@@ -118,8 +118,7 @@ static inline bool f_group_filter(const flow_style_t *s)
 
 // Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
 // a stacking context and a group laid by its mode; a plain inline's does
-// nothing, and an inline-block's is not drawn (it is no stacked box), as
-// their opacity is painted opaque.
+// nothing, as its opacity is painted opaque.
 static inline bool f_blended(const flow_style_t *s)
 {
     return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
@@ -128,8 +127,7 @@ static inline bool f_blended(const flow_style_t *s)
 // Whether a mask is granted (MASKS.md § 3): a layer has a picture or a
 // gradient — a mask of only `none` layers is no mask — on a box that is no
 // plain inline, whose mask does nothing, as its opacity is painted opaque.
-// A stacking context and a group; an inline-block's is neither, being no
-// stacked box (flow_style_t.masks).
+// A stacking context and a group.
 static inline bool f_masked(const flow_style_t *s)
 {
     if (s->display == FLOW_DISPLAY_INLINE)

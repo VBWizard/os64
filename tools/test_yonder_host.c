@@ -982,6 +982,38 @@ static void blend_paint_cases(void)
 
 #include "test_yonder_masks.inc"
 
+// An ATOM below full opacity — an inline-block, an inline picture — is a
+// group of its own, its atom whole: its frame and its content laid at its
+// opacity once, after the flow it sits in (CSS Color 4 § 3.2, painted as a
+// positioned box at z-index 0 is).
+static void atom_group_paint_cases(void)
+{
+    bool escaped = false;
+    static const char kBlock[] = "<!doctype html><style>body { margin: 0 }"
+        " span { display: inline-block; opacity: 0.5; width: 4px; height: 4px;"
+        " background: #00ff00 }</style>a<span></span>b";
+    char *got = paint_of(kBlock, strlen(kBlock), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("atom: an inline-block below full opacity is a group, after its line's text",
+           got != NULL && strcmp(got, "fill 0 0 200 100 #fefefe\n"
+                                      "text \"a\" 0 14 #101010\n"
+                                      "text \"b\" 12 14 #101010\n"
+                                      "group 8 10 4 4\n"
+                                      "fill 8 10 4 4 #00ff00\n"
+                                      "end group 128\n") == 0, got);
+    free(got);
+    static const char kPicture[] = "<!doctype html><style>body { margin: 0 }"
+        " img { opacity: 0.5 }</style>a<img src=a.png width=4 height=4>b";
+    got = paint_of(kPicture, strlen(kPicture), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("atom: an inline picture below full opacity is a group",
+           got != NULL && strcmp(got, "fill 0 0 200 100 #fefefe\n"
+                                      "text \"a\" 0 14 #101010\n"
+                                      "text \"b\" 12 14 #101010\n"
+                                      "group 8 10 4 4\n"
+                                      "image 8 10 4 4\n"
+                                      "end group 128\n") == 0, got);
+    free(got);
+}
+
 // A backdrop (FILTER.md § 7): asked before the box's own background, with
 // its border box cut to the view; a rounded box hands over its coverage
 // (-1 is none); a list with a reference asks nothing; a refusal is counted.
@@ -3220,6 +3252,7 @@ int main(int argc, char **argv)
         backdrop_paint_cases();
         blend_paint_cases();
         mask_paint_cases();
+        atom_group_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

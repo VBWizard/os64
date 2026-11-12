@@ -197,6 +197,13 @@ mutants = [
     ('a-filtered-mask-is-cut-before-its-filter', FLOWC,
      '    if (!f_masked(box->style) || f_group_filter(box->style))\n        return r;',
      '    if (!f_masked(box->style))\n        return r;', YON),
+    # The atom group: an atom on a line with an effect is stacked whole.
+    ('an-effect-stacks-no-atom', FLOWC,
+     '    if (moved || (fr->kind == FF_ATOMIC && (f_opacity_context(s) || f_filtered(s) ||',
+     '    if (moved || (false && fr->kind == FF_ATOMIC && (f_opacity_context(s) || f_filtered(s) ||', YON),
+    ('a-stacked-atom-leaves-its-line', FLOWC,
+     '            if (pieces != NULL && !(fr->kind == FF_ATOMIC && f_transforms(fr->style)))',
+     '            if (pieces != NULL && !pieces->stacked)', FLOW),
     ('a-mask-picture-is-never-sent-for', YONDER,
      '    return flow_background_layers(s) + flow_mask_layers(s);',
      '    return flow_background_layers(s) + 0 * flow_mask_layers(s);', SCRIPTS),
