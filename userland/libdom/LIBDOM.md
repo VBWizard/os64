@@ -1172,6 +1172,22 @@ image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
 the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`
 for a removal.
 
+Storage access refuses inactive document services with InvalidStateError,
+including retained Storage objects and areas that keep only a memory map.
+Borrowed methods use the receiver's document, so a method created in a retired
+realm can still serve an active area's receiver. Argument conversions and
+named-property visibility checks recheck retirement before service work.
+Identity/load/commit calls hold provider loans; load retries and ordinary
+settlement stop if a callback or clock retires the document. Owed writes remain
+available for native cleanup, including after retirement interrupts a failed
+load. Cleanup attempts each area's remaining commit once, including during
+closed root drain, then drops pending changes and detaches the providers.
+A failed final serialization cannot be retried after detachment. Reentrant
+settle/forget/provider replacement cannot disturb borrowed maps. The pure
+byte-format walk/merge utilities have no binding or document lifetime; a walk
+inside a commit remains covered by that commit's provider loan. Public
+departure finish and its complete safe-point barrier remain F.3b work.
+
 **`performance`** (`performance.c`): `now()` and `timeOrigin`, coarsened to
 100 µs, on the host's microsecond clock (`options.now_us`) against the
 navigation's origin (`options.timing`, read as the binding is made); User

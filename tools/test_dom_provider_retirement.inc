@@ -3,6 +3,7 @@
 bool d_provider_enter(os64_dom_t *dom);
 void d_provider_leave(os64_dom_t *dom);
 bool d_provider_busy(const os64_dom_t *dom);
+void d_storage_drain(os64_dom_t *dom);
 
 enum {
     RP_GEOMETRY, RP_HIT, RP_RECTS, RP_SVG, RP_VIEW, RP_SCROLL, RP_COMPUTED,
@@ -15,6 +16,8 @@ enum {
     RP_CLOCK_IDLE_NATIVE, RP_CLOCK_RAF_NATIVE, RP_CLOCK_WA, RP_CLOCK_NOW_MS, RP_CLOCK_WA_NATIVE,
     RP_HISTORY_LENGTH, RP_HISTORY_PUSH, RP_HISTORY_REPLACE, RP_HISTORY_FRAGMENT,
     RP_HISTORY_FRAGMENT_REFUSE, RP_HISTORY_UPDATE_REFUSE,
+    RP_STORAGE_IDENTITY, RP_STORAGE_LOAD, RP_STORAGE_GROW, RP_STORAGE_FAILED,
+    RP_STORAGE_COMMIT, RP_STORAGE_CLOCK, RP_STORAGE_COMMIT_CLOCK, RP_STORAGE_PRESSURE,
     RP_UPDATE, RP_RELEASE, RP_MS, RP_US, RP_ZOOM, RP_COUNT
 };
 typedef struct {
@@ -23,6 +26,8 @@ typedef struct {
     os64_js_realm_t *realm;
     unsigned kind, calls[RP_COUNT];
     bool armed;
+    unsigned storage_commits;
+    bool storage_reentry, storage_expect_owed;
 } RetirementProvider;
 
 static void retirement_provider_touch(RetirementProvider *p, unsigned kind)
@@ -220,8 +225,12 @@ static uint64_t retirement_now_ms(void *opaque)
     if (p->binding) {
         unsigned kind = (p->kind >= RP_CLOCK_TIMER && p->kind <= RP_CLOCK_PORT) ||
             p->kind == RP_CLOCK_EVENT || p->kind == RP_CLOCK_IDLE_NATIVE ||
-            p->kind == RP_CLOCK_WA || p->kind == RP_CLOCK_NOW_MS ? p->kind : RP_MS;
+            p->kind == RP_CLOCK_WA || p->kind == RP_CLOCK_NOW_MS ||
+            p->kind == RP_STORAGE_CLOCK || p->kind == RP_STORAGE_COMMIT_CLOCK ? p->kind : RP_MS;
+        bool postpone = kind == RP_STORAGE_COMMIT_CLOCK && p->calls[kind] == 0 && p->armed;
+        if (postpone) p->armed = false;
         retirement_provider_touch(p, kind);
+        if (postpone) p->armed = true;
     }
     return 1005;
 }
@@ -281,6 +290,48 @@ static void retirement_no_navigation(RetirementProvider *p, const char *label)
     if (ask.node) os64_html_release(p->base.document, ask.node);
     if (ask.submitter) os64_html_release(p->base.document, ask.submitter);
 }
+static uint64_t retirement_storage_identity(void *opaque, const char *origin)
+{
+    (void)origin;
+    retirement_provider_touch(opaque, RP_STORAGE_IDENTITY);
+    return 1;
+}
+static int64_t retirement_storage_load(void *opaque, const char *origin, void *out, size_t cap)
+{
+    (void)origin;
+    RetirementProvider *p = opaque;
+    unsigned kind = p->kind == RP_STORAGE_GROW || p->kind == RP_STORAGE_FAILED ? p->kind : RP_STORAGE_LOAD;
+    bool armed = p->armed;
+    retirement_provider_touch(p, kind);
+    if (armed && kind == RP_STORAGE_GROW) return (int64_t)cap + 1;
+    if (armed && kind == RP_STORAGE_FAILED) return -1;
+    static const char image[] = "os64 storage 1\n+4 4\nseedkept\n";
+    if (cap >= sizeof(image)-1) memcpy(out, image, sizeof(image)-1);
+    return sizeof(image)-1;
+}
+static os64_dom_storage_status_t retirement_storage_commit(void *opaque, const char *origin,
+                                                           const void *changes, size_t length)
+{
+    (void)origin;
+    RetirementProvider *p = opaque;
+    p->storage_commits++;
+    /* Bound the regression fixture even when reentrant settle is broken. */
+    if (!p->storage_reentry) {
+        p->storage_reentry = true;
+        os64_dom_storage_settle(p->binding);
+        os64_dom_storage_forget(p->binding);
+        d_storage_drain(p->binding);
+        os64_dom_set_storage(p->binding, OS64_DOM_STORAGE_LOCAL, NULL);
+        p->storage_reentry = false;
+    }
+    retirement_provider_touch(p, p->kind == RP_STORAGE_PRESSURE ? p->kind : RP_STORAGE_COMMIT);
+    check(os64_dom_storage_walk(changes, length, NULL, NULL),
+          "provider retirement: commit bytes survive native reentry");
+    if (p->storage_expect_owed)
+        check(bytes_find(changes, length, "owedbefore", 10) != NULL,
+              "provider retirement: commit preserves owed changes during reentry");
+    return OS64_DOM_STORAGE_OK;
+}
 static void provider_native_retirement_cases(void)
 {
     const char *operations[] = {
@@ -302,7 +353,10 @@ static void provider_native_retirement_cases(void)
         NULL, NULL, "B.document.timeline.currentTime", "B.performance.now()", NULL,
         "B.history.length", "B.history.pushState({next:2},'', '#push')",
         "B.history.replaceState({next:2},'', '#replace')", "B.location.hash='fragment'",
-        "B.location.replace('#refused')", "B.history.pushState({next:2},'', '#refused')"
+        "B.location.replace('#refused')", "B.history.pushState({next:2},'', '#refused')",
+        "B.store.getItem('seed')", "B.store.getItem('seed')", "B.store.getItem('seed')",
+        "B.store.getItem('seed')", NULL, NULL, NULL,
+        "B.store.setItem(B.bigKey+'c','1')"
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (unsigned kind = 0; kind < sizeof(operations) / sizeof(operations[0]); kind++) {
@@ -361,6 +415,10 @@ static void provider_native_retirement_cases(void)
                 os64_dom_history_t history = {retirement_history_update, retirement_history_fragment,
                                              retirement_history_length, &p[i]};
                 os64_dom_set_history(dom, &history);
+                os64_dom_storage_t storage = {retirement_storage_identity, retirement_storage_load,
+                                             retirement_storage_commit, &p[i]};
+                os64_dom_set_storage(dom, OS64_DOM_STORAGE_LOCAL, &storage);
+                os64_dom_set_storage(dom, OS64_DOM_STORAGE_SESSION, &storage);
                 check(os64_dom_history_moved(dom, "https://providers.example/", "{\"kept\":1}", 10),
                       "provider retirement: initial history snapshot installed");
                 realm_script(realms[i], STORAGE_ASSERT
@@ -385,6 +443,10 @@ static void provider_native_retirement_cases(void)
                     "globalThis.savedEvent=new Event('saved');globalThis.savedStamp=savedEvent.timeStamp;"
                     "globalThis.savedTiming=performance.timing.loadEventEnd;"
                     "globalThis.savedState=history.state;"
+                    "globalThis.store=localStorage;globalThis.session=sessionStorage;"
+                    "globalThis.storeRead=Storage.prototype.getItem;globalThis.storeKey=Storage.prototype.key;"
+                    "globalThis.storeClear=Storage.prototype.clear;"
+                    "globalThis.storeLength=Object.getOwnPropertyDescriptor(Storage.prototype,'length').get;"
                     "globalThis.link=document.createElement('a');link.href='/pending';document.body.appendChild(link);"
                     "globalThis.form=document.createElement('form');document.body.appendChild(form);"
                     "globalThis.media=matchMedia('(resolution: 1.25dppx)');",
@@ -419,6 +481,21 @@ static void provider_native_retirement_cases(void)
                 realm_script(realms[1], "box.animate([{opacity:0},{opacity:1}],1000);",
                              "provider retirement: animation update prepared");
             realm_script(realms[1], "link.click();", "provider retirement: navigation pending before mark");
+            if (kind >= RP_STORAGE_IDENTITY && kind <= RP_STORAGE_COMMIT_CLOCK) {
+                p[1].storage_expect_owed = true;
+                realm_script(realms[1], "store.setItem('owed','before');session.setItem('owed','before');",
+                             "provider retirement: two storage areas owe changes");
+                if (kind <= RP_STORAGE_FAILED) {
+                    os64_dom_storage_t storage = {retirement_storage_identity, retirement_storage_load,
+                                                 retirement_storage_commit, &p[1]};
+                    os64_dom_set_storage(p[1].binding, OS64_DOM_STORAGE_LOCAL, &storage);
+                }
+            }
+            if (kind == RP_STORAGE_PRESSURE)
+                realm_script(realms[1],
+                    "globalThis.bigKey='k'.repeat(1300000);"
+                    "for(let end of ['a','b']){store.setItem(bigKey+end,'1');store.removeItem(bigKey+end)}",
+                    "provider retirement: removed keys fill storage change list near quota");
             uint64_t entry = os64_dom_history_entry(p[1].binding);
             memset(p[1].calls, 0, sizeof(p[1].calls)); p[1].armed = true;
             if (kind == RP_BROKEN)
@@ -451,6 +528,12 @@ static void provider_native_retirement_cases(void)
                 if (kind == RP_HISTORY_FRAGMENT || kind == RP_HISTORY_FRAGMENT_REFUSE)
                     realm_script(realms[0], "assert(operationThrew&&operationError==='InvalidStateError');",
                                  "provider retirement: fragment retirement prevents commit and fallback");
+                if (kind >= RP_STORAGE_IDENTITY && kind <= RP_STORAGE_FAILED)
+                    realm_script(realms[0], "assert(operationThrew&&operationError==='InvalidStateError');",
+                                 "provider retirement: storage read stops after native mark");
+                if (kind == RP_STORAGE_PRESSURE)
+                    realm_script(realms[0], "assert(operationThrew&&operationError==='InvalidStateError');",
+                                 "provider retirement: pressure commit retirement refuses new write");
             } else if (kind == RP_IMAGE_EVENT) {
                 check(!os64_dom_image_event(p[1].binding, NULL, NULL, false),
                       "provider retirement: native image task stops after acquisition retirement");
@@ -467,6 +550,10 @@ static void provider_native_retirement_cases(void)
             } else if (kind == RP_CLOCK_WA_NATIVE) {
                 check(!os64_dom_web_animations_update(p[1].binding, 2000, &out),
                       "provider retirement: native animation clock stops update");
+            } else if (kind == RP_STORAGE_COMMIT || kind == RP_STORAGE_CLOCK || kind == RP_STORAGE_COMMIT_CLOCK) {
+                os64_dom_storage_settle(p[1].binding);
+                check(p[1].storage_commits == (kind == RP_STORAGE_COMMIT ? 1u : 0u),
+                      "provider retirement: ordinary storage settlement stops at retirement");
             } else {
                 os64_dom_canvas_visit_damage(p[1].binding, retirement_damage, &p[1]);
             }
@@ -474,7 +561,8 @@ static void provider_native_retirement_cases(void)
             snprintf(completion, sizeof(completion),
                      "provider retirement: one provider call marks child and no second pass follows (kind %u, calls %u)",
                      kind, p[1].calls[kind]);
-            check(os64_js_realm_is_retired(realms[1]) && p[1].calls[kind] == 1, completion);
+            check(os64_js_realm_is_retired(realms[1]) &&
+                  p[1].calls[kind] == (kind == RP_STORAGE_COMMIT_CLOCK ? 2u : 1u), completion);
             check(!d_provider_busy(p[0].binding) && !d_provider_busy(p[1].binding),
                   "provider retirement: loans balance after success or refusal");
             retirement_no_navigation(&p[1], "provider retirement: pending navigation discarded after mark");
@@ -506,6 +594,21 @@ static void provider_native_retirement_cases(void)
                 realm_script(realms[0], "assert(!operationThrew&&context.getImageData(0,0,1,1).data[0]===255);",
                              "provider retirement: borrowed pixels remain usable until release");
             unsigned calls[RP_COUNT]; memcpy(calls, p[1].calls, sizeof(calls));
+            realm_script(realms[0],
+                "assert(refused(()=>B.localStorage));assert(refused(()=>B.sessionStorage));"
+                "assert(refused(()=>B.storeRead.call(B.store,'seed')));"
+                "assert(refused(()=>B.storeKey.call(B.store,0)));assert(refused(()=>B.storeLength.call(B.store)));"
+                "assert(refused(()=>B.storeClear.call(B.store)));assert(refused(()=>{B.store.x='late'}));"
+                "assert(refused(()=>{delete B.store.seed}));assert(refused(()=>Object.keys(B.store)));"
+                "assert(refused(()=>Storage.prototype.getItem.call(B.store,'seed')));"
+                "assert(B.storeRead.call(localStorage,'seed')==='kept');"
+                "assert(B.storeKey.call(localStorage,0)==='seed'&&B.storeLength.call(localStorage)===1);"
+                "B.storeClear.call(localStorage);assert(localStorage.length===0);",
+                "provider retirement: storage receiver owns service despite borrowed method realm");
+            check(os64_dom_storage_due(p[1].binding) == UINT64_MAX,
+                  "provider retirement: departed storage has no ordinary due work");
+            os64_dom_storage_settle(p[1].binding);
+            os64_dom_storage_forget(p[1].binding);
             realm_script(realms[0],
                 "let security=f=>{try{f();return false}catch(e){return e.name==='SecurityError'}};"
                 "assert(security(()=>B.history.length));assert(security(()=>B.history.state));"
@@ -576,6 +679,15 @@ static void provider_native_retirement_cases(void)
             realm_script(realms[0], "document.body.appendChild(B.box);assert(B.box.getBoundingClientRect().width===100);",
                          "provider retirement: adopted retained node uses active destination provider");
             check(!d_provider_busy(p[0].binding), "provider retirement: sibling remains quiescent after adoption query");
+            /* The native cleanup entry is exercised directly until public
+             * departure finish supplies its broader safe-point barriers. */
+            d_storage_drain(p[1].binding);
+            unsigned commits = kind >= RP_STORAGE_IDENTITY && kind <= RP_STORAGE_COMMIT_CLOCK ? 2 :
+                kind == RP_STORAGE_PRESSURE ? 1 : 0;
+            check(p[1].storage_commits == commits && !d_provider_busy(p[0].binding),
+                  "provider retirement: cleanup settles both owed areas exactly once");
+            d_storage_drain(p[1].binding);
+            check(p[1].storage_commits == commits, "provider retirement: repeated storage cleanup is inert");
         }
         os64_dom_cluster_drain(cluster); os64_js_destroy(runtime); os64_dom_cluster_free(cluster);
         check(live == 0 && dom_live == 0 && !dom_allocations, "provider retirement: native and engine holds released");
@@ -584,22 +696,30 @@ static void provider_native_retirement_cases(void)
 
 static void provider_conversion_retirement_cases(void)
 {
-    static const struct { const char *source, *error; } operations[] = {
-        {"alert({toString(){retire();return 'late'}})", "InvalidStateError"},
-        {"document.write('first',{toString(){retire();return 'late'}})", "InvalidStateError"},
-        {"document.writeln({toString(){retire();return 'late'}},'last')", "InvalidStateError"},
-        {"document.cookie={toString(){retire();return 'late'}}", "InvalidStateError"},
-        {"input.reportValidity()", ""},
-        {"history.pushState({}, {toString(){retire();return ''}}, '#title')", "SecurityError"},
-        {"history.replaceState({}, '', {toString(){retire();return '#url'}})", "SecurityError"},
-        {"history.pushState({get x(){retire();return 1}}, '', '#state')", "SecurityError"},
-        {"history.go({valueOf(){retire();return -1}})", "SecurityError"},
-        {"history.scrollRestoration={toString(){retire();return 'manual'}}", "SecurityError"},
-        {"location.assign({toString(){retire();return '/late'}})", "InvalidStateError"},
-        {"location.replace({toString(){retire();return '#late'}})", "InvalidStateError"},
-        {"location.hash={toString(){retire();return ''}}", "InvalidStateError"},
-        {"form.requestSubmit()", ""},
-        {"link.click()", ""}
+    static const struct { const char *source, *error; bool memory_storage; } operations[] = {
+        {"alert({toString(){retire();return 'late'}})", "InvalidStateError", false},
+        {"document.write('first',{toString(){retire();return 'late'}})", "InvalidStateError", false},
+        {"document.writeln({toString(){retire();return 'late'}},'last')", "InvalidStateError", false},
+        {"document.cookie={toString(){retire();return 'late'}}", "InvalidStateError", false},
+        {"input.reportValidity()", "", false},
+        {"history.pushState({}, {toString(){retire();return ''}}, '#title')", "SecurityError", false},
+        {"history.replaceState({}, '', {toString(){retire();return '#url'}})", "SecurityError", false},
+        {"history.pushState({get x(){retire();return 1}}, '', '#state')", "SecurityError", false},
+        {"history.go({valueOf(){retire();return -1}})", "SecurityError", false},
+        {"history.scrollRestoration={toString(){retire();return 'manual'}}", "SecurityError", false},
+        {"location.assign({toString(){retire();return '/late'}})", "InvalidStateError", false},
+        {"location.replace({toString(){retire();return '#late'}})", "InvalidStateError", false},
+        {"location.hash={toString(){retire();return ''}}", "InvalidStateError", false},
+        {"form.requestSubmit()", "", false},
+        {"link.click()", "", false},
+        {"Storage.prototype.getItem.call(store,{toString(){retire();return 'seed'}})", "InvalidStateError", false},
+        {"Storage.prototype.setItem.call(store,'key',{toString(){retire();return 'late'}})", "InvalidStateError", false},
+        {"Storage.prototype.removeItem.call(store,{toString(){retire();return 'seed'}})", "InvalidStateError", false},
+        {"Storage.prototype.key.call(store,{valueOf(){retire();return 0}})", "InvalidStateError", false},
+        {"store.key={toString(){retire();return 'late'}}", "InvalidStateError", false},
+        {"Object.defineProperty(store,'key',{value:{toString(){retire();return 'late'}}})", "InvalidStateError", false},
+        {"Object.setPrototypeOf(store,new Proxy({}, {has(){visibilityCalls++;retire();return false}}));Object.keys(store)",
+         "InvalidStateError", true}
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (size_t i = 0; i < sizeof(operations) / sizeof(operations[0]); ++i) {
@@ -623,6 +743,11 @@ static void provider_conversion_retirement_cases(void)
             os64_dom_history_t history = {retirement_history_update, retirement_history_fragment,
                                          retirement_history_length, &p};
             os64_dom_set_history(f.binding, &history);
+            if (!operations[i].memory_storage) {
+                os64_dom_storage_t storage = {retirement_storage_identity, retirement_storage_load,
+                                             retirement_storage_commit, &p};
+                os64_dom_set_storage(f.binding, OS64_DOM_STORAGE_LOCAL, &storage);
+            }
             check(os64_js_realm_task_begin(p.realm, OS64_JS_ABI_ID, "provider conversion", &out) == OS64_JS_OK,
                   "provider conversion: setup task begins");
             JSContext *ctx = os64_js_realm_context(p.realm, OS64_JS_ABI_ID, &out);
@@ -632,14 +757,17 @@ static void provider_conversion_retirement_cases(void)
             JS_FreeValue(ctx, global);
             check(os64_js_task_end(f.runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
                   "provider conversion: setup task ends");
-            char source[1800];
+            char source[2400];
             snprintf(source, sizeof(source), STORAGE_ASSERT
                 "globalThis.input=document.createElement('input');input.required=true;document.body.appendChild(input);"
                 "input.addEventListener('invalid',retire);"
                 "globalThis.form=document.createElement('form');document.body.appendChild(form);"
                 "globalThis.link=document.createElement('a');link.href='/late';document.body.appendChild(link);"
                 "form.addEventListener('submit',retire);link.addEventListener('click',retire);"
-                "let error='';try{%s}catch(e){error=e.name}assert(error==='%s');",
+                "globalThis.store=localStorage;globalThis.visibilityCalls=0;%s"
+                "let error='';try{%s}catch(e){error=e.name}assert(error==='%s');"
+                "assert(visibilityCalls<=1);",
+                operations[i].memory_storage ? "store.setItem('a','1');store.setItem('b','2');" : "",
                 operations[i].source, operations[i].error);
             realm_script(p.realm, source, "provider conversion: retirement before host service");
             check(os64_js_realm_is_retired(p.realm), "provider conversion: conversion or event marked realm");
@@ -653,8 +781,54 @@ static void provider_conversion_retirement_cases(void)
     }
 }
 
+static void storage_cleanup_retirement_cases(void)
+{
+    for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
+    for (int mode = 0; mode < 5; ++mode) {
+        os64_js_config_t config = fixture_config();
+        DomFixture f = fixture_configured(0, 0, &config);
+        os64_js_destroy(f.runtime); f.runtime = NULL;
+        os64_js_outcome_t out;
+        check(os64_js_create_with_teardown(&config, policy, OS64_JS_ABI_ID, &f.runtime, &out) == OS64_JS_OK,
+              "storage cleanup: runtime created");
+        os64_js_realm_t *realm = os64_js_primary_realm(f.runtime, OS64_JS_ABI_ID, &out);
+        os64_dom_options_t options = p2b_options("https://cleanup.example/");
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &out);
+        FakeStore store = {0};
+        os64_dom_storage_t provider = {fake_identity, fake_load, fake_commit, &store};
+        check(f.binding != NULL, "storage cleanup: binding created");
+        if (f.binding) {
+            os64_dom_set_storage(f.binding, OS64_DOM_STORAGE_LOCAL, &provider);
+            realm_script(realm, "localStorage.setItem('owed','before');", "storage cleanup: owed write prepared");
+            if (mode == 1) store.forced = OS64_DOM_STORAGE_FULL;
+            if (mode == 2) store.forced = OS64_DOM_STORAGE_FAILED;
+            if (mode == 4) os64_dom_drain(f.binding);
+            else {
+                check(os64_js_realm_retire(realm, OS64_JS_ABI_ID, &out) == OS64_JS_OK,
+                      "storage cleanup: mark before native cleanup");
+                if (mode == 3) dom_fail_at = dom_attempts + 1;
+                d_storage_drain(f.binding);
+                if (mode == 3) check(dom_attempts >= dom_fail_at, "storage cleanup: serialization allocation cut reached");
+                dom_fail_at = 0;
+            }
+            unsigned expected = mode == 3 ? 0 : 1;
+            check(store.commits == expected && !d_provider_busy(f.binding),
+                  "storage cleanup: one final attempt balances provider loans");
+            d_storage_drain(f.binding);
+            os64_dom_storage_settle(f.binding);
+            os64_dom_set_storage(f.binding, OS64_DOM_STORAGE_LOCAL, &provider);
+            d_storage_drain(f.binding);
+            check(store.commits == expected && os64_dom_storage_due(f.binding) == UINT64_MAX,
+                  "storage cleanup: completed or failed final attempt cannot be retried or reattached");
+        }
+        fixture_free(&f);
+        fake_store_free(&store);
+    }
+}
+
 static void dom_provider_retirement_cases(void)
 {
     provider_native_retirement_cases();
     provider_conversion_retirement_cases();
+    storage_cleanup_retirement_cases();
 }

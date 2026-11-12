@@ -440,6 +440,51 @@ retirement; and inactive history-state/restoration access. The cumulative
 caught count is **109**. Full instrumented, guest and current pinned-WPT
 acceptance remain outstanding.
 
+## Storage service and final-settlement checkpoint
+
+Storage identity/load/commit calls hold provider loans. Normal access refuses
+inactive areas, including cached and memory-only maps; conversions, proxy
+visibility checks, load retries and quota-driven commits recheck retirement.
+Borrowed Storage methods use their receiver's binding rather than the method's
+creation binding. A retained method from a retired realm can serve an active
+receiver, while borrowing an active method cannot revive a retired receiver.
+
+Ordinary settlement stops on retirement, including from either its scheduling
+clock or the commit's clock. Reentrant settlement, forget, provider replacement
+and drain cannot disturb borrowed maps. Retirement during a failed load does
+not discard owed writes. The quiescent native cleanup entry attempts each
+owed area's final commit once, even during closed root drain, then drops
+pending changes and detaches the provider. A failed final serialization does
+not leave a retry after detachment. Maps and exported objects are retained;
+the public departure finish/barrier is still outstanding. Byte-format walk
+and merge utilities are independent of document bindings; a provider's use
+of them remains inside that provider's loan.
+
+The fixture covers 64 native callback scenarios and 22 conversion/event
+scenarios under both teardown policies, plus five final-cleanup cases under
+each policy (success, full store, failed store, serialization allocation
+failure and closed root drain). Pressure tests fill the change-list quota
+with removed keys and retire during the early commit. The final fixture
+reports **358 failures** against the preceding storage implementation.
+
+| Coverage | Result |
+|---|---:|
+| Complete shipping-engine DOM suite | 54,791 checks; 3,991 native allocation sweeps |
+| Provider retirement, shipping and instrumented | 9,224 checks each |
+| Instrumented modern web suite, including storage and allocation sweeps | 20,236 checks |
+| Instrumented storage quota | 10 checks |
+| Instrumented cross-realm routing | 678 checks |
+
+All pass with ASan/UBSan/LSan enabled. The native DOM library builds. Thirteen
+isolated mutants are caught: unborrowed identity/load/commit calls; interpreting
+a failed load after retirement; committing after clock retirement; using the
+method creator instead of its receiver; inactive map/getter access; accepting
+a new write after a retiring pressure commit; continuing names after a proxy
+visibility mark; omitting the retired final commit; and reentrant forget/drain.
+One mutation-runner anchor needed disambiguation before its remaining cases
+ran. The cumulative caught count is **122**. Full instrumented, guest and
+current pinned-WPT acceptance remain outstanding.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

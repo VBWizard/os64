@@ -169,11 +169,16 @@ bool d_require_active(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
+void d_provider_hold(os64_dom_t *dom)
+{
+    dom->provider_borrows++;
+    if (dom->cluster) dom->cluster->provider_borrows++;
+}
+
 bool d_provider_enter(os64_dom_t *dom)
 {
     if (!d_delivery_active(dom)) return false;
-    dom->provider_borrows++;
-    if (dom->cluster) dom->cluster->provider_borrows++;
+    d_provider_hold(dom);
     return true;
 }
 

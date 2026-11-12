@@ -450,7 +450,7 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained (the page departing: os64_dom_drain); sooner when the
+ * binding is drained (os64_dom_drain); sooner when the
  * changes not yet handed over would pass the quota or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
@@ -480,7 +480,10 @@ typedef enum {
  * again with room when it did not fit, a few times; a store still
  * outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
- * os64_dom_storage_merge's format), merged onto the store as it stands. */
+ * os64_dom_storage_merge's format), merged onto the store as it stands.
+ * Calls hold provider loans. A callback may mark retirement, but must keep
+ * opaque storage valid through the call; normal reads/settlement then stop.
+ * Final native cleanup can still commit changes owed before retirement. */
 typedef struct {
     uint64_t (*identity)(void *opaque, const char *origin);
     int64_t (*load)(void *opaque, const char *origin, void *out, size_t cap);
@@ -489,23 +492,28 @@ typedef struct {
     void *opaque;
 } os64_dom_storage_t;
 /* Copied; NULL removes the area's provider. Install before the first
- * script: an area already touched keeps what it has and reads the store
- * at its next touch. */
+ * script or outside callbacks: an area already touched keeps what it has
+ * and reads the store at its next touch. Changes while the cluster has a
+ * provider loan are ignored; inactive documents accept removal only. */
 void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area,
                           const os64_dom_storage_t *storage);
 /* Between tasks: the task that just ran is over, so the next touch asks the
  * provider again, and an area with changes commits them when they are due:
  * at once when the area has not committed for OS64_DOM_STORAGE_COMMIT_MS
  * of the host's now_ms (or ever), else that long after its last commit.
- * os64_dom_drain commits what is left, due or not. A host that never
- * settles asks the provider once per area and commits at drain. */
+ * Inactive documents and calls during provider loans do no work.
+ * os64_dom_drain makes a final attempt for what is left, due or not, and
+ * detaches storage providers. Serialization failure at that final attempt
+ * drops the owed changes; ordinary allocation failure waits for a retry.
+ * A host that never settles asks once per area and commits at drain. */
 void os64_dom_storage_settle(os64_dom_t *dom);
 /* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
- * to commit. */
+ * to commit or the document is inactive. */
 uint64_t os64_dom_storage_due(const os64_dom_t *dom);
 /* Forgets both areas' maps and their changes not yet committed, so their
  * next touch reads the store as it is: "Clear page storage" while a page
- * is open. Owner thread, outside callbacks. */
+ * is open. Owner thread, outside callbacks; ignored for inactive documents
+ * or while the cluster has a provider loan. */
 void os64_dom_storage_forget(os64_dom_t *dom);
 
 /* THE STORE'S BYTES, libdom's format and the host's to move: an image is a

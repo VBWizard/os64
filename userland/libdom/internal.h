@@ -809,6 +809,9 @@ bool d_require_active(os64_dom_t *dom, JSContext *ctx);
  * Coverage is inventoried in IFRAME_F3_PROVIDERS.md. */
 bool d_provider_enter(os64_dom_t *dom);
 bool d_provider_begin(os64_dom_t *dom, JSContext *ctx);
+/* Native cleanup may borrow an inactive provider after checking its own
+ * safe-point barriers. This does not admit new page activity. */
+void d_provider_hold(os64_dom_t *dom);
 void d_provider_leave(os64_dom_t *dom);
 bool d_provider_busy(const os64_dom_t *dom);
 /* Read-only host queries borrow mutable provider state. Inactive documents
