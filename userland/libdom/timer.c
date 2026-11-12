@@ -100,7 +100,8 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
     if (delay < 0) delay = 0;
     if (!d_require_active(dom, ctx)) { d_free(dom, source.data); return JS_EXCEPTION; }
-    uint32_t script = function ? d_callback_script(dom, ctx, handler) : D_SCRIPT_PAGE;
+    os64_dom_t *report_owner = dom;
+    uint32_t script = function ? d_callback_record(dom, ctx, handler, &report_owner) : D_SCRIPT_PAGE;
     if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
         d_free(dom, source.data);
@@ -112,6 +113,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
     }
     timer->callback = JS_UNDEFINED;
+    timer->report_owner = report_owner;
     if (function) {
         int extra = argc > 2 ? argc - 2 : 0;
         if (extra != 0) {
@@ -156,6 +158,7 @@ uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t
         return 0;
     }
     timer->callback = callback;
+    timer->report_owner = dom;
     timer->binding = true;
     dom->timers_held += held_values(timer);
     timer->id = ++dom->timer_id;
@@ -254,6 +257,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         timer->argc = 0;
         timer->source = NULL;
     }
+    os64_dom_t *report_owner = timer->report_owner;
     uint32_t nesting = timer->nesting, script = timer->script, id = timer->id;
     bool interval = timer->interval, binding = timer->binding;
     if (!timer->interval) d_free(dom, timer);
@@ -268,8 +272,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         os64_js_outcome_t call;
         if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
             /* What the callback throws is its script's (report.c). */
-            DScripts before = d_script_enter(dom, script);
-            os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+            DScripts before = d_script_enter(report_owner, script);
+            os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
             if (call.status == OS64_JS_REALM_RETIRED) {
                 /* The callback cannot become eligible again. In particular,
                  * do not leave its interval waking the live document. */
@@ -277,11 +281,11 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
                 if (discarded) timer_free(dom, discarded);
                 os64_memset(&call, 0, sizeof(call));
             }
-            d_script_leave(dom, &before, true);
+            d_script_leave(report_owner, &before, true);
             fold(outcome, &call);
             /* Its exception is reported before the checkpoint after it,
              * as a listener's is (event.c's invoke_target). */
-            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);
+            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(report_owner, outcome);
             /* What the callback left owed (report.c) runs in its task. */
             d_task_finish(dom, outcome);
         }

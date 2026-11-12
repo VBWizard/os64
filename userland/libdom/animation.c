@@ -8,6 +8,7 @@
 struct DAnimation {
     DAnimation *next;
     JSValue callback;
+    os64_dom_t *report_owner;
     uint32_t handle, script;
 };
 
@@ -48,13 +49,14 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     if(argc<1||!JS_IsFunction(ctx,argv[0]))
         return JS_ThrowTypeError(ctx,"requestAnimationFrame needs a function");
     if(!d_require_active(dom,ctx))return JS_EXCEPTION;
-    uint32_t script=d_callback_script(dom,ctx,argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script=d_callback_record(dom,ctx,argv[0],&report_owner);
     if(script==D_SCRIPT_FAILED)return JS_EXCEPTION;
     if(dom->animation_count>=FRAME_CALLBACKS_MAX||dom->animation_handle==UINT32_MAX)
         return d_error(ctx,"QuotaExceededError","Too many animation callbacks");
     DAnimation *entry=d_alloc(dom,sizeof(*entry));
     if(!entry)return d_error(ctx,"QuotaExceededError","DOM animation callback quota exceeded");
-    *entry=(DAnimation){.callback=JS_DupValue(ctx,argv[0]),.handle=++dom->animation_handle,.script=script};
+    *entry=(DAnimation){.callback=JS_DupValue(ctx,argv[0]),.handle=++dom->animation_handle,.script=script,.report_owner=report_owner};
     uint64_t now=dom->animations?0:d_host_now_ms(dom);
     if(!d_require_active(dom,ctx)) {
         JS_FreeValue(ctx,entry->callback);d_free(dom,entry);return JS_EXCEPTION;
@@ -94,16 +96,17 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
             DAnimation *entry=dom->animations;
             JSValue callback=JS_DupValueRT(dom->engine,entry->callback);
             uint32_t script=entry->script;
+            os64_dom_t *report_owner=entry->report_owner;
             remove_entry(dom,&dom->animations,NULL);
             JSValue arg=JS_NewFloat64(ctx,timestamp);
             os64_js_outcome_t call;
-            DScripts before=d_script_enter(dom,script);
-            os64_js_realm_call(dom->realm,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
+            DScripts before=d_script_enter(report_owner,script);
+            os64_js_realm_call(report_owner->realm,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
             if(call.status==OS64_JS_REALM_RETIRED)os64_memset(&call,0,sizeof(call));
-            d_script_leave(dom,&before,true);
+            d_script_leave(report_owner,&before,true);
             JS_FreeValueRT(dom->engine,callback);
             d_outcome_fold(out,&call);
-            if(call.status==OS64_JS_EXCEPTION)d_errors_fire(dom,out);
+            if(call.status==OS64_JS_EXCEPTION)d_errors_fire(report_owner,out);
             d_task_settle(dom,out);
             if(out->status!=OS64_JS_OK&&out->status!=OS64_JS_EXCEPTION&&
                out->status!=OS64_JS_UNHANDLED_REJECTION)break;

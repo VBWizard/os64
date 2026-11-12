@@ -619,9 +619,56 @@ missed the wrong-table lookup; the unequal-ID case closes that gap. A redundant
 error-event gate mutation was not caught and is not counted. The cumulative
 caught count is **159**.
 
-Scheduled callbacks and observer error-attribution still require a callable
-realm/script-table pass; their activity gates alone do not establish correct
-report ownership. Public finish and host-route detachment remain open.
+Scheduled callback and observer error attribution is covered by the following
+checkpoint. Public finish and host-route detachment remain open.
+
+## Scheduled callback reporting checkpoint
+
+Timers, rAF, both idle delivery paths, queueMicrotask and mutation/performance/
+resize/intersection observers now retain the callable's reporting binding and
+script ID independently of the scheduling document. Runtime calls select that
+binding's report host. Microtasks execute their native reporting wrapper in
+the same binding while retaining separate function and activity eligibility.
+Changing the realm's current script does not change a recorded callback's
+error muting. Already revoked proxies remain enqueueable and fail when invoked;
+revocation after registration retains the captured report owner.
+
+Shared task settlement visits cluster members' error and rejection queues;
+close consumes their diagnostic debt. If a directly run script retired its
+service owner, an active member can drive its remaining sibling reports.
+Native records still belong to their creation/service owner, and activity
+gates remain separate from report routing. Public header comments now describe
+the shared close boundary. The older retirement fixture takes its revoked-
+observer report before opening an unrelated native task, rather than expecting
+that report to survive a shared task close.
+
+The final `--callback-reports` fixture passes **1,118 instrumented checks**.
+It covers nine callback families with and without retirement of their service
+owner, nested microtask errors and promise rejections, plus proxies revoked
+before/after registration, under both teardown policies. Its initial nine-
+family version fails **36 checks** on the preceding implementation; the final
+fixture finds **46 failures** against that same checkpoint.
+Instrumented report retirement (**616**), combined delivery/provider retirement
+(**9,770**), report/allocation regression (**4,523**), realm routing (**678**),
+performance (**3,169**), resize (**1,309**), intersection (**409**) and animation
+(**106**) pass with ASan/UBSan/LSan enabled.
+
+Fourteen mutants are caught: each of the nine callback-family report routes,
+wrong registration script table, single-binding settle/close, refusing a
+retired original driver, and premature revoked-proxy registration failure.
+The first microtask mutation survived while the callback's script was also
+the realm's current script; switching to a later foreign script exposes the
+incorrect metadata write. The cumulative caught count is **173**.
+
+An initial full run exposed an idle capacity test tied to the old record size.
+The cached report-owner pointer increases each idle record; the regression now
+checks that nine further cancelled batches reuse the first batch's capacity,
+while preserving the separate quota-refusal test.
+The final full shipping-engine suite passes **58,694 checks**, including
+**3,991 native binding allocation sweeps**. Instrumented P2b/idle and its
+allocation sweeps pass **13,325 checks** with leak detection enabled. The
+target DOM library builds. These results do not replace final guest/WPT
+acceptance or the outstanding departure-finish proofs.
 
 ## Remaining F.3b work
 

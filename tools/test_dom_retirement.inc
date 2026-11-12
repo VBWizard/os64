@@ -312,6 +312,12 @@ static void dom_retirement_cases(void)
             realm_script(retirement_realms[0],
                 "assert(moLog.join()==='A,C','observer delivery: '+moLog);",
                 "retirement queues: observers gate activity and bound/proxy callback realms");
+            /* Consume the script's report before opening an unrelated native
+             * task: shared task close now settles each participating realm. */
+            os64_js_outcome_t reported;
+            check(os64_dom_take_report(bindings[0], &reported) && reported.status == OS64_JS_EXCEPTION &&
+                  strstr(reported.message, "revoked") != NULL,
+                  "retirement queues: revoked observer lookup retains its ordinary report");
             realm_script(retirement_realms[0],
                 "assert(ceLog.join()==='A,C,adopted','custom delivery: '+ceLog);",
                 "retirement queues: shared backup preserves sibling reactions");
@@ -344,10 +350,6 @@ static void dom_retirement_cases(void)
                 "getters++;B.document.adoptNode(hostSwap);return C.liveEvent}});"
                 "hostSwap.addEventListener('life',()=>eventLog.push('host-inactive-tail'));",
                 "retirement events: host dispatch preserves live object handler and function");
-            os64_js_outcome_t reported;
-            check(os64_dom_take_report(bindings[0], &reported) && reported.status == OS64_JS_EXCEPTION &&
-                  strstr(reported.message, "revoked") != NULL,
-                  "retirement queues: revoked observer lookup retains its ordinary report");
             check(os64_dom_dispatch(bindings[0], native_id(retirement_documents[0]->document, "host-swap"),
                   &event, &prevented, &out) == OS64_JS_OK && !prevented,
                   "retirement events: host getter may adopt target into inactive document");

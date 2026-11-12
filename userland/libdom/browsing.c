@@ -171,7 +171,8 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
-        uint32_t script = d_callback_script(dom, ctx, argv[0]);
+        os64_dom_t *report_owner;
+        uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
         JSContext *owner = JS_GetFunctionRealm(ctx, argv[0]);
         if (!owner) {
@@ -184,9 +185,12 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         }
         os64_js_outcome_t access;
         JSContext *activity = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
-        if (!activity) return JS_EXCEPTION;
+        JSContext *report_context = os64_js_realm_context(report_owner->realm, OS64_JS_ABI_ID, &access);
+        if (!activity || !report_context) return JS_EXCEPTION;
         JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, script)};
-        return JS_EnqueueJobOwned(ctx, owner, activity, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        /* The job writes thrown_script through its execution binding. Keep
+         * that binding with the callable's report host, not the service owner. */
+        return JS_EnqueueJobOwned(report_context, owner, activity, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:

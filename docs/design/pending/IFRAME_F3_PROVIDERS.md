@@ -91,15 +91,18 @@ remain ordinary DOM objects. Import-map type support remains a pure query.
 | `report.c`: failed diagnostics | Reporting document | Each native notice holds a provider loan through its borrowed strings. Task close detaches report bookkeeping into a local snapshot before reentry. Retirement suppresses subsequent notices, including the overflow summary. Native reentry cannot settle or drain borrowed report state. |
 | `report.c`: error/rejection delivery | Reporting document | Inactive hooks and `reportError` do not create new report debt. Queued error/handled-rejection delivery checks activity; obsolete values are released without author events. |
 | `custom.c`: callback, constructor and upgrade failures | Callable's realm | Error events and script muting use the callable binding's script table, independently of the retained definition registry and the element's current activity document. |
+| `timer.c`, `animation.c`, `idle.c`, `browsing.c`, mutation/performance/resize/intersection observers: callback failures | Callable's realm, separately from the activity owner | Registration caches the reporting owner and script identity. Delivery and microtask execution use that report binding; a later script or retirement of the scheduling document cannot redirect its error. An already revoked proxy retains the registration fallback and fails at invocation. |
 | `libjs/runtime/runtime.c`: module resolver/source | Module's realm | The engine active-call barrier retains the loader table and source loan. Retirement during a callback prevents further linking or source compilation; an owned resolved name is freed. Loader/script-host replacement is BUSY during the callback and can detach after unwinding. |
 | `libjs/runtime/runtime.c`: console output | Console's realm | Existing eligibility checks precede output and are repeated after conversions and between writes. Output uses a borrowed handle under the engine barrier, rather than a DOM callback table. |
 
 These guards do not yet implement public finish or host-route detachment.
 The engine barrier and DOM provider counters protect different entry paths;
 finish must observe both before releasing loader, diagnostic or output state.
-The callback-owner helper is shared with events. Timer, microtask, idle, rAF
-and observer error-attribution paths still need the corresponding callable
-realm/script-table audit; their delivery eligibility is covered separately.
+The callback-owner helper is shared with events. Task settlement visits the
+cluster's report queues under the enclosing budget, and close consumes the
+members' diagnostic debt. If a directly run script retired its service owner,
+an active sibling can drive the owed reports without changing their owners.
+Hosts must settle a directly run script before starting another native task.
 
 ## Entries still to integrate
 
@@ -108,7 +111,7 @@ successful public finish can promise that opaque storage is no longer borrowed.
 
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
-| Script/module/report hosts and console detachment | `report.c`, libjs host installation | Integrate guarded routes into safe-point finish without deleting siblings' state. Complete scheduled/observer callback error attribution. |
+| Script/module/report hosts and console detachment | `report.c`, libjs host installation | Integrate guarded routes into safe-point finish without deleting siblings' state. |
 | CSS animation hosts and effect borrowers | `webanimation.c` | Guard count/at/version/drive; stop timeline scheduling while retaining effect identity and tree generations until acknowledgements. Do not reuse destructive animation drain. |
 
 Provider replacement contracts and departure cleanup must agree: clearing a

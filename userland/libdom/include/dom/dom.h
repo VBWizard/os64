@@ -1223,9 +1223,11 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken, here or by os64_dom_script_ended, which
- * always takes it: the outcome when that is OK, else a line told to
- * options.failed. False when there is none. */
+ * first one is kept until taken here or consumed when a DOM task closes,
+ * including os64_dom_script_ended: the outcome when that is OK, else a line
+ * told to this binding's options.failed. A cluster task closes reports from
+ * its members; settle a directly run script before opening another task.
+ * False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* A script the host is about to run with os64_js_run is compiled under the
  * name this writes to `out` (`os64-script:<n>`, the binding's), never its
@@ -1284,7 +1286,10 @@ const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t 
  * an UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
  * those past the outcome's first failure are told to options.failed. No
  * engine entry when nothing is owed. False for a missing argument or a
- * drained binding. */
+ * drained binding, or reentry from a borrowed provider. In a cluster, report
+ * settlement visits its members under one budget, using an active member
+ * as the driver if the original service owner retired. Error events and
+ * diagnostic providers retain their own binding identities. */
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type

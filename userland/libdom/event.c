@@ -1320,9 +1320,9 @@ static void discard(JSContext *ctx)
     JS_FreeValue(ctx, error);
 }
 
-/* What the task left owed is settled inside it (d_task_settle), so its
- * events run under its deadline; as it closes, the binding's own report
- * and the rejections it only counted are told (d_task_close). */
+/* What the shared task left owed is settled inside it (d_task_settle), so
+ * report events run under its deadline. Close consumes member report debt
+ * and tells counted rejections through each binding's host (d_task_close). */
 os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     d_task_settle(dom, outcome);

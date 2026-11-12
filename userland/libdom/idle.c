@@ -47,6 +47,7 @@
  * each callback is one of the registry's values. */
 
 struct DIdle {
+    os64_dom_t *report_owner;
     JSValue callback;          /* JS_UNDEFINED: run or cancelled, a hole */
     uint32_t handle, timer, script;
 };
@@ -195,6 +196,7 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
     ptrdiff_t index = entry_find(dom, handle);
     if (index < 0 || JS_IsUndefined(dom->idle[index].callback)) return JS_UNDEFINED;
     uint32_t script = dom->idle[index].script;
+    os64_dom_t *report_owner = dom->idle[index].report_owner;
     /* Its timer is the one firing, which has already left the table. */
     dom->idle[index].timer = 0;
     JSValue callback;
@@ -202,16 +204,22 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
     int eligible = d_delivery_eligible(dom, ctx, callback);
     if (eligible <= 0) {
         JS_FreeValue(ctx, callback);
-        return eligible < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        if (eligible < 0) {
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
+            JSValue error = JS_GetException(ctx);
+            d_report_as(report_owner, ctx, error, script);
+            JS_FreeValue(ctx, error);
+        }
+        return JS_UNDEFINED;
     }
     JSValue deadline = deadline_new(ctx, 0, true);
     if (JS_IsException(deadline)) {
         JS_FreeValue(ctx, callback);
         return JS_EXCEPTION;
     }
-    DScripts before = d_script_enter(dom, script);
+    DScripts before = d_script_enter(report_owner, script);
     JSValue result = JS_Call(ctx, callback, dom->window->value, 1, (JSValueConst *)&deadline);
-    d_script_leave(dom, &before, false);
+    d_script_leave(report_owner, &before, false);
     JS_FreeValue(ctx, deadline);
     JS_FreeValue(ctx, callback);
     if (!JS_IsException(result)) {
@@ -220,7 +228,7 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
     if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
     JSValue error = JS_GetException(ctx);
-    d_report_as(dom, ctx, error, script);
+    d_report_as(report_owner, ctx, error, script);
     JS_FreeValue(ctx, error);
     return JS_UNDEFINED;
 }
@@ -262,7 +270,8 @@ static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     }
     if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
     if (dom->idle_handle == UINT32_MAX) return d_error(ctx, "QuotaExceededError", "Too many idle callbacks");
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     if (script == D_SCRIPT_FAILED || !entry_room(dom, ctx)) return JS_EXCEPTION;
     uint32_t handle = dom->idle_handle + 1, timer = 0;
     if (timeout > 0) {
@@ -274,7 +283,7 @@ static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     }
     dom->idle_handle = handle;
     dom->idle[dom->idle_count++] =
-        (DIdle){JS_DupValue(ctx, argv[0]), handle, timer, script};
+        (DIdle){report_owner, JS_DupValue(ctx, argv[0]), handle, timer, script};
     dom->idle_live++;
     /* One a period's callback asks for waits for the next period, 50 ms
      * after this one began; any other lets the next begin at once. */
@@ -336,6 +345,7 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
     while (JS_IsUndefined(dom->idle[dom->idle_head].callback)) dom->idle_head++;
     size_t index = dom->idle_head++;
     uint32_t handle = dom->idle[index].handle, script = dom->idle[index].script;
+    os64_dom_t *report_owner = dom->idle[index].report_owner;
     JSValue callback;
     entry_take(dom, index, &callback);
     char name[OS64_JS_SOURCE_NAME_CAP];
@@ -348,14 +358,14 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
         if (!JS_IsException(deadline)) {
             /* What the callback throws is its script's (report.c). */
             dom->idle_running = true;
-            DScripts before = d_script_enter(dom, script);
-            os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, dom->window->value, 1, &deadline, NULL, &call);
+            DScripts before = d_script_enter(report_owner, script);
+            os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, callback, dom->window->value, 1, &deadline, NULL, &call);
             if (call.status == OS64_JS_REALM_RETIRED) os64_memset(&call, 0, sizeof(call));
-            d_script_leave(dom, &before, true);
+            d_script_leave(report_owner, &before, true);
             dom->idle_running = false;
             JS_FreeValue(ctx, deadline);
             d_outcome_fold(outcome, &call);
-            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);
+            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(report_owner, outcome);
         }
         d_task_finish(dom, outcome);
     }

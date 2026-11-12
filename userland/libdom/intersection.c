@@ -57,6 +57,7 @@ typedef struct DIObserver {
     bool held, dead;
     JSValue callback, thresholds_array;
     uint32_t script;
+    os64_dom_t *report_owner;
     /* The root as given: NULL for none, else an element or a document,
      * held. */
     const os64_html_node_t *root;
@@ -640,7 +641,7 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                     hold_update(dom, ctx, o);
                     if (eligible < 0 && d_exception_catchable(ctx)) {
                         JSValue error = JS_GetException(ctx);
-                        d_report_as(dom, ctx, error, o->script);
+                        d_report_as(o->report_owner, ctx, error, o->script);
                         JS_FreeValue(ctx, error);
                     }
                     o = next;
@@ -660,11 +661,11 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                     }
                 } else {
                     JSValue args[2] = {records, self};
-                    DScripts before = d_script_enter(dom, o->script);
-                    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
-                    d_script_leave(dom, &before, true);
+                    DScripts before = d_script_enter(o->report_owner, o->script);
+                    os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                    d_script_leave(o->report_owner, &before, true);
                     d_outcome_fold(out, &call);
-                    if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
+                    if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                     d_task_settle(dom, out);
                 }
                 JS_FreeValue(ctx, records);
@@ -1032,7 +1033,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DIObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_INTERSECTION) : NULL;
     JSValue frozen = o != NULL ? frozen_numbers(ctx, thresholds.values, thresholds.count) : JS_EXCEPTION;
     JSValue object = !JS_IsException(frozen) ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class)
@@ -1050,6 +1052,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->callback = JS_DupValue(ctx, argv[0]);
     o->thresholds_array = frozen;
     o->script = script;
+    o->report_owner = report_owner;
     o->root = root;
     if (root != NULL) os64_html_hold(dom->document, root);
     for (int i = 0; i < 4; i++) {

@@ -42,6 +42,7 @@ typedef struct DRObserver {
     JSValue object, callback;
     bool held, dead;
     uint32_t script;
+    os64_dom_t *report_owner;
     DRTarget *targets, *targets_last;
     size_t ntargets;
 } DRObserver;
@@ -369,7 +370,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 }
                 if (eligible < 0 && d_exception_catchable(ctx)) {
                     JSValue error = JS_GetException(ctx);
-                    d_report_as(dom, ctx, error, o->script);
+                    d_report_as(o->report_owner, ctx, error, o->script);
                     JS_FreeValue(ctx, error);
                 }
                 o = next;
@@ -409,11 +410,11 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
             } else {
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
-                DScripts before = d_script_enter(dom, o->script);
-                os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
-                d_script_leave(dom, &before, true);
+                DScripts before = d_script_enter(o->report_owner, o->script);
+                os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                d_script_leave(o->report_owner, &before, true);
                 d_outcome_fold(out, &call);
-                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
+                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                 d_task_settle(dom, out);
             }
             JS_FreeValue(ctx, entries);
@@ -533,7 +534,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_RESIZE) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
@@ -547,6 +549,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->object = object;
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
+    o->report_owner = report_owner;
     o->prev = s->observers_last;
     if (s->observers_last != NULL) s->observers_last->next = o;
     else s->observers = o;

@@ -413,6 +413,7 @@ typedef struct {
     JSValue anchor, callback;
     JSValue *entries;
     uint32_t count, cap, script;
+    os64_dom_t *report_owner;
     uint8_t mode, kinds;
     bool dropped_owed;
 } DObserver;
@@ -545,7 +546,7 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
             o->entries = NULL;
             o->count = o->cap = 0;
             o->dropped_owed = false;
-            if (eligible < 0 && !report_pending(dom, ctx, o->script)) result = JS_EXCEPTION;
+            if (eligible < 0 && !report_pending(o->report_owner, ctx, o->script)) result = JS_EXCEPTION;
             continue;
         }
         /* This browser drops no entry (marks and measures are kept without
@@ -565,16 +566,17 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
         }
         o->dropped_owed = false;
         uint32_t script = o->script;
+        os64_dom_t *report_owner = o->report_owner;
         JSValue callback = JS_DupValue(ctx, o->callback);
         JSValueConst args[3] = {list, notify[i], options};
-        DScripts before = d_script_enter(dom, script);
+        DScripts before = d_script_enter(report_owner, script);
         JSValue called = JS_Call(ctx, callback, notify[i], 3, args);
-        d_script_leave(dom, &before, false);
+        d_script_leave(report_owner, &before, false);
         JS_FreeValue(ctx, callback);
         JS_FreeValue(ctx, list);
         JS_FreeValue(ctx, options);
         if (!JS_IsException(called)) JS_FreeValue(ctx, called);
-        else if (!report_pending(dom, ctx, script)) result = JS_EXCEPTION;
+        else if (!report_pending(report_owner, ctx, script)) result = JS_EXCEPTION;
     }
     for (uint32_t i = 0; i < count; i++) JS_FreeValue(ctx, notify[i]);
     d_free(dom, notify);
@@ -1272,7 +1274,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "A PerformanceObserver needs a callback function");
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     JSClassID id = os64_js_class_id(&observer_slot);
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
@@ -1287,6 +1290,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->anchor = JS_DupValue(ctx, dom->anchor->value);
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
+    o->report_owner = report_owner;
     JS_SetOpaque(object, o);
     return object;
 }

@@ -82,7 +82,7 @@ static void failed_notice(os64_dom_t *dom, const char *task, const char *message
     d_provider_leave(dom);
 }
 
-void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
+static void task_close_one(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
 {
     /* Detach task bookkeeping before native reentry. Callback arguments must
      * not alias the mutable report that a nested close can clear or replace. */
@@ -113,6 +113,16 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
                       (unsigned long long)untold);
         failed_notice(dom, task != NULL ? task : "", line, "");
     }
+}
+
+void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
+{
+    /* A shared task can invoke callbacks from several bindings. Their reports
+     * belong to this task even when its service owner has since retired. */
+    if (dom->cluster) {
+        for (size_t i = 0; i < dom->cluster->count; ++i)
+            task_close_one(dom->cluster->members[i], task, outcome);
+    } else task_close_one(dom, task, outcome);
 }
 
 static bool sticky(os64_js_status_t status)
@@ -293,6 +303,18 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
         if (text != NULL) JS_FreeCString(ctx, text);
     }
     return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
+}
+
+uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
+                           os64_dom_t **report_owner)
+{
+    *report_owner = d_callback_owner(dom, ctx, function);
+    if (*report_owner == NULL) {
+        if (!d_exception_catchable(ctx)) return D_SCRIPT_FAILED;
+        discard(ctx);
+        *report_owner = dom;
+    }
+    return d_callback_script(*report_owner, ctx, function);
 }
 
 DScripts d_script_enter(os64_dom_t *dom, uint32_t script)
@@ -800,19 +822,24 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
          * this checkpoint: HTML queues each as a task, so a handler added by
          * a listener fired below has its reaction run (the next checkpoint)
          * before its event, which waits for the pass after it. */
-        struct DPending *due = dom->handled, *last = dom->handled_last;
-        dom->handled = dom->handled_last = NULL;
-        bool owed = dom->errors != NULL || due != NULL;
-        d_errors_fire(dom, outcome);
-        handled_fire(dom, due, last, outcome);
-        JSValue promise, reason;
-        uint32_t script;
-        while (!sticky(outcome->status) &&
-               os64_js_realm_take_rejection(dom->realm, OS64_JS_ABI_ID, &promise, &reason, &script)) {
-            owed = true;
-            unhandled(dom, promise, reason, point.source_name, script, outcome);
+        bool owed = false;
+        size_t count = dom->cluster ? dom->cluster->count : 1;
+        for (size_t i = 0; i < count && !sticky(outcome->status); ++i) {
+            os64_dom_t *owner = dom->cluster ? dom->cluster->members[i] : dom;
+            struct DPending *due = owner->handled, *last = owner->handled_last;
+            owner->handled = owner->handled_last = NULL;
+            owed = owed || owner->errors != NULL || due != NULL;
+            d_errors_fire(owner, outcome);
+            handled_fire(owner, due, last, outcome);
+            JSValue promise, reason;
+            uint32_t script;
+            while (!sticky(outcome->status) &&
+                   os64_js_realm_take_rejection(owner->realm, OS64_JS_ABI_ID, &promise, &reason, &script)) {
+                owed = true;
+                unhandled(owner, promise, reason, point.source_name, script, outcome);
+            }
         }
-        if (!owed && dom->handled == NULL && dom->errors == NULL) return;
+        if (!owed) return;
     }
 }
 
@@ -846,14 +873,27 @@ static bool foreign(const os64_dom_t *dom, const char *address)
 
 void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome)
 {
+    os64_dom_t *driver = d_delivery_active(dom) ? dom : NULL;
+    size_t count = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < count && driver == NULL; ++i) {
+        os64_dom_t *member = dom->cluster ? dom->cluster->members[i] : dom;
+        if (d_delivery_active(member)) driver = member;
+    }
+    if (driver == NULL) return;
     JSValue promise, reason;
     uint32_t script;
-    bool taken = os64_js_realm_take_rejection(dom->realm, OS64_JS_ABI_ID, &promise, &reason, &script);
-    if (!taken && dom->errors == NULL && dom->handled == NULL) return;
+    bool taken = false, owed = false;
+    os64_dom_t *owner = dom;
+    for (size_t i = 0; i < count && !owed; ++i) {
+        owner = dom->cluster ? dom->cluster->members[i] : dom;
+        taken = os64_js_realm_take_rejection(owner->realm, OS64_JS_ABI_ID, &promise, &reason, &script);
+        owed = taken || owner->errors != NULL || owner->handled != NULL;
+    }
+    if (!owed) return;
     /* The bracket's failures go after the script's own, so a rejection
      * after a script that threw is told to the host (options.failed). */
     os64_js_outcome_t begin, task = *outcome;
-    if (os64_js_realm_task_begin(dom->realm, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
+    if (os64_js_realm_task_begin(driver->realm, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
         if (taken) {
             JS_FreeValueRT(dom->engine, promise);
             JS_FreeValueRT(dom->engine, reason);
@@ -862,16 +902,16 @@ void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outco
     }
     /* The script's own exception came before the checkpoint that left the
      * rejection. Each is muted or not by its own script. */
-    d_errors_fire(dom, &task);
-    if (taken) unhandled(dom, promise, reason, name, script, &task);
-    d_task_finish(dom, &task);
+    d_errors_fire(owner, &task);
+    if (taken) unhandled(owner, promise, reason, name, script, &task);
+    d_task_finish(driver, &task);
     *outcome = task;
 }
 
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome)
 {
     if (dom == NULL || dom->closed || name == NULL || outcome == NULL || d_provider_busy(dom)) return false;
-    if (d_delivery_active(dom)) d_script_settle(dom, name, outcome);
+    d_script_settle(dom, name, outcome);
     /* A script that left nothing owed opened no task, and a report of its
      * (a nested dispatch's error) is told here all the same. */
     d_task_close(dom, name, outcome);

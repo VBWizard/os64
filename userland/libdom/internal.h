@@ -318,6 +318,8 @@ struct DListener {
 enum { D_LISTENER = 0, D_SLOT_EMPTY, D_SLOT_FUNCTION, D_SLOT_UNCOMPILED, D_SLOT_ERROR };
 struct DTimer {
     DTimer *next;
+    /* Callable reporting provenance; the timer queue still owns activity. */
+    os64_dom_t *report_owner;
     uint64_t due, delay;
     uint32_t id, nesting;
     /* The callback's script (d_callback_script); a string's is the page's. */
@@ -1305,6 +1307,11 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
 /* Callable realm's binding within this cluster, or the supplied fallback for
  * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
 os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Record reporting provenance without moving a revoked-proxy error from
+ * invocation to registration. A catchable lookup failure uses the registering
+ * binding; a sticky failure returns D_SCRIPT_FAILED. */
+uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
+                           os64_dom_t **report_owner);
 /* Around every call the binding makes into a callback of the page's: the
  * muting state (report.c's current_script reads it) as it stood, kept by
  * the caller, and the callback's script made the one being called, which
@@ -1325,10 +1332,9 @@ void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
-/* As a task named `task` closes: the binding's own report (d_report's first
- * error) is the outcome when that is OK, else a line told to the host, and
- * is cleared either way; and the rejections it only counted, past the ones
- * told one by one, are told as one line. */
+/* As a task named `task` closes, visit the cluster's bindings (or this one
+ * standalone binding). Each first report is folded into an OK outcome or
+ * told to its own host, then cleared; counted rejections get one summary. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
