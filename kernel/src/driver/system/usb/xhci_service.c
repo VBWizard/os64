@@ -70,6 +70,8 @@ void xhci_wait_account(xhci_wait_t *w, xhci_evt_drain_t drain, uint64_t began, u
 		uint64_t bound = began - w->seen_empty;
 		if (bound > w->max)
 			w->max = bound;
+		if (bound > w->recent_max)
+			w->recent_max = bound;
 		if (bound <= edge[0]) w->within[0]++;
 		else if (bound <= edge[1]) w->within[1]++;
 		else if (bound <= edge[2]) w->within[2]++;

@@ -19,7 +19,7 @@ size_t bt_manager_status(const bt_manager_t *,char *,size_t);
 #define BT_BOND_RECORD_BYTES 80
 void bt_bond_encode(uint8_t [BT_BOND_RECORD_BYTES],const bt_le_bond_t *,bool);
 bool bt_bond_decode(bt_le_bond_t *,bool *,const uint8_t *,size_t);
-// Task context; marshals through kernel mappings without the USB poll lock.
+// Task context; marshals through kernel mappings without USB's serializing flag.
 bool bt_bond_load(bt_le_bond_t *,bool *);
 bool bt_bond_save(const bt_le_bond_t *,bool);
 bool bt_bond_load_slot(unsigned,bt_le_bond_t *,bool *);

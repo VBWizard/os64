@@ -118,7 +118,7 @@ typedef struct tty
 	                                   // after, and never two tty locks at once
 
 	// ── The input ring (one per tty — type-ahead stays with its terminal) ──
-	// Producers (PS/2 IRQ, xHCI poll, typematic) push under ring_lock; the
+	// Producers (PS/2 IRQ, the USB drainer, typematic) push under ring_lock; the
 	// consumer side is lock-free because each tty has at most ONE reader —
 	// the same single-consumer contract the global ring lived by.
 	keyboard_event_t ring[KEYBOARD_BUFFER_SIZE];

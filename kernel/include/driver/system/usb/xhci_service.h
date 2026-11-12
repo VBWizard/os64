@@ -88,6 +88,7 @@ xhci_erdp_t xhci_evt_erdp(const xhci_evt_ring_t *r, xhci_evt_drain_t drain,
 typedef struct {
 	uint64_t seen_empty;    // when a drain last found this ring empty (0 = never)
 	uint64_t max;           // the longest bound of any drain that handled events
+	uint64_t recent_max;    // the same, since the owner last zeroed it (a report's "since last read")
 	uint64_t within[3];     // drains whose bound was within edge[0], edge[1], edge[2]
 	uint64_t over;          // and beyond the last edge
 } xhci_wait_t;

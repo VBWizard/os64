@@ -414,6 +414,14 @@ static void test_wait_covers_late_visit(void)
 	CHECK(hc[1].wait.max == 22, "the bound is from seen-empty (100) to the drain (122): %lu",
 	      (unsigned long)hc[1].wait.max);
 	CHECK(hc[1].wait.within[1] == 1 && hc[1].wait.within[0] == 0, "22 belongs in the second bucket");
+	// The recent maximum is the owner's to zero; the lifetime one is not touched by that.
+	CHECK(hc[1].wait.recent_max == 22, "recent_max %lu", (unsigned long)hc[1].wait.recent_max);
+	hc[1].wait.recent_max = 0;
+	produce(1, now);
+	now += 3;
+	model_pass(1, true, now + 20, false);
+	CHECK(hc[1].wait.recent_max == 3 && hc[1].wait.max == 22, "after a reset: recent %lu max %lu",
+	      (unsigned long)hc[1].wait.recent_max, (unsigned long)hc[1].wait.max);
 }
 
 // Work carried over is as old as it was: a drain stopped by its deadline

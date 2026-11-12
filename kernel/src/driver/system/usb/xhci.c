@@ -302,6 +302,7 @@ static uint64_t s_polls;               // passes
 static uint64_t s_polls_with_events;   // of those, the ones that drained an event
 static uint64_t s_poll_last_tsc;       // when the previous pass began
 static uint64_t s_poll_gap_max;        // longest gap of any pass, in cycles
+static uint64_t s_poll_gap_recent;     // the same, since /sys/usb was last read
 // Gaps of the passes that drained events, by size. The first edge is two
 // ticks, so a pass every tick lands in the first bucket and not on its
 // boundary. The per-controller waits use the same edges.
@@ -370,6 +371,7 @@ static uint64_t xhci_pass_began(uint64_t now)
 	s_polls++;
 	s_interval_polls++;
 	if (gap > s_poll_gap_max) s_poll_gap_max = gap;
+	if (gap > s_poll_gap_recent) s_poll_gap_recent = gap;
 	if (gap > s_interval_gap_max) s_interval_gap_max = gap;
 	return gap;
 }
@@ -1527,7 +1529,7 @@ size_t xhci_usb_report(char *out, size_t cap)
 
 	xhci_report_addf(out, cap, &len, "controllers: %u\n", s_controller_count);
 	for (uint32_t i = 0; i < s_controller_count; i++) {
-		const xhci_t *hc = &s_controllers[i];
+		xhci_t *hc = &s_controllers[i];
 		xhci_report_addf(out, cap, &len,
 		                 "controller %u: %02x:%02x.%x driven=tick ports=%u events=%lu devices:",
 		                 i, hc->pci_bus, hc->pci_device, hc->pci_function, hc->max_ports,
@@ -1544,9 +1546,10 @@ size_t xhci_usb_report(char *out, size_t cap)
 		// How long an event found on this controller may have waited: from
 		// the last time its ring was seen empty to the drain that found it.
 		xhci_report_addf(out, cap, &len,
-		                 "controller %u wait: max_us=%lu to_20ms=%lu to_200ms=%lu to_2s=%lu over_2s=%lu\n",
-		                 i, hc->wait.max / per_us, hc->wait.within[0], hc->wait.within[1],
-		                 hc->wait.within[2], hc->wait.over);
+		                 "controller %u wait: max_us=%lu since_read_max_us=%lu to_20ms=%lu to_200ms=%lu to_2s=%lu over_2s=%lu\n",
+		                 i, hc->wait.max / per_us, hc->wait.recent_max / per_us, hc->wait.within[0],
+		                 hc->wait.within[1], hc->wait.within[2], hc->wait.over);
+		hc->wait.recent_max = 0;
 	}
 
 	// kusb, in /sys/net/knet's words (kusb.h).
@@ -1573,10 +1576,13 @@ size_t xhci_usb_report(char *out, size_t cap)
 	xhci_report_addf(out, cap, &len,
 	                 "polls: %lu\npolls_with_events: %lu\npasses_left_work: %lu\n"
 	                 "passes_refused: %lu\nrefusal_wait_max_us: %lu\nstep_delay_max_us: %lu\n"
-	                 "poll_gap_max_us: %lu\n",
+	                 "poll_gap_max_us: %lu\npoll_gap_since_read_max_us: %lu\n",
 	                 s_polls, s_polls_with_events, s_passes_left_work,
 	                 s_refusals, s_refusal_wait_max / per_us, s_step_delay_max / per_us,
-	                 s_poll_gap_max / per_us);
+	                 s_poll_gap_max / per_us, s_poll_gap_recent / per_us);
+	// "Since read" starts again here: read the file before and after a
+	// workload and the second reading is that workload's.
+	s_poll_gap_recent = 0;
 	// The gap of the passes that drained events: how often kusb comes
 	// round when there is something to find. A cadence, not a wait (the
 	// per-controller lines above are the wait).

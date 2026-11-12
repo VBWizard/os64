@@ -4,8 +4,8 @@
 #include "driver/system/hid_keyboard_map.h"
 #include "driver/system/hid_mouse.h"
 
-// One LE peer session. Fixed storage and asynchronous callbacks
-// keep USB polling usable from the scheduler's serialized input path.
+// One LE peer session. Fixed storage and asynchronous callbacks: a step
+// never waits, so kusb's pass (xhci.c) can run it against a deadline.
 #define BT_LE_QUEUE 8
 #define BT_LE_ACL_MAX 1024
 #define BT_LE_REPORTS 8
