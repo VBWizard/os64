@@ -4,7 +4,8 @@
 [the reviewed F.3 brief](IFRAME_F3_RETIREMENT.md), based on design amendment
 `3a8ceb1c` and merged F.2b at `37ec284d`. PR #552 is stacked on design PR #546.
 F.3b owns DOM departure, provider cleanup and failed binding installation;
-F.3 remains in progress after this engine slice.
+F.3 remains in progress after this engine slice. Engine implementation is
+`4a2b28dd`; this evidence closeout changes documentation/tracker metadata only.
 
 ## Implemented boundary
 
@@ -99,15 +100,16 @@ Evidence: `staging-runtime.log`, `final-realms.log`,
 ## DOM and guest consumers
 
 The complete shipping DOM suite passes **44,928 checks**, including **3,968
-binding allocation sweep cases**, against the transaction-enabled engine.
-The earlier retirement/ownership engine also passes the complete instrumented
-DOM suite: **309,810 checks**, **36,642 binding allocation sweep cases**. The
-transaction-enabled instrumented rerun is recorded separately when complete.
+binding allocation sweep cases**. The complete instrumented DOM suite passes
+**309,810 checks**, including **36,642 binding allocation sweep cases**. Both
+use the transaction-enabled engine; see `staging-dom.log`.
 No DOM departure or binding rollback implementation is claimed by these runs.
 
 QEMU uses q35, two CPUs, 2 GiB RAM, BIOS boot, no network, an existing kernel,
 and a disposable FAT/ext2 disk. A frozen five-file cohort contains the runtime
 consumer, parent runner and matching libjs/libmath/libos64, with SHA-256 hashes.
+The cohort manifest SHA-256 is
+`784fa801d1ea04bca57ea20ac48d8fa2f666676ca603a2bd13701bf726cbe80d`.
 The parent captures bounded consumer output and observes its actual
 `os64_wait` result: **1,879 checks, zero failures, exit `0x4a535254` (JSRT)**.
 The common A/B/C retirement and staged/refused-candidate cases run under both
