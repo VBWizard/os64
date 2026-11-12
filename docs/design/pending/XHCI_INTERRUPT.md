@@ -176,9 +176,16 @@ Two things are waiting on it:
 and Bluetooth paths, `doorbell.c`, `knet.c`, `kworker.c`, the RTL8125's
 MSI, and § What was measured. It is what X.2 and X.3 build. It awaits a
 read before code; where the builder finds the source disagrees, the source
-is right and this section is corrected in the same PR. Two statements
-about the xHCI specification are from memory and are marked: the builder
-checks them against the text before relying on them.*
+is right and this section is corrected in the same PR.*
+
+*Revised the same day after Quinn's read (XHCI_INTERRUPT_DESIGN_REVIEW.md,
+beside this file). Her four findings were right and are folded in: an idle
+pass must not rewrite an unchanged `ERDP`; a drain that stops early
+acknowledges the last event it handled, not the next slot; a budget
+checked between whole rounds bounds nothing; and the gap between passes
+is a cadence, not a bound on how long an event waited. She also checked
+the two statements about the specification that D6 had marked as from
+memory, and they hold.*
 
 ### D1. Who owns what, after the arc
 
@@ -205,35 +212,58 @@ with `knet`'s once-per-tick guard and for `knet`'s reason; `xhci_poll`'s
 call there is deleted, and no call to the drain remains on the scheduler's
 path (Q3).
 
-Its loop is `knet`'s, with the doorbell's protocol untouched (take before
-work; park re-checks under the queue lock):
+Its loop keeps the doorbell's protocol untouched (take before work; park
+re-checks under the queue lock). The drain is NOT `knet`'s rounds: a
+budget checked between whole rounds bounds nothing, because one round can
+itself run past it (Quinn's counterexample: three controllers at 4 ms a
+batch reach the timers at 12 ms under a 10 ms budget).
 
 1. `doorbell_take`. Time the wait as `knet` does, wake and response kept
    apart.
 2. Take the serializing flag (D4). If it cannot be had, go to 6.
-3. **Drain**, in rounds. A round visits every controller once and drains
-   up to one ring's worth of events from each (`RING_TRBS`). Rounds repeat
-   while any controller moved, until `KUSB_DRAIN_ROUNDS` (8) or the time
-   budget, ONE tick of TSC time, is spent. One tick, where `knet` takes
-   two, because the consumer this arc exists for paces at 15 to 20 ms and
-   the timers in step 4 are its clock.
-4. **Once per wake, after the drains, whatever the budget said**: for each
-   controller, the Bluetooth runtime step (`xhci_bt_runtime_poll`) and the
-   keyboards' typematic ticks. A busy controller cannot hold these off for
-   longer than the budget.
-5. Release the flag. If the budget was spent while a round still moved,
-   count it and raise the bell so the park returns at once.
+3. **Drain, against a deadline.** The deadline is this wake's start plus
+   ONE tick of TSC time: one tick, where `knet` takes two, because the
+   consumer this arc exists for paces at 15 to 20 ms and step 4 is its
+   clock. The controllers are visited once each, starting at a cursor that
+   persists across wakes. Each is drained until its ring is empty or the
+   deadline passes, and the deadline is checked BEFORE EVERY EVENT, not
+   between batches. A controller stopped by the deadline with work left
+   moves the cursor to the controller after it, so the one that used the
+   time is served last next wake, and the visit ends there.
+4. **Once per wake, after the drains, whatever the deadline did**: for
+   each controller, the Bluetooth runtime step (`xhci_bt_runtime_poll`,
+   which is also what re-arms the adapter's receive endpoints) and the
+   keyboards' typematic ticks.
+5. Release the flag. If any controller was left with work, count it and
+   raise the bell so the park returns at once.
 6. `doorbell_park` with a one-second backstop.
 
-**Every pass over a controller ends by writing `ERDP` with the dequeue
-pointer and the busy bit, whether or not it consumed an event** (D6 says
-why). `xhci_drain_events` writes it today only when it handled something;
-that changes in X.2, where it is harmless, so that X.3 changes nothing in
-the drain.
+**What that bounds.** From a wake's start to step 4 is at most one tick
+plus ONE event's handling: the deadline cannot interrupt a callback. A
+callback is a HID report or a Bluetooth packet delivered to its consumer,
+and X.2.11's audit says how long the longest of those can run (a terminal
+operation, a log line) and moves out of the drain any that can run long.
+The scheduler's delay in running `kusb` at all is on top, and is what the
+wake latency measures. The longest start-to-step-4 time is reported.
 
-The drain is split so its bound is real: `xhci_drain_events(max)` returns
-what it handled and whether it stopped at `max` with the next slot
-already valid. The boot-time callers pass no bound.
+**`ERDP` is written for two reasons, and never for neither** (D6 has the
+protocol). A drain that handled at least one event publishes its
+progress. A drain on a controller whose top half has acknowledged an
+interrupt since the last write retires the busy bit. A pass that did
+neither writes nothing: an idle tick must not rewrite an unchanged
+pointer (xHCI 1.2b § 4.9.4 and § 5.5.2.3.3 forbid consecutive identical
+writes except for a ring that went from full to empty).
+
+**What is written depends on why the drain stopped.** `evt_dequeue` is
+the software's cursor: the next slot to look at. When the drain stopped
+because that slot is not yet valid, the ring is empty and `ERDP` names
+that slot. When it stopped at the deadline with the next slot valid,
+`ERDP` names the LAST EVENT HANDLED, so the acknowledgement never covers
+an event the software has not handled. The cursor and the acknowledgement
+are two values, kept apart.
+
+`xhci_drain_events` takes the deadline and returns what it handled and
+which way it stopped. The boot-time callers pass no deadline.
 
 ### D3. What moves, and what does not
 
@@ -311,15 +341,21 @@ path works. For each controller, in this order:
 2. Program MSI or MSI-X at the vector, addressed at the BSP; set the PCI
    command register's INTx-disable bit.
 3. Write the moderation interval (D9).
-4. Clear `USBSTS.EINT` and `IMAN.IP`, whatever boot left there.
-5. Publish the controller to the handler's list (count last).
+4. Clear `USBSTS.EINT` and `IMAN.IP`, whatever boot left there, and mark
+   the controller as owing an `ERDP` write (D6).
+5. Publish the controller to the handler's list: its entry written whole,
+   then the count raised past it with a barrier. The list is a prefix
+   that only grows; an earlier controller may already be interrupting
+   while a later one is added, and the handler never sees a half-written
+   entry.
 6. Set `IMAN.IE`, then `USBCMD.INTE`.
 
-Then it falls into its loop, whose first pass drains every controller and
-writes every `ERDP` with the busy bit. That first unconditional pass is
-what accounts for events the boot left on a ring and for an event pending
-at the moment of enabling: nothing depends on the controller sending a
-message for a condition that existed before `IE` was set.
+Then it falls into its loop, whose first pass drains every controller and,
+because step 4 marked each as owing one, writes its `ERDP` with the busy
+bit. That is what accounts for events the boot left on a ring and for an
+event pending at the moment of enabling: nothing depends on the
+controller sending a message for a condition that existed before `IE` was
+set.
 
 A controller whose programming does not read back as written stays
 tick-driven and says so, on the glass and in the report, as the RTL8125
@@ -327,14 +363,15 @@ does.
 
 ### D6. The interrupt protocol
 
-*From memory of xHCI 1.2 § 4.17.2 and § 5.5.2.3.3, and of how QEMU's
-model and Linux's handler behave; the builder checks the text.* An event
-sets the interrupter's pending bit and its EVENT HANDLER BUSY bit
-(`ERDP.EHB`) together, and the controller signals. While `EHB` is set, a
-further event signals nothing. Software clears `EHB` by writing `ERDP`
-with that bit; if the ring is not empty at that write, the controller
-signals again. With MSI or MSI-X the pending bit clears itself when the
-message is sent; `USBSTS.EINT` does not.
+An event sets the interrupter's pending bit and its EVENT HANDLER BUSY
+bit (`ERDP.EHB`) together, and the controller signals. While `EHB` is
+set, a further event signals nothing. Software clears `EHB` by writing
+`ERDP` with that bit; if the ring is not empty at that write, the
+controller signals again, in its own time: after the moderation interval
+and only while the enables are set. With MSI or MSI-X the pending bit
+clears itself when the message is sent; `USBSTS.EINT` does not. (xHCI
+1.2 § 4.17.2, § 5.4.2, § 5.5.2.3.3; Quinn checked these against the
+text.)
 
 So the two halves divide like this:
 
@@ -342,21 +379,38 @@ So the two halves divide like this:
   controller: read `USBSTS`; if `EINT` is clear, next controller. Else
   write `USBSTS` with `EINT` alone (the register's other write-one-to-clear
   bits stay as they are), then write `IMAN` with `IP` and `IE` both set
-  (clears pending, keeps enable), count a fire for that controller. After
-  the walk: if no controller had `EINT`, count a spurious entry; else ring
-  `kUsbDoorbell`. No lock, no event ring, no `s_hc`, no print. EOI in the
-  stub.
-- **The bottom half** owns `ERDP`. Consuming events and writing `ERDP`
-  with `EHB` is what re-arms the controller, and D2's "every pass writes
-  it" is what makes these cases safe:
+  (clears pending, keeps enable); set that controller's `ehb_owed` mark,
+  stamp the time, count a fire. After the walk: if no controller had
+  `EINT`, count a spurious entry; else ring `kUsbDoorbell`. No lock, no
+  event ring, no `s_hc`, no print. EOI in the stub.
+- **The bottom half** owns `ERDP`. Before it drains a controller it takes
+  that controller's `ehb_owed` mark (an atomic exchange). After the
+  drain:
+  - handled events, stopped at an empty slot: write `ERDP` = that slot,
+    with `EHB`.
+  - handled events, stopped at the deadline: write `ERDP` = the last
+    event handled, with `EHB`.
+  - handled nothing, mark taken: READ `ERDP`; if `EHB` reads set, write
+    the pointer back with `EHB`, which is the one write that retires it;
+    if it reads clear, write nothing.
+  - handled nothing, no mark: write nothing.
+
+  The third line is the only place an unchanged pointer is written, it is
+  written once per acknowledged interrupt and only when the read shows the
+  bit set, and it is what Linux's handler does at the end of every
+  interrupt. THE BUILDER CHECKS that write against § 4.9.4's wording
+  before coding; if the text forbids even that, the answer is in the
+  specification's own description of how `EHB` is retired on an empty
+  ring, and this line is corrected.
 
 | Case | What happens |
 |---|---|
-| An event arrives while `kusb` is mid-drain | `EHB` is still set, so no message. Either the drain's loop sees the event, or its closing `ERDP` write finds the ring not empty and the controller signals again. |
-| The drain stops at its budget with events left | Its `ERDP` write clears `EHB` with the ring not empty: the controller signals again, and `kusb` has raised its own bell besides. |
-| A tick wake and an interrupt overlap | One consumer, so there is no race on the ring. The interrupt's ring lands on a bell that is already up, or raises it for a pass that finds nothing and writes `ERDP` anyway. |
-| A pass consumes nothing while `EHB` is set (boot leftovers; an interrupt for an event an earlier pass already took) | The unconditional write clears it. Without it the controller would be mute until the next event happened to be consumed by a tick pass. |
-| The flashlight, or a controller left tick-driven | `IE` is never set; the same loop, driven by the tick's ring. |
+| An event arrives while `kusb` is mid-drain | `EHB` is still set, so no message. Either the drain's loop sees the event, or its closing write finds the ring not empty and the controller signals again. |
+| The drain stops at the deadline with events left | `ERDP` names the last event handled and clears `EHB` with the ring not empty: the controller signals again, and `kusb` has raised its own bell besides. The events left are untouched. |
+| A tick wake and an interrupt overlap | One consumer, so there is no race on the ring. If the tick's pass took the event before the handler ran, the handler still sets the mark, and the pass that answers it finds nothing, reads `ERDP`, and retires `EHB` only if it is set. |
+| Idle ticks, no interrupt, nothing on the ring | No mark, nothing handled: no write. A hundred ticks write `ERDP` zero times. |
+| Boot leftovers; an event pending when `IE` is set | D5 marks every controller once at enabling, so the first pass retires whatever `EHB` state boot left. |
+| The flashlight, or a controller left tick-driven | `IE` is never set and no mark is ever made: `ERDP` is written on progress alone, as the poll writes it today. |
 
 ### D7. The vector, the handler's state, and the core
 
@@ -411,15 +465,36 @@ is measured.
 
 ### D10. The report and the flashlight
 
-`/sys/usb` grows; nothing it has is removed. Per controller: `driven=`
-`msi`, `msix` or `tick`, and why when it is the tick (`no capability`,
-`USBPOLL`, `did not take`), and its `fires`. For the daemon, in
-`/sys/net/knet`'s words: wakes, drain rounds, budget spent, longest wake,
-wake and response latency with their late counts, the bell's rings and
-wakes; the handler's spurious entries; and the refusals of the flag with
-the longest wait (D4). The `poll_*` and `event_gap_*` lines keep their
-meaning, with "poll" now a pass of `kusb`: they are what tells case (b)
-from case (c) in § Proof beside `fires`.
+`/sys/usb` grows. Per controller: `driven=` `msi`, `msix` or `tick`, and
+why when it is the tick (`no capability`, `USBPOLL`, `did not take`), and
+its `fires`. For the daemon, in `/sys/net/knet`'s words: wakes, wakes
+that left work, longest wake, longest time from a wake's start to the
+Bluetooth step (D2's bound), wake and response latency with their late
+counts, the bell's rings and wakes; the handler's spurious entries; and
+the refusals of the flag with the longest wait (D4).
+
+**The gap between passes is a cadence, and is reported as one.** X.1's
+`poll_gap_*` and `event_gap_*` measure start to start. For the old poll,
+which held nothing and drained every ring to empty in microseconds, that
+is also a bound on how long an event sat. For a daemon it is not: a wake
+can start on time and reach a controller late (Quinn's trace: wakes at 0
+and 10 ms, an event at 9 ms, its controller reached at 22 ms, a 10 ms gap
+recorded for a 13 ms wait), and work carried over from one wake to the
+next is older than any gap. So those lines keep their names and are
+described as how often `kusb` comes round, nothing more.
+
+**How long an event may have waited is measured per controller**, from
+the last moment that controller's ring was SEEN EMPTY to the start of the
+drain that found events on it. That interval includes whatever `kusb` did
+before reaching the controller, and it keeps growing across wakes while
+work is carried over, because a drain stopped by the deadline does not
+move the stamp. Reported per controller as a maximum and the same four
+buckets. For an interrupt-driven controller the time from the top half's
+stamp to the start of that controller's drain is reported beside it, named
+for what it is (interrupt to service), with a maximum and a late count.
+Neither is a per-event completion time: the controller does not stamp its
+events. The host model's producer does, and the model's tests assert
+completion-to-drain exactly (D11).
 
 The flashlight is the cmdline token `USBPOLL`: no controller is given an
 interrupt. It does not travel to the P5; that is said where it is added
@@ -429,25 +504,43 @@ and in CLAUDE.md's table.
 
 - **X.2** ends with `kusb` running, every controller `driven=tick`, and
   `xhci_poll` gone from `processSignals`. Its proof is that nothing got
-  worse: `/sys/usb`'s gaps no longer than X.1's reading on the same QEMU
-  entry and on the P5; input, Bluetooth pairing, reconnection and bond
-  save and load as before; and D4's refusal path provoked on purpose (a
-  loop of sysfs reads while a mouse moves) with the refusals counted and
-  no event lost.
+  worse, compared in ONE metric: the per-controller seen-empty interval
+  of D10. X.1's start-to-start gaps were taken on the old poll, where
+  they are an upper bound on that interval, so "no longer than X.1's
+  reading, on the same QEMU entry and on the P5" is a fair comparison and
+  errs against the new code. Beside it: input, Bluetooth pairing,
+  reconnection and bond save and load as before; and D4's refusal path
+  provoked on purpose (a loop of sysfs reads while a mouse moves) with the
+  refusals counted and no event lost.
+- **X.2's host model** drives the drain and the daemon's visit with a
+  fake controller whose producer stamps each event and whose register
+  file records every write, and with callbacks that cost injected time.
+  It asserts: the Bluetooth step is reached within the deadline plus one
+  callback under load (Quinn's three-controller trace among the cases);
+  the cursor rotates so a busy controller does not starve the others;
+  many idle passes write `ERDP` zero times; an early stop names the last
+  handled event and the events left survive, across a ring wrap; an empty
+  stop names the empty slot; a genuine full-to-empty wrap is written; and
+  the reported seen-empty interval covers a deliberately late controller
+  visit after a prompt wake.
 - **X.3** adds the handler, the enabling, the choice, moderation and the
-  flashlight, and proves D6's table: the register model on the host for
-  every row, and QEMU with `fires` counted on both controller models.
+  flashlight, and proves D6's table: the same register model on the host
+  for every row (the empty pass after an already-serviced interrupt among
+  them), and QEMU with `fires` counted on both controller models.
 
 ### D12. What this design does not settle
 
-- The two specification statements in D6, until the builder has read
-  them.
+- The one write D6 asks the builder to check against § 4.9.4: retiring
+  `EHB` on an empty ring by writing the pointer it already holds.
 - Whether a controller that is suspended and resumed exists in this tree
   at all. If it does, it must leave `IE`, `INTE` and the message
   programming as it found them; if it does not, the line is dropped.
 - Whether the timeline and the gap buckets stay once the arc is done, or
   shrink to what `/sys/net/knet` has. They stay through X.3 because they
   are the proof.
+- How long the longest delivery callback runs, until X.2.11's audit has
+  measured it. D2's bound is "one tick plus one callback", and it is only
+  as good as that number.
 
 ## Measure first
 
