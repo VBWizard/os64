@@ -195,6 +195,30 @@ bool d_provider_busy(const os64_dom_t *dom)
     return dom && (dom->provider_borrows || (dom->cluster && dom->cluster->provider_borrows));
 }
 
+uint64_t d_host_now_ms(const os64_dom_t *dom)
+{
+    if (dom == NULL) return 0;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.now_ms != NULL && d_provider_enter(owner)) {
+        owner->clock_seen_ms = dom->options.now_ms(dom->options.host_opaque);
+        d_provider_leave(owner);
+    }
+    return dom->clock_seen_ms;
+}
+
+uint64_t d_host_now_us(const os64_dom_t *dom)
+{
+    if (dom == NULL) return 0;
+    if (!d_delivery_active(dom)) return dom->clock_seen_us;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.now_us == NULL) owner->clock_seen_us = d_host_now_ms(dom) * 1000;
+    else if (d_provider_enter(owner)) {
+        owner->clock_seen_us = dom->options.now_us(dom->options.host_opaque);
+        d_provider_leave(owner);
+    }
+    return dom->clock_seen_us;
+}
+
 int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
 {
     /* A bound function or callable proxy can belong to a different realm

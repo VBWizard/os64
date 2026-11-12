@@ -164,7 +164,7 @@ static void terminate(os64_dom_t *dom, DXhr *x)
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 /* ── Events ──────────────────────────────────────────────────────────── */

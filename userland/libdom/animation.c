@@ -55,10 +55,13 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     DAnimation *entry=d_alloc(dom,sizeof(*entry));
     if(!entry)return d_error(ctx,"QuotaExceededError","DOM animation callback quota exceeded");
     *entry=(DAnimation){.callback=JS_DupValue(ctx,argv[0]),.handle=++dom->animation_handle,.script=script};
+    uint64_t now=dom->animations?0:d_host_now_ms(dom);
+    if(!d_require_active(dom,ctx)) {
+        JS_FreeValue(ctx,entry->callback);d_free(dom,entry);return JS_EXCEPTION;
+    }
     if(dom->animation_last)dom->animation_last->next=entry;
     else {
         dom->animations=entry;
-        uint64_t now=dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):0;
         dom->animation_due=frame_after(now);
     }
     dom->animation_last=entry;dom->animation_count++;
@@ -79,7 +82,9 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     uint64_t next=frame_after(now);
     uint32_t last=dom->animation_handle;
     double timestamp=d_performance_now(dom);
+    if(!d_delivery_active(dom))return false;
     d_web_animations_sample(dom,timestamp);
+    if(!d_delivery_active(dom))return false;
     dom->animation_running=true;
     if(os64_js_realm_task_begin(dom->realm,OS64_JS_ABI_ID,name,out)==OS64_JS_OK) {
         os64_js_outcome_t access;
@@ -109,7 +114,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     /* Callback/checkpoint work counts toward the interval. An overrun makes
      * one successor ready, not a debt of missed frames. The host still gates
      * that successor on presentation and an opportunity to handle input. */
-    uint64_t finished=d_delivery_active(dom)&&dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):now;
+    uint64_t finished=d_delivery_active(dom)?d_host_now_ms(dom):now;
     if(finished==UINT64_MAX)finished=UINT64_MAX-1;
     dom->animation_due=next>finished?next:finished;
     d_task_close(dom,name,out);

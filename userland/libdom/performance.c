@@ -11,13 +11,15 @@
  * microsecond clock (options.now_us) against it. Both now() and timeOrigin
  * are coarsened to 100 microseconds, the resolution HR-Time recommends for
  * a context that is not cross-origin isolated, which none here is.
+ * Live clock requests refuse inactive documents; explicit mark/measure
+ * timestamps and saved navigation timing remain readable after departure.
  *
  * THE ENTRIES. Marks and measures are kept in the order made, in an engine
  * object the registry holds, so the collector sees what they hold: one
  * with no prototype, which no page is ever handed, counted in C; an
  * entry's own state (its name, times and detail) is engine memory traced
  * by the collector, as an Event's is. The navigation entry is made once and
- * reads the host's timing as it stands whenever asked. A query answers the
+ * reads live host timing while active, then retains the last sample. A query answers the
  * matching entries in the order of their startTime, ties in the order
  * made. Nothing else is recorded: `resource`, `paint` and every other type
  * answers an empty list, which is what a browser that records none of them
@@ -92,8 +94,7 @@ static bool page_is(const os64_dom_t *dom, const char *prefix)
 
 static uint64_t now_us(const os64_dom_t *dom)
 {
-    if (dom->options.now_us != NULL) return dom->options.now_us(dom->options.host_opaque);
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) * 1000 : 0;
+    return d_host_now_us(dom);
 }
 
 /* Microseconds as milliseconds, to the 100 microseconds HR-Time
@@ -111,9 +112,22 @@ double d_performance_now(const os64_dom_t *dom)
 
 static void timing_read(const os64_dom_t *dom, os64_dom_timing_t *t)
 {
-    os64_memset(t, 0, sizeof(*t));
-    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) t->at[i] = OS64_DOM_TIMING_NOT_YET;
-    if (dom->options.timing != NULL) dom->options.timing(dom->options.host_opaque, t);
+    *t = dom->timing_seen;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.timing != NULL && d_provider_enter(owner)) {
+        os64_memset(t, 0, sizeof(*t));
+        for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) t->at[i] = OS64_DOM_TIMING_NOT_YET;
+        dom->options.timing(dom->options.host_opaque, t);
+        owner->timing_seen = *t;
+        d_provider_leave(owner);
+    }
+}
+
+static bool current_time(os64_dom_t *dom, JSContext *ctx, double *time)
+{
+    if (!d_require_active(dom, ctx)) return false;
+    *time = d_performance_now(dom);
+    return d_require_active(dom, ctx);
 }
 
 /* An attribute of `timing`'s, as milliseconds since the Unix epoch
@@ -706,7 +720,9 @@ static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
         d_error(ctx, "SyntaxError", "A mark may not take a name of PerformanceTiming's");
         goto done;
     }
-    if (JS_IsUndefined(start)) time = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+    if (JS_IsUndefined(start)) {
+        if (!current_time(dom, ctx, &time)) goto done;
+    }
     else if (time < 0) {
         JS_ThrowTypeError(ctx, "A mark's startTime may not be negative");
         goto done;
@@ -791,7 +807,7 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
         ok = mark_time(dom, ctx, member[3], &begin);
         if (ok == 0) ok = duration_time(ctx, duration);
         end = begin + duration;
-    } else end = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+    } else if (!current_time(dom, ctx, &end)) ok = -1;
     JS_FreeValue(ctx, end_mark);
     if (ok == 0) {
         if (has_start) ok = mark_time(dom, ctx, member[3], &begin);
@@ -952,7 +968,10 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
     if (JS_GetOpaque(self, os64_js_class_id(&performance_slot)) == NULL)
         return JS_ThrowTypeError(ctx, "Expected the Performance object");
     switch (magic) {
-    case M_NOW: return JS_NewFloat64(ctx, d_performance_now(dom));
+    case M_NOW: {
+        double time;
+        return current_time(dom, ctx, &time) ? JS_NewFloat64(ctx, time) : JS_EXCEPTION;
+    }
     case M_TIME_ORIGIN: return JS_NewFloat64(ctx, coarse(dom->time_origin_epoch_us));
     case M_TIMING: return JS_DupValue(ctx, dom->performance_timing->value);
     case M_NAVIGATION: return JS_DupValue(ctx, dom->performance_navigation->value);
@@ -1091,11 +1110,13 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* A mark's and a measure's detail are structured clones. */
     if (d_clone_setup(dom, ctx, global) < 0) return -1;
     /* The time origin, read once. */
+    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) dom->timing_seen.at[i] = OS64_DOM_TIMING_NOT_YET;
     os64_dom_timing_t t;
     timing_read(dom, &t);
     if (dom->options.timing != NULL) {
         dom->time_origin_us = t.origin_us;
         dom->time_origin_epoch_us = t.origin_epoch_us;
+        dom->clock_seen_us = t.origin_us;
     } else {
         os64_time_t wall;
         dom->time_origin_us = now_us(dom);

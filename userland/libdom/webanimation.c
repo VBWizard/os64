@@ -207,8 +207,10 @@ static const os64_html_node_t *wa_target(const DWaAnimation *a)
  * (wa_publish). The first read samples it. */
 static void wa_sample_at(os64_dom_t *dom, double now)
 {
+    if (!d_delivery_active(dom)) return;
+    uint64_t face = d_host_now_ms(dom);
+    if (!d_delivery_active(dom)) return;
     dom->wa_time = now;
-    uint64_t face = dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
     dom->wa_face = (double)face - dom->wa_time;
     dom->wa_sampled = true;
 }
@@ -3245,10 +3247,13 @@ static void remove_replaced(JSContext *ctx, os64_dom_t *dom)
 
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom)
 {
-    if (dom == NULL || dom->closed || dom->wa_running) return UINT64_MAX;
+    if (!d_delivery_active(dom) || dom->wa_running) return UINT64_MAX;
     uint64_t soon = dom->wa_stepped ? dom->wa_last_step + WA_FRAME_MS : 0;
-    if (wa_busy(dom)) return soon;
+    bool busy = wa_busy(dom);
+    if (!d_delivery_active(dom)) return UINT64_MAX;
+    if (busy) return soon;
     uint64_t due = css_due(dom);
+    if (!d_delivery_active(dom)) return UINT64_MAX;
     return due == UINT64_MAX ? UINT64_MAX : due > soon ? due : soon;
 }
 
@@ -3277,9 +3282,10 @@ static DWaEvent *events_sorted(DWaEvent *list)
 bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *out)
 {
     if (out) os64_memset(out, 0, sizeof(*out));
-    if (out == NULL || os64_dom_web_animations_next(dom) > now) return false;
+    if (out == NULL || !d_delivery_active(dom) || os64_dom_web_animations_next(dom) > now) return false;
     double since = dom->wa_stepped ? (double)dom->wa_last_step : -INFINITY;
     wa_sample(dom);
+    if (!d_delivery_active(dom)) return false;
     dom->wa_wanted = false;
     dom->wa_stepped = true;
     dom->wa_last_step = now;

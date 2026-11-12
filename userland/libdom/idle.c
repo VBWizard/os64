@@ -62,12 +62,12 @@ typedef struct {
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static uint64_t now_us(const os64_dom_t *dom)
 {
-    return dom->options.now_us != NULL ? dom->options.now_us(dom->options.host_opaque) : now_ms(dom) * 1000;
+    return d_host_now_us(dom);
 }
 
 /* HTML's computeDeadline for the period that began at `start_us`, on the
@@ -236,6 +236,7 @@ static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (magic == I_DID_TIMEOUT) return JS_NewBool(ctx, deadline->timed_out);
         if (deadline->timed_out || !d_delivery_active(dom)) return JS_NewFloat64(ctx, 0);
         uint64_t now = now_us(dom), end = deadline_us(dom, deadline->start_us, now);
+        if (!d_delivery_active(dom)) return JS_NewFloat64(ctx, 0);
         return JS_NewFloat64(ctx, end > now ? (double)(end - now) / 1000.0 : 0);
     }
     if (magic == I_CANCEL) {
@@ -289,7 +290,8 @@ static bool period_runs(const os64_dom_t *dom)
 {
     if (!dom->idle_open || dom->idle_runnable == 0) return false;
     uint64_t us = now_us(dom);
-    return us < deadline_us(dom, dom->idle_start_us, us);
+    uint64_t end = deadline_us(dom, dom->idle_start_us, us);
+    return d_delivery_active(dom) && us < end;
 }
 
 uint64_t os64_dom_idle_next(const os64_dom_t *dom)
@@ -312,6 +314,7 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
     if (outcome == NULL || !d_delivery_active(dom) || dom->idle_live == 0) return false;
     dom->idle_render_due = render_due;
     uint64_t ms = now_ms(dom);
+    if (!d_delivery_active(dom)) return false;
     if (render_due <= ms) return false;
     /* The page's own work first: an idle callback waits for its tasks. */
     if (os64_dom_timer_next(dom) <= ms || dom->messages != NULL) return false;
@@ -322,12 +325,14 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
         dom->idle_open = true;
         dom->idle_start_ms = ms;
         dom->idle_start_us = now_us(dom);
+        if (!d_delivery_active(dom)) { dom->idle_open = false; return false; }
         dom->idle_split = dom->idle_count;
         dom->idle_runnable = dom->idle_live;
         dom->idle_fresh = false;
         dom->idle_rested_ms = 0;
         if (!period_runs(dom)) return false;
     }
+    if (!d_delivery_active(dom)) return false;
     while (JS_IsUndefined(dom->idle[dom->idle_head].callback)) dom->idle_head++;
     size_t index = dom->idle_head++;
     uint32_t handle = dom->idle[index].handle, script = dom->idle[index].script;

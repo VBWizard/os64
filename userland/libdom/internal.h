@@ -587,6 +587,9 @@ struct os64_dom {
     DValue *entry_prototypes[5];
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
+    /* Last host samples remain binding-owned after service detachment. */
+    uint64_t clock_seen_ms, clock_seen_us;
+    os64_dom_timing_t timing_seen;
     /* PerformanceObserver (performance.c): the registered observers, each
      * held, in the order registered (d_alloc'd); whether the task that
      * delivers to them is queued; whether the navigation entry has been
@@ -808,6 +811,11 @@ bool d_provider_enter(os64_dom_t *dom);
 bool d_provider_begin(os64_dom_t *dom, JSContext *ctx);
 void d_provider_leave(os64_dom_t *dom);
 bool d_provider_busy(const os64_dom_t *dom);
+/* Read-only host queries borrow mutable provider state. Inactive documents
+ * return their saved samples without calling the host. Service creators
+ * must recheck activity after a clock callback before publishing work. */
+uint64_t d_host_now_ms(const os64_dom_t *dom);
+uint64_t d_host_now_us(const os64_dom_t *dom);
 /* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
  * activity is the operation's current document, not the callback's creator. */
 int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
@@ -1232,7 +1240,7 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The screen's width and height as `screen` reports them, in CSS pixels at
  * the page's zoom, and devicePixelRatio: what the device-* media features
  * and `resolution` answer (view.c). */
-void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
+bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the

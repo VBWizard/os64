@@ -346,6 +346,55 @@ calls, and unborrowed user-agent text. The cumulative caught count is **85**.
 These are service-entry proofs, not a public departure/finish guarantee or
 full instrumented/guest acceptance.
 
+## Clock, timing and zoom checkpoint
+
+Host millisecond/microsecond reads now share provider-loan helpers. Binding
+storage retains their last samples and the last navigation-timing snapshot,
+so inactive retained objects do not call old clock/timing opaque storage.
+`performance.now()` and mark/measure operations needing a current timestamp
+refuse inactive activity. Explicit timestamps, event timestamps and sampled
+navigation timing remain usable. Clock storage is included in the binding's
+native charge; its layout change required rebuilding the complete host cohort.
+
+Timer and idle-timeout creation, frame scheduling and message posting recheck
+after clock callbacks. In particular, the MessagePort timestamp is sampled
+before transfer detachment, so retirement from that native read preserves the
+caller's buffer. Native idle/frame/Web Animation opportunities stop after
+clock-triggered retirement. Web Animation effect/provider cleanup remains in
+the remaining inventory; these are clock and scheduling guards.
+
+Screen/media queries borrow their zoom provider and recheck activity before
+publishing results. A media environment uses one zoom sample. A failed
+matchMedia construction releases its private native record before publication;
+native media delivery stops on retirement. Stored color depth and orientation
+remain readable.
+
+The fixture covers 50 native-callback scenarios and five conversion/invalid
+event scenarios, each under both teardown policies. An initial native media
+case left the viewport unchanged and did not trigger re-evaluation; the final
+case changes the viewport before testing retirement. The preceding implementation
+fails the new clock/zoom assertions. Final results retain ASan/UBSan/LSan:
+
+| Coverage | Result |
+|---|---:|
+| Complete shipping-engine DOM suite | 50,007 checks; 3,991 native allocation sweeps |
+| Provider retirement, shipping and instrumented | 4,440 checks each |
+| Instrumented performance | 3,169 checks |
+| Instrumented animation callbacks | 106 checks |
+| Instrumented Web Animations | 675 checks |
+| Instrumented geometry/scroll/view/history | 313 checks |
+| Instrumented P2b messaging/idle/clone | 13,324 checks |
+| Instrumented events | 1,020 checks |
+| Instrumented fetch/Streams | 10,526 checks |
+
+All pass. The native target library also builds. Twelve isolated mutants are
+caught: unborrowed clock/zoom calls; lost clock/timing samples; timer, idle
+timeout and rAF publication after clock retirement; accepting a current-time
+result after retirement; publishing a new media query or match result after
+retirement; sampling a port timestamp after transfer; and continuing a native
+Web Animation update after clock retirement. The cumulative caught count is
+**97**. Full instrumented and guest acceptance remain outstanding.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

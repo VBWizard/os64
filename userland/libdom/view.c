@@ -1115,11 +1115,11 @@ static void *media_grow(void *ctx, void *old, size_t old_size, size_t new_size)
     return grown;
 }
 
-static bool media_matches(const os64_dom_t *dom, const DMedia *m, const os64_dom_view_t *v)
+static bool media_matches(os64_dom_t *dom, const DMedia *m, const os64_dom_view_t *v)
 {
     garb_env_t env = {.width = v->width, .height = v->height, .dark = v->dark,
                       .reduced_motion = v->reduced_motion, .scripting = dom->options.scripting};
-    d_screen_media(dom, &env.device_width, &env.device_height, &env.resolution);
+    if (!d_screen_media(dom, &env.device_width, &env.device_height, &env.resolution)) return false;
     return !m->unread && garb_media_text_matches(m->query, env);
 }
 
@@ -1264,6 +1264,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         m->media = media;
         os64_dom_view_t v = view_now(dom);
         m->matches = media_matches(dom, m, &v);
+        if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, object); media_free(dom, m); return JS_EXCEPTION; }
         if (dom->media_last != NULL) dom->media_last->next = m;
         else dom->media = m;
         dom->media_last = m;
@@ -1278,7 +1279,8 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         os64_dom_view_t v = view_now(dom);
         if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
-        return JS_NewBool(ctx, media_matches(dom, m, &v));
+        bool matches = media_matches(dom, m, &v);
+        return d_require_active(dom, ctx) ? JS_NewBool(ctx, matches) : JS_EXCEPTION;
     }
     case M_ADD_LISTENER: case M_REMOVE_LISTENER:
         return d_listener_change(dom, ctx, self, argc > 0 ? argv[0] : JS_UNDEFINED, magic == M_ADD_LISTENER);
@@ -1430,6 +1432,7 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
         for (DMedia *m = dom->media; m != NULL; m = m->next) {
             if (m->collected && m->entry == NULL) continue;
             bool matches = media_matches(dom, m, &now);
+            if (!d_delivery_active(dom)) return false;
             if (matches != m->matches) {
                 m->matches = matches;
                 m->owed = !m->owed;     // a change and its undoing owe nothing

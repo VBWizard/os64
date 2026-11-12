@@ -225,7 +225,7 @@ size_t os64_dom_intersections_observed(const os64_dom_t *dom)
 
 static uint64_t host_now(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static os64_dom_t *host_root(os64_dom_t *dom, const DIObserver *o, const os64_html_node_t **out);
@@ -254,7 +254,12 @@ bool os64_dom_intersections_owed(const os64_dom_t *dom)
     const struct DIntersections *s = dom->intersections;
     for (DIObserver *o = s->observers; o != NULL; o = o->next) {
         if (!observation_active(dom, o)) continue;
-        if (s->undone || (s->delayed_due != UINT64_MAX && host_now(dom) >= s->delayed_due)) return true;
+        if (s->undone) return true;
+        if (s->delayed_due != UINT64_MAX) {
+            uint64_t now = host_now(dom);
+            if (!d_delivery_active(dom)) return false;
+            if (now >= s->delayed_due) return true;
+        }
         for (DTarget *t = o->targets; t != NULL; t = t->next)
             if (t->previous_index < 0) return true;
     }
@@ -349,6 +354,7 @@ static bool observe_one(os64_dom_t *dom, DIObserver *o, DTarget *t, const os64_d
         /* Passed over: owed again once its delay has run, moved or not. */
         double wait = o->delay - (time - t->last_update);
         uint64_t due = host_now(dom) + (uint64_t)ceil(wait);
+        if (!d_delivery_active(dom)) return false;
         if (due < s->delayed_due) s->delayed_due = due;
         return false;
     }
@@ -484,6 +490,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
      * every required provider has answered, so refusal advances no target. */
     s->undone = false;
     double time = d_performance_now(dom);
+    if (!d_delivery_active(dom)) return false;
     s->delayed_due = UINT64_MAX;
     bool queued = false;
     const double empty_viewport[4] = {0};
@@ -498,6 +505,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         for (DTarget *t = o->targets; t != NULL; t = t->next) {
             bool asked = i < members && d_window_document(owner, t->node);
             queued = observe_one(dom, o, t, asked ? &s->batch[groups[i].at++] : NULL, viewport, time) || queued;
+            if (!d_delivery_active(dom)) return false;
         }
         hold_update(dom, NULL, o);
     }

@@ -43,6 +43,9 @@ alone do not authorize freeing provider storage.
 | `classic.c`: user-agent text | Navigator's window | Provider call through string interpretation/copy. Inactive service refuses; constant Navigator members do not query the provider. |
 | `classic.c`: cookies | Document or Navigator window | Each get/set/enabled call. Setters check after conversion; reads recheck after a response, before retrying with a larger buffer. Inactive cookie service refuses. |
 | `classic.c`, `attr.c`: missing-global and broken-attribute diagnostics | Diagnostic binding | Native callback. Inactive diagnostics are omitted; retained functions and detached Attr records remain usable. |
+| `core.c`: shared millisecond/microsecond reads; callers in timers, idle, animation, events, messages, storage, XHR, intersection and Web Animations | Clock's document | Each host read; inactive reads use binding-owned saved samples. Timer/idle/frame creation and message posting recheck after clock callbacks before publishing work or detaching transfers. Transport/storage cleanup remains a separate obligation below. |
+| `performance.c`: current time and navigation timing | Performance object's window | Native clock/timing call through snapshot copy. Live `now()` and implicit mark/measure timestamps refuse retirement; explicit timestamps and previously sampled navigation timing remain usable. |
+| `screen.c`, `view.c`: zoom and media-query sampling | Screen or media-query window | Each zoom call. A media environment uses one sample; post-call retirement refuses script query results and stops native media delivery. Stored screen metadata remains available. |
 
 ## Entries still to integrate
 
@@ -51,8 +54,6 @@ successful public finish can promise that opaque storage is no longer borrowed.
 
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
-| Host clocks and navigation timing | `timer.c`, `idle.c`, `animation.c`, `performance.c`, `event.c`, `message.c`, `xhr.c`, `storage.c`, `intersection.c`, `webanimation.c` | Guard native clock reads; distinguish inactive script requests from pure stored timestamps and scheduler no-work answers. |
-| Zoom | `screen.c`, `view.c` media-query callers | Guard native zoom reads and stop queries/delivery after retirement. Stored screen metadata remains separate. |
 | Failed diagnostics, script/module/report hosts and console | `report.c`, libjs host installation | Detach report/loader/output routes without deleting siblings' state. Missing-global and broken-attribute loans are covered above. |
 | Storage identity/load/commit and walkers | `storage.c` | Guard normal service entry; settle owed changes once while provider remains valid. Cleanup must also work during root drain, which has set `closed`. |
 | History length/update/fragment | `window.c` | Guard after URL/state conversions and through host completion; retained serialized data is separate from navigation activity. |

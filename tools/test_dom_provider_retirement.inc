@@ -8,8 +8,12 @@ enum {
     RP_GEOMETRY, RP_HIT, RP_RECTS, RP_SVG, RP_VIEW, RP_SCROLL, RP_COMPUTED,
     RP_IMAGE, RP_IMAGE_EVENT, RP_FONT, RP_RESIZE, RP_INTERSECTION, RP_DAMAGE, RP_DAMAGE_RESET,
     RP_ALERT, RP_WRITE, RP_OPEN, RP_ENTROPY, RP_FOCUS, RP_HAS_FOCUS, RP_ACTIVATE, RP_REPORT,
-    RP_SCRIPT, RP_COOKIE_READ, RP_COOKIE_SET, RP_COOKIE_ENABLED, RP_AGENT, RP_MISS, RP_BROKEN, RP_UPDATE,
-    RP_RELEASE, RP_COUNT
+    RP_SCRIPT, RP_COOKIE_READ, RP_COOKIE_SET, RP_COOKIE_ENABLED, RP_AGENT, RP_MISS, RP_BROKEN,
+    RP_CLOCK_TIMER, RP_CLOCK_INTERVAL, RP_CLOCK_RAF, RP_CLOCK_IDLE_TIMEOUT, RP_CLOCK_POST, RP_CLOCK_PORT,
+    RP_CLOCK_NOW, RP_CLOCK_MARK, RP_CLOCK_MEASURE, RP_CLOCK_EVENT, RP_TIMING,
+    RP_ZOOM_RATIO, RP_ZOOM_SCREEN, RP_ZOOM_MEDIA_NEW, RP_ZOOM_MEDIA_READ, RP_ZOOM_MEDIA_STEP,
+    RP_CLOCK_IDLE_NATIVE, RP_CLOCK_RAF_NATIVE, RP_CLOCK_WA, RP_CLOCK_NOW_MS, RP_CLOCK_WA_NATIVE,
+    RP_UPDATE, RP_RELEASE, RP_MS, RP_US, RP_ZOOM, RP_COUNT
 };
 typedef struct {
     ClusterProvider base;
@@ -208,6 +212,42 @@ static void retirement_broken(void *opaque, const char *sentence)
     (void)sentence;
     retirement_provider_touch(opaque, RP_BROKEN);
 }
+static uint64_t retirement_now_ms(void *opaque)
+{
+    RetirementProvider *p = opaque;
+    if (p->binding) {
+        unsigned kind = (p->kind >= RP_CLOCK_TIMER && p->kind <= RP_CLOCK_PORT) ||
+            p->kind == RP_CLOCK_EVENT || p->kind == RP_CLOCK_IDLE_NATIVE ||
+            p->kind == RP_CLOCK_WA || p->kind == RP_CLOCK_NOW_MS ? p->kind : RP_MS;
+        retirement_provider_touch(p, kind);
+    }
+    return 1005;
+}
+static uint64_t retirement_now_us(void *opaque)
+{
+    RetirementProvider *p = opaque;
+    if (p->binding) {
+        unsigned kind = (p->kind >= RP_CLOCK_NOW && p->kind <= RP_CLOCK_MEASURE) ||
+            p->kind == RP_CLOCK_RAF_NATIVE || p->kind == RP_CLOCK_WA_NATIVE ? p->kind : RP_US;
+        retirement_provider_touch(p, kind);
+    }
+    return 1005000;
+}
+static void retirement_timing(void *opaque, os64_dom_timing_t *out)
+{
+    RetirementProvider *p = opaque;
+    if (p->binding) retirement_provider_touch(p, RP_TIMING);
+    out->origin_us = 1000000; out->origin_epoch_us = 2000000;
+    out->at[OS64_DOM_TIMING_FETCH_START] = 5000;
+    out->at[OS64_DOM_TIMING_LOAD_END] = 7000;
+    out->type = 1; out->redirects = 3;
+}
+static uint32_t retirement_zoom(void *opaque)
+{
+    RetirementProvider *p = opaque;
+    retirement_provider_touch(p, p->kind >= RP_ZOOM_RATIO && p->kind <= RP_ZOOM_MEDIA_STEP ? p->kind : RP_ZOOM);
+    return 1250;
+}
 static void provider_native_retirement_cases(void)
 {
     const char *operations[] = {
@@ -220,7 +260,13 @@ static void provider_native_retirement_cases(void)
         "assert(!B.document.hasFocus())", "B.box.focus()", "B.input.reportValidity()",
         "B.document.body.appendChild(B.scripts)", "B.document.cookie", "B.document.cookie='k=v'",
         "B.navigator.cookieEnabled", "assert(B.navigator.userAgent==='Chrome/123')", "B.missingProbe()",
-        "assert(B.attr.value===''&&B.attr.ownerElement===null)"
+        "assert(B.attr.value===''&&B.attr.ownerElement===null)",
+        "B.setTimeout(()=>{},1)", "B.setInterval(()=>{},1)", "B.requestAnimationFrame(()=>{})",
+        "B.requestIdleCallback(()=>{},{timeout:1})", "B.postMessage('x','*',[B.buffer])",
+        "B.channel.port1.postMessage('x',[B.buffer])", "B.performance.now()", "B.performance.mark('implicit')",
+        "B.performance.measure('implicit')", "new B.Event('mark')", "assert(B.performance.timing.loadEventEnd===2007)",
+        "B.devicePixelRatio", "B.screen.width", "B.matchMedia('(resolution: 1.25dppx)')", "B.media.matches", NULL,
+        NULL, NULL, "B.document.timeline.currentTime", "B.performance.now()", NULL
     };
     for (int policy = OS64_JS_TEARDOWN_FATAL; policy <= OS64_JS_TEARDOWN_RECLAIM; ++policy)
     for (unsigned kind = 0; kind < sizeof(operations) / sizeof(operations[0]); kind++) {
@@ -245,6 +291,10 @@ static void provider_native_retirement_cases(void)
             options.entropy = retirement_entropy; options.focus = retirement_focus;
             options.activate = retirement_activate; options.script_connected = retirement_script;
             options.broken = retirement_broken;
+            options.now_ms = retirement_now_ms;
+            options.now_us = kind == RP_CLOCK_NOW_MS ? NULL : retirement_now_us;
+            options.timing = retirement_timing; options.zoom = retirement_zoom;
+            options.screen = (os64_dom_screen_t){.width=1920, .height=1080, .color_depth=24};
             os64_dom_admission_t admission = os64_dom_create_in_realm(cluster, realms[i], f.document, f.state, &options, &out);
             p[i] = (RetirementProvider){.binding = admission.binding, .realm = realms[i], .kind = kind,
                                        .base = {.document = f.document, .width = 100 + (int)i}};
@@ -289,6 +339,12 @@ static void provider_native_retirement_cases(void)
                     "for(let i=0;i<2;i++){let s=document.createElement('script');s.text='void 0';scripts.appendChild(s)}"
                     "globalThis.missingProbe=()=>typeof serviceMissing;",
                     "provider retirement: retained objects prepared");
+                realm_script(realms[i],
+                    "globalThis.buffer=new ArrayBuffer(16);globalThis.channel=new MessageChannel();"
+                    "globalThis.savedEvent=new Event('saved');globalThis.savedStamp=savedEvent.timeStamp;"
+                    "globalThis.savedTiming=performance.timing.loadEventEnd;"
+                    "globalThis.media=matchMedia('(resolution: 1.25dppx)');",
+                    "provider retirement: clock and media snapshots prepared");
             }
             JSContext *ac = os64_js_realm_context(realms[0], OS64_JS_ABI_ID, &out);
             JSContext *bc = os64_js_realm_context(realms[1], OS64_JS_ABI_ID, &out);
@@ -307,6 +363,15 @@ static void provider_native_retirement_cases(void)
                     "context.fillRect(0,0,1,1);canvas2.getContext('2d').fillRect(0,0,1,1);" :
                     "canvas.width=3;canvas2.width=4;", "provider retirement: two dirty canvases prepared");
             }
+            if (kind == RP_CLOCK_IDLE_NATIVE || kind == RP_CLOCK_RAF_NATIVE)
+                realm_script(realms[1], kind == RP_CLOCK_IDLE_NATIVE ?
+                    "requestIdleCallback(()=>{throw Error('retired idle ran')});" :
+                    "requestAnimationFrame(()=>{throw Error('retired frame ran')});",
+                    "provider retirement: native scheduler opportunity prepared");
+            if (kind == RP_ZOOM_MEDIA_STEP) p[1].base.width++;
+            if (kind == RP_CLOCK_WA_NATIVE)
+                realm_script(realms[1], "box.animate([{opacity:0},{opacity:1}],1000);",
+                             "provider retirement: animation update prepared");
             memset(p[1].calls, 0, sizeof(p[1].calls)); p[1].armed = true;
             if (kind == RP_BROKEN)
                 check(os64_html_remove_attr(p[1].base.document, native_id(p[1].base.document->document, "service-box"),
@@ -324,6 +389,13 @@ static void provider_native_retirement_cases(void)
                 if (kind == RP_FOCUS || kind == RP_HAS_FOCUS || kind == RP_AGENT || kind == RP_BROKEN)
                     realm_script(realms[0], "assert(!operationThrew);",
                                  "provider retirement: focus becomes inactive and borrowed agent text is copied");
+                if ((kind >= RP_CLOCK_TIMER && kind <= RP_CLOCK_MEASURE) ||
+                    (kind >= RP_ZOOM_RATIO && kind <= RP_ZOOM_MEDIA_READ) || kind == RP_CLOCK_NOW_MS)
+                    realm_script(realms[0], "assert(operationThrew&&operationError==='InvalidStateError');",
+                                 "provider retirement: clock or zoom retirement refuses service completion");
+                if (kind == RP_CLOCK_EVENT || kind == RP_TIMING || kind == RP_CLOCK_WA)
+                    realm_script(realms[0], "assert(!operationThrew);",
+                                 "provider retirement: passive snapshot survives native mark");
             } else if (kind == RP_IMAGE_EVENT) {
                 check(!os64_dom_image_event(p[1].binding, NULL, NULL, false),
                       "provider retirement: native image task stops after acquisition retirement");
@@ -331,13 +403,31 @@ static void provider_native_retirement_cases(void)
                 (void)os64_dom_resizes_step(p[0].binding, &out);
             } else if (kind == RP_INTERSECTION) {
                 (void)os64_dom_intersections_update(p[0].binding);
+            } else if (kind == RP_ZOOM_MEDIA_STEP) {
+                check(!os64_dom_view_step(p[1].binding, &out), "provider retirement: media sampling stops after mark");
+            } else if (kind == RP_CLOCK_IDLE_NATIVE) {
+                check(!os64_dom_idle_run(p[1].binding, &out), "provider retirement: native idle clock stops delivery");
+            } else if (kind == RP_CLOCK_RAF_NATIVE) {
+                check(!os64_dom_animation_fire(p[1].binding, 2000, &out), "provider retirement: native frame clock stops delivery");
+            } else if (kind == RP_CLOCK_WA_NATIVE) {
+                check(!os64_dom_web_animations_update(p[1].binding, 2000, &out),
+                      "provider retirement: native animation clock stops update");
             } else {
                 os64_dom_canvas_visit_damage(p[1].binding, retirement_damage, &p[1]);
             }
-            check(os64_js_realm_is_retired(realms[1]) && p[1].calls[kind] == 1,
-                  "provider retirement: one provider call marks child and no second pass follows");
+            char completion[160];
+            snprintf(completion, sizeof(completion),
+                     "provider retirement: one provider call marks child and no second pass follows (kind %u, calls %u)",
+                     kind, p[1].calls[kind]);
+            check(os64_js_realm_is_retired(realms[1]) && p[1].calls[kind] == 1, completion);
             check(!d_provider_busy(p[0].binding) && !d_provider_busy(p[1].binding),
                   "provider retirement: loans balance after success or refusal");
+            check(os64_dom_timer_next(p[1].binding) == UINT64_MAX &&
+                  os64_dom_animation_next(p[1].binding) == UINT64_MAX &&
+                  os64_dom_idle_next(p[1].binding) == UINT64_MAX &&
+                  os64_dom_web_animations_next(p[1].binding) == UINT64_MAX &&
+                  os64_dom_message_next(p[1].binding) == UINT64_MAX,
+                  "provider retirement: clock retirement publishes no scheduler opportunity");
             if (kind == RP_HIT || kind == RP_RECTS) {
                 os64_dom_geometry_stats_t stats = os64_dom_geometry_stats(p[1].binding, false);
                 check(stats.layouts == 1 && stats.elapsed_us == 7,
@@ -369,6 +459,17 @@ static void provider_native_retirement_cases(void)
                 "assert(refused(()=>B.navigator.cookieEnabled));assert(refused(()=>B.navigator.userAgent));"
                 "assert(B.navigator.appName==='Netscape'&&B.navigator.language.length>0);"
                 "assert(B.attr.value===''&&B.attr.ownerElement===null);"
+                "assert(B.buffer.byteLength===16);"
+                "assert(refused(()=>B.performance.now()));assert(refused(()=>B.performance.mark('late')));"
+                "assert(refused(()=>B.performance.measure('late')));"
+                "assert(B.performance.mark('explicit',{startTime:3}).startTime===3);"
+                "assert(B.performance.measure('explicit',{start:3,end:5}).duration===2);"
+                "assert(B.savedEvent.timeStamp===B.savedStamp&&new B.Event('late').timeStamp===B.savedStamp);"
+                "assert(B.performance.timing.loadEventEnd===B.savedTiming&&B.performance.timeOrigin===2000);"
+                "assert(B.performance.navigation.type===1&&B.performance.navigation.redirectCount===3);"
+                "assert(refused(()=>B.devicePixelRatio));assert(refused(()=>B.screen.width));"
+                "assert(refused(()=>B.media.matches));assert(refused(()=>B.matchMedia('screen')));"
+                "assert(B.screen.colorDepth===24&&typeof B.media.media==='string');"
                 "assert(B.crypto.getRandomValues(new Uint8Array(0)).length===0);"
                 "globalThis.digestLength=0;B.crypto.subtle.digest('SHA-256',new Uint8Array()).then(b=>digestLength=b.byteLength);"
                 "B.context.fillStyle='red';B.context.fillRect(0,0,1,1);"

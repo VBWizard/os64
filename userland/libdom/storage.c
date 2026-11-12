@@ -416,7 +416,7 @@ os64_dom_storage_status_t os64_dom_storage_merge(const void *image, size_t image
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static bool kept(const os64_dom_t *dom, const DStorageArea *area)

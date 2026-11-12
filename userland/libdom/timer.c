@@ -7,7 +7,7 @@
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static void release_values(os64_dom_t *dom, DTimer *timer)
@@ -135,6 +135,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     timer->nesting = dom->timer_nesting + 1;
     timer->delay = clamp((uint64_t)delay, timer->nesting);
     timer->due = now_ms(dom) + timer->delay;
+    if (!d_require_active(dom, ctx)) { timer_free(dom, timer); return JS_EXCEPTION; }
     insert(dom, timer);
     dom->timer_count++;
     return JS_NewUint32(ctx, timer->id);
@@ -161,6 +162,7 @@ uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t
     timer->nesting = dom->timer_nesting + 1;
     timer->delay = delay;
     timer->due = now_ms(dom) + delay;
+    if (!d_require_active(dom, ctx)) { timer_free(dom, timer); return 0; }
     insert(dom, timer);
     dom->timer_count++;
     return timer->id;

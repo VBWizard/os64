@@ -80,7 +80,7 @@ struct DMessage {
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static const char *page_address(const os64_dom_t *dom)
@@ -184,9 +184,11 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
         }
     }
     if (converted == 0 && !d_require_active(target, ctx)) converted = -1;
+    uint64_t posted = converted == 0 ? now_ms(target) : 0;
+    if (converted == 0 && !d_require_active(target, ctx)) converted = -1;
     DMessage *message = converted == 0 ? d_alloc(target, sizeof(*message)) : NULL;
     if (message != NULL) {
-        *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = now_ms(target)};
+        *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = posted};
         char origin[WAY_ORIGIN_TEXT_MAX];
         message->origin = text_copy(target, d_origin(page_address(poster), origin, sizeof(origin)) ? origin : "null");
         if (message->origin == NULL) {
@@ -505,6 +507,7 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         converted = -1;
     }
     DClone *clone = converted == 0 ? d_clone_write(dom, ctx, argv[0], transfer, count) : NULL;
+    uint64_t posted = clone != NULL ? now_ms(dom) : 0;
     if (clone != NULL && !d_require_active(dom, ctx)) {
         d_clone_free(dom->engine, clone);
         clone = NULL;
@@ -520,7 +523,7 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         return clone == NULL ? JS_EXCEPTION : JS_UNDEFINED;
     }
     *message = (DMessage){.clone = clone, .source = JS_UNDEFINED, .port = JS_UNDEFINED, .target_kind = T_ANY,
-                          .posted = now_ms(dom)};
+                          .posted = posted};
     if (target->started) {
         message->port = receiver;
         message_enqueue(target->dom, message);
