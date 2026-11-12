@@ -34,6 +34,7 @@
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
+#include "x86_64.h"          // rdtsc — the poll's measurements
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern const uint8_t bt_ax210_sfi[], bt_ax210_sfi_end[];
@@ -235,6 +236,9 @@ typedef struct {
 	uint64_t          control_data_trb;
 	uint64_t          control_status_trb;
 	volatile uint16_t xfer_actual;
+
+	// Events xhci_poll has drained from this controller (/sys/usb).
+	uint64_t          events_polled;
 } xhci_t;
 
 #define MAX_XHCI_CONTROLLERS 8
@@ -255,6 +259,98 @@ static volatile uint32_t s_bond_io_busy;
 static bool s_bond_manager_ready;
 
 extern volatile uint64_t kTicksSinceStart;   // Typematic and USB/Bluetooth deadlines.
+extern uint64_t kCPUCyclesPerSecond;         // TSC cycles to time, for the poll's measurements.
+
+// ── What the poll measures about itself (/sys/usb) ──────────────────────────
+//
+// A device that is slow to answer has two possible causes that look alike
+// from a chair: the controller held an event and the poll did not come round
+// to read it, or the event had not happened yet (a Bluetooth scan that has
+// not seen the device). These numbers tell them apart. A poll's GAP is the
+// time since the poll before it; an event a poll drains waited no longer
+// than that poll's gap, so the gaps of the polls that found events bound
+// how long anything sat unread. The TIMELINE lists what Bluetooth did and
+// when, each line with the polls, events and longest gap since the line
+// before, so a slow step can be laid beside how often the poll ran during
+// it. Everything here is written by the poll's owner under s_poll_busy,
+// except s_polls_lost, which the callers that lose the flag count.
+
+static uint64_t s_polls;               // polls that took the flag
+static uint64_t s_polls_with_events;   // of those, the ones that drained an event
+static uint64_t s_polls_lost;          // callers that found the flag held and left
+static uint64_t s_poll_last_tsc;       // when the previous poll began
+static uint64_t s_poll_gap_max;        // longest gap of any poll, in cycles
+// Gaps of the polls that drained events, by size: how long an event may
+// have sat.
+static uint64_t s_event_gap_max;       // cycles
+static uint64_t s_event_gap_10ms, s_event_gap_100ms, s_event_gap_1s, s_event_gap_over_1s;
+
+typedef enum {
+	XHCI_TL_SCAN_STARTED,
+	XHCI_TL_SCAN_FINISHED,   // `to` = devices found, `from` = 1 when the scan failed
+	XHCI_TL_LE_PHASE,        // `slot` moved from phase `from` to phase `to`
+} xhci_timeline_kind_t;
+
+typedef struct {
+	uint64_t at_ms;          // uptime
+	uint8_t  kind, slot, from, to;
+	uint32_t polls;          // polls since the previous line
+	uint32_t events;         // events those polls drained
+	uint64_t gap_max;        // the longest gap among them, in cycles
+} xhci_timeline_entry_t;
+
+// The last XHCI_TIMELINE lines. A reconnection walks about fifteen phases
+// and a waiting peer costs two lines a scan round, so this holds a
+// reconnection and several minutes of the waiting before it.
+#define XHCI_TIMELINE 64
+static xhci_timeline_entry_t s_timeline[XHCI_TIMELINE];
+static uint64_t s_timeline_count;      // lines ever written; the ring keeps the newest
+// Since the previous line.
+static uint32_t s_interval_polls, s_interval_events;
+static uint64_t s_interval_gap_max;
+
+static void xhci_timeline_add(xhci_timeline_kind_t kind, unsigned slot, unsigned from, unsigned to)
+{
+	xhci_timeline_entry_t *e = &s_timeline[s_timeline_count++ % XHCI_TIMELINE];
+	e->at_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+	e->kind = (uint8_t)kind;  e->slot = (uint8_t)slot;
+	e->from = (uint8_t)from;  e->to = (uint8_t)to;
+	e->polls = s_interval_polls;  e->events = s_interval_events;
+	e->gap_max = s_interval_gap_max;
+	s_interval_polls = s_interval_events = 0;
+	s_interval_gap_max = 0;
+}
+
+// A poll begins: its gap is known at once, and counted before any work, so
+// that a timeline line written during this poll includes it. The event
+// that moves Bluetooth on is drained by the poll that writes the line.
+// Returns the gap in cycles; the first poll has no poll before it and so
+// no gap.
+static uint64_t xhci_poll_began(void)
+{
+	uint64_t now = rdtsc();
+	uint64_t gap = s_poll_last_tsc ? now - s_poll_last_tsc : 0;
+	s_poll_last_tsc = now;
+	s_polls++;
+	s_interval_polls++;
+	if (gap > s_poll_gap_max) s_poll_gap_max = gap;
+	if (gap > s_interval_gap_max) s_interval_gap_max = gap;
+	return gap;
+}
+
+// A poll ends having drained `events` after a gap of `gap` cycles.
+static void xhci_poll_ended(uint64_t gap, uint32_t events)
+{
+	if (events == 0)
+		return;
+	s_polls_with_events++;
+	if (gap > s_event_gap_max) s_event_gap_max = gap;
+	uint64_t ms = kCPUCyclesPerSecond / 1000;
+	if (gap <= 10 * ms) s_event_gap_10ms++;
+	else if (gap <= 100 * ms) s_event_gap_100ms++;
+	else if (gap <= 1000 * ms) s_event_gap_1s++;
+	else s_event_gap_over_1s++;
+}
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 
@@ -1157,6 +1253,7 @@ static void xhci_bt_runtime_poll(void)
         p->scan_history.valid = true;
         p->scan_history.finished = p->scan_history.failed = false;
         p->scan_history.le_only = scan->le_only;
+        xhci_timeline_add(XHCI_TL_SCAN_STARTED, 0, 0, 0);
     }
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
@@ -1169,11 +1266,15 @@ static void xhci_bt_runtime_poll(void)
         p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
         p->scan_history.finished = true;
         p->scan_history.failed = scan->phase != BT_SCAN_DONE;
+        xhci_timeline_add(XHCI_TL_SCAN_FINISHED, 0, p->scan_history.failed,
+                          scan->count > 255 ? 255 : scan->count);
     }
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
         const bt_le_t *s = &p->host.peers[i].le;
         if(s->mouse && bt_le_input_active(s)) xhci_bt_pointer_register(p,i);
         else if(p->pointers[i].settings_slot || p->pointers[i].settings_key[0]) input_pointer_unregister(&p->pointers[i]);
+        if (s->phase != before[i])
+            xhci_timeline_add(XHCI_TL_LE_PHASE, i, before[i], s->phase);
         if (s->phase != before[i])
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
@@ -1315,6 +1416,103 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 	}
 	__sync_lock_release(&s_poll_busy);
 	return n;
+}
+
+// The LE phases by name, for the timeline; bt_le.h's enum in its order.
+static const char *const kLePhaseNames[] = {
+	"idle", "reset", "mask", "host", "events",
+	"address", "resolve", "buffer", "shared_buffer", "create", "connecting",
+	"passkey", "random_low", "random_high", "pair",
+	"pair_wait", "confirm_low", "confirm_high", "confirm_wait",
+	"random_wait", "verify_low", "verify_high", "stk",
+	"encrypt", "encrypt_wait", "bond_keys", "services", "characteristics",
+	"descriptors", "report_map", "report_descriptors", "report_reference",
+	"protocol", "subscribe", "verify_ccc", "verify_protocol", "ready",
+	"cleanup", "failed", "stopped",
+};
+_Static_assert(sizeof(kLePhaseNames) / sizeof(kLePhaseNames[0]) == BT_LE_STOPPED + 1,
+               "kLePhaseNames must name every bt_le_phase_t");
+
+static const char *xhci_le_phase_name(unsigned phase)
+{
+	return phase <= BT_LE_STOPPED ? kLePhaseNames[phase] : "?";
+}
+
+// Append to a bounded text; what does not fit is dropped and the text stays
+// terminated.
+static void xhci_report_addf(char *out, size_t cap, size_t *len, const char *fmt, ...)
+{
+	if (*len + 1 >= cap) return;
+	va_list args;
+	va_start(args, fmt);
+	int n = vsnprintf(out + *len, cap - *len, fmt, args);
+	va_end(args);
+	if (n < 0) return;
+	*len = (size_t)n < cap - *len ? *len + (size_t)n : cap - 1;
+}
+
+// /sys/usb: the controllers, how the poll that serves them has run, and
+// the Bluetooth timeline (see "What the poll measures about itself").
+size_t xhci_usb_report(char *out, size_t cap)
+{
+	if (!cap) return 0;
+	size_t len = 0;
+	out[0] = '\0';
+	if (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		xhci_report_addf(out, cap, &len, "USB busy; retry this read\n");
+		return len;
+	}
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	if (per_us == 0) per_us = 1;
+
+	xhci_report_addf(out, cap, &len, "controllers: %u\n", s_controller_count);
+	for (uint32_t i = 0; i < s_controller_count; i++) {
+		const xhci_t *hc = &s_controllers[i];
+		xhci_report_addf(out, cap, &len,
+		                 "controller %u: %02x:%02x.%x driven=poll ports=%u events=%lu devices:",
+		                 i, hc->pci_bus, hc->pci_device, hc->pci_function, hc->max_ports,
+		                 hc->events_polled);
+		if (hc->keyboard.present)
+			xhci_report_addf(out, cap, &len, " keyboard@port%u", hc->keyboard.port);
+		if (hc->mouse.present)
+			xhci_report_addf(out, cap, &len, " mouse@port%u", hc->mouse.port);
+		if (hc->bt_probe)
+			xhci_report_addf(out, cap, &len, " bluetooth@port%u", hc->bt_probe->device->port);
+		if (!hc->keyboard.present && !hc->mouse.present && !hc->bt_probe)
+			xhci_report_addf(out, cap, &len, " none");
+		xhci_report_addf(out, cap, &len, "\n");
+	}
+
+	xhci_report_addf(out, cap, &len,
+	                 "polls: %lu\npolls_with_events: %lu\npolls_lost_busy: %lu\npoll_gap_max_us: %lu\n",
+	                 s_polls, s_polls_with_events,
+	                 __atomic_load_n(&s_polls_lost, __ATOMIC_RELAXED), s_poll_gap_max / per_us);
+	// An event waited no longer than the gap of the poll that drained it.
+	xhci_report_addf(out, cap, &len,
+	                 "event_gap_max_us: %lu\nevent_gap_to_10ms: %lu\nevent_gap_to_100ms: %lu\n"
+	                 "event_gap_to_1s: %lu\nevent_gap_over_1s: %lu\n",
+	                 s_event_gap_max / per_us, s_event_gap_10ms, s_event_gap_100ms,
+	                 s_event_gap_1s, s_event_gap_over_1s);
+
+	// Oldest first. polls, events and gap_max_us cover the time since the
+	// line above (since boot, for the first line ever written).
+	uint64_t shown = s_timeline_count < XHCI_TIMELINE ? s_timeline_count : XHCI_TIMELINE;
+	xhci_report_addf(out, cap, &len, "timeline: %lu of %lu lines\n", shown, s_timeline_count);
+	for (uint64_t n = s_timeline_count - shown; n < s_timeline_count; n++) {
+		const xhci_timeline_entry_t *e = &s_timeline[n % XHCI_TIMELINE];
+		xhci_report_addf(out, cap, &len, "  ms=%lu polls=%u events=%u gap_max_us=%lu ",
+		                 e->at_ms, e->polls, e->events, e->gap_max / per_us);
+		if (e->kind == XHCI_TL_SCAN_STARTED)
+			xhci_report_addf(out, cap, &len, "scan started\n");
+		else if (e->kind == XHCI_TL_SCAN_FINISHED)
+			xhci_report_addf(out, cap, &len, "scan %s found=%u\n",
+			                 e->from ? "failed" : "finished", e->to);
+		else
+			xhci_report_addf(out, cap, &len, "slot %u %s -> %s\n", e->slot,
+			                 xhci_le_phase_name(e->from), xhci_le_phase_name(e->to));
+	}
+	__sync_lock_release(&s_poll_busy);
+	return len;
 }
 
 // Validate lengths and descriptor ordering before walking untrusted USB data.
@@ -1987,14 +2185,22 @@ void xhci_poll(void)
 	// non-blocking busy flag. A losing caller leaves work for a later pass.
 	if (s_controller_count == 0)
 		return;
-	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0)
+	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0) {
+		__atomic_fetch_add(&s_polls_lost, 1, __ATOMIC_RELAXED);
 		return;
+	}
+	uint64_t gap = xhci_poll_began();
+	uint32_t events = 0;
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		s_hc = &s_controllers[i];
-		xhci_drain_events();
+		uint32_t drained = xhci_drain_events();
+		s_hc->events_polled += drained;
+		s_interval_events += drained;
+		events += drained;
 		xhci_bt_runtime_poll();
 		if (s_hc->keyboard.present)
 			hid_keyboard_tick(&s_hc->keyboard.kbd);
 	}
+	xhci_poll_ended(gap, events);
 	__sync_lock_release(&s_poll_busy);
 }

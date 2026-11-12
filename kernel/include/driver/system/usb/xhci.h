@@ -65,5 +65,9 @@ bool xhci_bluetooth_scan(void);
 bool xhci_bluetooth_connection(const char *data, size_t bytes);
 // file: 0 scan status, 1 discovery results, 2 LE connection status.
 size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file);
+// /sys/usb: the controllers and what is on each, the poll's own counts and
+// gaps, and the Bluetooth timeline. Returns the bytes written, terminated;
+// a caller that finds USB busy is told so in the text.
+size_t xhci_usb_report(char *out, size_t cap);
 
 #endif

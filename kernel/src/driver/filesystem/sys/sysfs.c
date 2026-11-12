@@ -27,7 +27,7 @@
 //
 //   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
 //                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb"
 //   /sys/acpi                    everything the firmware's ACPI tables
 //                                said, used or not: every table, the
 //                                FADT's power-management facts, the MADT's
@@ -382,6 +382,7 @@ typedef enum
 	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
+	SYS_NODE_USBFILE,    // /usb — the xHCI controllers, the poll's gaps, the Bluetooth timeline
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
 	SYS_NODE_ACPIFILE,   // /acpi — what the firmware's ACPI tables said (acpi_tables.h)
@@ -513,6 +514,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_SHLIBFILE;
+		return;
+	}
+
+	if (strcmp(comp, "usb") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_USBFILE;
 		return;
 	}
 
@@ -1168,6 +1177,21 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 // is almost always comparative ("what is loaded, what does it cost"), and a
 // single readable table answers it in one `cat`. The clipboard's ruling
 // applies in reverse — a file that wants to stay a file.
+// /sys/usb — which controller carries which device, how often the poll
+// that serves them has come round, and what Bluetooth did when. Read it
+// FIRST when a USB or Bluetooth device is slow to answer: it separates an
+// event that sat unread from one that had not happened yet. The driver
+// renders it, under the flag that serializes it with the poll.
+#define SYS_USB_TEXT_BYTES 12288
+static void sys_gen_usb(synth_text_t *t)
+{
+	char *text = kmalloc(SYS_USB_TEXT_BYTES);
+	if (text == NULL)
+		return;
+	synth_text_add(t, text, xhci_usb_report(text, SYS_USB_TEXT_BYTES));
+	kfree(text);
+}
+
 static void sys_gen_shlib(synth_text_t *t)
 {
 	synth_text_addf(t, "window: 0x%016lx-0x%016lx\n",
@@ -2440,6 +2464,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_NETKNET
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
+	         && sp.type != SYS_NODE_USBFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
 	         && sp.type != SYS_NODE_ACPIFILE
@@ -2460,6 +2485,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_gui(&text);
 	else if (sp.type == SYS_NODE_SHLIBFILE)
 		sys_gen_shlib(&text);
+	else if (sp.type == SYS_NODE_USBFILE)
+		sys_gen_usb(&text);
 	else if (sp.type == SYS_NODE_RANDOMFILE)
 		sys_gen_random(&text);
 	else if (sp.type == SYS_NODE_ACPIFILE)
@@ -2712,7 +2739,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2938,6 +2965,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_SHLIBFILE:
 			strncpy(entry->name, "shlib", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_USBFILE:
+			strncpy(entry->name, "usb", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_CONFFILE:
