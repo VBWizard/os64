@@ -77,6 +77,31 @@ function data. A raw engine runtime constructed outside this wrapper has its
 ordinary engine configuration, including shared-buffer exposure; this contract
 governs the wrapper-owned contexts.
 
+### Embedding global this
+
+`JS_SetGlobalThis(context, value)` retains an object as the engine context's
+default script/sloppy-call receiver. A trusted binding calls it on the owner
+thread during setup before author execution, using a value from that runtime.
+Like other raw JSValue arguments, cross-runtime values are outside the API
+contract; the engine does not discover their runtime from an arbitrary object.
+Non-objects return false without changing the receiver or pending exception.
+Success duplicates the reference before releasing the old hold, which may
+invoke native finalizers. The context marks the hold during GC and releases
+it on destruction. No extra reference is held for the unconfigured default.
+
+Global name/lexical storage and `JS_GetGlobalObject` keep their meaning.
+The setter does not rewrite `globalThis` or DOM aliases. Script evaluation,
+compiled script evaluation, indirect eval and sloppy null/undefined this
+selection use the receiver; explicit `JS_EvalThis` and strict/module semantics
+remain separate. The prepared-engine identity changes with this hook; public
+wrapper layouts and ABI 5 are unchanged.
+
+This primitive does not install a WindowProxy, protect a global object or
+complete browser receiver semantics. Global-property accessor/reference paths
+and the engine's `groupBy` callback receiver also need the F.4 security audit
+before a proxy can be exposed. Existing consumers do not opt in. See
+[the F.4 brief](../../docs/design/pending/IFRAME_F4_SECURITY.md).
+
 ## Realms
 
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
