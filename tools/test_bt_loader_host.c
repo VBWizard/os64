@@ -359,17 +359,6 @@ static void runtime_transport(void)
     xhci_bt_runtime_poll();
     CHECK(bt_releases==1 && s->phase==BT_LE_STOPPED && p->device->ep0.enqueue==enqueued);
     CHECK(mouse->phase==BT_LE_READY && mouse_packets==1 && mouse_buttons==1);
-    // The start-up round read the controller's ACL buffers, and the host
-    // took them before this scan cleared the round's copy.
-    CHECK(p->host.acl.known && !bt_acl_shared(&p->host.acl));
-    CHECK(p->host.acl.classic_size==1021 && p->host.acl.classic_total==8);
-    CHECK(p->host.acl.le_size==251 && p->host.acl.le_total==3);
-    {
-        char status[2048];
-        bt_host_status(&p->host,status,sizeof(status));
-        CHECK(strstr(status,"acl pools: classic 8 x 1021 bytes, in use 0; le 3 x 251 bytes, in use 0; "
-                            "stray completions 0, bad completions 0\n")!=NULL);
-    }
     CHECK(xhci_bluetooth_scan() && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     CHECK(!xhci_bluetooth_connection("reconnect",9));
     p->host.scan=(bt_scan_t){.shared_controller=true};
@@ -605,6 +594,17 @@ int main(void)
             }
             CHECK(hc.bluetooth.host.scan.phase==BT_SCAN_DONE && !hc.bluetooth.host.scan.radio_active);
             CHECK(!released && allocations-frees==10);
+            // The start-up round read the controller's ACL buffers, and the host
+            // took them before a later scan could clear the round's copy.
+            CHECK(hc.bluetooth.host.acl.known && !bt_acl_shared(&hc.bluetooth.host.acl));
+            CHECK(hc.bluetooth.host.acl.classic_size==1021 && hc.bluetooth.host.acl.classic_total==8);
+            CHECK(hc.bluetooth.host.acl.le_size==251 && hc.bluetooth.host.acl.le_total==3);
+            {
+                char status[2048];
+                bt_host_status(&hc.bluetooth.host,status,sizeof(status));
+                CHECK(strstr(status,"acl pools: classic 8 x 1021 bytes, in use 0; le 3 x 251 bytes, in use 0; "
+                                    "stray completions 0, bad completions 0\n")!=NULL);
+            }
             if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
