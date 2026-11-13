@@ -153,6 +153,12 @@ bool kEnableNet = true;
 // here that has one, so this flag exists for the day that machine needs to
 // boot WITHOUT its NIC in order to diagnose something else.
 bool kEnableR8125 = true;
+// Set by USBPOLL — no xHCI controller is given an interrupt; kusb wakes only
+// when the tick rings it (XHCI_INTERRUPT.md's flashlight).
+bool kUsbPoll = false;
+// USBIMOD=<n> — the xHCI interrupt moderation interval for this boot, in
+// 250 ns units; negative (absent) leaves the driver's own value.
+int kUsbImod = -1;
 // Set by NETPOLL — every NIC stays tick-driven: no INTx probe, no MSI, and
 // knet wakes only when processSignals rings it (DOORBELL.md's flashlight).
 bool kNetPoll = false;

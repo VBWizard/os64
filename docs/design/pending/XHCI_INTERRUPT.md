@@ -667,6 +667,66 @@ devices connected; whether the early pass contributed is not known.)
   boot's keyboard link dropped with reason `3d` during HID setup and was
   not retried until `reconnect` was written.
 
+### X.3 as built (2026-11-13)
+
+**What was built.** The choice of how a controller is driven and the top
+half's acknowledgement are pure (`xhci_drive_choose`,
+`xhci_irq_acknowledge`, `xhci_service.c`); the host model gained an
+interrupter (a message when an event arrives with the busy bit clear and
+when an `ERDP` write clears it over a ring that is not empty) and a random
+run driven by interrupts ALONE, with a top half that sometimes runs late,
+which must strand nothing and leave no busy bit standing. Fifty mutants,
+all caught. `pci_msi_enable` and `pci_msix_enable_one` (pci.c) program and
+read back; the RTL8125 moved to the first. `xhci_isr` is D6's top half and
+`xhci_interrupts_enable` is D5's six steps, called by `kusb` once, after
+signal processing is on and before its first pass.
+
+**Departures from the design.**
+
+- D5 says `kusb` enables "at the top of its body". It enables at the first
+  wake after `kProcessSignals`, because until then it does no pass (X.2's
+  boot correction), and an interrupt that nobody will answer for a second
+  buys nothing. Enabling tries for the serializing flag and is asked again
+  at the next wake if the flag was held.
+- D9's three values are not built in: `USBIMOD=<n>` on the command line
+  sets the interval for a boot, and the report prints the value read back.
+- The interrupt-to-service time is from the OLDEST unanswered interrupt to
+  the start of the drain that took the controller's mark; a second
+  interrupt before that drain does not move the stamp.
+- One drain rule matters more with interrupts than it did without: a drain
+  stopped by the deadline after ONE event from a ring last published empty
+  writes nothing (the #559 rule), so the busy bit stays and the controller
+  says nothing more. `kusb` raising its own bell for "work left" is what
+  brings it back; the model has that case by name.
+- § 4.9.4 against the busy-bit retire (D6's "the builder checks"): NOT
+  re-read against the specification's text in this slice. The write is
+  made only when the bit reads set after an acknowledged interrupt, which
+  is the condition the design gave; the check against the text is still
+  owed.
+
+**QEMU, 2026-11-13** (TCG; counts are the evidence, the times are not the
+P5's). 20 mouse moves and a typed command each run:
+
+| Boot | driven | events | fires | spurious | interrupt to service, max |
+|---|---|---|---|---|---|
+| `qemu-xhci`, 8 CPUs | msix | 80 | 80 | 0 | 0.86 ms |
+| `nec-usb-xhci,msi=on,msix=off` | msi | 80 | 80 | 0 | 0.50 ms |
+| both at once, keyboard on one, mouse on the other | msix + msi | 60 + 20 | 60 + 20 | 0 | 0.54 ms |
+| `qemu-xhci`, sparse APIC IDs, 24 CPUs | msix | 86 | 86 | 0 | 1.55 ms |
+| `USBPOLL` | tick (USBPOLL) | 82 | none | 0 | (79 passes found events) |
+| `USBIMOD=4000` | msix | 82 | 82 | 0 | 0.54 ms, `imod=4000` read back |
+| no xHCI controller | | | | 0 | `kusb: none` |
+
+Fires equal to events says each event had its own message here: QEMU's
+model does not moderate and the test's events are far apart. The counters
+tell an interrupt-driven boot from a tick-driven one; working input proves
+neither.
+
+**Not proven here:** anything on the P5 (X.3.9), the moderation value
+(X.3.5, Q4), suspend and resume (the tree does neither), and a controller
+whose programming does not take (no model refuses it; the path is the
+RTL8125's, reading back and staying on the tick).
+
 ## Measure first
 
 Before any change, on the P5, with the LE keyboard and the trackball each:

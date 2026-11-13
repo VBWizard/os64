@@ -9,12 +9,11 @@
 // that's kind of the whole point." — the owner, correctly.)
 //
 // SHAPE OF V1 (each limit is a decision, not an accident):
-//   - TICK-DRIVEN, not interrupts: no MSI/IOAPIC wiring. The event rings
-//     live in ordinary RAM and a daemon, kusb (kusb.h), drains them when
-//     the tick rings its bell, so an event waits about a tick, and longer
-//     when a pass's deadline carries work over (/sys/usb measures it;
-//     docs/design/pending/XHCI_INTERRUPT.md is the arc that adds the
-//     interrupt).
+//   - A DAEMON DRAINS THE EVENT RINGS: kusb (kusb.h), rung by each
+//     controller's MSI or MSI-X message and by the tick. A controller with
+//     neither capability runs on the tick alone, where an event waits
+//     about a tick (/sys/usb says how each is driven and measures it;
+//     docs/design/pending/XHCI_INTERRUPT.md is the design). No INTx.
 //   - ROOT PORTS ONLY, no hubs: input devices must be plugged straight into
 //     the machine. (Devices with built-in hubs enumerate AS hubs — those
 //     need the hub slice, which is future work.)
@@ -62,6 +61,18 @@ uint32_t xhci_controller_count(void);
 // `*work_left` says a controller was stopped by the deadline or not
 // reached, and the caller should come straight back.
 bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left);
+
+// One vector for every controller: class 4, beside the NICs', above the
+// APs' priority bar and below the scheduler's class.
+#define XHCI_IRQ_VECTOR 0x47
+// Give each controller the interrupt it offers (MSI, else MSI-X; the tick
+// stays for one that offers neither, for the USBPOLL boot, and for one
+// whose programming does not read back). kusb calls it once its bell is
+// registered and signal processing is on. False: USB's serializing flag was
+// held and nothing was done; ask again.
+bool xhci_interrupts_enable(void);
+// The top half; called only from handler_xhci_irq_asm.
+void xhci_isr(void);
 // Task-context bond storage; publishes restored bonds to the connection
 // manager and rings kusb, whose pass runs the connection policy.
 void xhci_bluetooth_maintain(void);

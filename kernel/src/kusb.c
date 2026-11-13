@@ -28,8 +28,8 @@ volatile uint64_t kKusbResponseLatencySamples;
 volatile uint64_t kKusbResponseLatencyMax;
 volatile uint64_t kKusbResponseLatencyLate10ms;
 
-// The nap between rings. The tick rings the bell once a tick, so this is
-// never the cadence anything runs at; it is the backstop for a ring that
+// The nap between rings. The tick rings the bell once a tick and an
+// interrupt rings it sooner, so this is never the cadence anything runs at; it is the backstop for a ring that
 // lands in the one window the scheduler's service points do not cover
 // (DOORBELL.md).
 #define KUSB_BACKSTOP_TICKS (TICKS_PER_SECOND)
@@ -48,6 +48,7 @@ void kusb_thread(void)
 	       get_core_local_storage()->cpu, xhci_controller_count());
 
 	bool parked = false;   // did the park at the foot of the last turn actually sleep?
+	bool interrupting = false;   // has every controller been offered its interrupt?
 	for (;;)
 	{
 		// The take clears the bit and hands back the stamp in one act, before
@@ -66,6 +67,11 @@ void kusb_thread(void)
 			parked = doorbell_park(&kUsbDoorbell, KUSB_BACKSTOP_TICKS);
 			continue;
 		}
+		// Once, before the first pass: that pass then drains what boot left
+		// on each ring, which is what makes enabling safe against an event
+		// already pending (xhci_interrupts_enable).
+		if (!interrupting)
+			interrupting = xhci_interrupts_enable();
 		kKusbWakes++;
 		uint64_t started = rdtsc();
 		if (doorbell_edge_rung(edge) && doorbell_edge_cpu(edge) == get_core_local_storage()->cpu)

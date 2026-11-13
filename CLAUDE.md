@@ -487,8 +487,20 @@ virtio because its drain waits for the tick.
   and a timeline of Bluetooth's scans and connection steps. The
   `since_read` maxima start again at each read, so reading it before and
   after a workload measures that workload. Read it FIRST when a USB or
-  Bluetooth device answers late. No controller has an interrupt yet (DEBTS;
-  the arc's X.3)
+  Bluetooth device answers late. **Each controller interrupts** (MSI where
+  it offers it, MSI-X where that is all it offers; `driven=` says which, or
+  `tick (why)`): one vector, 0x47, for all of them, addressed at the BSP.
+  The top half (`xhci_isr`) acknowledges `USBSTS.EINT` then `IMAN.IP`,
+  marks the controller and rings `kusb`'s bell; it takes no lock and
+  touches no event ring. `kusb` enables the interrupts itself, before its
+  first pass, so events boot left on a ring are that pass's. The tick still
+  rings the bell, which is all a tick-driven controller has. Per
+  interrupting controller `/sys/usb` gives `fires` and the time from an
+  interrupt to the drain that answered it; `interrupt_spurious` counts
+  handler entries that found nobody signalling. MSI and MSI-X are
+  programmed by `pci_msi_enable` / `pci_msix_enable_one` (pci.c), which
+  read back what they wrote and say whether it took; the RTL8125 uses the
+  first
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
@@ -920,6 +932,13 @@ the library serves every process). How it fits together:
     MSI — and knet wakes only when the tick rings it (DOORBELL.md's
     flashlight, the path that carried every packet before the doorbell).
     Like every token: it does NOT travel to the P5 by itself
+  - `USBPOLL`: no xHCI controller is given an interrupt; `kusb` drains them
+    when the tick rings it (XHCI_INTERRUPT.md's flashlight). `/sys/usb`
+    then reads `driven=tick (USBPOLL)`. Like every token it does NOT travel
+    to the P5
+  - `USBIMOD=<n>`: the xHCI interrupt moderation interval for this boot, in
+    250 ns units (absent = the driver's 1000, which is 250 us; 0 = none).
+    A measuring dial; it does not travel to the P5 either
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —
