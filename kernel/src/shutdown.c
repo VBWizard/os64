@@ -408,9 +408,8 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	if (xhci_bluetooth_quiescing())
 	{
 		shutdown_wait(2 * TICKS_PER_SECOND, xhci_bluetooth_quiescing);
-		printf("  Bluetooth adapter %s\n", xhci_bluetooth_quiesced() ? "reset" : "did not answer its reset");
-		printd(DEBUG_BOOT, "bluetooth: adapter %s on the way down\n",
-		       xhci_bluetooth_quiesced() ? "reset" : "did not answer its reset");
+		printf("  Bluetooth adapter %s\n", xhci_bluetooth_quiesce_verdict());
+		printd(DEBUG_BOOT, "bluetooth: adapter %s on the way down\n", xhci_bluetooth_quiesce_verdict());
 	}
 
 	// 2. Retire the log daemon. Set the flag, then keep yielding so the

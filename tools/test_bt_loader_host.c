@@ -529,7 +529,7 @@ int main(void)
             CHECK(!xhci_bluetooth_quiescing());
             bt->host.initialized=true;
             xhci_bluetooth_quiesce_begin();
-            CHECK(xhci_bluetooth_quiescing() && !xhci_bluetooth_quiesced());
+            CHECK(xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ASKED);
             hc.control_slot=0;
             xhci_bt_runtime_poll();
             CHECK(s_bt_quiesce==BT_QUIESCE_SENT && hc.control_slot==bt->device->slot);
@@ -541,8 +541,15 @@ int main(void)
             CHECK(xhci_bluetooth_quiescing());
             static const uint8_t answer[]={0x0e,0x04,0x01,0x03,0x0c,0x00};
             xhci_bt_runtime_event(bt,answer,sizeof(answer));
-            CHECK(!xhci_bluetooth_quiescing() && xhci_bluetooth_quiesced());
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ANSWERED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[0]=='r' && xhci_bluetooth_quiesce_verdict()[2]=='s');
             CHECK(bt->recent_events==2 && bt->recent_event[1][3]==0x03);
+            // A reset the controller rejects ends the wait and is not called a reset.
+            s_bt_quiesce=BT_QUIESCE_SENT;
+            static const uint8_t rejected[]={0x0e,0x04,0x01,0x03,0x0c,0x0c};
+            xhci_bt_runtime_event(bt,rejected,sizeof(rejected));
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_REFUSED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[2]=='f');
             s_bt_quiesce=BT_QUIESCE_NONE; bt->host.initialized=false;
         }
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);

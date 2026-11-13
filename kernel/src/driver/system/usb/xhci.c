@@ -799,7 +799,7 @@ static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input
 // machine is still up and the adapter healthy, the same reset leaves the
 // next boot an idle controller. The shutdown thread asks; kusb, which owns
 // the adapter, sends; the reply is taken where events arrive.
-enum { BT_QUIESCE_NONE, BT_QUIESCE_ASKED, BT_QUIESCE_SENT, BT_QUIESCE_ANSWERED };
+enum { BT_QUIESCE_NONE, BT_QUIESCE_ASKED, BT_QUIESCE_SENT, BT_QUIESCE_ANSWERED, BT_QUIESCE_REFUSED };
 static volatile uint8_t s_bt_quiesce;
 
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
@@ -813,7 +813,7 @@ static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t by
 		// that matters is the reset's Command Complete.
 		if (s_bt_quiesce == BT_QUIESCE_SENT && bytes >= 6 && event[0] == 0x0e &&
 		    event[3] == 0x03 && event[4] == 0x0c)
-			s_bt_quiesce = BT_QUIESCE_ANSWERED;
+			s_bt_quiesce = event[5] == 0 ? BT_QUIESCE_ANSWERED : BT_QUIESCE_REFUSED;
 		crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 		return;
 	}
@@ -2517,9 +2517,10 @@ bool xhci_bluetooth_quiescing(void)
 	return s_bt_quiesce == BT_QUIESCE_ASKED || s_bt_quiesce == BT_QUIESCE_SENT;
 }
 
-bool xhci_bluetooth_quiesced(void)
+const char *xhci_bluetooth_quiesce_verdict(void)
 {
-	return s_bt_quiesce == BT_QUIESCE_ANSWERED;
+	return s_bt_quiesce == BT_QUIESCE_ANSWERED ? "reset" :
+	       s_bt_quiesce == BT_QUIESCE_REFUSED ? "refused its reset" : "did not answer its reset";
 }
 
 uint32_t xhci_controller_count(void)

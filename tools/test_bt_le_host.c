@@ -1079,9 +1079,15 @@ static void integrity_drop_after_encryption(void)
     assert(!manager.blocked && manager.mic_drops==0);
     run(); assert(session.phase==BT_LE_READY);
     // And so does input flowing: drops with work between them are first drops.
+    // A link that is merely ready, with no report delivered, is not that.
     manager.mic_drops=2;
+    assert(session.reports==0);
+    bt_manager_step(&manager,&session,&scan,now);
+    assert(manager.mic_drops==2);
+    session.reports=1;
     bt_manager_step(&manager,&session,&scan,now);
     assert(manager.mic_drops==0);
+    session.reports=0;
     // The same reason BEFORE the saved key has encrypted the link is the
     // key's: no retry, and the slot waits for its user.
     assert(bt_manager_command(&manager,&session,&scan,"disconnect",10,now)); tick(true,true); run();

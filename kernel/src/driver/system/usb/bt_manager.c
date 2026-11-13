@@ -39,7 +39,10 @@ void bt_manager_step(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,uint64_t now)
     bt_manager_observe(m,s,now);
     if(!m->loaded || !m->automatic || m->suppressed || !s->bond.valid || m->blocked) return;
     if(s->phase==BT_LE_FAILED || scan->phase==BT_SCAN_FAILED) { m->blocked=true; return; }
-    if(bt_le_input_active(s)) { m->backoff_ms=2000; m->mic_drops=0; return; }
+    // A link that is ready has earned the short backoff; only one that has
+    // DELIVERED input ends a run of integrity drops, or a device that sets
+    // up, drops and sets up again would never reach the cap.
+    if(bt_le_input_active(s)) { m->backoff_ms=2000; if(s->reports) m->mic_drops=0; return; }
     if(!bt_le_quiescent(s)) return;
     if(s->phase==BT_LE_STOPPED && !s->retryable) { m->blocked=true; return; }
     // Each integrity-check drop is counted once, by the time it happened.
