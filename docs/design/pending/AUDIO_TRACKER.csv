@@ -1,0 +1,41 @@
+id,task,depends_on,status,done_in,notes
+Q1,Where the SBC encoder runs,,ruled,,"RULED 2026-11-12 by Chris: the kernel, on the terms in BLUETOOTH_AUDIO.md § Where the encoder lives (integer-only, allocates nothing, parses nothing from outside, host-tested against a reference, a narrow PCM-in frames-out boundary, failing closed)"
+Q2,An HDA output as the harness sink,,ruled,,"Settled 2026-11-12 by Chris (""for now it is just BT audio""): no HDA; the test sink is the harness sink"
+Q3,The fixed format,,ruled,,"RULED 2026-11-12 by Chris: signed 16-bit stereo at 48 kHz for the first slice, built with negotiation in mind; nothing above the sink assumes 48"
+Q4,Where the headphone session lives,,ruled,,"RULED 2026-11-12 by Chris: /sys/bluetooth, with the same words as the LE keyboard and mouse"
+Q5,How a player asks for the position,,ruled,,"RULED 2026-11-12 by Chris: a node beside /dev/audio, provided it costs no more than a syscall would"
+Q6,Whether the xHCI interrupt goes first,,ruled,,"RULED 2026-11-12 by Chris: first, as its own arc. Done: XHCI_TRACKER.csv (#557, #559, #563)"
+Q7,What a flush does to sound already in the headphones,,open,,"A proof, not a ruling: settled on the P5 with the real pair (a seek and an immediate resume) in A.3, before flush is called done there"
+Q8,The position's exact contract,,open,,"For A.1's design. Quinn's is the starting point: frames submitted, the monotonic time of the reading, a separately named estimate of the frame being heard, and a stream generation"
+A.1,"The seam, with a test sink, in QEMU",,design,,"Shares nothing with Bluetooth. Userland-facing kernel work: a new device, a daemon, a blocking wait"
+A.1.1,The design: the nodes and their words; the sink seam below the node; the ring and who pumps it; the position contract (Q8); what pause and flush retire on our side and how an old generation's completion is refused; the write that does not park and its bell; one owner; result codes; the state table before code,,todo,,"One read by someone other than the author, then Chris"
+A.1.2,"The ring and the position arithmetic, pure, host-tested with mutants: fill, wrap, underrun counting, generations, the position and its estimate across pause, underrun and flush",A.1.1,todo,,
+A.1.3,The test sink: takes PCM from the ring at the rate the clock says a real one would and writes it where the harness reads it back; chosen by name when no other sink is present,A.1.2,todo,,
+A.1.4,"/dev/audio: open (one owner, its own refusal code), write that parks on a full ring and obeys signal_park_must_end and voids its waiter slot, close; the pump daemon",A.1.2,todo,,
+A.1.5,"The write that does not park, and the bell that rings when the ring has room (os64/bell.h)",A.1.4,todo,,
+A.1.6,"Pause and flush, and the generation they change",A.1.4,todo,,
+A.1.7,/dev/volume: a gain applied to the PCM on its way to the sink,A.1.4,todo,,
+A.1.8,"The position node beside /dev/audio, with its measured cost against a plain syscall (Q5)",A.1.4,todo,,
+A.1.9,"/sys/audio: the sink and its state, the ring fill, underruns since boot and since last read, the position, the latency estimate",A.1.4,todo,,
+A.1.10,"play: a WAV player in /bin, resampling to the device format where the file differs",A.1.4,todo,,Whose it is (Fable infrastructure or one of Chris utilities) is asked in the design
+A.1.11,"QEMU proof with the test sink, sample for sample: the park, the bell, pause and flush, volume, underrun counting, the position and latency bookkeeping; a fixture in /tests",A.1.3 A.1.5 A.1.6 A.1.7 A.1.8 A.1.9,todo,,
+A.1.12,"The books: CLAUDE.md gains the audio section; DEBTS rows for what the seam leaves out (a mixer, format negotiation, other sinks)",A.1.11,todo,,
+A.2,The Classic transport: a P5 connection to the headphones that goes nowhere,,todo,,"Kernel work on a radio protocol: Fable reviews the design, Codex the code"
+A.2.1,"The design: how one peer list holds LE and Classic; the send and receive buffers and the controller credit accounting made fit for both layouts (one shared pool and two); Classic HCI, pairing (SSP), L2CAP configuration, SDP as client and as responder; a headphone that calls us; the bond on disk; the state table before code",,todo,,BLUETOOTH_AUDIO.md's layer notes and Quinn's review are the inputs. btsnoop captures of the laptop pairing with the same headphones come first
+A.2.2,"The transport: the 512-byte send region, receive reassembly, and credits for both pool layouts, host-modelled with completions interleaved and a disconnection while packets are outstanding",A.2.1,todo,,
+A.2.3,"Classic HCI: inquiry or page, connection, authentication and encryption with Secure Simple Pairing; pure, with a host model of the peer, fuzzed",A.2.2,todo,,
+A.2.4,"Classic L2CAP: signalling and configuration, declining the modes we do not speak; pure, host-modelled, fuzzed",A.2.3,todo,,
+A.2.5,"SDP in both directions: asking for the sink record with an answer that comes in parts, and answering a peer that asks us; pure, host-modelled (an answer cut inside an attribute value; one that never finishes), fuzzed",A.2.4,todo,,
+A.2.6,"The session in /sys/bluetooth with the LE words (connect, forget, reconnect, reconnection at boot); the bond on disk",A.2.3,todo,,
+A.2.7,"P5: an encrypted link to the headphones with SDP asked and answered, made from either end; the LE keyboard and mouse still working beside it",A.2.5 A.2.6,todo,,Chris's hands
+A.3,AVDTP and the SBC encoder: sound plays,A.1 A.2,todo,,
+A.3.1,"The design: AVDTP as initiator and acceptor, the A2DP sink behind the seam, the encoder boundary and how it fails closed, pacing against credits, RTP sequence per packet, the latency constant",A.2.1,todo,,
+A.3.2,"The SBC encoder, PORTED, behind PCM-in frames-out: integer-only, no allocation, host-tested against a reference decoder to the error bound the specification allows",A.3.1,todo,,"Which implementation is ported, and its licence, are decided in the design and recorded in THIRD_PARTY.md"
+A.3.3,"AVDTP: discover, capabilities, configure, open, start, suspend, close, from either end and both at once; pure, with a host model of a sink, fuzzed",A.3.1,todo,,
+A.3.4,"The A2DP sink behind the audio seam: the pump paced by the controller credits, RTP sequence and timestamp checked apart from the encoder, underruns counted",A.3.2 A.3.3,todo,,
+A.3.5,"P5: pair, play a WAV; take the battery out mid-song and put it back; a scan during playback; the keyboard typing during playback; /sys/audio read after each",A.3.4,todo,,"Chris's hands, with the Bose QuietComfort Ultra and the older pair as backup"
+A.3.6,P5: the flush proof (Q7) and the latency constant measured,A.3.5,todo,,
+A.4,"Volume from the headphones, sniff mode, and scanning while streaming",A.3,todo,,
+A.4.1,"AVRCP absolute volume, both ways",A.3,todo,,
+A.4.2,Sniff mode when nothing is playing,A.3,todo,,
+A.4.3,"The scan-while-streaming measurement, and what the manager does about it",A.3,todo,,
