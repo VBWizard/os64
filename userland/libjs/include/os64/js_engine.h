@@ -8,6 +8,32 @@ typedef struct JSContext JSContext;
 typedef struct JSValue JSValue;
 typedef uint32_t JSClassID;
 
+typedef enum {
+    OS64_JS_SETTINGS_ENTRY,
+    OS64_JS_SETTINGS_INCUMBENT
+} os64_js_settings_role_t;
+typedef JSValue os64_js_settings_body_t(JSContext *entry, void *opaque);
+/* Owner-thread checked scope inside an existing turn/task. Entry and optional
+ * captured incumbent must be live, published members of the same runtime;
+ * private candidate setup is refused.
+ * NULL incumbent selects ordinary entry; non-NULL prepares a callback.
+ * Nested native bodies borrow the guard/budget; wrapper run/call stays BUSY.
+ * No task opening, checkpoint, deadline reset, exception reporting or capture.
+ * Body returns normally in C. Refusal leaves value untouched; admission
+ * transfers body's result (including JS_EXCEPTION) through value. Initialize
+ * value to JS_UNDEFINED and release it even when a sticky failure is reported.
+ * EXCEPTION leaves the engine exception pending for the caller. Every nested
+ * invocation needs separate outcome storage. See CONTRACT.md. */
+os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
+    os64_js_realm_t *incumbent, const char *caller_abi, os64_js_settings_body_t *body,
+    void *opaque, JSValue *value, os64_js_outcome_t *outcome);
+/* Borrow a live realm for this role inside a checked scope. NULL on refusal;
+ * no fallback for missing/foreign/retired/installing settings. No allocation,
+ * clock read, exception consumption or lifetime extension. Recheck after
+ * reentry/retirement. This is attribution, not an origin permission check. */
+os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome);
+
 /* Borrow the primary realm context, including inside native callbacks.
  * The calling unit supplies its compiled-in ABI ID and a separate outcome;
  * mismatch returns NULL/ABI_MISMATCH without exposing the context.

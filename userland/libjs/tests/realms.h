@@ -579,12 +579,14 @@ static void realm_failure_order_cases(void)
 #include "global_this.h"
 #include "native_call_contexts.h"
 #include "settings_scopes.h"
+#include "settings_bridge.h"
 
 static void realm_cases(void)
 {
     global_this_cases();
     native_call_context_cases();
     settings_scope_cases();
+    settings_bridge_cases();
     retirement_cases();
     staging_cases();
     realm_identity_cases();
