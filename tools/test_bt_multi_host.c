@@ -15,7 +15,7 @@ static void multi_report(void *ctx,unsigned slot,const bt_le_input_t *in)
 }
 static void multi_event(const uint8_t *p,size_t n) { bt_host_event(&host,p,n); }
 static void multi_wire(const uint8_t *p,size_t n)
-{ bt_host_receive(&host,p,n,multi_report,NULL); }
+{ bt_host_receive(&host,p,n,0,multi_report,NULL); }
 static void multi_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 { if(op==0x0c03) reset_count++; command(ctx,op,p,n); }
 static void step(void)
@@ -245,6 +245,129 @@ static void scan_recovery(void)
     now=host.init_retry_at; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
     puts("PASS: shared scan cleanup disables scanning without Reset; initial reset-confirmed setup failures remain retryable");
 }
+// The start-up round's reset and the reset that cleans up after it can both
+// go unanswered (the P5 after a warm reboot). That is not the boot: the
+// round is run again, with the command credit no reply gave back, and the
+// host is failed only when BT_HOST_INIT_ROUNDS have ended that way.
+static void start_up_rounds(void)
+{
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}}; reset_count=0;
+    for(unsigned round=1;round<=BT_HOST_INIT_ROUNDS;round++) {
+        step(); assert(host.init_retry_at && !host.failed);
+        now=host.init_retry_at; cmd_n=0; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
+        assert(reset_count==2*round-1);
+        now+=2000; step();                       // unanswered: the round turns to cleaning up
+        assert(host.scan.phase==BT_SCAN_CLEANUP && !host.failed);
+        cmd_n=0; step(); assert(reset_count==2*round);    // whose own reset goes out
+        now+=2000; step();                       // and is unanswered too
+        assert(host.init_failed_rounds==round);
+        assert(host.failed==(round==BT_HOST_INIT_ROUNDS));
+        if(!host.failed) assert(host.scan.phase==BT_SCAN_STOPPED && host.credits==1);
+    }
+    char text[4096]; bt_host_status(&host,text,sizeof(text));
+    assert(strstr(text,"controller: failed; reboot required\nstart-up rounds failed: 3 of 3\n"));
+
+    // A round that fails once and is answered the second time goes on.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}}; reset_count=0;
+    step(); now=host.init_retry_at; cmd_n=0; step();
+    now+=2000; step(); cmd_n=0; step(); now+=2000; step();
+    assert(host.init_failed_rounds==1 && !host.failed);
+    step(); now=host.init_retry_at; cmd_n=0; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
+    reply(0x0c03,0); cmd_n=0; step();
+    assert(!host.failed && host.scan.phase>BT_SCAN_RESET && host.scan.phase<BT_SCAN_CLEANUP);
+    assert(cmd_n && le_u16(cmd)==0x1003);        // the round moved on to its next command
+
+    // What a failed round died of outlives the round that follows it.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    step(); now=host.init_retry_at; cmd_n=0; step();
+    now+=2000; step(); cmd_n=0; step(); now+=2000; step();
+    step(); now=host.init_retry_at; cmd_n=0; step();     // round two is under way
+    assert(!host.scan.error && host.init_failed_rounds==1);
+    bt_host_status(&host,text,sizeof(text));
+    assert(strstr(text,"last failed start-up round: HCI command timed out (opcode 0c03 status 00); the USB transfer completed, no reply came\n"));
+
+    // An event that cannot be right, during start-up, fails the ROUND: the
+    // assembler can deliver one while it is finding its place after a tail.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    step(); now=host.init_retry_at; cmd_n=0; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
+    const uint8_t hardware[]={0x10,1,0x42}, runt[]={0x0e,1,1}, wrong[]={0x0f,3,0,1,3};
+    multi_event(hardware,sizeof(hardware)); assert(!host.failed && host.scan.hardware_error);
+    host.scan.hardware_error=false;
+    multi_event(runt,sizeof(runt)); assert(!host.failed && host.scan.bad_reply);
+    host.scan.bad_reply=false;
+    multi_event(wrong,sizeof(wrong)); assert(!host.failed && host.scan.bad_reply);
+    step(); assert(host.scan.phase==BT_SCAN_CLEANUP && !host.failed);     // the round fails, the host does not
+    // Between rounds there is nothing for it to belong to.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    multi_event(hardware,sizeof(hardware)); assert(!host.failed && !host.scan.hardware_error);
+    // Once the controller is up, the same event is the end of the host.
+    setup(); multi_event(hardware,sizeof(hardware)); assert(host.failed);
+    setup(); multi_event(runt,sizeof(runt)); assert(host.failed);
+
+    // A failed transport is not a round to repeat.
+    setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
+    step(); now=host.init_retry_at; cmd_n=0; step();
+    bt_host_tick(&host,++now,true,true,true,multi_command,acl,multi_report,NULL);
+    assert(host.failed && host.init_failed_rounds==0);
+    puts("PASS: an unanswered start-up round is run again with its credit restored, three failures fail the host, a failed transport is not retried");
+}
+// The ACL assembler gets back in step at transfer boundaries when it is fed
+// packets, and a header that cannot be real costs its transfer, not the host.
+static void acl_resync(void)
+{
+    enum { MPS=64 };
+    setup();
+    const uint8_t report[]={12,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};
+    // A tail left over from before this host took the adapter: three bytes.
+    const uint8_t tail[]={0x55,0x66,0x77};
+    bt_host_receive(&host,tail,sizeof(tail),MPS,multi_report,NULL);
+    assert(host.wire_used==0 && host.wire_resyncs==1 && !host.failed);
+    bt_host_receive(&host,report,sizeof(report),MPS,multi_report,NULL);
+    assert(input_count[0]==1 && host.wire_resyncs==1 && !host.failed);
+    // A tail long enough to read as a whole header with a believable
+    // length: the transfer still ended, inside what it called a body.
+    const uint8_t longer[]={0x55,0x66,0x10,0x00,0x77};
+    setup();
+    bt_host_receive(&host,longer,sizeof(longer),MPS,multi_report,NULL);
+    assert(host.wire_used==0 && host.wire_need==0 && host.wire_resyncs==1 && !host.failed);
+    bt_host_receive(&host,report,sizeof(report),MPS,multi_report,NULL);
+    assert(input_count[0]==1);
+    // The byte-stream form would have read the tail as part of a header.
+    setup();
+    bt_host_receive(&host,tail,sizeof(tail),0,multi_report,NULL);
+    bt_host_receive(&host,report,sizeof(report),0,multi_report,NULL);
+    assert(input_count[0]==0);
+    // A length that cannot be real: the stream form fails the host, the
+    // packet form skips to the end of the transfer and carries on.
+    uint8_t wild[MPS]; memset(wild,0xff,sizeof(wild));
+    setup(); bt_host_receive(&host,wild,sizeof(wild),0,multi_report,NULL); assert(host.failed);
+    setup(); bt_host_receive(&host,wild,sizeof(wild),MPS,multi_report,NULL);
+    assert(!host.failed && host.wire_skip && host.wire_resyncs==1 && host.wire_used==0);
+    bt_host_receive(&host,wild,sizeof(wild),MPS,multi_report,NULL);     // still that transfer
+    assert(host.wire_skip && host.wire_resyncs==1);
+    bt_host_receive(&host,wild,5,MPS,multi_report,NULL);                // its short last packet
+    assert(!host.wire_skip && !host.failed);
+    bt_host_receive(&host,report,sizeof(report),MPS,multi_report,NULL);
+    assert(input_count[0]==1);
+    // A wild length in a short packet is a whole transfer already.
+    setup(); bt_host_receive(&host,wild,8,MPS,multi_report,NULL);
+    assert(!host.failed && !host.wire_skip && host.wire_resyncs==1);
+    // The packet form drops nothing the stream form would deliver: two ACL
+    // packets in one USB packet are both routed.
+    uint8_t two[2*sizeof(report)]; memcpy(two,report,sizeof(report)); memcpy(two+sizeof(report),report,sizeof(report));
+    setup(); bt_host_receive(&host,two,sizeof(two),MPS,multi_report,NULL);
+    assert(input_count[0]==2 && host.wire_resyncs==0 && host.wire_used==0);
+    // A packet longer than one USB packet still assembles: full, then short.
+    uint8_t big[4+4+70]={12,0x20,74,0,70,0,4,0,0x1b,10,0,2,0,4};
+    setup();
+    bt_host_receive(&host,big,MPS,MPS,multi_report,NULL);
+    assert(host.wire_used==MPS && host.wire_resyncs==0);
+    bt_host_receive(&host,big+MPS,sizeof(big)-MPS,MPS,multi_report,NULL);
+    assert(host.wire_used==0 && host.wire_resyncs==0 && !host.failed);
+    char text[4096]; bt_host_status(&host,text,sizeof(text));
+    assert(strstr(text,"ACL framing resyncs: 0\n"));
+    puts("PASS: ACL assembly resyncs at transfer boundaries, skips an impossible length, and still spans packets");
+}
 static void peer_att_requests(void)
 {
     setup(); bt_le_t *s=&host.peers[1].le;
@@ -327,7 +450,7 @@ int main(void)
     mouse_interval();
     peer_att_requests();
     pairing_and_reconnect(); cancel_races(); credits_and_faults();
-    rejected_create_and_fragmentation(); scan_recovery();
+    rejected_create_and_fragmentation(); scan_recovery(); start_up_rounds(); acl_resync();
     saved_duplicate_requests();
     puts("Bluetooth multi-peer host tests passed");
 }

@@ -487,6 +487,11 @@ int main(void)
         xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
+        // The adapter's port as enumeration leaves it: connected, enabled,
+        // powered, with its connect-change bit standing.
+        uint32_t operational[(0x400+0x10*8)/4]={0}; hc.op=(void *)operational; hc.max_ports=8;
+        uint32_t *portsc=&operational[XHCI_OP_PORTSC(3)/4];
+        *portsc=PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17);
         hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
         hc.ctx_size=32;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
@@ -507,6 +512,46 @@ int main(void)
         bool retained=scenario==COLD_RSA || scenario==COLD_ECDSA || scenario==WARM ||
             scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR;
         CHECK((hc.bt_probe!=NULL)==retained);
+        // A retained adapter has its port's change bits acknowledged, with
+        // power written back and the enable bit NOT written (a one there
+        // disables the port). The model is plain memory, so what is read
+        // here is the value written.
+        if (retained) CHECK(*portsc==(PORTSC_PP|(1u<<17)));
+        else CHECK(*portsc==(PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17)));
+        // The reset on the way down. Nothing is asked of a host that has
+        // not started; once it has, kusb's poll sends HCI_Reset and stops
+        // running the host, and only the reset's own Command Complete is
+        // the answer.
+        if (scenario==WARM) {
+            xhci_bt_probe_t *bt=hc.bt_probe;
+            s_bt_quiesce=BT_QUIESCE_NONE;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(!xhci_bluetooth_quiescing());
+            bt->host.initialized=true;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ASKED);
+            hc.control_slot=0;
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT && hc.control_slot==bt->device->slot);
+            CHECK(bt->tx.buffer[512]==0x03 && bt->tx.buffer[513]==0x0c && bt->tx.buffer[514]==0);
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT);
+            static const uint8_t other[]={0x0e,0x04,0x01,0x01,0x10,0x00};
+            xhci_bt_runtime_event(bt,other,sizeof(other));
+            CHECK(xhci_bluetooth_quiescing());
+            static const uint8_t answer[]={0x0e,0x04,0x01,0x03,0x0c,0x00};
+            xhci_bt_runtime_event(bt,answer,sizeof(answer));
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_ANSWERED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[0]=='r' && xhci_bluetooth_quiesce_verdict()[2]=='s');
+            CHECK(bt->recent_events==2 && bt->recent_event[1][3]==0x03);
+            // A reset the controller rejects ends the wait and is not called a reset.
+            s_bt_quiesce=BT_QUIESCE_SENT;
+            static const uint8_t rejected[]={0x0e,0x04,0x01,0x03,0x0c,0x0c};
+            xhci_bt_runtime_event(bt,rejected,sizeof(rejected));
+            CHECK(!xhci_bluetooth_quiescing() && s_bt_quiesce==BT_QUIESCE_REFUSED);
+            CHECK(xhci_bluetooth_quiesce_verdict()[2]=='f');
+            s_bt_quiesce=BT_QUIESCE_NONE; bt->host.initialized=false;
+        }
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
         else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);

@@ -65,6 +65,15 @@ bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left);
 // Task-context bond storage; publishes restored bonds to the connection
 // manager and rings kusb, whose pass runs the connection policy.
 void xhci_bluetooth_maintain(void);
+// Reset the Bluetooth adapter before a reboot or power-off, so the next boot
+// does not meet firmware still holding this boot's links. begin() asks and
+// returns at once; quiescing() is true until the adapter answers (the
+// caller bounds the wait); the verdict says how it ended, as words for the
+// descent to print: reset, refused (a failing status), or no answer. With
+// no adapter in service, begin() asks nothing and quiescing() is false.
+void xhci_bluetooth_quiesce_begin(void);
+bool xhci_bluetooth_quiescing(void);
+const char *xhci_bluetooth_quiesce_verdict(void);
 // Enable the manager after boot-time mounts and configuration have settled.
 void xhci_bluetooth_start_manager(void);
 

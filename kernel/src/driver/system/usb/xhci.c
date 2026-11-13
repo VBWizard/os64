@@ -168,6 +168,10 @@ typedef struct {
 	bt_usb_endpoint_t endpoint;
 	bt_hci_stream_t stream;
 	bool retry_pending, retried, rearm_pending;
+	// For xhci_bt_log_usb_state: completions taken, the last one's code,
+	// and events for this endpoint that named a transfer not being waited on.
+	uint32_t completions, unmatched;
+	uint8_t last_cc;
 } xhci_bt_endpoint_t;
 
 // Intel transport state. Bring-up uses a stack instance, then transfers a
@@ -192,6 +196,23 @@ typedef struct {
 	hid_keyboard_t keyboards[BT_HOST_PEERS];
 	input_pointer_source_t pointers[BT_HOST_PEERS];
 	uint8_t timeline_phase[BT_HOST_PEERS];   // each slot's phase as /sys/usb's timeline last wrote it
+	// The adapter's port, as its status-change events left it, and control
+	// endpoint events that named no request in flight (xhci_bt_log_usb_state).
+	uint32_t port_changes, port_last_sc, ep0_unmatched;
+	// The head of each of the last few HCI events, oldest overwritten: what
+	// the adapter was saying when it stopped answering. Six bytes reach an
+	// event's code, its length and a command's opcode, and stop short of
+	// anything an event carries that is secret.
+	uint8_t recent_event[4][6];
+	uint32_t recent_events;
+	// What xhci_bt_log_trouble has already said, so each trouble is one line.
+	struct {
+		uint8_t rounds;
+		bool failed;
+		uint32_t event_resyncs, acl_resyncs;
+		const char *error[BT_HOST_PEERS];
+		bool blocked[BT_HOST_PEERS];
+	} logged;
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -454,6 +475,20 @@ static uint64_t ring_push(xhci_ring_t *r, uint64_t param, uint32_t status, uint3
 
 // ── Event ring drain ────────────────────────────────────────────────────────
 
+#define XHCI_BT_PORT_LINES 8   // port changes of the Bluetooth adapter said in the log
+
+// Acknowledge a port's change bits (PORTSC 17..23, write-one-to-clear). The
+// controller raises a port event only when a change bit goes from clear to
+// set, so a bit left standing hides every later change of its kind. Power
+// is written back as it stands; enable and reset are written as zeros,
+// which leave them alone.
+#define PORTSC_CHANGES       0x00FE0000u
+static void xhci_port_ack_changes(uint32_t port)
+{
+	uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+	mmio_w32(s_hc->op, XHCI_OP_PORTSC(port), (sc & PORTSC_PP) | (sc & PORTSC_CHANGES));
+}
+
 static void xhci_handle_transfer_event(const xhci_trb_t *ev);
 static void xhci_hid_lost(xhci_device_t *dev);
 
@@ -482,9 +517,23 @@ static void xhci_handle_event(void *ctx, const xhci_trb_t *ev)
 			uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
 			if (port < 1 || port > s_hc->max_ports)
 				break;   // not a port this controller has
-			bool connected = (mmio_r32(s_hc->op, XHCI_OP_PORTSC(port)) & PORTSC_CCS) != 0;
+			uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+			bool connected = (sc & PORTSC_CCS) != 0;
 			printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
 			       connected ? "connected" : "disconnected");
+			// The Bluetooth adapter's port is said in the system log
+			// whatever the change: an adapter that leaves the bus and comes
+			// straight back reads "connected" here and is otherwise unseen.
+			if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
+				xhci_bt_probe_t *bt = s_hc->bt_probe;
+				bt->port_last_sc = sc;
+				if (++bt->port_changes <= XHCI_BT_PORT_LINES)
+					printd(DEBUG_EXCEPTIONS, "bluetooth: the adapter's USB port %u changed: PORTSC %08x (%s, %s, link state %u, changes %02x)%s\n",
+					       port, sc, connected ? "connected" : "disconnected",
+					       (sc & PORTSC_PED) ? "enabled" : "disabled", (sc >> 5) & 0xF, (sc >> 17) & 0x7F,
+					       bt->port_changes == XHCI_BT_PORT_LINES ? "; further changes are counted, not logged" : "");
+				xhci_port_ack_changes(port);
+			}
 			if (!connected) {
 				if (s_hc->bt_probe && s_hc->bt_probe->device->port == port) {
 					s_hc->bt_probe->failed = true;
@@ -743,9 +792,31 @@ static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input
     } else hid_keyboard_report(&p->keyboards[peer], report->keys);
 }
 
+// THE ADAPTER IS RESET ON THE WAY DOWN (xhci_bluetooth_quiesce_begin). Its
+// firmware runs on through a warm reboot, links and all, and on the P5 an
+// adapter met in that state has refused its start-up reset and every
+// command after it until its power was cycled (DEBTS). Asked while the
+// machine is still up and the adapter healthy, the same reset leaves the
+// next boot an idle controller. The shutdown thread asks; kusb, which owns
+// the adapter, sends; the reply is taken where events arrive.
+enum { BT_QUIESCE_NONE, BT_QUIESCE_ASKED, BT_QUIESCE_SENT, BT_QUIESCE_ANSWERED, BT_QUIESCE_REFUSED };
+static volatile uint8_t s_bt_quiesce;
+
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
+	uint8_t *head = p->recent_event[p->recent_events++ % 4];
+	memset(head, 0, 6);
+	memcpy(head, event, bytes < 6 ? bytes : 6);
+	if (s_bt_quiesce != BT_QUIESCE_NONE) {
+		// The host is no longer run, so nothing is fed to it; the one event
+		// that matters is the reset's Command Complete.
+		if (s_bt_quiesce == BT_QUIESCE_SENT && bytes >= 6 && event[0] == 0x0e &&
+		    event[3] == 0x03 && event[4] == 0x0c)
+			s_bt_quiesce = event[5] == 0 ? BT_QUIESCE_ANSWERED : BT_QUIESCE_REFUSED;
+		crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
+		return;
+	}
 	bt_host_event(&p->host, event, bytes);
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
@@ -771,9 +842,13 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 		xhci_bt_endpoint_t *rx = &probe->rx[i];
 		if (dci != (uint32_t)(rx->endpoint.address & 15) * 2 + 1)
 			continue;
-		if (!probe->listening || ev->param != rx->pending_trb)
+		if (!probe->listening || ev->param != rx->pending_trb) {
+			rx->unmatched++;
 			return true;
+		}
 		uint32_t residual = ev->status & 0xffffff;
+		rx->completions++;
+		rx->last_cc = cc;
 		// Firmware startup can interrupt a receive without transferring data.
 		// Defer one host-side soft reset per endpoint to the wait loop; issuing
 		// a synchronous command here would recursively drain this same event.
@@ -798,9 +873,10 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 			// Re-arm after the drain so radio traffic cannot monopolize a pass.
 			if (i == 0)
 				bt_hci_feed(&rx->stream, xhci_bt_runtime_event, probe, rx->buffer,
-				            rx->endpoint.packet_bytes - residual);
+				            rx->endpoint.packet_bytes - residual, rx->endpoint.packet_bytes);
 			else
 				bt_host_receive(&probe->host, rx->buffer, rx->endpoint.packet_bytes - residual,
+				              rx->endpoint.packet_bytes,
 				              xhci_bt_input_report, probe);
 			crypto_wipe(rx->buffer, rx->endpoint.packet_bytes);
 			rx->rearm_pending = true;
@@ -842,8 +918,11 @@ static void xhci_handle_transfer_event(const xhci_trb_t *ev)
 		}
 		if (ev->param != s_hc->control_status_trb &&
 		    ev->param != s_hc->control_data_trb &&
-		    ev->param != s_hc->control_setup_trb)
+		    ev->param != s_hc->control_setup_trb) {
+			if (s_hc->bt_probe && slot == s_hc->bt_probe->device->slot)
+				s_hc->bt_probe->ep0_unmatched++;
 			return;
+		}
 		s_hc->xfer_cc = cc;
 		s_hc->xfer_done = true;
 		return;
@@ -1184,6 +1263,10 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		printd(DEBUG_USB, "xhci: AX210 Read Version: %s, image=%02x, USB packets=%u\n",
 		       state, v->image, probe.packets);
 		printf("USB Bluetooth: Intel AX210 %s\n", state);
+		// In the log as well as on the glass: whether the firmware was found
+		// already running (a warm boot) is the first fact a start-up
+		// failure is read against.
+		printd(DEBUG_BOOT, "bluetooth: Intel AX210 found %s (image %u)\n", state, v->image);
 		if (v->fields & BT_INTEL_CNVI)
 			printd(DEBUG_USB, "xhci: AX210 CNVi Bluetooth %08x\n", v->cnvi);
 		if (v->fields & BT_INTEL_CNVR)
@@ -1205,6 +1288,9 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			s_hc->bluetooth = probe;
 			s_hc->bluetooth.device = &s_hc->bluetooth_device;
 			s_hc->bluetooth.runtime = true;
+			// From here a change on the adapter's port is news: clear what
+			// enumeration left standing so the next one raises an event.
+			xhci_port_ack_changes(s_hc->bluetooth.device->port);
 			bt_host_init(&s_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
 			for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
 				s_hc->bluetooth.keyboards[i].name = "bluetooth";
@@ -1283,6 +1369,114 @@ static void xhci_bt_acl_send(void *context, const uint8_t *packet, size_t bytes)
 	mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, (p->tx.endpoint.address & 15) * 2);
 }
 
+// Bluetooth's troubles, in the SYSTEM LOG. The status files say what is
+// wrong now; this is what lets the log say that something went wrong, and
+// when, to somebody who was not looking. The state machines are pure code
+// with no kernel headers, so they cannot log; this watches them for a change
+// and says each one once, on the bit that is on by default: these are
+// faults, not narration.
+#define XHCI_BT_RESYNC_LINES 8
+
+// Where the adapter stands on USB, as two log lines: what a failed start-up
+// round needs beside its own line, because "no reply" has several causes
+// that look alike from the HCI side (the adapter left the bus, an endpoint
+// halted, the receive was never armed) and they are told apart here. The
+// slot and endpoint states are the controller's own, read from the device
+// context it maintains.
+static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
+{
+	const xhci_device_t *d = p->device;
+	uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(d->port));
+	const uint32_t *slot_ctx = (const uint32_t *)d->dev_ctx;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter on USB: port %u PORTSC %08x (%s, %s, link state %u), %u port change(s), last PORTSC %08x; slot %u state %u address %u\n",
+	       d->port, sc, (sc & PORTSC_CCS) ? "connected" : "disconnected",
+	       (sc & PORTSC_PED) ? "enabled" : "disabled", (sc >> 5) & 0xF,
+	       p->port_changes, p->port_last_sc, d->slot, slot_ctx[3] >> 27, slot_ctx[3] & 0xFF);
+	unsigned dci[3] = { 1, (p->rx[0].endpoint.address & 15u) * 2 + 1, (p->rx[1].endpoint.address & 15u) * 2 + 1 };
+	unsigned state[3];
+	for (unsigned i = 0; i < 3; i++)
+		state[i] = *(const uint32_t *)(d->dev_ctx + dci[i] * s_hc->ctx_size) & 7;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter endpoints (state 1=running 2=halted 3=stopped 4=error): control state %u, current request %s cc %u, %u unmatched; events state %u, %s, %u taken, last cc %u, %u unmatched; data in state %u, %s, %u taken, last cc %u, %u unmatched; listening %s, transport failed %s\n",
+	       state[0], s_hc->control_slot != d->slot ? "not ours" : s_hc->xfer_done ? "done" : "in flight",
+	       s_hc->xfer_cc, p->ep0_unmatched,
+	       state[1], p->rx[0].rearm_pending ? "waiting to be armed" : "armed", p->rx[0].completions, p->rx[0].last_cc, p->rx[0].unmatched,
+	       state[2], p->rx[1].rearm_pending ? "waiting to be armed" : "armed", p->rx[1].completions, p->rx[1].last_cc, p->rx[1].unmatched,
+	       p->listening ? "yes" : "no", p->failed ? "yes" : "no");
+	// Oldest first; a row of zeros is a slot no event has filled.
+	const uint8_t (*e)[6] = p->recent_event;
+	unsigned o = p->recent_events % 4;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: %u HCI event(s) since start; heads of the last four, oldest first: %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x\n",
+	       p->recent_events,
+	       e[o][0], e[o][1], e[o][2], e[o][3], e[o][4], e[o][5],
+	       e[(o+1)%4][0], e[(o+1)%4][1], e[(o+1)%4][2], e[(o+1)%4][3], e[(o+1)%4][4], e[(o+1)%4][5],
+	       e[(o+2)%4][0], e[(o+2)%4][1], e[(o+2)%4][2], e[(o+2)%4][3], e[(o+2)%4][4], e[(o+2)%4][5],
+	       e[(o+3)%4][0], e[(o+3)%4][1], e[(o+3)%4][2], e[(o+3)%4][3], e[(o+3)%4][4], e[(o+3)%4][5]);
+}
+
+static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
+{
+	const bt_host_t *h = &p->host;
+	if (h->init_failed_rounds != p->logged.rounds) {
+		p->logged.rounds = h->init_failed_rounds;
+		xhci_bt_log_usb_state(p);
+		printd(DEBUG_EXCEPTIONS, "bluetooth: start-up round %u of %u failed: %s (opcode %04x status %02x)%s; %s\n",
+		       h->init_failed_rounds, BT_HOST_INIT_ROUNDS, h->round_error ? h->round_error : "no error recorded",
+		       h->round_opcode, h->round_status, h->round_timeout ? h->round_timeout : "",
+		       h->init_failed_rounds < BT_HOST_INIT_ROUNDS ? "trying again" : "giving up");
+	}
+	if (h->failed && !p->logged.failed) {
+		p->logged.failed = true;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: the controller has failed (%s); Bluetooth is off until a reboot\n",
+		       h->scan.error ? h->scan.error : h->round_error ? h->round_error : "see /sys/bluetooth/scan");
+		// On the glass too: it happens seconds after the boot messages end,
+		// with nothing else on screen to show for it.
+		printf("Bluetooth did not start (%s); the system log has the details\n",
+		       h->round_error ? h->round_error : "controller failed");
+	}
+	// A controller that keeps handing over broken framing would otherwise
+	// write a line a pass: the first few are said, the rest only counted.
+	uint32_t resyncs = p->rx[0].stream.resyncs;
+	if (resyncs != p->logged.event_resyncs) {
+		if (resyncs <= XHCI_BT_RESYNC_LINES)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: the event stream was out of step with its transfers and was resynchronised (%u so far%s)\n",
+			       resyncs, resyncs == XHCI_BT_RESYNC_LINES ? "; further ones are counted in /sys/bluetooth/scan, not logged" : "");
+		p->logged.event_resyncs = resyncs;
+	}
+	if (h->wire_resyncs != p->logged.acl_resyncs) {
+		if (h->wire_resyncs <= XHCI_BT_RESYNC_LINES)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: the ACL data stream was out of step with its transfers and was resynchronised (%u so far%s)\n",
+			       h->wire_resyncs, h->wire_resyncs == XHCI_BT_RESYNC_LINES ? "; further ones are counted in /sys/bluetooth/connection, not logged" : "");
+		p->logged.acl_resyncs = h->wire_resyncs;
+	}
+	for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
+		const bt_le_t *s = &h->peers[i].le;
+		const bt_manager_t *m = &h->peers[i].manager;
+		// A slot that stopped or failed with an error. Said when the error
+		// CHANGES, so a slot failing the same way at every attempt is one
+		// line, not one an attempt. Input flowing again clears the memory.
+		// A retryable stop that never had a link and carries no failing
+		// status is a device that is not there yet (off, or not yet
+		// advertising after a boot): ordinary, and not said.
+		bool absent = s->phase == BT_LE_STOPPED && s->retryable &&
+		              s->disconnect_reason == 0 && s->error_status == 0;
+		if (bt_le_input_active(s)) {
+			p->logged.error[i] = NULL;
+		} else if ((s->phase == BT_LE_STOPPED || s->phase == BT_LE_FAILED) && s->error && !absent &&
+		           s->error != p->logged.error[i]) {
+			p->logged.error[i] = s->error;
+			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u stopped: %s (command %04x status %02x, disconnect reason %02x); %s\n",
+			       i, s->error, s->error_opcode, s->error_status, s->disconnect_reason,
+			       s->phase == BT_LE_FAILED ? "the controller has failed" :
+			       s->retryable ? "it will be retried" : "it waits for the user");
+		}
+		if (m->blocked != p->logged.blocked[i]) {
+			p->logged.blocked[i] = m->blocked;
+			if (m->blocked)
+				printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u's automatic connection has stopped and waits for the user (write reconnect to /sys/bluetooth/connection)\n", i);
+		}
+	}
+}
+
 static void xhci_bt_runtime_poll(void)
 {
 	xhci_bt_probe_t *p = s_hc->bt_probe;
@@ -1298,6 +1492,17 @@ static void xhci_bt_runtime_poll(void)
         (s_hc->xfer_cc != TRB_CC_SUCCESS ||
         (p->host.owner && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
     bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
+    if (s_bt_quiesce != BT_QUIESCE_NONE) {
+        // Going down: the host's clockwork has stopped for good. The reset
+        // goes out once the control endpoint is free of the host's last
+        // request; HCI lets a reset be sent whatever commands are
+        // outstanding.
+        if (s_bt_quiesce == BT_QUIESCE_ASKED && usb_done && !p->failed) {
+            xhci_bt_runtime_send(p, 0x0c03, NULL, 0);
+            s_bt_quiesce = BT_QUIESCE_SENT;
+        }
+        return;
+    }
     bt_scan_t *scan = &p->host.scan;
     bool scanning = !bt_scan_quiescent(scan) && scan->phase != BT_SCAN_FAILED;
     if (scanning && (!p->scan_history.valid || p->scan_history.finished)) {
@@ -1338,6 +1543,7 @@ static void xhci_bt_runtime_poll(void)
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
     }
+    xhci_bt_log_trouble(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
     if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
     for (unsigned i = 0; i < BT_HOST_PEERS; i++)
@@ -1485,6 +1691,14 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 
 		if (file == 0 && n < capacity - 1)
 			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
+		// How often the event assembler was found out of step with the
+		// transfers and emptied (bt_intel.h). Not zero after a warm reboot
+		// is the adapter handing over the tail of an event from before.
+		if (file == 0 && n < capacity - 1) {
+			int more = snprintf(out + n, capacity - n, "event framing resyncs: %u\n",
+			                    s_bluetooth_hc->bluetooth.rx[0].stream.resyncs);
+			if (more > 0) n += (size_t)more < capacity - n ? (size_t)more : capacity - n - 1;
+		}
 	}
 	xhci_serial_release();
 	return n;
@@ -2289,6 +2503,28 @@ void init_xHCI(void)
 	       s_keyboard_claimed ? "keyboard attached" : "no keyboard",
 	       s_mouse_claimed ? "mouse attached" : "no mouse");
 	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
+}
+
+// Shutdown's half of the reset on the way down. Nothing is asked of an
+// adapter that never started or has already failed: it would not answer,
+// and the descent would only wait out its patience.
+void xhci_bluetooth_quiesce_begin(void)
+{
+	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
+	if (p && p->runtime && !p->failed && p->host.initialized && !p->host.failed &&
+	    s_bt_quiesce == BT_QUIESCE_NONE)
+		s_bt_quiesce = BT_QUIESCE_ASKED;
+}
+
+bool xhci_bluetooth_quiescing(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ASKED || s_bt_quiesce == BT_QUIESCE_SENT;
+}
+
+const char *xhci_bluetooth_quiesce_verdict(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ANSWERED ? "reset" :
+	       s_bt_quiesce == BT_QUIESCE_REFUSED ? "refused its reset" : "did not answer its reset";
 }
 
 uint32_t xhci_controller_count(void)
