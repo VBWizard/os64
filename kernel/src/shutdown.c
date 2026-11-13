@@ -10,6 +10,7 @@
 #include "io.h"
 #include "shutdown.h"
 #include "log.h"          // the klog retire handshake (kernel side)
+#include "driver/system/usb/xhci.h"   // the Bluetooth adapter's reset on the way down
 #include "vfs.h"          // vfs_sync_all — the open-file registry sweep
 #include "memory/vma.h"   // call_in_kernel_context — file I/O runs in kernel context
 #include "scheduler.h"    // scheduler_trigger — yielding while logd drains
@@ -398,6 +399,19 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	// 2. Ask every program to stop, then insist. Before logd retires, so the
 	//    exits make the log.
 	shutdown_terminate_tasks();
+
+	//    Reset the Bluetooth adapter while it is healthy: its firmware
+	//    outlives a warm reboot, and the next boot must not meet it still
+	//    holding this boot's links (xhci.c has the story). kusb sends the
+	//    reset, so this is a wait on another thread, bounded like the rest.
+	xhci_bluetooth_quiesce_begin();
+	if (xhci_bluetooth_quiescing())
+	{
+		shutdown_wait(2 * TICKS_PER_SECOND, xhci_bluetooth_quiescing);
+		printf("  Bluetooth adapter %s\n", xhci_bluetooth_quiesced() ? "reset" : "did not answer its reset");
+		printd(DEBUG_BOOT, "bluetooth: adapter %s on the way down\n",
+		       xhci_bluetooth_quiesced() ? "reset" : "did not answer its reset");
+	}
 
 	// 2. Retire the log daemon. Set the flag, then keep yielding so the
 	//    daemon (a ring-3 task) gets CPU to hear the answer, commit, and

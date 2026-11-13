@@ -518,6 +518,33 @@ int main(void)
         // here is the value written.
         if (retained) CHECK(*portsc==(PORTSC_PP|(1u<<17)));
         else CHECK(*portsc==(PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17)));
+        // The reset on the way down. Nothing is asked of a host that has
+        // not started; once it has, kusb's poll sends HCI_Reset and stops
+        // running the host, and only the reset's own Command Complete is
+        // the answer.
+        if (scenario==WARM) {
+            xhci_bt_probe_t *bt=hc.bt_probe;
+            s_bt_quiesce=BT_QUIESCE_NONE;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(!xhci_bluetooth_quiescing());
+            bt->host.initialized=true;
+            xhci_bluetooth_quiesce_begin();
+            CHECK(xhci_bluetooth_quiescing() && !xhci_bluetooth_quiesced());
+            hc.control_slot=0;
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT && hc.control_slot==bt->device->slot);
+            CHECK(bt->tx.buffer[512]==0x03 && bt->tx.buffer[513]==0x0c && bt->tx.buffer[514]==0);
+            xhci_bt_runtime_poll();
+            CHECK(s_bt_quiesce==BT_QUIESCE_SENT);
+            static const uint8_t other[]={0x0e,0x04,0x01,0x01,0x10,0x00};
+            xhci_bt_runtime_event(bt,other,sizeof(other));
+            CHECK(xhci_bluetooth_quiescing());
+            static const uint8_t answer[]={0x0e,0x04,0x01,0x03,0x0c,0x00};
+            xhci_bt_runtime_event(bt,answer,sizeof(answer));
+            CHECK(!xhci_bluetooth_quiescing() && xhci_bluetooth_quiesced());
+            CHECK(bt->recent_events==2 && bt->recent_event[1][3]==0x03);
+            s_bt_quiesce=BT_QUIESCE_NONE; bt->host.initialized=false;
+        }
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
         else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);

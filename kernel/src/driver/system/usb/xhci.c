@@ -199,6 +199,12 @@ typedef struct {
 	// The adapter's port, as its status-change events left it, and control
 	// endpoint events that named no request in flight (xhci_bt_log_usb_state).
 	uint32_t port_changes, port_last_sc, ep0_unmatched;
+	// The head of each of the last few HCI events, oldest overwritten: what
+	// the adapter was saying when it stopped answering. Six bytes reach an
+	// event's code, its length and a command's opcode, and stop short of
+	// anything an event carries that is secret.
+	uint8_t recent_event[4][6];
+	uint32_t recent_events;
 	// What xhci_bt_log_trouble has already said, so each trouble is one line.
 	struct {
 		uint8_t rounds;
@@ -786,9 +792,31 @@ static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input
     } else hid_keyboard_report(&p->keyboards[peer], report->keys);
 }
 
+// THE ADAPTER IS RESET ON THE WAY DOWN (xhci_bluetooth_quiesce_begin). Its
+// firmware runs on through a warm reboot, links and all, and on the P5 an
+// adapter met in that state has refused its start-up reset and every
+// command after it until its power was cycled (DEBTS). Asked while the
+// machine is still up and the adapter healthy, the same reset leaves the
+// next boot an idle controller. The shutdown thread asks; kusb, which owns
+// the adapter, sends; the reply is taken where events arrive.
+enum { BT_QUIESCE_NONE, BT_QUIESCE_ASKED, BT_QUIESCE_SENT, BT_QUIESCE_ANSWERED };
+static volatile uint8_t s_bt_quiesce;
+
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
+	uint8_t *head = p->recent_event[p->recent_events++ % 4];
+	memset(head, 0, 6);
+	memcpy(head, event, bytes < 6 ? bytes : 6);
+	if (s_bt_quiesce != BT_QUIESCE_NONE) {
+		// The host is no longer run, so nothing is fed to it; the one event
+		// that matters is the reset's Command Complete.
+		if (s_bt_quiesce == BT_QUIESCE_SENT && bytes >= 6 && event[0] == 0x0e &&
+		    event[3] == 0x03 && event[4] == 0x0c)
+			s_bt_quiesce = BT_QUIESCE_ANSWERED;
+		crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
+		return;
+	}
 	bt_host_event(&p->host, event, bytes);
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
@@ -1374,6 +1402,15 @@ static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
 	       state[1], p->rx[0].rearm_pending ? "waiting to be armed" : "armed", p->rx[0].completions, p->rx[0].last_cc, p->rx[0].unmatched,
 	       state[2], p->rx[1].rearm_pending ? "waiting to be armed" : "armed", p->rx[1].completions, p->rx[1].last_cc, p->rx[1].unmatched,
 	       p->listening ? "yes" : "no", p->failed ? "yes" : "no");
+	// Oldest first; a row of zeros is a slot no event has filled.
+	const uint8_t (*e)[6] = p->recent_event;
+	unsigned o = p->recent_events % 4;
+	printd(DEBUG_EXCEPTIONS, "bluetooth: %u HCI event(s) since start; heads of the last four, oldest first: %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x\n",
+	       p->recent_events,
+	       e[o][0], e[o][1], e[o][2], e[o][3], e[o][4], e[o][5],
+	       e[(o+1)%4][0], e[(o+1)%4][1], e[(o+1)%4][2], e[(o+1)%4][3], e[(o+1)%4][4], e[(o+1)%4][5],
+	       e[(o+2)%4][0], e[(o+2)%4][1], e[(o+2)%4][2], e[(o+2)%4][3], e[(o+2)%4][4], e[(o+2)%4][5],
+	       e[(o+3)%4][0], e[(o+3)%4][1], e[(o+3)%4][2], e[(o+3)%4][3], e[(o+3)%4][4], e[(o+3)%4][5]);
 }
 
 static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
@@ -1451,6 +1488,17 @@ static void xhci_bt_runtime_poll(void)
         (s_hc->xfer_cc != TRB_CC_SUCCESS ||
         (p->host.owner && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
     bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
+    if (s_bt_quiesce != BT_QUIESCE_NONE) {
+        // Going down: the host's clockwork has stopped for good. The reset
+        // goes out once the control endpoint is free of the host's last
+        // request; HCI lets a reset be sent whatever commands are
+        // outstanding.
+        if (s_bt_quiesce == BT_QUIESCE_ASKED && usb_done && !p->failed) {
+            xhci_bt_runtime_send(p, 0x0c03, NULL, 0);
+            s_bt_quiesce = BT_QUIESCE_SENT;
+        }
+        return;
+    }
     bt_scan_t *scan = &p->host.scan;
     bool scanning = !bt_scan_quiescent(scan) && scan->phase != BT_SCAN_FAILED;
     if (scanning && (!p->scan_history.valid || p->scan_history.finished)) {
@@ -2451,6 +2499,27 @@ void init_xHCI(void)
 	       s_keyboard_claimed ? "keyboard attached" : "no keyboard",
 	       s_mouse_claimed ? "mouse attached" : "no mouse");
 	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
+}
+
+// Shutdown's half of the reset on the way down. Nothing is asked of an
+// adapter that never started or has already failed: it would not answer,
+// and the descent would only wait out its patience.
+void xhci_bluetooth_quiesce_begin(void)
+{
+	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
+	if (p && p->runtime && !p->failed && p->host.initialized && !p->host.failed &&
+	    s_bt_quiesce == BT_QUIESCE_NONE)
+		s_bt_quiesce = BT_QUIESCE_ASKED;
+}
+
+bool xhci_bluetooth_quiescing(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ASKED || s_bt_quiesce == BT_QUIESCE_SENT;
+}
+
+bool xhci_bluetooth_quiesced(void)
+{
+	return s_bt_quiesce == BT_QUIESCE_ANSWERED;
 }
 
 uint32_t xhci_controller_count(void)
