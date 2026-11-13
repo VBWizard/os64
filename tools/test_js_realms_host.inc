@@ -363,10 +363,12 @@ static void staging_host_cases(void)
 }
 
 #include "test_js_quiescence.inc"
+#include "test_js_settings_bridge.inc"
 
 static void realm_host_cases(void)
 {
     quiescence_cases();
+    settings_bridge_host_cases();
     staging_host_cases();
     retirement_interrupt_cases();
     realm_admission_host_cases();
