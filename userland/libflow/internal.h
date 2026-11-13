@@ -502,11 +502,12 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
 uint8_t f_motion_effects(const FMotion *m, double now);
 // Whether every property `m`'s animations set only repaints where the
 // element, and what it holds, already draw — colours, opacity,
-// visibility, a background's position, the corners' curves — or around
-// its text by no more than FMotion.text_reach (a text shadow). Such an
-// animation can wait while its element is out of view; any other (a
-// transform, a size, a position, a box shadow's offset) may carry what it
-// draws into view from anywhere (flow_motion_due).
+// visibility, a background's or a mask's position and size, the corners'
+// curves — or around its text by no more than FMotion.text_reach (a text
+// shadow). Such an animation can wait while its element is out of view;
+// any other (a transform, a box's size or position, a box shadow's
+// offset) may carry what it draws into view from anywhere
+// (flow_motion_due).
 bool f_motion_in_place(const FMotion *m);
 // How far past [0, 1] an easing's output may go at most, either side: the
 // control points' reach for a Bézier, whose curve lies inside their hull —
@@ -515,9 +516,9 @@ bool f_motion_in_place(const FMotion *m);
 double f_easing_overshoot(const garb_easing_t *e);
 // Whether every property `m`'s animations set is of the TICK SET, which
 // nothing but painting reads and nothing inherits: the transform's four
-// properties and its origin, opacity, the background's colour and
-// position, the border colours, `box-shadow` (PILE3.md § Animations in
-// place).
+// properties and its origin, opacity, the background's colour, position
+// and size, the mask's position and size, the border colours,
+// `box-shadow` (PILE3.md § Animations in place).
 bool f_motion_ticks(const FMotion *m);
 // Whether any property `m`'s animations set has another value in `a` than
 // in `b`: a blend in a transform is the same only as itself, so two worked

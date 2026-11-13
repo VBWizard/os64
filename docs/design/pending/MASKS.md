@@ -154,11 +154,14 @@ layers and its size; that is a measured follow-up, not this slice.
   background ones.
 - `mask-position` and `mask-size` animate as `background-position` and
   `-size` do (motion.c mixes the mask's lists with the background's
-  code). `mask-position` is in the tick set and the in-place class beside
-  `background-position` (PILE3.md § Animations in place): only painting
-  reads it, and what a mask paints is inside what its element already
-  draws, so its frames move without a layout. `mask-size` moves by
-  layouts, as `background-size` does.
+  code). Both are in the tick set and the in-place class beside
+  `background-position` and `-size` (PILE3.md § Animations in place):
+  only painting reads them, and what a mask paints is inside what its
+  element already draws, so their frames move without a layout — but a
+  size whose layers name a picture moves by layouts, since how big a
+  copy of a picture is kept is worked out after a layout
+  (PICTURE_SIZES.md § The needed size). A layout's frame of one repaints
+  only the element, the in-place class's rule.
 
 ## 6. yonder
 
