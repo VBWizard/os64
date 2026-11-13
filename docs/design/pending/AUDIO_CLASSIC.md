@@ -138,9 +138,8 @@ void bt_acl_link_down(bt_acl_t *, uint16_t handle);        // its outstanding pa
 - **In one pool, LE is kept room.** A Classic link may not take the last
   buffers, one for each live LE link, and is always left at least one. That
   reserve is what keeps a keystroke's acknowledgement from waiting behind
-  audio. With two pools nothing is reserved. The AX210's real numbers are
-  not known until part T prints them on the P5 (recalled: about four
-  Classic buffers); the reserve is re-judged then.
+  audio. With two pools nothing is reserved, and two pools is what the
+  AX210 has (§ T, as built).
 - **What a wrong count costs is the link, not the host.** A completion for
   a handle the table does not hold, or with a count of zero, is ignored and
   counted, as LE ignores it today. One for more than a link has outstanding
@@ -245,6 +244,13 @@ classic and le together, ...`.)
 - The two buffer-size commands run after the LE event mask, not after the
   Classic one: a scan on a controller already in service starts at the
   phase after them, so they run once without a flag to say so.
+- **On the P5 (Chris, 2026-11-13)**: the keyboard and the mouse connected
+  as before, and the AX210 answered both commands:
+  `acl pools: classic 4 x 1021 bytes, in use 0; le 6 x 251 bytes, in use 0`.
+  **Two pools.** LE has six buffers of its own, so nothing has to be kept
+  back from the Classic four for the keyboard, and the shared-pool reserve
+  is a rule this adapter never uses. Four Classic buffers of 1,021 bytes
+  is what audio will be paced against in A.3.
 - Proof: `test_bt_acl_host` and its 50 mutants; `test_bt_scan_host`
   (the two replies, their lengths, never asked twice); `test_bt_multi_host`
   (the agreement above); `test_bt_loader_host` (the real start-up fills the
