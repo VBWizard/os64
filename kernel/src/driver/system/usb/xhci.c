@@ -924,8 +924,7 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 		}
 		if (mine && (cc != TRB_CC_SUCCESS || (ev->status & 0xffffff))) {
 			// The endpoint halts on a failed transfer, and what was queued
-			// behind it will not complete: the transport is finished, and
-			// the poll wipes the slots still with the controller.
+			// behind it will not complete: the transport is finished.
 			probe->failed = true;
 			printd(DEBUG_USB, "xhci: AX210 bulk OUT failed cc=%u residual=%u\n",
 			       cc, ev->status & 0xffffff);
@@ -1424,7 +1423,8 @@ cleanup:
 	}
 }
 
-// Runtime EP0 and ACL use disjoint regions of the retained transmit DMA page.
+// The runtime command's bytes are at offset 512 of the transmit storage's
+// first page; ACL data is in the send slots after that page (BT_TX_SLOTS).
 // Runtime HCI submits after USB Status and the preceding HCI reply agree;
 // it never waits or allocates: it runs inside kusb's pass, against that
 // pass's deadline.
@@ -1507,11 +1507,12 @@ static void xhci_bt_log_usb_state(const xhci_bt_probe_t *p)
 	unsigned state[3];
 	for (unsigned i = 0; i < 3; i++)
 		state[i] = *(const uint32_t *)(d->dev_ctx + dci[i] * s_hc->ctx_size) & 7;
-	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter endpoints (state 1=running 2=halted 3=stopped 4=error): control state %u, current request %s cc %u, %u unmatched; events state %u, %s, %u taken, last cc %u, %u unmatched; data in state %u, %s, %u taken, last cc %u, %u unmatched; listening %s, transport failed %s\n",
+	printd(DEBUG_EXCEPTIONS, "bluetooth: adapter endpoints (state 1=running 2=halted 3=stopped 4=error): control state %u, current request %s cc %u, %u unmatched; events state %u, %s, %u taken, last cc %u, %u unmatched; data in state %u, %s, %u taken, last cc %u, %u unmatched; data out %u of %u send slots in flight, %u unmatched; listening %s, transport failed %s\n",
 	       state[0], s_hc->control_slot != d->slot ? "not ours" : s_hc->xfer_done ? "done" : "in flight",
 	       s_hc->xfer_cc, p->ep0_unmatched,
 	       state[1], p->rx[0].rearm_pending ? "waiting to be armed" : "armed", p->rx[0].completions, p->rx[0].last_cc, p->rx[0].unmatched,
 	       state[2], p->rx[1].rearm_pending ? "waiting to be armed" : "armed", p->rx[1].completions, p->rx[1].last_cc, p->rx[1].unmatched,
+	       p->tx_slots, BT_TX_SLOTS, p->tx.unmatched,
 	       p->listening ? "yes" : "no", p->failed ? "yes" : "no");
 	// Oldest first; a row of zeros is a slot no event has filled.
 	const uint8_t (*e)[6] = p->recent_event;
@@ -1657,12 +1658,10 @@ static void xhci_bt_runtime_poll(void)
     }
     xhci_bt_log_trouble(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
-    // A slot is wiped as its transfer completes. On a failed transport the
-    // ones still with the controller never will, and are wiped here.
-    if (usb_failed && p->tx_slots) {
-        crypto_wipe(p->tx.buffer + PAGE_SIZE, BT_TX_SLOTS * BT_TX_SLOT_STRIDE);
-        p->tx_slots = 0;
-    }
+    // A send slot is wiped as its transfer completes, and not before: one
+    // still queued is the controller's to read, and zeroing it would put a
+    // packet of zeroes on the air. That holds on a failed transport too,
+    // whose endpoint may still be running.
     for (unsigned i = 0; i < BT_HOST_PEERS; i++)
         if (bt_le_input_active(&p->host.peers[i].le)) hid_keyboard_tick(&p->keyboards[i]);
 }

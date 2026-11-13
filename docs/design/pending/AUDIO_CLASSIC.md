@@ -178,8 +178,10 @@ void bt_acl_link_down(bt_acl_t *, uint16_t handle);        // its outstanding pa
   or than the pool's packet size, or no slot is free. The caller's state
   machine keeps the packet and tries next pass. Nothing can write past a
   slot: that is the overrun Quinn found waiting in the 512-byte region.
-- The shutdown quiesce and every `crypto_wipe` of the transmit page are
-  re-pointed at the new storage; a slot is wiped when it is freed.
+- A slot is wiped when its transfer completes and never before. One still
+  queued is the controller's to read, even on a failed transport: only a
+  failed bulk transfer halts that endpoint, and a slot zeroed under a
+  running one would go out as a packet of zeroes.
 
 ### T3. Receive routed by a table
 
@@ -234,6 +236,12 @@ classic and le together, ...`.)
   allocation (three pages), each slot inside a page; the page bring-up
   sends from and the command's bytes at offset 512 of it are where they
   were.
+- A controller that refuses either buffer-size command never starts, as
+  with any other start-up command: the round stops, cleans up and is tried
+  again. On the AX210 the LE one has been answered at every LE connection
+  since LE worked; Read Buffer Size is mandatory and is new to this
+  controller only in the start-up round, so the P5 run is its first
+  hearing.
 - The two buffer-size commands run after the LE event mask, not after the
   Classic one: a scan on a controller already in service starts at the
   phase after them, so they run once without a flag to say so.
