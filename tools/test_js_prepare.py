@@ -42,8 +42,9 @@ class PrepareTests(unittest.TestCase):
         source = (self.root / 'prepared/quickjs.c').read_text()
         self.assertIn('return JS_EXCEPTION;\n}\n\n/* Browser compatibility:', source)
         self.assertIn('return JS_NULL;\n}\n\n#define GLOBAL_VAR_OFFSET', source)
-        # 0008 hears a global miss at both ends of a lookup.
-        self.assertIn('ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop));\n}\n\n'
+        # 0008 hears a global miss at both ends of a lookup; 0029 tracks
+        # the native hook without changing its placement.
+        self.assertIn('JS_ENGINE_CALLBACK_VOID(ctx->rt, ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop)));\n}\n\n'
                       'JSValue JS_GetPropertyInternal(', source)
         self.assertIn('js_hear_global_miss(ctx, obj, atom);    \\\n                            val = JS_UNDEFINED;',
                       source)

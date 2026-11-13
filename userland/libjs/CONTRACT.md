@@ -192,12 +192,69 @@ scope facts were classified, not that native cleanup or affected-set coverage
 has been certified. Primary author frames can be present even when that flag
 is true. An empty `global` cause, a classified scope set or a closed task
 grants no admission: these constructors retain terminal runtime-wide failures.
-No failure-reset, generation token, cleanup barrier or recovery commit is
-provided by this diagnostic cut. Native/provider/Streams consistency and the
-opt-in recovery protocol remain F16 follow-ons.
+The diagnostic constructor supplies no recovery protocol. The distinct native
+policy below adds recovery for a supported subset; native/provider/Streams
+consistency for browser adoption remains a separate F16 obligation.
 
 Evidence and the next protocol boundary:
 [IFRAME_F16_FAILURE_RECORDS.md](../../docs/design/pending/IFRAME_F16_FAILURE_RECORDS.md).
+
+
+## Opt-in child execution recovery
+
+`os64_js_create_with_child_recovery` in `os64/js_failure.h` requires a native
+host preparation callback at construction and enables scope tracking before
+exposure. The default and failure-record constructors retain their terminal
+contract. Public config/outcome layouts and ABI 5 remain unchanged. The prepared
+engine identity changes; rebuild engine-dependent objects together.
+
+A candidate is a LIMIT/EXECUTION episode whose complete observed author-code
+set contains child realms, with no primary author frame or unsupported scope.
+A primary incoming call context alone is neutral. Ordinary script eval and
+callable child tasks are supported. Compiler-only/unknown attribution,
+foreign contexts, native callbacks, raw/checked settings and setup, GC, jobs, modules
+and suspended resumptions fall back globally. JOBS exhaustion stays global;
+no next job is blamed and no pending engine job receives a replacement budget.
+
+The owner closes the failed task, inspects the record, then calls
+`os64_js_recovery_prepare`. Admission requires wrapper/engine/native idle,
+empty engine jobs and rejection bookkeeping, no wrapper module handles, no
+pending exception and no observed global failure. A raw engine fence blocks
+executable entry before every affected context is irreversibly marked failed
+and its wrapper realm is made failed/retired. Retained objects and slots stay
+charged; data mutations survive, including mutations made before interruption.
+Uncatchable interruption does not run abandoned author catch/finally blocks.
+
+Only then does the guarded native host callback certify shared state and
+remove affected activity. It must return normally without author execution,
+release affected callback/registry roots, preserve healthy native task order,
+and keep provider opaque storage alive through native loans. BUSY retains the
+same generation and engine fence for a later retry after pure native loan
+release; it publishes no completion token or storage-release permission. OK
+certifies complete preparation and returns a runtime/generation token. A native
+failure, late health failure, newly queued work or pending exception requires
+root cleanup. Once acquired, a failed preparation's engine fence stays closed.
+
+`os64_js_recovery_commit` requires that exact prepared runtime/generation,
+closed work, native/engine idle, empty bookkeeping and good late health. It
+clears the approved local execution latch and residual consumed interruption
+flag only. It does not resume the task, reset its counters or deadline, execute
+jobs, clear cancellation/allocator flags, or undo a global cause. The next
+independent native event must use ordinary task admission to arm a fresh budget.
+Cancellation racing commit is checked again by that normal admission.
+
+`recovery_inspect` preserves original first-failure facts and final abandoned
+job counts across later healthy tasks; a new failure episode advances the
+generation and replaces that episode's record. Stale/foreign tokens, guessed
+unprepared generations and repeated commits refuse. `REALM_FAILED` distinguishes
+wrapper refusal for contained realms; raw retained failed aliases remain subject
+to the engine's catchable failed-code guard. Ordinary retirement still permits
+retained direct-function execution. Root destruction retains both teardown
+policies and the zero-leaked-roots obligation.
+
+This interface delegates native safety to an audited host; it does not supply a
+DOM/Streams/provider certificate. Yonder/libdom remain opted out. Source audit,
+proofs and reproducible commands: [F16 child recovery](../../docs/design/pending/IFRAME_F16_CHILD_RECOVERY.md).
 
 ## Realms
 
@@ -480,9 +537,9 @@ These interfaces have no production browser consumer. Relevant role
 integration, WebIDL conversion-site integration and associated-object realm
 proofs, Promise reaction/thenable capture, DOM entry-site integration and origin
 security checks remain separate work. A settings handle is not a permission.
-F.16 recovery must preserve the bridge's native-body guard and synchronize
-wrapper lifecycle with engine failed-context state before admitting recovered
-work; raw engine marking alone is not a wrapper recovery protocol.
+The opt-in child recovery policy rejects overruns inside checked settings
+bodies and synchronizes wrapper failed/retired state with the engine before
+native preparation. Raw engine marking alone grants no wrapper admission.
 
 Creation and the explicit realm output/Intl installers support three setup
 modes: idle setup owns a bounded turn; setup between calls of an open task
@@ -741,7 +798,8 @@ can replace it. UNHANDLED_REJECTION is reported at queue exhaustion and ends tha
 turn. The runner stops on either outcome and destroys its runtime; other hosts
 may continue with the documented draining rule.
 
-LIMIT, CANCELLED, and HOST_FAILURE make the runtime failed: no further script or
+Under the default and diagnostic policies, LIMIT, CANCELLED, and HOST_FAILURE
+make the runtime failed: no further script or
 jobs run, and pending work is discarded at destruction. An already-failed runtime
 returns FAILED_RUNTIME. A browser can continue showing the document without its
 script environment. Sticky limit/cancellation/host-failure signals take precedence

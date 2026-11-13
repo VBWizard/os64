@@ -1,5 +1,8 @@
 # F.16c1 — terminal failure records
 
+Later implementation: [opt-in libjs child recovery](IFRAME_F16_CHILD_RECOVERY.md).
+The evidence below qualifies this earlier checkpoint and its terminal APIs.
+
 Source baseline: merged engine foundation #573, `f73ddd56403ee0fa708e55111f25e364e7f6e552`.
 This splits the [F16c protocol cut](IFRAME_F16_RECOVERY.md) at its diagnostic
 boundary. It supplies first-failure facts and later global-cause observation;
