@@ -350,8 +350,51 @@ read the clock, latch a failure, consume an exception, or extend lifetime.
 Recheck after reentry or retirement. Runtime health checks include pending
 cancellation and allocator failure, without converting them into a new latch.
 
+The opt-in `os64/js_callbacks.h` adds a native-owned inline callback record.
+Initialize `os64_js_callback_t` with `OS64_JS_CALLBACK_INIT`; populated records
+own one engine value reference and must not be shallow-copied. Their wrapper
+runtime must outlive them. The binding accounts for the record storage as part
+of its holder and supplies values from the same engine, as for raw engine APIs.
+Output/result storage must not overlap the record or the invocation's inputs.
+
+`os64_js_callback_capture` runs at the conversion point after binding-specific
+type validation. It accepts an object and an empty record, retains the value,
+and captures the checked INCUMBENT realm. It neither calls JavaScript nor
+reads properties, allocates, infers the associated entry realm, or checks
+callability. Missing checked settings, invalid input and health/lifecycle
+refusals leave the record and pending exception untouched. The callback's
+value, the native registration binding and the captured incumbent may all
+belong to different realms within the runtime.
+
+`os64_js_callback_with_settings` takes a separately established associated
+entry realm and an invocation adapter. The bridge's guard, budget, eligibility,
+outcome-alias and exception rules apply. The adapter runs property lookup,
+argument/result conversion and invocation under the prepared settings; it
+must apply the binding's callback type and activity/security checks. This
+helper does not infer entry from `JS_GetFunctionRealm`, a bound/proxy target,
+`handleEvent`, the registration binding or the task owner. The held value and
+captured incumbent are fixed for that invocation. The adapter borrows the
+value, returns an owned result as usual, and may clear/reuse the record or
+release its enclosing holder. The temporary value hold is freed before the
+checked scope exits, including normal native finalization. Refusal before
+admission leaves the caller's value output untouched.
+
+`os64_js_callback_clear` empties the record before releasing its value so
+reentrant native cleanup sees an empty record. Clearing an empty initialized
+record is idempotent. Clear remains available after cancellation, failure and
+realm retirement, and during an engine holder's destruction. It validates
+runtime/ABI and rejects active outcome aliases, without sampling time,
+consuming exceptions or acquiring a guard. Normal value finalization can run.
+C-root records must be cleared before destroying the runtime. An engine-owned
+holder instead calls `os64_js_callback_mark` from its `gc_mark` and clears the
+record in its finalizer; marking the engine edge permits cycle collection.
+A C root must not be reported as an engine edge. Captured realm handles do not
+extend realm eligibility: retirement prevents later delivery, while cleanup
+can still release the retained value.
+
 These interfaces have no production browser consumer. Current/relevant role
-attribution, WebIDL/Promise capture, DOM entry-site integration and origin
+attribution, WebIDL conversion-site integration and associated-object realm
+proofs, Promise reaction/thenable capture, DOM entry-site integration and origin
 security checks remain separate work. A settings handle is not a permission.
 F.16 recovery must preserve the bridge's native-body guard and synchronize
 wrapper lifecycle with engine failed-context state before admitting recovered
