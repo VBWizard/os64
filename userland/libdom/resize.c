@@ -42,6 +42,7 @@ typedef struct DRObserver {
     JSValue object, callback;
     bool held, dead;
     uint32_t script;
+    os64_dom_t *report_owner;
     DRTarget *targets, *targets_last;
     size_t ntargets;
 } DRObserver;
@@ -151,7 +152,7 @@ static void sweep(os64_dom_t *dom)
 
 void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->resizes_provider = provider;
     dom->resizes_opaque = opaque;
 }
@@ -163,8 +164,15 @@ size_t os64_dom_resizes_observed(const os64_dom_t *dom)
 
 bool os64_dom_resizes_owed(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->resizes != NULL &&
-           (dom->resizes->owed != 0 || dom->resizes->skipped != 0 || dom->resizes->undone);
+    if (!d_delivery_active(dom) || dom->resizes == NULL) return false;
+    const struct DResizes *s = dom->resizes;
+    for (DRObserver *o = s->observers; o != NULL; o = o->next) {
+        if (o->dead) continue;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next)
+            if (d_delivery_active(d_owner((os64_dom_t *)dom, t->node)) &&
+                (t->last[0] < 0 || t->skipped || s->undone)) return true;
+    }
+    return false;
 }
 
 /* The standard's "calculate depth for node": how many nodes from it to the
@@ -207,6 +215,7 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
     size_t members = dom->cluster != NULL ? dom->cluster->count : 1;
     for (size_t i = 0; i < members; i++) {
         os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
+        if (!d_delivery_active(owner)) continue;
         size_t n = 0;
         for (DRObserver *o = s->observers; o != NULL; o = o->next) {
             if (o->dead) continue;
@@ -216,10 +225,15 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
         }
         if (n == 0) continue;
         os64_dom_geometry_stats_t cost = {0};
-        bool answered = owner->resizes_provider != NULL &&
-            owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+        bool answered = false;
+        if (owner->resizes_provider != NULL && d_provider_enter(owner)) {
+            answered = owner->resizes_provider(owner->resizes_opaque, s->batch, n, &cost);
+            d_provider_leave(owner);
+        }
         owner->geometry_stats.layouts += cost.layouts;
         owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!d_delivery_active(dom)) return 0;
+        if (!d_delivery_active(owner)) continue;
         if (!answered) return -1;
         size_t at = 0;
         for (DRObserver *o = s->observers; o != NULL; o = o->next) {
@@ -233,8 +247,9 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
         if (o->dead) continue;
         for (DRTarget *t = o->targets; t != NULL; t = t->next) {
             double size[2];
-            observed_size(&t->now, t->box, size);
             t->active = t->skipped = false;
+            if (!d_delivery_active(d_owner(dom, t->node))) continue;
+            observed_size(&t->now, t->box, size);
             if (size[0] == t->last[0] && size[1] == t->last[1]) continue;
             if (node_depth(dom, t->node) > depth) {
                 t->active = true;
@@ -334,11 +349,33 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
     size_t shallowest = SIZE_MAX;
     DRObserver *last = s->observers_last;
     s->walking = true;
-    for (DRObserver *o = s->observers; o != NULL && !dom->closed && !sticky(out);) {
+    for (DRObserver *o = s->observers; o != NULL && d_delivery_active(dom) && !sticky(out);) {
         DRObserver *next = o == last ? NULL : o->next;
         bool any = false;
-        for (DRTarget *t = o->targets; t != NULL && !any; t = t->next) any = t->active;
+        for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+            if (!d_delivery_active(d_owner(dom, t->node))) t->active = false;
+            any = any || t->active;
+        }
         if (any && !o->dead && JS_IsObject(o->object)) {
+            int eligible = d_delivery_eligible(dom, ctx, o->callback);
+            if (eligible <= 0) {
+                /* A permanently retired callback cannot consume a later
+                 * resize either. Remember the sample without constructing
+                 * entries or keeping the host awake for the same sizes. */
+                for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+                    if (!t->active) continue;
+                    t->active = false;
+                    if (t->last[0] < 0) s->owed--;
+                    observed_size(&t->now, t->box, t->last);
+                }
+                if (eligible < 0 && d_exception_catchable(ctx)) {
+                    JSValue error = JS_GetException(ctx);
+                    d_report_as(o->report_owner, ctx, error, o->script);
+                    JS_FreeValue(ctx, error);
+                }
+                o = next;
+                continue;
+            }
             JSValue entries = JS_NewArray(ctx);
             uint32_t i = 0;
             for (DRTarget *t = o->targets; t != NULL && !JS_IsException(entries); t = t->next) {
@@ -373,11 +410,11 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
             } else {
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
-                DScripts before = d_script_enter(dom, o->script);
-                os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
-                d_script_leave(dom, &before, true);
+                DScripts before = d_script_enter(o->report_owner, o->script);
+                os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                d_script_leave(o->report_owner, &before, true);
                 d_outcome_fold(out, &call);
-                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
+                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                 d_task_settle(dom, out);
             }
             JS_FreeValue(ctx, entries);
@@ -412,7 +449,7 @@ static void loop_error(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
 bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 {
     if (out != NULL) os64_memset(out, 0, sizeof(*out));
-    struct DResizes *s = dom != NULL && !dom->closed ? dom->resizes : NULL;
+    struct DResizes *s = d_delivery_active(dom) ? dom->resizes : NULL;
     if (out == NULL || s == NULL) return false;
     sweep(dom);
     if (s->observed == 0) return false;
@@ -431,13 +468,13 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
         if (ctx == NULL) d_outcome_fold(out, &access);
         /* Each round's depth is deeper than the last's shallowest, and a
          * tree is finitely deep: the loop ends. */
-        while (ctx != NULL && active > 0 && !dom->closed && !sticky(out)) {
+        while (ctx != NULL && active > 0 && d_delivery_active(dom) && !sticky(out)) {
             size_t depth = broadcast(dom, ctx, out);
-            if (sticky(out) || dom->closed) break;
+            if (sticky(out) || !d_delivery_active(dom)) break;
             active = gather(dom, depth, &skipped);
             if (active < 0) s->undone = true;
         }
-        if (ctx != NULL && skipped != 0 && !dom->closed && !sticky(out)) loop_error(dom, ctx, out);
+        if (ctx != NULL && skipped != 0 && d_delivery_active(dom) && !sticky(out)) loop_error(dom, ctx, out);
         s->skipped = skipped;
         d_task_finish(dom, out);
     }
@@ -497,7 +534,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_RESIZE) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
@@ -511,6 +549,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->object = object;
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
+    o->report_owner = report_owner;
     o->prev = s->observers_last;
     if (s->observers_last != NULL) s->observers_last->next = o;
     else s->observers = o;
@@ -689,6 +728,11 @@ void d_resizes_drain(os64_dom_t *dom)
             JS_FreeValueRT(dom->engine, o->object);
         }
     dom->resizes_held = 0;
+}
+
+bool d_resizes_busy(const os64_dom_t *dom)
+{
+    return dom->resizes && dom->resizes->walking;
 }
 
 void d_resizes_free(os64_dom_t *dom)

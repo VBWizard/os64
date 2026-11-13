@@ -68,8 +68,8 @@ static JSValue select_fired(JSContext *ctx, JSValueConst self, int argc, JSValue
 }
 
 /* HTML's "set the selection range" ends by queuing an element task to fire
- * select when the set moved the selection, in extent or direction: a
- * timer in the control's current binding, due at once. The function uses
+ * select in an active document when the set moved the selection, in extent
+ * or direction: a timer in the control's current binding, due at once. The function uses
  * that binding's realm and the host runs it as a task.
  * `before` and the record as it now stands are compared. -1 with an
  * exception pending when it could not be queued. */
@@ -77,6 +77,7 @@ static int select_queue(os64_dom_t *dom, JSContext *ctx, JSValueConst element, c
                         uint32_t start, uint32_t end, os64_page_direction_t direction)
 {
     dom = d_owner(dom, node);
+    if (!d_delivery_active(dom)) return 0;
     uint32_t now_start, now_end;
     os64_page_direction_t now_direction;
     if (os64_page_node_selection(d_owner(dom, node)->state, node, &now_start, &now_end, &now_direction) != 0 ||

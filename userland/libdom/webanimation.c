@@ -89,7 +89,8 @@ struct DWaEffect {
 typedef struct DWaAnimation DWaAnimation;
 struct DWaAnimation {
     DValue target;                  /* first: the plain event target's entry, in the object */
-    os64_dom_t *dom;
+    os64_dom_t *dom;               /* native registry, activity and timeline owner */
+    os64_dom_t *creation;          /* object realm, independent of its timeline */
     DWaAnimation *prev, *next;      /* dom->wa_first..wa_last, in the order they were made */
     uint64_t serial;
     JSValue effect;                 /* the KeyframeEffect object, or null */
@@ -207,8 +208,10 @@ static const os64_html_node_t *wa_target(const DWaAnimation *a)
  * (wa_publish). The first read samples it. */
 static void wa_sample_at(os64_dom_t *dom, double now)
 {
+    if (!d_delivery_active(dom)) return;
+    uint64_t face = d_host_now_ms(dom);
+    if (!d_delivery_active(dom)) return;
     dom->wa_time = now;
-    uint64_t face = dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
     dom->wa_face = (double)face - dom->wa_time;
     dom->wa_sampled = true;
 }
@@ -384,9 +387,13 @@ static void free3(JSContext *ctx, JSValue *p, JSValue *res, JSValue *rej)
     *p = *res = *rej = JS_UNDEFINED;
 }
 
-/* A new pending promise into `p`, its resolving functions beside it. */
-static int promise_new(JSContext *ctx, JSValue *p, JSValue *res, JSValue *rej)
+/* Replacement promises keep the animation's realm even when another
+ * document's scheduler or a borrowed method creates them. */
+static int animation_promise(DWaAnimation *a, JSValue *p, JSValue *res, JSValue *rej)
 {
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_realm_context(a->creation->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return -1;
     JSValue funcs[2];
     JSValue made = JS_NewPromiseCapability(ctx, funcs);
     if (JS_IsException(made)) return -1;
@@ -443,10 +450,10 @@ static void resolve_ready(JSContext *ctx, DWaAnimation *a)
 
 /* A ready promise that is resolved is replaced by a new pending one, as
  * play and pause do when they schedule a task. */
-static int ready_pending(JSContext *ctx, DWaAnimation *a)
+static int ready_pending(DWaAnimation *a)
 {
     if (!a->ready_done) return 0;
-    if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0) return -1;
+    if (animation_promise(a, &a->ready, &a->ready_resolve, &a->ready_reject) < 0) return -1;
     a->ready_done = false;
     return 0;
 }
@@ -459,6 +466,7 @@ static void queue_event(JSContext *ctx, DWaAnimation *a, const char *type, doubl
                         double scheduled)
 {
     os64_dom_t *dom = a->dom;
+    if (!d_delivery_active(dom)) return;
     DWaEvent *e = d_alloc(dom, sizeof(*e));
     if (e == NULL) return;
     *e = (DWaEvent){.animation = JS_DupValue(ctx, a->target.value), .type = type, .current = current,
@@ -494,7 +502,7 @@ static int css_event_fields(JSContext *ctx, JSValue event, const char *name, siz
 static void finish_notify(JSContext *ctx, DWaAnimation *a)
 {
     a->notify_queued = false;
-    if (play_state(a) != WA_FINISHED || a->finished_done) return;
+    if (!d_delivery_active(a->dom) || play_state(a) != WA_FINISHED || a->finished_done) return;
     a->finished_done = true;
     promise_call(ctx, a->finished_resolve, a->target.value);
     /* Scheduled when its end was reached: the animation time of the end
@@ -540,17 +548,22 @@ static void update_finished(JSContext *ctx, DWaAnimation *a, bool did_seek, bool
     /* Becoming finished makes it replaceable, and may make it replace. */
     if (finished && !a->was_finished) a->dom->wa_replace_check = true;
     a->was_finished = finished;
-    if (finished && !a->finished_done) {
+    if (finished && !a->finished_done && d_delivery_active(a->dom)) {
         if (sync) {
             finish_notify(ctx, a);
         } else if (!a->notify_queued) {
             a->notify_queued = true;
             JSValue arg = a->target.value;
-            if (JS_EnqueueJob(ctx, finish_job, 1, &arg) < 0) a->notify_queued = false;
+            os64_js_outcome_t access;
+            JSContext *activity = os64_js_realm_context(a->dom->realm, OS64_JS_ABI_ID, &access);
+            /* This native notification follows the timeline. Its promise's
+             * author reactions have their own callable eligibility. */
+            if (activity == NULL || JS_EnqueueJobOwned(ctx, NULL, activity, finish_job, 1, &arg) < 0)
+                a->notify_queued = false;
         }
     }
     if (!finished && a->finished_done) {
-        if (promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) == 0)
+        if (animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) == 0)
             a->finished_done = false;
     }
     wa_changed(a);
@@ -631,7 +644,7 @@ static int play(JSContext *ctx, DWaAnimation *a, bool auto_rewind)
         has_ready = true;
     }
     if (isnan(a->held) && !aborted_pause && !a->has_pending_rate) return 0;
-    if (!has_ready && ready_pending(ctx, a) < 0) return -1;
+    if (!has_ready && ready_pending(a) < 0) return -1;
     a->pending_play = true;
     update_finished(ctx, a, false, false);
     return 0;
@@ -660,7 +673,7 @@ static int pause(JSContext *ctx, DWaAnimation *a)
         a->pending_play = false;
         has_ready = true;
     }
-    if (!has_ready && ready_pending(ctx, a) < 0) return -1;
+    if (!has_ready && ready_pending(a) < 0) return -1;
     a->pending_pause = true;
     update_finished(ctx, a, false, false);
     return 0;
@@ -732,7 +745,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
             mark_handled(a->dom, ctx, a->ready);
             JS_FreeValue(ctx, reason);
             JSValue resolved = JS_UNDEFINED, res = JS_UNDEFINED, rej = JS_UNDEFINED;
-            if (promise_new(ctx, &resolved, &res, &rej) < 0) return -1;
+            if (animation_promise(a, &resolved, &res, &rej) < 0) return -1;
             promise_call(ctx, res, a->target.value);
             free3(ctx, &a->ready, &a->ready_resolve, &a->ready_reject);
             a->ready = resolved;
@@ -746,7 +759,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
             mark_handled(a->dom, ctx, a->finished);
             JS_FreeValue(ctx, reason);
         }
-        if (promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) return -1;
+        if (animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) return -1;
         a->finished_done = false;
         a->notify_queued = false;
         queue_event(ctx, a, "cancel", NAN, wa_now(a->dom), wa_now(a->dom));
@@ -1892,6 +1905,7 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     }
     d_event_target_init(dom, &a->target, object);
     a->dom = dom;
+    a->creation = d_binding(ctx);
     a->id = id;
     a->start = a->held = a->previous = NAN;
     a->rate = 1;
@@ -1909,8 +1923,8 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     index_dirty(dom);
     /* A new animation's ready promise is resolved, its finished one
      * pending (an animation's initial state, § 4.4.7 and § 4.4.11). */
-    if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
-        promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) {
+    if (animation_promise(a, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
+        animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) {
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
@@ -1920,12 +1934,12 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     return object;
 }
 
-/* Whether an animation may still change what is drawn or fire: one with a
- * pending task, one running (on its way to its finish, which a listener may
- * hear, even through a stretch where it is not relevant: reversed into its
- * delay), relevant, or a CSSAnimation whose CSS animation lives. */
+/* Whether active document activity keeps an animation alive: pending or
+ * running work, a relevant effect, or a CSSAnimation whose host record lives.
+ * Retained references can still change a departed animation's pure data. */
 static bool wa_live(DWaAnimation *a)
 {
+    if (!d_delivery_active(a->dom)) return false;
     /* A CSSAnimation is kept while its CSS animation is, so a script that
      * asks again gets the same object. */
     if (a->css_id != 0) return true;
@@ -2347,9 +2361,21 @@ static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCon
     return effect_new(dom, ctx, element, d, &spec, prototype);
 }
 
-/* `new Animation(effect, timeline)` (§ 6.4, Animation): idle, of `effect` (null or
- * undefined for none), on the document's timeline unless `timeline` is
- * null; any other timeline is not one this binding has. */
+/* Resolve a supported document timeline by identity, without invoking page
+ * properties. Registry ownership follows the chosen timeline from creation. */
+static os64_dom_t *timeline_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst timeline)
+{
+    size_t count = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < count; ++i) {
+        os64_dom_t *member = dom->cluster ? dom->cluster->members[i] : dom;
+        if (member->wa_timeline && JS_StrictEq(ctx, timeline, member->wa_timeline->value)) return member;
+    }
+    JS_ThrowTypeError(ctx, "An animation's timeline is a document timeline or null");
+    return NULL;
+}
+
+/* The constructor's realm supplies its prototype and default timeline;
+ * an explicit cluster timeline can belong to another document. */
 static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     os64_dom_t *dom = d_binding(ctx);
@@ -2359,8 +2385,10 @@ static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int 
         return JS_ThrowTypeError(ctx, "An animation's effect is a KeyframeEffect or null");
     JSValueConst timeline = argc > 1 ? argv[1] : JS_UNDEFINED;
     bool none = JS_IsNull(timeline);
-    if (!none && !JS_IsUndefined(timeline) && !JS_StrictEq(ctx, timeline, dom->wa_timeline->value))
-        return JS_ThrowTypeError(ctx, "An animation's timeline is the document's or null");
+    if (!none && !JS_IsUndefined(timeline)) {
+        dom = timeline_owner(dom, ctx, timeline);
+        if (dom == NULL) return JS_EXCEPTION;
+    }
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     if (JS_IsException(prototype)) return prototype;
     JSValue animation = animation_new(dom, ctx, effect, NULL, prototype);
@@ -2387,14 +2415,24 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     magic &= ~D_SET;
     JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (magic == T_CURRENT) {
-        dom->wa_wanted = true;
+        dom = timeline_owner(dom, ctx, self);
+        if (dom == NULL) return JS_EXCEPTION;
+        if (d_delivery_active(dom)) dom->wa_wanted = true;
         return JS_NewFloat64(ctx, wa_now(dom));
     }
-    if (magic == D_TIMELINE) return JS_DupValue(ctx, dom->wa_timeline->value);
+    if (magic == D_TIMELINE) {
+        const os64_html_node_t *node = d_node(dom, ctx, self);
+        if (node == NULL || node->kind != OS64_HTML_DOCUMENT)
+            return JS_ThrowTypeError(ctx, "Document.timeline needs a document");
+        dom = d_owner(dom, node);
+        return JS_DupValue(ctx, dom->wa_timeline->value);
+    }
     DWaAnimation *a = wa_state(self);
     if (a == NULL) return JS_ThrowTypeError(ctx, "Expected an Animation");
     if (a->dom == NULL) return JS_UNDEFINED;
     dom = a->dom;
+    if ((magic == A_PLAY || magic == A_PAUSE || magic == A_REVERSE || magic == A_FINISH) &&
+        !a->no_timeline && !d_require_active(dom, ctx)) return JS_EXCEPTION;
     bool was_paused = play_state(a) == WA_PAUSED;
     int r = 0;
     switch (magic) {
@@ -2425,6 +2463,7 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
         if (set) {
             double t;
             if (time_arg(ctx, arg, &t) < 0) return JS_EXCEPTION;
+            if (!a->no_timeline && !d_require_active(dom, ctx)) return JS_EXCEPTION;
             set_start(ctx, a, t);
             break;
         }
@@ -2472,6 +2511,7 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
         double rate;
         if (JS_ToFloat64(ctx, &rate, arg) < 0) return JS_EXCEPTION;
         if (!isfinite(rate)) return JS_ThrowTypeError(ctx, "A playback rate is a finite number");
+        if (!a->no_timeline && !d_require_active(dom, ctx)) return JS_EXCEPTION;
         r = update_rate(ctx, a, rate);
         break;
     }
@@ -2502,8 +2542,29 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     timing_default(&timing, &spec);
     if (timing_of(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, &timing, &spec, WA_TIMING_ANIMATE) < 0)
         return JS_EXCEPTION;
+    JSValue timeline = argc > 1 && JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], "timeline") : JS_UNDEFINED;
+    if (JS_IsException(timeline)) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    bool none = JS_IsNull(timeline), default_timeline = JS_IsUndefined(timeline);
+    os64_dom_t *activity = none || default_timeline ? NULL : timeline_owner(dom, ctx, timeline);
+    JS_FreeValue(ctx, timeline);
+    if (!none && !default_timeline && activity == NULL) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    /* Adoption preserves the receiver's realm and the allocation owner of
+     * its effect. The default timeline is chosen after keyframe conversion,
+     * which can adopt the receiver again. */
+    dom = d_creation_owner(dom, element);
+    os64_js_outcome_t access;
+    JSContext *creation = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (creation == NULL) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    ctx = creation;
     DWaData *d = keyframes_data(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (d == NULL) {
+        js_free(ctx, spec.id);
+        return JS_EXCEPTION;
+    }
+    if (default_timeline) activity = d_owner(dom, element);
+    if (none) activity = dom;
+    if (!none && !d_require_active(activity, ctx)) {
+        data_free(dom, d);
         js_free(ctx, spec.id);
         return JS_EXCEPTION;
     }
@@ -2513,11 +2574,13 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
         js_free(ctx, spec.id);
         return effect;
     }
-    JSValue animation = animation_new(dom, ctx, effect, spec.id, JS_UNDEFINED);
+    JSValue animation = animation_new(activity, ctx, effect, spec.id, JS_UNDEFINED);
     JS_FreeValue(ctx, effect);
     if (JS_IsException(animation)) return animation;
     DWaAnimation *a = wa_state(animation);
-    if (play(ctx, a, true) < 0) {
+    a->no_timeline = none;
+    if ((!none && !d_require_active(activity, ctx)) || play(ctx, a, true) < 0 ||
+        (!none && !d_require_active(activity, ctx))) {
         JS_FreeValue(ctx, animation);
         return JS_EXCEPTION;
     }
@@ -2600,13 +2663,15 @@ static DWaAnimation *css_find(os64_dom_t *dom, uint64_t id)
 static void css_push(DWaAnimation *a)
 {
     os64_dom_t *dom = a->dom;
-    if (a->css_id == 0 || dom == NULL || dom->wa_css.drive == NULL) return;
+    if (a->css_id == 0 || dom == NULL || dom->wa_css.drive == NULL || !d_provider_enter(dom)) return;
+    os64_dom_css_animations_t host = dom->wa_css;
     bool paused = !isnan(a->held), canceled = !paused && isnan(a->start);
     double start = paused || canceled ? 0 : a->start + dom->wa_face;
     /* False only when the host's animation went: the next step finds that. */
-    if (dom->wa_css.drive(dom->wa_css.opaque, a->css_id, paused, canceled, start, paused ? a->held : 0, a->rate) &&
-        wa_target(a) != NULL)
+    if (host.drive(host.opaque, a->css_id, paused, canceled, start, paused ? a->held : 0, a->rate) &&
+        d_delivery_active(dom) && wa_target(a) != NULL)
         (void)os64_html_touch(d_owner(dom, wa_target(a))->document, (os64_html_node_t *)wa_target(a));
+    d_provider_leave(dom);
 }
 
 /* A procedure a CSS animation's style asked for, whose throw (a backwards
@@ -2702,7 +2767,7 @@ static DWaAnimation *css_wrap(os64_dom_t *dom, JSContext *ctx, const os64_dom_cs
     } else if (!r->canceled && r->start_ms > now) {
         a->held = 0;
         a->pending_play = true;
-        if (ready_pending(ctx, a) < 0) {
+        if (ready_pending(a) < 0) {
             JS_FreeValue(ctx, effect);
             JS_FreeValue(ctx, animation);
             return NULL;
@@ -2713,6 +2778,9 @@ static DWaAnimation *css_wrap(os64_dom_t *dom, JSContext *ctx, const os64_dom_cs
     a->rate = r->rate;
     set_effect(ctx, a, effect);
     JS_FreeValue(ctx, effect);
+    /* A clock push may retire the provider before the registry takes its
+     * strong hold. Do not return a pointer after releasing that last value. */
+    if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, animation); return NULL; }
     wa_keep(ctx, a);
     JS_FreeValue(ctx, animation);
     return a;
@@ -2779,6 +2847,7 @@ static DWaSeen *seen_of(os64_dom_t *dom, const os64_dom_css_animation_t *r)
  * its active interval, for a clock that runs; now, for one that stands. */
 static void css_queue(os64_dom_t *dom, const DWaSeen *s, const char *type, double elapsed, double scheduled)
 {
+    if (!d_delivery_active(dom)) return;
     DWaEvent *e = d_alloc(dom, sizeof(*e));
     char *name = e != NULL ? d_alloc(dom, s->name_len + 1) : NULL;
     if (name == NULL) {
@@ -2881,18 +2950,22 @@ static void css_events(os64_dom_t *dom, const os64_dom_css_animation_t *r, int32
  * play moves it, which is never later; a driven, held one hands 0.) */
 static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
 {
-    os64_dom_css_animations_t *h = &dom->wa_css;
+    if (!d_delivery_active(dom) || d_provider_busy(dom)) return;
+    os64_dom_css_animations_t host = dom->wa_css, *h = &host;
     bool listening = h->count != NULL && css_listening(dom);
     bool seeding = listening && !dom->wa_css_listening;
     dom->wa_css_listening = listening;
     if (!listening) seen_clear(dom);
-    if (h->count == NULL) return;
+    if (h->count == NULL || h->at == NULL || !d_provider_enter(dom)) return;
+    /* Names and nodes returned by at remain borrowed through consumption.
+     * Keep one loan across the snapshot, including any CSS clock push. */
     dom->wa_css_version = h->version != NULL ? h->version(h->opaque) : 0;
+    if (!d_delivery_active(dom)) { d_provider_leave(dom); return; }
     uint32_t pass = ++dom->wa_css_pass;
     int32_t n = h->count(h->opaque, false);
-    for (int32_t i = 0; i < n; i++) {
+    for (int32_t i = 0; i < n && d_delivery_active(dom); i++) {
         os64_dom_css_animation_t r;
-        if (!h->at(h->opaque, i, &r)) break;
+        if (!h->at(h->opaque, i, &r) || !d_delivery_active(dom)) break;
         DWaAnimation *a = css_find(dom, r.id);
         if (a != NULL) {
             a->css_pass = pass;
@@ -2902,8 +2975,11 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
          * no pending play or pause task (one the style's change just
          * gave it): it keeps the phase it had until that task runs. */
         bool pending = a != NULL && (a->pending_play || a->pending_pause);
-        if (listening) css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);
+        if (listening && d_delivery_active(dom))
+            css_events(dom, &r, i, now, seeding && r.start_ms <= since, pending);
     }
+    d_provider_leave(dom);
+    if (!d_delivery_active(dom)) return;
     /* Each gone one held while all are canceled: a cancel settles promises,
      * which may run a page's getter, which may make or drop animations. */
     size_t ngone = 0;
@@ -2914,13 +2990,13 @@ static void css_step(JSContext *ctx, os64_dom_t *dom, double now, double since)
         if (a->css_id != 0 && a->css_pass != pass) gone[k++] = JS_DupValue(ctx, a->target.value);
     for (size_t i = 0; i < k; i++) {
         DWaAnimation *a = wa_state(gone[i]);
-        if (a != NULL && a->css_id != 0) css_vanish(ctx, a);
+        if (a != NULL && a->css_id != 0 && d_delivery_active(dom)) css_vanish(ctx, a);
         JS_FreeValue(ctx, gone[i]);
     }
     js_free(ctx, gone);
     /* The ones that went, cancelled in the order the host last listed
      * them: composite order, as they last stood. */
-    for (int32_t next = INT32_MIN; listening;) {
+    for (int32_t next = INT32_MIN; listening && d_delivery_active(dom);) {
         DWaSeen *first = NULL;
         for (size_t i = 0; i < dom->wa_nseen; i++) {
             DWaSeen *s = &dom->wa_seen[i];
@@ -2960,13 +3036,19 @@ static double seen_next(const DWaSeen *s, double then)
  * UINT64_MAX for never. */
 static uint64_t css_due(os64_dom_t *dom)
 {
-    os64_dom_css_animations_t *h = &dom->wa_css;
+    os64_dom_css_animations_t host = dom->wa_css, *h = &host;
     if (h->count == NULL) return UINT64_MAX;
     bool listening = css_listening(dom), wrapped = false;
     for (DWaAnimation *a = dom->wa_first; a != NULL && !wrapped; a = a->next) wrapped = a->css_id != 0;
     if (listening != dom->wa_css_listening) return 0;
     if (!listening && !wrapped) return UINT64_MAX;
-    if (h->version != NULL && h->version(h->opaque) != dom->wa_css_version) return 0;
+    if (h->version != NULL) {
+        if (!d_provider_enter(dom)) return UINT64_MAX;
+        uint64_t version = h->version(h->opaque);
+        d_provider_leave(dom);
+        if (!d_delivery_active(dom)) return UINT64_MAX;
+        if (version != dom->wa_css_version) return 0;
+    }
     if (!listening) return UINT64_MAX;
     double due = INFINITY;
     for (size_t i = 0; i < dom->wa_nseen; i++) due = fmin(due, seen_next(&dom->wa_seen[i], (double)dom->wa_last_step));
@@ -2975,7 +3057,7 @@ static uint64_t css_due(os64_dom_t *dom)
 
 void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css)
 {
-    if (dom == NULL) return;
+    if (dom == NULL || d_provider_busy(dom) || dom->departure_finishing || dom->departure_finished) return;
     if (css != NULL) dom->wa_css = *css;
     else os64_memset(&dom->wa_css, 0, sizeof(dom->wa_css));
 }
@@ -3036,29 +3118,36 @@ static JSValue get_animations(JSContext *ctx, JSValueConst self, int argc, JSVal
     }
     /* Reading subtree may have adopted the receiver into another document. */
     dom = d_owner(dom, root);
+    if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
+    if (d_provider_busy(dom)) return d_error(ctx, "InvalidStateError", "An animation snapshot is borrowed");
     JSValue list = JS_NewArray(ctx);
     if (JS_IsException(list)) return list;
     uint32_t n = 0;
-    os64_dom_css_animations_t *h = &dom->wa_css;
-    int32_t ncss = h->count != NULL ? h->count(h->opaque, true) : 0;
+    os64_dom_css_animations_t host = dom->wa_css, *h = &host;
+    bool borrowed = h->count != NULL && h->at != NULL && d_provider_enter(dom);
+    int32_t ncss = borrowed ? h->count(h->opaque, true) : 0;
     for (int32_t i = 0; i < ncss; i++) {
         os64_dom_css_animation_t r;
-        if (!h->at(h->opaque, i, &r)) break;
+        if (!d_delivery_active(dom) || !h->at(h->opaque, i, &r) || !d_delivery_active(dom)) break;
         bool mine = animation_in_query(r.element, root, subtree);
         DWaAnimation *a = mine ? css_find(dom, r.id) : NULL;
         if (a != NULL) css_pull(ctx, a, &r);
         else if (mine && css_record_relevant(dom, &r)) a = css_wrap(dom, ctx, &r);
         else continue;
         if (a == NULL) {
+            if (borrowed) d_provider_leave(dom);
             JS_FreeValue(ctx, list);
             return JS_EXCEPTION;
         }
         if (!wa_relevant(a)) continue;
         if (JS_SetPropertyUint32(ctx, list, n++, JS_DupValue(ctx, a->target.value)) < 0) {
+            if (borrowed) d_provider_leave(dom);
             JS_FreeValue(ctx, list);
             return JS_EXCEPTION;
         }
     }
+    if (borrowed) d_provider_leave(dom);
+    if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, list); return JS_EXCEPTION; }
     DWaAnimation *heads[D_REALMS];
     size_t members = animation_heads(dom, heads);
     /* Array growth can collect unreferenced records. Pin each queued head;
@@ -3245,10 +3334,13 @@ static void remove_replaced(JSContext *ctx, os64_dom_t *dom)
 
 uint64_t os64_dom_web_animations_next(os64_dom_t *dom)
 {
-    if (dom == NULL || dom->closed || dom->wa_running) return UINT64_MAX;
+    if (!d_delivery_active(dom) || dom->wa_running || d_provider_busy(dom)) return UINT64_MAX;
     uint64_t soon = dom->wa_stepped ? dom->wa_last_step + WA_FRAME_MS : 0;
-    if (wa_busy(dom)) return soon;
+    bool busy = wa_busy(dom);
+    if (!d_delivery_active(dom)) return UINT64_MAX;
+    if (busy) return soon;
     uint64_t due = css_due(dom);
+    if (!d_delivery_active(dom)) return UINT64_MAX;
     return due == UINT64_MAX ? UINT64_MAX : due > soon ? due : soon;
 }
 
@@ -3277,9 +3369,10 @@ static DWaEvent *events_sorted(DWaEvent *list)
 bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *out)
 {
     if (out) os64_memset(out, 0, sizeof(*out));
-    if (out == NULL || os64_dom_web_animations_next(dom) > now) return false;
+    if (out == NULL || !d_delivery_active(dom) || os64_dom_web_animations_next(dom) > now) return false;
     double since = dom->wa_stepped ? (double)dom->wa_last_step : -INFINITY;
     wa_sample(dom);
+    if (!d_delivery_active(dom)) return false;
     dom->wa_wanted = false;
     dom->wa_stepped = true;
     dom->wa_last_step = now;
@@ -3297,7 +3390,7 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
         JSValue *held = ctx != NULL && dom->wa_count > 0 ? js_malloc(ctx, dom->wa_count * sizeof(*held)) : NULL;
         for (DWaAnimation *a = dom->wa_first; held != NULL && a != NULL && n < dom->wa_count; a = a->next)
             held[n++] = JS_DupValue(ctx, a->target.value);
-        for (size_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n && d_delivery_active(dom); i++) {
             DWaAnimation *a = wa_state(held[i]);
             if (a == NULL) continue;
             if (a->no_timeline) continue;
@@ -3307,7 +3400,7 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
         /* After the pending tasks: a pause or play the style asks for now
          * waits for the next step, as a script's does. */
         if (ctx != NULL) css_step(ctx, dom, (double)now, since);
-        if (ctx != NULL) remove_replaced(ctx, dom);
+        if (ctx != NULL && d_delivery_active(dom)) remove_replaced(ctx, dom);
         if (ctx != NULL) d_task_settle(dom, out);
         DWaEvent *events = events_sorted(dom->wa_events);
         dom->wa_events = dom->wa_events_last = NULL;
@@ -3315,15 +3408,15 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
             DWaEvent *e = events;
             events = e->next;
             DWaAnimation *a = wa_state(e->animation);
-            if (ctx != NULL && e->element != NULL) {
+            if (ctx != NULL && d_delivery_active(dom) && e->element != NULL) {
                 JSValue event = d_event_new_proto(dom, ctx, dom->wa_css_event_prototype->value, e->type, true,
                                                   false, true);
                 if (!JS_IsException(event) &&
                     css_event_fields(ctx, event, e->name, e->name_len, e->elapsed) == 0)
                     (void)d_dispatch_node_task(dom, ctx, event, e->element, out);
                 JS_FreeValue(ctx, event);
-            } else if (ctx != NULL && a != NULL) {
-                JSValue event = d_event_new_proto(dom, ctx, dom->wa_event_prototype->value, e->type, false,
+            } else if (ctx != NULL && d_delivery_active(dom) && a != NULL) {
+                JSValue event = d_event_new_proto(a->creation, ctx, a->creation->wa_event_prototype->value, e->type, false,
                                                   false, true);
                 if (!JS_IsException(event)) {
                     JSValue current = time_value(ctx, e->current), timeline = time_value(ctx, e->timeline);
@@ -3473,8 +3566,40 @@ bool os64_dom_effects_held(const os64_dom_t *dom)
 
 /* ── The binding's lifetime ──────────────────────────────────────────── */
 
+/* Quiescent activity cleanup keeps exported animations/effects and layout
+ * generations alive. The public departure barrier must also exclude engine
+ * and DOM dispatch/reaction entry before calling this seam. */
+void d_web_animations_cancel(os64_dom_t *dom)
+{
+    if (dom == NULL || d_delivery_active(dom) || d_provider_busy(dom) || dom->wa_running) return;
+    os64_memset(&dom->wa_css, 0, sizeof(dom->wa_css));
+    while (dom->wa_events != NULL) {
+        DWaEvent *e = dom->wa_events;
+        dom->wa_events = e->next;
+        event_free(dom, e);
+    }
+    dom->wa_events_last = NULL;
+    seen_clear(dom);
+    dom->wa_css_listening = dom->wa_wanted = dom->wa_replace_check = false;
+    for (DWaAnimation *a = dom->wa_first; a != NULL; a = a->next) {
+        a->held = current_time(a);
+        a->start = NAN;
+        a->pending_play = a->pending_pause = a->has_pending_rate = a->notify_queued = false;
+        wa_changed(a);
+    }
+    /* Releasing a hold can finalize other records through listener cycles. */
+    for (DWaAnimation *a = dom->wa_first; a != NULL;) {
+        if (JS_IsUndefined(a->hold)) { a = a->next; continue; }
+        JSValue held = a->hold;
+        a->hold = JS_UNDEFINED;
+        JS_FreeValueRT(dom->engine, held);
+        a = dom->wa_first;
+    }
+}
+
 void d_web_animations_drain(os64_dom_t *dom)
 {
+    if (d_provider_busy(dom)) return;
     while (dom->wa_events != NULL) {
         DWaEvent *e = dom->wa_events;
         dom->wa_events = e->next;

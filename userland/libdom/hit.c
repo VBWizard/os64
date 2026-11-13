@@ -14,7 +14,7 @@
 
 void os64_dom_set_hit(os64_dom_t *dom, os64_dom_hit_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->hit = provider;
     dom->hit_opaque = opaque;
 }
@@ -64,7 +64,12 @@ static JSValue from_point(JSContext *ctx, JSValueConst self, int argc, JSValueCo
         /* Each ask's cost is its own and both are charged: the first is the
          * one that makes the layout current. */
         os64_dom_geometry_stats_t cost = {0}, again_cost = {0};
+        if (!d_provider_begin(dom, ctx)) return JS_EXCEPTION;
         count = dom->hit(dom->hit_opaque, xy[0], xy[1], few, 64, &cost);
+        d_provider_leave(dom);
+        dom->geometry_stats.layouts = add_sat(dom->geometry_stats.layouts, cost.layouts);
+        dom->geometry_stats.elapsed_us = add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         bool refused = false;
         if (count > 64 && magic == H_ALL) {
             out = d_alloc(dom, count * sizeof(*out));
@@ -72,15 +77,17 @@ static JSValue from_point(JSContext *ctx, JSValueConst self, int argc, JSValueCo
                 refused = true;
                 out = few;
             } else {
+                if (!d_provider_begin(dom, ctx)) { d_free(dom, out); return JS_EXCEPTION; }
                 size_t again = dom->hit(dom->hit_opaque, xy[0], xy[1], out, count, &again_cost);
+                d_provider_leave(dom);
+                dom->geometry_stats.layouts = add_sat(dom->geometry_stats.layouts, again_cost.layouts);
+                dom->geometry_stats.elapsed_us = add_sat(dom->geometry_stats.elapsed_us, again_cost.elapsed_us);
+                if (!d_require_active(dom, ctx)) { d_free(dom, out); return JS_EXCEPTION; }
                 count = again < count ? again : count;
             }
         } else if (count > 64) {
             count = 64;
         }
-        dom->geometry_stats.layouts = add_sat(dom->geometry_stats.layouts, add_sat(cost.layouts, again_cost.layouts));
-        dom->geometry_stats.elapsed_us =
-            add_sat(dom->geometry_stats.elapsed_us, add_sat(cost.elapsed_us, again_cost.elapsed_us));
         if (refused) return d_error(ctx, "QuotaExceededError", "DOM hit quota exceeded");
     }
     JSValue result;

@@ -80,7 +80,7 @@ struct DMessage {
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static const char *page_address(const os64_dom_t *dom)
@@ -183,9 +183,12 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
             JS_FreeValue(ctx, value);
         }
     }
+    if (converted == 0 && !d_require_active(target, ctx)) converted = -1;
+    uint64_t posted = converted == 0 ? now_ms(target) : 0;
+    if (converted == 0 && !d_require_active(target, ctx)) converted = -1;
     DMessage *message = converted == 0 ? d_alloc(target, sizeof(*message)) : NULL;
     if (message != NULL) {
-        *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = now_ms(target)};
+        *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = posted};
         char origin[WAY_ORIGIN_TEXT_MAX];
         message->origin = text_copy(target, d_origin(page_address(poster), origin, sizeof(origin)) ? origin : "null");
         if (message->origin == NULL) {
@@ -203,6 +206,8 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
         message->clone = d_clone_write(poster, ctx, argv[0], transfer, count);
         converted = message->clone != NULL ? 0 : -1;
     }
+    /* Serialization can run getters that retire the posting activity. */
+    if (converted == 0 && !d_require_active(target, ctx)) converted = -1;
     /* Posted: the transfer list is the message's now. */
     if (converted == 0) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
@@ -250,14 +255,14 @@ static DValue *port_target(JSValueConst port);
 
 uint64_t os64_dom_message_next(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->messages != NULL ? dom->messages->posted : UINT64_MAX;
+    return d_delivery_active(dom) && dom->messages != NULL ? dom->messages->posted : UINT64_MAX;
 }
 
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
-    if (outcome == NULL || dom == NULL) return false;
-    for (bool dropped = false; !dom->closed && dom->messages != NULL; dropped = true) {
+    if (outcome == NULL || !d_delivery_active(dom)) return false;
+    for (bool dropped = false; d_delivery_active(dom) && dom->messages != NULL; dropped = true) {
         DMessage *message = dom->messages;
         /* Past one dropped, a message posted after the page's next timer
          * fell due waits for that timer's task, which may add a listener
@@ -280,26 +285,17 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return false;
 }
 
-void d_message_drain(os64_dom_t *dom)
-{
-    while (dom->messages != NULL) {
-        DMessage *message = dom->messages;
-        dom->messages = message->next;
-        message_free(dom, message);
-    }
-    dom->messages_last = NULL;
-}
-
 /* ── MessageChannel and MessagePort (HTML § 9.4) ─────────────────────── */
 
 static JSClassID port_slot, channel_slot;
 
-typedef struct {
+typedef struct DPort {
     DValue target;              /* first: the plain target's entry, in the object */
     os64_dom_t *dom;
     JSValue partner;            /* the entangled port, traced; JS_UNDEFINED once disentangled */
     bool started, closed;
     DMessage *pending, *pending_last;   /* sent before it started; each holding no port */
+    struct DPort *previous, *next;      /* weak membership in dom->ports */
 } DPort;
 
 typedef struct {
@@ -330,7 +326,7 @@ static void message_enqueue(os64_dom_t *dom, DMessage *message)
  * the port, in the order it was sent. */
 static void port_start(JSContext *ctx, JSValueConst self, DPort *p)
 {
-    if (p->started || p->closed) return;
+    if (p->started || p->closed || !d_delivery_active(p->dom)) return;
     p->started = true;
     while (p->pending != NULL) {
         DMessage *message = p->pending;
@@ -350,6 +346,31 @@ static void port_pending_free(JSRuntime *rt, DPort *p)
         message_free(p->dom, message);
     }
     p->pending_last = NULL;
+}
+
+/* Release task payloads without closing exported ports or destroying their
+ * event-target records. Queued tasks can release the last hold on a port,
+ * so finish that queue before walking the surviving weak port list. */
+void d_message_cancel(os64_dom_t *dom)
+{
+    while (dom->messages != NULL) {
+        DMessage *message = dom->messages;
+        dom->messages = message->next;
+        message_free(dom, message);
+    }
+    dom->messages_last = NULL;
+    for (DPort *p = dom->ports; p != NULL; p = p->next)
+        port_pending_free(dom->engine, p);
+}
+
+void d_message_drain(os64_dom_t *dom)
+{
+    d_message_cancel(dom);
+    while (dom->ports != NULL) {
+        DPort *p = dom->ports;
+        dom->ports = p->next;
+        p->previous = p->next = NULL;
+    }
 }
 
 /* Disentangled: neither port holds the other, and what this one was sent
@@ -373,6 +394,9 @@ static void port_finalizer(JSRuntime *rt, JSValue value)
 {
     DPort *p = port_of(value);
     if (p == NULL) return;
+    if (p->previous != NULL) p->previous->next = p->next;
+    else if (p->dom->ports == p) p->dom->ports = p->next;
+    if (p->next != NULL) p->next->previous = p->previous;
     port_pending_free(rt, p);
     JS_FreeValueRT(rt, p->partner);
     d_event_target_finalize(rt, &p->target);
@@ -400,6 +424,9 @@ static JSValue port_new(os64_dom_t *dom, JSContext *ctx)
     p->partner = JS_UNDEFINED;
     d_event_target_init(dom, &p->target, object);
     JS_SetOpaque(object, p);
+    p->next = dom->ports;
+    if (p->next != NULL) p->next->previous = p;
+    dom->ports = p;
     return object;
 }
 
@@ -438,6 +465,7 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (dom == NULL) return JS_EXCEPTION;
     DPort *p = port_of(self);
     if (p == NULL) return JS_ThrowTypeError(ctx, "Expected a MessagePort");
+    dom = p->dom;
     if (magic == P_START) {
         port_start(ctx, self, p);
         return JS_UNDEFINED;
@@ -463,6 +491,7 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
                                                                      : "A MessagePort is not transferred here");
             converted = -1;
         }
+    if (converted == 0 && !d_require_active(dom, ctx)) converted = -1;
     /* The receiver held while the message is written: serializing runs the
      * page's getters, which may close either port, and closing drops the
      * last other hold on it. The node first, so a quota refusal detaches
@@ -478,9 +507,15 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         converted = -1;
     }
     DClone *clone = converted == 0 ? d_clone_write(dom, ctx, argv[0], transfer, count) : NULL;
+    uint64_t posted = clone != NULL ? now_ms(dom) : 0;
+    if (clone != NULL && !d_require_active(dom, ctx)) {
+        d_clone_free(dom->engine, clone);
+        clone = NULL;
+    }
     if (clone != NULL) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
-    live = live && !p->closed && !target->closed && same_object(p->partner, receiver);
+    live = live && !p->closed && !target->closed && d_delivery_active(target->dom) &&
+           same_object(p->partner, receiver);
     if (clone == NULL || !live) {
         d_free(dom, message);
         if (clone != NULL) d_clone_free(dom->engine, clone);
@@ -488,10 +523,10 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         return clone == NULL ? JS_EXCEPTION : JS_UNDEFINED;
     }
     *message = (DMessage){.clone = clone, .source = JS_UNDEFINED, .port = JS_UNDEFINED, .target_kind = T_ANY,
-                          .posted = now_ms(dom)};
+                          .posted = posted};
     if (target->started) {
         message->port = receiver;
-        message_enqueue(dom, message);
+        message_enqueue(target->dom, message);
     } else {
         JS_FreeValue(ctx, receiver);
         if (target->pending_last != NULL) target->pending_last->next = message;
@@ -562,6 +597,10 @@ static JSValue channel_construct(JSContext *ctx, JSValueConst new_target, int ar
     if (dom == NULL) return JS_EXCEPTION;
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     if (JS_IsException(prototype)) return prototype;
+    if (!d_require_active(dom, ctx)) {
+        JS_FreeValue(ctx, prototype);
+        return JS_EXCEPTION;
+    }
     JSClassID id = os64_js_class_id(&channel_slot);
     JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
     JS_FreeValue(ctx, prototype);

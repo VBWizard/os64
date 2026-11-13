@@ -318,6 +318,8 @@ struct DListener {
 enum { D_LISTENER = 0, D_SLOT_EMPTY, D_SLOT_FUNCTION, D_SLOT_UNCOMPILED, D_SLOT_ERROR };
 struct DTimer {
     DTimer *next;
+    /* Callable reporting provenance; the timer queue still owns activity. */
+    os64_dom_t *report_owner;
     uint64_t due, delay;
     uint32_t id, nesting;
     /* The callback's script (d_callback_script); a string's is the page's. */
@@ -374,6 +376,7 @@ struct os64_dom_cluster {
     struct DObservers *observers;
     struct DCustomAgent *custom_agent;
     size_t dispatching;
+    size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
@@ -391,6 +394,9 @@ struct os64_dom {
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
+    bool departure_finishing, departure_finished;
+    bool installing;
+    size_t provider_borrows;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
     bool mutation_installed;
@@ -585,6 +591,9 @@ struct os64_dom {
     DValue *entry_prototypes[5];
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
+    /* Last host samples remain binding-owned after service detachment. */
+    uint64_t clock_seen_ms, clock_seen_us;
+    os64_dom_timing_t timing_seen;
     /* PerformanceObserver (performance.c): the registered observers, each
      * held, in the order registered (d_alloc'd); whether the task that
      * delivers to them is queued; whether the navigation entry has been
@@ -774,8 +783,22 @@ struct os64_dom {
     struct DKept *kept;
     size_t body_bytes;
     uint64_t bodies_refused;
+    /* Ports remain reachable after their activity stops; this weak list lets
+     * cleanup release messages waiting on ports that have not started. */
+    struct DPort *ports;
+    void (*global_miss)(void *opaque, const char *name);
+    void *global_miss_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
+/* Native walks not wholly described by the engine's task state. */
+bool d_custom_busy(const os64_dom_t *);
+bool d_observers_busy(const os64_dom_t *);
+bool d_intersections_busy(const os64_dom_t *);
+bool d_resizes_busy(const os64_dom_t *);
+void d_custom_cancel(os64_dom_t *);
+void d_observers_cancel(os64_dom_t *);
+void d_intersections_cancel(os64_dom_t *);
+void d_performance_cancel(os64_dom_t *);
 /* d_callback_script's answer when the runtime must stop: the exception is
  * pending, uncatchable, and the caller fails before it records anything. */
 #define D_SCRIPT_FAILED (UINT32_MAX - 1)
@@ -790,6 +813,33 @@ typedef struct { char *data; size_t length; } DString;
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
+/* Scheduling eligibility is separate from retained-object usability. */
+bool d_delivery_active(const os64_dom_t *dom);
+/* Service-creating methods refuse inactive owners after argument conversion. */
+bool d_require_active(os64_dom_t *dom, JSContext *ctx);
+/* Owner-thread provider loans include consuming and releasing borrowed output.
+ * The cluster count makes a sibling's outstanding loan visible to cleanup.
+ * Coverage is inventoried in IFRAME_F3_PROVIDERS.md. */
+bool d_provider_enter(os64_dom_t *dom);
+bool d_provider_begin(os64_dom_t *dom, JSContext *ctx);
+/* Native cleanup may borrow an inactive provider after checking its own
+ * safe-point barriers. This does not admit new page activity. */
+void d_provider_hold(os64_dom_t *dom);
+void d_provider_leave(os64_dom_t *dom);
+bool d_provider_busy(const os64_dom_t *dom);
+/* Read-only host queries borrow mutable provider state. Inactive documents
+ * return their saved samples without calling the host. Service creators
+ * must recheck activity after a clock callback before publishing work. */
+uint64_t d_host_now_ms(const os64_dom_t *dom);
+uint64_t d_host_now_us(const os64_dom_t *dom);
+/* 1 permits a host callback, 0 suppresses it, -1 leaves a lookup exception.
+ * activity is the operation's current document, not the callback's creator. */
+int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback);
+/* Function-only eligibility for document-neutral data iteration. `owner`
+ * identifies the runtime, not an activity document. Scheduled work must use
+ * d_delivery_eligible instead. A required inactive callback throws. */
+int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
+bool d_require_callback(os64_dom_t *owner, JSContext *ctx, JSValueConst callback);
 /* A block of the binding's own, charged to max_bytes and counted under
  * `kind` (MEMORY_CENSUS.md § 4); d_alloc is d_alloc_kind's OTHER. Zeroed.
  * d_free reads the kind back from the block, so nothing else is passed. */
@@ -1206,7 +1256,7 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The screen's width and height as `screen` reports them, in CSS pixels at
  * the page's zoom, and devicePixelRatio: what the device-* media features
  * and `resolution` answer (view.c). */
-void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
+bool d_screen_media(os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the
@@ -1265,6 +1315,14 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
  * getter's call found the runtime must stop: asked before the callback is
  * recorded, so the caller can fail with nothing done. */
 uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Callable realm's binding within this cluster, or the supplied fallback for
+ * non-functions/unbound realms. NULL leaves a realm-lookup exception pending. */
+os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Record reporting provenance without moving a revoked-proxy error from
+ * invocation to registration. A catchable lookup failure uses the registering
+ * binding; a sticky failure returns D_SCRIPT_FAILED. */
+uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
+                           os64_dom_t **report_owner);
 /* Around every call the binding makes into a callback of the page's: the
  * muting state (report.c's current_script reads it) as it stood, kept by
  * the caller, and the callback's script made the one being called, which
@@ -1285,10 +1343,9 @@ void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
-/* As a task named `task` closes: the binding's own report (d_report's first
- * error) is the outcome when that is OK, else a line told to the host, and
- * is cleared either way; and the rejections it only counted, past the ones
- * told one by one, are told as one line. */
+/* As a task named `task` closes, visit the cluster's bindings (or this one
+ * standalone binding). Each first report is folded into an OK outcome or
+ * told to its own host, then cleared; counted rejections get one summary. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
@@ -1431,14 +1488,18 @@ char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length);
 /* Whether `value` is a URLSearchParams (XHR's send() treats one as it
  * treats a string when it rewrites a charset). */
 bool d_params_is(JSValueConst value);
-/* AbortSignal (abort.c). A signal's algorithms are C's: a fetch's abort,
- * by its request's token, and a dependent signal's. */
+/* AbortSignal (abort.c): native fetch/Streams algorithms and weak dependent
+ * signal links are separate from author event listeners. */
 JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 bool d_signal_is(JSValueConst value);
 bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx);
 int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source);
 int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+/* Private self-hosted algorithms, never author event callbacks. The signal
+ * traces their holds; removal or abort releases them before further delivery. */
+int d_signal_add_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
+void d_signal_remove_internal(JSContext *ctx, JSValueConst signal, JSValueConst callback);
 /* A fetch answered: its algorithm now aborts the Response whose state is
  * `answered` (NULL: there is no body to error, and the algorithm goes),
  * and the Response keeps this signal's state at *back, which this side
@@ -1447,6 +1508,7 @@ int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
 void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back);
 void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back);
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+void d_signal_remove_fetch_rt(JSRuntime *rt, JSValueConst signal, uint32_t token);
 /* How many dependents a signal's weak set links (the DOM host's bound). */
 size_t d_signal_dependents(JSValueConst signal);
 /* The steps a signal's links took (abort.c): each source followed, each
@@ -1539,6 +1601,8 @@ struct DRequest {
     uint64_t id;
     DAnswer answer;
     DPart part;
+    os64_dom_network_t network; /* original producer, valid until this request ends */
+    void (*depart)(os64_dom_t *, DRequest *); /* native bookkeeping, no author callbacks */
     bool headed;                /* its head came: the body is under way */
     bool asked;                 /* the host has been asked for more and has not answered */
     JSValue held[3];            /* C-held: the registry's fourth list, drain releases them */
@@ -1583,7 +1647,7 @@ size_t d_streams_bytecode_kept(void);
  * over at the first read, and closed behind it; closed from its creation
  * when `length` is 0. */
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
-/* Whether `value` is a ReadableStream of this realm: 1, 0, or -1 with the
+/* Whether `value` is a genuine ReadableStream in this cluster: 1, 0, or -1 with the
  * exception pending. */
 int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 /* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception.
@@ -1830,6 +1894,7 @@ void d_animation_drain(os64_dom_t *dom);
  * buried (no layout reads an effect once the binding is freed). */
 int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_web_animations_drain(os64_dom_t *dom);
+void d_web_animations_cancel(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);
 /* The document timeline sampled at `now` (performance.now()'s clock): a
  * frame-callback batch's timestamp is the timeline's time in its
@@ -1839,6 +1904,7 @@ int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */
 void d_message_drain(os64_dom_t *dom);
+void d_message_cancel(os64_dom_t *dom);
 void d_idle_drain(os64_dom_t *dom);
 void d_idle_free(os64_dom_t *dom);
 /* MessageEvent (event.c): the interface, and one made for a dispatch:

@@ -52,7 +52,7 @@
  * THE LAZY BACKSTOP names the invariant if it ever stops being true: an
  * attached Attr whose namespace and local name libhtml no longer finds on
  * its element reads as
- * detached with an empty value, and the host is told (options.broken, which
+ * detached with an empty value, and an active host is told (options.broken, which
  * yonder writes as `FAILED page: an attribute left its element outside
  * libdom`). What it cannot see is an attribute removed and set again
  * outside the door, which reads as the same attribute with its new value.
@@ -300,13 +300,16 @@ static const os64_html_attr_t *rec_attr(const DAttr *rec)
 
 /* THE BACKSTOP: an attached Attr whose attribute its element no longer has
  * was removed by something other than the door. It reads as detached with
- * an empty value from here on, and the host hears of the broken rule. */
+ * an empty value from here on; an active host hears of the broken rule. */
 static void attr_live(os64_dom_t *dom, DAttr *rec)
 {
     const os64_html_node_t *element = rec->entry->target;
     if (element == NULL || rec_attr(rec) != NULL) return;
     detach(dom, rec, NULL, 0);
-    if (dom->options.broken != NULL) dom->options.broken(dom->options.host_opaque, kBroken);
+    if (dom->options.broken != NULL && d_provider_enter(dom)) {
+        dom->options.broken(dom->options.host_opaque, kBroken);
+        d_provider_leave(dom);
+    }
 }
 
 /* The Attr standing for an attribute `element` has: the one made for its

@@ -51,6 +51,7 @@ typedef struct DObserver {
     bool held;
     JSValue callback;
     uint32_t script;
+    os64_dom_t *report_owner;
     DMutation *first, *last;
     size_t registrations;
     /* The listener's scratch while it gathers one change's interested
@@ -87,6 +88,7 @@ struct DObservers {
     uint64_t changes;
     /* The notify microtask: queued, or owed when no turn will drain it. */
     bool queued, owed;
+    size_t walking;
     /* Records the listener could not keep for want of memory, reported at
      * the next notify. */
     uint64_t lost;
@@ -190,7 +192,9 @@ static void request_notify(os64_dom_t *dom)
     if (os64_js_turn_open(dom->runtime)) {
         os64_js_outcome_t outcome;
         JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-        if (ctx != NULL && JS_EnqueueJob(ctx, notify_job, 0, NULL) == 0) {
+        /* The shared agent queue outlives its first enqueuer. Each observer
+         * supplies its own activity and callback eligibility at delivery. */
+        if (ctx != NULL && JS_EnqueueJobOwned(ctx, NULL, NULL, notify_job, 0, NULL) == 0) {
             s->owed = false;
             return;
         }
@@ -511,17 +515,19 @@ static int signal_failed(os64_dom_t *dom, JSContext *ctx)
 }
 
 /* DOM's "notify mutation observers": the slots whose assignment changed
- * are taken first (its signal slots); then every observer, in the order
+ * are taken first (its signal slots); then observers, in the order
  * the page made them (those made by a callback meanwhile wait for the next
- * notify), is handed its records if it has any, its transient
- * registrations going either way; then a slotchange fires at each slot
- * taken, so one an observer's callback causes waits for the next notify.
+ * notify), receive their records when their activity and callback remain
+ * eligible. Ineligible records are cleared; transient registrations go
+ * either way. A slotchange then fires at each slot whose current document
+ * remains active, so one a callback causes waits for the next notify.
  * A root left marked for want of memory is reported by a later one; a
  * slot that could not be listed loses its event, and says so. -1 when the
  * runtime must stop. */
 static int notify(os64_dom_t *dom, JSContext *ctx)
 {
     struct DObservers *s = dom->observers;
+    s->walking++;
     s->queued = false;
     s->owed = false;
     report_lost(dom, ctx);
@@ -541,25 +547,34 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         JSContext *callback_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
         if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
-        JSValue records = take_records(owner, callback_ctx, o);
+        int eligible = d_delivery_active(owner);
+        if (eligible && any) eligible = d_delivery_eligible(owner, callback_ctx, o->callback);
+        if (eligible <= 0) queue_clear(owner, o);
+        if (eligible == 0) {
+            registrations_drop(dom, transient_for, o);
+            o = next;
+            continue;
+        }
+        JSValue records = eligible < 0 ? JS_EXCEPTION : take_records(owner, callback_ctx, o);
         registrations_drop(dom, transient_for, o);
         if (JS_IsException(records)) {
             if (!d_exception_catchable(callback_ctx)) status = -1;
             else {
                 JSValue error = JS_GetException(callback_ctx);
-                d_report(owner, callback_ctx, error);
+                if (eligible < 0) d_report_as(o->report_owner, callback_ctx, error, o->script);
+                else d_report(owner, callback_ctx, error);
                 JS_FreeValue(callback_ctx, error);
             }
         } else if (any && JS_IsObject(o->object) && JS_IsFunction(callback_ctx, o->callback)) {
             JSValue args[2] = {records, o->object};
-            DScripts before = d_script_enter(owner, o->script);
+            DScripts before = d_script_enter(o->report_owner, o->script);
             JSValue result = JS_Call(callback_ctx, o->callback, o->object, 2, args);
-            d_script_leave(owner, &before, false);
+            d_script_leave(o->report_owner, &before, false);
             if (JS_IsException(result)) {
                 if (!d_exception_catchable(callback_ctx)) status = -1;
                 else {
                     JSValue error = JS_GetException(callback_ctx);
-                    d_report_as(owner, callback_ctx, error, o->script);
+                    d_report_as(o->report_owner, callback_ctx, error, o->script);
                     JS_FreeValue(callback_ctx, error);
                 }
             }
@@ -578,7 +593,7 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
             os64_js_outcome_t outcome;
             JSContext *event_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
             if (!event_ctx) status = -1;
-            else {
+            else if (d_delivery_active(owner)) {
                 JSValue event = d_event_new(owner, event_ctx, "slotchange", true, false, true);
                 if (JS_IsException(event) || d_dispatch(owner, event_ctx, event, signals.slots[i]) < 0)
                     status = signal_failed(owner, event_ctx);
@@ -588,7 +603,23 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         os64_html_release(dom->document, signals.slots[i]);
     }
     d_free(dom, signals.slots);
+    s->walking--;
     return status;
+}
+
+bool d_observers_busy(const os64_dom_t *dom)
+{
+    return dom->observers && dom->observers->walking;
+}
+
+void d_observers_cancel(os64_dom_t *dom)
+{
+    if (!dom->observers) return;
+    for (DObserver *o = dom->observers->observers; o != NULL; o = o->next)
+        if (o->dom == dom) {
+            queue_clear(dom, o);
+            registrations_drop(dom, transient_for, o);
+        }
 }
 
 static JSValue notify_job(JSContext *ctx, int argc, JSValueConst *argv)
@@ -644,7 +675,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_MUTATION) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
@@ -658,6 +690,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->object = object;
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
+    o->report_owner = report_owner;
     if (s->observers_last != NULL) s->observers_last->next = o;
     else s->observers = o;
     s->observers_last = o;
@@ -813,7 +846,10 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (!s) { d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded"); return -1; }
         if (dom->cluster) {
             dom->cluster->observers = s;
-            for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = s;
+            /* Failed installation shells may retain a private partial state
+             * for teardown. Publishing a new dispatcher must not replace it. */
+            for (size_t i = 0; i < dom->cluster->count; ++i)
+                if (!dom->cluster->members[i]->closed) dom->cluster->members[i]->observers = s;
         }
     }
     dom->observers = s;
@@ -889,8 +925,9 @@ void d_observers_free(os64_dom_t *dom)
         d_free(dom, o);
     }
     if (dom->cluster) {
-        dom->cluster->observers = NULL;
-        for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = NULL;
+        if (dom->cluster->observers == s) dom->cluster->observers = NULL;
+        for (size_t i = 0; i < dom->cluster->count; ++i)
+            if (dom->cluster->members[i]->observers == s) dom->cluster->members[i]->observers = NULL;
     }
     d_free(dom, s);
     dom->observers = NULL;

@@ -170,10 +170,27 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        uint32_t script = d_callback_script(dom, ctx, argv[0]);
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
+        os64_dom_t *report_owner;
+        uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
         if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+        JSContext *owner = JS_GetFunctionRealm(ctx, argv[0]);
+        if (!owner) {
+            /* Enqueueing a revoked proxy keeps the ordinary callback error
+             * for execution. Discovery itself must not throw or hide a
+             * sticky engine failure. */
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            owner = ctx;
+        }
+        os64_js_outcome_t access;
+        JSContext *activity = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+        JSContext *report_context = os64_js_realm_context(report_owner->realm, OS64_JS_ABI_ID, &access);
+        if (!activity || !report_context) return JS_EXCEPTION;
         JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, script)};
-        return JS_EnqueueJob(ctx, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        /* The job writes thrown_script through its execution binding. Keep
+         * that binding with the callable's report host, not the service owner. */
+        return JS_EnqueueJobOwned(report_context, owner, activity, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:

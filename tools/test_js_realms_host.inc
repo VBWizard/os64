@@ -362,8 +362,11 @@ static void staging_host_cases(void)
     }
 }
 
+#include "test_js_quiescence.inc"
+
 static void realm_host_cases(void)
 {
+    quiescence_cases();
     staging_host_cases();
     retirement_interrupt_cases();
     realm_admission_host_cases();

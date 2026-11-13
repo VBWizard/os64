@@ -26,17 +26,23 @@ enum { C_GET_RANDOM_VALUES, C_RANDOM_UUID, W_CRYPTO };
 bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length)
 {
     if (length == 0) return true;
+    if (!d_require_active(dom, ctx)) return false;
     uint8_t *scratch = d_alloc(dom, length);
     if (scratch == NULL) {
         d_error(ctx, "QuotaExceededError", "crypto quota exceeded");
         return false;
     }
+    if (!d_provider_begin(dom, ctx)) { d_free(dom, scratch); return false; }
     bool got = dom->options.entropy != NULL && dom->options.entropy(dom->options.host_opaque, scratch, length);
+    bool active = d_delivery_active(dom);
+    got = got && active;
     if (got) os64_memcpy(out, scratch, length);
     /* Zeroed before it is freed: for a generated key, these bytes are the key. */
     volatile uint8_t *v = scratch;
     for (size_t i = 0; i < length; i++) v[i] = 0;
     d_free(dom, scratch);
+    d_provider_leave(dom);
+    if (!active) return d_require_active(dom, ctx);
     if (!got) d_error(ctx, "OperationError", "This browser could not read the system's randomness");
     return got;
 }

@@ -20,7 +20,7 @@ JSValueConst d_svg_prototype(os64_dom_t *dom,const os64_html_node_t *n)
 }
 void os64_dom_set_svg_hit(os64_dom_t *dom,os64_dom_svg_hit_provider_t provider,void *opaque)
 {
-    if(!dom||dom->closed)return;
+    if(!dom||dom->closed||dom->departure_finishing||dom->departure_finished)return;
     dom->svg_hit=provider;dom->svg_hit_opaque=opaque;
 }
 static uint64_t add_sat(uint64_t a,uint64_t b) {return b>UINT64_MAX-a?UINT64_MAX:a+b;}
@@ -40,13 +40,16 @@ static JSValue contains(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     dom=d_owner(dom,n);
     if(!dom->svg_hit)return d_error(ctx,"InvalidStateError","No SVG geometry provider");
     if(cancelled(dom))return d_error(ctx,"InvalidStateError","SVG query requires a live script budget");
+    if(!d_provider_begin(dom,ctx))return JS_EXCEPTION;
     os64_geometry_memory_t memory={dom,d_canvas_allocate,d_canvas_release};
     os64_dom_geometry_stats_t cost={0};bool inside=false;
     os64_geometry_status_t result=dom->svg_hit(dom->svg_hit_opaque,n,p[0],p[1],
         &memory,cancelled,dom,&inside,&cost);
+    d_provider_leave(dom);
     dom->geometry_stats.layouts=add_sat(dom->geometry_stats.layouts,cost.layouts);
     dom->geometry_stats.elapsed_us=add_sat(dom->geometry_stats.elapsed_us,cost.elapsed_us);
     if(cancelled(dom))return d_error(ctx,"InvalidStateError","SVG query requires a live script budget");
+    if(!d_require_active(dom,ctx))return JS_EXCEPTION;
     if(result!=OS64_GEOMETRY_OK)return d_error(ctx,
         result==OS64_GEOMETRY_LIMIT||result==OS64_GEOMETRY_NO_MEMORY?"QuotaExceededError":"InvalidStateError",
         "SVG fill query refused");

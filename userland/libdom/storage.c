@@ -28,7 +28,12 @@
  * no room for (no memory to write the list) is refused as a full store's
  * is. The keys' cap bounds what the quota cannot: a key of one character
  * costs the quota two bytes and the heap a record, and a page could
- * otherwise make millions of them. */
+ * otherwise make millions of them.
+ *
+ * Retired documents refuse Storage service access, including memory-only
+ * maps. Ordinary settlement stops; native cleanup gets one final attempt
+ * while providers are valid, then detaches them without freeing retained
+ * maps. Provider loans exclude reentrant settlement and map replacement. */
 
 #define MAGIC "os64 storage 1\n"
 #define MAGIC_LENGTH (sizeof(MAGIC) - 1)
@@ -77,7 +82,7 @@ typedef struct DStorageArea {
      * provider (an opaque origin, or a store that failed). `loaded`: the map
      * holds what the store held at `identity`. `asked`: this task has asked
      * the provider already. */
-    bool memory, loaded, asked, committed;
+    bool memory, loaded, asked, committed, committing;
     uint64_t identity, committed_at;
 } DStorageArea;
 
@@ -416,7 +421,7 @@ os64_dom_storage_status_t os64_dom_storage_merge(const void *image, size_t image
 
 static uint64_t now_ms(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
 }
 
 static bool kept(const os64_dom_t *dom, const DStorageArea *area)
@@ -458,7 +463,8 @@ static bool image_valid(const void *image, size_t length)
  * and the map replaced. False with the map as it was: on no memory, or a
  * store still growing past its room at the last asking (both tried again
  * at the next task), or when the store could not be read or was not in
- * the format (`*broken`, and the area keeps to memory). */
+ * the format (`*broken`, and the area keeps to memory). Retirement stops
+ * before interpreting the response or issuing another load. */
 static bool area_load(DStorageArea *area, bool *broken)
 {
     os64_dom_t *dom = area->dom;
@@ -472,7 +478,10 @@ static bool area_load(DStorageArea *area, bool *broken)
     for (int tries = 1;; tries++) {
         image = os64_malloc(room);
         if (image == NULL) return false;
+        if (!d_provider_enter(dom)) { os64_free(image); return false; }
         length = provider->load(provider->opaque, area->origin, image, room);
+        d_provider_leave(dom);
+        if (!d_delivery_active(dom)) { os64_free(image); return false; }
         if (length < 0 || (uint64_t)length > IMAGE_MAX) {
             os64_free(image);
             *broken = true;
@@ -506,10 +515,11 @@ static bool area_load(DStorageArea *area, bool *broken)
 }
 
 /* The area a script is about to read or change, brought up to the store
- * at the first touch in a task. NULL on no memory, with the exception
- * thrown. */
+ * at the first touch in a task. NULL on inactive service or no memory,
+ * with the exception thrown. */
 static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storage_area_t which)
 {
+    if (!d_require_active(dom, ctx)) return NULL;
     DStorageArea *area = area_of(dom, which);
     if (area == NULL) {
         d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
@@ -518,7 +528,13 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
     if (!kept(dom, area) || area->asked) return area;
     area->asked = true;
     const os64_dom_storage_t *provider = &dom->storage_providers[which];
-    uint64_t identity = provider->identity != NULL ? provider->identity(provider->opaque, area->origin) : 0;
+    uint64_t identity = 0;
+    if (provider->identity != NULL) {
+        if (!d_provider_begin(dom, ctx)) return NULL;
+        identity = provider->identity(provider->opaque, area->origin);
+        d_provider_leave(dom);
+        if (!d_require_active(dom, ctx)) return NULL;
+    }
     if (area->loaded && identity == area->identity) return area;
     bool broken;
     if (area_load(area, &broken)) {
@@ -528,7 +544,7 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
         area->memory = true;
         map_free(&area->changes);
     }
-    return area;
+    return d_require_active(dom, ctx) ? area : NULL;
 }
 
 /* The change list handed to the provider, and forgotten: the page sees
@@ -536,19 +552,32 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * window's changes merged in. A store that could not be written leaves the
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
- * want of memory wait for the next commit, COMMIT_MS on. */
-static void area_commit(DStorageArea *area)
+ * want of memory wait for the next ordinary commit, OS64_DOM_STORAGE_COMMIT_MS on. Cleanup
+ * instead drops uncommitted changes after its final attempt. */
+static void area_commit(DStorageArea *area, bool cleanup)
 {
     os64_dom_t *dom = area->dom;
-    if (!kept(dom, area) || area->changes.count == 0) return;
+    if (area->committing || (!cleanup && !d_delivery_active(dom)) ||
+        !kept(dom, area) || area->changes.count == 0) return;
+    area->committing = true;
+    uint64_t now = cleanup ? dom->clock_seen_ms : now_ms(dom);
+    if (!cleanup && !d_delivery_active(dom)) { area->committing = false; return; }
+    /* Cleanup settles already owed changes even while closed/retired. Its
+     * caller has excluded borrowers; the loan covers serialization and the
+     * callback, so reentrant settle/forget/drain cannot consume these maps. */
+    d_provider_hold(dom);
     size_t length;
     char *changes = map_write(&area->changes, &length);
     /* A commit that could not be made for want of memory counts as one
-     * for the schedule: the next is COMMIT_MS on, and the host's loop waits
+     * for the schedule: the next is OS64_DOM_STORAGE_COMMIT_MS on, and the host's loop waits
      * for it rather than asking again every turn. */
     area->committed = true;
-    area->committed_at = now_ms(dom);
-    if (changes == NULL) return;
+    area->committed_at = now;
+    if (changes == NULL) {
+        d_provider_leave(dom);
+        area->committing = false;
+        return;
+    }
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
         ? provider->commit(provider->opaque, area->origin, changes, length) : OS64_DOM_STORAGE_FAILED;
@@ -556,6 +585,8 @@ static void area_commit(DStorageArea *area)
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
     else area->loaded = false;
+    d_provider_leave(dom);
+    area->committing = false;
 }
 
 static uint64_t area_due(const DStorageArea *area)
@@ -568,7 +599,8 @@ static uint64_t area_due(const DStorageArea *area)
 
 void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area, const os64_dom_storage_t *storage)
 {
-    if (dom == NULL || (unsigned)area >= OS64_DOM_STORAGE_AREAS) return;
+    if (dom == NULL || (unsigned)area >= OS64_DOM_STORAGE_AREAS || d_provider_busy(dom) ||
+        (storage != NULL && !d_delivery_active(dom))) return;
     if (storage != NULL) dom->storage_providers[area] = *storage;
     else os64_memset(&dom->storage_providers[area], 0, sizeof(dom->storage_providers[area]));
     if (dom->storage[area] != NULL) {
@@ -579,19 +611,21 @@ void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area, const o
 
 void os64_dom_storage_settle(os64_dom_t *dom)
 {
-    if (dom == NULL) return;
+    if (!d_delivery_active(dom) || d_provider_busy(dom)) return;
     uint64_t now = now_ms(dom);
+    if (!d_delivery_active(dom)) return;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++) {
+        if (!d_delivery_active(dom)) break;
         DStorageArea *area = dom->storage[i];
         if (area == NULL) continue;
         area->asked = false;
-        if (area_due(area) <= now) area_commit(area);
+        if (area_due(area) <= now) area_commit(area, false);
     }
 }
 
 uint64_t os64_dom_storage_due(const os64_dom_t *dom)
 {
-    if (dom == NULL) return UINT64_MAX;
+    if (!d_delivery_active(dom)) return UINT64_MAX;
     uint64_t due = UINT64_MAX;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++) {
         uint64_t one = area_due(dom->storage[i]);
@@ -602,7 +636,7 @@ uint64_t os64_dom_storage_due(const os64_dom_t *dom)
 
 void os64_dom_storage_forget(os64_dom_t *dom)
 {
-    if (dom == NULL) return;
+    if (!d_delivery_active(dom) || d_provider_busy(dom)) return;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++) {
         DStorageArea *area = dom->storage[i];
         if (area == NULL) continue;
@@ -614,8 +648,17 @@ void os64_dom_storage_forget(os64_dom_t *dom)
 
 void d_storage_drain(os64_dom_t *dom)
 {
-    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
-        if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
+    if (d_provider_busy(dom)) return;
+    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++) {
+        DStorageArea *area = dom->storage[i];
+        if (area != NULL) {
+            area_commit(area, true);
+            /* Final settlement is one attempt, including serialization
+             * failure; retained maps survive but no retry owes the host. */
+            map_free(&area->changes);
+        }
+        os64_memset(&dom->storage_providers[i], 0, sizeof(dom->storage_providers[i]));
+    }
 }
 
 void d_storage_free(os64_dom_t *dom)
@@ -653,8 +696,9 @@ static bool changes_fit(const DMap *changes, size_t count, size_t cost)
 static bool changes_room(DStorageArea *area, size_t count, size_t cost)
 {
     if (!kept(area->dom, area) || changes_fit(&area->changes, count, cost)) return true;
-    area_commit(area);
-    return !kept(area->dom, area) || changes_fit(&area->changes, count, cost);
+    area_commit(area, false);
+    return d_delivery_active(area->dom) &&
+           (!kept(area->dom, area) || changes_fit(&area->changes, count, cost));
 }
 
 /* A change, made to the map and remembered for the commit together, or
@@ -826,6 +870,7 @@ static int storage_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *l
     uint32_t used = 0;
     for (size_t i = 0; i < count; i++) {
         int shown = visible(ctx, object, names[i].atom);
+        if (shown >= 0 && !d_require_active(area->dom, ctx)) shown = -1;
         if (shown < 0) {
             for (size_t k = i; k < count; k++) JS_FreeAtom(ctx, names[k].atom);
             while (used != 0) JS_FreeAtom(ctx, names[--used].atom);
@@ -860,7 +905,7 @@ static JSValue set_item(DStorageArea *area, JSContext *ctx, const DString *key, 
     if (area->map.used - old > OS64_DOM_STORAGE_QUOTA || cost > OS64_DOM_STORAGE_QUOTA - (area->map.used - old))
         return d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
     if (!area_change(area, key->data, key->length, value->data, value->length))
-        return d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
+        return d_require_active(area->dom, ctx) ? d_error(ctx, "QuotaExceededError", "Storage quota exceeded") : JS_EXCEPTION;
     return JS_UNDEFINED;
 }
 
@@ -869,7 +914,7 @@ static JSValue remove_item(DStorageArea *area, JSContext *ctx, const DString *ke
     if (area_touch(area->dom, ctx, area->which) == NULL) return JS_EXCEPTION;
     if (map_find(&area->map, key->data, key->length, hash_of(key->data, key->length)) < 0) return JS_UNDEFINED;
     if (!area_change(area, key->data, key->length, NULL, 0))
-        return d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
+        return d_require_active(area->dom, ctx) ? d_error(ctx, "QuotaExceededError", "Storage quota exceeded") : JS_EXCEPTION;
     return JS_UNDEFINED;
 }
 
@@ -977,6 +1022,7 @@ static JSValue storage_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     if (dom == NULL) return JS_EXCEPTION;
     magic &= ~D_SET;
     if (magic == S_LOCAL || magic == S_SESSION) {
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         os64_dom_storage_area_t which = magic == S_LOCAL ? OS64_DOM_STORAGE_LOCAL : OS64_DOM_STORAGE_SESSION;
         DStorageArea *area = area_of(dom, which);
         if (area == NULL) return d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
@@ -990,6 +1036,7 @@ static JSValue storage_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     }
     DStorageArea *area = receiver(ctx, self);
     if (area == NULL) return JS_EXCEPTION;
+    dom = area->dom;
     static const int kNeeds[] = {0, 1, 1, 2, 1, 0};
     if (argc < kNeeds[magic])
         return JS_ThrowTypeError(ctx, "Storage's method needs %d argument%s", kNeeds[magic],
@@ -1006,7 +1053,8 @@ static JSValue storage_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     if (magic == S_LENGTH || magic == S_CLEAR) {
         if (area_touch(dom, ctx, area->which) == NULL) return JS_EXCEPTION;
         if (magic == S_LENGTH) return JS_NewInt64(ctx, (int64_t)area->map.count);
-        if (!area_clear(area)) return d_error(ctx, "QuotaExceededError", "Storage quota exceeded");
+        if (!area_clear(area))
+            return d_require_active(dom, ctx) ? d_error(ctx, "QuotaExceededError", "Storage quota exceeded") : JS_EXCEPTION;
         return JS_UNDEFINED;
     }
     DString key = {0}, value = {0};

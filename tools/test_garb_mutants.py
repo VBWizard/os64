@@ -244,11 +244,28 @@ mutants = [
      '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd',
      '    case GARB_BACKGROUND_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd', FLOW),
     ('a-mask-position-repaints-past-its-box', 'userland/libflow/motion.c',
-     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
-     '    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
     ('a-mask-position-does-not-tick', 'userland/libflow/motion.c',
-     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_COLOR:',
-     '    case GARB_BORDER_TOP_COLOR:', FLOW),
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    # A size repaints in place and ticks: a layout for a value a layout
+    # places repaints the whole view (MASKS.md § 5).
+    ('a-size-repaints-past-its-box', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
+     '    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
+    ('a-mask-size-does-not-tick', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_BACKGROUND_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    ('a-background-size-does-not-tick', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    ('a-picture-size-ticks', STYLE,
+     '    if (sizes_a_picture(m, s))\n        return true;',
+     '    if (false && sizes_a_picture(m, s))\n        return true;', FLOW),
+    ('the-canvas-owner-is-not-marked', FLOWC,
+     '        if (e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))',
+     '        if (false && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))', FLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

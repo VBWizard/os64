@@ -36,24 +36,66 @@ custom elements share one reaction stack and backup queue. Definitions remain
 per realm. Aggregate HTML, page, DOM, kept-body and Canvas caps supplement the
 existing local caps; counters include headers and retained backing.
 
-For an explicit admission, `consumed == false` leaves document/state ownership
-with the caller. Once installation begins, failure consumes them, poisons the
-cluster and drains its bindings. Destroy the shared runtime and free the
-cluster; child-only rollback and independent retirement are not implemented.
-Public individual drain/free calls do nothing for explicit-cluster members.
+For explicit admissions, `consumed == false` leaves document/state ownership
+with the caller. `os64_dom_create_in_realm` installs into an existing realm;
+its consumed installation failure poisons and drains the cluster and requires
+root teardown. Public individual drain/free calls do nothing for cluster members.
 
-Stop host deliveries, drain the cluster, destroy its runtime once, release
+`os64_dom_create_child` creates a fresh staged realm and installs its DOM
+privately. Admission checks cumulative slots, aggregate native ledgers and
+caller-supplied engine headroom before taking document/state ownership.
+`OS64_DOM_CHILD_ENGINE_HEADROOM` supplies an 8 MiB admission allowance for the
+full interface bootstrap and sibling work under the 64 MiB engine limit;
+[the validation record](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+records measurements for both allocator profiles. Preflight does not reserve
+bytes or make arbitrary later engine OOM recoverable.
+
+The host supplies a copied creation-time clock/timing snapshot. Bootstrap
+cannot call option providers, author code or siblings. The privileged engine
+setup guard tags private jobs, drains only candidate work and activates the
+realm only on success. Nested setup borrows the parent's deadline/job count
+and requires a distinct outcome; it preserves queued parent work and its order.
+
+`CHILD_REFUSED` is unconsumed. `CHILD_ACTIVE` is the publication boundary.
+`CHILD_FAILED` retains a closed, charged shell and owned backing, removes its
+wrappers from shared lookup, restores shared dispatcher ownership and retires
+the candidate without draining siblings. Partial private observer/custom
+storage stays attached to its shell until native teardown; a later child
+cannot overwrite it. `CHILD_RUNTIME_FAILED` preserves sticky engine memory,
+clock, cancellation and budget failure and requires root teardown after stacks
+unwind. The result's `consumed` flag remains authoritative for backing ownership
+in every state. Failed and departed realms retain their slots and bytes until
+root teardown; no per-child reclamation or slot reuse is implied.
+
+`os64_dom_depart` marks a document ineligible for new activity without freeing
+records beneath a running callback. `os64_dom_depart_finish` returns BUSY while
+the shared engine has active work or pending jobs, or any member has DOM walks
+or provider loans. At a safe point it commits storage once, cancels this
+binding's request tokens and obsolete task payloads, freezes timeline activity,
+and detaches provider pointers and module/report hosts. It does not close the
+binding, release exported objects, stop tree mutation tracking or acknowledge
+layout generations. Provider setters cannot attach fresh pointers during or
+after successful finish. The console's borrowed descriptor remains engine
+state, protected by irreversible realm retirement and the engine barrier.
+
+Only a successful finish permits releasing provider opaque storage. A sticky
+runtime failure requires root teardown after its stacks unwind; FAILED_RUNTIME
+from finish does not certify that unwind. Ordinary sibling exceptions do not
+prevent finishing a marked child. Repeated mark and finish are harmless.
+
+For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
 layout borrowers, then free the cluster. Native records and allocation-owner
 descriptors survive finalizers and all native sweeps. Document records remain
 arena-owned while detached nodes may name them; this does not pin ordinary
 fragment churn. Retired animation data uses a shared generation and the oldest
-borrowing host. Provider opaque storage must survive through drain.
+borrowing host. Providers not detached by successful departure finish must
+survive through drain.
 
 The legacy sequence remains drain, runtime destruction, native binding free,
 then state/document release; layout borrowers must be gone before native free.
 A failed legacy installation can leave engine registration, so destroy that
-runtime without evaluating further source. Explicit installation runs through
-a guarded realm task. These ownership APIs do not implement an origin gate;
+runtime without evaluating further source. Existing-realm installation runs
+through a guarded realm task; fresh child installation uses staged setup. These ownership APIs do not implement an origin gate;
 only the trusted native fixtures exchange raw realm references. See
 [the F.2 contract](../../docs/design/pending/IFRAME_F2_OWNERSHIP.md) and
 [validation](../../docs/design/pending/IFRAME_F2_BINDINGS_VALIDATION.md).
@@ -503,6 +545,13 @@ count of entries, and 1 with no host or the switch off. `window.status`
 reads back the last string a script set, as HTML keeps it, and
 `defaultStatus`, which no standard has, accepts an assignment and reads
 empty; the status line itself is the browser's and shows neither.
+
+Inactive document services cannot enqueue navigation. Location requests refuse
+with InvalidStateError; retained Location data still names the binding's saved
+address. Taking an inactive document's pending ask discards its node holds.
+Stable WindowProxy/Location routing across replacement documents belongs to
+the iframe proxy slice. History uses its specified SecurityError inactive
+behavior, described below.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it; with the switch on the
@@ -1021,7 +1070,7 @@ style's member. `document.defaultView` is window.
 **History** (`os64_dom_set_history`) is the host's session: `pushState`
 and `replaceState` give it the entry's address (one the document may
 rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
-carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
+carry; DataCloneError otherwise, QuotaExceededError past 2 MiB or when the
 host refuses), and fire nothing. `history.state` is that JSON read once,
 the same object until the entry changes. A fragment navigation a script
 makes goes to the host at once, and its `popstate` fires inside that
@@ -1036,6 +1085,17 @@ the entry's state and name (`os64_dom_history_entry`), its state being
 history.state itself only while that entry is still the current one.
 `history.scrollRestoration` is the host's to read
 (`os64_dom_history_manual`).
+
+History methods and properties (including `state` and `scrollRestoration`)
+throw SecurityError for an inactive associated document, following
+[HTML's History interface](https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface).
+Previously returned state objects remain ordinary retained data. Host
+length/update/fragment callbacks hold provider loans; conversion and callback
+retirement prevent later native calls or local completion. A host-accepted
+entry is not rolled back if the callback retires the document, but the departed
+binding neither commits that result nor falls back to another navigation.
+Late native moves refuse and owed events are discarded. The finish protocol
+must still detach the provider before its opaque storage can be freed.
 
 ## The Modern Web's surface
 
@@ -1154,6 +1214,22 @@ image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
 the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`
 for a removal.
 
+Storage access refuses inactive document services with InvalidStateError,
+including retained Storage objects and areas that keep only a memory map.
+Borrowed methods use the receiver's document, so a method created in a retired
+realm can still serve an active area's receiver. Argument conversions and
+named-property visibility checks recheck retirement before service work.
+Identity/load/commit calls hold provider loans; load retries and ordinary
+settlement stop if a callback or clock retires the document. Owed writes remain
+available for native cleanup, including after retirement interrupts a failed
+load. Cleanup attempts each area's remaining commit once, including during
+closed root drain, then drops pending changes and detaches the providers.
+A failed final serialization cannot be retried after detachment. Reentrant
+settle/forget/provider replacement cannot disturb borrowed maps. The pure
+byte-format walk/merge utilities have no binding or document lifetime; a walk
+inside a commit remains covered by that commit's provider loan. Public
+departure finish and its complete safe-point barrier remain F.3b work.
+
 **`performance`** (`performance.c`): `now()` and `timeOrigin`, coarsened to
 100 µs, on the host's microsecond clock (`options.now_us`) against the
 navigation's origin (`options.timing`, read as the binding is made); User
@@ -1254,6 +1330,20 @@ a document of its own answers none); a submitter is a NotSupportedError.
 multipart/form-data is written here (an empty FormData is the close
 delimiter alone, as browsers send it) and
 read back by `formData()`, as is urlencoded.
+
+The self-hosted Streams interfaces keep unforgeable private-field brands.
+On a local miss, a private native bridge asks the other cluster members' raw
+probes, bounded by the cluster's realm limit. It does not inspect the public
+object's properties or prototype, and retired retained realms still answer.
+Borrowed stream/reader/writer/controller/iterator/strategy/encoding methods and
+native Response body conversion can therefore use authentic foreign objects;
+proxies and forged prototype chains do not acquire their target's brand.
+
+Internal promise-returning algorithms use a private neutral thenable for
+adoption, retaining its asynchronous step and captured Promise intrinsic.
+Piping, repeated async iteration and transform backpressure can finish after
+creator departure without looking up the retained promise's public `then`.
+Author-returned values keep their normal conversion and callback eligibility.
 
 **`fetch`, `Headers`, `Request`, `Response`** (`fetch.c`): the Fetch
 standard's § 5. A header list is a C array, its sort-and-combine kept

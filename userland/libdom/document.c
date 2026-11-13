@@ -28,7 +28,8 @@
  *   - activeElement is the element the host says has focus in it
  *     (options.focus), else its body, else its document element, else
  *     null; hasFocus() is whether the host says the document has the
- *     system's focus;
+ *     system's focus. A departed window document has neither: activeElement
+ *     is null and hasFocus() is false without consulting the host;
  *   - currentScript is the script element the host says is running
  *     (os64_dom_set_current_script), null between scripts;
  *   - URL and documentURI are its address, as location reads it; domain is
@@ -178,21 +179,34 @@ static JSValue title_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
     return result;
 }
 
+static bool focus_read(os64_dom_t *dom, const os64_html_node_t **focused)
+{
+    *focused = NULL;
+    if (dom->options.focus == NULL || !d_provider_enter(dom)) return false;
+    bool has_focus = dom->options.focus(dom->options.host_opaque, focused);
+    bool active = d_delivery_active(dom);
+    if (!active || (*focused != NULL && (!os64_html_owns_node(dom->document, *focused) ||
+        (*focused)->kind != OS64_HTML_ELEMENT || !d_in_window_tree(dom, *focused)))) *focused = NULL;
+    d_provider_leave(dom);
+    return active && has_focus;
+}
+
 const os64_html_node_t *d_focused(os64_dom_t *dom)
 {
-    const os64_html_node_t *focused = NULL;
-    if (dom->options.focus != NULL) (void)dom->options.focus(dom->options.host_opaque, &focused);
-    return focused != NULL && os64_html_owns_node(dom->document, focused) && focused->kind == OS64_HTML_ELEMENT &&
-        d_in_window_tree(dom, focused) ? focused : NULL;
+    const os64_html_node_t *focused;
+    (void)focus_read(dom, &focused);
+    return focused;
 }
 
 /* HTML § Document.activeElement: the focused element retargeted against
  * the document, so a focused element inside a shadow tree shows as its
  * outermost host; else the document, whose answer is its body, else its
- * element, else null. Only the window's document has anything focused. */
+ * element, else null. A departed window document answers null; it no longer
+ * queries the host. Only an active window document has anything focused. */
 static JSValue active_element(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, bool window)
 {
     const os64_html_node_t *focused = window ? d_focused(dom) : NULL;
+    if (window && !d_delivery_active(dom)) return JS_NULL;
     if (focused != NULL) return d_wrap(dom, ctx, os64_html_retarget(focused, document));
     const os64_html_node_t *body = d_document_part(document, true);
     return d_wrap(dom, ctx, body != NULL ? body : d_document_element(document));
@@ -283,8 +297,7 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case P_ACTIVE_ELEMENT: return active_element(dom, ctx, document, window);
     case P_HAS_FOCUS: {
         const os64_html_node_t *focused = NULL;
-        return JS_NewBool(ctx, window && dom->options.focus != NULL &&
-                                   dom->options.focus(dom->options.host_opaque, &focused));
+        return JS_NewBool(ctx, window && focus_read(dom, &focused));
     }
     case P_CURRENT_SCRIPT: return window && dom->current_script != NULL ? d_wrap(dom, ctx, dom->current_script)
                                                                          : JS_NULL;

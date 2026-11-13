@@ -57,6 +57,7 @@ typedef struct DIObserver {
     bool held, dead;
     JSValue callback, thresholds_array;
     uint32_t script;
+    os64_dom_t *report_owner;
     /* The root as given: NULL for none, else an element or a document,
      * held. */
     const os64_html_node_t *root;
@@ -213,7 +214,7 @@ static void sweep(os64_dom_t *dom)
 
 void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->intersections_provider = provider;
     dom->intersections_opaque = opaque;
 }
@@ -225,24 +226,50 @@ size_t os64_dom_intersections_observed(const os64_dom_t *dom)
 
 static uint64_t host_now(const os64_dom_t *dom)
 {
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+    return d_host_now_ms(dom);
+}
+
+static os64_dom_t *host_root(os64_dom_t *dom, const DIObserver *o, const os64_html_node_t **out);
+
+/* A retained observation can resume after its explicit root is adopted into
+ * an active document. Until then it must not keep the old provider awake. */
+static bool observation_active(const os64_dom_t *dom, const DIObserver *o)
+{
+    if (o->dead || o->ntargets == 0) return false;
+    const os64_html_node_t *root;
+    os64_dom_t *owner = host_root((os64_dom_t *)dom, o, &root);
+    return owner == NULL || d_delivery_active(owner);
 }
 
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->intersections != NULL ? dom->intersections->delayed_due : UINT64_MAX;
+    if (!d_delivery_active(dom) || dom->intersections == NULL) return UINT64_MAX;
+    for (DIObserver *o = dom->intersections->observers; o != NULL; o = o->next)
+        if (observation_active(dom, o)) return dom->intersections->delayed_due;
+    return UINT64_MAX;
 }
 
 bool os64_dom_intersections_owed(const os64_dom_t *dom)
 {
-    if (dom == NULL || dom->closed || dom->intersections == NULL) return false;
+    if (!d_delivery_active(dom) || dom->intersections == NULL) return false;
     const struct DIntersections *s = dom->intersections;
-    return (s->observed != 0 && s->undone) || s->owed != 0 || (s->delayed_due != UINT64_MAX && host_now(dom) >= s->delayed_due);
+    for (DIObserver *o = s->observers; o != NULL; o = o->next) {
+        if (!observation_active(dom, o)) continue;
+        if (s->undone) return true;
+        if (s->delayed_due != UINT64_MAX) {
+            uint64_t now = host_now(dom);
+            if (!d_delivery_active(dom)) return false;
+            if (now >= s->delayed_due) return true;
+        }
+        for (DTarget *t = o->targets; t != NULL; t = t->next)
+            if (t->previous_index < 0) return true;
+    }
+    return false;
 }
 
 bool os64_dom_intersections_due(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->intersections != NULL && dom->intersections->queued;
+    return d_delivery_active(dom) && dom->intersections != NULL && dom->intersections->queued;
 }
 
 enum { L, T, R, B };
@@ -328,6 +355,7 @@ static bool observe_one(os64_dom_t *dom, DIObserver *o, DTarget *t, const os64_d
         /* Passed over: owed again once its delay has run, moved or not. */
         double wait = o->delay - (time - t->last_update);
         uint64_t due = host_now(dom) + (uint64_t)ceil(wait);
+        if (!d_delivery_active(dom)) return false;
         if (due < s->delayed_due) s->delayed_due = due;
         return false;
     }
@@ -390,7 +418,7 @@ static bool observe_one(os64_dom_t *dom, DIObserver *o, DTarget *t, const os64_d
 
 bool os64_dom_intersections_update(os64_dom_t *dom)
 {
-    struct DIntersections *s = dom != NULL && !dom->closed ? dom->intersections : NULL;
+    struct DIntersections *s = d_delivery_active(dom) ? dom->intersections : NULL;
     if (s == NULL) return false;
     sweep(dom);
     if (s->observed == 0) return false;
@@ -427,6 +455,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         os64_dom_t *owner = dom->cluster != NULL ? dom->cluster->members[i] : dom;
         groups[i].owner = owner;
         groups[i].at = n;
+        if (!d_delivery_active(owner)) continue;
         for (DIObserver *o = s->observers; o != NULL; o = o->next) {
             const os64_html_node_t *root;
             if (o->dead || host_root(dom, o, &root) != owner) continue;
@@ -437,13 +466,23 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         size_t count = n - groups[i].at;
         if (count == 0) continue;
         os64_dom_geometry_stats_t cost = {0};
-        bool answered = owner->intersections_provider != NULL &&
-            owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost);
+        bool answered = false;
+        if (owner->intersections_provider != NULL && d_provider_enter(owner)) {
+            answered = owner->intersections_provider(owner->intersections_opaque, s->batch + groups[i].at, count, &cost);
+            d_provider_leave(owner);
+        }
         owner->geometry_stats.layouts += cost.layouts;
         owner->geometry_stats.elapsed_us += cost.elapsed_us;
+        if (!d_delivery_active(dom)) return false;
+        if (!d_delivery_active(owner)) continue;
         if (!answered) return false;
         os64_dom_view_t view = {0};
-        if (owner->view.read != NULL) owner->view.read(owner->view.opaque, &view);
+        if (owner->view.read != NULL && d_provider_enter(owner)) {
+            owner->view.read(owner->view.opaque, &view);
+            d_provider_leave(owner);
+        }
+        if (!d_delivery_active(dom)) return false;
+        if (!d_delivery_active(owner)) continue;
         groups[i].viewport[2] = view.width;
         groups[i].viewport[3] = view.height;
     }
@@ -452,6 +491,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
      * every required provider has answered, so refusal advances no target. */
     s->undone = false;
     double time = d_performance_now(dom);
+    if (!d_delivery_active(dom)) return false;
     s->delayed_due = UINT64_MAX;
     bool queued = false;
     const double empty_viewport[4] = {0};
@@ -459,12 +499,14 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         const os64_html_node_t *root;
         if (o->dead) continue;
         os64_dom_t *owner = host_root(dom, o, &root);
+        if (owner != NULL && !d_delivery_active(owner)) continue;
         size_t i = 0;
         while (i < members && groups[i].owner != owner) i++;
         const double *viewport = i < members ? groups[i].viewport : empty_viewport;
         for (DTarget *t = o->targets; t != NULL; t = t->next) {
             bool asked = i < members && d_window_document(owner, t->node);
             queued = observe_one(dom, o, t, asked ? &s->batch[groups[i].at++] : NULL, viewport, time) || queued;
+            if (!d_delivery_active(dom)) return false;
         }
         hold_update(dom, NULL, o);
     }
@@ -572,7 +614,7 @@ static void report_lost(os64_dom_t *dom, JSContext *ctx)
 bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
 {
     if (out != NULL) os64_memset(out, 0, sizeof(*out));
-    struct DIntersections *s = dom != NULL && !dom->closed ? dom->intersections : NULL;
+    struct DIntersections *s = d_delivery_active(dom) ? dom->intersections : NULL;
     if (out == NULL || s == NULL || !s->queued) return false;
     s->queued = false;
     sweep(dom);
@@ -590,9 +632,21 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
          * callback included. */
         DIObserver *last = s->observers_last;
         s->walking = true;
-        for (DIObserver *o = s->observers; ctx != NULL && o != NULL && !dom->closed;) {
+        for (DIObserver *o = s->observers; ctx != NULL && o != NULL && d_delivery_active(dom);) {
             DIObserver *next = o == last ? NULL : o->next;
             if (o->first != NULL && !o->dead && JS_IsObject(o->object)) {
+                int eligible = d_delivery_eligible(dom, ctx, o->callback);
+                if (eligible <= 0) {
+                    entries_clear(dom, o);
+                    hold_update(dom, ctx, o);
+                    if (eligible < 0 && d_exception_catchable(ctx)) {
+                        JSValue error = JS_GetException(ctx);
+                        d_report_as(o->report_owner, ctx, error, o->script);
+                        JS_FreeValue(ctx, error);
+                    }
+                    o = next;
+                    continue;
+                }
                 JSValue self = JS_DupValue(ctx, o->object);
                 JSValue callback = JS_DupValue(ctx, o->callback);
                 JSValue records = take_records(dom, ctx, o);
@@ -607,11 +661,11 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                     }
                 } else {
                     JSValue args[2] = {records, self};
-                    DScripts before = d_script_enter(dom, o->script);
-                    os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
-                    d_script_leave(dom, &before, true);
+                    DScripts before = d_script_enter(o->report_owner, o->script);
+                    os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                    d_script_leave(o->report_owner, &before, true);
                     d_outcome_fold(out, &call);
-                    if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, out);
+                    if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                     d_task_settle(dom, out);
                 }
                 JS_FreeValue(ctx, records);
@@ -979,7 +1033,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DIObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_INTERSECTION) : NULL;
     JSValue frozen = o != NULL ? frozen_numbers(ctx, thresholds.values, thresholds.count) : JS_EXCEPTION;
     JSValue object = !JS_IsException(frozen) ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class)
@@ -997,6 +1052,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->callback = JS_DupValue(ctx, argv[0]);
     o->thresholds_array = frozen;
     o->script = script;
+    o->report_owner = report_owner;
     o->root = root;
     if (root != NULL) os64_html_hold(dom->document, root);
     for (int i = 0; i < 4; i++) {
@@ -1247,8 +1303,21 @@ int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     return 0;
 }
 
-/* Teardown: the objects the binding holds, let go with the engine's values
- * (os64_dom_drain); everything else after the engine. */
+bool d_intersections_busy(const os64_dom_t *dom)
+{
+    return dom->intersections && dom->intersections->walking;
+}
+
+void d_intersections_cancel(os64_dom_t *dom)
+{
+    struct DIntersections *s = dom->intersections;
+    if (!s) return;
+    for (DIObserver *o = s->observers; o != NULL; o = o->next) entries_clear(dom, o);
+    s->queued = false;
+    s->lost = 0;
+}
+
+/* Root teardown releases registration holds; departure only clears payloads. */
 void d_intersections_drain(os64_dom_t *dom)
 {
     struct DIntersections *s = dom->intersections;

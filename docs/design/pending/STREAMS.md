@@ -43,11 +43,17 @@ yonder would carry `streams.js`:
   (libjs already reads and writes bytecode: `runtime.c`, patch 0015), so a
   page pays a read, not a compile;
 - the INTRINSICS it needs (`Promise`, its `then`, `resolve`, `reject`,
-  `Reflect.apply`, typed-array constructors, `queueMicrotask`) captured
+  `Reflect.apply`, typed-array constructors) captured
   before any page script runs and called only through those captures, so a
   page that patches `Promise.prototype.then` or `Array.prototype.push`
   cannot reach inside a stream (WPT's `patched-global` tests check exactly
   this);
+- private native reaction and microtask helpers keep internal algorithms
+  eligible after the creation realm retires. They retain ordinary function
+  identity, execution budgets and installation transaction tags. Author
+  start/size/pull/cancel/write/close/abort/transform/flush callbacks pass a
+  separate function-realm eligibility check; settled stream data can still
+  be read or teed by a live caller.
 - a small C door for libdom: an internal object the JS hands back at realm
   start, through which `fetch.c` makes a body's stream, enqueues bytes,
   closes it and errors it.
@@ -208,9 +214,12 @@ Where the build departs from §§ 3–7, and why:
   abort that lands after the answer still errors a body nobody read.
 - **A clone an abort can still reach is teed**, and the abort errors the
   tee's source, so the clone sees it (DEBTS' clone row, paid).
-- **EventTarget's methods are captured from `AbortSignal.prototype`**:
-  that is where libdom puts them when the streams row runs, and a signal
-  is the only target the pipes listen on.
+- **Pipe abort uses the signal's native algorithm list.** Private factory
+  helpers add and remove the internal function, whose hold the signal traces.
+  Algorithms run before the abort event, even if author event delivery is
+  stopped or the signal's creation document has departed. Removal preserves
+  the remaining algorithms' order. This follows
+  [ReadableStreamPipeTo](https://streams.spec.whatwg.org/#readable-stream-pipe-to).
 - **A refusal while streams.js loads fails the runtime.** libjs latches an
   allocator refusal met under script as the runtime's failure; no C-only
   installer had ever run script, so the DOM host's allocation sweep now

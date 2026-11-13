@@ -100,7 +100,9 @@ static void sweep(os64_dom_t *dom)
  * algorithm reads as any of the three), or -1 with the exception pending.
  * A function is called with `this` undefined, an object's acceptNode with
  * the object, and a filter that runs this walker again is an
- * InvalidStateError. */
+ * InvalidStateError. A retained traversal without a filter remains a pure
+ * tree operation; invoking an inactive document or callback's filter is
+ * refused with InvalidStateError. */
 static int filter_node(os64_dom_t *dom, JSContext *ctx, DWalk *w, const os64_html_node_t *node)
 {
     if (w->active) {
@@ -110,6 +112,7 @@ static int filter_node(os64_dom_t *dom, JSContext *ctx, DWalk *w, const os64_htm
     /* whatToShow's bit for a node is its nodeType's, less one. */
     if ((w->what & (1u << (d_node_type(node) - 1))) == 0) return FILTER_SKIP;
     if (JS_IsNull(w->filter)) return FILTER_ACCEPT;
+    if (!d_require_active(d_owner(dom, node), ctx)) return -1;
     JSValue argument = d_wrap(dom, ctx, node);
     if (JS_IsException(argument)) return -1;
     JSValue filter = JS_DupValue(ctx, w->filter), call, self = JS_UNDEFINED;
@@ -123,7 +126,13 @@ static int filter_node(os64_dom_t *dom, JSContext *ctx, DWalk *w, const os64_htm
             call = JS_ThrowTypeError(ctx, "The NodeFilter's acceptNode is not a function");
         }
     }
-    JSValue result = JS_IsException(call) ? JS_EXCEPTION : JS_Call(ctx, call, self, 1, &argument);
+    JSValue result = JS_EXCEPTION;
+    if (!JS_IsException(call)) {
+        /* acceptNode lookup can move the target or retire its activity. */
+        int eligible = d_delivery_eligible(d_owner(dom, node), ctx, call);
+        if (eligible > 0) result = JS_Call(ctx, call, self, 1, &argument);
+        else if (eligible == 0) d_error(ctx, "InvalidStateError", "The traversal's filter is inactive");
+    }
     uint32_t value = 0;
     int status = JS_IsException(result) || JS_ToUint32(ctx, &value, result) < 0 ? -1 : (int)(value & 0xFFFF);
     w->active = false;
