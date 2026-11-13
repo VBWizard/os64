@@ -737,10 +737,23 @@ model does not moderate and the test's events are far apart. The counters
 tell an interrupt-driven boot from a tick-driven one; working input proves
 neither.
 
-**Not proven here:** anything on the P5 (X.3.9), the moderation value
-(X.3.5, Q4), suspend and resume (the tree does neither), and a controller
-whose programming does not take (no model refuses it; the path is the
-RTL8125's, reading back and staying on the tick).
+**The P5, 2026-11-13** (Chris's hands; `/sys/usb` read over SSH). All five
+controllers `driven=msi`. Controller 2 (64:00.4: the dongle mouse and the
+Bluetooth adapter, which carries the LE keyboard and mouse) took 4009
+fires for 4011 events with no spurious entry; no event waited over 20 ms,
+where before X.3 29 of 3,300 on the same controller waited between 20 and
+200 ms; interrupt to service 3.0 ms at most and never over a tick. The
+other controllers had nothing to say (the dongle keyboard on controller 1
+was idle). A reboot and a cold boot both came up working, the RTL8125
+with it.
+
+**Q4, ruled 2026-11-13:** 250 us stays. It was not measured: the pointing
+devices to hand do not report fast enough for moderation to matter, and
+DEBTS carries what would reopen it.
+
+**Not proven:** suspend and resume (the tree does neither), and a
+controller whose programming does not take (no model refuses it; the path
+is the RTL8125's, reading back and staying on the tick).
 
 ## Measure first
 
@@ -876,7 +889,8 @@ interrupt work, it is raised with Chris, not folded in.
    2026-11-12; Quinn leaned the same way).
 3. **No call to the drain stays on the scheduler's path.** The tick
    ringing the daemon is the backstop (Chris, 2026-11-12).
-4. **The moderation value is OPEN.** D9 proposes 250 µs and says how it is
-   measured; Chris rules from the numbers.
+4. **The moderation value is 250 µs** (ruled 2026-11-13 on Fable's lean;
+   Chris had no view on the number). It was not measured as D9 describes:
+   § X.3 as built and DEBTS say why, and what would reopen it.
 5. **No INTx in this arc** (Chris, 2026-11-12, on condition that the P5's
    controllers offer MSI or MSI-X; they offer both).
