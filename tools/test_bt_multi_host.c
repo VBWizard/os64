@@ -36,7 +36,52 @@ static struct {
     // delivered, or the link gone), which the host's count must equal.
     unsigned acl_packets;
     uint16_t acl_out;
+    // The controller holding back Number Of Completed Packets for the
+    // Classic link, and how many it has held back.
+    bool withhold;
+    uint16_t withheld;
 } CM;
+// The headphones' L2CAP and SDP (headphones_acl, below): their end of the
+// channel we open to their SDP server, and of the one they open to ours.
+typedef struct { uint64_t at; uint8_t b[1100]; size_t n; } hp_packet_t;
+static struct {
+    hp_packet_t q[32]; unsigned qn;      // ACL packets on their way to the host
+    uint8_t ident;
+    uint16_t mtu;                        // what their Configuration Requests state
+    uint16_t refuse;                     // our Connection Request's answer, 0: accepted
+    bool silent;                         // their SDP server answers nothing
+    // Ours to theirs: the host's CID, theirs is HP_SERVER_CID.
+    uint16_t host_out;
+    bool out_open, out_closed;
+    unsigned conn_reqs, sdp_requests, disc_reqs;
+    uint16_t served;                     // record bytes served for the query in progress
+    // Theirs to ours: the host's CID (0 until it accepts), and the result.
+    uint16_t host_in, in_result;
+    bool in_answered;
+    unsigned in_conf_rsps;
+    // Their questions to our SDP, and the answers: each answer is compared
+    // with bt_sdp_respond's for the same request.
+    uint8_t asked[8][64]; size_t asked_n[8]; uint16_t asked_tid[8]; unsigned asks;
+    uint16_t answered_tid[8]; unsigned answers;
+    uint8_t lists[2048]; size_t lists_n;  // attribute bytes our answers carried
+    bool follow;                          // ask for the continuation an answer carries
+    unsigned echo_rsps, conn_rsps;
+    uint16_t last_conn_result;
+    unsigned other;                       // anything else they were sent
+} HP;
+#define HP_SERVER_CID 0x0070
+#define HP_CLIENT_CID 0x0080
+#define HP_AVDTP_CID  0x0090
+// The transport's send slots: each packet completes `delay` ms after it was
+// sent, oldest first, unless `hold` keeps them all.
+static struct {
+    uint16_t handle[BT_HOST_TX_SLOTS]; uint64_t done[BT_HOST_TX_SLOTS];
+    unsigned head, n;
+    uint64_t delay;
+    bool hold;
+    // Per tick: the ACL packets sent, in order, by handle.
+    uint16_t sent[8]; unsigned sent_n;
+} TX;
 static void multi_event(const uint8_t *p,size_t n)
 {
     if(n>=6 && (p[0]==0x0e || p[0]==0x0f)) {
@@ -125,21 +170,39 @@ static void classic_deliver(void)
 // What leaves for the controller as ACL data: the Classic link's packets
 // go to the headphones' model, the LE peers' to the LE model, as before.
 // A Classic packet is one whole L2CAP PDU, first automatically flushable.
+// Every packet takes a send slot: one sent with none free is what fails the
+// real transport.
 static void headphones_acl(const uint8_t *p,size_t n);
 static void multi_acl(void *ctx,const uint8_t *p,size_t n)
 {
     assert(n>=4 && n==4u+le_u16(p+2));
     uint16_t handle=le_u16(p)&0xfff;
+    assert(TX.n<BT_HOST_TX_SLOTS && n<=BT_LE_ACL_MAX+4);
+    unsigned slot=(TX.head+TX.n++)%BT_HOST_TX_SLOTS;
+    TX.handle[slot]=handle; TX.done[slot]=now+TX.delay;
+    if(TX.sent_n<8) TX.sent[TX.sent_n++]=handle;
     if(host.classic.connected && handle==host.classic.handle) {
         assert((le_u16(p)>>12)==2 && n>=8 && le_u16(p+4)==n-8);
         headphones_acl(p,n); return;
     }
     acl(ctx,p,n);
 }
+// The oldest slots whose transfers have finished, gone.
+static void tx_settle(void)
+{
+    while(TX.n && !TX.hold && TX.done[TX.head]<=now) { TX.head=(TX.head+1)%BT_HOST_TX_SLOTS; TX.n--; }
+}
+static unsigned tx_holding(uint16_t handle)
+{
+    unsigned k=0;
+    for(unsigned i=0;i<TX.n;i++) k+=TX.handle[(TX.head+i)%BT_HOST_TX_SLOTS]==handle;
+    return k;
+}
+static void headphones_deliver(void);
 static void step(void)
 {
-    ++now; classic_deliver();
-    bt_host_tick(&host,now,true,0,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static void notify_keyboard(void)
 {
@@ -168,6 +231,8 @@ static void setup(void)
     host.peers[0].le.peer[0]=0x44;
     reset_count=0;
     memset(&CM,0,sizeof(CM)); CM.present=true;
+    memset(&HP,0,sizeof(HP)); HP.mtu=48; HP.ident=0x80; HP.follow=true;
+    memset(&TX,0,sizeof(TX));
     if(classic_on) {
         bt_classic_bond_t none={0};
         classic_slot(&none,false);
@@ -672,13 +737,176 @@ static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
     default: printf("unexpected Classic command %04x\n",op); assert(0);
     }
 }
-// The headphones' end of the Classic link's ACL data.
+// ── The headphones' L2CAP and SDP ───────────────────────────────────────────
+//
+// Written here from the specification, not shared with bt_l2cap.c's or
+// bt_sdp.c's own suites (their peers keep their state in globals named for
+// those suites): Connection, Configuration and Disconnection on both kinds
+// of channel, Echo, an SDP server holding a canned Audio Sink record served
+// in parts with continuation, and a client asking our SDP.
+
+// Their Audio Sink record, as AttributeLists: one record, 68 bytes.
+static const uint8_t HP_RECORD[]={
+    0x35,0x42, 0x35,0x40,
+    0x09,0x00,0x00, 0x0a,0x00,0x01,0x00,0x03,                          // ServiceRecordHandle
+    0x09,0x00,0x01, 0x35,0x03,0x19,0x11,0x0b,                          // ServiceClassIDList: Audio Sink
+    0x09,0x00,0x04, 0x35,0x10, 0x35,0x06,0x19,0x01,0x00,0x09,0x00,0x19,  // L2CAP, PSM 0x0019
+                    0x35,0x06,0x19,0x00,0x19,0x09,0x01,0x03,           // AVDTP 1.3
+    0x09,0x00,0x05, 0x35,0x03,0x19,0x10,0x02,                          // BrowseGroupList
+    0x09,0x00,0x09, 0x35,0x08,0x35,0x06,0x19,0x11,0x0d,0x09,0x01,0x03, // A2DP 1.3
+    0x09,0x03,0x11, 0x09,0x00,0x03,                                    // SupportedFeatures
+};
+_Static_assert(sizeof(HP_RECORD)==68,"the record's lengths are right");
+static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0]<<8 | p[1]); }
+// One L2CAP PDU from the headphones, as one ACL packet, delivered at the
+// next step's start (the drain precedes the tick).
+static void hp_pdu(uint16_t cid,const uint8_t *d,size_t n)
+{
+    assert(HP.qn<32 && 8+n<=sizeof(HP.q[0].b));
+    hp_packet_t *q=&HP.q[HP.qn++];
+    uint16_t h=CM.handle|0x2000;
+    q->b[0]=(uint8_t)h; q->b[1]=(uint8_t)(h>>8); q->b[2]=(uint8_t)(n+4); q->b[3]=(uint8_t)((n+4)>>8);
+    q->b[4]=(uint8_t)n; q->b[5]=(uint8_t)(n>>8); q->b[6]=(uint8_t)cid; q->b[7]=(uint8_t)(cid>>8);
+    memcpy(q->b+8,d,n); q->n=8+n; q->at=now+1;
+}
+static void hp_cmd(uint8_t code,uint8_t ident,const uint8_t *d,size_t n)
+{
+    uint8_t c[1100]={code,ident,(uint8_t)n,(uint8_t)(n>>8)};
+    memcpy(c+4,d,n); hp_pdu(1,c,4+n);
+}
+#define HP_CMD(code,ident,...) do { const uint8_t d_[]={__VA_ARGS__}; hp_cmd((code),(ident),d_,sizeof d_); } while(0)
+#define W16(x) (uint8_t)(x),(uint8_t)((x)>>8)
+static void hp_config(uint16_t host_cid) { HP_CMD(4,HP.ident++,W16(host_cid),0,0,1,2,W16(HP.mtu)); }
+static void headphones_deliver(void)
+{
+    unsigned kept=0;
+    for(unsigned i=0;i<HP.qn;i++) {
+        if(HP.q[i].at<=now) multi_wire(HP.q[i].b,HP.q[i].n);
+        else HP.q[kept++]=HP.q[i];
+    }
+    HP.qn=kept;
+}
+// They open a channel to our SDP, or to AVDTP.
+static void hp_connect(uint16_t psm,uint16_t cid) { HP_CMD(2,HP.ident++,W16(psm),W16(cid)); }
+// Their question to our SDP: Service Search Attribute for `uuid`, every
+// attribute, at most `max` bytes, with a continuation state.
+static void hp_ask(uint16_t tid,uint16_t uuid,uint16_t max,const uint8_t *cont,uint8_t cont_n)
+{
+    assert(HP.asks<8 && HP.host_in);
+    uint8_t *q=HP.asked[HP.asks];
+    size_t k=0;
+    q[k++]=0x06; q[k++]=(uint8_t)(tid>>8); q[k++]=(uint8_t)tid; q[k++]=0; q[k++]=0;
+    q[k++]=0x35; q[k++]=3; q[k++]=0x19; q[k++]=(uint8_t)(uuid>>8); q[k++]=(uint8_t)uuid;
+    q[k++]=(uint8_t)(max>>8); q[k++]=(uint8_t)max;
+    q[k++]=0x35; q[k++]=5; q[k++]=0x0a; q[k++]=0; q[k++]=0; q[k++]=0xff; q[k++]=0xff;
+    q[k++]=cont_n; if(cont_n) memcpy(q+k,cont,cont_n);
+    k+=cont_n;
+    q[4]=(uint8_t)(k-5);
+    HP.asked_n[HP.asks]=k; HP.asked_tid[HP.asks]=tid; HP.asks++;
+    hp_pdu(HP.host_in,q,k);
+}
+// Our client's request on the channel to their server: checked field by
+// field, answered with the next part of the record.
+static void hp_serve(const uint8_t *q,size_t n)
+{
+    HP.sdp_requests++;
+    assert(n>=20 && q[0]==0x06 && be16(q+3)==n-5);
+    static const uint8_t middle[]={0x35,0x03,0x19,0x11,0x0b};
+    static const uint8_t range[]={0x35,0x05,0x0a,0x00,0x00,0xff,0xff};
+    assert(!memcmp(q+5,middle,5) && !memcmp(q+12,range,7));
+    uint16_t max=be16(q+10);
+    uint8_t cont=q[19];
+    assert(n==20u+cont && (cont==0 || cont==2));
+    uint16_t from=cont?be16(q+20):0;
+    assert(from==HP.served);
+    if(HP.silent) return;
+    uint16_t count=(uint16_t)(sizeof(HP_RECORD)-from); if(count>max) count=max;
+    HP.served=(uint16_t)(from+count);
+    bool more=HP.served<sizeof(HP_RECORD);
+    uint8_t r[1100]; size_t k=0;
+    r[k++]=0x07; r[k++]=q[1]; r[k++]=q[2]; k+=2;
+    r[k++]=(uint8_t)(count>>8); r[k++]=(uint8_t)count;
+    memcpy(r+k,HP_RECORD+from,count); k+=count;
+    if(more) { r[k++]=2; r[k++]=(uint8_t)(HP.served>>8); r[k++]=(uint8_t)HP.served; } else r[k++]=0;
+    r[3]=(uint8_t)((k-5)>>8); r[4]=(uint8_t)(k-5);
+    assert(k<=BT_L2CAP_MTU);
+    hp_pdu(HP.host_out,r,k);
+}
+// Our answer on the channel they opened to our SDP: byte for byte what
+// bt_sdp_respond gives for the question it answers, within their MTU;
+// its attribute bytes kept, and the continuation asked for.
+static void hp_answered(const uint8_t *r,size_t n)
+{
+    assert(n>=5 && HP.answers<HP.asks && HP.answers<8);
+    unsigned a=HP.answers++;
+    uint8_t want[1100];
+    size_t room=HP.mtu<BT_L2CAP_MTU?HP.mtu:BT_L2CAP_MTU;
+    size_t w=bt_sdp_respond(HP.asked[a],HP.asked_n[a],want,room);
+    assert(w==n && !memcmp(want,r,n) && n<=HP.mtu);
+    HP.answered_tid[a]=be16(r+1);
+    if(r[0]!=0x07) return;
+    uint16_t count=be16(r+5);
+    assert(HP.lists_n+count<=sizeof(HP.lists));
+    memcpy(HP.lists+HP.lists_n,r+7,count); HP.lists_n+=count;
+    uint8_t cont=r[7+count];
+    if(cont && HP.follow) hp_ask((uint16_t)(be16(r+1)+1),be16(HP.asked[a]+8),be16(HP.asked[a]+10),r+8+count,cont);
+}
+// What the host sends them on the Classic link.
 static void headphones_acl(const uint8_t *p,size_t n)
 {
-    (void)p; (void)n;
     CM.acl_packets++; CM.acl_out++;
-    // The controller completes it a step later.
-    CM_PUSH(1,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),1,0);
+    // The controller completes it a step later, unless it is told not to.
+    if(CM.withhold) CM.withheld++;
+    else CM_PUSH(1,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),1,0);
+    uint16_t cid=le_u16(p+6);
+    const uint8_t *d=p+8;
+    size_t len=n-8;
+    if(cid==HP_SERVER_CID) { hp_serve(d,len); return; }
+    if(cid==HP_CLIENT_CID) { hp_answered(d,len); return; }
+    assert(cid==1);
+    while(len) {
+        assert(len>=4 && le_u16(d+2)<=len-4);
+        uint8_t code=d[0], ident=d[1];
+        uint16_t m=le_u16(d+2);
+        const uint8_t *x=d+4;
+        switch(code) {
+        case 2:     // our Connection Request: to their SDP, the one PSM this part asks for
+            assert(m==4 && le_u16(x)==BT_L2CAP_PSM_SDP);
+            HP.conn_reqs++; HP.host_out=le_u16(x+2); HP.served=0; HP.out_open=HP.out_closed=false;
+            if(HP.refuse) { HP_CMD(3,ident,0,0,W16(HP.host_out),W16(HP.refuse),0,0); break; }
+            HP_CMD(3,ident,W16(HP_SERVER_CID),W16(HP.host_out),0,0,0,0);
+            hp_config(HP.host_out);
+            break;
+        case 3:     // the answer to their Connection Request
+            assert(m==8);
+            HP.conn_rsps++; HP.last_conn_result=le_u16(x+4);
+            if(le_u16(x+2)==HP_CLIENT_CID) {
+                HP.in_result=le_u16(x+4); HP.in_answered=true;
+                if(!HP.in_result) { HP.host_in=le_u16(x); hp_config(HP.host_in); }
+            }
+            break;
+        case 4: {   // our Configuration Request: our MTU, accepted
+            assert(m==8 && x[4]==1 && x[5]==2 && le_u16(x+6)==BT_L2CAP_MTU);
+            uint16_t theirs=le_u16(x);
+            uint16_t ours=theirs==HP_SERVER_CID?HP.host_out:HP.host_in;
+            HP_CMD(5,ident,W16(ours),0,0,0,0);
+            break;
+        }
+        case 5:     // the answer to theirs
+            assert(m>=6 && !le_u16(x+4));
+            if(le_u16(x)==HP_SERVER_CID) HP.out_open=true; else HP.in_conf_rsps++;
+            break;
+        case 6:     // our Disconnection Request
+            assert(m==4);
+            HP.disc_reqs++;
+            if(le_u16(x)==HP_SERVER_CID) HP.out_closed=true;
+            hp_cmd(7,ident,x,4);
+            break;
+        case 9: HP.echo_rsps++; break;
+        default: HP.other++; break;
+        }
+        d+=4u+m; len-=4u+m;
+    }
 }
 // The LE model answers what it knows; the scan's two commands are
 // answered here, as scan_recovery does.
@@ -725,11 +953,11 @@ static bool w_free, w_urgent;
 static unsigned w_before;
 static void step_watched(void)
 {
-    ++now; classic_deliver();
+    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
     w_free=!host.owner || (host.command_done && !host_owner_pending(&host));
     w_urgent=bt_classic_urgent(&host.classic);
     w_before=CM.n;
-    bt_host_tick(&host,now,true,0,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static bt_classic_bond_t ph_bond(void)
 {
@@ -781,6 +1009,8 @@ static void classic_quiet(void)
     }
     assert(input_count[0]==10000 && !release_count[0]);
     assert(classic_ops_since(from)==0 && CM.classic==1 && CM.scan_writes==1);
+    // Not one byte of L2CAP: no link, so no L2CAP to send it.
+    assert(!CM.acl_packets && !host.l2cap.up);
     assert(host.classic.phase==BT_CLASSIC_IDLE && bt_classic_quiescent(&host.classic) && !host.classic.malformed);
     assert(!host.owner && !host.classic_auto && !host.classic_page_at);
     mouse_interval();
@@ -1278,6 +1508,310 @@ static void classic_status(void)
     puts("PASS: slot 2's status: not ready, unavailable with the reason, the link, automatic connection, the services; no key");
 }
 
+// ── Slot 2's services: L2CAP and SDP (AUDIO_CLASSIC.md part S) ─────────────
+
+// The host with its Classic slot, bonded to the headphones with `slot 2
+// bond` and stepped to READY while the keyboard types. The query begins in
+// the tick that reaches READY, so the headphones' answer to our channel
+// (`refuse`: 0 accepts) is set before.
+static void classic_bonded_refusing(uint16_t refuse)
+{
+    setup(); bt_classic_bond_t none={0}; classic_slot(&none,false);
+    HP.refuse=refuse;
+    host.scan.count=1; host.scan.devices[0]=(bt_scan_device_t){.le=false};
+    memcpy(host.scan.devices[0].address,PH,6);
+    char text[64]; snprintf(text,sizeof text,"slot 2 bond %s",PH_TEXT);
+    assert(classic_cmd(text));
+    for(unsigned i=0;i<3000 && host.classic.phase!=BT_CLASSIC_READY;i++) { notify_keyboard(); step(); }
+    assert(host.classic.phase==BT_CLASSIC_READY && host.l2cap.up && host.l2cap.encrypted);
+}
+static void classic_bonded(void) { classic_bonded_refusing(0); }
+// Steps until this connection's query has ended, the keyboard typing.
+static void sdp_settle(void)
+{
+    unsigned ended=host.sdp_ended;
+    for(unsigned i=0;i<8000 && host.sdp_ended==ended;i++) { notify_keyboard(); step(); }
+    assert(host.sdp_ended==ended+1);
+    for(unsigned i=0;i<50;i++) { notify_keyboard(); step(); }
+}
+static bool l2cap_all_free(void)
+{
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(!bt_l2cap_is_free(&host.l2cap,i)) return false;
+    return true;
+}
+static const char SDP_SINK_LINE[]="sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0003, psm 0019 (complete)\n";
+// The keyboard's own ATT traffic: one packet queued whenever it has none,
+// and each completed by the controller a step after it is sent.
+static void keyboard_sends(void)
+{
+    bt_le_t *k=&host.peers[0].le;
+    if(!k->queue_count && !k->outstanding) { const uint8_t ack[]={0x1e}; assert(le_queue(k,4,ack,1)); }
+}
+static void keyboard_completes(void)
+{
+    if(!tx_n) return;
+    tx_n=0; CM_PUSH(1,0x13,5,1,12,0,1,0);
+}
+
+// READY, and with no typing: we open the SDP channel, it is configured both
+// ways, the query goes out and is answered in three parts, the channel is
+// closed, and nothing more is asked on that connection.
+static void classic_sdp_query(void)
+{
+    classic_bonded();
+    sdp_settle();
+    assert(HP.conn_reqs==1 && HP.out_open && HP.sdp_requests==3 && HP.served==sizeof(HP_RECORD));
+    assert(HP.disc_reqs==1 && HP.out_closed && l2cap_all_free());
+    assert(status_has(SDP_SINK_LINE) && status_has("sdp requests answered: 0 dropped: 0\n"));
+    assert(!strcmp(host.sdp_line,SDP_SINK_LINE) && host.sdp_ended==1);
+    const bt_sdp_sink_t *r=&host.sdp_result;
+    assert(host.sdp_result_valid && host.sdp_result_current && r->found && r->complete);
+    assert(r->avdtp_version==0x0103 && r->a2dp_version==0x0103 && r->features==3 && r->l2cap_psm==0x0019);
+    assert(!host.l2cap.malformed && !host.l2cap.strays && !host.l2cap.closed_cid && !HP.other);
+    unsigned packets=CM.acl_packets;
+    for(unsigned i=0;i<20000;i++) { notify_keyboard(); step(); }
+    assert(HP.conn_reqs==1 && HP.sdp_requests==3 && CM.acl_packets==packets && host.sdp_ended==1);
+    assert(host.classic.phase==BT_CLASSIC_READY && !host.failed);
+    puts("PASS: slot 2's SDP query: our channel, configured both ways, three parts with continuation, closed, once a connection");
+}
+
+// The keyboard types every tick and sends every seventh, while the
+// headphones keep the Classic link busy on a transport whose transfers take
+// 5 ms: an LE packet that may go (queued, nothing of LE's in flight) goes
+// in that very tick, ahead of any Classic packet, however many slots the
+// Classic link has filled; and the count agrees at every step. Then an LE
+// peer still holding a packet it could not send holds the Classic link.
+static void classic_le_first(void)
+{
+    classic_bonded(); sdp_settle();
+    // Transfers of 5 ms keep the Classic link at the most slots it may
+    // take; then 1 ms ones leave room for both kinds in one tick.
+    unsigned eligible_ticks=0, both=0, classic_sent=0, full=0;
+    for(unsigned i=0;i<6000;i++) {
+        TX.delay=i<3000?5:1;
+        notify_keyboard();
+        if(i%7==0) keyboard_sends();
+        HP_CMD(8,HP.ident++,(uint8_t)i);          // an Echo Request: the answer is Classic traffic
+        ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+        const bt_le_t *k=&host.peers[0].le;
+        bool eligible=k->queue_count && !k->outstanding && !tx_holding(12);
+        bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+        int le_at=-1, classic_at=-1;
+        for(unsigned s=0;s<TX.sent_n;s++) {
+            if(TX.sent[s]==12 && le_at<0) le_at=(int)s;
+            if(TX.sent[s]==CM.handle && classic_at<0) classic_at=(int)s;
+        }
+        // It would fail if the Classic link went first: in the order of the
+        // sends, or by taking the slot the keyboard needed.
+        if(eligible) { assert(le_at>=0); eligible_ticks++; }
+        if(le_at>=0 && classic_at>=0) { assert(le_at<classic_at); both++; }
+        classic_sent+=classic_at>=0;
+        full+=tx_holding(CM.handle)==BT_HOST_TX_SLOTS-1;
+        assert(TX.n<=BT_HOST_TX_SLOTS && !host.failed && host.peers[0].le.phase==BT_LE_READY);
+        keyboard_completes();
+    }
+    assert(eligible_ticks>800 && both>300 && classic_sent>3000 && full>1000 && !release_count[0]);
+    // The keyboard's packet waits on its own uncompleted one: the Classic
+    // link waits too, and goes again once the keyboard has sent.
+    TX.delay=0;
+    for(unsigned i=0;i<20;i++) step();
+    bt_le_t *k=&host.peers[0].le;
+    keyboard_sends(); step();
+    assert(tx_n && k->outstanding); tx_n=0;
+    const uint8_t ack[]={0x1e}; assert(le_queue(k,4,ack,1));
+    unsigned classic=CM.acl_packets;
+    for(unsigned i=0;i<50;i++) {
+        HP_CMD(8,HP.ident++,(uint8_t)i); step();
+        assert(CM.acl_packets==classic && k->queue_count && !tx_n);
+    }
+    CM_PUSH(0,0x13,5,1,12,0,1,0); step();
+    assert(tx_n && !k->queue_count); tx_n=0;
+    CM_PUSH(0,0x13,5,1,12,0,1,0);
+    for(unsigned i=0;i<20;i++) step();
+    assert(CM.acl_packets>classic);
+    puts("PASS: LE goes first: the keyboard's packets leave in the tick they may, ahead of the Classic link's, on a slow transport kept busy");
+}
+
+// The controller holds back the Classic link's completions: L2CAP stops at
+// the pool's four, LE is untouched, and the rest go when the four come back.
+static void classic_pool_exhausted(void)
+{
+    classic_bonded(); sdp_settle();
+    CM.withhold=true;
+    unsigned before=CM.acl_packets, echoes=HP.echo_rsps, le=packets;
+    for(unsigned i=0;i<6;i++) HP_CMD(8,HP.ident++,0xaa);
+    for(unsigned i=0;i<300;i++) { notify_keyboard(); keyboard_sends(); step(); keyboard_completes(); }
+    assert(CM.acl_packets==before+4 && HP.echo_rsps==echoes+4 && CM.withheld==4);
+    assert(bt_acl_outstanding(&host.acl,CM.handle)==4 && bt_l2cap_wants_send(&host.l2cap));
+    assert(packets>le+100 && !host.failed && !release_count[0]);
+    CM.withhold=false;
+    CM_PUSH(0,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),4,0); CM.withheld=0;
+    for(unsigned i=0;i<20;i++) { notify_keyboard(); step(); }
+    assert(CM.acl_packets==before+6 && HP.echo_rsps==echoes+6 && !bt_l2cap_wants_send(&host.l2cap));
+    puts("PASS: the Classic pool exhausted: L2CAP stops at four, the keyboard carries on, the rest go on completion");
+}
+
+// They ask our SDP: Service Search Attribute for Audio Source with a small
+// maximum, followed through every continuation, each answer byte for byte
+// what bt_sdp_respond gives; then three at once with the payload slot
+// taken: the first two answered in order, the third dropped and counted.
+// And AVDTP is not admitted in this part.
+static void classic_sdp_asked(void)
+{
+    classic_bonded(); sdp_settle();
+    hp_connect(BT_L2CAP_PSM_SDP,HP_CLIENT_CID);
+    for(unsigned i=0;i<20 && HP.in_conf_rsps<1;i++) step();
+    assert(HP.in_answered && !HP.in_result && HP.host_in && HP.in_conf_rsps==1);
+    step(); step();
+    hp_ask(1,0x110A,16,NULL,0);
+    for(unsigned i=0;i<200 && (HP.answers<HP.asks || !HP.answers);i++) { notify_keyboard(); step(); }
+    assert(HP.answers==HP.asks && HP.answers>=4);
+    bt_sdp_sink_t ours={0};
+    assert(bt_sdp_parse_attribute_lists(HP.lists,HP.lists_n,0x110A,true,&ours)==BT_SDP_PARSED);
+    assert(ours.found && ours.l2cap_psm==0x0019 && ours.avdtp_version==0x0103 && ours.a2dp_version==0x0103 && ours.features==1);
+    assert(host.sdp_answered==HP.answers && !host.sdp_dropped);
+    // Three at once.
+    HP.follow=false;
+    unsigned answers=HP.answers;
+    hp_ask(10,0x110A,600,NULL,0); hp_ask(11,0x110A,600,NULL,0); hp_ask(12,0x110A,600,NULL,0);
+    step();
+    assert(host.sdp_dropped==1 && host.sdp_answer_bytes);
+    for(unsigned i=0;i<20;i++) step();
+    assert(HP.answers==answers+2 && HP.answered_tid[answers]==10 && HP.answered_tid[answers+1]==11);
+    assert(!host.sdp_answer_bytes && host.sdp_answered==answers+2);
+    char want[64]; snprintf(want,sizeof want,"sdp requests answered: %u dropped: 1\n",answers+2);
+    assert(status_has(want));
+    // AVDTP: not supported in this part.
+    unsigned rsps=HP.conn_rsps;
+    hp_connect(BT_L2CAP_PSM_AVDTP,HP_AVDTP_CID);
+    for(unsigned i=0;i<10;i++) step();
+    assert(HP.conn_rsps==rsps+1 && HP.last_conn_result==0x0002);
+    assert(host.classic.phase==BT_CLASSIC_READY && !host.failed && !host.l2cap.malformed);
+    puts("PASS: our SDP answered across continuations byte for byte; a request while one answer is held is dropped and counted; AVDTP not supported");
+}
+
+// The link drops mid-query: everything of that connection goes, and the
+// next connection asks again, once; then a drop after an answer leaves it
+// shown as the earlier connection's.
+static void classic_sdp_drop(void)
+{
+    classic_bonded();
+    HP.silent=true;
+    for(unsigned i=0;i<100 && !HP.sdp_requests;i++) step();
+    assert(HP.sdp_requests==1 && bt_sdp_client_state(&host.sdp)==BT_SDP_ASKING);
+    cm_disconn(0,0x08); step();
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && !host.l2cap.up && l2cap_all_free());
+    assert(bt_sdp_client_state(&host.sdp)==BT_SDP_IDLE && !host.sdp_asked && !host.sdp_channel && !host.sdp_result_valid);
+    assert(status_has("l2cap: link down, not encrypted\n") && status_has("sdp: not asked\n"));
+    HP.silent=false;
+    // Paged again on the ladder, READY, and asked once more.
+    for(unsigned i=0;i<20000 && !host.sdp_result_current;i++) { notify_keyboard(); step(); }
+    assert(host.sdp_result_current && HP.conn_reqs==2 && status_has(SDP_SINK_LINE));
+    for(unsigned i=0;i<5000;i++) step();
+    assert(HP.conn_reqs==2 && host.sdp_ended==1);
+    // Gone again: the answer is kept as the earlier connection's.
+    cm_disconn(0,0x08); step();
+    assert(host.sdp_result_valid && !host.sdp_result_current && host.sdp_result.l2cap_psm==0x0019);
+    char want[160]; snprintf(want,sizeof want,"sdp: not asked\nearlier connection's %s",SDP_SINK_LINE);
+    assert(status_has(want));
+    puts("PASS: the link dropping mid-query resets everything; the next connection asks once; an answer outlives its connection, marked");
+}
+
+// Our channel refused: the query is recorded as not made, with the result,
+// it is not asked again on that connection, and the link stays READY.
+static void classic_sdp_refused(void)
+{
+    classic_bonded_refusing(0x0002);
+    for(unsigned i=0;i<200 && !host.sdp_ended;i++) step();
+    assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.sdp_refused==0x0002 && host.l2cap_refusals==1);
+    assert(status_has("sdp: not made: the headphones refused the SDP channel\n"));
+    assert(status_has("last refusal: PSM not supported (0002) psm 0001\n"));
+    assert(!strcmp(host.sdp_line,"sdp: not made: the headphones refused the SDP channel\n"));
+    for(unsigned i=0;i<20000;i++) { notify_keyboard(); step(); }
+    assert(HP.conn_reqs==1 && host.sdp_ended==1 && host.classic.phase==BT_CLASSIC_READY && !host.failed);
+    puts("PASS: a refused SDP channel is recorded, not retried, and the link stays ready");
+}
+
+// A full-size Classic ACL packet (an L2CAP PDU of BT_L2CAP_MTU + 4: an Echo
+// Request as large as our signalling MTU) between two keyboard packets, as
+// one stream and as one transfer of 64-byte USB packets: each is delivered.
+static void classic_full_packet(void)
+{
+    enum { MPS=64 };
+    classic_bonded(); sdp_settle();
+    static const uint8_t key[]={12,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};
+    static uint8_t stream[2*sizeof(key)+4+4+BT_L2CAP_MTU];
+    size_t k=0;
+    memcpy(stream,key,sizeof key); k+=sizeof key;
+    uint16_t h=CM.handle|0x2000, acl_len=4+BT_L2CAP_MTU;
+    stream[k++]=(uint8_t)h; stream[k++]=(uint8_t)(h>>8); stream[k++]=(uint8_t)acl_len; stream[k++]=(uint8_t)(acl_len>>8);
+    stream[k++]=(uint8_t)BT_L2CAP_MTU; stream[k++]=(uint8_t)(BT_L2CAP_MTU>>8); stream[k++]=1; stream[k++]=0;
+    stream[k++]=8; stream[k++]=0x77; stream[k++]=(uint8_t)(BT_L2CAP_MTU-4); stream[k++]=(uint8_t)((BT_L2CAP_MTU-4)>>8);
+    for(unsigned i=0;i<BT_L2CAP_MTU-4;i++) stream[k++]=(uint8_t)i;
+    memcpy(stream+k,key,sizeof key); k+=sizeof key;
+    assert(k==sizeof stream && 4+acl_len==4+4+BT_L2CAP_MTU);
+    for(unsigned form=0;form<2;form++) {
+        unsigned typed=input_count[0], echoes=HP.echo_rsps;
+        if(!form) bt_host_receive(&host,stream,k,0,multi_report,NULL);
+        else for(size_t at=0;at<k;at+=MPS) bt_host_receive(&host,stream+at,k-at<MPS?k-at:MPS,MPS,multi_report,NULL);
+        assert(input_count[0]==typed+2 && !host.wire_resyncs && !host.wire_used && !host.failed);
+        assert(!host.l2cap.oversized && !host.l2cap.malformed && !host.l2cap.unfinished);
+        for(unsigned i=0;i<5;i++) step();
+        assert(HP.echo_rsps==echoes+1);
+    }
+    puts("PASS: a full-size Classic ACL packet between keyboard packets: assembled whole and answered, both forms, no resync");
+}
+
+// An LE peer cleaning up waits for its own packets to leave the send slots,
+// not the Classic link's: Classic ahead of it in the slots, and behind it.
+static void classic_cleanup_in_flight(void)
+{
+    for(unsigned order=0;order<2;order++) {
+        classic_bonded(); sdp_settle();
+        bt_le_t *m=&host.peers[1].le;
+        *m=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+            .handle=11,.input_value=10,.mouse=true};
+        assert(hid_mouse_parse(packed,sizeof(packed),&m->mouse_layout));
+        step();
+        TX.hold=true;
+        const uint8_t ack[]={0x1e};
+        if(order==0) {      // Classic first, the mouse's behind it
+            HP_CMD(8,HP.ident++,1); step(); step();
+            assert(tx_holding(CM.handle)==1);
+            assert(le_queue(m,4,ack,1)); step(); tx_n=0;
+        } else {            // the mouse's first, Classic behind it
+            assert(le_queue(m,4,ack,1)); step(); tx_n=0;
+            HP_CMD(8,HP.ident++,1); HP_CMD(8,HP.ident++,2); step(); step(); step();
+            assert(tx_holding(CM.handle)==2);
+        }
+        assert(tx_holding(11)==1);
+        cmd_n=0;
+        assert(bt_host_command(&host,"slot 1 disconnect",17,now));
+        for(unsigned i=0;i<100;i++) { step(); assert(!cmd_n && m->phase==BT_LE_CLEANUP); }
+        if(order==0) {
+            // The Classic packet completes; the mouse's is still in its slot.
+            TX.head=(TX.head+1)%BT_HOST_TX_SLOTS; TX.n--;
+            for(unsigned i=0;i<100;i++) { step(); assert(!cmd_n && m->phase==BT_LE_CLEANUP); }
+        }
+        // The mouse's completes; with the Classic link's still held, or
+        // none, the Disconnect goes at once.
+        assert(TX.handle[TX.head]==11);
+        TX.head=(TX.head+1)%BT_HOST_TX_SLOTS; TX.n--;
+        step();
+        assert(cmd_n && le_u16(cmd)==0x0406 && le_u16(cmd+3)==11);
+        assert(tx_holding(CM.handle)==(order==0?0:2));
+        const uint8_t ok[]={0x0f,4,0,1,6,4}; cmd_n=0; multi_event(ok,sizeof(ok));
+        disconnected(1,0x16); step();
+        assert(m->phase==BT_LE_IDLE && !host.failed);
+        // The Classic link's packets held past the three seconds a cleanup
+        // may take cost nothing.
+        for(unsigned i=0;i<3500;i++) { notify_keyboard(); step(); assert(!host.failed); }
+        assert(host.peers[0].le.phase==BT_LE_READY && !release_count[0]);
+        TX.hold=false;
+    }
+    puts("PASS: an LE peer's cleanup waits for its own packets in the send slots, not the Classic link's, in both orders");
+}
+
 int main(void)
 {
     (void)basic;
@@ -1296,5 +1830,13 @@ int main(void)
     classic_reconnection();
     classic_commands();
     classic_status();
+    classic_sdp_query();
+    classic_le_first();
+    classic_pool_exhausted();
+    classic_sdp_asked();
+    classic_sdp_drop();
+    classic_sdp_refused();
+    classic_full_packet();
+    classic_cleanup_in_flight();
     puts("Bluetooth multi-peer host tests passed");
 }
