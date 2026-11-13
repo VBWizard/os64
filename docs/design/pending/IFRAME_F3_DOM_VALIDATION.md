@@ -924,7 +924,8 @@ to `shorts_learn`, whose immutable table is reused afterward. Repeatable
 sweeps warm that table before measuring. Focused installation passes **58
 checks**; seven selected nested cuts also pass with the instrumented engine.
 The longer instrumented exhaustive run reached its harness wall-time limit
-in its final group; that group is checked separately in final acceptance.
+in its final group; a separate run completed that group with 31,222 checks
+and no failure. Final merged-source acceptance below repeats all four groups.
 
 Nine isolated mutations are caught: enabling providers before commit,
 recomputing the copied origin, poisoning siblings on local failure, retaining
@@ -945,18 +946,19 @@ bytes or promise recovery from arbitrary subsequent allocation failure.
 The test runtime remains capped at **64 MiB**, with unchanged aggregate native
 limits: HTML 64 MiB, page state 16 MiB, DOM 8 MiB, kept bodies 256 MiB, Canvas
 128 MiB. Byte counts below use the engine allocator's charge, including its
-profile overhead, rather than a raw QuickJS object census.
+profile overhead, rather than a raw QuickJS object census. The table is from
+merged source `a67d3248`, including current userland through `5df62a01`.
 
 | Engine / teardown | Additional installation peak | Additional retained engine bytes | Native DOM bytes | Modern children before local headroom refusal |
 |---|---:|---:|---:|---:|
-| Shipping / FATAL | 1,371,024 | 1,371,024 | 56,117 | 41 |
+| Shipping / FATAL | 1,375,104 | 1,375,104 | 56,117 | 41 |
 | Shipping / RECLAIM | 1,415,392 | 1,415,392 | 56,117 | 41 |
-| Instrumented / FATAL | 1,486,816 | 1,486,720 | 56,117 | 39 |
-| Instrumented / RECLAIM | 2,140,448 | 2,140,320 | 56,117 | 27 |
+| Instrumented / FATAL | 1,489,504 | 1,489,408 | 56,117 | 39 |
+| Instrumented / RECLAIM | 2,144,576 | 2,144,448 | 56,117 | 27 |
 
 The largest observed peak leaves more than 6 MiB of the admission allowance
 for sibling work. Repeated modern installation/departure refuses locally with
-6,892,880–8,204,768 bytes of engine headroom, depending on the profile; A remains
+6,777,056–8,102,768 bytes of engine headroom, depending on the profile; A remains
 usable. A smaller-interface cycle admits **32 departed and 32 failed children**
 beside the primary, then returns REALM_LIMIT: both consume the cumulative
 65-slot ledger. Their native charges remain live. Deliberately underdeclared
@@ -966,8 +968,8 @@ both retain the shared failure and refuse later parent source execution.
 
 ### Guest and pinned-web integration
 
-The rebuilt target libraries and three-realm consumer run from a frozen,
-SHA-256-manifested cohort of **19 files (21,850,576 bytes)**. Its parent observes
+The final merged target libraries and three-realm consumer run from a frozen,
+SHA-256-manifested cohort of **19 files (21,855,104 bytes)**. Its parent observes
 `os64_wait` return and child exit **0x446f0100**. The guest exercises staged B/C
 creation, the shared A/B/C adoption oracle, ordinary B departure, suppressed
 B timers, retained B function and object access through A/C, an unconsumed
@@ -987,11 +989,42 @@ previous passing subtest is lost. Existing expected failures, harness errors,
 not-run results and excluded worker/shadow-realm variants remain explicit.
 No expectation file is weakened or updated. The runner self-tests also pass.
 
-## Remaining F.3b work
+## Final implementation acceptance
 
-- Integrate current userland, recheck affected browser/rendering seams and
-  complete the instrumented allocation evidence before final review.
-- Record final source-qualified acceptance and review in the tracker/PR.
+The implementation checkpoint is `792617e2`; `a67d3248` merges userland through
+`5df62a01`. The merge brings current graphics and kernel work without changing
+libdom/libjs implementation. Changed CSS alias handling adds three native
+bootstrap allocations, so the final sweeps cover **1,119** cuts with a classic
+parent and **1,117** with a modern parent, in each teardown policy. The DOM
+cohort recompiles the changed CSS parser and relinks the test unit; the Yonder
+runner and native libraries/consumer are rebuilt against the merged headers.
 
-Frame enablement, independent realm reclamation and child-local overrun
-recovery remain outside F.3b. F.15/F.16 retain the F.11 proof-or-acceptance gates.
+- Complete shipping DOM suite: **322,022 checks, zero failures**, including
+  **12,941 native allocation sweeps** and the exhaustive standalone/nested
+  installation cases.
+- Fully instrumented installation sweeps: **120,856 checks, zero failures**
+  across four separately completed groups, covering **4,472 native cuts**.
+  Splitting the groups avoids the earlier whole-run wall-time limit without
+  changing engine deadlines, memory limits or executed-job caps.
+- Final merged instrumented installation (**58**), engine/admission (**1,306**),
+  combined retirement/provider (**9,770**) and public departure (**353**) checks
+  pass. Shipping engine/admission passes **1,402**. The preceding focused
+  instrumented realm, observer/custom, animation and Fetch/Streams checks also
+  pass; the merge changes no implementation in those modules.
+- The final frozen QEMU cohort passes again, including parent-observed child
+  status and heap checks under both teardown policies.
+- Fresh merged Yonder runner self-tests pass. All **17 pinned WPT families**
+  match unchanged expectations and have **identical named verdicts** to the
+  pre-merge run above. Against the pre-F3 baseline, the 70 newly exposed mask
+  subtests remain the only named-result additions; no previous pass is lost.
+- **231 cumulative source mutations** have been caught across this PR's
+  checkpoints. No implementation under those mutations changes in the merge.
+- ASan, UBSan and LeakSanitizer remain enabled. Target DOM/Yonder builds,
+  contract-header/source-manifest checks, tracker, stale-reference and diff
+  checks pass. Source hashes and bounded logs qualify the local evidence.
+
+The implementation is ready for review; no final review or merge is claimed.
+The tracker remains `review` until that acceptance. Frame enablement,
+independent realm reclamation and child-local overrun recovery remain outside
+F.3b. F.15/F.16 retain the F.11 proof-or-acceptance gates. No P5 handoff is
+required for this foundation.
