@@ -189,6 +189,11 @@
       "path": "patches/0021-neutral-host-continuations.patch",
       "sha256": "aaa1d6bd740a09dec1ecc3aaa2055b80db040d1f8f2a4438cf7be53d03462695",
       "reason": "Separate trusted self-hosted Streams continuations from author callback ownership while retaining function realm, job budgets and installation transactions."
+    },
+    {
+      "path": "patches/0022-browser-global-this.patch",
+      "sha256": "532ffe0695ac387b0481426542cade6ed6ab47bd380dcb79fb95d84a025d89da",
+      "reason": "Retain an opt-in global-this receiver for sloppy calls, script and bytecode evaluation, and indirect eval while preserving global environment storage and standalone defaults."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
