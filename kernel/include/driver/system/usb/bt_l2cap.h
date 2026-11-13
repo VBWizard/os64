@@ -68,7 +68,8 @@ typedef struct {
     // CONFIG: when a channel still not open is closed. Set on entering
     // configuration, and again when the peer reconfigures an open channel.
     uint64_t config_deadline;
-    // The one data payload waiting for a turn, as a whole PDU.
+    // The one data payload waiting for a turn, as a whole PDU; held while
+    // the channel is not open.
     bool queued;
     uint16_t queued_bytes;
     uint32_t queued_seq;
@@ -113,6 +114,7 @@ typedef struct bt_l2cap {
     uint32_t fixed_cid;         // connectionless or reserved CIDs
     uint32_t strays;            // a response that answers nothing outstanding (a late success is also disconnected)
     uint32_t queue_full;        // signalling dropped for want of a queue row
+    uint32_t outgrown;          // a queued payload longer than the MTU the peer stated when its channel reopened
 } bt_l2cap_t;
 
 void bt_l2cap_init(bt_l2cap_t *l);                       // the link came up: everything cleared, admitted PSMs too
@@ -153,14 +155,18 @@ bool bt_l2cap_is_free(const bt_l2cap_t *l, unsigned channel);
 uint16_t bt_l2cap_peer_mtu(const bt_l2cap_t *l, unsigned channel);     // the largest payload the peer takes; 0 when not open
 // Queue ONE payload on an open channel (copied; at most the peer's MTU and
 // BT_L2CAP_MTU). False when the channel is not open, its queue slot is
-// taken, or it is too long.
+// taken, or it is too long. The payload leaves only while the channel is
+// open: a reconfiguration by the peer holds it, and if the channel reopens
+// with an MTU the payload no longer fits, it is dropped (`outgrown`). A
+// channel that closes drops it.
 bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t bytes);
 
 // One step: runs the timers (a request unanswered for 10 s, or 60 s after
 // "pending"; security awaited for 30 s; configuration unfinished after
 // 30 s), then, when `may_send`, hands AT MOST ONE whole
 // L2CAP PDU (4-byte header + payload, never more than BT_L2CAP_MTU+4) to
-// `send`: signalling before data, oldest first.
+// `send`: signalling before data, then the oldest payload free to leave.
+// True from bt_l2cap_wants_send when there is such a PDU.
 typedef void (*bt_l2cap_send_t)(void *context, const uint8_t *pdu, size_t bytes);
 void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t send, void *context);
 bool bt_l2cap_wants_send(const bt_l2cap_t *l);

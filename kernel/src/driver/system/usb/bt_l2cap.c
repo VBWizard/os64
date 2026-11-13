@@ -35,6 +35,10 @@ static bool l2_psm_valid(uint16_t psm) { return (psm & 0x0101)==0x0001; }
 
 static bool l2_open(const bt_l2cap_channel_t *c)
 { return c->state==BT_L2CAP_CONFIG && c->ours_done && c->peer_done; }
+// A queued payload leaves only while its channel is open and within the
+// MTU the peer states now.
+static bool l2_sendable(const bt_l2cap_channel_t *c)
+{ return c->queued && l2_open(c) && c->queued_bytes-4u<=c->peer_mtu; }
 
 static uint8_t l2_ident(bt_l2cap_t *l)
 {
@@ -635,6 +639,12 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
         if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);
         else l2_free(l,i);
     }
+    // A payload waiting on a channel that is open again, longer than what
+    // the peer now takes, can never be sent: it goes, and is counted.
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
+        bt_l2cap_channel_t *c=&l->ch[i];
+        if(c->queued && l2_open(c) && c->queued_bytes-4u>c->peer_mtu) { c->queued=false; l->outgrown++; }
+    }
     if(!may_send || !send) return;
     if(l->sig_count) {
         bt_l2cap_signal_t s=*l2_sig_at(l,0);
@@ -646,9 +656,12 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
         send(context,s.pdu,s.bytes);
         return;
     }
+    // The oldest payload that may leave. One on a channel being
+    // reconfigured is held, not sent and not dropped, and the others go
+    // past it.
     int oldest=-1;
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++)
-        if(l->ch[i].queued && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;
+        if(l2_sendable(&l->ch[i]) && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;
     if(oldest<0) return;
     bt_l2cap_channel_t *c=&l->ch[oldest];
     c->queued=false;
@@ -658,7 +671,7 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
 bool bt_l2cap_wants_send(const bt_l2cap_t *l)
 {
     if(l->sig_count) return true;
-    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l->ch[i].queued) return true;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l2_sendable(&l->ch[i])) return true;
     return false;
 }
 
@@ -695,10 +708,11 @@ size_t bt_l2cap_status(const bt_l2cap_t *l, char *out, size_t cap)
     }
     if(at<cap) {
         n=snprintf(out+at,cap-at,"last refusal: %s (%04x) psm %04x\n"
-                   "malformed %u oversized %u orphans %u unfinished %u closed cid %u fixed cid %u strays %u queue full %u\n",
+                   "malformed %u oversized %u orphans %u unfinished %u closed cid %u fixed cid %u strays %u queue full %u outgrown %u\n",
                    l2_refusal_text(l->refused),l->refused,l->refused_psm,
                    (unsigned)l->malformed,(unsigned)l->oversized,(unsigned)l->orphans,(unsigned)l->unfinished,
-                   (unsigned)l->closed_cid,(unsigned)l->fixed_cid,(unsigned)l->strays,(unsigned)l->queue_full);
+                   (unsigned)l->closed_cid,(unsigned)l->fixed_cid,(unsigned)l->strays,(unsigned)l->queue_full,
+                   (unsigned)l->outgrown);
         if(n>0) at+=(size_t)n;
     }
     return !cap ? 0 : at<cap ? at : cap-1;

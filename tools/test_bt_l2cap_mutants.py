@@ -321,7 +321,23 @@ mutants = [
     ('signalling-newest-first', '        bt_l2cap_signal_t s=*l2_sig_at(l,0);', '        bt_l2cap_signal_t s=*l2_sig_at(l,l->sig_count-1);'),
     ('data-newest-first', '(int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0', '(int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)>0'),
     ('sent-data-stays-queued', '    c->queued=false;\n    send(context,c->out', '    send(context,c->out'),
-    ('wants-send-ignores-data', '    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l->ch[i].queued) return true;\n', ''),
+    ('wants-send-ignores-data', '    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l2_sendable(&l->ch[i])) return true;\n', ''),
+    ('wants-send-counts-a-held-payload', '    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l2_sendable(&l->ch[i])) return true;',
+     '    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l->ch[i].queued) return true;'),
+    # A payload queued before a reconfiguration.
+    ('a-held-payload-is-sent', '{ return c->queued && l2_open(c) && c->queued_bytes-4u<=c->peer_mtu; }',
+     '{ return c->queued && c->queued_bytes-4u<=c->peer_mtu; }'),
+    ('an-outgrown-payload-is-kept', '        if(c->queued && l2_open(c) && c->queued_bytes-4u>c->peer_mtu) { c->queued=false; l->outgrown++; }',
+     '        if(0 && c->queued && l2_open(c) && c->queued_bytes-4u>c->peer_mtu) { c->queued=false; l->outgrown++; }'),
+    ('a-payload-of-the-new-mtu-is-outgrown', '        if(c->queued && l2_open(c) && c->queued_bytes-4u>c->peer_mtu) {',
+     '        if(c->queued && l2_open(c) && c->queued_bytes-4u>=c->peer_mtu) {'),
+    ('outgrown-is-not-counted', '{ c->queued=false; l->outgrown++; }', '{ c->queued=false; }'),
+    ('outgrown-is-not-shown', '                   (unsigned)l->outgrown);', '                   0u);'),
+    ('the-oldest-goes-held-or-not', '        if(l2_sendable(&l->ch[i]) && (oldest<0 ||',
+     '        if(l->ch[i].queued && (oldest<0 ||'),
+    ('a-held-payload-blocks-the-rest',
+     '        if(l2_sendable(&l->ch[i]) && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0) return;',
+     '        if(l->ch[i].queued && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0 || !l2_sendable(&l->ch[oldest])) return;'),
 ]
 
 caught, missed, unbuilt = [], [], []

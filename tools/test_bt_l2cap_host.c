@@ -49,6 +49,14 @@ static bool tick(bool may)
     bt_l2cap_tick(&L, T, may, on_send, NULL);
     if (sends > 1) { failures++; printf("FAIL %d PDUs in one tick\n", sends); }
     if (!may && sends) { failures++; printf("FAIL a PDU without may_send\n"); }
+    // Data leaves only on an open channel, within the MTU the peer states now.
+    uint16_t cid = sent_n >= 4 ? (uint16_t)(sent[2] | sent[3] << 8) : 0;
+    if (sends == 1 && cid >= 0x40) {
+        bool fits = false;
+        for (unsigned i = 0; i < BT_L2CAP_CHANNELS; i++)
+            if (L.ch[i].dcid == cid && bt_l2cap_is_open(&L, i) && sent_n - 4 <= L.ch[i].peer_mtu) fits = true;
+        if (!fits) { failures++; printf("FAIL data on cid %04x, %zu bytes, with no open channel that takes it\n", cid, sent_n - 4); }
+    }
     return sends == 1;
 }
 
@@ -481,6 +489,80 @@ static void test_config_deadline(void)
     CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
     T = at + 30000;
     expect_cmd(DISC_REQ, 3, BYTES(W(0x0070), W(0x0040)));
+}
+
+// A payload queued before the peer reconfigures leaves only while the
+// channel is open, and only if it still fits.
+static void test_held_payload(void)
+{
+    static uint8_t p[100];
+    for (int i = 0; i < 100; i++) p[i] = (uint8_t)i;
+    // Held through a reconfiguration in parts, then sent.
+    fresh();
+    open_outgoing();
+    CHECK(bt_l2cap_send(&L, 0, p, 80));
+    peer_cmd(CONF_REQ, 20, BYTES(W(0x0040), W(1), 0x01, 2, W(300)));
+    expect_cmd(CONF_RSP, 20, BYTES(W(0x0070), W(1), W(0)));
+    CHECK(!bt_l2cap_is_open(&L, 0));
+    CHECK(!bt_l2cap_wants_send(&L));
+    for (int i = 0; i < 5; i++) { T += 10; expect_nothing(); }
+    CHECK(L.ch[0].queued);
+    CHECK(!bt_l2cap_send(&L, 0, p, 10));                  // its slot is still taken
+    peer_cmd(CONF_REQ, 21, BYTES(W(0x0040), W(0)));
+    expect_cmd(CONF_RSP, 21, BYTES(W(0x0070), W(0), W(0)));
+    CHECK(bt_l2cap_is_open(&L, 0));
+    CHECK(bt_l2cap_wants_send(&L));
+    expect_data(0x0070, p, 80);
+    CHECK_EQ(L.outgrown, 0);
+    // Outgrown: the peer now takes 48, the payload is 80. Dropped, counted, shown.
+    fresh();
+    open_outgoing();
+    CHECK(bt_l2cap_send(&L, 0, p, 80));
+    peer_cmd(CONF_REQ, 22, BYTES(W(0x0040), W(0), 0x01, 2, W(48)));
+    expect_cmd(CONF_RSP, 22, BYTES(W(0x0070), W(0), W(0)));
+    CHECK(!bt_l2cap_wants_send(&L));
+    expect_nothing();
+    CHECK(!L.ch[0].queued);
+    CHECK_EQ(L.outgrown, 1);
+    char text[512];
+    bt_l2cap_status(&L, text, sizeof(text));
+    CHECK(strstr(text, "outgrown 1\n") != NULL);
+    CHECK(bt_l2cap_send(&L, 0, p, 48));
+    expect_data(0x0070, p, 48);
+    // Exactly the new MTU still fits.
+    fresh();
+    open_outgoing();
+    CHECK(bt_l2cap_send(&L, 0, p, 48));
+    peer_cmd(CONF_REQ, 23, BYTES(W(0x0040), W(0), 0x01, 2, W(48)));
+    expect_cmd(CONF_RSP, 23, BYTES(W(0x0070), W(0), W(0)));
+    expect_data(0x0070, p, 48);
+    CHECK_EQ(L.outgrown, 0);
+    // A held payload blocks neither signalling nor another channel's data,
+    // older though it is.
+    fresh();
+    open_outgoing();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_SDP, true);
+    peer_cmd(CONN_REQ, 40, BYTES(W(1), W(0x0080)));
+    expect_cmd(CONN_RSP, 40, BYTES(W(0x0041), W(0x0080), W(0), W(0)));
+    expect_cmd(CONF_REQ, 3, BYTES(W(0x0080), W(0), 0x01, 2, MTU_OPT));
+    peer_cmd(CONF_RSP, 3, BYTES(W(0x0041), W(0), W(0)));
+    peer_cmd(CONF_REQ, 41, BYTES(W(0x0041), W(0)));
+    expect_cmd(CONF_RSP, 41, BYTES(W(0x0080), W(0), W(0)));
+    CHECK(bt_l2cap_send(&L, 0, BYTES(0xa1)));
+    CHECK(bt_l2cap_send(&L, 1, BYTES(0xb1)));
+    peer_cmd(CONF_REQ, 42, BYTES(W(0x0040), W(1)));
+    expect_cmd(CONF_RSP, 42, BYTES(W(0x0070), W(1), W(0)));
+    peer_cmd(ECHO_REQ, 43, BYTES(7));
+    expect_cmd(ECHO_RSP, 43, BYTES(7));
+    expect_data(0x0080, BYTES(0xb1));
+    expect_nothing();
+    CHECK(L.ch[0].queued);
+    peer_cmd(CONF_REQ, 44, BYTES(W(0x0040), W(0)));
+    expect_cmd(CONF_RSP, 44, BYTES(W(0x0070), W(0), W(0)));
+    CHECK(bt_l2cap_send(&L, 1, BYTES(0xb2)));               // newer than the held one
+    expect_data(0x0070, BYTES(0xa1));
+    expect_data(0x0080, BYTES(0xb2));
+    expect_nothing();
 }
 
 static void test_late_success(void)
@@ -1597,6 +1679,7 @@ int main(int argc, char **argv)
     test_security_pending();
     test_config_deadline();
     test_late_success();
+    test_held_payload();
     test_connection_refusals();
     test_outgoing_refused_and_pending();
     test_rtx();
