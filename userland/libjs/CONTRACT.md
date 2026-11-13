@@ -396,7 +396,7 @@ must propagate or consume that exception; no diagnostic conversion or script
 host exception callback runs in this bridge. These semantics differ from the
 reporting/discarding `os64_js_realm_call` API.
 
-`os64_js_settings_realm` maps ENTRY or INCUMBENT to a borrowed wrapper handle
+`os64_js_settings_realm` maps ENTRY, INCUMBENT, CURRENT or NATIVE_CALLER to a borrowed wrapper handle
 inside an active checked scope. It checks membership and current wrapper
 lifecycle on each query; missing settings, a raw-only scope, or an unregistered
 engine context give ADMISSION_REFUSED. Retired/installing contexts give their
@@ -447,8 +447,37 @@ A C root must not be reported as an engine edge. Captured realm handles do not
 extend realm eligibility: retirement prevents later delivery, while cleanup
 can still release the retained value.
 
-These interfaces have no production browser consumer. Current/relevant role
-attribution, WebIDL conversion-site integration and associated-object realm
+CURRENT follows the executing realm: explicit host preparation, bytecode
+activation/resumption, native function entry and supported built-in call
+classes. It is independent of script-provenance presence and incumbent
+suppression. C-function-data and optimized-iterator bodies retain their
+incoming `ctx` argument while CURRENT reports their defining realm. Bound and
+proxy dispatch preserve current until a target or trap enters its own context.
+Unknown custom call classes mask CURRENT; the wrapper refuses the query
+instead of assigning the surrounding caller's realm to unclassified code.
+Property exotics themselves do not create a function execution context.
+
+NATIVE_CALLER is the snapshot of current immediately before the innermost
+active C-function/data or optimized-iterator entry. It remains that native
+invocation's snapshot across JavaScript reentry, while CURRENT follows the
+reentrant execution. This is not a general caller query, the incoming C
+argument, or automatic WebIDL authorization. A binding must use it at its own
+native boundary and apply the operation-specific pre-member check before
+conversions/reentry. Missing proof is refusal, including a native call from
+an unclassified custom call. Relevant settings still come from the target
+binding. Neither role guesses from task owner, function prototype or incumbent.
+
+The underlying `JS_GetCurrentContext` and `JS_GetNativeCallerContext` require
+an explicit raw settings scope but do not check wrapper lifecycle. Engine
+bookkeeping adds two runtime pointers and automatic saved pointers; it adds no
+retained roots or allocations beyond the runtime's existing allocation. The
+prepared engine identity changes, so engine objects and headers must rebuild
+together and incompatible cached bytecode is refused. Existing public layouts
+and ABI 5 remain unchanged. Native job execution does not establish HTML entry
+or capture a Promise incumbent: the host must prepare its job scope separately.
+
+These interfaces have no production browser consumer. Relevant role
+integration, WebIDL conversion-site integration and associated-object realm
 proofs, Promise reaction/thenable capture, DOM entry-site integration and origin
 security checks remain separate work. A settings handle is not a permission.
 F.16 recovery must preserve the bridge's native-body guard and synchronize

@@ -1108,7 +1108,8 @@ JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome)
 {
     if (settings_ready(runtime, caller_abi, outcome) != OS64_JS_OK) return NULL;
-    if (role != OS64_JS_SETTINGS_ENTRY && role != OS64_JS_SETTINGS_INCUMBENT) {
+    if (role != OS64_JS_SETTINGS_ENTRY && role != OS64_JS_SETTINGS_INCUMBENT &&
+        role != OS64_JS_SETTINGS_CURRENT && role != OS64_JS_SETTINGS_NATIVE_CALLER) {
         status(outcome, OS64_JS_BAD_ARGUMENT, "unknown settings role");
         return NULL;
     }
@@ -1116,8 +1117,14 @@ JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
         status(outcome, OS64_JS_ADMISSION_REFUSED, "no checked settings scope is active");
         return NULL;
     }
-    JSContext *context = role == OS64_JS_SETTINGS_ENTRY
-        ? JS_GetEntryContext(runtime->engine) : JS_GetIncumbentContext(runtime->engine);
+    JSContext *context;
+    switch (role) {
+    case OS64_JS_SETTINGS_ENTRY: context = JS_GetEntryContext(runtime->engine); break;
+    case OS64_JS_SETTINGS_INCUMBENT: context = JS_GetIncumbentContext(runtime->engine); break;
+    case OS64_JS_SETTINGS_CURRENT: context = JS_GetCurrentContext(runtime->engine); break;
+    case OS64_JS_SETTINGS_NATIVE_CALLER: context = JS_GetNativeCallerContext(runtime->engine); break;
+    default: return NULL; /* Invalid roles were refused before scope inspection. */
+    }
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (settings_eligible(runtime, realm, outcome) != OS64_JS_OK) return NULL;
     return realm;

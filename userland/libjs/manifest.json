@@ -219,6 +219,10 @@
       "path": "patches/0027-optimized-iterator-entry.patch",
       "sha256": "314ee7bd15a9e88e766ffcee19d79995f4030b31dbfdd6af1b8ca2158a4aa467",
       "reason": "Guard and attribute optimized native iterator entry without changing its incoming-context callback ABI."
+    },
+    {
+      "path": "patches/0028-current-realm.patch",
+      "sha256": "6a57b9475aa8dbc6620d7cb6fbcdb24502dfeccf93c865a225b1fc9e1e57e60b"
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
