@@ -66,9 +66,21 @@ check(not re.search(r'\((TEXTREL|INIT|FINI|INIT_ARRAY|FINI_ARRAY)\)', dyn), 'lib
 disasm = run('x86_64-elf-objdump', '-d', '--no-show-raw-insn', SO)
 check(not re.search(r'\t(syscall|sysenter|int)\b', disasm), 'libsound.so contains a system call')
 
-# The notice that travels with both images is upstream's, byte for byte.
-check((ROOT / 'license/speexdsp-LICENSE').read_bytes() == (upstream / 'COPYING').read_bytes(),
-      'license/speexdsp-LICENSE is not the vendored COPYING')
+# The notice that travels with both images. The licence asks a binary
+# distribution to reproduce "the above copyright notice, this list of
+# conditions and the following disclaimer", and resample.c and its header
+# carry a notice of their own that COPYING does not repeat (another holder,
+# other wording). So the installed file must hold COPYING and the leading
+# comment of every vendored source file, each byte for byte.
+notice = (ROOT / 'license/speexdsp-LICENSE').read_text()
+check((upstream / 'COPYING').read_text() in notice, 'license/speexdsp-LICENSE does not carry the vendored COPYING')
+for name in manifest['files']:
+    if name.endswith(('.c', '.h')):
+        text = (upstream / name).read_text()
+        # Through the end of the comment that holds the disclaimer: arch.h's
+        # copyright line is a comment of its own, ahead of its conditions.
+        head = text[:text.index('*/', text.index('SUCH DAMAGE')) + 2]
+        check(head in notice, f'license/speexdsp-LICENSE does not carry the notice at the head of {name}')
 root_make = (ROOT / 'GNUmakefile').read_text()
 check(root_make.count('/etc/licenses/speexdsp.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libsound.so' in root_make, 'libsound.so is not in the images')

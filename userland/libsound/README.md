@@ -121,6 +121,20 @@ branch and has not reached `userland`; this is its row when it does):
 
 ## Licence
 
-Revised BSD (three-clause), `upstream/COPYING`. The same bytes are
-`license/speexdsp-LICENSE` in this repository and
-`/etc/licenses/speexdsp.txt` on both disk images, which the audit checks.
+Revised BSD (three-clause). It has to travel with the code, in both
+forms:
+
+- **In source**, the licence's first condition: the notices stay on the
+  files. They do, since no vendored file is touched.
+- **In a binary**, its second: a distribution must reproduce the copyright
+  notice, the conditions and the disclaimer "in the documentation and/or
+  other materials provided". The disk images ship `libsound.so`, so they
+  ship the notice: `license/speexdsp-LICENSE`, installed as
+  `/etc/licenses/speexdsp.txt` on both.
+
+That file is `upstream/COPYING` and, after it, the notice at the head of
+each vendored source file. COPYING alone is not enough: `resample.c` and
+`speex_resampler.h` carry their own notice, which names a holder COPYING
+does not (Thorvald Natvig, 2008) and words its third condition
+differently. The audit checks that every one of them is in the installed
+file byte for byte.
