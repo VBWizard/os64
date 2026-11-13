@@ -473,6 +473,8 @@ static void test_reconnect_ignores_new_key(void)
     CHECK(request(&c, "reconnect", NULL, NULL));
     CHECK(run_until_phase(&c, &M, BT_CLASSIC_ENCRYPTING, 3000));
     ev_key_notify(&M, 0, PHONES, NEW_KEY, 0x04);
+    step(&c, &M, 10);
+    CHECK(!c.have_key); CHECK(all_zero(c.new_key, 16));
     CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
     CHECK(!c.bond_dirty); CHECK(!memcmp(c.bond.key, OLD_KEY, 16)); CHECK(!c.have_key);
 }
@@ -964,6 +966,7 @@ static void test_refusal_queue(void)
     for (int i = 0; i < 6; i++) { a[0] = (uint8_t)(0x10 + i); ev_addr(&M, 0, 0x17, a); }
     run(&c, &M, 20);
     CHECK_EQ(c.refusal_count, BT_CLASSIC_REFUSALS); CHECK_EQ(c.refusals_dropped, 2);
+    CHECK(bt_classic_urgent(&c)); CHECK(!bt_classic_quiescent(&c));
     unsigned from = M.logn;
     M.control = true;
     run(&c, &M, 200);
@@ -1030,6 +1033,10 @@ static void test_requests(void)
     CHECK(request(&c, "connect 4C:87:5D:C3:B2:A1", &junk, &why));
     CHECK(!memcmp(c.peer, PHONES, 6));
     CHECK(!strcmp(c.peer_name, "Bose?Phones"));
+    start(&c, &none);
+    bt_scan_device_t edges = classic_hint(PHONES, " \x1f~\x7f");
+    CHECK(request(&c, "connect 4c:87:5d:c3:b2:a1", &edges, &why));
+    CHECK(!strcmp(c.peer_name, " ?~?"));
     // FAILED refuses all but forget.
     start(&c, &none);
     g_control = true;
@@ -1046,6 +1053,7 @@ static void test_requests(void)
     run(&c, &M, 1000);
     CHECK_EQ(M.logn, from);
     CHECK_EQ(c.phase, BT_CLASSIC_FAILED);
+    CHECK(!bt_classic_urgent(&c));
     CHECK_TEXT(&c, "state: failed (reboot required)");
 }
 
@@ -1584,8 +1592,12 @@ static void test_claims(void)
     CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(c.encrypted);
     CHECK(bt_classic_event(&c, refresh, sizeof refresh));
     CHECK_EQ(c.refresh_status, 0x12);
-    uint8_t cc_other[6] = {0x0e, 4, 1, 0x1a, 0x0c, 0};
+    // A reply to the last command, with nothing in flight, is not this link's.
+    CHECK(!c.pending);
+    uint8_t cc_other[9] = {0x0e, 7, 1, (uint8_t)c.opcode, (uint8_t)(c.opcode >> 8), 0, (uint8_t)h, (uint8_t)(h >> 8), 16};
+    uint32_t bad = c.malformed;
     CHECK(!bt_classic_event(&c, cc_other, sizeof cc_other));
+    CHECK_EQ(c.malformed, bad);
     uint8_t role_other[10] = {0x12, 8, 0, 1, 2, 3, 4, 5, 6, 0};
     CHECK(bt_classic_event(&c, role_other, sizeof role_other));
     CHECK_EQ(c.role_known, false);
@@ -1627,6 +1639,217 @@ static void test_key_hygiene(void)
     step(&c, &M, 10);
     CHECK(!c.have_key); CHECK(all_zero(c.new_key, 16));
     CHECK(!c.bond.valid); CHECK(!c.bond_dirty);
+}
+
+// A link driven by hand, the model silent: the page answered and the link
+// up as `handle`, Authentication Requested out.
+static void silent_link(bt_classic_t *c, const bt_classic_bond_t *b, const char *text, uint16_t handle)
+{
+    start(c, b);
+    M.silent = true;
+    CHECK(request(c, text, NULL, NULL));
+    step(c, &M, 10);
+    ev_cs(&M, 0, 0, 0x0405); ev_conn(&M, 0, TAG_NONE, 0, handle, PHONES, 1);
+    step(c, &M, 10);
+    CHECK(c->pending && c->opcode == 0x0411);
+}
+
+static void test_more_rules(void)
+{
+    bt_classic_t c;
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    bt_classic_bond_t none = {0};
+    char bond_text[64];
+    snprintf(bond_text, sizeof bond_text, "bond %s", PHONES_TEXT);
+
+    // A voice link's Connection Complete while paging is not the page's.
+    start(&c, &b);
+    M.silent = true;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    step(&c, &M, 10);
+    ev_conn(&M, 0, TAG_NONE, 0x0d, 0, PHONES, 0);
+    ev_conn(&M, 0, TAG_NONE, 0, 0x0005, PHONES, 2);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.connected); CHECK(!c.error);
+
+    // While closing a live link, a stray Connection Complete changes nothing.
+    silent_link(&c, &b, "reconnect", 0x0060);
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    ev_cs(&M, 0, 0, 0x0411);
+    step(&c, &M, 10);
+    CHECK(c.pending && c.opcode == 0x0406);
+    ev_conn(&M, 0, TAG_NONE, 0, 0x0061, PHONES, 1);
+    step(&c, &M, 10);
+    CHECK_EQ(c.handle, 0x0060); CHECK(c.connected); CHECK_EQ(c.phase, BT_CLASSIC_CLOSING);
+
+    // A latched accept the controller gave up on (accept timeout) is not
+    // answered with a reject.
+    start(&c, &b);
+    unsigned from = M.logn;
+    M.control = false;
+    ev_request(&M, 0, PHONES, 1);
+    step(&c, &M, 10);
+    ev_conn(&M, 5060, TAG_NONE, 0x10, 0, PHONES, 1);
+    run(&c, &M, 5200);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+    CHECK(c.error && !strcmp(c.error, "the connection was not made"));
+    M.control = true;
+    run(&c, &M, 200);
+    CHECK_EQ(M.logn, from);
+    check_clean(&c, "accept timed out");
+    // Nor one that waited 25 s with nothing from the controller at all.
+    start(&c, &b);
+    from = M.logn;
+    M.control = false; M.silent = true;
+    ev_request(&M, 0, PHONES, 1);
+    run(&c, &M, 25100);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+    M.control = true;
+    run(&c, &M, 200);
+    CHECK_EQ(M.logn, from);
+
+    // With no bond, even a call from the address of zeroes is a stranger's.
+    start(&c, &none);
+    static const uint8_t zero[6] = {0};
+    ev_request(&M, 0, zero, 1);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_IDLE);
+
+    // Authentication Complete for a ready link changes nothing.
+    start(&c, &b);
+    M.has_key = true; memcpy(M.key, OLD_KEY, 16);
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+    ev_auth(&M, 0, 0, M.handle);
+    run(&c, &M, 100);
+    CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(!c.pending);
+
+    // Encryption Change with an error status, even saying "on", fails it.
+    silent_link(&c, &b, "reconnect", 0x0062);
+    ev_cs(&M, 0, 0, 0x0411); ev_enc(&M, 0, 0x06, 0x0062, 1);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_CLOSING); CHECK(!c.encrypted);
+    CHECK_EQ(c.error_status, 0x06);
+
+    // `bond` to the address already bonded: the stored key answers, no new
+    // key comes, and nothing is marked to save.
+    start(&c, &b);
+    M.has_key = true; memcpy(M.key, OLD_KEY, 16);
+    CHECK(request(&c, bond_text, NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+    CHECK(!c.bond_dirty); CHECK(!memcmp(c.bond.key, OLD_KEY, 16)); CHECK(c.bond.valid);
+
+    // A bond for another address gives this one no key.
+    bt_classic_bond_t elsewhere = bond_for(STRANGER, OLD_KEY);
+    start(&c, &elsewhere);
+    M.expect_auth = 0x00;
+    from = M.logn;
+    char connect_text[64];
+    snprintf(connect_text, sizeof connect_text, "connect %s", PHONES_TEXT);
+    CHECK(request(&c, connect_text, NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+    CHECK(find_op(0x040c, from)); CHECK(!find_op(0x040b, from)); CHECK(!c.key_given);
+
+    // A page cancel answered "Unknown Connection": nothing was outstanding,
+    // so it is over at once.
+    start(&c, &b);
+    M.silent = true;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    step(&c, &M, 10);
+    ev_cs(&M, 0, 0, 0x0405);
+    step(&c, &M, 10);
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    step(&c, &M, 10);
+    CHECK(c.pending && c.opcode == 0x0408);
+    ev_cc_addr(&M, 0, 0x0408, 0x02, PHONES);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(!c.error);
+
+    // Disconnect answered "Unknown Connection": the link is already gone.
+    silent_link(&c, &b, "reconnect", 0x0063);
+    ev_cs(&M, 0, 0, 0x0411);
+    step(&c, &M, 10);
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    step(&c, &M, 10);
+    CHECK(c.pending && c.opcode == 0x0406);
+    ev_cs(&M, 0, 0x02, 0x0406);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(!c.error); CHECK(!c.connected);
+    // Disconnect refused for another reason: given up on, said so.
+    silent_link(&c, &b, "reconnect", 0x0064);
+    ev_cs(&M, 0, 0, 0x0411);
+    step(&c, &M, 10);
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    step(&c, &M, 10);
+    ev_cs(&M, 0, 0x0c, 0x0406);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(!c.connected);
+    CHECK(c.error && !strcmp(c.error, "the controller refused to disconnect"));
+    CHECK_EQ(c.error_status, 0x0c); CHECK_EQ(c.error_opcode, 0x0406);
+    // A Disconnect nobody answers at all.
+    silent_link(&c, &b, "reconnect", 0x0065);
+    ev_cs(&M, 0, 0, 0x0411);
+    step(&c, &M, 10);
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    run(&c, &M, 2100);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+    CHECK(c.error && !strcmp(c.error, "the controller did not answer the disconnection"));
+
+    // A reply to a command from an attempt that has ended does not end the next one.
+    for (int late = 0; late < 2; late++) {
+        silent_link(&c, &b, "reconnect", 0x0066);
+        ev_disconn(&M, 0, 0, 0x0066, 0x13);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(c.pending && c.opcode == 0x0411);
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        if (!late) ev_cs(&M, 0, 0x0c, 0x0411);
+        run(&c, &M, late ? 2100 : 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.error);
+        CHECK(c.pending && c.opcode == 0x0405);
+    }
+
+    // A refusal the controller rejects does not touch the link.
+    silent_link(&c, &b, "reconnect", 0x0067);
+    ev_cs(&M, 0, 0, 0x0411); ev_addr(&M, 0, 0x17, STRANGER);
+    step(&c, &M, 10);
+    CHECK(c.pending && c.opcode == 0x040c);
+    ev_cc_addr(&M, 0, 0x040c, 0x12, STRANGER);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(!c.error);
+
+    // The first error is the one kept: a stale bond, then a controller that
+    // never confirms the disconnection.
+    start(&c, &b);
+    M.has_key = false;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_CLOSING, 3000));
+    M.silent = true; M.qn = 0;
+    run(&c, &M, 5000);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+    CHECK(c.error && !strcmp(c.error, "the headphones no longer hold this bond; forget and bond again"));
+    // And a new attempt starts with none.
+    M.silent = false; M.has_key = true; memcpy(M.key, OLD_KEY, 16); M.live = false;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+    CHECK(!c.error); CHECK(!c.retryable); CHECK_EQ(c.error_status, 0);
+    CHECK_TEXT(&c, "error: none (opcode 0000 status 00)");
+
+    // A cancel queued when the page completes is not sent: a Disconnect is.
+    start(&c, &b);
+    M.reply_only = true;
+    from = M.logn;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    run(&c, &M, 30);
+    M.control = false;
+    CHECK(request(&c, "disconnect", NULL, NULL));
+    M.live = true; M.handle = 0x68;
+    ev_conn(&M, 0, TAG_NONE, 0, 0x68, PHONES, 1);
+    step(&c, &M, 10);
+    M.control = true;
+    run(&c, &M, 200);
+    static const uint16_t ops[] = {0x0405, 0x0406};
+    expect_ops("cancel overtaken", ops, 2, from);
+    check_clean(&c, "cancel overtaken");
 }
 
 // ── Random soup ─────────────────────────────────────────────────────────────
@@ -1881,6 +2104,7 @@ int main(int argc, char **argv)
     test_malformed();
     test_claims();
     test_key_hygiene();
+    test_more_rules();
     test_status_capacity();
     test_soup(rounds);
     if (failures) { printf("bt_classic: %d FAILED\n", failures); return 1; }

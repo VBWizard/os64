@@ -55,12 +55,12 @@ static void cl_name(char out[32], const char *name)
     for(;i<32;i++) out[i]=0;
 }
 static void cl_want_scan(bt_classic_t *c)
-{
-    uint8_t want=c->bond.valid ? 0x02 : 0x00;
-    // A failed write is not repeated until there is something new to write.
-    if(want!=c->scan_enable_wanted) c->scan_enable_tried=0xff;
-    c->scan_enable_wanted=want;
-}
+{ c->scan_enable_wanted=c->bond.valid ? 0x02 : 0x00; }
+// Write Scan Enable is sent when what is wanted is not what was last sent:
+// a write the controller refused, or never answered, is not repeated until
+// there is something else to write (or a load makes it unknown again).
+static bool cl_scan_owed(const bt_classic_t *c)
+{ return c->bond_loaded && c->scan_enable_wanted!=c->scan_enable_tried; }
 
 static void cl_error(bt_classic_t *c, const char *why, uint16_t op, uint8_t status, bool retry)
 {
@@ -274,7 +274,7 @@ static bool cl_reply(bt_classic_t *c, const uint8_t *e, size_t n)
 bool bt_classic_event(bt_classic_t *c, const uint8_t *e, size_t n)
 {
     if(n<2 || n!=2u+e[1]) { c->malformed++; return false; }
-    if(e[0]==0x0e || e[0]==0x0f) return c->phase!=BT_CLASSIC_FAILED && cl_reply(c,e,n);
+    if(e[0]==0x0e || e[0]==0x0f) return cl_reply(c,e,n);
     unsigned i=0, count=sizeof(cl_events)/sizeof(cl_events[0]);
     while(i<count && cl_events[i].code!=e[0]) i++;
     if(i==count) return false;
@@ -495,7 +495,8 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
         else cl_fail(c,"the peer did not answer in time",0,0,false,0x13);
     }
     if(c->phase==BT_CLASSIC_CLOSING) {
-        if(c->next_op==0x0406 && (!c->connected || c->disconnect_sent)) c->next_op=0;
+        // A cancel queued for a page that has since ended is not sent; a
+        // link that page brought up is disconnected instead.
         if(c->next_op==0x0408 && !c->link_may_active) c->next_op=0;
         if(c->connected && !c->disconnect_sent && !c->next_op) c->next_op=0x0406;
         if(!c->connected && !c->link_may_active) { c->next_op=0; c->waiting=false; c->phase=BT_CLASSIC_STOPPED; }
@@ -564,8 +565,7 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
             cl_put(p,c->handle); len=2;
             break;
         }
-    } else if(c->bond_loaded && c->scan_enable_wanted!=c->scan_enable_set &&
-              c->scan_enable_wanted!=c->scan_enable_tried) {
+    } else if(cl_scan_owed(c)) {
         op=0x0c1a; p[0]=c->scan_enable_wanted; len=1; link=false;
         c->scan_enable_tried=p[0]; c->command_value=p[0];
     } else return;
@@ -587,9 +587,7 @@ bool bt_classic_urgent(const bt_classic_t *c)
 bool bt_classic_quiescent(const bt_classic_t *c)
 {
     return (c->phase==BT_CLASSIC_IDLE || c->phase==BT_CLASSIC_STOPPED) && !c->pending &&
-        !c->next_op && !bt_classic_urgent(c) &&
-        !(c->bond_loaded && c->scan_enable_wanted!=c->scan_enable_set &&
-          c->scan_enable_wanted!=c->scan_enable_tried);
+        !c->next_op && !bt_classic_urgent(c) && !cl_scan_owed(c);
 }
 
 static const char *cl_phase_text(bt_classic_phase_t phase)
