@@ -253,3 +253,32 @@ identity-bearing wrapper objects; these checks qualify this prepared identity.
 Tracker, shell syntax, stale-reference and diff checks pass. These remain
 entry-boundary regressions with wrapper recovery disabled, not native recovery
 certification or guest/WPT/P5 acceptance.
+
+## Merge-forward qualification: checked settings bridge
+
+After the iterator fix was pushed, accepted wrapper bridge #575 advanced
+`userland` to `91a24702` and conflicted at the focused selector block.
+The resolution retains F16 containment/scopes and the settings bridge selector,
+with both lanes in the complete realm matrix. The shell allowlist also accepts
+`--settings-bridge`. The merged F4 contract and tracker row are retained.
+
+No prepared engine source, patch hash or identity changes in this merge.
+The identity-bearing wrapper, harness and other runtime fixture sources are
+rebuilt; matching engine objects are reused. The wrapper's `settings_calls`
+chain is a native quiescence/outcome obligation for future F16 recovery, and
+no wrapper recovery is enabled here.
+
+Both profiles pass settings bridge **769**, containment **244**, execution
+scopes **119**, settings scopes **724**, native-call facts **324** and global-this
+**67** checks. Complete runtime passes **15,521 shipping checks** and **62,869
+instrumented checks**, zero failures and zero live allocations. Compiler
+refusal (40 each), shipping raw construction and both fatal/reclaim invariant
+matrices pass with leak detection enabled outside the sandbox.
+
+Both DOM profiles pass routing **678**, retirement **9,770**, departure **353**
+and Streams **104**; child installation/engine budgets pass **1,402 shipping**
+and **1,306 instrumented** checks. The earlier complete shipping DOM total
+qualifies the iterator-fix cohort before this wrapper merge; its allocation
+campaign was not repeated. Header/manifest, tracker, shell syntax, diff and
+stale-reference checks pass. The engine preparation and teardown audits above
+continue to qualify the unchanged prepared engine.

@@ -2590,6 +2590,12 @@ int main(int argc, char **argv)
         printf("libjs execution scopes: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--settings-bridge")) {
+        settings_bridge_cases(); settings_bridge_host_cases();
+        check(live == 0, "settings bridge releases allocations");
+        printf("libjs settings bridge: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--settings-scopes")) {
         settings_scope_cases();
         check(live == 0, "settings scopes release allocations");

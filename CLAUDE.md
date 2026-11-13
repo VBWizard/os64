@@ -502,6 +502,17 @@ virtio because its drain waits for the tick.
   programmed by `pci_msi_enable` / `pci_msix_enable_one` (pci.c), which
   read back what they wrote and say whether it took; the RTL8125 uses the
   first
+  **Bluetooth's ACL data** leaves through SEND SLOTS (xhci.c `BT_TX_SLOTS`):
+  a packet is copied into storage of its own after the transmit endpoint's
+  first page and queued, so several can be with the controller at once and
+  none can reach the command's bytes; a completion frees the oldest, each
+  slot has its own five-second deadline, and a packet the transport cannot
+  carry fails it and writes nothing. The controller's own buffers are
+  counted in `bt_acl.c` (pure; `tools/test_bt_acl_host.sh`, 50 mutants):
+  one pool or two, a reserve for LE in a shared pool, completions by
+  handle. `/sys/bluetooth/connection`'s `acl pools:` line shows them.
+  docs/design/pending/AUDIO_CLASSIC.md is the design; its § T, as built
+  says what is counted but not yet gated
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to

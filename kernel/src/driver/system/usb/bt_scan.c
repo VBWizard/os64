@@ -155,6 +155,14 @@ void bt_scan_event(void *context, const uint8_t *e, size_t n)
         } else if (s->opcode==0x1009) {
             if (n!=12) { s->bad_reply=true; return; }
             scan_copy(s->address,e+6,6);
+        } else if (s->opcode==0x1005) {
+            // ACL length, SCO length, ACL count, SCO count.
+            if (n!=13) { s->bad_reply=true; return; }
+            s->acl_size=scan_u16(e+6); s->acl_total=scan_u16(e+9);
+        } else if (s->opcode==0x2002) {
+            if (n!=9) { s->bad_reply=true; return; }
+            s->le_acl_size=scan_u16(e+6); s->le_acl_total=e[8];
+            s->buffers_known=true;
         } else if (n!=6) s->bad_reply=true;
     } else if (e[0]==1 && (s->phase==BT_SCAN_INQUIRY || s->phase==BT_SCAN_CLASSIC_WAIT)) {
         if (n!=3) { s->bad_reply=true; return; }
@@ -266,6 +274,8 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         s->radio_active=true; break; // GIAC, 8 * 1.28 seconds, unlimited responses.
     case BT_SCAN_LE_HOST: op=0x0c6d; length=2; p[0]=1; break;
     case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=7; break; // Connection, advertising, connection update.
+    case BT_SCAN_BUFFER: op=0x1005; break;
+    case BT_SCAN_LE_BUFFER: op=0x2002; break;
     case BT_SCAN_LE_PARAMS:
         op=0x200b; length=7; p[0]=1; p[1]=0x60; p[3]=0x30;
         break; // Active scan, 60ms interval / 30ms window, public own address, all advertisers.
@@ -291,7 +301,8 @@ size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
     const char *state=s->phase==BT_SCAN_IDLE ? "idle" : s->phase==BT_SCAN_DONE ? "complete" :
         s->phase==BT_SCAN_STOPPED ? "stopped (retry available)" :
         s->phase==BT_SCAN_FAILED ? "failed (reboot required)" : s->phase==BT_SCAN_CLEANUP ? "stopping after error" :
-        s->phase<=BT_SCAN_INQUIRY ? "initializing" : s->phase==BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" : "LE scan";
+        s->phase<=BT_SCAN_INQUIRY || s->phase==BT_SCAN_BUFFER || s->phase==BT_SCAN_LE_BUFFER ? "initializing" :
+        s->phase==BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" : "LE scan";
     const char *timeout=bt_scan_timeout_text(s);
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"

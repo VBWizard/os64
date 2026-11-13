@@ -311,6 +311,52 @@ job use the context returned by the engine; late module failures use their
 module's owner and source name, with runtime-wide first-failure ordering.
 Values from a different engine must not be passed to these calls.
 
+The opt-in `os64_js_realm_with_settings` bridge supplies checked native entry
+and callback scopes without changing these legacy execution verbs. It requires
+an existing active turn, or an open task between calls. Entry and an optional
+captured incumbent must be published, non-retired members of the same wrapper
+runtime. Private candidate setup, failed/cancelled runtimes, foreign realms,
+invalid ABI and missing arguments refuse before the native body runs. Scope
+nesting is bounded by the engine's `JS_SETTINGS_SCOPE_LIMIT`; overflow is a
+non-sticky ADMISSION_REFUSED. A null incumbent means ordinary script entry;
+a non-null incumbent prepares callback suppression and backup selection. The
+host supplies that captured realm explicitly; this API does not capture it.
+
+An outer bridge call acquires the wrapper guard; nested native calls borrow it
+without updating the stack origin. Separate outcome storage is required at
+each level, including queries. The guard covers the native body's whole
+lifetime, so task closure, top-level run/call, destruction and quiescent cleanup
+cannot pass through the interval between its JS calls. The body must return
+normally in C. Entry counts as evaluated when the admitted body starts.
+No task is opened, deadline renewed, queue drained, rejection reported, or
+engine exception consumed. Existing failure observation runs before/after the
+body. Outcomes report queued/executed/discarded job counts without checkpointing.
+
+Initialize the `JSValue` output to JS_UNDEFINED. Refusal leaves it untouched;
+admission transfers the body's value after restoring engine scopes. Release
+the value even when post-body failure observation returns LIMIT/CANCELLED/
+HOST_FAILURE. A body returning JS_EXCEPTION produces EXCEPTION with the engine
+exception still pending, unless a sticky failure takes precedence. The caller
+must propagate or consume that exception; no diagnostic conversion or script
+host exception callback runs in this bridge. These semantics differ from the
+reporting/discarding `os64_js_realm_call` API.
+
+`os64_js_settings_realm` maps ENTRY or INCUMBENT to a borrowed wrapper handle
+inside an active checked scope. It checks membership and current wrapper
+lifecycle on each query; missing settings, a raw-only scope, or an unregistered
+engine context give ADMISSION_REFUSED. Retired/installing contexts give their
+lifecycle refusal. Unknown roles are BAD_ARGUMENT. Queries do not allocate,
+read the clock, latch a failure, consume an exception, or extend lifetime.
+Recheck after reentry or retirement. Runtime health checks include pending
+cancellation and allocator failure, without converting them into a new latch.
+
+These interfaces have no production browser consumer. Current/relevant role
+attribution, WebIDL/Promise capture, DOM entry-site integration and origin
+security checks remain separate work. A settings handle is not a permission.
+F.16 recovery must preserve the bridge's native-body guard and synchronize
+wrapper lifecycle with engine failed-context state before admitting recovered
+work; raw engine marking alone is not a wrapper recovery protocol.
+
 Creation and the explicit realm output/Intl installers support three setup
 modes: idle setup owns a bounded turn; setup between calls of an open task
 borrows its budget and acquires the guard; setup inside a native callback

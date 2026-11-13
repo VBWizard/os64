@@ -1,7 +1,7 @@
 # F.4b — settings attribution interfaces
 
 F.4b supplies raw native call facts (#571) and explicit engine entry/incumbent
-scopes. Browser callback capture, job integration, lifecycle validation and
+scopes. The wrapper adds opt-in lifecycle-checked entry/incumbent scopes. Browser callback capture, job integration and
 operation-specific security checks remain acceptance gates. These primitives
 have no production DOM consumer; F.4 remains in progress.
 
@@ -153,12 +153,35 @@ This presence marker is sufficient for this incumbent-selection primitive.
 It is not an active-script-record API or the Promise HostMakeJobCallback
 capture record. Queue ownership from the existing job API remains separate.
 
+## Checked wrapper bridge
+
+`os64_js_realm_with_settings` admits an explicit host entry and optional
+captured incumbent inside an existing turn/task. It validates wrapper
+membership, ABI, published/non-retired lifecycle, runtime health and budget.
+Private setup cannot use this path to enter published settings. Its native
+body retains the wrapper guard, with separate outcomes for nested scopes;
+no checkpoint or new budget is introduced. The engine restores attribution
+before the body result transfers to the caller, including abrupt returns.
+
+`os64_js_settings_realm` exposes ENTRY and INCUMBENT as checked borrowed realm
+handles only inside such a scope. It refuses missing/unregistered settings,
+retired/staged realms and raw-only entry, without sampling time or touching
+the pending exception. These are opt-in host interfaces with no DOM consumer.
+Full signatures, ownership and status rules are in
+[libjs CONTRACT.md](../../../userland/libjs/CONTRACT.md).
+
+The wrapper's allocation includes a native scope-outcome chain; the bridge
+itself allocates nothing. Public existing layouts and ABI ID remain unchanged,
+and the engine source identity is unchanged from #572. The wrapper state
+checks do not constitute F.16 recovery or a browser origin check.
+Evidence: [IFRAME_F4_SETTINGS_BRIDGE_VALIDATION.md](IFRAME_F4_SETTINGS_BRIDGE_VALIDATION.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
 
-- Wrapper entry/lifecycle validation and role-specific current/relevant
-  settings attribution. Relevant settings come from the target binding.
+- DOM integration of checked entry/lifecycle scopes and role-specific
+  current/relevant settings attribution. Relevant settings come from the target binding.
 - WebIDL callback capture at conversion and invocation, preserving the
   captured incumbent independently of callable realm, target and task owner.
 - Promise reaction and thenable capture/invocation, including bound foreign

@@ -51,6 +51,13 @@ typedef struct SetupCall {
     unsigned facility;
     const char *name;
 } SetupCall;
+typedef struct SettingsCall {
+    struct SettingsCall *previous;
+    os64_js_realm_t *entry;
+    os64_js_outcome_t *outcome;
+    os64_js_settings_body_t *body;
+    void *opaque;
+} SettingsCall;
 struct os64_js_runtime {
     JSRuntime *engine;
     JSPortAllocator allocator;
@@ -58,6 +65,7 @@ struct os64_js_runtime {
     os64_js_outcome_t *active_outcome;
     SetupCall *setup_calls;
     os64_js_realm_t *setup_realm;
+    SettingsCall *settings_calls;
     os64_js_realm_t realms[OS64_JS_MAX_REALMS];
     size_t realm_count;
     os64_js_realm_t *turn_owner;
@@ -131,6 +139,8 @@ static bool outcome_in_use(const os64_js_runtime_t *runtime, const os64_js_outco
     if (runtime == NULL) return false;
     if (runtime->active_outcome == out) return true;
     for (const SetupCall *c = runtime->setup_calls; c != NULL; c = c->previous)
+        if (c->outcome == out) return true;
+    for (const SettingsCall *c = runtime->settings_calls; c != NULL; c = c->previous)
         if (c->outcome == out) return true;
     return false;
 }
@@ -969,6 +979,105 @@ JS_PUBLIC bool os64_js_realm_is_retired(const os64_js_realm_t *realm)
     return realm != NULL && realm->retired;
 }
 
+/* Querying attribution must not consume an exception or run the clock while
+ * a caller is unwinding. Execution admission separately observes its budget. */
+static os64_js_status_t settings_ready(os64_js_runtime_t *runtime, const char *abi,
+                                       os64_js_outcome_t *out)
+{
+    if (out == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, out)) return OS64_JS_BUSY;
+    os64_memset(out, 0, sizeof(*out));
+    if (runtime == NULL || abi == NULL)
+        return status(out, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(abi, OS64_JS_ABI_ID) != 0)
+        return status(out, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (runtime->destroying || runtime->failure != OS64_JS_OK || runtime->allocator.failures ||
+        __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
+        return status(out, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
+    if (runtime->setup_realm != NULL)
+        return status(out, OS64_JS_REALM_INSTALLING, "private setup cannot expose published settings");
+    return OS64_JS_OK;
+}
+
+static os64_js_status_t settings_eligible(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+                                          os64_js_outcome_t *out)
+{
+    if (realm == NULL || !realm_member(runtime, realm))
+        return status(out, OS64_JS_ADMISSION_REFUSED, "settings realm is not a member");
+    if (realm->retired)
+        return status(out, OS64_JS_REALM_RETIRED, "settings realm has retired");
+    if (realm->staged)
+        return status(out, OS64_JS_REALM_INSTALLING, "settings realm is installing");
+    return OS64_JS_OK;
+}
+
+static JSValue settings_body(JSContext *context, void *opaque)
+{
+    SettingsCall *call = opaque;
+    call->entry->evaluated = true;
+    return call->body(context, call->opaque);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
+    os64_js_realm_t *incumbent, const char *caller_abi, os64_js_settings_body_t *body,
+    void *opaque, JSValue *value, os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = entry != NULL ? entry->runtime : NULL;
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (body == NULL || value == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "settings body and value output are required");
+    result = settings_eligible(runtime, entry, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (incumbent != NULL) {
+        result = settings_eligible(runtime, incumbent, outcome);
+        if (result != OS64_JS_OK) return result;
+    }
+    bool borrowed = runtime->active;
+    if (!runtime->turn || (!borrowed && !runtime->task))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "settings require an active turn or open task");
+    if (observe(runtime)) { sticky(runtime, outcome); return outcome->status; }
+    if (!borrowed) {
+        result = enter(runtime, outcome);
+        if (result != OS64_JS_OK) return result;
+    }
+    SettingsCall call = {runtime->settings_calls, entry, outcome, body, opaque};
+    runtime->settings_calls = &call;
+    bool admitted = JS_RunWithSettings(entry->context, incumbent ? incumbent->context : NULL,
+                                      settings_body, &call, value);
+    runtime->settings_calls = call.previous;
+    if (!admitted) status(outcome, OS64_JS_ADMISSION_REFUSED, "settings scope nesting limit reached");
+    else if (JS_IsException(*value)) outcome->status = OS64_JS_EXCEPTION;
+    if (observe(runtime)) sticky(runtime, outcome);
+    outcome->jobs_pending = JS_IsJobPending(runtime->engine);
+    outcome->jobs_executed = runtime->jobs;
+    outcome->jobs_discarded = runtime->discarded_jobs;
+    if (!borrowed) {
+        runtime->active_outcome = NULL;
+        runtime->active = false;
+    }
+    return outcome->status;
+}
+
+JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome)
+{
+    if (settings_ready(runtime, caller_abi, outcome) != OS64_JS_OK) return NULL;
+    if (role != OS64_JS_SETTINGS_ENTRY && role != OS64_JS_SETTINGS_INCUMBENT) {
+        status(outcome, OS64_JS_BAD_ARGUMENT, "unknown settings role");
+        return NULL;
+    }
+    if (runtime->settings_calls == NULL || !runtime->active || !runtime->turn) {
+        status(outcome, OS64_JS_ADMISSION_REFUSED, "no checked settings scope is active");
+        return NULL;
+    }
+    JSContext *context = role == OS64_JS_SETTINGS_ENTRY
+        ? JS_GetEntryContext(runtime->engine) : JS_GetIncumbentContext(runtime->engine);
+    os64_js_realm_t *realm = realm_for_context(runtime, context);
+    if (settings_eligible(runtime, realm, outcome) != OS64_JS_OK) return NULL;
+    return realm;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
                                             const char *caller_abi,
                                             os64_js_outcome_t *outcome)
@@ -986,7 +1095,7 @@ JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
         __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
         return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
     if (runtime->active || runtime->turn || runtime->task || runtime->checkpointing ||
-        runtime->setup_calls || runtime->setup_realm || JS_IsJobPending(runtime->engine))
+        runtime->setup_calls || runtime->settings_calls || runtime->setup_realm || JS_IsJobPending(runtime->engine))
         return status(outcome, OS64_JS_BUSY, "runtime has unfinished engine work");
     return OS64_JS_OK;
 }
