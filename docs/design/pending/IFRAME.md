@@ -57,14 +57,16 @@ the `userland` checkpoint comparison is held stable (§ The cut).*
    `OP_push_this`; the proposed engine patch makes that substitute a
    per-context value the binding sets to the proxy. The rest of the
    global/WindowProxy behavior has its own proof in F1.
-4. **Cross-origin access is the standard's list and nothing else.** Two
+4. **Cross-origin access follows HTML's security algorithms.** Two
    documents are same-origin when their origins compare equal, exactly
    (scheme, host, port; an opaque origin only to itself). Across origins
    the proxy answers `window`, `self`, `location` (as a location proxy
    whose only verbs are setting `href` and `replace`), `close`,
    `closed`, `focus`, `blur`, `frames`, `length`, `top`, `opener`,
-   `parent`, `postMessage`, and indexed child windows. Named child lookup
-   is not a cross-origin grant. Implement HTML's WindowProxy and Location
+   `parent`, `postMessage`, and indexed child windows. The restricted
+   child-target-name case in WindowProxy's `[[GetOwnProperty]]` also applies;
+   arbitrary element IDs/names do not grant cross-origin access.
+   Implement HTML's WindowProxy and Location
    internal methods, including descriptor/enumeration behavior and the
    specified `then`/symbol fallbacks; a blanket "everything else throws"
    is not that contract (§ The cluster and the window proxy).
@@ -524,20 +526,16 @@ budget and do not reactivate the departed document. The primary context remains 
 through the existing single-document API. Realm-aware run, timer and
 event entry points extend it; compatibility wrappers select the primary.
 
-**`this` (the next patch in the series; 0018 at the revision, after the
-two 0017s).** `OP_push_this` substitutes `ctx->global_obj` for
-an undefined or null `this` in sloppy mode (quickjs.c, `CASE(OP_push_this)`). The patch
-adds `JSValue this_substitute` to `JSContext`, initialised to the global
-object, read there instead, and set by `JS_SetThisSubstitute(ctx, v)`.
-The binding sets it to the window proxy; `JS_EvalThis` already lets a
-top-level script's `this` be chosen, and `globalThis` is a plain property
-the binding overwrites. The patch is one field, one read, one setter,
-with the comment naming the frame design; select the patch number from
-the series at implementation, not from this design's dated number.
-This identifies one engine change, not proof that a one-field patch
-implements WindowProxy. Test global declarations, eval, sloppy `this`,
-borrowed accessors/methods, descriptors and prototype/extensibility traps;
-identify any missing engine hooks before enabling the proxy.
+**Global `this`.** The engine needs a retained, GC-marked per-context
+global-this value, distinct from the global object's storage. The binding
+sets it to the WindowProxy when installing the complete proxy path.
+`OP_push_this` is one consumer; default script evaluation, compiled script
+evaluation and indirect eval also select global this. `JS_EvalThis` accepts
+an explicit receiver, and the writable `globalThis` property is a separate
+binding concern. The [F.4 brief](IFRAME_F4_SECURITY.md) defines the audit,
+strict/module distinctions, construction/teardown proof and small cuts.
+Default standalone behavior stays unchanged. No single opcode edit proves
+WindowProxy identity or security.
 
 **Context-sensitive services.** The library owns the runtime/context
 opaque slots. Its realm API must expose the correct context while
@@ -614,9 +612,10 @@ algorithms (§ What this settles 4) otherwise. The caller is resolved from
 the engine's execution context at the operation, with borrowed methods,
 getters and callbacks tested across realms. `JS_GetRuntime` returns a
 runtime, not a "current context"; the realm bridge must preserve HTML's
-current/incumbent settings where each API requires them. Indexed children
-are accessible across origins; named lookup follows the same-origin
-Window named-access rules and is not another cross-origin grant.
+current, entry and incumbent settings where each API requires them. Indexed
+children are accessible across origins; the restricted child-target-name
+case follows HTML's WindowProxy algorithm and its name-set construction.
+General element named access does not bypass the origin check.
 The named lookup for everything else is P3c's. `window`, `self`,
 `globalThis`, `frames` read through the proxy answer the proxy; `top`
 and `parent` answer the ancestors' proxies; `frameElement` answers the
