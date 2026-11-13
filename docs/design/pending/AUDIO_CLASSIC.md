@@ -37,20 +37,32 @@ P5 run.
 
 ## The headphones this is proven with
 
-Chris's older Bose over-ear pair, with his Bose QuietComfort Ultra
-Headphones (2023: Bluetooth 5.3; SBC, AAC and aptX Adaptive over Classic
-A2DP; no LE Audio on that generation; checked against Bose's published
-specifications, not yet observed) as the spare.
+Chris's older pair: the **Bose SoundLink around-ear wireless headphones II**
+(marked "AE2 SoundLink"; 2015). His Bose QuietComfort Ultra Headphones
+(2023: Bluetooth 5.3; SBC, AAC and aptX Adaptive over Classic A2DP) are the
+spare. Neither has been observed yet; this is from published material,
+checked 2026-11-13.
 
-**The older pair's model is not yet known.** Chris gave it as the
-QuietComfort 15, "probably from 2019"; the QuietComfort 15 is a wired pair
-from 2009 with no radio, so the name or the year is off. Bose's Bluetooth
-over-ear pairs of those years (QuietComfort 35 and 35 II, Noise Cancelling
-Headphones 700, QuietComfort 45) are all Classic A2DP with SBC and AAC, so
-the plan does not turn on which it is; what may differ is the Bluetooth
-version (4.1 to 5.1) and so how old a pairing procedure it expects. The
-model is confirmed before part L's P5 run, and § L3 says what an older
-pair could need.
+What is known of the SoundLink II, and how sure:
+
+- **Classic Bluetooth, A2DP.** Bose's own support page: it works with
+  devices of Bluetooth 2.1 or later that support the A2DP, hands-free and
+  headset profiles. Certain. SBC follows, since every A2DP sink must take
+  it.
+- **Secure Simple Pairing.** It asks its host for Bluetooth 2.1, which is
+  the version that made Simple Pairing mandatory. So § L3's refusal of PIN
+  pairing should not meet it. Likely, not observed.
+- **Its Bluetooth version and other codecs** are given differently by
+  different shops (4.0 or 4.2; AAC, aptX). Unconfirmed, and nothing here
+  depends on them.
+- **It is a headset too** (hands-free and headset profiles, a microphone).
+  A pair like that may ask its host for a voice link (SCO or eSCO) and for
+  the hands-free service besides the music one. § L3 refuses the voice
+  link and § S1 refuses the service's channel; whether the pair then stays
+  for music alone is something only the P5 run can say, and it is the
+  first thing to look at if it hangs up.
+- **It pairs with two hosts** and is bonded to one today, so it has a place
+  free.
 
 ## What is there now (read at `014d9809`)
 
