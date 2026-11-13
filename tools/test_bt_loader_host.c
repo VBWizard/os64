@@ -14,6 +14,7 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
+#include "../kernel/src/driver/system/usb/bt_acl.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
@@ -101,7 +102,9 @@ static unsigned allocations, frees, fail_after;
 void *kmalloc_aligned(uint64_t size)
 {
     if (allocations==fail_after) return NULL;
-    CHECK(allocations<32 && size==PAGE_SIZE);
+    // A page, or the transmit endpoint's page and its send slots: ASan
+    // then polices every slot's bounds for the cases below.
+    CHECK(allocations<32 && (size==PAGE_SIZE || size==BT_TX_BYTES));
     void *p=aligned_alloc(PAGE_SIZE,size); CHECK(p); memset(p,0,size);
     allocated[allocations++]=p;
     return p;
@@ -236,6 +239,9 @@ static void test_controller_step(void)
                 unsigned n=6;
                 if (op==0x1003) { n=14; reply[1]=12; reply[10]=0x40; reply[12]=1; }
                 if (op==0x1009) { n=12; reply[1]=10; reply[6]=0xab; }
+                // 1021-byte ACL packets, 8 of them; LE: 251 bytes, 3.
+                if (op==0x1005) { n=13; reply[1]=11; reply[6]=0xfd; reply[7]=3; reply[8]=64; reply[9]=8; reply[11]=8; }
+                if (op==0x2002) { n=9; reply[1]=7; reply[6]=251; reply[8]=3; }
                 if (op==0x0401) {
                     const uint8_t inquiry[]={0x0f,4,0,1,1,4, 1,1,0};
                     queue(inquiry,sizeof(inquiry),0);
@@ -311,6 +317,120 @@ static void test_controller_step(void)
         emit(rx->pending_trb,((n==64?1u:13u)<<24)|(64-n),
              TRB_TYPE(TRB_EV_TRANSFER)|(2u<<24)|((receive_endpoint==0?3u:5u)<<16));
     }
+}
+
+// The send slots (AUDIO_CLASSIC.md § T2): several ACL packets with the
+// controller at once, each in storage of its own, freed in the order they
+// were queued, each with its own deadline; a packet that cannot be carried
+// fails the transport and writes nothing. Run last: it ends with the
+// transport failed.
+static void send_slots(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+    p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    s_hc->control_slot=0;
+    uint8_t packet[BT_TX_SLOT_BYTES], zero[BT_TX_SLOT_BYTES]={0}, page[512], command[258];
+    uint64_t trb[BT_TX_SLOTS];
+    xhci_trb_t ev;
+    memset(command,0xc3,sizeof(command)); memcpy(p->tx.buffer+512,command,sizeof(command));
+    memcpy(page,p->tx.buffer,sizeof(page));
+
+    // Four of the largest packets, all in flight.
+    for (unsigned i=0;i<BT_TX_SLOTS;i++) {
+        memset(packet,0x10+i,sizeof(packet));
+        xhci_bt_acl_send(p,packet,sizeof(packet));
+        trb[i]=p->tx.pending_trb;
+        CHECK(!p->failed && p->tx_slots==i+1 && !p->tx_done);
+        const xhci_trb_t *queued=(void *)(uintptr_t)trb[i];
+        CHECK(queued->param==(uintptr_t)xhci_bt_tx_slot(p,i) && (queued->status&0x1ffff)==sizeof(packet));
+        CHECK(!memcmp(xhci_bt_tx_slot(p,i),packet,sizeof(packet)));
+    }
+    // None of them reached the command's bytes or the page bring-up sends from.
+    CHECK(!memcmp(p->tx.buffer+512,command,sizeof(command)) && !memcmp(p->tx.buffer,page,sizeof(page)));
+    for (unsigned i=0;i+1<BT_TX_SLOTS;i++)
+        CHECK(xhci_bt_tx_slot(p,i)+BT_TX_SLOT_BYTES<=xhci_bt_tx_slot(p,i+1));
+
+    // A completion for one that is not the oldest frees nothing, and is counted.
+    unsigned unmatched=p->tx.unmatched;
+    ev=(xhci_trb_t){.param=trb[2]};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    CHECK(p->tx_slots==BT_TX_SLOTS && p->tx.unmatched==unmatched+1 && !p->failed && !p->tx_done);
+    // In order, each frees its own slot and wipes it; the last makes the endpoint idle.
+    for (unsigned i=0;i<BT_TX_SLOTS;i++) {
+        ev=(xhci_trb_t){.param=trb[i]};
+        CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+        CHECK(p->tx_slots==BT_TX_SLOTS-1-i && p->tx_done==(i==BT_TX_SLOTS-1) && !p->failed);
+        CHECK(!memcmp(xhci_bt_tx_slot(p,i),zero,sizeof(zero)));
+        if (i+1<BT_TX_SLOTS) CHECK(xhci_bt_tx_slot(p,i+1)[0]==0x10+i+1);
+    }
+    // The slots are a ring: with two freed and two more sent, the fourth and
+    // the first are in use again, in that order.
+    for (unsigned i=0;i<3;i++) { packet[0]=0x40+i; xhci_bt_acl_send(p,packet,8); trb[i]=p->tx.pending_trb; }
+    ev=(xhci_trb_t){.param=trb[0]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=trb[1]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    packet[0]=0x50; xhci_bt_acl_send(p,packet,8); trb[3]=p->tx.pending_trb;
+    packet[0]=0x51; xhci_bt_acl_send(p,packet,8);
+    CHECK(p->tx_slots==3 && p->tx_oldest==2 && xhci_bt_tx_slot(p,2)[0]==0x42);
+    CHECK(xhci_bt_tx_slot(p,3)[0]==0x50 && xhci_bt_tx_slot(p,0)[0]==0x51);
+    ev=(xhci_trb_t){.param=trb[2]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=trb[3]}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    ev=(xhci_trb_t){.param=p->tx.pending_trb}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS));
+    CHECK(p->tx_done && !p->tx_slots && !p->failed);
+
+    // Each slot has its own five seconds: a later send does not buy the
+    // oldest more time.
+    kTicksSinceStart+=10;
+    uint64_t first=kTicksSinceStart;
+    xhci_bt_acl_send(p,packet,8);
+    kTicksSinceStart=first+3*TICKS_PER_SECOND;
+    xhci_bt_acl_send(p,packet,8);
+    kTicksSinceStart=first+5*TICKS_PER_SECOND-1;
+    xhci_bt_runtime_poll(); CHECK(!p->host.failed && p->tx_slots==2);
+    kTicksSinceStart=first+5*TICKS_PER_SECOND;
+    xhci_bt_runtime_poll();
+    CHECK(p->host.failed);
+    // What is still queued is the controller's to read, failed transport or
+    // not: neither slot is touched, and the endpoint is not called idle.
+    unsigned held=p->tx_oldest;   // the ring has moved on: these two are wherever it now is
+    CHECK(p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51 &&
+          xhci_bt_tx_slot(p,(held+1)%BT_TX_SLOTS)[0]==0x51);
+    // The same when the failure is the control endpoint's: the bulk
+    // endpoint is still running.
+    p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    kTicksSinceStart=first; s_hc->control_slot=p->device->slot; s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_USB_TRANSACTION_ERROR;
+    xhci_bt_runtime_poll();
+    CHECK(p->host.failed && p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51);
+    s_hc->control_slot=0; s_hc->xfer_cc=TRB_CC_SUCCESS;
+
+    // A fifth packet with four in flight, and one too long for a slot:
+    // the transport fails, nothing is queued and nothing is written.
+    // (The poll above wiped the idle command's bytes, as it does; plant them again.)
+    memcpy(p->tx.buffer+512,command,sizeof(command));
+    for (unsigned pass=0;pass<2;pass++) {
+        p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+        memset(packet,0x77,sizeof(packet));
+        if (pass==0) for (unsigned i=0;i<BT_TX_SLOTS;i++) xhci_bt_acl_send(p,packet,8);
+        unsigned queued=p->tx.ring.enqueue, in_flight=p->tx_slots;
+        uint8_t before[BT_TX_SLOTS*BT_TX_SLOT_STRIDE];
+        memcpy(before,p->tx.buffer+PAGE_SIZE,sizeof(before));
+        uint8_t long_packet[BT_TX_SLOT_BYTES+1]; memset(long_packet,0x99,sizeof(long_packet));
+        if (pass==0) xhci_bt_acl_send(p,packet,8);
+        else xhci_bt_acl_send(p,long_packet,sizeof(long_packet));
+        CHECK(p->failed && p->tx.ring.enqueue==queued && p->tx_slots==in_flight);
+        CHECK(!memcmp(before,p->tx.buffer+PAGE_SIZE,sizeof(before)));
+        CHECK(!memcmp(p->tx.buffer+512,command,sizeof(command)));
+    }
+    // A transfer that did not succeed fails the transport.
+    p->failed=false; p->tx_done=true; p->tx_slots=p->tx_oldest=0;
+    xhci_bt_acl_send(p,packet,8);
+    ev=(xhci_trb_t){.param=p->tx.pending_trb};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_USB_TRANSACTION_ERROR) && p->failed);
+    // Bring-up is as it was: its one transfer, matched by its own pointer.
+    p->failed=false; p->runtime=false; p->tx_done=false; p->tx.pending_trb=0x1234;
+    ev=(xhci_trb_t){.param=0x9999}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS) && !p->tx_done);
+    ev=(xhci_trb_t){.param=0x1234}; CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS) && p->tx_done && !p->failed);
+    p->runtime=true; p->failed=true;
 }
 
 static void runtime_transport(void)
@@ -590,7 +710,18 @@ int main(void)
             }
             CHECK(hc.bluetooth.host.scan.phase==BT_SCAN_DONE && !hc.bluetooth.host.scan.radio_active);
             CHECK(!released && allocations-frees==10);
-            if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); }
+            // The start-up round read the controller's ACL buffers, and the host
+            // took them before a later scan could clear the round's copy.
+            CHECK(hc.bluetooth.host.acl.known && !bt_acl_shared(&hc.bluetooth.host.acl));
+            CHECK(hc.bluetooth.host.acl.classic_size==1021 && hc.bluetooth.host.acl.classic_total==8);
+            CHECK(hc.bluetooth.host.acl.le_size==251 && hc.bluetooth.host.acl.le_total==3);
+            {
+                char status[2048];
+                bt_host_status(&hc.bluetooth.host,status,sizeof(status));
+                CHECK(strstr(status,"acl pools: classic 8 x 1021 bytes, in use 0; le 3 x 251 bytes, in use 0; "
+                                    "stray completions 0, bad completions 0\n")!=NULL);
+            }
+            if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); send_slots(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately

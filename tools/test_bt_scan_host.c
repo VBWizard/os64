@@ -15,10 +15,13 @@ static void send_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 }
 static void complete(bt_scan_t *s,uint8_t status)
 {
-    uint8_t e[14]={0x0e,4,1,s->opcode&255,s->opcode>>8,status};
+    uint8_t e[14]={0x0e,4,1,(uint8_t)(s->opcode&255),(uint8_t)(s->opcode>>8),status};
     size_t n=6;
     if (!status && s->opcode==0x1003) { n=14;e[1]=12;e[10]=0x40;e[12]=1; }
     if (!status && s->opcode==0x1009) { n=12;e[1]=10;e[6]=0x11;e[11]=0xaa; }
+    // Read Buffer Size: 1021-byte ACL packets, 8 of them. LE Read Buffer Size: 251 bytes, 3.
+    if (!status && s->opcode==0x1005) { n=13;e[1]=11;e[6]=0xfd;e[7]=3;e[8]=64;e[9]=8;e[11]=8; }
+    if (!status && s->opcode==0x2002) { n=9;e[1]=7;e[6]=251;e[8]=3; }
     if (s->opcode==0x0401) {
         const uint8_t accepted[]={0x0f,4,status,1,1,4};
         bt_scan_event(s,accepted,sizeof(accepted));
@@ -91,6 +94,39 @@ static void reports(void)
         bt_scan_event(&s,e,n);bt_scan_event(&classic,e,n);
     }
 }
+// The two buffer-size replies: taken whole, refused at any other length,
+// and never asked for by a scan on a controller already in service.
+static void buffers(void)
+{
+    // LE only, so the round does not stop for a twelve-second inquiry.
+    bt_scan_t s={0}; assert(bt_scan_start_le(&s,0));
+    until(&s,BT_SCAN_BUFFER,1);
+    assert(!s.buffers_known);
+    tick(&s,30); assert(s.pending && sent_op==0x1005 && sent_length==0);
+    complete(&s,0); tick(&s,31);
+    assert(s.phase==BT_SCAN_LE_BUFFER && sent_op==0x2002 && !s.buffers_known);
+    assert(s.acl_size==1021 && s.acl_total==8);
+    complete(&s,0); tick(&s,32);
+    assert(s.phase==BT_SCAN_LE_PARAMS && s.buffers_known && s.le_acl_size==251 && s.le_acl_total==3);
+    char out[512]; bt_scan_status(&s,out,sizeof(out));
+    for(int which=0;which<2;which++) for(int delta=-1;delta<=1;delta+=2) {
+        s=(bt_scan_t){0}; assert(bt_scan_start_le(&s,0));
+        until(&s,which?BT_SCAN_LE_BUFFER:BT_SCAN_BUFFER,1); tick(&s,30);
+        assert(s.pending && s.opcode==(which?0x2002:0x1005));
+        uint8_t e[16]={0x0e,0,1,(uint8_t)s.opcode,(uint8_t)(s.opcode>>8),0};
+        size_t n=(size_t)((which?9:13)+delta); e[1]=(uint8_t)(n-2);
+        bt_scan_event(&s,e,n); tick(&s,31);
+        assert(s.error && !strcmp(s.error,"malformed HCI reply") && !s.buffers_known);
+    }
+    // In service: straight to the scan itself.
+    s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true};
+    unsigned before=sends;
+    assert(bt_scan_start_le(&s,0)); tick(&s,1);
+    assert(sends==before+1 && sent_op==0x200b);
+    s=(bt_scan_t){.phase=BT_SCAN_BUFFER}; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: initializing"));
+    s.phase=BT_SCAN_LE_BUFFER; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: initializing"));
+    s.phase=BT_SCAN_LE_PARAMS; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: LE scan"));
+}
 static void late_completion(void)
 {
     bt_scan_t s={0}; assert(bt_scan_start(&s,0)); tick(&s,0);
@@ -155,7 +191,7 @@ int main(void)
     assert(bt_scan_request_valid("scan\n",5) && bt_scan_request_valid(" \tscan\r\n",8));
     assert(!bt_scan_request_valid("scan x",6) && !bt_scan_request_valid("scan\0",5));
     assert(!bt_scan_request_valid("",0));
-    reports(); late_completion();
+    reports(); buffers(); late_completion();
     bt_scan_t s={0};assert(bt_scan_start(&s,0));assert(!bt_scan_start(&s,0));
     tick(&s,0);assert(sent_op==0x0c03);
     complete(&s,0);unsigned before=sends;
@@ -205,6 +241,8 @@ int main(void)
     tick(&s,2029); assert(s.phase==BT_SCAN_LE_WAIT);
     tick(&s,2030); assert(s.phase==BT_SCAN_LE_DISABLE && !sent_params[0]);
     complete(&s,0); tick(&s,2031); assert(s.phase==BT_SCAN_DONE && !s.radio_active);
+    // The start-up round asked the controller for its ACL buffers, once.
+    assert(s.buffers_known && s.acl_size==1021 && s.acl_total==8 && s.le_acl_size==251 && s.le_acl_total==3);
     s.shared_controller=true;
     uint8_t address[6],features[8]; memcpy(address,s.address,6); memcpy(features,s.features,8);
     assert(bt_scan_start_le(&s,3000) && s.phase==BT_SCAN_LE_PARAMS);

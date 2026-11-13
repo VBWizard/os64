@@ -1,6 +1,7 @@
 #ifndef OS64_BT_HOST_H
 #define OS64_BT_HOST_H
 #include "driver/system/usb/bt_manager.h"
+#include "driver/system/usb/bt_acl.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
@@ -15,6 +16,17 @@ typedef struct {
     bt_host_peer_t peers[BT_HOST_PEERS];
     bool initialized, failed, command_done, tx_used;
     uint8_t owner, credits, next_peer, poll_peer;
+    // The controller's ACL buffers (bt_acl.h): sized from the start-up
+    // round, a link for each connected LE peer, every packet sent and
+    // completed counted. The LE peers still send one packet at a time by
+    // their own rule (tx_used); this is the count a link that sends more
+    // will be held to. acl_link[i] is the handle peer i is counted under
+    // PLUS ONE, zero when it has none, so a host made by zeroing is right.
+    bt_acl_t acl;
+    uint16_t acl_link[BT_HOST_PEERS];
+    // Number Of Completed Packets events the count could not take: not
+    // well formed, or giving a link back more than it had out.
+    uint32_t acl_bad_completions;
     uint8_t duplicate_slot; // Last refused peer's owning slot plus one; zero means none.
     uint64_t init_retry_at;
     // Start-up rounds that ended FAILED: a first error, and then a cleanup

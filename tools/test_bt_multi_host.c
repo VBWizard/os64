@@ -2,6 +2,7 @@
 #define main single_peer_suite
 #include "test_bt_le_host.c"
 #undef main
+#include "../kernel/src/driver/system/usb/bt_acl.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
 
@@ -18,8 +19,25 @@ static void multi_wire(const uint8_t *p,size_t n)
 { bt_host_receive(&host,p,n,0,multi_report,NULL); }
 static void multi_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 { if(op==0x0c03) reset_count++; command(ctx,op,p,n); }
+// The controller-wide count (bt_acl.h) must agree with each peer's own at
+// every step of every scenario here: a link for each connected peer, under
+// its handle, with as many packets out as the peer believes it has.
+static void acl_agrees(void)
+{
+    unsigned links=0;
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) {
+        const bt_le_t *s=&host.peers[i].le;
+        if(!s->connected) { assert(!host.acl_link[i]); continue; }
+        links++;
+        assert(host.acl_link[i]==s->handle+1u);
+        assert(bt_acl_outstanding(&host.acl,s->handle)==s->outstanding);
+    }
+    unsigned live=0;
+    for(unsigned i=0;i<BT_ACL_LINKS;i++) live+=host.acl.link[i].live;
+    assert(live==links);
+}
 static void step(void)
-{ bt_host_tick(&host,++now,true,true,false,multi_command,acl,multi_report,NULL); }
+{ bt_host_tick(&host,++now,true,true,false,multi_command,acl,multi_report,NULL); acl_agrees(); }
 static void notify_keyboard(void)
 {
     const uint8_t a[]={12,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};

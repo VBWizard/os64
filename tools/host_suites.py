@@ -118,6 +118,7 @@ PY_SUITES = [
     py('test_pty_budget_host'),
     py('test_pulse_ui_host'),
     py('test_roam_launch_host'),
+    py('test_sound_audit'),
     py('test_roam_ui_host'),
     py('test_scribe_host'),
     py('test_spawn_argv_host'),

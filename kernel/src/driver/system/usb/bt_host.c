@@ -13,8 +13,23 @@ static bool host_setup(const bt_host_t *h)
 void bt_host_init(bt_host_t *h,uint64_t now)
 {
     *h=(bt_host_t){.credits=1};
+    bt_acl_init(&h->acl);
     for(unsigned i=0;i<BT_HOST_PEERS;i++) h->peers[i].le.shared_controller=true;
     bt_scan_start_le(&h->scan,now);
+}
+// Bring the count's links in line with the LE peers: one for each that is
+// connected, under its handle. Called wherever a peer may have connected or
+// let go (its events, its tick), before the count is asked or told anything.
+static void host_acl_links(bt_host_t *h)
+{
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) {
+        const bt_le_t *s=&h->peers[i].le;
+        uint16_t now=s->connected?(uint16_t)((s->handle&0xfff)+1):0;   // the handle plus one (bt_host.h)
+        if(now==h->acl_link[i]) continue;
+        if(h->acl_link[i]) bt_acl_link_down(&h->acl,(uint16_t)(h->acl_link[i]-1));
+        if(now) (void)bt_acl_link_up(&h->acl,(uint16_t)(now-1),true);
+        h->acl_link[i]=now;
+    }
 }
 // An event that cannot be right. Once the controller is known to be up that
 // is the end of the host. During start-up it is the end of the ROUND, which
@@ -46,6 +61,12 @@ void bt_host_event(bt_host_t *h,const uint8_t *e,size_t n)
         return;
     }
     if(e[0]==0x10) { host_bad_event(h,true); return; }
+    if(e[0]==0x13) {
+        // Counted here for the controller as a whole; each LE peer below
+        // still takes its own entries, and judges them, as it always has.
+        uint16_t link;
+        if(bt_acl_completed(&h->acl,e,n,&link)!=BT_ACL_COUNTED) h->acl_bad_completions++;
+    }
     if(e[0]==0x3e && n>=3 && e[2]==2) { bt_scan_event(&h->scan,e,n); return; }
     if(e[0]==1 || e[0]==2 || e[0]==0x22 || e[0]==0x2f) {
         bt_scan_event(&h->scan,e,n); return;
@@ -58,6 +79,7 @@ void bt_host_event(bt_host_t *h,const uint8_t *e,size_t n)
            !(s->link_may_active && !s->connected)) continue;
         bt_le_event(s,e,n);
     }
+    host_acl_links(h);
 }
 typedef struct {
     bt_host_t *host;
@@ -130,6 +152,7 @@ static void host_acl(void *context,const uint8_t *p,size_t n)
 {
     host_call_t *c=context; c->host->tx_used=true;
     c->host->poll_peer=(c->peer+1)%BT_HOST_PEERS;
+    if(n>=2) (void)bt_acl_sent(&c->host->acl,host_u16(p)&0xfff);
     c->acl(c->context,p,n);
 }
 static bool host_control(const bt_host_t *h,unsigned owner,bool usb_done)
@@ -164,6 +187,7 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
 {
     h->failed|=failed;
     host_retire(h,usb_done);
+    host_acl_links(h);   // before any peer below may send
     h->tx_used=!bulk_done;
     for(unsigned i=0;i<BT_HOST_PEERS;i++)
         if(h->peers[i].le.outstanding) h->tx_used=true;
@@ -199,6 +223,10 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
         }
         if(!h->initialized && h->scan.phase==BT_SCAN_DONE) {
             h->initialized=true; h->scan.shared_controller=true;
+            // The next scan clears what this round heard.
+            if(h->scan.buffers_known)
+                bt_acl_sizes(&h->acl,h->scan.acl_size,h->scan.acl_total,
+                             h->scan.le_acl_size,h->scan.le_acl_total);
         }
     }
     unsigned first=h->poll_peer;
@@ -209,6 +237,7 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
                    s->phase==BT_LE_CLEANUP?bulk_done:!h->tx_used,
                    h->failed,host_command,host_acl,host_report,&call);
         host_retire(h,usb_done);
+        host_acl_links(h);
         if(s->phase==BT_LE_FAILED) h->failed=true;
     }
     // A controller failure affects every connection, even if detected by the
@@ -287,6 +316,22 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
         h->round_timeout?h->round_timeout:"",h->wire_resyncs);
     if(n<0) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;
+    if(used<cap-1) {
+        const bt_acl_t *a=&h->acl;
+        if(!a->known) n=snprintf(out+used,cap-used,"acl pools: not yet read\n");
+        else if(bt_acl_shared(a)) n=snprintf(out+used,cap-used,
+            "acl pools: one, classic and le together, %u x %u bytes; in use %u, kept for le %u; "
+            "stray completions %u, bad completions %u\n",
+            a->classic_total,a->classic_size,bt_acl_in_use(a,false),
+            bt_acl_reserved_for_le(a),a->strays,h->acl_bad_completions);
+        else n=snprintf(out+used,cap-used,
+            "acl pools: classic %u x %u bytes, in use %u; le %u x %u bytes, in use %u; "
+            "stray completions %u, bad completions %u\n",
+            a->classic_total,a->classic_size,bt_acl_in_use(a,false),
+            a->le_total,a->le_size,bt_acl_in_use(a,true),a->strays,h->acl_bad_completions);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
     if(h->duplicate_slot && used<cap-1) {
         n=snprintf(out+used,cap-used,"last command refused: peer belongs to slot %u\n",h->duplicate_slot-1);
         if(n<0) return used;

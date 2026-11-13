@@ -17,7 +17,11 @@ typedef struct {
 typedef enum {
     BT_SCAN_IDLE, BT_SCAN_RESET, BT_SCAN_FEATURES, BT_SCAN_ADDRESS,
     BT_SCAN_MASK, BT_SCAN_INQUIRY_MODE, BT_SCAN_INQUIRY, BT_SCAN_CLASSIC_WAIT,
-    BT_SCAN_LE_HOST, BT_SCAN_LE_MASK, BT_SCAN_LE_PARAMS, BT_SCAN_LE_ENABLE,
+    BT_SCAN_LE_HOST, BT_SCAN_LE_MASK,
+    // The controller's ACL buffers, asked once: a scan on a controller
+    // already in service starts at LE_PARAMS, past them.
+    BT_SCAN_BUFFER, BT_SCAN_LE_BUFFER,
+    BT_SCAN_LE_PARAMS, BT_SCAN_LE_ENABLE,
     BT_SCAN_LE_WAIT, BT_SCAN_LE_DISABLE, BT_SCAN_DONE,
     BT_SCAN_CLEANUP, BT_SCAN_STOPPED, BT_SCAN_FAILED
 } bt_scan_phase_t;
@@ -39,6 +43,12 @@ typedef struct {
     // which.
     bool timed_out, timeout_usb_done, timeout_reply;
     uint8_t inquiry_status;
+    // Read Buffer Size's ACL packet length and count, and LE Read Buffer
+    // Size's, as the start-up round heard them (bt_acl.h). A later scan
+    // clears them with the rest: whoever wants them takes them at DONE.
+    bool buffers_known;
+    uint16_t acl_size, acl_total, le_acl_size;
+    uint8_t le_acl_total;
     const char *error;
     unsigned count, dropped, malformed_reports;
     bt_scan_device_t devices[BT_SCAN_DEVICES];
