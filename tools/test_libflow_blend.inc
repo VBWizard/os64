@@ -289,6 +289,37 @@ static void gradient_style_cases(void)
         " mask-mode=luminance\n"
         "    div block\n"
         "    span inline mask=0 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
+    // -webkit-mask-composite is mask-composite (MASKS.md § 4): one
+    // property in the cascade, the later declaration winning by either
+    // name, its legacy operators read as the standard ones they compute —
+    // and only by its own name. A word neither name reads drops the
+    // declaration, so what came before it stands.
+    cascade_case("masks: -webkit-mask-composite, legacy words and cascade", 400,
+        "<!doctype html><style>"
+        "div{mask-image:linear-gradient(#000 0 0)}"
+        ".a{mask-composite:intersect;-webkit-mask-composite:xor}"
+        ".b{-webkit-mask-composite:xor;mask-composite:intersect}"
+        ".c{mask-composite:xor}"
+        ".d{-webkit-mask-composite:source-out}"
+        ".e{-webkit-mask-composite:destination-in}"
+        ".f{mask-composite:exclude;-webkit-mask-composite:destination-out}"
+        ".g{-webkit-mask-composite:source-over}"
+        ".h{mask-image:linear-gradient(#000 0 0),linear-gradient(#000 0 0);"
+        "-webkit-mask-composite:source-in,xor}"
+        "</style><div class=a></div><div class=b></div><div class=c></div><div class=d></div>"
+        "<div class=e></div><div class=f></div><div class=g></div><div class=h></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=subtract\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect"
+        " mask=1 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n");
     // An angle is taken round the circle before it is scaled: 1e20 degrees
     // is fmod's 280, not whatever an overflowed integer makes of it.
     cascade_case("gradients: an angle of any size", 400,

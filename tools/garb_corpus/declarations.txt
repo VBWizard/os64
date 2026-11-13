@@ -1604,7 +1604,15 @@ OUT: mask-composite: intersect, add
 IN: mask-composite: source-in
 OUT: invalid
 IN: -webkit-mask-composite: intersect
-OUT: unknown
+OUT: mask-composite: intersect
+IN: -webkit-mask-composite: xor, source-in, source-out, source-over, destination-in
+OUT: mask-composite: exclude, intersect, subtract, add, intersect
+IN: -webkit-mask-composite: destination-out
+OUT: invalid
+IN: -webkit-mask-composite: XOR
+OUT: mask-composite: exclude
+IN: -webkit-mask: linear-gradient(#000 0 0) xor
+OUT: invalid
 IN: mask-mode: luminance
 OUT: mask-mode: luminance
 IN: mask: none

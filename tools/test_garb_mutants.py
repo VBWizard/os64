@@ -216,6 +216,39 @@ mutants = [
     ('a-mask-reference-is-sent-for', YONDER,
      '    if (l.image != NULL && l.image_len > 0 && l.image[0] == \'#\')\n        l.image = NULL;',
      '    if (false)\n        l.image = NULL;', SCRIPTS),
+    # Masks M2: -webkit-mask-composite's legacy words, and a mask's
+    # position and size animated (MASKS.md § 4, § 5).
+    ('the-legacy-composite-reads-no-legacy-word', PROPS,
+     '    static const Longhand kWebkitComposite = {GARB_MASK_COMPOSITE, G_MASK_LEGACY,\n'
+     '                                              kWebkitMaskComposite};',
+     '    static const Longhand kWebkitComposite = {GARB_MASK_COMPOSITE, G_MASK_KEYWORD,\n'
+     '                                              kMaskComposite};', GARB),
+    ('xor-is-read-as-add', PROPS,
+     '    "add", "subtract", "intersect", "exclude", "intersect"};',
+     '    "add", "subtract", "intersect", "add", "intersect"};', GARB),
+    ('source-out-is-read-as-intersect', PROPS,
+     '    "add", "subtract", "intersect", "exclude",\n    "add", "subtract",',
+     '    "add", "subtract", "intersect", "exclude",\n    "add", "intersect",', GARB),
+    ('the-standard-name-takes-the-legacy-words', PROPS,
+     '{GARB_MASK_COMPOSITE, G_MASK_KEYWORD, kMaskComposite}',
+     '{GARB_MASK_COMPOSITE, G_MASK_LEGACY, kWebkitMaskComposite}', GARB),
+    ('destination-out-is-read', PROPS,
+     '    "source-over", "source-out", "source-in", "xor", "destination-in", NULL};',
+     '    "source-over", "source-out", "source-in", "xor", "destination-out", NULL};', GARB),
+    ('a-mask-is-placed-by-the-background', 'userland/libflow/motion.c',
+     'static const flow_backgrounds_t *layers_of(garb_prop_t p, const flow_style_t *s)\n{\n'
+     '    return mask_placed(p) ? &s->masks.layers : &s->backgrounds;',
+     'static const flow_backgrounds_t *layers_of(garb_prop_t p, const flow_style_t *s)\n{\n'
+     '    return (void)mask_placed(p), &s->backgrounds;', FLOW),
+    ('a-mask-size-is-not-mixed', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd',
+     '    case GARB_BACKGROUND_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd', FLOW),
+    ('a-mask-position-repaints-past-its-box', 'userland/libflow/motion.c',
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
+     '    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
+    ('a-mask-position-does-not-tick', 'userland/libflow/motion.c',
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_BORDER_TOP_COLOR:', FLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

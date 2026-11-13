@@ -119,14 +119,25 @@ layers and its size; that is a measured follow-up, not this slice.
 - **The shorthand** `mask` (Masking 1 § 7.9): a background's shorthand
   without the colour, plus `mask-mode` and `mask-composite`, and the
   `<geometry-box>` pair as background's is.
-- **`-webkit-` names**: every `-webkit-mask-*` but `-webkit-mask-composite`
-  is an alias of its longhand, as the browsers alias them, and
-  `-webkit-mask` of the shorthand. `-webkit-mask-composite` (slice M2, § 7)
-  takes the legacy keywords — `source-over`,
-  `source-in`, `source-out`, `xor`, `destination-in`, `destination-out` —
-  which map onto the four standard operators (the destination forms swap
-  source and destination); a page's `-webkit-mask-composite: destination-in`
-  beside `mask-composite: intersect` is the usual way spinners write it.
+- **`-webkit-` names**: every `-webkit-mask-*` is an alias of its
+  longhand, as the browsers alias them, and `-webkit-mask` of the
+  shorthand, read with the standard grammar — all but
+  `-webkit-mask-composite`, which is `mask-composite` in the cascade, one
+  property, but has words of its own: it takes the
+  standard words and the legacy compositing operators' that pages write,
+  each read as the standard operator it computes for one channel of
+  coverage: `source-over` add, `source-in` intersect, `source-out`
+  subtract, `xor` exclude, and `destination-in` intersect (keeping the
+  layers below where this one is is the same product). The corpus writes
+  `xor` alone in about 1,100 declarations, `source-in, xor` in about 360,
+  and `source-in` in about 190 — the gradient-border pattern among them —
+  against 6 for `destination-in` and 1 for `destination-out`.
+  `destination-out` (the layers below cut by this one) is no standard
+  operator with this layer as the source, so it and the legacy words no
+  page writes (`clear`, `copy`, the atops, `destination-over`,
+  `plus-lighter`) drop the declaration (§ 8). The words are read only by
+  the prefixed name: `mask-composite: xor` is invalid, as the standard
+  says.
 - **@supports** answers what is drawn: a mask of gradients and pictures is,
   from the slice that draws it.
 
@@ -142,8 +153,12 @@ layers and its size; that is a measured follow-up, not this slice.
 - `getComputedStyle` writes the `mask-*` longhands as it writes the
   background ones.
 - `mask-position` and `mask-size` animate as `background-position` and
-  `-size` do (motion.c's interpolation by field), in place, since only
-  painting reads them.
+  `-size` do (motion.c mixes the mask's lists with the background's
+  code). `mask-position` is in the tick set and the in-place class beside
+  `background-position` (PILE3.md § Animations in place): only painting
+  reads it, and what a mask paints is inside what its element already
+  draws, so its frames move without a layout. `mask-size` moves by
+  layouts, as `background-size` does.
 
 ## 6. yonder
 
@@ -168,10 +183,17 @@ layers and its size; that is a measured follow-up, not this slice.
   and reading a value the painter then ignores would draw spinners 3, 4
   and 5 wrong rather than not at all; gradient and picture mask images,
   the icon pattern among them.
-- **M2, the rest**: `-webkit-mask-composite` and its legacy keywords (left
-  unread by M1, so a page's `destination-in` beside `intersect` is the
-  standard word's); `mask-position` and `-size` animated; and the coverage
-  cache, if measurement asks for it (§ 3).
+- **M2, the rest**: `-webkit-mask-composite` and its legacy keywords (§ 4;
+  M1 left the name unread, so a page that wrote only `xor` drew its layers
+  added); `mask-position` and `-size` animated (§ 5).
+- **The coverage cache** (§ 3) is its own slice, if the P5 asks for it:
+  Lamplighter's beam, a masked gradient turning, costs about 1.5 ms a
+  frame at 100% zoom and 4–5 ms zoomed in on the P5 (Chris's frame meter,
+  2026-11-12), growing with the pixels it covers; yonder's record splits
+  a paint into its stages (gradients, layers, warps), which says how much
+  of that a kept coverage would save. The beam is drawn in its own
+  coordinates and turned after, so its coverage is the same bytes from
+  frame to frame wherever the view does not cut it.
 
 Each slice gets a cold read before Codex and mutants of its rules, as this
 arc's slices have.
@@ -188,6 +210,9 @@ arc's slices have.
 - The SVG geometry boxes `fill-box`, `stroke-box` and `view-box` in
   `mask-origin` and `mask-clip`, and `-webkit-mask-clip: text`: not read,
   so the declaration is dropped.
+- `-webkit-mask-composite: destination-out` (1 declaration in the corpus)
+  and the legacy words no page writes: not read, so the declaration is
+  dropped (§ 4).
 - `clip-path` (84 hosts, the same as masks): the next slice, which reuses
   this one's coverage at the layer's close with a shape for its source.
 
