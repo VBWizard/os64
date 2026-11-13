@@ -1,0 +1,97 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -389,6 +389,7 @@
+     int shape_hash_count; /* number of hashed shapes */
+     JSShape **shape_hash;
+     void *user_opaque;
++    const JSNativeCallContexts *native_call_contexts;
+ };
+ 
+ struct JSClass {
+@@ -3016,6 +3017,17 @@
+     return ctx->rt;
+ }
+ 
++JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out)
++{
++    if (!out)
++        return FALSE;
++    *out = (JSNativeCallContexts){ NULL, NULL };
++    if (!rt || !rt->native_call_contexts)
++        return FALSE;
++    *out = *rt->native_call_contexts;
++    return TRUE;
++}
++
+ static void update_stack_limit(JSRuntime *rt)
+ {
+     if (rt->stack_size == 0) {
+@@ -6211,6 +6223,10 @@
+ {
+     JSCFunctionDataRecord *s = JS_GetOpaque(func_obj, JS_CLASS_C_FUNCTION_DATA);
+     JSValueConst *arg_buf;
++    JSRuntime *rt = ctx->rt;
++    const JSNativeCallContexts *previous = rt->native_call_contexts;
++    JSNativeCallContexts contexts = { ctx, s->realm };
++    JSValue result;
+     int i;
+ 
+     /* XXX: could add the function on the stack for debug */
+@@ -6224,7 +6240,10 @@
+         arg_buf = argv;
+     }
+ 
+-    return s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++    rt->native_call_contexts = &contexts;
++    result = s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++    rt->native_call_contexts = previous;
++    return result;
+ }
+ 
+ JSValue JS_NewCFunctionData(JSContext *ctx, JSCFunctionData *func,
+@@ -17868,6 +17887,8 @@
+     JSValueConst *arg_buf;
+     int arg_count, i;
+     JSCFunctionEnum cproto;
++    const JSNativeCallContexts *previous = rt->native_call_contexts;
++    JSNativeCallContexts contexts;
+ 
+     p = JS_VALUE_GET_OBJ(func_obj);
+     cproto = p->u.cfunc.cproto;
+@@ -17877,6 +17898,8 @@
+     if (js_check_stack_overflow(rt, sizeof(arg_buf[0]) * arg_count))
+         return JS_ThrowStackOverflow(ctx);
+ 
++    contexts = (JSNativeCallContexts){ ctx, p->u.cfunc.realm };
++    rt->native_call_contexts = &contexts;
+     prev_sf = rt->current_stack_frame;
+     sf->prev_frame = prev_sf;
+     rt->current_stack_frame = sf;
+@@ -17982,6 +18005,7 @@
+     }
+ 
+     rt->current_stack_frame = sf->prev_frame;
++    rt->native_call_contexts = previous;
+     return ret_val;
+ }
+ 
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -401,6 +401,17 @@
+ void *JS_GetContextOpaque(JSContext *ctx);
+ void JS_SetContextOpaque(JSContext *ctx, void *opaque);
+ JSRuntime *JS_GetRuntime(JSContext *ctx);
++/* Borrowed facts for the innermost active C-function/data invocation, including
++   across its JS reentry. Incoming is the dispatcher argument; defining is the
++   function's creation context. Neither is an HTML settings/security decision.
++   Query on the owner thread; results expire when that invocation returns.
++   Returns false and clears output outside a native invocation or for null rt.
++   A null output returns false. No allocation, exception or refcount changes. */
++typedef struct JSNativeCallContexts {
++    JSContext *incoming;
++    JSContext *defining;
++} JSNativeCallContexts;
++JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out);
+ void JS_SetClassProto(JSContext *ctx, JSClassID class_id, JSValue obj);
+ JSValue JS_GetClassProto(JSContext *ctx, JSClassID class_id);
+ 

@@ -1031,3 +1031,26 @@ zero length with the engine exception pending. This includes a rope
 linearized by `JS_ToString`; the temporary string belongs to the conversion
 until it is returned or released. `tools/test_js_port_host.sh` refuses the
 conversion of both a Latin-1 and a wide string and checks teardown ownership.
+
+## Native call context facts
+
+`JS_GetNativeCallContexts` is an additive raw-engine query for the innermost
+active generic/data C-function invocation. It copies borrowed `incoming` and
+`defining` contexts without allocation, reference changes or exception access.
+No invocation (or a null runtime) returns false and clears a supplied output;
+a null output returns false. Query on the owner thread and do not retain the
+borrowed pair beyond the native invocation.
+
+Generic C functions receive their defining context as their callback argument;
+data functions receive the incoming context while retaining their defining
+context. The query preserves those conventions. Nested calls restore the
+enclosing pair on normal or abrupt return. During JS reentry, that enclosing
+pair still describes the native invocation, not the current JS realm. Other
+class/provider callbacks do not establish a new pair.
+
+These are dispatcher facts, not browser security authority, entry/incumbent
+settings, job ownership or an interrupted-environment set. Raw host callers can
+choose the incoming context. Production DOM/Yonder do not use the query; the
+remaining browser attribution obligations are in
+[the F.4b interface note](../../docs/design/pending/IFRAME_F4_SETTINGS.md).
+Wrapper ABI 5 is unchanged; use matching rebuilt engine objects and headers.

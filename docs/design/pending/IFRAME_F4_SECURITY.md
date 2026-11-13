@@ -44,7 +44,7 @@ prepared F.3b engine as well as the tracked patch inputs.
 |---|---|---|
 | `libjs` prepared `quickjs.h`: `JSClassExoticMethods` | Contains property, prototype and extensibility hooks | Reuse native exotics; no speculative hook-table extension or ordinary JS Proxy implementation |
 | Prepared `quickjs.c`: `OP_push_this`, `JS_Eval`, `JS_EvalFunction`, `js_global_eval` | Several paths select `ctx->global_obj` as a this-value | Audit global-this independently from global name/lexical storage; changing one opcode is insufficient |
-| Prepared `quickjs.c`: `js_call_c_function`, C-function-data call path | Native functions use their defining realm | The `ctx` inside a borrowed binding is not proof of the security caller |
+| Prepared `quickjs.c`: `js_call_c_function`, C-function-data call path | Generic C functions receive their defining realm; data functions retain it but receive the incoming context | The `ctx` inside a borrowed binding is not proof of the security caller |
 | `libjs/runtime/runtime.c`: `turn_owner`, task/setup guards | Outer task ownership governs accounting | Do not repurpose it as current or incumbent settings |
 | `libdom/core.c`, `event.c`, `browsing.c` | Global object supplies window identity, events and related-window answers | Audit exported window values and event targets together; keep the event registry document-owned |
 | `libdom/window.c`: `window_member`, `ask_url` | Location uses binding identity/URL, resolves through that binding, and queues an unattributed ask | Separate relevant global, current active target, source settings and queued navigation identity |
@@ -76,9 +76,12 @@ stay intact. Global declarations stay on the real global. A mutable
 installs its public aliases when it opts into the complete proxy; a dormant
 engine hook does not alter existing Yonder aliases.
 
+F.4b interface details and staged evidence live in [IFRAME_F4_SETTINGS.md](IFRAME_F4_SETTINGS.md).
+The initial raw native-call query is not a settings or security query.
+
 F.4b keeps four explicit roles, following the
 [HTML settings algorithms](https://html.spec.whatwg.org/multipage/webappapis.html#realms-settings-objects-global-objects):
-current execution, outer entry, incumbent callback context and target relevant
+current execution, most recent host entry, incumbent callback context and target relevant
 settings. A WebIDL security check needs the context before the callee becomes
 current. Callback capture/invocation needs its own scoped bookkeeping; it
 cannot be reconstructed from a function's creation realm or timer owner.

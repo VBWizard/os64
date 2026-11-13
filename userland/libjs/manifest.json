@@ -194,6 +194,11 @@
       "path": "patches/0022-browser-global-this.patch",
       "sha256": "532ffe0695ac387b0481426542cade6ed6ab47bd380dcb79fb95d84a025d89da",
       "reason": "Retain an opt-in global-this receiver for sloppy calls, script and bytecode evaluation, and indirect eval while preserving global environment storage and standalone defaults."
+    },
+    {
+      "path": "patches/0025-native-call-contexts.patch",
+      "sha256": "9a7db65d417f2e8fb98a7ac8ba3cd47ca7989009d0228f1dacd35133dab3b3bd",
+      "reason": "Expose borrowed incoming and defining context facts for active native function calls without treating either as browser security authority or changing callback context delivery."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
