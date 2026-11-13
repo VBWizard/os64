@@ -649,7 +649,7 @@ static int invoke_queue(os64_dom_t *dom, JSContext *ctx, DElementQueue *q)
 
 bool d_custom_busy(const os64_dom_t *dom)
 {
-    return dom->custom && (dom->custom->agent->depth || dom->custom->agent->walking ||
+    return dom->custom && dom->custom->agent && (dom->custom->agent->depth || dom->custom->agent->walking ||
                            dom->custom->agent->adopting);
 }
 
@@ -1716,9 +1716,10 @@ void d_custom_free(os64_dom_t *dom)
         d_free(dom, agent->stack);
         d_free(dom, agent->backup.items);
         if (dom->cluster) {
-            dom->cluster->custom_agent = NULL;
+            if (dom->cluster->custom_agent == agent) dom->cluster->custom_agent = NULL;
             for (size_t i = 0; i < dom->cluster->count; ++i)
-                if (dom->cluster->members[i]->custom) dom->cluster->members[i]->custom->agent = NULL;
+                if (dom->cluster->members[i]->custom && dom->cluster->members[i]->custom->agent == agent)
+                    dom->cluster->members[i]->custom->agent = NULL;
         }
         d_free(dom, agent);
         s->agent = NULL;

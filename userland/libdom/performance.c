@@ -1111,20 +1111,22 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     /* A mark's and a measure's detail are structured clones. */
     if (d_clone_setup(dom, ctx, global) < 0) return -1;
-    /* The time origin, read once. */
-    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) dom->timing_seen.at[i] = OS64_DOM_TIMING_NOT_YET;
-    os64_dom_timing_t t;
-    timing_read(dom, &t);
-    if (dom->options.timing != NULL) {
-        dom->time_origin_us = t.origin_us;
-        dom->time_origin_epoch_us = t.origin_epoch_us;
-        dom->clock_seen_us = t.origin_us;
-    } else {
-        os64_time_t wall;
-        dom->time_origin_us = now_us(dom);
-        dom->time_origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
-            ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
-            : 0;
+    /* Staged installation uses the caller's copied creation snapshot. */
+    if (!dom->installing) {
+        for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) dom->timing_seen.at[i] = OS64_DOM_TIMING_NOT_YET;
+        os64_dom_timing_t t;
+        timing_read(dom, &t);
+        if (dom->options.timing != NULL) {
+            dom->time_origin_us = t.origin_us;
+            dom->time_origin_epoch_us = t.origin_epoch_us;
+            dom->clock_seen_us = t.origin_us;
+        } else {
+            os64_time_t wall;
+            dom->time_origin_us = now_us(dom);
+            dom->time_origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
+                ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
+                : 0;
+        }
     }
 
     /* The prototypes: Performance's, the entries', timing's, navigation's. */

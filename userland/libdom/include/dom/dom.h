@@ -400,6 +400,43 @@ os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
+/* Admission allowance for the installed DOM interfaces, including shadow
+ * trees and ranges, plus sibling work. Validated under the 64 MiB engine cap
+ * with both allocator profiles; this check does not reserve heap storage. */
+#define OS64_DOM_CHILD_ENGINE_HEADROOM (8u * 1024u * 1024u)
+
+/* Fresh private child installation. The host supplies measured engine peak
+ * plus sibling headroom, and a copied creation-time snapshot in its clock
+ * domains. Setup does not call option providers. Timing offsets use
+ * OS64_DOM_TIMING_NOT_YET for milestones that have not happened.
+ * A nested installation borrows the parent's task budget and preserves its
+ * queued jobs. Use an outcome distinct from the enclosing engine call.
+ * CHILD_REFUSED leaves document/state ownership with the caller. Once consumed is
+ * true, the cluster retains the binding shell and backing, including failure;
+ * only CHILD_ACTIVE publishes a usable child. CHILD_FAILED leaves siblings usable;
+ * CHILD_RUNTIME_FAILED requires root teardown after executing stacks unwind.
+ * Failed consumed slots and native charges are retained until root teardown. */
+typedef struct {
+    size_t engine_headroom;
+    uint64_t now_ms, now_us;
+    os64_dom_timing_t timing;
+} os64_dom_installation_t;
+typedef enum {
+    OS64_DOM_CHILD_REFUSED = 0,
+    OS64_DOM_CHILD_ACTIVE,
+    OS64_DOM_CHILD_FAILED,
+    OS64_DOM_CHILD_RUNTIME_FAILED
+} os64_dom_child_state_t;
+typedef struct {
+    os64_dom_child_state_t state;
+    os64_dom_t *binding;
+    os64_js_realm_t *realm;
+    bool consumed;
+} os64_dom_child_t;
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *, os64_html_document_t *,
+    os64_page_state_t *, const os64_dom_options_t *, const os64_dom_installation_t *,
+    os64_js_outcome_t *);
 void os64_dom_cluster_drain(os64_dom_cluster_t *);
 void os64_dom_cluster_free(os64_dom_cluster_t *);
 os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);

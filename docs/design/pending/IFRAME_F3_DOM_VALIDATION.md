@@ -884,15 +884,114 @@ expectation matches, not a claim that the unsupported cases pass. Native
 libdom builds; ASan/UBSan/LSan remain enabled. Tracker/diff checks pass and
 stale-reference output is reviewed. No new guest/P5 acceptance is claimed.
 
+## Staged native installation and admission checkpoint
+
+`os64_dom_create_child` admits a fresh private engine realm, installs its
+interfaces through `os64_js_realm_setup`, and publishes only after activation.
+A copied creation-time clock/timing snapshot avoids external provider entry
+during setup. Nested installation preserves the parent's active outcome,
+deadline, job count and queued-job order. Existing-realm construction retains
+its original root-failure contract; the new API explicitly distinguishes an
+unconsumed refusal, active child, consumed local failure and shared failure.
+
+Local failure closes and retains the candidate shell, detaches its option
+providers, stops mutation delivery, removes candidate-owned wrappers from
+shared buckets and releases its retained JS roots. Existing shared observer
+and custom queues keep their identity and order. A failed first modern child
+can own private partial dispatchers: those remain attached to its shell until
+root teardown, and subsequent installation/free sweeps replace or clear only
+matching owners. The partial bootstrap creates no author registrations or
+native tasks. Engine memory, clock, cancellation and budget failures retain
+the sticky runtime-wide boundary; cleanup never clears the engine latch.
+
+The new fixture covers modern and classic parents with pre-existing sibling
+C, cross-document adopted nodes, ordered A/C observer registrations and a
+custom-element definition. Every native installation allocation is refused
+in turn under both teardown policies, followed by A/C execution, mutation of
+the existing adopted object and successful admission of another child. The
+same sweep runs inside A's callback with jobs already queued; an attempt to
+alias its active outcome is refused without changing that outcome. Failed
+candidate wrappers and registry roots are checked directly. Shadow DOM and
+Range interfaces are enabled in the full bootstrap.
+
+At this source checkpoint, the complete shipping DOM suite passes **182,878
+checks**, including **8,454 native allocation sweeps**. The separate exhaustive
+nested sweep passes **138,364 checks**. The 1,116 native allocations with a
+classic parent and 1,114 with a modern parent are each cut under FATAL and
+RECLAIM. A fresh process separately refuses the cold CSS shorthand-cache
+scratch allocation: the initial sweep's apparent extra allocation was traced
+to `shorts_learn`, whose immutable table is reused afterward. Repeatable
+sweeps warm that table before measuring. Focused installation passes **58
+checks**; seven selected nested cuts also pass with the instrumented engine.
+The longer instrumented exhaustive run reached its harness wall-time limit
+in its final group; that group is checked separately in final acceptance.
+
+Nine isolated mutations are caught: enabling providers before commit,
+recomputing the copied origin, poisoning siblings on local failure, retaining
+failed wrappers, overwriting a failed private observer state, clearing a later
+custom agent, leaking candidate registry roots, reporting an engine failure as
+local, and publishing without activation. The retained-root mutation is caught
+by the engine's `gc_obj_list` teardown invariant, before the fixture can report
+its ordinary leak assertion. Cumulative caught total: **231**. Logs are bounded
+and read incrementally; ASan, UBSan and LeakSanitizer remain enabled.
+
+### Production-cap admission measurements
+
+The explicit allowance `OS64_DOM_CHILD_ENGINE_HEADROOM` is **8 MiB**. It covers
+full supported interfaces (including shadow DOM and Range), the measured
+installation peak and sibling operating margin. It is checked before native
+ownership is taken and again by engine staging; it does not reserve heap
+bytes or promise recovery from arbitrary subsequent allocation failure.
+The test runtime remains capped at **64 MiB**, with unchanged aggregate native
+limits: HTML 64 MiB, page state 16 MiB, DOM 8 MiB, kept bodies 256 MiB, Canvas
+128 MiB. Byte counts below use the engine allocator's charge, including its
+profile overhead, rather than a raw QuickJS object census.
+
+| Engine / teardown | Additional installation peak | Additional retained engine bytes | Native DOM bytes | Modern children before local headroom refusal |
+|---|---:|---:|---:|---:|
+| Shipping / FATAL | 1,371,024 | 1,371,024 | 56,117 | 41 |
+| Shipping / RECLAIM | 1,415,392 | 1,415,392 | 56,117 | 41 |
+| Instrumented / FATAL | 1,486,816 | 1,486,720 | 56,117 | 39 |
+| Instrumented / RECLAIM | 2,140,448 | 2,140,320 | 56,117 | 27 |
+
+The largest observed peak leaves more than 6 MiB of the admission allowance
+for sibling work. Repeated modern installation/departure refuses locally with
+6,892,880–8,204,768 bytes of engine headroom, depending on the profile; A remains
+usable. A smaller-interface cycle admits **32 departed and 32 failed children**
+beside the primary, then returns REALM_LIMIT: both consume the cumulative
+65-slot ledger. Their native charges remain live. Deliberately underdeclared
+headroom forces actual engine limits at multiple bootstrap stages, and a
+host allocation failure during context creation exercises OOM separately;
+both retain the shared failure and refuse later parent source execution.
+
+### Guest and pinned-web integration
+
+The rebuilt target libraries and three-realm consumer run from a frozen,
+SHA-256-manifested cohort of **19 files (21,850,576 bytes)**. Its parent observes
+`os64_wait` return and child exit **0x446f0100**. The guest exercises staged B/C
+creation, the shared A/B/C adoption oracle, ordinary B departure, suppressed
+B timers, retained B function and object access through A/C, an unconsumed
+candidate refusal and heap verification after both teardown policies. The
+existing NONET kernel reports its unrelated `net_arp_pending_order` failure;
+the acceptance claim is for the DOM consumer, not the kernel suite. This is
+QEMU evidence, with no P5 handoff required for the foundation.
+
+Fresh Yonder runners compare against the preserved pre-F3 baseline `37ec284d`
+at WPT pin `a699fb16767be39ba3e61a8e8b6bef60383f08ee`. All **17 affected families**
+match their unchanged expectation files: DOM nodes/ranges/events, custom
+elements, intersection/resize observers, performance timeline, web/CSS
+animations, animation frames, pointer events and six Streams families. Sixteen
+families have identical named verdicts. Web Animations adds 70 mask-property
+subtests (56 pass, 14 fail), following the intervening mask surface; no
+previous passing subtest is lost. Existing expected failures, harness errors,
+not-run results and excluded worker/shadow-realm variants remain explicit.
+No expectation file is weakened or updated. The runner self-tests also pass.
+
 ## Remaining F.3b work
 
-- Install a child DOM transactionally with staged engine setup and native
-  rollback, preserving siblings and accounting for retained failed shells.
-- Measure installation peak and retained active/departed charges under both
-  allocator profiles, set the production reserve/margin, and prove repeated
-  admission refuses locally before sticky runtime failure.
-- Complete the brief's integration, allocation, budget, mutant, guest and
-  pinned-WPT evidence before marking F.3 done or requesting final review.
+- Integrate current userland, recheck affected browser/rendering seams and
+  complete the instrumented allocation evidence before final review.
+- Record final source-qualified acceptance and review in the tracker/PR.
 
 Frame enablement, independent realm reclamation and child-local overrun
-recovery remain outside F.3b. No P5 handoff is required for this checkpoint.
+recovery remain outside F.3b. F.15/F.16 retain the F.11 proof-or-acceptance gates.

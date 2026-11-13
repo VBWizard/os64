@@ -395,6 +395,7 @@ struct os64_dom {
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
     bool departure_finishing, departure_finished;
+    bool installing;
     size_t provider_borrows;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
@@ -1646,7 +1647,7 @@ size_t d_streams_bytecode_kept(void);
  * over at the first read, and closed behind it; closed from its creation
  * when `length` is 0. */
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
-/* Whether `value` is a ReadableStream of this realm: 1, 0, or -1 with the
+/* Whether `value` is a genuine ReadableStream in this cluster: 1, 0, or -1 with the
  * exception pending. */
 int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 /* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception.

@@ -275,6 +275,21 @@ itself.
 Parts from the DOM Standard rather than from Unix, recorded here because a
 page's script can see them.
 
+- **Iframe retirement is bounded retention.** The F.3 foundation keeps
+  departed and failed contexts/native shells until root teardown. All consume
+  the cumulative 65-slot limit and aggregate byte caps. Admission uses an
+  8 MiB engine allowance for full DOM setup and sibling work. Ordinary
+  departure stops document-owned activity while retained objects and direct
+  function calls remain usable under the live caller's budget. F.15 tracks
+  independent reclamation; F.11 requires that proof or accepted session-churn
+  measurements. `IFRAME_F3_RETIREMENT.md`; libdom `LIBDOM.md`.
+- **A script overrun ends the shared iframe runtime.** F.3 preserves sticky
+  memory, deadline/job/stack, clock and cancellation failures instead of
+  resuming an interrupted heap. Healthy siblings survive ordinary departure
+  and local native child-installation failure. Child-local recovery requires
+  F.16's attribution and unwind proof; F.11 requires it or explicit fallback
+  acceptance. These foundations do not enable frame browsing by themselves.
+
 - **A history state is at most 2 MiB of JSON** (`OS64_DOM_STATE_MAX`): a
   `pushState` or `replaceState` with more is a QuotaExceededError. The
   standard sets no number and other browsers allow more (Firefox 16 MiB).

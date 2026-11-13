@@ -104,8 +104,9 @@ the `userland` checkpoint comparison is held stable (§ The cut).*
    while ordinary document departure leaves siblings running. Per-child
    timeout recovery remains a separate extension requiring heap/native
    unwind proofs, interrupted-realm attribution and a defined boundary
-   for retained calls. F.3 records the fallback in DEBTS/DIVERGENCES when
-   implemented; it does not silently clear libjs's sticky failure latch.
+   for retained calls. DEBTS/DIVERGENCES record this F.3 foundation's fallback;
+   it does not clear libjs's sticky failure latch. F.16 tracks child-local
+   recovery, and F.11 requires its proof or explicit fallback acceptance.
 9. **Out of this design, each with its row:** `window.open` to a new
    window and `opener` (P3a answers `null`, the blocked popup, and the
    status line says a popup was blocked; a second GUI window is the
@@ -512,9 +513,10 @@ Worker budgets remain a separate part of WORKERS.md.
 additional contexts" becomes "consumers create realms through the
 library and nothing else": `os64_js_realm_create(runtime, outcome)`
 returns a realm handle wrapping a new `JSContext` in the runtime (the
-intrinsics installed as the primary's are). The F.3 brief specifies a
-retirement operation: no new document-owned task runs, and ineligible
-jobs are suppressed before execution. The context and its native backing
+intrinsics installed as the primary's are). F.3 supplies engine retirement,
+DOM departure mark/finish and staged child installation (see
+[the lifecycle contract](../../../userland/libdom/LIBDOM.md)): no new
+document-owned task runs, and ineligible jobs are suppressed before execution. The context and its native backing
 remain retained until root teardown, within the cumulative slot and byte
 limits in that brief; retirement does not release the context reference.
 Direct calls to retained functions remain under the live caller's enclosing

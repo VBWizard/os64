@@ -846,7 +846,10 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (!s) { d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded"); return -1; }
         if (dom->cluster) {
             dom->cluster->observers = s;
-            for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = s;
+            /* Failed installation shells may retain a private partial state
+             * for teardown. Publishing a new dispatcher must not replace it. */
+            for (size_t i = 0; i < dom->cluster->count; ++i)
+                if (!dom->cluster->members[i]->closed) dom->cluster->members[i]->observers = s;
         }
     }
     dom->observers = s;
@@ -922,8 +925,9 @@ void d_observers_free(os64_dom_t *dom)
         d_free(dom, o);
     }
     if (dom->cluster) {
-        dom->cluster->observers = NULL;
-        for (size_t i = 0; i < dom->cluster->count; ++i) dom->cluster->members[i]->observers = NULL;
+        if (dom->cluster->observers == s) dom->cluster->observers = NULL;
+        for (size_t i = 0; i < dom->cluster->count; ++i)
+            if (dom->cluster->members[i]->observers == s) dom->cluster->members[i]->observers = NULL;
     }
     d_free(dom, s);
     dom->observers = NULL;

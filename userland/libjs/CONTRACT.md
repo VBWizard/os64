@@ -115,8 +115,11 @@ the check immediately before ordinary realm creation, including when nested
 inside a parent callback. It publishes no handle on refusal. The legacy
 `os64_js_realm_create` keeps its existing slot-only admission. Neither path
 promises that arbitrary later allocations or system OOM are recoverable.
-The DOM installation reserve and its profile-specific measurements belong to
-F.3b; a bare engine realm's size is not the cost of an installed DOM binding.
+libdom's `os64_dom_create_child` supplies staged installation and native
+rollback; its 8 MiB admission allowance includes the measured interface peak
+and sibling margin. [F.3b's measurements](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+cover both allocator profiles. A bare engine realm's size is not the cost of
+an installed DOM binding.
 
 `os64_js_realm_stage` performs guarded creation and reserves an Installing
 slot. It exposes a native handle for private installation, but ordinary
@@ -186,8 +189,11 @@ At the host's safe point after active entries and checkpoints, clear script
 and module hooks before freeing their opaque storage. Context/member queries
 and module release remain available while their ordinary runtime-health rules
 allow them. The libjs mark is not DOM departure: a DOM host must separately
-stop its timers, observers, network activity and binding providers. F.3b owns
-that integration and its cleanup proof.
+stop its timers, observers, network activity and binding providers.
+libdom's `os64_dom_depart_finish` joins this engine barrier with native walk
+and provider-loan checks, clears obsolete work and detaches providers while
+retaining exported objects. Its successful return permits releasing provider
+opaque storage; a sticky failure requires root teardown instead.
 
 Queued work carries native execution context, callback/code owner and an
 optional activity owner. Patch 0019 retains these independently. Promise

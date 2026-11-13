@@ -36,11 +36,36 @@ custom elements share one reaction stack and backup queue. Definitions remain
 per realm. Aggregate HTML, page, DOM, kept-body and Canvas caps supplement the
 existing local caps; counters include headers and retained backing.
 
-For an explicit admission, `consumed == false` leaves document/state ownership
-with the caller. Once installation begins, failure consumes them, poisons the
-cluster and drains its bindings. Destroy the shared runtime and free the
-cluster; child-only installation rollback remains an F.3b obligation.
-Public individual drain/free calls do nothing for explicit-cluster members.
+For explicit admissions, `consumed == false` leaves document/state ownership
+with the caller. `os64_dom_create_in_realm` installs into an existing realm;
+its consumed installation failure poisons and drains the cluster and requires
+root teardown. Public individual drain/free calls do nothing for cluster members.
+
+`os64_dom_create_child` creates a fresh staged realm and installs its DOM
+privately. Admission checks cumulative slots, aggregate native ledgers and
+caller-supplied engine headroom before taking document/state ownership.
+`OS64_DOM_CHILD_ENGINE_HEADROOM` supplies an 8 MiB admission allowance for the
+full interface bootstrap and sibling work under the 64 MiB engine limit;
+[the validation record](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+records measurements for both allocator profiles. Preflight does not reserve
+bytes or make arbitrary later engine OOM recoverable.
+
+The host supplies a copied creation-time clock/timing snapshot. Bootstrap
+cannot call option providers, author code or siblings. The privileged engine
+setup guard tags private jobs, drains only candidate work and activates the
+realm only on success. Nested setup borrows the parent's deadline/job count
+and requires a distinct outcome; it preserves queued parent work and its order.
+
+`CHILD_REFUSED` is unconsumed. `CHILD_ACTIVE` is the publication boundary.
+`CHILD_FAILED` retains a closed, charged shell and owned backing, removes its
+wrappers from shared lookup, restores shared dispatcher ownership and retires
+the candidate without draining siblings. Partial private observer/custom
+storage stays attached to its shell until native teardown; a later child
+cannot overwrite it. `CHILD_RUNTIME_FAILED` preserves sticky engine memory,
+clock, cancellation and budget failure and requires root teardown after stacks
+unwind. The result's `consumed` flag remains authoritative for backing ownership
+in every state. Failed and departed realms retain their slots and bytes until
+root teardown; no per-child reclamation or slot reuse is implied.
 
 `os64_dom_depart` marks a document ineligible for new activity without freeing
 records beneath a running callback. `os64_dom_depart_finish` returns BUSY while
@@ -69,8 +94,8 @@ survive through drain.
 The legacy sequence remains drain, runtime destruction, native binding free,
 then state/document release; layout borrowers must be gone before native free.
 A failed legacy installation can leave engine registration, so destroy that
-runtime without evaluating further source. Explicit installation runs through
-a guarded realm task. These ownership APIs do not implement an origin gate;
+runtime without evaluating further source. Existing-realm installation runs
+through a guarded realm task; fresh child installation uses staged setup. These ownership APIs do not implement an origin gate;
 only the trusted native fixtures exchange raw realm references. See
 [the F.2 contract](../../docs/design/pending/IFRAME_F2_OWNERSHIP.md) and
 [validation](../../docs/design/pending/IFRAME_F2_BINDINGS_VALIDATION.md).
