@@ -542,9 +542,9 @@ error after an underrun; `/dev/audiotap` for more than one listener.
 ## `play` and the resampler (the second pull request)
 
 `play file.wav`: reads a RIFF/WAVE file of 16-bit PCM, one or two channels,
-any rate; writes it to `/dev/audio`; prints nothing unless asked; on
+any rate (4 to 384 kHz as built); writes it to `/dev/audio`; prints nothing unless asked; on
 Ctrl+C writes `flush` and exits. Mono is doubled. A rate that is not the
-device's goes through a resampler in libos64, which yonder's media element
+device's goes through a resampler (§ As built says where it lives), which yonder's media element
 will need for the same reason (a great deal of the web's sound is 44.1
 kHz).
 
@@ -553,8 +553,8 @@ ported and host-tested and not written here. The lean is speexdsp's
 `resample.c` (BSD, one file, the resampler inside Opus's own tools), in the
 `upstream/` + `patches/` + `port/` pattern, pinned and hash-checked. Its
 proof is a host test: a sine through 44.1 to 48 kHz comes out a sine at the
-same frequency within a stated error. Which resampler is confirmed when
-that pull request opens; nothing in the kernel seam depends on it.
+same frequency within a stated error. Chris approved that port on
+2026-11-13; nothing in the kernel seam depends on it.
 
 ## As built (the kernel seam)
 
@@ -606,6 +606,30 @@ Proven: `tools/test_audio_stream_host.sh` (twelve named cases and random
 rounds beside the model), `tools/test_audio_stream_mutants.py` (111
 mutants), and `/tests/audiotest` (eleven steps, in `testrun`) on 8 CPUs and
 on the sparse 24.
+
+## As built (`play` and the resampler)
+
+- **The resampler is speexdsp's**, 1.2.1, `resample.c` alone and unpatched,
+  as `libsound.so` (`userland/libsound/README.md` has the inventory, the
+  build switches, and a review of upstream's branches made at Chris's ask:
+  nothing since the release fixes the resampler's C code). Not in libos64,
+  as this file first said: it needs `sin`, and libos64 does not load
+  libmath. The interface is `os64/resample.h`.
+- **`play [-v] file.wav`**: 16-bit PCM, one or two channels, any rate from
+  4 to 384 kHz; a WAVE_FORMAT_EXTENSIBLE header is read. It does not print
+  unless asked or refused. Ctrl+C flushes and exits 130. A flush from
+  somebody else is played through. It does not wait for its last fifth of
+  a second before exiting; the close leaves it playing.
+- **Proof**: `tools/test_resample_host.sh` and `/tests/resampletest` (one
+  body, `checks.h`: a sine in at one rate is the same sine out at another,
+  to within the rounding to 16 bits), `/tests/playtest` (`play` on a
+  44.1 kHz mono file and a 48 kHz stereo one, heard at the tap, and three
+  refusals), `tools/test_sound_audit.py`.
+
+On the P5 (Chris, 2026-11-13): `/tests/resampletest` and `/tests/audiotest`
+pass, and `play` on a 22.05 kHz file of 12.8 s ran for 12.65 s by the
+`time` utility, which is the song less the last of the ring that the close
+leaves playing.
 
 ## For Chris
 
