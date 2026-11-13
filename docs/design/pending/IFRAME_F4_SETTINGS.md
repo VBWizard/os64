@@ -105,6 +105,8 @@ These are required before F.4b completion and F.4d's browser publication API.
 This raw primitive is not a substitute for any of them. No security gate may
 use `incoming` or `defining` without the operation-specific attribution proof.
 
+Final evidence is recorded in [IFRAME_F4_NATIVE_CONTEXT_VALIDATION.md](IFRAME_F4_NATIVE_CONTEXT_VALIDATION.md).
+
 ## Focused proof
 
 Shared host/guest fixture `userland/libjs/tests/native_call_contexts.h` runs
