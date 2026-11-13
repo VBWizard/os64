@@ -241,6 +241,28 @@ static JSValue require_callback(JSContext *ctx, JSValueConst self, int argc,
     return d_require_callback(dom, ctx, argv[0]) ? JS_UNDEFINED : JS_EXCEPTION;
 }
 
+/* The hidden doors retain raw private-field probes, never public methods or
+ * page-controlled properties. A retained foreign object keeps its genuine
+ * brand after departure; probing does not schedule activity in its realm. */
+static JSValue foreign_stream_slot(JSContext *ctx, JSValueConst self, int argc,
+                                   JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (argc < 2 || !JS_IsObject(argv[1]) || !dom->cluster) return JS_UNDEFINED;
+    for (size_t i = 0; i < dom->cluster->count; ++i) {
+        os64_dom_t *member = dom->cluster->members[i];
+        if (member == dom || member->closed || !member->streams_door) continue;
+        JSValue probe = JS_GetPropertyStr(ctx, member->streams_door->value, "brand");
+        if (JS_IsException(probe)) return probe;
+        JSValue record = JS_Call(ctx, probe, JS_UNDEFINED, 2, argv);
+        JS_FreeValue(ctx, probe);
+        if (!JS_IsUndefined(record)) return record;
+    }
+    return JS_UNDEFINED;
+}
+
 /* Only the private factory can supply these functions. Their algorithms keep
  * settled data usable after creator departure; author invocation goes through
  * RequireCallback inside streams.js, rather than inheriting neutrality. */
@@ -303,6 +325,7 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
+    if (d_method(dom, ctx, object, "ForeignStreamSlot", foreign_stream_slot, 2, 0) < 0) goto fail;
     static const struct { const char *name; JSCFunction *function; int length; } helpers[] = {
         {"InternalReaction", internal_reaction, 1},
         {"InternalMicrotask", internal_microtask, 1},

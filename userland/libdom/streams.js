@@ -28,10 +28,11 @@
  *     value, so a value a page returned is looked at as the standard looks
  *     at it.
  *
- * Each public object carries ONE private field, the internal record that
- * holds its slots; `#x in o` is the brand check the IDL asks for, and the
- * records point at one another, never at a public object, except through
- * `pub`, the object a page sees.
+ * Public objects carry private fields for their slots. Local probes use
+ * `#x in o`; a private native bridge can ask other cluster members' raw
+ * probes, including retained departed realms. Neither probes nor records
+ * are exposed to page script. Records point at one another, with `pub`
+ * naming the public object.
  *
  * What it returns: the interfaces, which streams.c defines on the global
  * through the Modern Web's table (modern.c), and `door`, the internal
@@ -46,7 +47,7 @@
 // first window.
 const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply', 'RequireCallback',
     'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
-    'Object_getOwnPropertyDescriptor', 'Object_create',
+    'Object_getOwnPropertyDescriptor', 'Object_create', 'ForeignStreamSlot',
     'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'InternalMicrotask', 'InternalReaction',
     'ArrayBuffer', 'DataView', 'Int8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array',
     'Uint32Array', 'Float16Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
@@ -70,6 +71,19 @@ const getPrototypeOf = I.Object_getPrototypeOf;
 const getOwnPropertyNames = I.Object_getOwnPropertyNames;
 const objectCreate = I.Object_create;
 const getOwnPropertyDescriptor = I.Object_getOwnPropertyDescriptor;
+
+// Keep raw probes separate from the cross-realm fallback to avoid recursion.
+// The null-prototype table and captured probes are private factory state.
+const foreignStreamSlot = I.ForeignStreamSlot;
+const brandProbes = objectCreate(null);
+function sharedBrand(name, probe) {
+    brandProbes[name] = probe;
+    return function (o) {
+        const local = probe(o);
+        if (local !== undefined || !isObject(o)) return local;
+        return foreignStreamSlot(name, o);
+    };
+}
 const TypeError_ = I.TypeError;
 const RangeError_ = I.RangeError;
 const Uint8Array_ = I.Uint8Array;
@@ -197,6 +211,24 @@ function uponPromise(promise, onFulfilled, onRejected) {
 }
 function uponFulfillment(promise, onFulfilled) { uponPromise(promise, onFulfilled, undefined); }
 function uponRejection(promise, onRejected) { uponPromise(promise, undefined, onRejected); }
+
+// A trusted algorithm returning an internal promise still needs promise
+// adoption's asynchronous step. Its private thenable supplies a neutral
+// continuation and the captured intrinsic, rather than asking the departed
+// promise's ordinary `then` to run. Author-returned values never use this path.
+function internalPromise(promise) {
+    const wrapper = objectCreate(null);
+    wrapper.then = internalReaction(function (resolve, reject) {
+        apply(then_, promise, [internalReaction(resolve), internalReaction(reject)]);
+    });
+    return wrapper;
+}
+
+function transformAdopting(promise, onFulfilled, onRejected) {
+    return transformPromise(promise,
+        function (value) { return internalPromise(onFulfilled(value)); },
+        function (reason) { return internalPromise(onRejected(reason)); });
+}
 
 // "The result of reacting to": a new promise the caller hands on.
 function transformPromise(promise, onFulfilled, onRejected) {
@@ -703,7 +735,7 @@ let rsOf, rsReaderOf, rsControllerOf;
 class ReadableStream {
     #r;
     static {
-        rsOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        rsOf = sharedBrand('rsOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(underlyingSource = undefined, strategy = undefined) {
@@ -865,7 +897,7 @@ function isAbortSignal(value) {
 class ReadableStreamDefaultReader {
     #r;
     static {
-        rsReaderOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        rsReaderOf = sharedBrand('rsReaderOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(stream, record = undefined) {
@@ -1047,7 +1079,7 @@ function numReadRequests(stream) { return stream.reader.readRequests.length; }
 class ReadableStreamDefaultController {
     #r;
     static {
-        rsControllerOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        rsControllerOf = sharedBrand('rsControllerOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(key = undefined, record = undefined) {
@@ -1407,7 +1439,7 @@ let byobReaderOf;
 class ReadableStreamBYOBReader {
     #r;
     static {
-        byobReaderOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        byobReaderOf = sharedBrand('byobReaderOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(stream, record = undefined) {
@@ -1521,7 +1553,7 @@ let rbsControllerOf, byobRequestOf;
 class ReadableByteStreamController {
     #r;
     static {
-        rbsControllerOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        rbsControllerOf = sharedBrand('rbsControllerOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(key = undefined, record = undefined) {
@@ -1572,7 +1604,7 @@ class ReadableByteStreamController {
 class ReadableStreamBYOBRequest {
     #r;
     static {
-        byobRequestOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        byobRequestOf = sharedBrand('byobRequestOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(key = undefined, record = undefined) {
@@ -2295,7 +2327,7 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
             }, function (e) {
                 rejectDeferred(read, e);
             }));
-            return read.promise;
+            return internalPromise(read.promise);
         }, undefined);
     }
 
@@ -2322,7 +2354,7 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
     function waitForWritesToFinish() {
         const oldCurrentWrite = currentWrite;
         return transformPromise(currentWrite, function () {
-            return oldCurrentWrite !== currentWrite ? waitForWritesToFinish() : undefined;
+            return oldCurrentWrite !== currentWrite ? internalPromise(waitForWritesToFinish()) : undefined;
         }, undefined);
     }
 
@@ -2411,7 +2443,7 @@ class ReturnOverride {
 class AsyncIteratorStamp extends ReturnOverride {
     #r;
     static {
-        asyncIteratorOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        asyncIteratorOf = sharedBrand('asyncIteratorOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(o, record) {
@@ -2462,7 +2494,7 @@ function asyncIteratorNext() {
             throw reason;
         });
     }
-    it.ongoing = it.ongoing !== undefined ? transformPromise(it.ongoing, nextSteps, nextSteps) : nextSteps();
+    it.ongoing = it.ongoing !== undefined ? transformAdopting(it.ongoing, nextSteps, nextSteps) : nextSteps();
     return it.ongoing;
 }
 
@@ -2481,7 +2513,7 @@ function asyncIteratorReturn(value) {
         defaultReaderRelease(reader);
         return resolvedWith(undefined);
     }
-    it.ongoing = it.ongoing !== undefined ? transformPromise(it.ongoing, returnSteps, returnSteps) : returnSteps();
+    it.ongoing = it.ongoing !== undefined ? transformAdopting(it.ongoing, returnSteps, returnSteps) : returnSteps();
     return transformPromise(it.ongoing, function () { return iterResult(value, true); }, undefined);
 }
 
@@ -2613,7 +2645,7 @@ let wsOf, wsWriterOf, wsControllerOf;
 class WritableStream {
     #r;
     static {
-        wsOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        wsOf = sharedBrand('wsOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(underlyingSink = undefined, strategy = undefined) {
@@ -2838,7 +2870,7 @@ function writableStreamUpdateBackpressure(stream, backpressure) {
 class WritableStreamDefaultWriter {
     #r;
     static {
-        wsWriterOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        wsWriterOf = sharedBrand('wsWriterOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(stream, record = undefined) {
@@ -2989,7 +3021,7 @@ function writerWrite(writer, chunk) {
 class WritableStreamDefaultController {
     #r;
     static {
-        wsControllerOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        wsControllerOf = sharedBrand('wsControllerOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(key = undefined, record = undefined) {
@@ -3154,7 +3186,7 @@ let tsOf, tsControllerOf;
 class TransformStream {
     #r;
     static {
-        tsOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        tsOf = sharedBrand('tsOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(transformer = undefined, writableStrategy = undefined, readableStrategy = undefined) {
@@ -3248,7 +3280,7 @@ function tsSetBackpressure(stream, backpressure) {
 class TransformStreamDefaultController {
     #r;
     static {
-        tsControllerOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        tsControllerOf = sharedBrand('tsControllerOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     constructor(key = undefined, record = undefined) {
@@ -3350,7 +3382,7 @@ function tsSinkWriteAlgorithm(stream, chunk) {
         return transformPromise(stream.backpressureChange.promise, function () {
             const writable = stream.writable;
             if (writable.state === 'erroring') throw writable.storedError;
-            return tsControllerPerformTransform(c, chunk);
+            return internalPromise(tsControllerPerformTransform(c, chunk));
         }, undefined);
     }
     return tsControllerPerformTransform(c, chunk);
@@ -3444,7 +3476,7 @@ let blqsOf, cqsOf;
 class ByteLengthQueuingStrategy {
     #hwm;
     static {
-        blqsOf = function (o) { return isObject(o) && #hwm in o; };
+        blqsOf = sharedBrand('blqsOf', function (o) { return isObject(o) && #hwm in o ? o.#hwm : undefined; });
     }
 
     constructor(init) {
@@ -3452,12 +3484,13 @@ class ByteLengthQueuingStrategy {
     }
 
     get highWaterMark() {
-        if (!blqsOf(this)) throw new TypeError_('Illegal invocation');
-        return this.#hwm;
+        const hwm = blqsOf(this);
+        if (hwm === undefined) throw new TypeError_('Illegal invocation');
+        return hwm;
     }
 
     get size() {
-        if (!blqsOf(this)) throw new TypeError_('Illegal invocation');
+        if (blqsOf(this) === undefined) throw new TypeError_('Illegal invocation');
         return byteLengthSize;
     }
 }
@@ -3465,7 +3498,7 @@ class ByteLengthQueuingStrategy {
 class CountQueuingStrategy {
     #hwm;
     static {
-        cqsOf = function (o) { return isObject(o) && #hwm in o; };
+        cqsOf = sharedBrand('cqsOf', function (o) { return isObject(o) && #hwm in o ? o.#hwm : undefined; });
     }
 
     constructor(init) {
@@ -3473,12 +3506,13 @@ class CountQueuingStrategy {
     }
 
     get highWaterMark() {
-        if (!cqsOf(this)) throw new TypeError_('Illegal invocation');
-        return this.#hwm;
+        const hwm = cqsOf(this);
+        if (hwm === undefined) throw new TypeError_('Illegal invocation');
+        return hwm;
     }
 
     get size() {
-        if (!cqsOf(this)) throw new TypeError_('Illegal invocation');
+        if (cqsOf(this) === undefined) throw new TypeError_('Illegal invocation');
         return countSize;
     }
 }
@@ -3561,7 +3595,7 @@ function codecWritable(r) {
 class TextDecoderStream {
     #r;
     static {
-        tdsOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        tdsOf = sharedBrand('tdsOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     // The label and options are TextDecoder's, read as its constructor
@@ -3610,7 +3644,7 @@ class TextDecoderStream {
 class TextEncoderStream {
     #r;
     static {
-        tesOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+        tesOf = sharedBrand('tesOf', function (o) { return isObject(o) && #r in o ? o.#r : undefined; });
     }
 
     // "encode and enqueue a chunk": the chunk as a DOMString, after a lead
@@ -3873,6 +3907,10 @@ function doorError(value, reason) {
 }
 
 const door = objectCreate(null);
+door.brand = function (name, object) {
+    const probe = brandProbes[name];
+    return probe === undefined ? undefined : probe(object);
+};
 door.fromBytes = doorFromBytes;
 door.fromHost = doorFromHost;
 door.enqueue = doorEnqueue;

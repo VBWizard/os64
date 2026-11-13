@@ -204,11 +204,12 @@ unobserved-cycle WeakRef assertion closes that gap. A destructor-only hold
 omission mutant is not detected by this fixture and is not counted as caught.
 The normal implementation passes the leak-enabled allocation sweeps.
 
-A separate audit observation remains unresolved: a B-created readable stream
+At that checkpoint, a separate audit observation remained unresolved: a B-created readable stream
 piped into an A-created writable stream fails the self-hosted private-brand
 check, even before departure. The retained-pipe retirement regression uses
 B-created streams on both sides to isolate the lifecycle behavior. Mixed-realm
-stream interoperability is not claimed by these results.
+stream interoperability is not claimed by those results; the later mixed-realm
+Streams checkpoint below supplies the repair and its evidence.
 
 Nine isolated source mutants were compiled and rejected by named assertions:
 restoring first-enqueuer ownership for either shared queue; ignoring callback
@@ -824,11 +825,67 @@ checks pass; stale-reference output was inspected (the retained design-brief
 filename is a prose-only false positive, not a deleted file). No new guest or
 pinned-WPT acceptance is claimed.
 
+## Mixed-realm Streams and internal promise adoption
+
+A B-created readable stream rejected an A-created writable stream before any
+retirement: each factory's private brand probes recognized only local class
+instances. The new private bridge asks other cluster members' retained raw
+probes on a local miss. It neither recurses through fallback probes nor reads
+page-controlled object properties/prototypes. All sixteen interface probes
+participate, including strategies with zero/NaN high-water marks. Retired
+realms retain their genuine brands; proxies and forged prototypes do not.
+
+With branding repaired, retained pipes exposed a second failure: both writes
+completed, but one pipe promise stayed pending. Internal promise adoption was
+using an ordinary `then` belonging to the retired realm. Trusted algorithms
+now return a private thenable whose continuation and resolver wrappers carry
+neutral ownership and use the captured Promise intrinsic. This preserves the
+asynchronous adoption step in pipes, repeated iterator operations and
+transform backpressure. Author-returned values still take ordinary conversion
+and eligibility paths; no engine ownership rule or runtime budget is relaxed.
+
+The focused fixture exercises mixed pipes in both directions, retained
+same-realm pipes, borrowed readers/writers/controllers/iterators, BYOB requests,
+transform/encoding/strategy getters, native Response conversion, false/proxy
+brands, and a poisoned public Promise.prototype.then. Its initial baseline had
+28 failures (including follow-on refusals after the first brand failure).
+After the brand fix, two assertions exposed the pending retained pipes. The
+initial three-pipe combined fixture exceeded its 100-job cap; separating the
+independent same-realm pipe into its own task preserved that cap and passed.
+The byte-controller fixture's expected desiredSize was corrected to -1 for a
+queued byte at high-water mark zero.
+
+The focused fixture passes **104 checks** on both engine profiles. Full
+shipping DOM passes **60,910 checks**, including **3,994 native binding
+allocation sweeps**. Instrumented Fetch/Streams (**10,526**) and combined
+retirement (**9,770**) pass. Nine isolated mutations are caught: ignoring
+retired probe owners, scanning only the first member, losing readable or
+writable fallback, treating a zero strategy mark as a missing brand, ordinary
+adoption, owned thenable continuations, public-then lookup and owned resolver
+jobs. One mutation's first oracle named the pipe-completion assertion; the
+actual catch was the patched-public-then assertion, and the corrected oracle
+was rerun. Cumulative caught total: **222**.
+
+A freshly rebuilt Yonder runner at pinned WPT commit
+`a699fb16767be39ba3e61a8e8b6bef60383f08ee` matches all six checked-in Streams
+expectation files without updating them:
+
+| Group | Pass | Expected fail | Not run within pages |
+|---|---:|---:|---:|
+| readable-streams | 349 | 13 | 0 |
+| readable-byte-streams | 245 | 4 | 0 |
+| writable-streams | 197 | 0 | 0 |
+| transform-streams | 133 | 1 | 0 |
+| piping | 230 | 0 | 0 |
+| transferable | 10 | 71 | 1 |
+
+Worker/shadow-realm variants remain excluded by the runner. These totals are
+expectation matches, not a claim that the unsupported cases pass. Native
+libdom builds; ASan/UBSan/LSan remain enabled. Tracker/diff checks pass and
+stale-reference output is reviewed. No new guest/P5 acceptance is claimed.
+
 ## Remaining F.3b work
 
-- Complete the mixed-realm Streams private-brand repair and integration audit;
-  retained cross-realm `ReadableStream.pipeTo(WritableStream)` must work before
-  and after creator retirement.
 - Install a child DOM transactionally with staged engine setup and native
   rollback, preserving siblings and accounting for retained failed shells.
 - Measure installation peak and retained active/departed charges under both

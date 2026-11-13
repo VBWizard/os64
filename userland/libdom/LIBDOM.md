@@ -1306,6 +1306,20 @@ multipart/form-data is written here (an empty FormData is the close
 delimiter alone, as browsers send it) and
 read back by `formData()`, as is urlencoded.
 
+The self-hosted Streams interfaces keep unforgeable private-field brands.
+On a local miss, a private native bridge asks the other cluster members' raw
+probes, bounded by the cluster's realm limit. It does not inspect the public
+object's properties or prototype, and retired retained realms still answer.
+Borrowed stream/reader/writer/controller/iterator/strategy/encoding methods and
+native Response body conversion can therefore use authentic foreign objects;
+proxies and forged prototype chains do not acquire their target's brand.
+
+Internal promise-returning algorithms use a private neutral thenable for
+adoption, retaining its asynchronous step and captured Promise intrinsic.
+Piping, repeated async iteration and transform backpressure can finish after
+creator departure without looking up the retained promise's public `then`.
+Author-returned values keep their normal conversion and callback eligibility.
+
 **`fetch`, `Headers`, `Request`, `Response`** (`fetch.c`): the Fetch
 standard's § 5. A header list is a C array, its sort-and-combine kept
 until it changes, so a walk is n log n; the guards (request, no-cors,
