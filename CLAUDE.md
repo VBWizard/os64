@@ -466,7 +466,7 @@ virtio because its drain waits for the tick.
   meeting os64 for the first time.
 - **USB** (`usb/xhci.c`, `kusb.c`): the xHCI controllers, drained by
   **`kusb`**, a kernel daemon pinned to the BSP and parked on a doorbell the
-  tick rings (`knet`'s shape; docs/design/pending/XHCI_INTERRUPT.md § The
+  controllers' interrupt and the tick both ring (`knet`'s shape; docs/design/pending/XHCI_INTERRUPT.md § The
   design). It is the one consumer of the event rings once the scheduler
   runs. A wake is one PASS (`xhci_pass`): each controller drained until its
   ring is empty or a one-tick deadline passes (checked before every event;
@@ -492,8 +492,9 @@ virtio because its drain waits for the tick.
   `tick (why)`): one vector, 0x47, for all of them, addressed at the BSP.
   The top half (`xhci_isr`) acknowledges `USBSTS.EINT` then `IMAN.IP`,
   marks the controller and rings `kusb`'s bell; it takes no lock and
-  touches no event ring. `kusb` enables the interrupts itself, before its
-  first pass, so events boot left on a ring are that pass's. The tick still
+  touches no event ring. `kusb` enables the interrupts itself, at its
+  first wake that finds USB's flag free, marking each controller so its
+  next drain takes what boot left on the ring. The tick still
   rings the bell, which is all a tick-driven controller has. Per
   interrupting controller `/sys/usb` gives `fires` and the time from an
   interrupt to the drain that answered it; `interrupt_spurious` counts
@@ -937,7 +938,8 @@ the library serves every process). How it fits together:
     then reads `driven=tick (USBPOLL)`. Like every token it does NOT travel
     to the P5
   - `USBIMOD=<n>`: the xHCI interrupt moderation interval for this boot, in
-    250 ns units (absent = the driver's 1000, which is 250 us; 0 = none).
+    250 ns units, 0 to 65535 (absent = the driver's 1000, which is 250 us;
+    0 = none).
     A measuring dial; it does not travel to the P5 either
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's

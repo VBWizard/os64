@@ -264,13 +264,13 @@ typedef struct {
 
 	// How it is driven: decided once, by kusb, in xhci_interrupts_enable.
 	xhci_drive_choice_t drive;
-	// THE TOP HALF'S MARKS, written in interrupt context and taken by
-	// kusb's drain. ehb_owed: an interrupt was acknowledged for this ring
-	// since its ERDP was last written, so a drain that handles nothing
-	// must read the register and retire the busy bit if it is set.
-	// irq_at: when the oldest interrupt nobody has answered arrived
-	// (0 = none), for the interrupt-to-service time.
-	volatile uint32_t ehb_owed;
+	// THE TOP HALF'S MARK, written in interrupt context and taken by kusb's
+	// drain in one exchange. Non-zero: an interrupt was acknowledged for
+	// this ring since a drain last took the mark, so a drain that handles
+	// nothing must read ERDP and retire the busy bit if it is set. The
+	// value is the TSC at the OLDEST such interrupt, which is what the
+	// interrupt-to-service time is measured from; one word, so the mark
+	// and its stamp cannot be taken apart.
 	volatile uint64_t irq_at;
 	volatile uint64_t irq_fires;
 	// From an interrupt to the start of the drain that answered it, in
@@ -296,7 +296,8 @@ static xhci_t *s_hc;
 // grows. kusb writes an entry whole and then raises the count past it; the
 // handler reads the count and never looks beyond it, so it never sees a
 // half-published controller. Through an entry it reads `op` and `rt`, which
-// are set at bring-up and not changed after.
+// are set at bring-up and not changed after, and writes that controller's
+// interrupt mark and fire count.
 static xhci_t *s_irq_list[MAX_XHCI_CONTROLLERS];
 static volatile uint32_t s_irq_count;
 static volatile uint64_t s_irq_spurious;   // handler entries that found no controller signalling
@@ -592,18 +593,20 @@ static uint64_t xhci_clock(void *ctx)
 // (0: no deadline, drain to empty), then write ERDP if the drain made
 // progress: the empty slot when it drained to empty, the last event handled
 // when the deadline stopped it (xhci_service.h says why they differ). A
-// drain that handled nothing writes nothing.
+// drain that handled nothing writes nothing, unless the top half
+// acknowledged an interrupt for this ring and the busy bit reads set: then
+// the pointer is written back once, to retire the bit.
 static xhci_evt_drain_t xhci_drain_until(uint64_t deadline)
 {
 	// The mark is taken BEFORE the drain: an interrupt acknowledged while
 	// the drain runs raises it again, for the next one. It is never set for
 	// a tick-driven controller or before kusb enables interrupts, and then
 	// ERDP is never read.
-	bool owed = __atomic_exchange_n(&s_hc->ehb_owed, 0, __ATOMIC_SEQ_CST) != 0;
+	uint64_t at = __atomic_exchange_n(&s_hc->irq_at, 0, __ATOMIC_SEQ_CST);
+	bool owed = at != 0;
 	if (owed) {
-		uint64_t at = __atomic_exchange_n(&s_hc->irq_at, 0, __ATOMIC_SEQ_CST);
 		uint64_t now = rdtsc();
-		if (at != 0 && now > at) {
+		if (now > at) {
 			uint64_t waited = now - at;
 			if (waited > s_hc->irq_service_max) s_hc->irq_service_max = waited;
 			if (waited > s_hc->irq_service_recent) s_hc->irq_service_recent = waited;
@@ -2366,9 +2369,9 @@ static bool xhci_init_controller(pci_device_t *dev)
 	}
 	mmio_w64(s_hc->op, XHCI_OP_DCBAAP, virt_to_phys(s_hc->dcbaa));
 
-	// Command ring + event ring (interrupter 0, interrupts left DISABLED —
-	// the tick drives the drain; see xhci.h for why that's a decision and
-	// not a shortcut).
+	// Command ring + event ring (interrupter 0, its interrupt left DISABLED
+	// here: bring-up drains by polling, and kusb turns the interrupt on
+	// once it exists, xhci_interrupts_enable).
 	if (!ring_init(&s_hc->cmd))
 		return false;
 	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
@@ -2602,8 +2605,7 @@ void xhci_isr(void)
 		xhci_t *hc = s_irq_list[i];
 		if (!xhci_irq_acknowledge(xhci_irq_read, xhci_irq_write, hc))
 			continue;
-		__atomic_store_n(&hc->ehb_owed, 1, __ATOMIC_SEQ_CST);
-		// The OLDEST unanswered interrupt keeps the stamp.
+		// The mark, and the OLDEST unanswered interrupt keeps the stamp.
 		uint64_t none = 0;
 		__atomic_compare_exchange_n(&hc->irq_at, &none, now, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 		hc->irq_fires++;
@@ -2626,7 +2628,8 @@ bool xhci_interrupts_enable(void)
 	if (__sync_lock_test_and_set(&s_poll_busy, 1))
 		return false;
 	uint8_t bsp = (uint8_t)kCPUs[BSP_CPU].apic.id;   // a message address names an APIC ID
-	uint32_t imod = kUsbImod >= 0 ? (uint32_t)kUsbImod & 0xFFFF : XHCI_IMOD_DEFAULT;
+	// The interval is sixteen bits; a larger request gets the longest there is.
+	uint32_t imod = kUsbImod < 0 ? XHCI_IMOD_DEFAULT : kUsbImod > 0xFFFF ? 0xFFFFu : (uint32_t)kUsbImod;
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		xhci_t *hc = &s_controllers[i];
 		const pci_caps_t *caps = pci_caps_of(hc->pci_bus, hc->pci_device, hc->pci_function);
@@ -2668,13 +2671,20 @@ bool xhci_interrupts_enable(void)
 		// message for a condition older than the enable.
 		mmio_w32(hc->op, XHCI_OP_USBSTS, XHCI_USBSTS_EINT);
 		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP);
-		__atomic_store_n(&hc->ehb_owed, 1, __ATOMIC_SEQ_CST);
+		__atomic_store_n(&hc->irq_at, rdtsc(), __ATOMIC_SEQ_CST);
 		// Published whole before it can interrupt.
 		uint32_t n = s_irq_count;
 		s_irq_list[n] = hc;
 		__atomic_store_n(&s_irq_count, n + 1, __ATOMIC_RELEASE);
 		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IE);
 		mmio_w32(hc->op, XHCI_OP_USBCMD, mmio_r32(hc->op, XHCI_OP_USBCMD) | USBCMD_INTE);
+		// An event that arrived between the clear above and the two gates
+		// opening may have set the pending bit with nothing to send it to,
+		// and a controller that signals only when the bit RISES would then
+		// stay silent for good. Cleared once more, with the gates open: the
+		// mark already has this controller's first drain taking whatever is
+		// on the ring, and the next event finds the bit clear.
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
 		printd(DEBUG_BOOT, "xhci %02x:%02x.%x: interrupts live, %s vector 0x%02x at APIC %u, moderation %u (x250 ns)\n",
 		       hc->pci_bus, hc->pci_device, hc->pci_function, xhci_drive_text(choice),
 		       XHCI_IRQ_VECTOR, bsp, mmio_r32(hc->rt, XHCI_IR0_IMOD) & 0xFFFF);

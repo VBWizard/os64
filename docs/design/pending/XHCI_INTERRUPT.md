@@ -688,6 +688,21 @@ signal processing is on and before its first pass.
   boot correction), and an interrupt that nobody will answer for a second
   buys nothing. Enabling tries for the serializing flag and is asked again
   at the next wake if the flag was held.
+- D5 and D6 speak of an `ehb_owed` mark and a separate stamp. They are one
+  word (`irq_at`: zero is "not owed", anything else is the time of the
+  oldest unanswered interrupt), because taken in two exchanges a top half
+  running between them lost or misplaced the sample (the cold read).
+- D5's step 6 is followed by one more write: `IMAN` with `IP` and `IE`,
+  after both gates are open. An event arriving between step 4's clear and
+  the gates opening could leave the pending bit set with no message sent,
+  and a controller that signals only on the bit rising would stay silent.
+  Whether real controllers do that was not settled from the text; the
+  write costs nothing and the mark covers whatever was on the ring. The
+  tick would HIDE such a controller (input keeps working at tick cadence):
+  on the P5, `fires` must grow with `events`.
+- D8 gives MSI-X's order as table, then enable. Built as enable with the
+  function mask set, table, then mask cleared, so a half-written table
+  sends nothing.
 - D9's three values are not built in: `USBIMOD=<n>` on the command line
   sets the interval for a boot, and the report prints the value read back.
 - The interrupt-to-service time is from the OLDEST unanswered interrupt to

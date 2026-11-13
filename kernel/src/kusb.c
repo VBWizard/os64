@@ -67,9 +67,12 @@ void kusb_thread(void)
 			parked = doorbell_park(&kUsbDoorbell, KUSB_BACKSTOP_TICKS);
 			continue;
 		}
-		// Once, before the first pass: that pass then drains what boot left
-		// on each ring, which is what makes enabling safe against an event
-		// already pending (xhci_interrupts_enable).
+		// Until it has been done once. Enabling marks each controller, so the
+		// drain that follows takes what boot left on its ring; that is what
+		// makes enabling safe against an event already pending
+		// (xhci_interrupts_enable). A try that finds the flag held is made
+		// again at the next wake, and a pass in between is an ordinary
+		// tick-driven one.
 		if (!interrupting)
 			interrupting = xhci_interrupts_enable();
 		kKusbWakes++;

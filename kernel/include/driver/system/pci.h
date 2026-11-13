@@ -253,10 +253,13 @@ const pci_caps_t *pci_caps_of(uint8_t bus, uint8_t device, uint8_t function);
 // ── Message-signalled interrupts ────────────────────────────────────────────
 // One message, at `vector`, addressed at the CPU whose APIC ID is `apic_id`.
 // Both helpers program, set the command register's INTx-disable bit (so a
-// pin nobody routes cannot assert a line nobody answers), READ EVERYTHING
-// BACK, and say `took` only when what was read is what was written: on a
+// pin nobody routes cannot assert a line nobody answers), READ BACK the
+// enable, the address and the data (and for MSI-X the entry's mask and the
+// function mask), and say `took` only when those read as written: on a
 // machine with no debugger the read-back is the investigation, and a
-// driver that is told false keeps whatever drove it before. Neither
+// driver that is told false keeps whatever drove it before. Not checked:
+// the INTx-disable bit, and MSI's per-vector mask bits where a function
+// has them (they are left as found, which is clear after a reset). Neither
 // touches the device's own interrupt enables; the caller turns those on
 // after `took`, so the first message is a real event.
 #define PCI_COMMAND_INTX_DISABLE  (1u << 10)
@@ -287,9 +290,10 @@ typedef struct
 	const char *refused;           // NULL, or why nothing was programmed
 } pci_msix_result_t;
 
-// MSI-X with ONE message: table entry 0 carries it and is unmasked, every
-// other entry is masked, then the capability is enabled with its function
-// mask clear. The table lives in device memory named by the capability (a
+// MSI-X with ONE message. The capability is enabled with its FUNCTION MASK
+// SET, the table is written (entry 0 carries the message and is unmasked,
+// every other entry is masked), and the function mask is cleared last, so
+// a half-written table sends nothing. The table lives in device memory named by the capability (a
 // BAR and an offset); its pages are mapped at their upper-half alias.
 // `bars` is the function's six BAR registers as enumeration read them.
 pci_msix_result_t pci_msix_enable_one(uint8_t bus, uint8_t device, uint8_t function,

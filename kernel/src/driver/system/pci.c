@@ -649,12 +649,13 @@ pci_msix_result_t pci_msix_enable_one(uint8_t bus, uint8_t device, uint8_t funct
 	uint32_t held = (ctrl & 0xFFFF) | MSIX_CTRL_ENABLE | MSIX_CTRL_FMASK;
 	writePCIRegister(bus, device, function, r.cap, held);
 	uint32_t address = MSI_ADDRESS_BASE | ((uint32_t)apic_id << 12);
+	// Vector Control's other bits are reserved and kept as read.
 	for (uint32_t i = 0; i < r.entries; i++)
-		entry[i * 4 + 3] = MSIX_ENTRY_MASKED;
+		entry[i * 4 + 3] |= MSIX_ENTRY_MASKED;
 	entry[0] = address;
 	entry[1] = 0;
 	entry[2] = vector;
-	entry[3] = 0;
+	entry[3] &= ~MSIX_ENTRY_MASKED;
 	writePCIRegister(bus, device, function, r.cap, held & ~MSIX_CTRL_FMASK);
 	pci_intx_disable(bus, device, function);
 
