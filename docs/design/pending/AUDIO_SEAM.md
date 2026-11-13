@@ -7,8 +7,10 @@ checked against the tree at `a86b0f18`. It settles Q8 (the position's
 contract) and leaves Q7 (what a flush does inside the headphones) where it
 was: a proof for A.3 on the real pair.*
 
-*Status: awaiting one read by someone other than the author, then Chris.
-§ For Chris lists what is his to rule.*
+*Status: read once by someone other than the author (a cold Opus read
+against the source, 2026-11-13; its fourteen findings are folded in, the
+largest being that the seam no longer calls into a sink at all). Awaiting
+Chris. § For Chris lists what is his to rule.*
 
 ## What A.1 is
 
@@ -59,9 +61,21 @@ short lock (§ What it costs is measured in A.1.8).
 
 One new tag, `HANDLE_AUDIO`, carries all three. Its object is a small
 `audio_open_t`: which face it is (`AUDIO_FACE_STREAM`, `_POSITION`, `_TAP`)
-and a reference count in handle.c's currency (the handle holds one, each
-operation in flight one). There is one stream in the machine, a static
-object, so the open carries no pointer to it.
+and two counts, kept apart as the bell and the glass view keep them: how
+many HANDLES name it (one, plus one for each task it was shared into), and
+how many holders keep its memory (each handle, and each operation in
+flight; handle.c § The pin). The last handle's close is the CLOSE: it marks
+the open closed, does the face's last-close work (§ The stream's states,
+or freeing the tap), and wakes an operation parked in it, which answers
+"closed" and lets go. The last holder's release frees the memory. There is
+one stream in the machine, a static object, so the open carries no pointer
+to it.
+
+A stream open is shareable across a spawn, as a pipe end is
+(`handle_share`), so `cat song.pcm > /dev/audio` works; the position and
+the tap are not, as glass and bells are not. An open the handle table had
+no room for is given back through `devfs_handle_alias_abandon`, which does
+the same close, or the one-open rule would hold the name until reboot.
 
 `/dev/audioctl` and `/dev/volume` are ordinary devfs files: short text,
 never waiting, used at a person's pace. Their per-open state gains a read
@@ -108,27 +122,53 @@ across to.
 // What a sink is, to the seam. (kernel/include/audio.h)
 typedef struct audio_sink
 {
-	const char *name;                  // for /sys/audio
-	void (*suspend)(void *ctx);        // the stream paused: stop asking the far end for sound
-	void (*resume)(void *ctx);         // ...and start again
-	void (*flush)(void *ctx, uint32_t generation);   // drop what you hold that is older
-	uint32_t (*delay_us)(void *ctx);   // how far behind the pull the ear is
+	const char *name;             // for /sys/audio
+	void (*nudge)(void *ctx);     // optional: "the stream changed, pump soon". Any
+	                              // context, never sleeps, carries no fact
 	void *ctx;
 } audio_sink_t;
 
 void audio_sink_attach(const audio_sink_t *sink);   // becomes the sink; one at a time
 void audio_sink_detach(const audio_sink_t *sink);   // the null sink takes over
 void audio_sink_failed(const audio_sink_t *sink, const char *why);   // fail closed
+void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);  // how far behind the pull the ear is
+
+// What a pull tells the sink, read under the same lock as the frames.
+typedef struct audio_pulled
+{
+	uint32_t frames;       // how many of `out` are the ring's; the rest is silence
+	uint32_t generation;   // the generation those frames belong to
+	bool     paused;       // the stream is paused: `out` is untouched, send nothing
+	bool     yours;        // false: another sink is the sink now. `out` is untouched
+} audio_pulled_t;
 
 // The sink's one verb. Fills `out` with exactly `frames` frames: the ring's,
-// with the volume applied, then silence for what the ring did not have.
-// Returns how many were the ring's. Any thread; never sleeps.
-uint32_t audio_pull(int16_t *out, uint32_t frames);
+// with the volume applied, then silence for what the ring did not have. It
+// never crosses a generation: frames of one generation, then silence, and
+// the next pull starts the next. Any thread; never sleeps.
+audio_pulled_t audio_pull(const audio_sink_t *self, int16_t *out, uint32_t frames);
 ```
 
-The three verbs the seam calls (`suspend`, `resume`, `flush`) are called
-with the stream's lock released and must not sleep: they set a flag their
-own pump acts on.
+**The seam never calls into a sink with a fact.** A pause, a resume and a
+flush are things the sink LEARNS from its next pull: `paused` says stop,
+and a `generation` different from the last one it saw says everything it
+still holds is retired. The first draft had `suspend`, `resume` and `flush`
+callbacks made after the lock was released; two control verbs on two CPUs
+could then reach the sink in the wrong order and leave it suspended under a
+stream that said playing, and a flush could not name what to drop because
+the sink was never told which generation its frames belonged to. A fact
+read under the lock, with the frames it describes, cannot arrive out of
+order. `nudge` only shortens the wait for that next pull and says nothing.
+
+A pull names its sink, and is answered `yours = false` when that sink is no
+longer the one attached: a pump that was already awake when the sink
+changed takes nothing from a stream that is not its own.
+
+**A sink change is a flush.** Attaching or detaching empties the ring and
+moves the generation on, exactly as the `flush` verb does. Sound queued for
+headphones that have gone is not played late into something else, and a
+player sees one event it already handles. (A.3 may want better for a
+reconnection; it will have the real pair to judge with.)
 
 **The null sink is the first sink, and the default.** It is what plays when
 nothing else is attached: it takes frames at the rate the clock says a real
@@ -138,14 +178,24 @@ runs for the length of the song and ends, as it would with them. It is the
 
 Its pump is **`kaudio`**, a kernel daemon in `knet`'s shape: pinned to the
 BSP, parked on a doorbell, rung by the tick. The tick rings it only while
-the null sink is the sink and the stream has work (frames queued, or a
-handle open and not paused), so an idle machine pays nothing. Each wake it
-asks the clock how many frames are due since its anchor
-(`elapsed_us * 48000 / 1000000`, less what it has taken), pulls that many
-through the same `audio_pull` every sink uses, and wakes the parked writer.
-The anchor is set when the stream starts or resumes. A wake that finds more
-than the ring's worth due (the daemon was held off for over 200 ms) takes
-one ring's worth, moves the anchor to now, and counts a `clock_slip`.
+`kAudioClocked` is set: the null sink is the sink, and the stream has work
+(frames queued, or a handle open and not paused), so an idle machine pays
+nothing. That flag is one word, written under the stream's lock whenever
+the facts behind it change and READ WITHOUT IT, because the tick's ringers
+run inside the scheduler's pass with the queue lock held, and the stream's
+lock is taken before the queue lock everywhere else (a wake is made under
+it). Work that appears between two ticks waits for the next one, at most 10
+ms, which the null sink's clock absorbs.
+
+Each wake `kaudio` asks the clock how many frames are due since its anchor
+(`elapsed_us * 48000 / 1000000`, less what it has taken) and pulls that
+many through the same `audio_pull` every sink uses. The anchor is set to
+now, with nothing taken, each time `kAudioClocked` goes from clear to set
+and at each resume, so a wake never measures from an earlier stream. A wake
+that finds more than the ring's worth due (the daemon was held off for over
+200 ms) takes one ring's worth, moves the anchor to now, and counts a
+`clock_slip`. A wake that is answered `paused` or `yours = false` takes
+nothing.
 
 `kaudio` exists on every boot. When a real sink attaches, the tick stops
 ringing it.
@@ -176,10 +226,16 @@ typedef struct os64_audio_tap
 } os64_audio_tap_t;
 ```
 
-A pull that is part ring and part silence makes two records. A read of the
-tap returns whole records, waits under read's patience when there are none,
-and ends for a signal like every other wait. A full capture ring drops the
-new record whole and counts it. The tap is at the pull, so it hears
+A record carries one generation and is all sound or all silence, at most
+1,024 frames (4,096 bytes and the header); a larger pull is cut into
+several, and a pull that is part ring and part silence makes two. A read
+returns as many whole records as its buffer holds and refuses a buffer too
+small for one of full size. It waits under read's patience when there are
+none, is woken by the pull, and ends for a signal like every other wait. A
+full capture ring drops the new record whole and counts it; so is a record
+taken for a reader whose buffer turned out not to be writable. The close
+frees the capture ring under the stream's lock, which a pull appending to
+it holds. The tap is at the pull, so it hears
 whichever sink is attached; on the P5 it will record what the headphones
 were sent.
 
@@ -203,6 +259,17 @@ typedef struct os64_audio_position
 } os64_audio_position_t;
 ```
 
+A read is served the first `length` bytes of it, up to its size, and never
+refused for being short: a program built against today's record keeps
+working the day the record grows, and `size` says how much of a larger one
+the kernel filled.
+
+**The clock** is `micros()`'s own. The body of `syscall_micros` (the TSC
+against the boot anchor, folded through its high-water mark so it never
+runs backward) becomes a kernel function the syscall and the stream both
+call. A stamp taken any other way would not be comparable with the `now` a
+player reads.
+
 What each number means, exactly:
 
 - **A count is in the program's own frames.** `accepted` is how many frames
@@ -221,17 +288,25 @@ What each number means, exactly:
   audible fault; the estimate is exact again once the sink's delay has
   passed.
 - **Between readings a player extrapolates**, and only in state `PLAYING`:
-  `heard + (now - micros) * rate`, never past `taken`. In every other state
-  it uses `heard` as read.
+  `heard + (now - micros) * rate / 1000000`, never past `taken`. In every
+  other state it uses `heard` as read.
 - **`queued` is delay; the ring's size is not.** A full ring puts 200 ms
   between a write and its pull, an empty one nothing. `queued` also counts
   frames an earlier owner left (§ Close), which no subtraction of this
   generation's numbers would show.
-- **`generation`** goes up by one at: a flush; an open of `/dev/audio`; a
-  sink attaching or detaching. `accepted`, `taken`, `heard` and `underruns`
-  start from zero with it. It does not change at a pause, a resume or an
+- **`generation`** goes up by one at: a flush (the verb, a sink change, or
+  the last close of a paused stream, which are all the same act); and an
+  open of `/dev/audio`. `accepted`, `taken`, `heard` and `underruns` start
+  from zero with it. It does not change at a pause, a resume or an
   underrun. A player holds the generation of the stream it is feeding and
   discards a reading that carries another.
+- **An open is the one generation change that keeps frames in the ring**
+  (an earlier owner's, still playing out; § Close). They stay the old
+  generation's: the stream remembers how many there are, pulls take them
+  first and count them toward nothing, and the tap shows them under the old
+  number. `taken` for the new generation starts at its own first frame.
+  Until then the new owner sees `taken` 0 and the old frames in `queued`,
+  which is the truth a player needs: that much sound is ahead of mine.
 
 What each event does to it:
 
@@ -239,12 +314,11 @@ What each event does to it:
 |---|---|---|---|---|
 | write | grows | | | |
 | pull | | grow, stamped | follows | |
-| pull finds the ring dry | | `micros` stamped | follows | (`underruns` +1 once per dry spell) |
+| pull finds the ring dry | | `micros` stamped | follows | (`underruns` +1, once, if this generation was ever written and the dry spell is not already counted; a write ends the spell) |
 | pause | | frozen at the last pull | frozen | |
 | resume | | resume | resumes | |
-| flush | 0 | 0 | 0 | +1 |
+| flush, sink change | 0 | 0 | 0 | +1 |
 | open | 0 | 0 until the earlier owner's frames are gone | 0 | +1 |
-| sink attach or detach | 0 | 0 | 0 | +1 |
 
 On a pause `heard` freezes at `taken` less the delay. What the far end does
 with the sound it already holds when it is told to suspend is not known
@@ -253,9 +327,11 @@ says `PAUSED` and a player does not extrapolate.
 
 ## The stream's states
 
-One stream. Its state is derived from four facts, never stored beside
+One stream. Its state is derived from five facts, never stored beside
 them: is a `/dev/audio` handle open; is it paused; has the ring frames; has
-this generation ever been written to.
+this generation ever been written to; has the sink failed. Every "to" in
+the second table is what those facts then say, and where a row names a
+state it is naming the usual case, not overriding them.
 
 | State | Handle | Paused | Ring | Meaning |
 |---|---|---|---|---|
@@ -270,20 +346,25 @@ this generation ever been written to.
 | Event | From | To | What happens |
 |---|---|---|---|
 | open `/dev/audio` | `IDLE` | `WAITING` | generation +1 |
-| open | `DRAINING` | `PLAYING` | generation +1; the new owner's frames queue behind the old |
+| open | `DRAINING` | `PLAYING` | generation +1; the old frames stay the old generation's and play first |
+| open | `FAILED`, no handle | `FAILED` | accepted; its writes answer `OS64_AUDIO_FAILED` until the sink is replaced |
 | open | any state with a handle | (unchanged) | refused, `OS64_AUDIO_BUSY` |
-| write, room | `WAITING`, `STARVED` | `PLAYING` | null sink's clock anchored |
+| write, room | `WAITING`, `STARVED` | `PLAYING` | the dry spell, if one was counted, is over |
 | write, no room | `PLAYING`, `PAUSED` | (unchanged) | parks, or answers by its patience (§ The write) |
-| pull, frames | `PLAYING`, `DRAINING` | same, or `STARVED` / `IDLE` when it empties | writer woken |
-| pull, dry | `STARVED`, `WAITING` | (unchanged) | all silence |
-| `pause` | `WAITING`, `PLAYING`, `STARVED` | `PAUSED` | sink's `suspend` |
-| `pause` | `IDLE`, `DRAINING`, `PAUSED` | (unchanged) | refused: nothing is open to pause, or it already is |
-| `resume` | `PAUSED` | by the ring | sink's `resume`; clock anchored |
-| `flush` | any but `IDLE` | by the handle and pause | ring emptied, split frame dropped, generation +1, sink's `flush`, a parked writer woken to `OS64_AUDIO_FLUSHED` |
+| pull, frames | `PLAYING`, `DRAINING` | by the facts | `STARVED` if it emptied a written generation, `WAITING` if the new owner has not written yet, `IDLE` with no handle; writer woken |
+| pull, dry | `STARVED`, `WAITING` | (unchanged) | all silence; an underrun counted by the rule above |
+| pull | `PAUSED`, `FAILED`, `IDLE` | (unchanged) | takes nothing |
+| `pause` | `WAITING`, `PLAYING`, `STARVED` | `PAUSED` | sink nudged |
+| `pause` | `IDLE`, `DRAINING`, `PAUSED`, `FAILED` | (unchanged) | refused: nothing is open to pause, or it already is |
+| `resume` | `PAUSED` | by the facts | sink nudged; null sink's clock anchored. No underrun is counted for being empty at a resume: only a dry pull counts one |
+| `resume` | any other | (unchanged) | refused |
+| `flush` | any but `IDLE` | by the facts | ring emptied (an earlier owner's frames too), split frame dropped, generation +1, sink nudged, a parked writer woken to `OS64_AUDIO_FLUSHED` |
+| `flush` | `IDLE` | `IDLE` | accepted, and changes nothing |
 | last close | `PLAYING`, `STARVED`, `WAITING` | `DRAINING` or `IDLE` | split frame dropped |
-| last close | `PAUSED` | `IDLE` | flushed and un-paused: a pause belongs to an open, and sound nobody can resume is not kept |
-| sink attach, detach | any | by the facts | generation +1; the ring is kept |
-| sink failed | any | `FAILED` | ring emptied; a parked writer woken to `OS64_AUDIO_FAILED`; cleared when that sink detaches |
+| last close | `PAUSED` | `IDLE` | a flush (generation +1), and the pause is lifted: a pause belongs to an open, and sound nobody can resume is not kept |
+| a close while a thread is parked in a write | any | as the last close | the writer wakes, answers what it had placed (or -1), and lets go |
+| sink attach, detach | any | by the facts | a flush; a failure belonging to the departing sink is cleared |
+| sink failed | any | `FAILED` | ring emptied; a parked writer woken to `OS64_AUDIO_FAILED` |
 
 **Close never waits.** A close can come from a task's burial, where nothing
 may park. So the last close leaves the queued sound to play out
@@ -293,16 +374,17 @@ the second open is accepted while the first drains, and its frames follow.
 A player that is killed leaves at most 200 ms to play; one that wants
 silence at once writes `flush` first.
 
-**What a flush retires on our side** is the ring, the split frame, and
-through the sink's `flush(generation)` whatever the sink has built and not
-sent. Nothing completes later against the seam: a frame is counted when it
+**What a flush retires on our side** is the ring, the split frame, and,
+once the sink's next pull shows it the new generation, whatever the sink
+has built and not sent. Nothing completes later against the seam: a frame is counted when it
 is pulled, under the lock a flush takes, so there is no old completion to
 refuse at this layer. The A2DP sink has its own (packets built, packets
 with the controller), and refusing those by generation is A.3's design.
 
-**The handle is shared the way a pipe's is.** A spawn redirection or an
-inherited handle is the same open: one `audio_open_t`, more references. The
-"one open" rule counts opens, not tasks.
+**The handle is shared the way a pipe's is.** A spawn redirection is the
+same open: one `audio_open_t`, one more handle counted on it. The "one
+open" rule counts opens, not tasks, and the last close is the last of those
+handles.
 
 ## The write
 
@@ -324,11 +406,17 @@ this call wrote survives, whatever it had been told so far;
 `OS64_AUDIO_FAILED` on a failed sink; `OS64_AUDIO_BUSY` when another thread
 is already parked in a write on the stream.
 
-The park is the kernel's ordinary one, and obeys its rules (CLAUDE.md
-§ Signals): the writer registers in the stream's one waiter slot under the
-lock, voids its own slot at the top of every pass, asks
-`signal_park_must_end`, and on the way out asks
-`current_thread_will_catch`. The pull wakes it with
+A write remembers the generation it began under. Its bytes cross from user
+memory in pieces, with the lock released between them, so each piece is
+placed only if the generation is still that one; otherwise the call answers
+`OS64_AUDIO_FLUSHED`, and what it had placed went with the flush.
+
+The park is the kernel's ordinary one, bell.c's shape, and obeys its rules
+(CLAUDE.md § Signals): the writer registers in the stream's one waiter slot
+under the lock; at the top of every pass it voids its own slot and its own
+owed wake (`scheduler_forget_owed_wake`), then looks for closed, flushed,
+failed and `signal_park_must_end` before it looks for room; and on the way
+out it asks `current_thread_will_catch`. The pull wakes it with
 `scheduler_wake_or_owe`, so a wake that lands between the registration and
 the park is not lost (WAKE_OWED.md). It is woken when a pull leaves at
 least a quarter of the ring free, not at every pull: a writer woken to
@@ -384,7 +472,7 @@ and what it dropped. Read it first when sound stutters.
 | `kernel/src/audio/audio_stream.c` | PURE (no kernel headers): the ring, the split frame, every counter, the state, the gain, the position record, the tap's record framing. The caller gives it storage and the clock | `tools/test_audio_stream_host.sh` under ASan and UBSan against a plain model; `tools/test_audio_stream_mutants.py` |
 | `kernel/src/audio/audio.c` | The lock, the park, the sink table, the handle faces, the control and volume verbs, `/sys/audio`'s text | QEMU fixture |
 | `kernel/src/audio/kaudio.c` | The daemon and the null sink's clock arithmetic (the arithmetic itself in the pure file) | QEMU fixture |
-| `devfs.c`, `handle.c`, `syscall.c`, `sysfs.c`, `signals.c`, `kernel.c` | The names, the tag's rows, write's patience and read's for the new tag, the report, the tick's ring, the daemon's birth | |
+| `devfs.c`, `handle.c`, `procfs.c`, `syscall.c`, `sysfs.c`, `signals.c`, `kernel.c` | The names and the abandon arm; the tag's rows (pin, unpin, close, share and unshare for the stream face, its name in `/proc/<pid>/handles`); write's patience and read's for the new tag; `micros` as a kernel function; the report; the tick's ring; the daemon's birth | |
 | `abi/include/os64/audio.h` | The two records, the states, the result codes | Size and offsets static-asserted both sides |
 | `userland/tests/audiotest/` | The fixture | |
 
@@ -424,16 +512,22 @@ complement), with the tap open:
 - `/dev/volume` at 50: every tapped sample is the ramp's times the gain,
   exactly;
 - close with sound queued, then open: the first owner's tail and the second
-  owner's frames both appear, in order, under two generations;
+  owner's frames both appear, in order, under two generations, and the
+  second owner's `taken` counts only its own;
+- `cat` of a raw file with the stream as its redirected output plays (the
+  shared handle), and an open refused for a full handle table does not
+  leave the name busy;
+- a close from one thread ends another's parked write, and a parked tap
+  read;
 - the position read 100,000 times against `micros()` read 100,000 times,
   for A.1.8's figure.
 
 Booted with 8 CPUs and with `make run-sparse`'s 24, since the writer, the
 daemon and the control verbs meet on one lock from different cores.
 
-**Not proven here:** anything about a real sink. `suspend`, `resume`,
-`flush` and `audio_sink_failed` are called on the null sink, whose versions
-do nothing, and are exercised for real in A.3.
+**Not proven in QEMU:** a second sink. Attach, detach, a pull answered
+`yours = false`, and `audio_sink_failed` are driven on the host, where the
+pure file holds their rules, and meet a real sink in A.3.
 
 ## What A.1 leaves out, on purpose
 
