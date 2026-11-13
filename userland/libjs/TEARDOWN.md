@@ -42,6 +42,16 @@ and restoring shared lookup/dispatcher state. Neither operation frees a realm
 slot or its context; the cluster drains before engine destruction and frees
 its native owners afterward. See [libdom's lifecycle](../libdom/LIBDOM.md).
 
+## Dormant execution scopes
+
+Opt-in raw-engine execution scope records live on the native stack and borrow
+contexts held by their active operation. They add no independently retained
+engine roots. Call/eval/constructor/resume wrappers pop on ordinary and
+exceptional return; a job pops after body/value cleanup and before releasing
+its context and owner references. Snapshot visitors must not release values
+or reenter the engine. An empty snapshot is not a native cleanup certificate
+and does not clear wrapper failure. The wrapper leaves tracking disabled.
+
 ## Detection and reclamation
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original

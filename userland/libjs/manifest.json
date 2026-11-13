@@ -189,6 +189,11 @@
       "path": "patches/0021-neutral-host-continuations.patch",
       "sha256": "aaa1d6bd740a09dec1ecc3aaa2055b80db040d1f8f2a4438cf7be53d03462695",
       "reason": "Separate trusted self-hosted Streams continuations from author callback ownership while retaining function realm, job budgets and installation transactions."
+    },
+    {
+      "path": "patches/0023-execution-scope-snapshot.patch",
+      "sha256": "5ba6411600ad9ad4237c7c36eb516a56110b019dae69a6d2fd6fbb00f49a5ee4",
+      "reason": "Expose opt-in allocation-free execution scope facts before interrupt polling; unknown dispatch and native invariant coverage remain explicit, with recovery disabled."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

@@ -77,6 +77,22 @@ function data. A raw engine runtime constructed outside this wrapper has its
 ordinary engine configuration, including shared-buffer exposure; this contract
 governs the wrapper-owned contexts.
 
+## Dormant engine execution observations
+
+The raw engine exposes explicitly enabled execution-scope observations for
+trusted diagnostics. `JS_EnableExecutionScopeTracking` must run on the owner
+thread outside engine entry, before code to be observed executes. The wrapper
+does not enable tracking. `JS_VisitExecutionScopes` is allocation-free and
+visits borrowed incoming-context/code-environment facts, innermost first,
+including pending calls before their interrupt poll. Its visitor must not
+allocate, reenter the engine, release values or mutate runtime state.
+
+Unknown proxy/custom dispatch, eval preparation and native job provenance are
+explicit; observations do not certify complete interrupted-environment
+attribution, browser caller authority or native consistency. Scope tracking
+does not change eligibility, failure or budget behavior and cannot recover a
+runtime. See [the F16 scope checkpoint](../../docs/design/pending/IFRAME_F16_SCOPES_VALIDATION.md).
+
 ## Realms
 
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
