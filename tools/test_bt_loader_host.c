@@ -668,6 +668,9 @@ static void classic_maintenance(void)
     CHECK(!xhci_bluetooth_scan(true) && xhci_bluetooth_scan(false) && h->scan.phase==BT_SCAN_LE_PARAMS);
     // And `slot 2` commands reach the link through the connection file.
     h->scan=(bt_scan_t){.shared_controller=true};
+    // Not before the bond file has been read: the read would undo it.
+    CHECK(!xhci_bluetooth_connection("slot 2 connect 4c:87:5d:c3:b2:a1\n",33) && h->classic.phase==BT_CLASSIC_IDLE);
+    h->classic.bond_loaded=true;
     CHECK(xhci_bluetooth_connection("slot 2 connect 4c:87:5d:c3:b2:a1\n",33) && h->classic.phase==BT_CLASSIC_PAGING);
     char status[8192]; xhci_bluetooth_read(status,sizeof(status),2);
     CHECK(strstr(status,"\nslot 2:\nkind: classic\nstate: paging\n"));

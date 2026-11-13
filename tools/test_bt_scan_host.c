@@ -292,11 +292,14 @@ static void classic_scan(void)
         tick(&s,32003); assert(sent_op==0x0402 && sent_length==0);
         // Refused: no inquiry was running after all. Still an answer.
         complete(&s,refuse?0x0c:0); tick(&s,32004);
-        assert(s.phase==BT_SCAN_CLEANUP && !s.inquiry_active && sent_op==0x200c && sent_length==2 && !sent_params[0]);
-        complete(&s,0); tick(&s,32005);
-        assert(s.phase==BT_SCAN_STOPPED && !s.radio_active);
-        static const uint16_t cleanup[]={0x0c45,0x0401,0x0402,0x200c};
-        assert(sent_logged==4 && !memcmp(sent_log,cleanup,sizeof(cleanup)));
+        // The LE half never began, so there is no LE scan to disable: a
+        // disable for a scan that is not running is a command a controller
+        // may refuse, and a refusal in cleanup would fail the host.
+        assert(!s.inquiry_active && !s.le_scan_on);
+        tick(&s,32005);
+        assert(s.phase==BT_SCAN_STOPPED && !s.radio_active && !s.pending);
+        static const uint16_t cleanup[]={0x0c45,0x0401,0x0402};
+        assert(sent_logged==3 && !memcmp(sent_log,cleanup,sizeof(cleanup)));
     }
     // The cancel unanswered: the cleanup fails as any cleanup does.
     assert(bt_scan_start_classic(&s,40000));
@@ -310,8 +313,27 @@ static void classic_scan(void)
     tick(&s,0); complete(&s,0); tick(&s,1); complete(&s,0x0c); tick(&s,2);
     assert(s.phase==BT_SCAN_CLEANUP && !strcmp(s.error,"HCI command rejected"));
     tick(&s,3); assert(sent_op==0x0402);
-    complete(&s,0x0c); tick(&s,4); assert(sent_op==0x200c);
-    complete(&s,0); tick(&s,5); assert(s.phase==BT_SCAN_STOPPED);
+    complete(&s,0x0c); tick(&s,4); tick(&s,5);
+    assert(s.phase==BT_SCAN_STOPPED && sent_op==0x0402);   // the cancel was the last thing sent
+    // A Classic scan that fails once its LE half HAS begun stops that too.
+    s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true,.features={[4]=0x40}};
+    assert(bt_scan_start_classic(&s,0));
+    tick(&s,0); complete(&s,0); tick(&s,1); complete(&s,0); tick(&s,2);
+    { const uint8_t done[]={1,1,0}; bt_scan_event(&s,done,sizeof(done)); }
+    tick(&s,3); assert(s.phase==BT_SCAN_LE_PARAMS && !s.inquiry_active && sent_op==0x200b);
+    complete(&s,0); tick(&s,4); assert(sent_op==0x200c && sent_params[0]==1 && s.le_scan_on);
+    complete(&s,0); tick(&s,5); assert(s.phase==BT_SCAN_LE_WAIT);
+    tick(&s,40001); assert(s.phase==BT_SCAN_CLEANUP && !strcmp(s.error,"scan deadline expired"));
+    tick(&s,40002); assert(sent_op==0x200c && sent_length==2 && !sent_params[0]);
+    complete(&s,0); tick(&s,40003); assert(s.phase==BT_SCAN_STOPPED);
+    // ...and one that completes switches its LE scan off and says so.
+    s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true,.features={[4]=0x40}};
+    assert(bt_scan_start_classic(&s,0));
+    tick(&s,0); complete(&s,0); tick(&s,1); complete(&s,0); tick(&s,2);
+    { const uint8_t done[]={1,1,0}; bt_scan_event(&s,done,sizeof(done)); }
+    tick(&s,3); complete(&s,0); tick(&s,4); complete(&s,0); tick(&s,5);
+    tick(&s,10006); assert(s.phase==BT_SCAN_LE_DISABLE && s.le_scan_on);
+    complete(&s,0); tick(&s,10007); assert(s.phase==BT_SCAN_DONE && !s.le_scan_on);
     // An LE scan's cleanup is what it was: the LE scan stopped, nothing else.
     s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true,.features={[4]=0x40}};
     assert(bt_scan_start_le(&s,0));

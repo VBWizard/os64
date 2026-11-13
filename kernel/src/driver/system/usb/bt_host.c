@@ -186,8 +186,8 @@ static bool host_control(const bt_host_t *h,unsigned owner,bool usb_done)
 { return usb_done && (h->owner==owner || (!h->owner && h->credits)); }
 // The Classic link counts no credits of its own: holding the slot is leave
 // to finish the command in flight, and to send the next only with a credit
-// the controller has given back. A command it gave up waiting for leaves it
-// holding the slot with none, so it sends nothing until the late reply.
+// the controller has given back. After a command it gave up waiting for it
+// holds the slot with none, and sends nothing until some reply brings one.
 static bool host_classic_control(const bt_host_t *h,bool usb_done)
 {
     if(h->owner!=BT_HOST_OWNER_CLASSIC) return host_control(h,BT_HOST_OWNER_CLASSIC,usb_done);
@@ -267,9 +267,12 @@ static void host_classic_begin(bt_host_t *h)
         s->classic_setup_refused?"the controller refused a Classic setup command":NULL;
     h->classic_available=!h->classic_unavailable;
 }
-// A Classic command still unanswered this long after the link gave up on
-// it would hold the command slot for ever and starve the LE peers; the
-// controller is failed instead, as it is when an LE command goes unanswered.
+// The Classic link still owning the command slot this long after its
+// command's deadline, with nothing of its own in flight: the reply never
+// came, or it came and the USB transfer that carried the command never
+// reported done. Either way the slot would be held for ever and the LE
+// peers starved in silence; the controller is failed instead, as it is
+// when an LE command goes unanswered.
 #define BT_HOST_CLASSIC_REPLY_GRACE_MS 3000
 void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool failed,
                   bt_scan_send_t command,bt_le_acl_send_t acl,bt_host_report_t report,void *ctx)
@@ -336,7 +339,7 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
         if(s->phase==BT_LE_FAILED) h->failed=true;
     }
     if(classic && !classic_first) host_classic_tick(h,now,usb_done,&call);
-    if(classic && h->owner==BT_HOST_OWNER_CLASSIC && !h->command_done && !h->classic.pending &&
+    if(classic && h->owner==BT_HOST_OWNER_CLASSIC && !h->classic.pending &&
        now>=h->classic.command_deadline+BT_HOST_CLASSIC_REPLY_GRACE_MS) h->failed=true;
     // A controller failure affects every connection, even if detected by the
     // last peer in this pass. Deliver releases before returning to input code.
@@ -444,6 +447,10 @@ static bool host_classic_command_text(bt_host_t *h,const char *p,size_t n,uint64
     if(!h->initialized) { h->refused_why="the controller is not ready"; return false; }
     if(h->failed && !forget) { h->refused_why="the Bluetooth controller failed; reboot required"; return false; }
     if(!h->classic_available) { h->refused_why=host_no_classic; return false; }
+    // Until the bond file has been read the link does not know what it
+    // holds, and the read, when it lands, would overwrite whatever a
+    // command had done meanwhile: a bond just made, or one just forgotten.
+    if(!h->classic.bond_loaded) { h->refused_why="the saved bond has not been read yet; try again in a moment"; return false; }
     if(pages && host_setup(h)) { h->refused_why="busy: an LE slot is setting up"; return false; }
     // A dual-mode device is heard at one address as both kinds; the
     // Classic entry is the one this slot is about.

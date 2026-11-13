@@ -955,7 +955,25 @@ static void classic_owner_bounds(void)
     cm_cs(0,0,0x0405); step();
     // Freed: the closing link's page cancel is the next command.
     assert(!host.failed && CM.n==before+1 && CM.ops[before]==0x0408);
-    puts("PASS: every command-slot owner is bounded in routing and retirement; an unanswered Classic command fails the controller, a late one frees the slot");
+    // Answered, but the USB transfer that carried the command never reports
+    // done: the slot cannot be retired, and that too fails the controller
+    // rather than holding the slot for ever.
+    setup(); classic_slot(&none,false);
+    assert(classic_cmd(text)); step();
+    assert(host.owner==BT_HOST_OWNER_CLASSIC && !host.command_done);
+    uint64_t sent_at=now;
+    for(unsigned i=0;i<4900;i++) {
+        ++now; classic_deliver();   // the model's reply arrives; the transfer never completes
+        bt_host_tick(&host,now,false,true,false,multi_command,acl,multi_report,NULL);
+        assert(!host.failed && host.owner==BT_HOST_OWNER_CLASSIC);
+        if(i==100) assert(host.command_done);
+    }
+    for(unsigned i=0;i<300 && !host.failed;i++) {
+        ++now; classic_deliver();
+        bt_host_tick(&host,now,false,true,false,multi_command,acl,multi_report,NULL);
+    }
+    assert(host.failed && now>=sent_at+5000 && now<sent_at+5200);
+    puts("PASS: every command-slot owner is bounded in routing and retirement; a Classic command unanswered, or answered with its transfer never done, fails the controller; a late reply frees the slot");
 }
 
 // Run a start-up round on the host, answering every command (`refuse` with

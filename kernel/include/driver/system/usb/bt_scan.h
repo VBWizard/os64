@@ -65,6 +65,11 @@ typedef struct {
     // controller in service, a failed scan's cleanup cancels it before it
     // stops the LE scan.
     bool inquiry_active;
+    // LE Set Scan Enable(on) has been sent and no disable has been answered:
+    // what a Classic scan's cleanup must know, since it can fail before its
+    // LE half began, and a disable for a scan that is not running is a
+    // command a controller may refuse.
+    bool le_scan_on;
     const char *error;
     unsigned count, dropped, malformed_reports;
     bt_scan_device_t devices[BT_SCAN_DEVICES];

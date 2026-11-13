@@ -486,10 +486,17 @@ Where the code departs from the text above, or settles what it left open:
 - **Page scan** is written once the bond file has been read, 0x02 with a
   bond and 0x00 without, and again only when that changes. A write the
   controller refuses is not repeated until then.
-- **A Classic command still unanswered three seconds after the link gave
-  up on it fails the controller**, as an unanswered LE command does. The
-  link holds the command slot with no credit until a reply comes, and
-  left there it would starve the keyboard silently.
+- **The Classic link still holding the command slot three seconds past
+  its command's deadline fails the controller**, as an unanswered LE
+  command does: the reply never came, or the USB transfer that carried the
+  command never reported done. Left there it would starve the keyboard
+  silently.
+- **Slot 2 takes no command until the bond file has been read**, a few
+  seconds after start-up: the read would otherwise undo a bond just made
+  or bring back one just forgotten.
+- **A `scan classic` that fails before its LE half began sends no LE
+  disable**: a disable for a scan that is not running is a command a
+  controller may refuse, and a refusal in a scan's cleanup fails the host.
 - **The link sends only with a credit the controller has given back**
   (the core counts none of its own), and never in the tick it gave up on
   a command.

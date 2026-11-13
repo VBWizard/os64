@@ -259,6 +259,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
             if (s->phase==BT_SCAN_INQUIRY) s->deadline=now+12000;
             if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+(s->le_only?2000:10000);
             if (s->phase==BT_SCAN_RESET || s->phase==BT_SCAN_LE_DISABLE) s->radio_active=false;
+            if (s->phase==BT_SCAN_LE_DISABLE) s->le_scan_on=false;
             s->phase++;
         }
     }
@@ -295,6 +296,11 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         // A controller in service keeps its links, so what may be running
         // is stopped rather than reset away: the inquiry, then the LE scan.
         if (s->shared_controller && s->inquiry_active) { op=0x0402; break; }
+        // A Classic scan that failed before its LE scan was switched on has
+        // nothing left to stop.
+        if (s->shared_controller && !s->le_only && !s->le_scan_on) {
+            s->radio_active=false; s->phase=BT_SCAN_STOPPED; return;
+        }
         op=s->shared_controller?0x200c:0x0c03;
         length=s->shared_controller?2:0; break;
     case BT_SCAN_FEATURES: op=0x1003; break;
@@ -339,7 +345,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
     case BT_SCAN_LE_PARAMS:
         op=0x200b; length=7; p[0]=1; p[1]=0x60; p[3]=0x30;
         break; // Active scan, 60ms interval / 30ms window, public own address, all advertisers.
-    case BT_SCAN_LE_ENABLE: op=0x200c; length=2; p[0]=1; p[1]=1; s->radio_active=true; break;
+    case BT_SCAN_LE_ENABLE: op=0x200c; length=2; p[0]=1; p[1]=1; s->radio_active=true; s->le_scan_on=true; break;
     case BT_SCAN_LE_DISABLE: op=0x200c; length=2; break;
     default: return;
     }
