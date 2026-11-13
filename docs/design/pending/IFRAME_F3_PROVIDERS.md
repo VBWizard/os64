@@ -10,7 +10,9 @@ can observe an outstanding loan through `d_provider_busy`.
 The owner thread publishes retirement before releasing obsolete work. Provider
 callbacks may mark retirement; they must not free opaque storage while a loan
 is outstanding. The public finish operation still needs the complete inventory,
-engine/dispatch/reaction barriers and cancellation cleanup. Internal counters
+engine/dispatch/reaction barriers and cancellation cleanup. ABI 5 now supplies
+`os64_js_quiescent` for the engine-side check; DOM borrow exclusion and cleanup
+integration remain separate work. Internal counters
 alone do not authorize freeing provider storage.
 
 ## Guarded rendering providers

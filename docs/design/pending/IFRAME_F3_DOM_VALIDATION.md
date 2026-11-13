@@ -746,6 +746,36 @@ native notification activity from its execution context. Cumulative caught
 mutants: **194**. This closes the adopted-receiver creation proof identified
 above; public departure finish remains open.
 
+## Engine quiescence boundary checkpoint
+
+Embedding ABI **5** publishes `os64_js_quiescent`, the engine-side snapshot
+needed by departure finish. It returns BUSY for active calls, open tasks/turns,
+checkpoints, installation and queued jobs; ordinary completed exceptions do
+not poison it. Latched failures, cancellation and raw allocator failures require
+root cleanup. It allocates nothing, does not sample the clock, leaves active
+outcomes intact and neither executes work nor changes budgets/failure latches.
+This does not replace the DOM dispatch/reaction/provider barrier or implement
+public finish. The bytecode engine identity does not change.
+
+The focused host fixture passes **206 checks** with both shipping and
+instrumented engines. Full realm/lifecycle suites pass **3,343 shipping** and
+**33,026 instrumented checks**, including their allocation-failure sweeps.
+Nine mutations are caught: lost active-outcome protection, entry guards, open
+native tasks, raw pending jobs, allocator failure, unobserved cancellation,
+latched failure, unexpected clock sampling and ABI validation. Cumulative
+caught mutants: **203**. The raw-queue case deliberately injects invalid host
+state to test refusal; an initial attempt to drain that state hit the existing
+runtime invariant. The corrected fixture discards the injected entry directly
+without author execution, and tests normal draining through a valid open turn.
+
+All DOM host objects were rebuilt for ABI 5. The full shipping suite passes
+**60,454 checks**, including **3,991 native binding allocation sweeps**. Fresh
+instrumented combined retirement (**9,770**), animation retirement (**1,196**),
+callback reporting (**1,118**) and animation routing (**564**) pass. Leak
+checks remain enabled with ASan/UBSan. Target libjs/libdom builds, source
+manifest/header checks, tracker, stale-reference and diff checks pass.
+No new guest or pinned-WPT result is claimed.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

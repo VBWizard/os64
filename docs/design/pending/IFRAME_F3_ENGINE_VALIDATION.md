@@ -7,6 +7,9 @@ F.3b owns DOM departure, provider cleanup and failed binding installation;
 F.3 remains in progress after this engine slice. Engine implementation is
 `4a2b28dd`; this evidence closeout changes documentation/tracker metadata only.
 
+The F.3a evidence below describes ABI 4. The F.3b quiescence addendum at the
+end records the subsequent ABI 5 entry and its separate validation.
+
 ## Implemented boundary
 
 Embedding ABI 4 adds allocation-free engine-headroom inspection/preflight,
@@ -183,3 +186,18 @@ F.3b must integrate DOM departure and shared delivery eligibility, transactional
 native installation rollback, provider lifetimes and measured admission bounds.
 F.15 reclamation and F.16 recovery remain explicit F.11 gates. F.3a does not
 free departed realms, enable frames, clear sticky overruns or mark F.3 done.
+
+## F.3b addendum: engine quiescence
+
+ABI 5 adds `os64_js_quiescent`, an allocation-free owner-thread snapshot for
+native cleanup. It distinguishes unfinished engine work from a healthy idle
+runtime and from failures requiring root teardown. It does not execute jobs,
+change budgets, sample time, clear failures or detach providers. Native DOM
+borrow and dispatch/reaction checks remain separate obligations.
+
+The focused fixture passes 206 checks on both engine profiles. Existing realm
+and lifecycle coverage passes 3,343 shipping and 33,026 instrumented checks,
+with ASan/UBSan/LSan and allocation sweeps. Nine isolated query mutants are
+caught. Fresh ABI 5 DOM validation and the malformed-queue fixture qualification
+are recorded in [the F.3b evidence](IFRAME_F3_DOM_VALIDATION.md#engine-quiescence-boundary-checkpoint).
+This wrapper API addition changes the binding ABI, not bytecode engine identity.

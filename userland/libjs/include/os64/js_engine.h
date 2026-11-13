@@ -264,6 +264,16 @@ os64_js_status_t os64_js_realm_retire(os64_js_realm_t *realm, const char *caller
 /* Borrowed handle lifetime is unchanged; false for NULL. No engine entry. */
 bool os64_js_realm_is_retired(const os64_js_realm_t *realm);
 
+/* Owner-thread, allocation-free safe-point snapshot. OK means the runtime is
+ * healthy with no active call, open task/turn, installer, checkpoint or queued
+ * job. BUSY preserves those operations; FAILED_RUNTIME requires root cleanup.
+ * Does not run jobs, sample time, reset budgets, latch failures or detach hosts.
+ * An aliased active outcome is refused without writing it. Native bindings
+ * must also exclude their own dispatch/reaction/provider borrows, and must
+ * not enter engine work between this check and the protected cleanup. */
+os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime, const char *caller_abi,
+    os64_js_outcome_t *outcome);
+
 /* Owner-thread admission snapshot, including inside a parent's callback with
  * queued jobs. Checks slots and a positive caller-measured installation peak
  * plus sibling headroom; does not allocate, execute jobs, change the enclosing

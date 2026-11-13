@@ -1,6 +1,6 @@
 # JavaScript runtime API contract
 
-Status: embedding ABI 4, including admission, retirement, staged setup and job ownership, 2026-11-12.
+Status: embedding ABI 5, including the owner-thread quiescence query, 2026-11-12.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -164,6 +164,22 @@ so selecting A's context cannot schedule a departed B callback. Existing
 JavaScript stacks may finish/unwind, and live scripts may directly call
 retained ordinary functions. Retirement neither frees context/global/native
 storage nor removes queued entries under an active stack.
+
+`os64_js_quiescent` is an owner-thread, allocation-free snapshot for native
+cleanup. It returns BUSY while an engine call, task/turn, checkpoint, installer
+or queued job remains. The queue check also rejects malformed raw work outside
+a turn; it does not authorize executing such work. FAILED_RUNTIME covers latched failure, unobserved allocator
+failure or cancellation, and destruction; that result requires the root cleanup
+path after its normal unwind. An ordinary sibling exception does not prevent a
+later OK result. Argument and ABI errors are ordinary refusals, and an aliased
+active outcome is left untouched.
+
+The query does not run jobs, sample the clock, change budgets or latch a failure.
+OK is not a lock or permission to free arbitrary binding state: the host must
+also exclude native dispatch, reactions and provider borrows, and perform no
+intervening engine entry before the protected cleanup. ABI 5 publishes this
+entry; the bytecode engine identity is unchanged because the engine sources
+and compilation profile are unchanged.
 
 Script reporting and new module-provider/output activity stop at the mark.
 At the host's safe point after active entries and checkpoints, clear script

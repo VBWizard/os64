@@ -969,6 +969,28 @@ JS_PUBLIC bool os64_js_realm_is_retired(const os64_js_realm_t *realm)
     return realm != NULL && realm->retired;
 }
 
+JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
+                                            const char *caller_abi,
+                                            os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    /* Observe raw allocator/cancellation failure without changing the latch
+     * or calling the clock beneath an entry that is still unwinding. */
+    if (runtime->destroying || runtime->failure != OS64_JS_OK || runtime->allocator.failures ||
+        __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
+    if (runtime->active || runtime->turn || runtime->task || runtime->checkpointing ||
+        runtime->setup_calls || runtime->setup_realm || JS_IsJobPending(runtime->engine))
+        return status(outcome, OS64_JS_BUSY, "runtime has unfinished engine work");
+    return OS64_JS_OK;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime,
                                                  const char *caller_abi,
                                                  size_t required_headroom,
