@@ -178,6 +178,24 @@ typedef struct {
 	uint8_t last_cc;
 } xhci_bt_endpoint_t;
 
+// ACL packets on their way to the adapter (AUDIO_CLASSIC.md § T2). The
+// transmit endpoint's storage is one allocation: its first page is what
+// bring-up sends from, with the runtime command's bytes at offset 512 of
+// it; after that page come BT_TX_SLOTS send slots. A packet is copied into
+// a free slot and queued, so several can be with the controller at once and
+// none can reach the command's bytes, whatever its length. Each slot lies
+// inside one page.
+#define BT_TX_SLOTS       4
+#define BT_TX_SLOT_STRIDE 2048
+#define BT_TX_SLOT_BYTES  (BT_LE_ACL_MAX + 4)   // an HCI ACL packet as large as the receive side assembles
+#define BT_TX_BYTES       (PAGE_SIZE + BT_TX_SLOTS * BT_TX_SLOT_STRIDE)
+_Static_assert(BT_TX_SLOT_BYTES <= BT_TX_SLOT_STRIDE && PAGE_SIZE % BT_TX_SLOT_STRIDE == 0,
+               "a send slot lies inside one page");
+typedef struct {
+	uint64_t trb;        // the transfer queued for it
+	uint64_t deadline;   // the tick by which that transfer must have completed
+} xhci_bt_tx_slot_t;
+
 // Intel transport state. Bring-up uses a stack instance, then transfers a
 // successful device into controller-owned storage for discovery and LE input.
 typedef struct {
@@ -187,7 +205,14 @@ typedef struct {
 	bt_intel_events_t events;
 	uint64_t deadline;
 	uint32_t tx_bytes;
+	// No transmit is with the controller. At runtime that is "no send slot
+	// is in flight"; bring-up has the one transfer.
 	bool tx_done;
+	// The send slots in flight, oldest first: tx_slots of them, starting at
+	// slot tx_oldest. Transfers on one endpoint complete in the order they
+	// were queued, so the oldest is the one a completion is for.
+	xhci_bt_tx_slot_t tx_slot[BT_TX_SLOTS];
+	uint8_t tx_oldest, tx_slots;
 	bool listening, failed;
 	unsigned packets;
 	bool runtime;
@@ -868,6 +893,11 @@ static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t by
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
 
+static uint8_t *xhci_bt_tx_slot(const xhci_bt_probe_t *p, unsigned slot)
+{
+	return p->tx.buffer + PAGE_SIZE + slot * BT_TX_SLOT_STRIDE;
+}
+
 static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_t cc)
 {
 	xhci_bt_probe_t *probe = s_hc->bt_probe;
@@ -875,13 +905,30 @@ static bool xhci_bt_transfer(const xhci_trb_t *ev, uint32_t slot, uint32_t dci, 
 		return false;
 	if (probe->tx.endpoint.address &&
 	    dci == (uint32_t)(probe->tx.endpoint.address & 15) * 2) {
-		if (ev->param == probe->tx.pending_trb && !probe->tx_done) {
-			probe->tx_done = true;
-			if (cc != TRB_CC_SUCCESS || (ev->status & 0xffffff)) {
-				probe->failed = true;
-				printd(DEBUG_USB, "xhci: AX210 bulk OUT failed cc=%u residual=%u\n",
-				       cc, ev->status & 0xffffff);
-			}
+		bool mine;
+		if (probe->runtime) {
+			// The oldest slot in flight, or not ours: an event for anything
+			// else (a transfer from before the runtime began) is counted
+			// and frees nothing. A slot whose completion never comes is
+			// found by its deadline (xhci_bt_runtime_poll).
+			mine = probe->tx_slots && ev->param == probe->tx_slot[probe->tx_oldest].trb;
+			if (mine) {
+				crypto_wipe(xhci_bt_tx_slot(probe, probe->tx_oldest), BT_TX_SLOT_BYTES);
+				probe->tx_oldest = (uint8_t)((probe->tx_oldest + 1) % BT_TX_SLOTS);
+				probe->tx_done = --probe->tx_slots == 0;
+			} else
+				probe->tx.unmatched++;
+		} else {
+			mine = ev->param == probe->tx.pending_trb && !probe->tx_done;
+			if (mine) probe->tx_done = true;
+		}
+		if (mine && (cc != TRB_CC_SUCCESS || (ev->status & 0xffffff))) {
+			// The endpoint halts on a failed transfer, and what was queued
+			// behind it will not complete: the transport is finished, and
+			// the poll wipes the slots still with the controller.
+			probe->failed = true;
+			printd(DEBUG_USB, "xhci: AX210 bulk OUT failed cc=%u residual=%u\n",
+			       cc, ev->status & 0xffffff);
 		}
 		return true;
 	}
@@ -1255,7 +1302,8 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 	for (unsigned i = 0; i < 3; i++) {
 		xhci_bt_endpoint_t *endpoint = i < 2 ? &probe.rx[i] : &probe.tx;
 		if (!ring_init(&endpoint->ring)) goto cleanup;
-		endpoint->buffer = kmalloc_aligned(PAGE_SIZE);
+		// The transmit endpoint's page is followed by its send slots.
+		endpoint->buffer = kmalloc_aligned(i < 2 ? PAGE_SIZE : BT_TX_BYTES);
 		if (!endpoint->buffer) goto cleanup;
 	}
 	stage = "SET_CONFIGURATION";
@@ -1406,13 +1454,29 @@ static void xhci_bt_runtime_send(void *context, uint16_t opcode,
 static void xhci_bt_acl_send(void *context, const uint8_t *packet, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
-	crypto_wipe(p->tx.buffer, 512);
-	memcpy(p->tx.buffer, packet, bytes);
-	p->deadline = kTicksSinceStart + 5 * TICKS_PER_SECOND;
+	// A packet no slot can hold, or no slot to hold it: the sender was told
+	// neither could happen (it asks before it sends), so its state and the
+	// controller's no longer agree. Never truncated, never written past a
+	// slot: the transport fails, and says why.
+	if (bytes > BT_TX_SLOT_BYTES || p->tx_slots == BT_TX_SLOTS) {
+		if (!p->failed)
+			printd(DEBUG_EXCEPTIONS, "bluetooth: an ACL packet of %lu bytes could not be sent (%u of %u send slots in flight)\n",
+			       (unsigned long)bytes, p->tx_slots, BT_TX_SLOTS);
+		p->failed = true;
+		return;
+	}
+	unsigned slot = (p->tx_oldest + p->tx_slots) % BT_TX_SLOTS;
+	uint8_t *buffer = xhci_bt_tx_slot(p, slot);
+	memcpy(buffer, packet, bytes);
 	p->tx_bytes = bytes;
 	p->tx_done = false;
-	p->tx.pending_trb = ring_push(&p->tx.ring, virt_to_phys(p->tx.buffer),
+	p->tx.pending_trb = ring_push(&p->tx.ring, virt_to_phys(buffer),
 	                             bytes, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+	// Its own five seconds: one deadline pushed back by each send would
+	// let the oldest wait for as long as anything was being sent.
+	p->tx_slot[slot] = (xhci_bt_tx_slot_t){ .trb = p->tx.pending_trb,
+	                                        .deadline = kTicksSinceStart + 5 * TICKS_PER_SECOND };
+	p->tx_slots++;
 	mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, (p->tx.endpoint.address & 15) * 2);
 }
 
@@ -1534,7 +1598,8 @@ static void xhci_bt_runtime_poll(void)
 			xhci_bt_arm(p, &p->rx[i]);
 		}
 	}
-    bool usb_failed = p->failed || (!p->tx_done && kTicksSinceStart >= p->deadline) ||
+    bool usb_failed = p->failed ||
+        (p->tx_slots && kTicksSinceStart >= p->tx_slot[p->tx_oldest].deadline) ||
         (s_hc->control_slot == p->device->slot && s_hc->xfer_done &&
         (s_hc->xfer_cc != TRB_CC_SUCCESS ||
         (p->host.owner && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
@@ -1592,7 +1657,12 @@ static void xhci_bt_runtime_poll(void)
     }
     xhci_bt_log_trouble(p);
     if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
-    if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
+    // A slot is wiped as its transfer completes. On a failed transport the
+    // ones still with the controller never will, and are wiped here.
+    if (usb_failed && p->tx_slots) {
+        crypto_wipe(p->tx.buffer + PAGE_SIZE, BT_TX_SLOTS * BT_TX_SLOT_STRIDE);
+        p->tx_slots = 0;
+    }
     for (unsigned i = 0; i < BT_HOST_PEERS; i++)
         if (bt_le_input_active(&p->host.peers[i].le)) hid_keyboard_tick(&p->keyboards[i]);
 }

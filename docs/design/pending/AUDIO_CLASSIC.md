@@ -192,6 +192,45 @@ acl pools: classic 8 x 1021, le 0 x 0 (shared), in use 0, reserved for le 3
 ```
 
 and `/sys/usb` shows no new wait. No behaviour a person can see changes.
+(The line as built names the layout it found: `acl pools: classic 8 x 1021
+bytes, in use 0; le 3 x 251 bytes, in use 0; ...`, or `acl pools: one,
+classic and le together, ...`.)
+
+### T, as built
+
+- **Nothing is gated on the count yet.** The accountant is sized, told of
+  every link, send and completion, and shown in the status file; the LE
+  peers are still serialized among themselves by `tx_used`, exactly as
+  before, so the keyboard's path decides nothing new. The first sender held
+  to the count is the Classic link (part L). The multi-peer suite asserts
+  at every step that the controller-wide count agrees with each LE peer's
+  own.
+- **§ T3 is deferred to part L**, which is the first to have a second kind
+  of receiver. `bt_host_receive` is unchanged.
+- **"Nothing of mine is in flight", per link, is deferred to the part that
+  first sends Classic data** (S). With only LE sending, one packet at a
+  time, "the endpoint is idle" is still the same question.
+- **A completion that is not the oldest slot's is counted, not fatal**
+  (`unmatched`, as the receive endpoints count theirs): an event for a
+  transfer from before the runtime began must not end the transport. A
+  slot whose completion never comes is found by its deadline.
+- **A send the transport cannot carry fails the transport** (a packet
+  longer than a slot, or a fifth with four in flight), with a `bluetooth:`
+  log line. The send callback has no way to refuse, and a sender is meant
+  to have asked first; nothing is truncated and nothing is written.
+- The send slots follow the transmit endpoint's first page in ONE
+  allocation (three pages), each slot inside a page; the page bring-up
+  sends from and the command's bytes at offset 512 of it are where they
+  were.
+- The two buffer-size commands run after the LE event mask, not after the
+  Classic one: a scan on a controller already in service starts at the
+  phase after them, so they run once without a flag to say so.
+- Proof: `test_bt_acl_host` and its 50 mutants; `test_bt_scan_host`
+  (the two replies, their lengths, never asked twice); `test_bt_multi_host`
+  (the agreement above); `test_bt_loader_host` (the real start-up fills the
+  accountant; four slots in flight, their order, the ring, each slot's
+  deadline, the refusals under ASan, bring-up unchanged). QEMU has no
+  adapter: it proves only that the kernel still boots and USB input works.
 
 ## Part L: the link
 
