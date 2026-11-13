@@ -56,7 +56,7 @@ mutants = [
 
     # Names, the request parser.
     ('a-name-keeps-unit-separator', 'out[i]=name[i]>=32 && name[i]<127', 'out[i]=name[i]>=31 && name[i]<127'),
-    ('a-name-keeps-delete', 'out[i]=name[i]>=32 && name[i]<127', 'out[i]=name[i]>=32 && name[i]<=127'),
+    ('a-name-keeps-delete', 'out[i]=name[i]>=32 && name[i]<127', 'out[i]=name[i]>=32 && (unsigned char)name[i]<128'),
     ('a-name-fills-its-terminator', 'for(;name && i<31 && name[i];i++)', 'for(;name && i<32 && name[i];i++)'),
     ('page-scan-is-inquiry-scan', '{ c->scan_enable_wanted=c->bond.valid ? 0x02 : 0x00; }',
      '{ c->scan_enable_wanted=c->bond.valid ? 0x03 : 0x00; }'),
@@ -187,7 +187,7 @@ mutants = [
 
     # The errors.
     ('the-last-error-wins', '    if(c->error) return;\n    c->error=why;', '    c->error=why;'),
-    ('the-status-is-not-kept', 'c->error_opcode=op; c->error_status=status; c->retryable=retry;', 'c->error_opcode=op; c->retryable=retry;'),
+    ('the-status-is-not-kept', 'c->error_opcode=op; c->error_status=status; c->retryable=retry;', 'c->error_opcode=op; c->error_status=0*status; c->retryable=retry;'),
     ('a-new-attempt-keeps-the-old-error', '    c->error=NULL; c->error_opcode=0;', '    c->error_opcode=0;'),
     ('closing-records-failures', '    if(!cl_active(c)) return;\n    cl_error(c,why,op,status,retry);', '    cl_error(c,why,op,status,retry);'),
     ('attempts-are-not-counted', '    c->attempt++;\n', ''),
@@ -244,7 +244,8 @@ mutants = [
     ('decode-leaves-old-bytes', '    cl_wipe(b,sizeof(*b));\n    if(n!=', '    if(n!='),
     ('any-magic', '    if(n!=BT_CLASSIC_BOND_RECORD_BYTES || !cl_equal(p,(const uint8_t *)"OS64BC01",8)) return false;',
      '    if(n!=BT_CLASSIC_BOND_RECORD_BYTES) return false;'),
-    ('no-check', '    for(unsigned i=0;i<4;i++) if(p[76+i]!=(uint8_t)(crc>>(8*i))) return false;\n', ''),
+    ('no-check', '    for(unsigned i=0;i<4;i++) if(p[76+i]!=(uint8_t)(crc>>(8*i))) return false;\n',
+     '    for(unsigned i=0;i<4;i++) if(0 && p[76+i]!=(uint8_t)(crc>>(8*i))) return false;\n'),
     ('the-check-misses-a-byte', '    uint32_t crc=cl_crc(p,76);', '    uint32_t crc=cl_crc(p,75);'),
     ('flag-two-is-valid', '    if(p[8]>1 || p[10]', '    if(p[8]>2 || p[10]'),
     ('padding-byte-eleven', '|| p[10] || p[11] ||', '|| p[10] ||'),

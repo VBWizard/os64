@@ -112,7 +112,8 @@ static void cl_give_up(bt_classic_t *c, const char *why, uint16_t op, uint8_t st
 }
 
 // A new attempt: everything the last one learned is cleared, except the
-// bond, page scan, the refusals still owed and any command in flight.
+// bond, page scan, the refusals still owed, any command in flight and the
+// malformed count.
 static void cl_session(bt_classic_t *c, bt_classic_session_t kind, const uint8_t peer[6], const char *name)
 {
     c->attempt++;

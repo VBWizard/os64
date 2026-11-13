@@ -67,9 +67,11 @@ typedef struct {
     uint64_t since;
 } bt_classic_answer_t;
 
-// Refusals: answers to anyone who is not the link's peer, and to a voice
-// link from anyone. They never touch the link's state; a queue that is
-// full drops the newest, and the controller's own timeout then refuses it.
+// Refusals: answers to anyone the link is not paging, accepting or linked
+// to (while CLOSING, that is everyone), and to a voice link from anyone.
+// They never touch the link's state. A queue that is full drops the
+// newest, and one that has waited 25 s is dropped; the controller's own
+// timeout then refuses it.
 #define BT_CLASSIC_REFUSALS 4
 typedef struct {
     uint16_t opcode;

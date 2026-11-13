@@ -1720,9 +1720,12 @@ static void test_more_rules(void)
     M.has_key = true; memcpy(M.key, OLD_KEY, 16);
     CHECK(request(&c, "reconnect", NULL, NULL));
     CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+    from = M.logn;
     ev_auth(&M, 0, 0, M.handle);
+    step(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(!c.pending); CHECK_EQ(c.next_op, 0);
     run(&c, &M, 100);
-    CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(!c.pending);
+    CHECK_EQ(M.logn, from);
 
     // Encryption Change with an error status, even saying "on", fails it.
     silent_link(&c, &b, "reconnect", 0x0062);
