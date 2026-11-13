@@ -51,6 +51,19 @@ typedef struct {
 	uint32_t reads;
 	// A flood: whenever the ring has room, the producer posts.
 	bool     flood;
+	// The interrupter. An event arriving with the busy bit clear sets
+	// USBSTS.EINT and, with IE set, sends one message; so does an ERDP
+	// write that clears the busy bit with the ring not empty. While the
+	// busy bit is set nothing is sent. (With MSI the pending bit clears
+	// itself when the message goes; EINT does not.)
+	uint32_t usbsts;         // EINT and the register's other write-one-to-clear bits
+	bool     ie;
+	uint32_t messages;       // sent
+	uint32_t answered;       // of which the top half has run for
+	bool     owed;           // the top half's mark, taken by the pass that answers it
+	uint32_t irq_writes;
+	xhci_irq_reg_t irq_write_reg[MAX_WRITES];
+	uint32_t irq_write_value[MAX_WRITES];
 } controller_t;
 
 static controller_t hc[MAX_CONTROLLERS];
@@ -102,6 +115,10 @@ static void produce(uint32_t c, uint64_t at)
 	t->control = (k->prod_cycle ? XHCI_TRB_CYCLE : 0);
 	k->posted_at[k->posted++] = at;
 	if (++k->enqueue == k->ring.size) { k->enqueue = 0; k->prod_cycle ^= 1; }
+	if (!k->ehb) {
+		k->usbsts |= XHCI_USBSTS_EINT;
+		if (k->ie) k->messages++;
+	}
 	k->ehb = true;                              // an event sets the busy bit
 }
 
@@ -192,8 +209,11 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 		k->ehb = false;
 		// A ring not empty at the write would signal again; the model's
 		// producer sets the bit again on its next event either way.
-		if (k->posted != k->handled)
+		if (k->posted != k->handled) {
 			k->ehb = true;
+			k->usbsts |= XHCI_USBSTS_EINT;
+			if (k->ie) k->messages++;
+		}
 	}
 
 	// The wait bound must cover every event this drain handled.
@@ -216,7 +236,234 @@ static xhci_evt_drain_t model_pass(uint32_t c, bool use_deadline, uint64_t deadl
 	return d;
 }
 
+// The interrupter's two registers as the top half sees them.
+static uint32_t irq_read(void *ctx, xhci_irq_reg_t reg)
+{
+	controller_t *k = ctx;
+	return reg == XHCI_REG_USBSTS ? k->usbsts : (k->ie ? XHCI_IMAN_IE : 0);
+}
+
+static void irq_write(void *ctx, xhci_irq_reg_t reg, uint32_t value)
+{
+	controller_t *k = ctx;
+	CHECK(k->irq_writes < MAX_WRITES, "model ran out of interrupt write slots");
+	k->irq_write_reg[k->irq_writes] = reg;
+	k->irq_write_value[k->irq_writes++] = value;
+	if (reg == XHCI_REG_USBSTS)
+		k->usbsts &= ~value;                    // write-one-to-clear, all of it
+	else
+		k->ie = (value & XHCI_IMAN_IE) != 0;    // IE is read-write: a write without it turns it off
+}
+
+// The top half, for every controller, as one entry of the shared vector.
+// Returns whether any controller had signalled (else the entry is spurious).
+static bool model_irq(void)
+{
+	bool any = false;
+	for (uint32_t c = 0; c < hc_count; c++) {
+		hc[c].answered = hc[c].messages;
+		if (xhci_irq_acknowledge(irq_read, irq_write, &hc[c])) {
+			hc[c].owed = true;
+			any = true;
+		}
+	}
+	return any;
+}
+
+// A pass as kusb makes it for an interrupt-driven controller: the mark is
+// taken before the drain.
+static xhci_evt_drain_t model_irq_pass(uint32_t c, bool use_deadline, uint64_t deadline)
+{
+	bool owed = hc[c].owed;
+	hc[c].owed = false;
+	return model_pass(c, use_deadline, deadline, owed);
+}
+
 // ── The cases ───────────────────────────────────────────────────────────────
+
+static void test_drive_choice(void)
+{
+	for (int msi = 0; msi < 2; msi++)
+		for (int msix = 0; msix < 2; msix++) {
+			xhci_drive_choice_t lit = xhci_drive_choose(msi, msix, true);
+			CHECK(lit.driven == XHCI_DRIVEN_TICK && lit.why_tick == XHCI_TICK_FLASHLIGHT,
+			      "the flashlight did not force the tick (msi %d msix %d)", msi, msix);
+			CHECK(strcmp(xhci_drive_text(lit), "tick (USBPOLL)") == 0, "flashlight text");
+			xhci_drive_choice_t c = xhci_drive_choose(msi, msix, false);
+			xhci_driven_t want = msi ? XHCI_DRIVEN_MSI : msix ? XHCI_DRIVEN_MSIX : XHCI_DRIVEN_TICK;
+			CHECK(c.driven == want, "msi %d msix %d chose %d", msi, msix, (int)c.driven);
+			CHECK((c.driven == XHCI_DRIVEN_TICK) == (c.why_tick == XHCI_TICK_NO_CAPABILITY) &&
+			      (c.driven != XHCI_DRIVEN_TICK) == (c.why_tick == XHCI_TICK_BY_CHOICE_NONE),
+			      "msi %d msix %d: the reason does not match the choice", msi, msix);
+			const char *text = msi ? "msi" : msix ? "msix" : "tick (no capability)";
+			CHECK(strcmp(xhci_drive_text(c), text) == 0, "msi %d msix %d reads %s", msi, msix, xhci_drive_text(c));
+		}
+	xhci_drive_choice_t failed = { XHCI_DRIVEN_TICK, XHCI_TICK_DID_NOT_TAKE };
+	CHECK(strcmp(xhci_drive_text(failed), "tick (did not take)") == 0, "did-not-take text");
+	xhci_drive_choice_t undecided = { XHCI_DRIVEN_TICK, XHCI_TICK_NOT_ASKED };
+	CHECK(strcmp(xhci_drive_text(undecided), "tick") == 0, "undecided text");
+}
+
+static void test_irq_acknowledge(void)
+{
+	model_reset(1, 8);
+	controller_t *k = &hc[0];
+	k->ie = true;
+	// Not this controller's interrupt: nothing is written, and the
+	// register's other bits are not touched either.
+	k->usbsts = (1u << 4) | (1u << 2);
+	CHECK(!xhci_irq_acknowledge(irq_read, irq_write, k) && k->irq_writes == 0,
+	      "EINT clear, yet the top half wrote %u register(s)", k->irq_writes);
+	// Its interrupt: USBSTS with EINT alone, THEN IMAN with IP and IE.
+	produce(0, now);
+	CHECK(k->messages == 1 && (k->usbsts & XHCI_USBSTS_EINT), "the model did not signal");
+	CHECK(xhci_irq_acknowledge(irq_read, irq_write, k), "EINT set, not acknowledged");
+	CHECK(k->irq_writes == 2, "%u writes, wanted two", k->irq_writes);
+	CHECK(k->irq_write_reg[0] == XHCI_REG_USBSTS && k->irq_write_value[0] == XHCI_USBSTS_EINT,
+	      "first write: register %d value %x", (int)k->irq_write_reg[0], k->irq_write_value[0]);
+	CHECK(k->irq_write_reg[1] == XHCI_REG_IMAN &&
+	      k->irq_write_value[1] == (XHCI_IMAN_IP | XHCI_IMAN_IE),
+	      "second write: register %d value %x", (int)k->irq_write_reg[1], k->irq_write_value[1]);
+	CHECK(k->usbsts == ((1u << 4) | (1u << 2)), "USBSTS's other bits were cleared: %x", k->usbsts);
+	CHECK(k->ie, "the acknowledgement turned the interrupt off");
+	// Acknowledged once: a second entry finds nothing.
+	CHECK(!xhci_irq_acknowledge(irq_read, irq_write, k) && k->irq_writes == 2, "acknowledged twice");
+}
+
+static void test_irq_protocol(void)
+{
+	// One event, one message, one pass: handled, ERDP written, quiet again.
+	model_reset(2, 8);
+	hc[0].ie = hc[1].ie = true;
+	produce(0, now);
+	CHECK(model_irq() && hc[0].owed && !hc[1].owed, "the wrong controller was marked");
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 1 && hc[0].writes == 1 && !hc[0].ehb && !hc[0].owed, "one event");
+
+	// While the busy bit is set the controller says nothing more: three
+	// events, one message. The pass that answers it takes all three.
+	produce(0, now); produce(0, now); produce(0, now);
+	CHECK(hc[0].messages == 2, "%u messages for a burst behind one busy bit", hc[0].messages);
+	model_irq();
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 4 && hc[0].messages == 2, "the burst");
+
+	// An event between the acknowledgement and the drain is the drain's.
+	produce(0, now);
+	model_irq();
+	produce(0, now);
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 6 && hc[0].messages == 3 && !hc[0].ehb, "an event after the acknowledgement");
+
+	// A drain stopped at the deadline with events left: its ERDP write
+	// clears the busy bit on a ring that is not empty, and the controller
+	// signals again by itself.
+	hc[0].cost = 10;
+	produce(0, now); produce(0, now); produce(0, now);
+	model_irq();
+	xhci_evt_drain_t d = model_irq_pass(0, true, now + 11);
+	CHECK(d.work_left && hc[0].handled == 8, "the deadline did not stop the drain after two: %u", hc[0].handled);
+	CHECK(hc[0].messages == 5 && (hc[0].usbsts & XHCI_USBSTS_EINT), "no second signal after an early stop");
+	model_irq();
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 9 && !hc[0].ehb, "the rest was not taken");
+	// Stopped after ONE event from a ring last published empty, nothing is
+	// written (the pointer would be the one the register holds), so the
+	// busy bit stays and the controller says nothing: the pass's own
+	// "work left" is what brings the daemon back.
+	produce(0, now); produce(0, now);
+	model_irq();
+	uint32_t messages = hc[0].messages;
+	d = model_irq_pass(0, true, now + 1);
+	CHECK(d.work_left && hc[0].handled == 10 && hc[0].ehb && hc[0].messages == messages,
+	      "a one-event stop: handled %u, busy %d, %u new message(s)", hc[0].handled, hc[0].ehb,
+	      hc[0].messages - messages);
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 11 && !hc[0].ehb, "the event left by a one-event stop");
+	hc[0].cost = 1;
+
+	// A tick's pass takes the event before the top half has run. The top
+	// half still marks; the pass that answers finds nothing, reads ERDP,
+	// finds the bit clear and writes nothing.
+	produce(0, now);
+	model_pass(0, false, 0, false);
+	uint32_t writes = hc[0].writes, reads = hc[0].reads;
+	CHECK(model_irq() && hc[0].owed, "the late top half did not mark");
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].writes == writes && hc[0].reads == reads + 1, "an already-serviced interrupt: %u writes %u reads",
+	      hc[0].writes - writes, hc[0].reads - reads);
+
+	// An event pending when the interrupt is turned on never signals:
+	// enabling marks the controller once, and that first pass takes it.
+	model_reset(1, 8);
+	produce(0, now);
+	CHECK(hc[0].messages == 0, "a message with the interrupt off");
+	hc[0].ie = true;
+	hc[0].owed = true;
+	model_irq_pass(0, false, 0);
+	CHECK(hc[0].handled == 1 && !hc[0].ehb, "an event pending at enabling was stranded");
+	produce(0, now);
+	CHECK(hc[0].messages == 1, "no message for the first event after enabling");
+
+	// A spurious entry: nobody had signalled.
+	CHECK(!model_irq() || hc[0].owed, "setup");
+	model_irq_pass(0, false, 0);
+	CHECK(!model_irq(), "an entry with nothing pending was not called spurious");
+}
+
+// Interrupts ALONE: no tick ever comes. A pass runs only because the top
+// half marked a controller or because the last pass said work was left.
+// Whatever the bursts, costs and deadlines, nothing may be stranded.
+static void test_irq_random(int rounds)
+{
+	uint32_t seed = 0x0BADCAFE;
+#define RND(n) ((seed = seed * 1664525u + 1013904223u) >> 8) % (n)
+	for (int round = 0; round < rounds; round++) {
+		uint32_t controllers = 1 + RND(MAX_CONTROLLERS);
+		uint32_t size = 4 + RND(13);
+		model_reset(controllers, size);
+		for (uint32_t c = 0; c < controllers; c++) {
+			hc[c].cost = 1 + RND(6);
+			hc[c].ie = true;
+		}
+		bool raised = false;
+		for (int step = 0; step < 300; step++) {
+			if (step < 200 && RND(3) == 0) {
+				uint32_t c = RND(controllers);
+				uint32_t burst = 1 + RND(size);
+				for (uint32_t i = 0; i < burst && ring_has_room(&hc[c]); i++) produce(c, now);
+			}
+			// The top half runs when a message is undelivered, and
+			// sometimes late: after the next pass has already been by.
+			bool pending = false;
+			for (uint32_t c = 0; c < controllers; c++) pending |= hc[c].answered != hc[c].messages;
+			bool fired = pending && RND(4) != 0 && model_irq();
+			if (!fired && !raised) { now += RND(5); continue; }
+			raised = false;
+			uint64_t deadline = now + 1 + RND(20);
+			for (uint32_t c = 0; c < controllers; c++) {
+				xhci_evt_drain_t d = model_irq_pass(c, true, deadline);
+				if (d.work_left) { raised = true; break; }
+			}
+			now += RND(5);
+		}
+		// Quiet now: let every outstanding message and raised bell be answered.
+		for (int settle = 0; settle < 64; settle++) {
+			bool fired = model_irq();
+			if (!fired && !raised) break;
+			raised = false;
+			for (uint32_t c = 0; c < controllers; c++)
+				if (model_irq_pass(c, true, now + 1000).work_left) raised = true;
+		}
+		for (uint32_t c = 0; c < controllers; c++) {
+			CHECK(hc[c].handled == hc[c].posted, "round %d: controller %u has %u of %u handled with no message outstanding",
+			      round, c, hc[c].handled, hc[c].posted);
+			CHECK(!hc[c].ehb, "round %d: controller %u is left with its busy bit set: it will never signal again", round, c);
+			CHECK(hc[c].ie, "round %d: controller %u's interrupt was turned off", round, c);
+		}
+	}
+#undef RND
+}
 
 static void test_drain_to_empty(void)
 {
@@ -661,6 +908,10 @@ int main(int argc, char **argv)
 	test_wait_before_first_empty();
 	test_wait_carries_over();
 	test_random(rounds);
+	test_drive_choice();
+	test_irq_acknowledge();
+	test_irq_protocol();
+	test_irq_random(rounds);
 	for (uint32_t c = 0; c < MAX_CONTROLLERS; c++)
 		free(hc[c].ring.trb);
 	if (failures) {

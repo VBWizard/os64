@@ -48,6 +48,7 @@ bool bt_bond_save_slot(unsigned slot,const bt_le_bond_t *bond,bool automatic)
 }
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
+uint64_t kCPUCyclesPerSecond = 1000000000;
 // What the driver asks of kusb's side of the kernel: a bell nobody is
 // parked on, a clock that only has to move, and a sleep this harness never
 // reaches (it is kworker's wait for the serializing flag, which is free).
