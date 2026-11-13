@@ -89,6 +89,25 @@ bool console_unread(char c)
 // terminal that window represents, so the victim is THAT terminal's
 // foreground, exactly as a VT's Ctrl+C aims at the VT's own. The policy
 // below is unchanged; only who asks moved.
+// WHY THE HOLD IS SOUND. A task is named by fgTask until its own departure
+// takes it out (tty_task_departed), under fg_lock, and it departs before
+// its exiting thread is retired, which is before the reaper will look at
+// it. So a task found in the pointer under fg_lock has not been unlinked
+// for burial, and a hold taken there, which the reaper honours, keeps it
+// from being. The lock is a leaf and irqsave, so the keyboard's interrupt
+// handler may take it too.
+task_t *console_fg_hold(tty_t *tty)
+{
+	if (tty == NULL)
+		tty = &kTTY[0];
+	uint64_t flags = spinlock_acquire_irqsave(&tty->fg_lock);
+	task_t *fg = tty->fgTask;
+	if (fg != NULL)
+		task_hold(fg);
+	spinlock_release_irqrestore(&tty->fg_lock, flags);
+	return fg;
+}
+
 bool console_intr_intercept_tty(tty_t *tty, char ascii)
 {
 	if (ascii != CONSOLE_ETX)
@@ -101,20 +120,23 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	// it is aimed at. The pointer changes hands at a spawn, a wait and a
 	// departure; classify by one task's wish and then signal whatever the
 	// pointer names a moment later, and a cooked program gets 0x03 as data
-	// or a program whose raw request succeeded gets killed.
-	task_t *fg = tty->fgTask;
+	// or a program whose raw request succeeded gets killed. HELD, because
+	// this runs in thread context as well as in the keyboard's interrupt,
+	// and a thread can be preempted between the read and the signal for
+	// long enough that the task exits and is buried.
+	task_t *fg = console_fg_hold(tty);
+	if (fg == NULL)
+		return false;               // no owner yet: stays data
 
 	// RAW (SIGINT.md § Raw mode): the terminal interprets nothing, so the
 	// byte is data for whoever is reading — telnet sends it down the wire
 	// as IAC IP itself, the way character-mode telnet has since 4.2BSD.
-	if (fg != NULL && fg->wantsRaw)
+	// The shell: stays data too.
+	if (fg->wantsRaw || fg->controllingShell || fg->threads == NULL)
+	{
+		task_release(fg);
 		return false;
-
-	if (fg == NULL || fg->controllingShell)
-		return false;               // no owner yet, or the shell: stays data
-
-	if (fg->threads == NULL)
-		return false;
+	}
 
 	// A word-OR per thread — still all an IRQ path is allowed to do, and a
 	// read-only walk of a chain whose nodes are published fully linked.
@@ -128,21 +150,22 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	// through the normal task_exit path. Any parked in ISLEEP are woken
 	// into that check by processSignals within a scheduler pass (~10ms).
 	task_signal_all_threads(fg, SIGINT);
+	task_release(fg);
 	return true;                    // consumed: the byte never enters the ring
 }
 
 // The terminal's mode is its foreground's wish, read at the moment of
-// asking. The pointer is read once; a foreground that is dying is replaced
-// in that pointer by its own departure, the same exposure every other
-// reader of fgTask in this file has always had. A caller that goes on to
+// asking, from a held snapshot (console_fg_hold). A caller that goes on to
 // ACT on the foreground must not ask here and then read the pointer again
 // — it takes its own snapshot and asks that task's wish directly.
 bool console_tty_raw(tty_t *tty)
 {
-	if (tty == NULL)
-		tty = &kTTY[0];
-	task_t *fg = tty->fgTask;
-	return fg != NULL && fg->wantsRaw;
+	task_t *fg = console_fg_hold(tty);
+	if (fg == NULL)
+		return false;
+	bool raw = fg->wantsRaw;
+	task_release(fg);
+	return raw;
 }
 
 void console_classify_tty(tty_t *tty, keyboard_event_t *ev)

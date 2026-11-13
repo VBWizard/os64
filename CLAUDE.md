@@ -464,15 +464,31 @@ virtio because its drain waits for the tick.
   boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
   firmware's boot logo, and the walk's problems. Read it FIRST on a machine
   meeting os64 for the first time.
-- **USB** (`usb/xhci.c`): the xHCI controllers, polled from the scheduler's
-  pass (`xhci_poll`). **`/sys/usb`** says which controller carries the
-  keyboard, the mouse and the Bluetooth adapter, how often the poll came
-  round (`event_gap_*`: an event waited no longer than the gap of the poll
-  that drained it), and a timeline of Bluetooth's scans and connection
-  steps with the polls and the longest gap between each. Read it FIRST when
-  a USB or Bluetooth device answers late: it tells an event that sat unread
-  from one that had not happened yet. docs/design/pending/XHCI_INTERRUPT.md
-  is the arc that replaces the poll
+- **USB** (`usb/xhci.c`, `kusb.c`): the xHCI controllers, drained by
+  **`kusb`**, a kernel daemon pinned to the BSP and parked on a doorbell the
+  tick rings (`knet`'s shape; docs/design/pending/XHCI_INTERRUPT.md § The
+  design). It is the one consumer of the event rings once the scheduler
+  runs. A wake is one PASS (`xhci_pass`): each controller drained until its
+  ring is empty or a one-tick deadline passes (checked before every event;
+  the controller that used the time is served last next pass), then
+  Bluetooth's clockwork and the keyboards' typematic repeat. Input is
+  therefore delivered from a THREAD, not from inside the scheduler's pass.
+  USB's serializing flag (`s_poll_busy`) has one release door for everyone
+  but `kusb`, and that door rings `kusb` if a held flag turned it away. The
+  arithmetic (the drain, what `ERDP` is owed, the wait bound, the visit's
+  order) is `xhci_service.c`, pure: `tools/test_xhci_service_host.sh`
+  drives it against a model controller and `tools/test_xhci_service_mutants.py`
+  breaks each rule (`mutants_parallel.py ... --with kernel`). **`/sys/usb`**
+  says which controller carries the keyboard, the mouse and the Bluetooth
+  adapter and how each is driven; per controller, how long an event may
+  have waited (from the last time its ring was seen empty); `kusb`'s wakes
+  and latencies in `/sys/net/knet`'s words; passes refused the flag and the
+  longest wait; the gap between passes, which is a cadence and NOT a wait;
+  and a timeline of Bluetooth's scans and connection steps. The
+  `since_read` maxima start again at each read, so reading it before and
+  after a workload measures that workload. Read it FIRST when a USB or
+  Bluetooth device answers late. No controller has an interrupt yet (DEBTS;
+  the arc's X.3)
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer

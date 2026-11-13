@@ -22,8 +22,9 @@ typedef enum {
     BT_SCAN_CLEANUP, BT_SCAN_STOPPED, BT_SCAN_FAILED
 } bt_scan_phase_t;
 
-// Owned by the serialized USB poll path. No allocation, waits or logging in
-// the decoder: radio traffic can arrive while the scheduler lock is held.
+// Owned by whoever holds USB's serializing flag (xhci.c). No allocation,
+// waits or logging in the decoder: it runs inside kusb's pass, against that
+// pass's deadline.
 typedef struct {
     bt_scan_phase_t phase;
     uint64_t deadline, total_deadline;

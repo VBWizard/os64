@@ -4,7 +4,8 @@
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
-// bond policy and input state belong to a peer. USB polling serializes access.
+// bond policy and input state belong to a peer. USB's serializing flag
+// (xhci.c) orders access.
 typedef struct {
     bt_le_t le;
     bt_manager_t manager;

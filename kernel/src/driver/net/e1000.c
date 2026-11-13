@@ -74,7 +74,7 @@
 // Legacy INTx is the entire menu on this chip. So the honest choice was
 // INTx-plus-IOAPIC-routing versus polling, and polling wins for v1: it keeps
 // the slice about the seam instead of about interrupt plumbing, and it is
-// the pattern this kernel has already proven twice (xhci_poll, then
+// the pattern this kernel has already proven twice (the xHCI poll, then
 // virtio-net's drain). Interrupts get built for hardware that rewards them —
 // the RTL8125 on the P5, or an e1000e — where real MSI-X vectors and a
 // bottom half buy microsecond round trips. All interrupt sources are

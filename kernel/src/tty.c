@@ -729,7 +729,7 @@ void tty_input_event(const keyboard_event_t *ev)
 // The ring push alone — the choke both producers share: the keyboard path
 // above (focus/knock/scrollback policy applied first) and a pty master's
 // write (no ceremony — the terminal app already decided whose keys these
-// are). Producers lock (PS/2 IRQ, xHCI poll, typematic, and now a master
+// are). Producers lock (PS/2 IRQ, the USB drainer, typematic, and now a master
 // writer can interleave); the consumer side stays lock-free — one reader
 // per tty, the same single-consumer contract the global ring had.
 void tty_input_push(tty_t *t, const keyboard_event_t *ev)
@@ -789,7 +789,7 @@ bool tty_input_pop(tty_t *t, keyboard_event_t *ev)
 }
 
 // ── Focus ───────────────────────────────────────────────────────────────────
-// Deliberately synchronous from the keypress (PS/2 IRQ or the xHCI poll):
+// Deliberately synchronous from the keypress (PS/2 IRQ or the USB drainer):
 // the repaint writes the shadow (cached RAM) and pushes one blit, the same
 // cost class as the full-screen scroll that already runs under the renderer
 // lock with interrupts off — correctness beats the few-ms jitter, and a

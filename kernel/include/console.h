@@ -91,6 +91,15 @@ void console_classify_tty(struct tty *tty, struct keyboard_event *ev);
 // Derived from the foreground pointer, never stored (SIGINT.md § Raw mode).
 bool console_tty_raw(struct tty *tty);
 
+// The terminal's foreground task, HELD: a reader that is going to
+// dereference the foreground takes it this way and gives it back with
+// task_release, which is then its last access. NULL when the terminal has
+// no foreground. A bare read of tty->fgTask is good for comparing the
+// pointer and nothing else: the task it names can exit and be buried while
+// a reader in thread context is preempted, and input is delivered from
+// thread context (kusb, a pty master's write).
+struct task *console_fg_hold(struct tty *tty);
+
 // Called from processSignals (scheduler context, every pass). If a reader is
 // asleep in console_read AND the keyboard driver has input, wake the reader.
 // Level-triggered on keyboard_has_event(), so a key arriving at any instant is

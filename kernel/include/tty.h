@@ -118,7 +118,7 @@ typedef struct tty
 	                                   // after, and never two tty locks at once
 
 	// ── The input ring (one per tty — type-ahead stays with its terminal) ──
-	// Producers (PS/2 IRQ, xHCI poll, typematic) push under ring_lock; the
+	// Producers (PS/2 IRQ, the USB drainer, typematic) push under ring_lock; the
 	// consumer side is lock-free because each tty has at most ONE reader —
 	// the same single-consumer contract the global ring lived by.
 	keyboard_event_t ring[KEYBOARD_BUFFER_SIZE];
@@ -140,8 +140,9 @@ typedef struct tty
 	// and finish, a task's departure and a seat are each one indivisible
 	// transition, never a check on one core and a store on another. A leaf
 	// lock, irqsave, held for a pointer compare and a task-list walk and
-	// nothing else; readers (the Ctrl+C intercept in IRQ context, the mode
-	// query, /proc) read the pointer bare — a single aligned word.
+	// nothing else. A reader that only COMPARES the pointer reads it bare,
+	// a single aligned word; a reader that will DEREFERENCE the task takes
+	// it under this lock with a lifetime hold (console_fg_hold).
 	spinlock_t fg_lock;
 	// Raw mode has no word here on purpose: the terminal is raw exactly
 	// while fgTask->wantsRaw (task.h) — derived, never stored, so there is
