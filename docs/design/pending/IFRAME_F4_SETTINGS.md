@@ -171,10 +171,35 @@ Full signatures, ownership and status rules are in
 [libjs CONTRACT.md](../../../userland/libjs/CONTRACT.md).
 
 The wrapper's allocation includes a native scope-outcome chain; the bridge
-itself allocates nothing. Public existing layouts and ABI ID remain unchanged,
-and the engine source identity is unchanged from #572. The wrapper state
-checks do not constitute F.16 recovery or a browser origin check.
+itself allocates nothing. The #575 bridge cut changed neither existing public
+layouts/ABI ID nor the engine identity. The wrapper state checks do not
+constitute F.16 recovery or a browser origin check.
 Evidence: [IFRAME_F4_SETTINGS_BRIDGE_VALIDATION.md](IFRAME_F4_SETTINGS_BRIDGE_VALIDATION.md).
+
+## Native callback capture and ownership
+
+`os64_js_callback_t` in `os64/js_callbacks.h` owns a callback object reference
+and its conversion-time incumbent. Capture uses the checked incumbent query;
+it does not derive attribution from the callback's code or registration
+binding. The record can be a C root or a traced edge of an engine object;
+explicit clear and mark operations support both lifetimes and cycle collection.
+The holder owns and accounts for the inline storage. Cleanup remains available
+after cancellation, retirement and failure.
+
+Invocation uses the checked bridge with a separately proven associated entry
+realm. A native adapter performs the binding's lookup, conversion and call
+work inside that scope. The value and incumbent survive registration removal
+or replacement during delivery, with final reference release inside the guard.
+The helper neither identifies the associated realm nor implements WebIDL type
+validation, callback activity checks or origin permissions.
+
+[WebIDL's callback function and interface rules](https://webidl.spec.whatwg.org/#es-callback-function)
+separate conversion-time incumbent capture from invocation-time preparation.
+Associated object realm is a separate requirement
+([§3.1](https://webidl.spec.whatwg.org/#js-environment)); a callable-target query
+is not a general proof for bound functions, proxies or callback objects.
+This cut leaves that proof at the adapter boundary and adds no DOM consumer.
+Evidence: [IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md](IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md).
 
 ## Remaining F.4b interfaces and acceptance gates
 
@@ -182,8 +207,9 @@ Before publishing browser settings queries, implement and prove:
 
 - DOM integration of checked entry/lifecycle scopes and role-specific
   current/relevant settings attribution. Relevant settings come from the target binding.
-- WebIDL callback capture at conversion and invocation, preserving the
-  captured incumbent independently of callable realm, target and task owner.
+- Integrate native capture records at WebIDL conversion and invocation sites,
+  proving associated-object entry realm and callback activity/security checks.
+  Preserve captured incumbent independently of callable realm and task owner.
 - Promise reaction and thenable capture/invocation, including bound foreign
   native methods. Supply host scopes per invocation rather than treating a
   checkpoint's queue context as the captured callback incumbent. Exact active
