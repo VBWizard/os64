@@ -667,6 +667,94 @@ devices connected; whether the early pass contributed is not known.)
   boot's keyboard link dropped with reason `3d` during HID setup and was
   not retried until `reconnect` was written.
 
+### X.3 as built (2026-11-13)
+
+**What was built.** The choice of how a controller is driven and the top
+half's acknowledgement are pure (`xhci_drive_choose`,
+`xhci_irq_acknowledge`, `xhci_service.c`); the host model gained an
+interrupter (a message when an event arrives with the busy bit clear and
+when an `ERDP` write clears it over a ring that is not empty) and a random
+run driven by interrupts ALONE, with a top half that sometimes runs late,
+which must strand nothing and leave no busy bit standing. Fifty mutants,
+all caught. `pci_msi_enable` and `pci_msix_enable_one` (pci.c) program and
+read back; the RTL8125 moved to the first. `xhci_isr` is D6's top half and
+`xhci_interrupts_enable` is D5's six steps, called by `kusb` once, after
+signal processing is on and before its first pass.
+
+**Departures from the design.**
+
+- D5 says `kusb` enables "at the top of its body". It enables at the first
+  wake after `kProcessSignals`, because until then it does no pass (X.2's
+  boot correction), and an interrupt that nobody will answer for a second
+  buys nothing. Enabling tries for the serializing flag and is asked again
+  at the next wake if the flag was held.
+- D5 and D6 speak of an `ehb_owed` mark and a separate stamp. They are one
+  word (`irq_at`: zero is "not owed", anything else is the time of the
+  oldest unanswered interrupt), because taken in two exchanges a top half
+  running between them lost or misplaced the sample (the cold read).
+- D5's step 6 is followed by one more write: `IMAN` with `IP` and `IE`,
+  after both gates are open. An event arriving between step 4's clear and
+  the gates opening could leave the pending bit set with no message sent,
+  and a controller that signals only on the bit rising would stay silent.
+  Whether real controllers do that was not settled from the text; the
+  write costs nothing and the mark covers whatever was on the ring. The
+  tick would HIDE such a controller (input keeps working at tick cadence):
+  on the P5, `fires` must grow with `events`.
+- D8 gives MSI-X's order as table, then enable. Built as enable with the
+  function mask set, table, then mask cleared, so a half-written table
+  sends nothing.
+- D9's three values are not built in: `USBIMOD=<n>` on the command line
+  sets the interval for a boot, and the report prints the value read back.
+- The interrupt-to-service time is from the OLDEST unanswered interrupt to
+  the start of the drain that took the controller's mark; a second
+  interrupt before that drain does not move the stamp.
+- One drain rule matters more with interrupts than it did without: a drain
+  stopped by the deadline after ONE event from a ring last published empty
+  writes nothing (the #559 rule), so the busy bit stays and the controller
+  says nothing more. `kusb` raising its own bell for "work left" is what
+  brings it back; the model has that case by name.
+- § 4.9.4 against the busy-bit retire (D6's "the builder checks"): NOT
+  re-read against the specification's text in this slice. The write is
+  made only when the bit reads set after an acknowledged interrupt, which
+  is the condition the design gave; the check against the text is still
+  owed.
+
+**QEMU, 2026-11-13** (TCG; counts are the evidence, the times are not the
+P5's). 20 mouse moves and a typed command each run:
+
+| Boot | driven | events | fires | spurious | interrupt to service, max |
+|---|---|---|---|---|---|
+| `qemu-xhci`, 8 CPUs | msix | 80 | 80 | 0 | 0.86 ms |
+| `nec-usb-xhci,msi=on,msix=off` | msi | 80 | 80 | 0 | 0.50 ms |
+| both at once, keyboard on one, mouse on the other | msix + msi | 60 + 20 | 60 + 20 | 0 | 0.54 ms |
+| `qemu-xhci`, sparse APIC IDs, 24 CPUs | msix | 86 | 86 | 0 | 1.55 ms |
+| `USBPOLL` | tick (USBPOLL) | 82 | none | 0 | (79 passes found events) |
+| `USBIMOD=4000` | msix | 82 | 82 | 0 | 0.54 ms, `imod=4000` read back |
+| no xHCI controller | | | | 0 | `kusb: none` |
+
+Fires equal to events says each event had its own message here: QEMU's
+model does not moderate and the test's events are far apart. The counters
+tell an interrupt-driven boot from a tick-driven one; working input proves
+neither.
+
+**The P5, 2026-11-13** (Chris's hands; `/sys/usb` read over SSH). All five
+controllers `driven=msi`. Controller 2 (64:00.4: the dongle mouse and the
+Bluetooth adapter, which carries the LE keyboard and mouse) took 4009
+fires for 4011 events with no spurious entry; no event waited over 20 ms,
+where before X.3 29 of 3,300 on the same controller waited between 20 and
+200 ms; interrupt to service 3.0 ms at most and never over a tick. The
+other controllers had nothing to say (the dongle keyboard on controller 1
+was idle). A reboot and a cold boot both came up working, the RTL8125
+with it.
+
+**Q4, ruled 2026-11-13:** 250 us stays. It was not measured: the pointing
+devices to hand do not report fast enough for moderation to matter, and
+DEBTS carries what would reopen it.
+
+**Not proven:** suspend and resume (the tree does neither), and a
+controller whose programming does not take (no model refuses it; the path
+is the RTL8125's, reading back and staying on the tick).
+
 ## Measure first
 
 Before any change, on the P5, with the LE keyboard and the trackball each:
@@ -801,7 +889,8 @@ interrupt work, it is raised with Chris, not folded in.
    2026-11-12; Quinn leaned the same way).
 3. **No call to the drain stays on the scheduler's path.** The tick
    ringing the daemon is the backstop (Chris, 2026-11-12).
-4. **The moderation value is OPEN.** D9 proposes 250 µs and says how it is
-   measured; Chris rules from the numbers.
+4. **The moderation value is 250 µs** (ruled 2026-11-13 on Fable's lean;
+   Chris had no view on the number). It was not measured as D9 describes:
+   § X.3 as built and DEBTS say why, and what would reopen it.
 5. **No INTx in this arc** (Chris, 2026-11-12, on condition that the P5's
    controllers offer MSI or MSI-X; they offer both).

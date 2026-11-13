@@ -75,6 +75,26 @@ mutants = [
     ('a-stopped-visit-is-not-said', '			v->cursor = (index + 1) % v->count;\n			result.work_left = true;',
      '			v->cursor = (index + 1) % v->count;'),
     ('the-visit-always-starts-at-zero', '	uint32_t first = v->cursor;', '	uint32_t first = 0;'),
+    # How a controller is driven.
+    ('the-flashlight-is-ignored', '	if (flashlight) {\n		choice.why_tick = XHCI_TICK_FLASHLIGHT;', '	if (flashlight && 0) {\n		choice.why_tick = XHCI_TICK_FLASHLIGHT;'),
+    ('the-flashlight-gives-no-reason', '		choice.why_tick = XHCI_TICK_FLASHLIGHT;\n', ''),
+    ('msix-is-preferred-to-msi', '	} else if (has_msi) {', '	} else if (has_msi && !has_msix) {'),
+    ('msix-alone-is-left-on-the-tick', '	} else if (has_msix) {', '	} else if (has_msix && has_msi) {'),
+    ('msi-is-chosen-unoffered', '	} else if (has_msi) {', '	} else if (has_msi || !has_msix) {'),
+    ('a-choice-keeps-its-tick-reason', '		choice.driven = XHCI_DRIVEN_MSIX;\n		choice.why_tick = XHCI_TICK_BY_CHOICE_NONE;', '		choice.driven = XHCI_DRIVEN_MSIX;'),
+    ('msix-reads-as-msi', '		return "msix";', '		return "msi";'),
+    ('did-not-take-reads-as-no-capability', '		case XHCI_TICK_DID_NOT_TAKE:  return "tick (did not take)";', '		case XHCI_TICK_DID_NOT_TAKE:  return "tick (no capability)";'),
+    # The top half.
+    ('the-top-half-acknowledges-unasked', '	if ((read(ctx, XHCI_REG_USBSTS) & XHCI_USBSTS_EINT) == 0)\n		return false;', '	(void)read;'),
+    ('the-top-half-claims-every-entry', '	if ((read(ctx, XHCI_REG_USBSTS) & XHCI_USBSTS_EINT) == 0)\n		return false;',
+     '	if ((read(ctx, XHCI_REG_USBSTS) & XHCI_USBSTS_EINT) == 0)\n		return true;'),
+    ('the-top-half-clears-all-of-usbsts', '	write(ctx, XHCI_REG_USBSTS, XHCI_USBSTS_EINT);', '	write(ctx, XHCI_REG_USBSTS, read(ctx, XHCI_REG_USBSTS));'),
+    ('the-top-half-leaves-eint', '	write(ctx, XHCI_REG_USBSTS, XHCI_USBSTS_EINT);\n', ''),
+    ('the-top-half-writes-iman-first', '	write(ctx, XHCI_REG_USBSTS, XHCI_USBSTS_EINT);\n	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);',
+     '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);\n	write(ctx, XHCI_REG_USBSTS, XHCI_USBSTS_EINT);'),
+    ('the-top-half-turns-the-interrupt-off', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP);'),
+    ('the-top-half-leaves-pending', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IE);'),
+    ('the-top-half-does-not-say-it-acknowledged', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);\n	return true;', '	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);\n	return false;'),
 ]
 
 caught, missed, unbuilt = [], [], []

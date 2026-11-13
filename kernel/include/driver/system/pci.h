@@ -234,8 +234,6 @@ pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t fu
 
 void init_PCI();
 
-#endif
-
 
 // ── Capabilities ────────────────────────────────────────────────────────────
 // Walk a function's capability list, live, for one capability id. Returns
@@ -251,3 +249,54 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
 // for an address init_PCI did not record. Touches no hardware, so it is
 // safe wherever a configuration read is not (/sys/bus/pci asks this).
 const pci_caps_t *pci_caps_of(uint8_t bus, uint8_t device, uint8_t function);
+
+// ── Message-signalled interrupts ────────────────────────────────────────────
+// One message, at `vector`, addressed at the CPU whose APIC ID is `apic_id`.
+// Both helpers program, set the command register's INTx-disable bit (so a
+// pin nobody routes cannot assert a line nobody answers), READ BACK the
+// enable, the address and the data (and for MSI-X the entry's mask and the
+// function mask), and say `took` only when those read as written: on a
+// machine with no debugger the read-back is the investigation, and a
+// driver that is told false keeps whatever drove it before. Not checked:
+// the INTx-disable bit, and MSI's per-vector mask bits where a function
+// has them (they are left as found, which is clear after a reset). Neither
+// touches the device's own interrupt enables; the caller turns those on
+// after `took`, so the first message is a real event.
+#define PCI_COMMAND_INTX_DISABLE  (1u << 10)
+
+typedef struct
+{
+	bool     took;
+	uint8_t  cap;                  // the capability's offset; 0 = the function has none
+	bool     is64;                 // it takes a 64-bit message address
+	uint32_t address, data;        // as read back
+	uint16_t control_before, control_after;   // Message Control
+} pci_msi_result_t;
+
+// Address, then data, then enable: the first message already has
+// somewhere to go.
+pci_msi_result_t pci_msi_enable(uint8_t bus, uint8_t device, uint8_t function,
+                                uint8_t vector, uint8_t apic_id);
+
+typedef struct
+{
+	bool     took;
+	uint8_t  cap;                  // the capability's offset; 0 = the function has none
+	uint16_t entries;              // the table's size
+	uint8_t  bar;                  // which BAR holds the table
+	uint32_t offset;               // and where in it
+	uint32_t address, data;        // entry 0 as read back
+	uint16_t control_after;        // Message Control
+	const char *refused;           // NULL, or why nothing was programmed
+} pci_msix_result_t;
+
+// MSI-X with ONE message. The capability is enabled with its FUNCTION MASK
+// SET, the table is written (entry 0 carries the message and is unmasked,
+// every other entry is masked), and the function mask is cleared last, so
+// a half-written table sends nothing. The table lives in device memory named by the capability (a
+// BAR and an offset); its pages are mapped at their upper-half alias.
+// `bars` is the function's six BAR registers as enumeration read them.
+pci_msix_result_t pci_msix_enable_one(uint8_t bus, uint8_t device, uint8_t function,
+                                      const uint32_t bars[6], uint8_t vector, uint8_t apic_id);
+
+#endif

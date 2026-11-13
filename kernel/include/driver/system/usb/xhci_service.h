@@ -137,4 +137,53 @@ typedef struct {
 xhci_visit_result_t xhci_visit(xhci_visit_t *v, xhci_visit_drain_t drain, void *ctx,
                                uint64_t deadline);
 
+// ── How a controller is driven ──────────────────────────────────────────────
+
+typedef enum {
+	XHCI_DRIVEN_TICK,    // no interrupt: the tick's ring of the daemon's bell
+	XHCI_DRIVEN_MSI,
+	XHCI_DRIVEN_MSIX,
+} xhci_driven_t;
+
+// Why a controller is tick-driven.
+typedef enum {
+	XHCI_TICK_BY_CHOICE_NONE,   // it is not: it has an interrupt
+	XHCI_TICK_NO_CAPABILITY,    // the function offers neither MSI nor MSI-X
+	XHCI_TICK_FLASHLIGHT,       // the boot asked for every controller to stay on the tick
+	XHCI_TICK_DID_NOT_TAKE,     // programming did not read back as written
+	XHCI_TICK_NOT_ASKED,        // nothing has decided yet (before the daemon's enabling)
+} xhci_tick_reason_t;
+
+typedef struct {
+	xhci_driven_t      driven;
+	xhci_tick_reason_t why_tick;
+} xhci_drive_choice_t;
+
+// MSI where the function offers it, MSI-X where that is all it offers, the
+// tick otherwise; the flashlight forces the tick whatever is offered.
+xhci_drive_choice_t xhci_drive_choose(bool has_msi, bool has_msix, bool flashlight);
+
+// The words /sys/usb prints for a choice: "msi", "msix", or "tick (<why>)".
+const char *xhci_drive_text(xhci_drive_choice_t choice);
+
+// ── The top half ────────────────────────────────────────────────────────────
+
+#define XHCI_USBSTS_EINT  (1u << 3)   // an interrupter has an event pending; write-one-to-clear
+#define XHCI_IMAN_IP      (1u << 0)   // interrupt pending; write-one-to-clear
+#define XHCI_IMAN_IE      (1u << 1)   // interrupt enable
+
+typedef enum { XHCI_REG_USBSTS, XHCI_REG_IMAN } xhci_irq_reg_t;
+typedef uint32_t (*xhci_reg_read_t)(void *ctx, xhci_irq_reg_t reg);
+typedef void (*xhci_reg_write_t)(void *ctx, xhci_irq_reg_t reg, uint32_t value);
+
+// One controller's share of an interrupt. Reads USBSTS; with EINT clear the
+// controller did not signal, nothing is written and the answer is false.
+// With it set: USBSTS is written with EINT ALONE (the register's other
+// write-one-to-clear bits are somebody else's news and stay), THEN IMAN
+// with IP and IE both set, which clears pending and keeps the enable. That
+// order is the specification's (xHCI 1.2 § 5.4.2 for USBSTS before IMAN):
+// clearing IP first leaves a window in which EINT, still set, is all that
+// says an event happened.
+bool xhci_irq_acknowledge(xhci_reg_read_t read, xhci_reg_write_t write, void *ctx);
+
 #endif

@@ -4,8 +4,10 @@
 // kusb.h — the USB drainer: the bottom half every xHCI controller shares
 // (docs/design/pending/XHCI_INTERRUPT.md § The design).
 //
-// One kernel daemon, pinned to the BSP, parked on one doorbell. The tick
-// rings the bell once a tick. Each wake is one PASS (xhci_pass): every
+// One kernel daemon, pinned to the BSP, parked on one doorbell. The
+// controllers' interrupt rings the bell (xhci_isr), and so does the tick,
+// once a tick, which is what a controller with no interrupt runs on. Each
+// wake is one PASS (xhci_pass): every
 // controller's event ring drained against a deadline, then Bluetooth's
 // clockwork and the keyboards' typematic repeat, then park. kusb is the one
 // consumer of the event rings once the scheduler runs, which is what lets a

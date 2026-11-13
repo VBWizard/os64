@@ -28,6 +28,7 @@ static void outb(uint16_t port, uint8_t value);
 extern int puts(const char *);
 extern _Noreturn void abort(void);
 volatile uint64_t kTicksSinceStart;
+uint64_t kCPUCyclesPerSecond = 1000000000;
 // What the driver asks of kusb's side of the kernel, none of it reached by
 // these cases: a bell, a clock that moves, a sleep.
 doorbell_t kUsbDoorbell;

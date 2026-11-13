@@ -363,6 +363,10 @@ doorbell, one token away.
 
 ## A second customer (2026-11-12)
 
+(Since the xHCI interrupt, `kUsbDoorbell` has a second ringer beside the
+tick: `xhci_isr`, the controllers' shared top half. It rings exactly as a
+NIC's handler does, and nothing in the doorbell changed for it either.)
+
 `kusb` (`kernel/src/kusb.c`) parks on the same primitive: a daemon pinned
 to the BSP, its bell `kUsbDoorbell` rung by the tick once a tick, draining
 every xHCI controller's event ring. Nothing in the doorbell changed for it.

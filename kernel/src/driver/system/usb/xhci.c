@@ -47,6 +47,8 @@ extern uint16_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
+extern bool kUsbPoll;    // USBPOLL — the flashlight: no controller is given an interrupt
+extern int  kUsbImod;    // USBIMOD=<n> — the moderation interval in 250 ns units; negative = the built-in value
 extern volatile uint64_t kSystemCurrentTime;
 
 // ── Register offsets (xHCI spec ch. 5) ──────────────────────────────────────
@@ -67,6 +69,7 @@ extern volatile uint64_t kSystemCurrentTime;
 
 #define USBCMD_RS            (1u << 0)
 #define USBCMD_HCRST         (1u << 1)
+#define USBCMD_INTE          (1u << 2)   // interrupter enable: the controller-wide gate over every IMAN.IE
 #define USBSTS_HCH           (1u << 0)
 #define USBSTS_CNR           (1u << 11)
 
@@ -78,6 +81,7 @@ extern volatile uint64_t kSystemCurrentTime;
 
 // Interrupter 0 (runtime base + 0x20)
 #define XHCI_IR0_IMAN        0x20
+#define XHCI_IR0_IMOD        0x24   // moderation: interval (bits 0..15, 250 ns units), countdown above
 #define XHCI_IR0_ERSTSZ      0x28
 #define XHCI_IR0_ERSTBA      0x30
 #define XHCI_IR0_ERDP        0x38
@@ -219,6 +223,7 @@ typedef struct {
 // controllers, so initialized controllers remain live and are all drained.
 typedef struct {
 	uint8_t pci_bus, pci_device, pci_function;
+	uint32_t     pci_bars[6];     // as enumeration read them (the MSI-X table is found through one)
 	bool         present;         // controller found and running
 	uint8_t     *cap;             // MMIO: capability base (HHDM-aliased)
 	uint8_t     *op;              // MMIO: operational base
@@ -256,6 +261,22 @@ typedef struct {
 
 	// Events kusb's passes have drained from this controller (/sys/usb).
 	uint64_t          events_polled;
+
+	// How it is driven: decided once, by kusb, in xhci_interrupts_enable.
+	xhci_drive_choice_t drive;
+	// THE TOP HALF'S MARK, written in interrupt context and taken by kusb's
+	// drain in one exchange. Non-zero: an interrupt was acknowledged for
+	// this ring since a drain last took the mark, so a drain that handles
+	// nothing must read ERDP and retire the busy bit if it is set. The
+	// value is the TSC at the OLDEST such interrupt, which is what the
+	// interrupt-to-service time is measured from; one word, so the mark
+	// and its stamp cannot be taken apart.
+	volatile uint64_t irq_at;
+	volatile uint64_t irq_fires;
+	// From an interrupt to the start of the drain that answered it, in
+	// cycles: the longest, the longest since /sys/usb was last read, and
+	// how many took longer than a tick.
+	uint64_t          irq_service_max, irq_service_recent, irq_service_late;
 } xhci_t;
 
 #define MAX_XHCI_CONTROLLERS 8
@@ -271,6 +292,15 @@ static uint32_t s_ax210_described;
 // during a pass. Nothing else reads or writes it, so it is never changed
 // concurrently.
 static xhci_t *s_hc;
+// THE TOP HALF'S LIST: the controllers that interrupt, as a prefix that only
+// grows. kusb writes an entry whole and then raises the count past it; the
+// handler reads the count and never looks beyond it, so it never sees a
+// half-published controller. Through an entry it reads `op` and `rt`, which
+// are set at bring-up and not changed after, and writes that controller's
+// interrupt mark and fire count.
+static xhci_t *s_irq_list[MAX_XHCI_CONTROLLERS];
+static volatile uint32_t s_irq_count;
+static volatile uint64_t s_irq_spurious;   // handler entries that found no controller signalling
 static xhci_t *s_bluetooth_hc; // First operational AX210 retained for /sys/bluetooth.
 // THE SERIALIZING FLAG. Whoever holds it owns the Bluetooth host state and,
 // if it is kusb, the event rings. kusb's pass, a sysfs read or request and
@@ -492,8 +522,8 @@ static void xhci_port_ack_changes(uint32_t port)
 static void xhci_handle_transfer_event(const xhci_trb_t *ev);
 static void xhci_hid_lost(xhci_device_t *dev);
 
-// Handle one event of s_hc's ring. This is the whole "interrupt handler",
-// minus the interrupt.
+// Handle one event of s_hc's ring: the bottom half's work, in kusb's thread
+// (or the boot thread's, before there is one).
 static void xhci_handle_event(void *ctx, const xhci_trb_t *ev)
 {
 	(void)ctx;
@@ -563,14 +593,31 @@ static uint64_t xhci_clock(void *ctx)
 // (0: no deadline, drain to empty), then write ERDP if the drain made
 // progress: the empty slot when it drained to empty, the last event handled
 // when the deadline stopped it (xhci_service.h says why they differ). A
-// drain that handled nothing writes nothing.
+// drain that handled nothing writes nothing, unless the top half
+// acknowledged an interrupt for this ring and the busy bit reads set: then
+// the pointer is written back once, to retire the bit.
 static xhci_evt_drain_t xhci_drain_until(uint64_t deadline)
 {
+	// The mark is taken BEFORE the drain: an interrupt acknowledged while
+	// the drain runs raises it again, for the next one. It is never set for
+	// a tick-driven controller or before kusb enables interrupts, and then
+	// ERDP is never read.
+	uint64_t at = __atomic_exchange_n(&s_hc->irq_at, 0, __ATOMIC_SEQ_CST);
+	bool owed = at != 0;
+	if (owed) {
+		uint64_t now = rdtsc();
+		if (now > at) {
+			uint64_t waited = now - at;
+			if (waited > s_hc->irq_service_max) s_hc->irq_service_max = waited;
+			if (waited > s_hc->irq_service_recent) s_hc->irq_service_recent = waited;
+			if (waited > kCPUCyclesPerSecond / TICKS_PER_SECOND) s_hc->irq_service_late++;
+		}
+	}
 	xhci_evt_drain_t drain = xhci_evt_drain(&s_hc->evt, xhci_handle_event, NULL,
 	                                        deadline ? xhci_clock : NULL, NULL, deadline);
-	// No interrupt is ever acknowledged for this ring (interrupter 0 is
-	// left off), so nothing is owed for the busy bit and ERDP is never read.
-	xhci_erdp_t erdp = xhci_evt_erdp(&s_hc->evt, drain, false, false);
+	bool reads_set = xhci_evt_erdp_wants_read(drain, owed) &&
+	                 (mmio_r32(s_hc->rt, XHCI_IR0_ERDP) & XHCI_ERDP_EHB) != 0;
+	xhci_erdp_t erdp = xhci_evt_erdp(&s_hc->evt, drain, owed, reads_set);
 	if (erdp.write) {
 		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp.value);
 		xhci_evt_published(&s_hc->evt, erdp);
@@ -1756,9 +1803,9 @@ size_t xhci_usb_report(char *out, size_t cap)
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		xhci_t *hc = &s_controllers[i];
 		xhci_report_addf(out, cap, &len,
-		                 "controller %u: %02x:%02x.%x driven=tick ports=%u events=%lu devices:",
-		                 i, hc->pci_bus, hc->pci_device, hc->pci_function, hc->max_ports,
-		                 hc->events_polled);
+		                 "controller %u: %02x:%02x.%x driven=%s ports=%u events=%lu devices:",
+		                 i, hc->pci_bus, hc->pci_device, hc->pci_function,
+		                 xhci_drive_text(hc->drive), hc->max_ports, hc->events_polled);
 		if (hc->keyboard.present)
 			xhci_report_addf(out, cap, &len, " keyboard@port%u", hc->keyboard.port);
 		if (hc->mouse.present)
@@ -1775,7 +1822,18 @@ size_t xhci_usb_report(char *out, size_t cap)
 		                 i, hc->wait.max / per_us, hc->wait.recent_max / per_us, hc->wait.within[0],
 		                 hc->wait.within[1], hc->wait.within[2], hc->wait.over);
 		hc->wait.recent_max = 0;
+		// An interrupt-driven controller: how often it interrupted, and how
+		// long from an interrupt to the start of the drain that answered it.
+		if (hc->drive.driven != XHCI_DRIVEN_TICK) {
+			xhci_report_addf(out, cap, &len,
+			                 "controller %u interrupt: fires=%lu to_service_max_us=%lu since_read_max_us=%lu over_a_tick=%lu imod=%u\n",
+			                 i, hc->irq_fires, hc->irq_service_max / per_us,
+			                 hc->irq_service_recent / per_us, hc->irq_service_late,
+			                 mmio_r32(hc->rt, XHCI_IR0_IMOD) & 0xFFFF);
+			hc->irq_service_recent = 0;
+		}
 	}
+	xhci_report_addf(out, cap, &len, "interrupt_spurious: %lu\n", s_irq_spurious);
 
 	// kusb, in /sys/net/knet's words (kusb.h).
 	xhci_report_addf(out, cap, &len,
@@ -2199,6 +2257,8 @@ static bool xhci_probe_device(uint32_t port, uint32_t speed)
 static bool xhci_init_controller(pci_device_t *dev)
 {
     s_hc->pci_bus=dev->busNo; s_hc->pci_device=dev->deviceNo; s_hc->pci_function=dev->funcNo;
+	for (unsigned i = 0; i < 6; i++) s_hc->pci_bars[i] = dev->baseAdd[i];
+	s_hc->drive = (xhci_drive_choice_t){ XHCI_DRIVEN_TICK, XHCI_TICK_NOT_ASKED };
 	// BAR0 (possibly 64-bit — bits 2:1 == 10b means the high half lives in
 	// BAR1). Mask the low flag bits off to get the MMIO physical base.
 	uint64_t bar = dev->baseAdd[0] & ~0xFULL;
@@ -2213,7 +2273,8 @@ static bool xhci_init_controller(pci_device_t *dev)
 
 	// Map the register file at an UPPER-half alias (kHHDMOffset | phys) so
 	// it is reachable from every task's CR3: a sysfs request reaches the
-	// driver under its caller's page tables. PCD: MMIO.
+	// driver under its caller's page tables, and the interrupt's top half
+	// runs under whatever CR3 it interrupted. PCD: MMIO.
 	uint64_t map_base = bar & ~(uint64_t)(PAGE_SIZE - 1);
 	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + map_base,
 	                 map_base, 0x10000 / PAGE_SIZE,
@@ -2308,9 +2369,9 @@ static bool xhci_init_controller(pci_device_t *dev)
 	}
 	mmio_w64(s_hc->op, XHCI_OP_DCBAAP, virt_to_phys(s_hc->dcbaa));
 
-	// Command ring + event ring (interrupter 0, interrupts left DISABLED —
-	// the tick drives the drain; see xhci.h for why that's a decision and
-	// not a shortcut).
+	// Command ring + event ring (interrupter 0, its interrupt left DISABLED
+	// here: bring-up drains by polling, and kusb turns the interrupt on
+	// once it exists, xhci_interrupts_enable).
 	if (!ring_init(&s_hc->cmd))
 		return false;
 	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
@@ -2503,6 +2564,134 @@ void init_xHCI(void)
 	       s_keyboard_claimed ? "keyboard attached" : "no keyboard",
 	       s_mouse_claimed ? "mouse attached" : "no mouse");
 	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
+}
+
+// ── The interrupt (XHCI_INTERRUPT.md § D5-D9) ───────────────────────────────
+
+// 250 us: at most four thousand interrupts a second from one controller and
+// at most a quarter of a millisecond added to an event. Far below a tick and
+// far below audio's pacing; the reason for any value at all is a mouse at a
+// high report rate. USBIMOD=<n> overrides it for a boot.
+#define XHCI_IMOD_DEFAULT 1000u
+
+static uint32_t xhci_irq_read(void *ctx, xhci_irq_reg_t reg)
+{
+	xhci_t *hc = ctx;
+	return reg == XHCI_REG_USBSTS ? mmio_r32(hc->op, XHCI_OP_USBSTS) : mmio_r32(hc->rt, XHCI_IR0_IMAN);
+}
+
+static void xhci_irq_write(void *ctx, xhci_irq_reg_t reg, uint32_t value)
+{
+	xhci_t *hc = ctx;
+	if (reg == XHCI_REG_USBSTS)
+		mmio_w32(hc->op, XHCI_OP_USBSTS, value);
+	else
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, value);
+}
+
+// THE TOP HALF, in interrupt context on the BSP, under whatever CR3 was
+// interrupted. It takes no lock, prints nothing, and touches neither an
+// event ring nor s_hc (the doorbell rule, doorbell.h): it acknowledges, marks
+// and rings, and kusb does the work. One vector serves every controller, so
+// every published controller is asked on every entry; a message that
+// arrives while this runs sets the LAPIC's request bit again and this runs
+// again.
+void xhci_isr(void)
+{
+	uint32_t count = __atomic_load_n(&s_irq_count, __ATOMIC_ACQUIRE);
+	uint64_t now = rdtsc();
+	bool any = false;
+	for (uint32_t i = 0; i < count; i++) {
+		xhci_t *hc = s_irq_list[i];
+		if (!xhci_irq_acknowledge(xhci_irq_read, xhci_irq_write, hc))
+			continue;
+		// The mark, and the OLDEST unanswered interrupt keeps the stamp.
+		uint64_t none = 0;
+		__atomic_compare_exchange_n(&hc->irq_at, &none, now, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+		hc->irq_fires++;
+		any = true;
+	}
+	if (!any) {
+		s_irq_spurious++;
+		return;
+	}
+	doorbell_ring(&kUsbDoorbell);
+}
+
+// kusb gives each controller its interrupt, once, holding the serializing
+// flag; false means the flag was held and nothing was done, so it asks
+// again at its next wake. By now the handler's vector is installed and
+// kusb's bell is registered, so a message has somewhere to go from the
+// first moment one can be sent.
+bool xhci_interrupts_enable(void)
+{
+	if (__sync_lock_test_and_set(&s_poll_busy, 1))
+		return false;
+	uint8_t bsp = (uint8_t)kCPUs[BSP_CPU].apic.id;   // a message address names an APIC ID
+	// The interval is sixteen bits; a larger request gets the longest there is.
+	uint32_t imod = kUsbImod < 0 ? XHCI_IMOD_DEFAULT : kUsbImod > 0xFFFF ? 0xFFFFu : (uint32_t)kUsbImod;
+	for (uint32_t i = 0; i < s_controller_count; i++) {
+		xhci_t *hc = &s_controllers[i];
+		const pci_caps_t *caps = pci_caps_of(hc->pci_bus, hc->pci_device, hc->pci_function);
+		xhci_drive_choice_t choice = xhci_drive_choose(caps && caps->has_msi, caps && caps->has_msix, kUsbPoll);
+		bool took = false;
+		if (choice.driven == XHCI_DRIVEN_MSI) {
+			pci_msi_result_t r = pci_msi_enable(hc->pci_bus, hc->pci_device, hc->pci_function,
+			                                    XHCI_IRQ_VECTOR, bsp);
+			took = r.took;
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: MSI capability at 0x%02x (%s-bit), address 0x%08x data 0x%04x, control 0x%04x -> 0x%04x\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, r.cap, r.is64 ? "64" : "32",
+			       r.address, r.data, r.control_before, r.control_after);
+		} else if (choice.driven == XHCI_DRIVEN_MSIX) {
+			pci_msix_result_t r = pci_msix_enable_one(hc->pci_bus, hc->pci_device, hc->pci_function,
+			                                          hc->pci_bars, XHCI_IRQ_VECTOR, bsp);
+			took = r.took;
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: MSI-X capability at 0x%02x, %u entries in BAR %u at 0x%x, entry 0 address 0x%08x data 0x%04x, control 0x%04x%s%s\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, r.cap, r.entries, r.bar, r.offset,
+			       r.address, r.data, r.control_after, r.refused ? "; refused: " : "", r.refused ? r.refused : "");
+		}
+		if (choice.driven != XHCI_DRIVEN_TICK && !took) {
+			// The device's own enables are never set, so a capability that
+			// half took sends nothing.
+			choice = (xhci_drive_choice_t){ XHCI_DRIVEN_TICK, XHCI_TICK_DID_NOT_TAKE };
+			printf("xhci %02x:%02x.%x: its interrupt did not take - staying tick-driven\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function);
+		}
+		hc->drive = choice;
+		if (choice.driven == XHCI_DRIVEN_TICK) {
+			printd(DEBUG_BOOT, "xhci %02x:%02x.%x: driven by the %s\n",
+			       hc->pci_bus, hc->pci_device, hc->pci_function, xhci_drive_text(choice));
+			continue;
+		}
+
+		mmio_w32(hc->rt, XHCI_IR0_IMOD, imod);
+		// Whatever boot left: an event the boot-time polling did not take
+		// has the busy bit set and will never signal. The mark makes this
+		// controller's first drain retire it, so nothing depends on a
+		// message for a condition older than the enable.
+		mmio_w32(hc->op, XHCI_OP_USBSTS, XHCI_USBSTS_EINT);
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP);
+		__atomic_store_n(&hc->irq_at, rdtsc(), __ATOMIC_SEQ_CST);
+		// Published whole before it can interrupt.
+		uint32_t n = s_irq_count;
+		s_irq_list[n] = hc;
+		__atomic_store_n(&s_irq_count, n + 1, __ATOMIC_RELEASE);
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IE);
+		mmio_w32(hc->op, XHCI_OP_USBCMD, mmio_r32(hc->op, XHCI_OP_USBCMD) | USBCMD_INTE);
+		// An event that arrived between the clear above and the two gates
+		// opening may have set the pending bit with nothing to send it to,
+		// and a controller that signals only when the bit RISES would then
+		// stay silent for good. Cleared once more, with the gates open: the
+		// mark already has this controller's first drain taking whatever is
+		// on the ring, and the next event finds the bit clear.
+		mmio_w32(hc->rt, XHCI_IR0_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
+		printd(DEBUG_BOOT, "xhci %02x:%02x.%x: interrupts live, %s vector 0x%02x at APIC %u, moderation %u (x250 ns)\n",
+		       hc->pci_bus, hc->pci_device, hc->pci_function, xhci_drive_text(choice),
+		       XHCI_IRQ_VECTOR, bsp, mmio_r32(hc->rt, XHCI_IR0_IMOD) & 0xFFFF);
+	}
+	// kusb's own release: it is the caller, and it drains next.
+	__atomic_store_n(&s_poll_busy, 0, __ATOMIC_SEQ_CST);
+	return true;
 }
 
 // Shutdown's half of the reset on the way down. Nothing is asked of an

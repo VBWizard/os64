@@ -126,3 +126,45 @@ xhci_visit_result_t xhci_visit(xhci_visit_t *v, xhci_visit_drain_t drain, void *
 	}
 	return result;
 }
+
+// ── How a controller is driven ──────────────────────────────────────────────
+
+xhci_drive_choice_t xhci_drive_choose(bool has_msi, bool has_msix, bool flashlight)
+{
+	xhci_drive_choice_t choice = { XHCI_DRIVEN_TICK, XHCI_TICK_NO_CAPABILITY };
+	if (flashlight) {
+		choice.why_tick = XHCI_TICK_FLASHLIGHT;
+	} else if (has_msi) {
+		choice.driven = XHCI_DRIVEN_MSI;
+		choice.why_tick = XHCI_TICK_BY_CHOICE_NONE;
+	} else if (has_msix) {
+		choice.driven = XHCI_DRIVEN_MSIX;
+		choice.why_tick = XHCI_TICK_BY_CHOICE_NONE;
+	}
+	return choice;
+}
+
+const char *xhci_drive_text(xhci_drive_choice_t choice)
+{
+	if (choice.driven == XHCI_DRIVEN_MSI)
+		return "msi";
+	if (choice.driven == XHCI_DRIVEN_MSIX)
+		return "msix";
+	switch (choice.why_tick) {
+		case XHCI_TICK_NO_CAPABILITY: return "tick (no capability)";
+		case XHCI_TICK_FLASHLIGHT:    return "tick (USBPOLL)";
+		case XHCI_TICK_DID_NOT_TAKE:  return "tick (did not take)";
+		default:                      return "tick";
+	}
+}
+
+// ── The top half ────────────────────────────────────────────────────────────
+
+bool xhci_irq_acknowledge(xhci_reg_read_t read, xhci_reg_write_t write, void *ctx)
+{
+	if ((read(ctx, XHCI_REG_USBSTS) & XHCI_USBSTS_EINT) == 0)
+		return false;
+	write(ctx, XHCI_REG_USBSTS, XHCI_USBSTS_EINT);
+	write(ctx, XHCI_REG_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
+	return true;
+}
