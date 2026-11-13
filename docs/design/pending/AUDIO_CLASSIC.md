@@ -682,7 +682,10 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
   after the LE peers have had theirs, and may send it only when the
   accountant gives the Classic link a buffer (the first sender held to the
   count), a send slot is free with another left over, and no LE peer is
-  still holding a packet it could not send. The transport reports how many
+  still holding a packet it could not send. In a pool the two kinds share
+  it also leaves a buffer for each LE slot the host has, connected or not,
+  because an LE peer does not ask the count before it sends (the AX210's
+  pools are separate). The transport reports how many
   of its four send slots are in flight (`bt_host_tick`'s `tx_in_flight`,
   replacing one "endpoint idle" flag, which could not say "busy, with a
   slot free"); slots complete in order, so the host knows who filled each.
@@ -698,10 +701,17 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
 - **A PDU one Classic ACL packet cannot carry is dropped and counted**,
   never cut: what we send is at most 1,021 bytes, which the AX210's
   packets carry; a controller with smaller ones is booked in DEBTS.
+- **A payload queued on a channel leaves only while the channel is open**
+  and fits the MTU the peer states now. While the peer reconfigures it is
+  held, and signalling and other channels go past it; one the new MTU no
+  longer admits is dropped and counted (`outgrown`).
+- **An unknown configuration option is returned whole** (type, length,
+  data), as many whole ones as the 50 bytes of a signalling row's room
+  hold; one that does not fit is left off, never cut.
 - The ACL assembler's buffer was already 1,028 bytes; a static assertion
   now ties it to a whole Classic packet.
 - Proof: `test_bt_l2cap_host` (every case scripted byte for byte, 3,000
-  fuzz rounds) and 199 mutants; `test_bt_sdp_host` (the client against a
+  fuzz rounds) and 211 mutants; `test_bt_sdp_host` (the client against a
   model server cut at every byte, the responder asked everything, the
   cross check, fuzz) and 123 mutants; `test_bt_multi_host` (the query after
   `slot 2 bond`, LE first on a slow transport kept busy, the Classic pool
