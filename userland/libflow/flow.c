@@ -4209,7 +4209,13 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
         const FTick *e = &t->ticking[i];
         if (!e->changed)
             continue;
-        bool marked = false;
+        // The element whose background the canvas may take paints the
+        // whole view wherever its box is, whatever its box or its group
+        // reaches — nothing, for a body whose content is all positioned
+        // out of it: it is handed over with an empty rectangle too, and
+        // the painter says whether it paints the view (may_own_canvas).
+        if (e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))
+            mark(ctx, e->boxes[0], (os64_gui_rect_t){0, 0, 0, 0});
         if (e->open >= 0) {
             const flow_box_t *g = t->layers[e->open].box;
             int32_t end;
@@ -4218,35 +4224,20 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
             os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[e->open]
                                                                     : group_bounds(t, e->open, scroll, &end),
                                            scroll);
-            if (r.w > 0 && r.h > 0) {
+            if (r.w > 0 && r.h > 0)
                 mark(ctx, g, r);
-                marked = true;
-            }
+            continue;
         }
-        for (int32_t j = 0; e->open < 0 && j < e->nboxes; j++) {
+        for (int32_t j = 0; j < e->nboxes; j++) {
             const flow_box_t *b = e->boxes[j];
             os64_gui_rect_t r;
-            if (b->unpainted)
-                continue;
-            if (mark_filtered(t, b, scroll, &memo, bounds, mark, ctx)) {
-                marked = true;
-                continue;
-            }
-            if (!layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
+            if (b->unpainted || mark_filtered(t, b, scroll, &memo, bounds, mark, ctx) ||
+                !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
                 continue;
             r = space_rect(b->frame, r, scroll);
-            if (r.w > 0 && r.h > 0) {
+            if (r.w > 0 && r.h > 0)
                 mark(ctx, b, r);
-                marked = true;
-            }
         }
-        // The element whose background the canvas may take paints the
-        // whole view wherever its box is, a box or a group that reaches
-        // nothing among them — a body whose content is all positioned out
-        // of it: it is handed over with an empty rectangle, and the
-        // painter says whether it paints the view (may_own_canvas).
-        if (!marked && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))
-            mark(ctx, e->boxes[0], (os64_gui_rect_t){0, 0, 0, 0});
     }
     os64_free(bounds);
 }

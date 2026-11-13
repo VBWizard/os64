@@ -1977,9 +1977,9 @@ would stretch it across the view — and the whole view for the canvas's
 owner, whose background it paints across the view, told by the
 painter's own rule from the box, asked at each mark: a tick may change
 which box that is, the root's background being what moves. libflow
-hands that element over whatever its boxes reach — with an empty
-rectangle when they reach nothing, as a body whose content is all
-positioned out of it does — so the painter is always asked. An element out of view is marked
+hands that element over with an empty rectangle whatever its boxes or
+its group reach — nothing, for a body whose content is all positioned
+out of it — so the painter is always asked. An element out of view is marked
 nothing, and a tick that marks nothing paints nothing. A tick that moved a frame places
 the page's live controls again (`forms_place`), so a field inside a
 sliding panel slides with it.

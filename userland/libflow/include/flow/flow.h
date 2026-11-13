@@ -1458,9 +1458,9 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 // tick): each element's style rewritten, its transform frames remade and
 // the ink of its shadows grown. `mark`, when not NULL, is handed what each
 // element that changed painted before the tick and what it paints after,
-// in page coordinates at `scroll`, with the box that paints it — an empty
-// rectangle for the element whose background the canvas may take when
-// its boxes reach nothing, since the canvas paints the view wherever its
+// in page coordinates at `scroll`, with the box that paints it — and an
+// empty rectangle for the element whose background the canvas may take,
+// whatever its boxes reach, since the canvas paints the view wherever its
 // box is — and
 // `*moved` (when not NULL) says whether a frame changed. False when the
 // tick is not taken — its lists found no room in what the layout's budget
