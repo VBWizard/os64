@@ -487,6 +487,11 @@ int main(void)
         xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
+        // The adapter's port as enumeration leaves it: connected, enabled,
+        // powered, with its connect-change bit standing.
+        uint32_t operational[(0x400+0x10*8)/4]={0}; hc.op=(void *)operational; hc.max_ports=8;
+        uint32_t *portsc=&operational[XHCI_OP_PORTSC(3)/4];
+        *portsc=PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17);
         hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=(xhci_evt_ring_t){.trb=events,.size=RING_TRBS,.cycle=1};
         hc.ctx_size=32;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
@@ -507,6 +512,12 @@ int main(void)
         bool retained=scenario==COLD_RSA || scenario==COLD_ECDSA || scenario==WARM ||
             scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR;
         CHECK((hc.bt_probe!=NULL)==retained);
+        // A retained adapter has its port's change bits acknowledged, with
+        // power written back and the enable bit NOT written (a one there
+        // disables the port). The model is plain memory, so what is read
+        // here is the value written.
+        if (retained) CHECK(*portsc==(PORTSC_PP|(1u<<17)));
+        else CHECK(*portsc==(PORTSC_CCS|PORTSC_PED|PORTSC_PP|(1u<<17)));
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
         else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);
