@@ -35,6 +35,12 @@
 //   /dev/tty    the caller's own terminal (see THE ALIAS below).
 //   /dev/glass  the screen, as a stream of changed rectangles: one viewer
 //               per open (gui/glass.h, os64/glass.h). Also an alias.
+//   /dev/audio  the sound stream: write PCM (os64/audio.h, audio/audio.h).
+//               An alias, as are /dev/audiopos (the playback position) and
+//               /dev/audiotap (what the sink was given).
+//   /dev/audioctl  the stream's verbs as a line of text: pause, resume,
+//               flush, format. Reads back the format, state and generation.
+//   /dev/volume a line of text, 0 to 100.
 //
 // ── Lineage, because it explains the shapes ─────────────────────────────────
 //
@@ -60,8 +66,8 @@
 //
 // ── THE ALIAS: why /dev/tty is not a file ───────────────────────────────────
 //
-// The other three are byte containers and answer through fops. /dev/tty is
-// not — it is a NAME for a handle kind, and it resolves to exactly what
+// null, zero, full and random are byte containers and answer through fops.
+// /dev/tty is not — it is a NAME for a handle kind, and it resolves to exactly what
 // os64_tty_handle() mints: a HANDLE_CONSOLE_IN (or _OUT) carrying no object,
 // late-bound to task_tty(caller) at every single read. That late binding is
 // what makes one tag serve a VT and a pty slave alike (see PTY.md, "The
@@ -109,14 +115,26 @@ void devfs_mount(void);
 //             may not sleep (THE ALIAS above) — the same reason /dev/tty is
 //             a handle.
 //
+//   "/audio"  "w" or "a" gets HANDLE_AUDIO, the stream's face; "/audiopos"
+//             and "/audiotap", "r", get the same tag with theirs. The
+//             stream's write and the tap's read wait, which a HANDLE_FILE
+//             may not; the position never waits, and is a handle so that a
+//             read of it costs a syscall and no borrowed stack. The stream
+//             and the tap are one open at a time: a second is HANDLE_NONE
+//             with *refusal set to OS64_AUDIO_BUSY.
+//
+// *refusal is written only when the answer is HANDLE_NONE and the kind has a
+// reason of its own to give; the caller presets it to its ordinary refusal.
+//
 // Deliberately a direct call rather than a new fops slot: the customers are
-// both devfs's, and consumer-driven growth says size the seam to the demand.
+// all devfs's, and consumer-driven growth says size the seam to the demand.
 // The day a second filesystem wants to alias a handle, this becomes the
 // op-table entry it should have been, and this function becomes its
 // implementation. Returns false for every other path (and for any fs that is
 // not devfs), so the caller falls through to the ordinary open.
 bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
-                        const char *mode, handle_type_t *type, void **object);
+                        const char *mode, handle_type_t *type, void **object,
+                        long *refusal);
 
 // An alias whose handle could not be published (a full handle table): give
 // back what devfs_handle_alias created for it.

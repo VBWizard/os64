@@ -191,6 +191,11 @@
       "reason": "Separate trusted self-hosted Streams continuations from author callback ownership while retaining function realm, job budgets and installation transactions."
     },
     {
+      "path": "patches/0022-browser-global-this.patch",
+      "sha256": "532ffe0695ac387b0481426542cade6ed6ab47bd380dcb79fb95d84a025d89da",
+      "reason": "Retain an opt-in global-this receiver for sloppy calls, script and bytecode evaluation, and indirect eval while preserving global environment storage and standalone defaults."
+    },
+    {
       "path": "patches/0023-execution-scope-snapshot.patch",
       "sha256": "5ba6411600ad9ad4237c7c36eb516a56110b019dae69a6d2fd6fbb00f49a5ee4",
       "reason": "Expose opt-in allocation-free execution scope facts before interrupt polling; unknown dispatch and native invariant coverage remain explicit, with recovery disabled."

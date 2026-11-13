@@ -2584,6 +2584,12 @@ int main(int argc, char **argv)
         printf("libjs execution scopes: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--global-this")) {
+        global_this_cases();
+        check(live == 0, "global this cases release allocations");
+        printf("libjs global this: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--quiescence")) {
         quiescence_cases();
         printf("libjs quiescence: %u checks, %u failures\n", checks, failures);

@@ -35,6 +35,7 @@
 #include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
 #include "knet.h"                // knet_thread — the "/knet" task's body
 #include "kusb.h"                // kusb_thread — the "/kusb" task's body
+#include "audio/audio.h"         // kaudio_thread — the "/kaudio" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -2588,6 +2589,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
 	bool isKnetTask    = (path != NULL && strncmp(path, "/knet", 5) == 0);
 	bool isKusbTask    = (path != NULL && strncmp(path, "/kusb", 5) == 0);
+	bool isKaudioTask  = (path != NULL && strncmp(path, "/kaudio", 7) == 0);
 
 	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
 	// asked in more than one place and the copies drifted. The list used to be
@@ -2623,7 +2625,8 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	bool isKernelBuiltinTask = isKernelTask &&
 	                          (isIdleTask || isLogdTask || isKWorkerTask ||
 	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
-	                           isLateTestTask || isKnetTask || isKusbTask);
+	                           isLateTestTask || isKnetTask || isKusbTask ||
+	                           isKaudioTask);
 
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
@@ -2800,6 +2803,8 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 			newTask->threads->regs.RIP = (uint64_t)&knet_thread;
 		else if (isKusbTask)
 			newTask->threads->regs.RIP = (uint64_t)&kusb_thread;
+		else if (isKaudioTask)
+			newTask->threads->regs.RIP = (uint64_t)&kaudio_thread;
 		else if (isLateTestTask)
 			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}

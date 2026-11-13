@@ -27,7 +27,7 @@
 //
 //   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
 //                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio"
 //   /sys/acpi                    everything the firmware's ACPI tables
 //                                said, used or not: every table, the
 //                                FADT's power-management facts, the MADT's
@@ -38,6 +38,10 @@
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
 //   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
+//   /sys/audio                   the sound stream: its sink, state and ring,
+//                                the position, underruns since boot and since
+//                                this file was last read, the null sink's
+//                                pump. Read it FIRST when sound stutters
 //   /sys/usb                     the xHCI controllers and what is on each, how
 //                                often the poll that serves them came round,
 //                                and what Bluetooth did when. Read it FIRST
@@ -177,6 +181,7 @@
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
 #include "driver/system/usb/xhci.h"
+#include "audio/audio.h"
 #include "driver/system/usb/bt_scan.h"
 #include "memcpy.h"
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
@@ -387,6 +392,7 @@ typedef enum
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_USBFILE,    // /usb — the xHCI controllers, the poll's gaps, the Bluetooth timeline
+	SYS_NODE_AUDIOFILE,  // /audio — the sound stream, its sink and its counters
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
 	SYS_NODE_ACPIFILE,   // /acpi — what the firmware's ACPI tables said (acpi_tables.h)
@@ -526,6 +532,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_USBFILE;
+		return;
+	}
+
+	if (strcmp(comp, "audio") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_AUDIOFILE;
 		return;
 	}
 
@@ -1181,6 +1195,20 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 // is almost always comparative ("what is loaded, what does it cost"), and a
 // single readable table answers it in one `cat`. The clipboard's ruling
 // applies in reverse — a file that wants to stay a file.
+
+// /sys/audio — the sound stream's report. audio.c renders it from one look
+// at the stream under its lock; the since-read counters start again at each
+// open of this file.
+#define SYS_AUDIO_TEXT_BYTES 2048
+static void sys_gen_audio(synth_text_t *t)
+{
+	char *text = kmalloc(SYS_AUDIO_TEXT_BYTES);
+	if (text == NULL)
+		return;
+	synth_text_add(t, text, audio_report(text, SYS_AUDIO_TEXT_BYTES));
+	kfree(text);
+}
+
 // /sys/usb — which controller carries which device, how often the poll
 // that serves them has come round, and what Bluetooth did when. Read it
 // FIRST when a USB or Bluetooth device is slow to answer: it separates an
@@ -2468,7 +2496,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_NETKNET
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
-	         && sp.type != SYS_NODE_USBFILE
+	         && sp.type != SYS_NODE_USBFILE && sp.type != SYS_NODE_AUDIOFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
 	         && sp.type != SYS_NODE_ACPIFILE
@@ -2491,6 +2519,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_shlib(&text);
 	else if (sp.type == SYS_NODE_USBFILE)
 		sys_gen_usb(&text);
+	else if (sp.type == SYS_NODE_AUDIOFILE)
+		sys_gen_audio(&text);
 	else if (sp.type == SYS_NODE_RANDOMFILE)
 		sys_gen_random(&text);
 	else if (sp.type == SYS_NODE_ACPIFILE)
@@ -2743,7 +2773,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2973,6 +3003,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_USBFILE:
 			strncpy(entry->name, "usb", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_AUDIOFILE:
+			strncpy(entry->name, "audio", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_CONFFILE:
