@@ -2590,6 +2590,12 @@ int main(int argc, char **argv)
         printf("libjs execution scopes: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--settings-scopes")) {
+        settings_scope_cases();
+        check(live == 0, "settings scopes release allocations");
+        printf("libjs settings scopes: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--native-call-contexts")) {
         native_call_context_cases();
         check(live == 0, "native context cases release allocations");

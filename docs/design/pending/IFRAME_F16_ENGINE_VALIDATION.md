@@ -2,9 +2,10 @@
 
 This implements the engine primitives in the approved
 [F16 brief](IFRAME_F16_RECOVERY.md), following the
-[scope checkpoint](IFRAME_F16_SCOPES_VALIDATION.md). The integration baseline
+[scope checkpoint](IFRAME_F16_SCOPES_VALIDATION.md). The initial integration baseline
 is `650b51a4` (accepted F4 native-call facts), including F4 global-this and
-source-tracked patches 0022/0025. **Child-local runtime recovery remains
+source-tracked patches 0022/0025. The merge-forward qualification below adds
+accepted F4 settings scopes at `e7708cec`. **Child-local runtime recovery remains
 unimplemented and disabled.** This is an engine foundation cut, not F16
 completion or certification of DOM/native consistency after interruption.
 
@@ -175,3 +176,26 @@ Contract/header checks, six preparation tests, allocation/global/visibility
 audit, tracker, shell syntax and diff/stale-reference checks pass. Target
 libjs/runtime consumer link, including the new raw exports, passes. No guest,
 WPT or P5 recovery acceptance is claimed by this dormant foundation cut.
+
+## Merge-forward qualification: F4 settings scopes
+
+PR #573's test-harness conflict was resolved against `userland` `e7708cec`,
+which includes accepted F4 settings patch 0026. Both F16 selectors and the F4
+settings selector remain present; the complete realm matrix also retains both
+lanes. The shell focused-selector allowlist accepts `--settings-scopes`.
+No F16 engine patch or failure policy changed in this resolution.
+
+The coherently rebuilt merged engine has prepared identity
+`48edfb6260cd8fbf7f36cc42dd3532a6041715ac3c64634db09adac2b4f01bb1`.
+Both engine profiles pass containment (**177**), execution scopes (**119**),
+settings scopes (**724**), native-call facts (**324**) and global-this (**67**).
+Complete runtime passes **14,686 shipping checks** and **62,034 instrumented
+checks**, zero failures and zero live allocations, with leak detection enabled
+outside the sandbox. Header/manifest preparation (six tests), teardown audit,
+tracker, shell syntax, stale-reference and diff checks pass.
+
+The earlier DOM/mutation totals qualify the preceding frozen cohort; those
+campaigns were not repeated for this harness merge. The new F4 native settings
+body remains a separate quiescence obligation for the future recovery protocol;
+entry/incumbent getters and a successful raw context mark certify no native
+unwind on their own.

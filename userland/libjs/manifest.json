@@ -209,6 +209,11 @@
       "path": "patches/0025-native-call-contexts.patch",
       "sha256": "9a7db65d417f2e8fb98a7ac8ba3cd47ca7989009d0228f1dacd35133dab3b3bd",
       "reason": "Expose borrowed incoming and defining context facts for active native function calls without treating either as browser security authority or changing callback context delivery."
+    },
+    {
+      "path": "patches/0026-settings-scopes.patch",
+      "sha256": "30d85402e6c28f20d285a099a5612c8066997c1ceb94f386279950755f9a40ee",
+      "reason": "Track bounded host entry and callback incumbent scopes separately from script-bearing activations, native dispatch contexts and task ownership."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
