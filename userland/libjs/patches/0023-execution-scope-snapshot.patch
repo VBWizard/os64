@@ -1,0 +1,287 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -316,6 +316,11 @@
+ 
+ /* end JS Malloc */
+ 
++typedef struct JSExecutionScope {
++    struct JSExecutionScope *previous;
++    JSExecutionScopeInfo info;
++} JSExecutionScope;
++
+ struct JSRuntime {
+     JSMallocContext malloc_ctx;
+     const char *rt_info;
+@@ -356,6 +361,8 @@
+     BOOL in_out_of_memory : 8;
+ 
+     struct JSStackFrame *current_stack_frame;
++    JSExecutionScope *execution_scopes;
++    BOOL execution_scope_tracking;
+ 
+     JSInterruptHandler *interrupt_handler;
+     void *interrupt_opaque;
+@@ -2269,6 +2276,37 @@
+ #define free(p) free_is_forbidden(p)
+ #define realloc(p,s) realloc_is_forbidden(p,s)
+ 
++void JS_EnableExecutionScopeTracking(JSRuntime *rt)
++{
++    assert(!rt->current_stack_frame && !rt->execution_scopes);
++    rt->execution_scope_tracking = TRUE;
++}
++
++BOOL JS_VisitExecutionScopes(JSRuntime *rt, JSExecutionScopeVisitor *visitor,
++                             void *opaque)
++{
++    JSExecutionScope *scope;
++    if (!rt->execution_scope_tracking)
++        return FALSE;
++    for (scope = rt->execution_scopes; scope; scope = scope->previous)
++        visitor(opaque, &scope->info);
++    return TRUE;
++}
++
++static void js_execution_scope_enter(JSRuntime *rt, JSExecutionScope *scope,
++                                     JSExecutionScopeInfo info)
++{
++    scope->info = info;
++    scope->previous = rt->execution_scopes;
++    rt->execution_scopes = scope;
++}
++
++static void js_execution_scope_leave(JSRuntime *rt, JSExecutionScope *scope)
++{
++    assert(rt->execution_scopes == scope);
++    rt->execution_scopes = scope->previous;
++}
++
+ void JS_SetInterruptHandler(JSRuntime *rt, JSInterruptHandler *cb, void *opaque)
+ {
+     rt->interrupt_handler = cb;
+@@ -2448,6 +2486,10 @@
+     /* Remove from both queues before the body can enqueue more work. */
+     js_job_unlink(e);
+     ctx = e->realm;
++    JSExecutionScope scope;
++    if (rt->execution_scope_tracking)
++        js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){
++            ctx, e->owner, JS_EXECUTION_SCOPE_JOB, JS_EXECUTION_CODE_UNKNOWN });
+     res = e->job_func(ctx, e->argc, (JSValueConst *)e->argv);
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+@@ -2456,6 +2498,8 @@
+     else
+         ret = 1;
+     JS_FreeValue(ctx, res);
++    if (rt->execution_scope_tracking)
++        js_execution_scope_leave(rt, &scope);
+     if (e->owner) JS_FreeContext(e->owner);
+     if (e->activity) JS_FreeContext(e->activity);
+     js_free(ctx, e);
+@@ -18075,7 +18119,79 @@
+     return js_fetch_reaches_call(ctx->nc_after, call, argc);
+ }
+ 
+-static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
++/* Discover the code selected by a call without traps, allocation or throws.
++   Proxy/custom dispatch remains unknown; trap/target calls get nested scopes. */
++static JSExecutionScopeInfo js_execution_call_info(JSContext *ctx,
++                                                  JSValueConst function,
++                                                  JSExecutionScopeKind kind)
++{
++    JSExecutionScopeInfo info = { ctx, NULL, kind, JS_EXECUTION_CODE_UNKNOWN };
++    JSObject *p;
++    unsigned bound_hops = 0;
++    while (JS_IsObject(function)) {
++        p = JS_VALUE_GET_OBJ(function);
++        if (p->class_id != JS_CLASS_BOUND_FUNCTION)
++            break;
++        /* Diagnostic setup must stay bounded before interrupt polling. */
++        if (bound_hops++ == 64)
++            return info;
++        function = p->u.bound_function->func_obj;
++    }
++    if (!JS_IsObject(function))
++        return info;
++    p = JS_VALUE_GET_OBJ(function);
++    switch (p->class_id) {
++    case JS_CLASS_BYTECODE_FUNCTION:
++    case JS_CLASS_GENERATOR_FUNCTION:
++    case JS_CLASS_ASYNC_FUNCTION:
++    case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++        info.code = p->u.func.function_bytecode->realm;
++        info.code_kind = JS_EXECUTION_CODE_BYTECODE;
++        break;
++    case JS_CLASS_C_FUNCTION:
++    case JS_CLASS_C_FUNCTION_DATA:
++    case JS_CLASS_ASYNC_FUNCTION_RESOLVE:
++    case JS_CLASS_ASYNC_FUNCTION_REJECT:
++    case JS_CLASS_PROMISE_RESOLVE_FUNCTION:
++    case JS_CLASS_PROMISE_REJECT_FUNCTION:
++        info.code = JS_GetFunctionRealm(ctx, function);
++        info.code_kind = JS_EXECUTION_CODE_NATIVE;
++        break;
++    default:
++        break;
++    }
++    return info;
++}
++
++static JSValue JS_CallInternalImpl(JSContext *caller_ctx, JSValueConst func_obj,
++                               JSValueConst this_obj, JSValueConst new_target,
++                               int argc, JSValue *argv, int flags);
++
++static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
++                               JSValueConst this_obj, JSValueConst new_target,
++                               int argc, JSValue *argv, int flags)
++{
++    JSRuntime *rt = ctx->rt;
++    JSExecutionScope scope;
++    JSExecutionScopeInfo info;
++    JSValue result;
++    if (!rt->execution_scope_tracking)
++        return JS_CallInternalImpl(ctx, func_obj, this_obj, new_target, argc, argv, flags);
++    if (flags & JS_CALL_FLAG_GENERATOR) {
++        JSAsyncFunctionState *state = JS_VALUE_GET_PTR(func_obj);
++        info = js_execution_call_info(ctx, state->frame.cur_func, JS_EXECUTION_SCOPE_RESUME);
++    } else {
++        info = js_execution_call_info(ctx, func_obj, JS_EXECUTION_SCOPE_CALL);
++    }
++    /* Link before the implementation polls: the callee is not on the
++       interpreter frame chain at that interrupt boundary. */
++    js_execution_scope_enter(rt, &scope, info);
++    result = JS_CallInternalImpl(ctx, func_obj, this_obj, new_target, argc, argv, flags);
++    js_execution_scope_leave(rt, &scope);
++    return result;
++}
++
++static JSValue JS_CallInternalImpl(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+                                int argc, JSValue *argv, int flags)
+ {
+@@ -21025,7 +21141,28 @@
+ }
+ 
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
++static JSValue JS_CallConstructorInternalImpl(JSContext *ctx,
++                                          JSValueConst func_obj,
++                                          JSValueConst new_target,
++                                          int argc, JSValue *argv, int flags);
++
+ static JSValue JS_CallConstructorInternal(JSContext *ctx,
++                                          JSValueConst func_obj,
++                                          JSValueConst new_target,
++                                          int argc, JSValue *argv, int flags)
++{
++    JSRuntime *rt = ctx->rt;
++    JSExecutionScope scope;
++    JSValue result;
++    if (!rt->execution_scope_tracking)
++        return JS_CallConstructorInternalImpl(ctx, func_obj, new_target, argc, argv, flags);
++    js_execution_scope_enter(rt, &scope, js_execution_call_info(ctx, func_obj, JS_EXECUTION_SCOPE_CONSTRUCT));
++    result = JS_CallConstructorInternalImpl(ctx, func_obj, new_target, argc, argv, flags);
++    js_execution_scope_leave(rt, &scope);
++    return result;
++}
++
++static JSValue JS_CallConstructorInternalImpl(JSContext *ctx,
+                                           JSValueConst func_obj,
+                                           JSValueConst new_target,
+                                           int argc, JSValue *argv, int flags)
+@@ -37595,7 +37732,26 @@
+     s->get_line_col_cache.col_num = 0;
+ }
+ 
++static JSValue JS_EvalFunctionInternalImpl(JSContext *ctx, JSValue fun_obj,
++                                       JSValueConst this_obj,
++                                       JSVarRef **var_refs, JSStackFrame *sf);
++
+ static JSValue JS_EvalFunctionInternal(JSContext *ctx, JSValue fun_obj,
++                                       JSValueConst this_obj,
++                                       JSVarRef **var_refs, JSStackFrame *sf)
++{
++    JSRuntime *rt = ctx->rt;
++    JSExecutionScope scope;
++    JSValue result;
++    if (!rt->execution_scope_tracking)
++        return JS_EvalFunctionInternalImpl(ctx, fun_obj, this_obj, var_refs, sf);
++    js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){ ctx, ctx, JS_EXECUTION_SCOPE_EVAL_FUNCTION, JS_EXECUTION_CODE_UNKNOWN });
++    result = JS_EvalFunctionInternalImpl(ctx, fun_obj, this_obj, var_refs, sf);
++    js_execution_scope_leave(rt, &scope);
++    return result;
++}
++
++static JSValue JS_EvalFunctionInternalImpl(JSContext *ctx, JSValue fun_obj,
+                                        JSValueConst this_obj,
+                                        JSVarRef **var_refs, JSStackFrame *sf)
+ {
+@@ -37757,7 +37913,26 @@
+ }
+ 
+ /* the indirection is needed to make 'eval' optional */
++static JSValue JS_EvalInternalImpl(JSContext *ctx, JSValueConst this_obj,
++                               const char *input, size_t input_len,
++                               const char *filename, int flags, int scope_idx);
++
+ static JSValue JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
++                               const char *input, size_t input_len,
++                               const char *filename, int flags, int scope_idx)
++{
++    JSRuntime *rt = ctx->rt;
++    JSExecutionScope scope;
++    JSValue result;
++    if (!rt->execution_scope_tracking)
++        return JS_EvalInternalImpl(ctx, this_obj, input, input_len, filename, flags, scope_idx);
++    js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){ ctx, ctx, JS_EXECUTION_SCOPE_EVAL, JS_EXECUTION_CODE_UNKNOWN });
++    result = JS_EvalInternalImpl(ctx, this_obj, input, input_len, filename, flags, scope_idx);
++    js_execution_scope_leave(rt, &scope);
++    return result;
++}
++
++static JSValue JS_EvalInternalImpl(JSContext *ctx, JSValueConst this_obj,
+                                const char *input, size_t input_len,
+                                const char *filename, int flags, int scope_idx)
+ {
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -54,6 +54,39 @@
+ typedef struct JSRuntime JSRuntime;
+ typedef struct JSContext JSContext;
+ typedef struct JSClass JSClass;
++
++/* Dormant execution attribution, independent of browser security settings.
++   Enable once, on the owner thread outside engine entry, before executing
++   code to be observed. Enabling does not make interruption recoverable. */
++typedef enum {
++    JS_EXECUTION_SCOPE_CALL,
++    JS_EXECUTION_SCOPE_CONSTRUCT,
++    JS_EXECUTION_SCOPE_RESUME,
++    JS_EXECUTION_SCOPE_EVAL,
++    JS_EXECUTION_SCOPE_EVAL_FUNCTION,
++    JS_EXECUTION_SCOPE_JOB,
++} JSExecutionScopeKind;
++typedef enum {
++    JS_EXECUTION_CODE_UNKNOWN,
++    JS_EXECUTION_CODE_BYTECODE,
++    JS_EXECUTION_CODE_NATIVE,
++} JSExecutionCodeKind;
++typedef struct {
++    JSContext *caller; /* engine entry context, not a security caller */
++    JSContext *code; /* candidate; authoritative only for a known code_kind */
++    JSExecutionScopeKind kind;
++    JSExecutionCodeKind code_kind;
++} JSExecutionScopeInfo;
++typedef void JSExecutionScopeVisitor(void *opaque, const JSExecutionScopeInfo *info);
++void JS_EnableExecutionScopeTracking(JSRuntime *rt);
++/* Allocation-free, innermost first, including pending pre-interrupt calls.
++   Info/contexts are borrowed for the visit. The visitor must not allocate,
++   execute engine code, release values, or change runtime state. Returns false
++   when tracking is disabled; true with zero visits means no tracked scope.
++   Scope facts do not certify native invariants or complete recovery coverage.
++   Wrapper/proxy dispatch may report UNKNOWN while nested calls report code. */
++JS_BOOL JS_VisitExecutionScopes(JSRuntime *rt, JSExecutionScopeVisitor *visitor,
++                               void *opaque);
+ typedef uint32_t JSClassID;
+ typedef uint32_t JSAtom;
+ 

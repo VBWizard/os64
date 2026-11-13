@@ -102,6 +102,48 @@ and the engine's `groupBy` callback receiver also need the F.4 security audit
 before a proxy can be exposed. Existing consumers do not opt in. See
 [the F.4 brief](../../docs/design/pending/IFRAME_F4_SECURITY.md).
 
+## Dormant engine execution observations
+
+The raw engine exposes explicitly enabled execution-scope observations for
+trusted diagnostics. `JS_EnableExecutionScopeTracking` must run on the owner
+thread outside engine entry, before code to be observed executes. Default wrapper
+setup leaves tracking disabled. `JS_VisitExecutionScopes` is allocation-free and
+visits borrowed incoming-context/code-environment facts, innermost first,
+including pending calls before their interrupt poll. Its visitor must not
+allocate, reenter the engine, release values or mutate runtime state.
+
+Unknown proxy/custom dispatch, eval preparation and native job provenance are
+explicit; observations do not certify complete interrupted-environment
+attribution, browser caller authority or native consistency. Scope tracking
+does not change eligibility, failure or budget behavior and cannot recover a
+runtime. See [the F16 scope checkpoint](../../docs/design/pending/IFRAME_F16_SCOPES_VALIDATION.md).
+
+## Dormant executable containment
+
+`JS_MarkContextExecutableFailed` is an irreversible raw-engine mark, separate
+from document retirement and wrapper failure. A trusted owner calls it after
+engine/native unwind, with scope tracking enabled; tracked active entry is
+refused without changing the mark. It allocates/releases nothing and does not
+change queues, pending exceptions, cancellation or task budgets. Marking alone
+grants no permission to resume a failed wrapper; reuse follows its results
+and task contract.
+
+Marked function/code contexts cannot be reentered through raw calls,
+constructors, native/data/neutral functions, eval, module handles or suspended
+resumptions. Marked execution/callback/activity contexts also block native job
+bodies. Unknown custom call classes and over-deep wrapper chains refuse
+conservatively once executable failure has been seen. Healthy callers receive
+a catchable TypeError unless an uncatchable exception remains pending; that
+original exception is preserved. A consumed exception marker does not suppress
+a fresh refusal. Allocation/host failure retains the existing sticky contract.
+
+Identity, ordinary data and initialized namespace exports remain retained.
+Property access that invokes code still crosses the guard. Module creation
+contexts are explicitly retained and GC-marked, including for native/unlinked
+modules. These are ownership facts; they grant no origin authority and prove
+no interrupted native algorithm consistent. Ordinary departed functions retain
+their existing behavior. See [the engine checkpoint](../../docs/design/pending/IFRAME_F16_ENGINE_VALIDATION.md).
+
 ## Realms
 
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
@@ -268,6 +310,52 @@ enclosing task's budget. Checkpoints drain the shared queue. Exceptions from a
 job use the context returned by the engine; late module failures use their
 module's owner and source name, with runtime-wide first-failure ordering.
 Values from a different engine must not be passed to these calls.
+
+The opt-in `os64_js_realm_with_settings` bridge supplies checked native entry
+and callback scopes without changing these legacy execution verbs. It requires
+an existing active turn, or an open task between calls. Entry and an optional
+captured incumbent must be published, non-retired members of the same wrapper
+runtime. Private candidate setup, failed/cancelled runtimes, foreign realms,
+invalid ABI and missing arguments refuse before the native body runs. Scope
+nesting is bounded by the engine's `JS_SETTINGS_SCOPE_LIMIT`; overflow is a
+non-sticky ADMISSION_REFUSED. A null incumbent means ordinary script entry;
+a non-null incumbent prepares callback suppression and backup selection. The
+host supplies that captured realm explicitly; this API does not capture it.
+
+An outer bridge call acquires the wrapper guard; nested native calls borrow it
+without updating the stack origin. Separate outcome storage is required at
+each level, including queries. The guard covers the native body's whole
+lifetime, so task closure, top-level run/call, destruction and quiescent cleanup
+cannot pass through the interval between its JS calls. The body must return
+normally in C. Entry counts as evaluated when the admitted body starts.
+No task is opened, deadline renewed, queue drained, rejection reported, or
+engine exception consumed. Existing failure observation runs before/after the
+body. Outcomes report queued/executed/discarded job counts without checkpointing.
+
+Initialize the `JSValue` output to JS_UNDEFINED. Refusal leaves it untouched;
+admission transfers the body's value after restoring engine scopes. Release
+the value even when post-body failure observation returns LIMIT/CANCELLED/
+HOST_FAILURE. A body returning JS_EXCEPTION produces EXCEPTION with the engine
+exception still pending, unless a sticky failure takes precedence. The caller
+must propagate or consume that exception; no diagnostic conversion or script
+host exception callback runs in this bridge. These semantics differ from the
+reporting/discarding `os64_js_realm_call` API.
+
+`os64_js_settings_realm` maps ENTRY or INCUMBENT to a borrowed wrapper handle
+inside an active checked scope. It checks membership and current wrapper
+lifecycle on each query; missing settings, a raw-only scope, or an unregistered
+engine context give ADMISSION_REFUSED. Retired/installing contexts give their
+lifecycle refusal. Unknown roles are BAD_ARGUMENT. Queries do not allocate,
+read the clock, latch a failure, consume an exception, or extend lifetime.
+Recheck after reentry or retirement. Runtime health checks include pending
+cancellation and allocator failure, without converting them into a new latch.
+
+These interfaces have no production browser consumer. Current/relevant role
+attribution, WebIDL/Promise capture, DOM entry-site integration and origin
+security checks remain separate work. A settings handle is not a permission.
+F.16 recovery must preserve the bridge's native-body guard and synchronize
+wrapper lifecycle with engine failed-context state before admitting recovered
+work; raw engine marking alone is not a wrapper recovery protocol.
 
 Creation and the explicit realm output/Intl installers support three setup
 modes: idle setup owns a bounded turn; setup between calls of an open task
@@ -1035,15 +1123,19 @@ conversion of both a Latin-1 and a wide string and checks teardown ownership.
 ## Native call context facts
 
 `JS_GetNativeCallContexts` is an additive raw-engine query for the innermost
-active generic/data C-function invocation. It copies borrowed `incoming` and
-`defining` contexts without allocation, reference changes or exception access.
+active C-function/data invocation, including optimized native iterator dispatch.
+It copies borrowed `incoming` and `defining` contexts without allocation,
+reference changes or exception access.
 No invocation (or a null runtime) returns false and clears a supplied output;
 a null output returns false. Query on the owner thread and do not retain the
 borrowed pair beyond the native invocation.
 
 Generic C functions receive their defining context as their callback argument;
 data functions receive the incoming context while retaining their defining
-context. The query preserves those conventions. Nested calls restore the
+context. Optimized `iterator_next` callbacks also receive the incoming context;
+their direct dispatcher checks executable containment and records an opt-in
+native execution scope before invoking the callback, without boxing its result.
+The query preserves those conventions. Nested calls restore the
 enclosing pair on normal or abrupt return. During JS reentry, that enclosing
 pair still describes the native invocation, not the current JS realm. Other
 class/provider callbacks do not establish a new pair.

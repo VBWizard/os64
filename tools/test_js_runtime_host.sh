@@ -62,6 +62,16 @@ cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack \
     "${maths[@]}" "$js_runtime_work/runtime.o" "$js_runtime_work/intl.o" "$js_runtime_work/str-local.o" \
     "$js_runtime_work/fmt.o" "$js_runtime_work/test_js_port_calendar.o" \
     "$js_runtime_work/test_js_runtime_host.o" -o "$js_runtime_work/sanitized-probe"
+if [ "${JS_RUNTIME_FOCUSED_SELECTOR:-}" != "" ]; then
+    case "$JS_RUNTIME_FOCUSED_SELECTOR" in
+        --failed-code-only|--execution-scopes-only|--native-call-contexts|--settings-scopes|--settings-bridge|--global-this|--realms-only|--quiescence) ;;
+        *) printf 'Unsupported focused runtime selector\n' >&2; exit 2 ;;
+    esac
+    for probe in probe sanitized-probe; do
+        "$js_runtime_work/$probe" "$JS_RUNTIME_FOCUSED_SELECTOR"
+    done
+    exit
+fi
 for probe in probe sanitized-probe; do
     "$js_runtime_work/$probe"
     # This arena-allocation index is a separate regression for the actual
