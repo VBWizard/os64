@@ -156,6 +156,101 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
     return true;
 }
 
+bool d_delivery_active(const os64_dom_t *dom)
+{
+    return dom && !dom->closed && !dom->installing && !(dom->cluster && (dom->cluster->poisoned || dom->cluster->drained)) &&
+           !os64_js_realm_is_retired(dom->realm);
+}
+
+bool d_require_active(os64_dom_t *dom, JSContext *ctx)
+{
+    if (d_delivery_active(dom)) return true;
+    d_error(ctx, "InvalidStateError", "The document's host service is inactive");
+    return false;
+}
+
+void d_provider_hold(os64_dom_t *dom)
+{
+    dom->provider_borrows++;
+    if (dom->cluster) dom->cluster->provider_borrows++;
+}
+
+bool d_provider_enter(os64_dom_t *dom)
+{
+    if (!d_delivery_active(dom)) return false;
+    d_provider_hold(dom);
+    return true;
+}
+
+bool d_provider_begin(os64_dom_t *dom, JSContext *ctx)
+{
+    if (d_provider_enter(dom)) return true;
+    d_error(ctx, "InvalidStateError", "The document's host service is inactive");
+    return false;
+}
+
+void d_provider_leave(os64_dom_t *dom)
+{
+    dom->provider_borrows--;
+    if (dom->cluster) dom->cluster->provider_borrows--;
+}
+
+bool d_provider_busy(const os64_dom_t *dom)
+{
+    return dom && (dom->provider_borrows || (dom->cluster && dom->cluster->provider_borrows));
+}
+
+uint64_t d_host_now_ms(const os64_dom_t *dom)
+{
+    if (dom == NULL) return 0;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.now_ms != NULL && d_provider_enter(owner)) {
+        owner->clock_seen_ms = dom->options.now_ms(dom->options.host_opaque);
+        d_provider_leave(owner);
+    }
+    return dom->clock_seen_ms;
+}
+
+uint64_t d_host_now_us(const os64_dom_t *dom)
+{
+    if (dom == NULL) return 0;
+    if (!d_delivery_active(dom)) return dom->clock_seen_us;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.now_us == NULL) owner->clock_seen_us = d_host_now_ms(dom) * 1000;
+    else if (d_provider_enter(owner)) {
+        owner->clock_seen_us = dom->options.now_us(dom->options.host_opaque);
+        d_provider_leave(owner);
+    }
+    return dom->clock_seen_us;
+}
+
+int d_callback_eligible(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
+{
+    /* A bound function or callable proxy can belong to a different realm
+     * from the registration. A revoked proxy keeps its normal exception. */
+    JSContext *function_ctx = JS_GetFunctionRealm(ctx, callback);
+    if (!function_ctx) return -1;
+    os64_js_outcome_t outcome;
+    os64_js_realm_t *realm = os64_js_realm_from_context(owner->runtime, function_ctx, OS64_JS_ABI_ID, &outcome);
+    if (!realm) {
+        d_error(ctx, "InvalidStateError", "Callback realm is unavailable");
+        return -1;
+    }
+    return !os64_js_realm_is_retired(realm);
+}
+
+int d_delivery_eligible(os64_dom_t *activity, JSContext *ctx, JSValueConst callback)
+{
+    return d_delivery_active(activity) ? d_callback_eligible(activity, ctx, callback) : 0;
+}
+
+bool d_require_callback(os64_dom_t *owner, JSContext *ctx, JSValueConst callback)
+{
+    int eligible = d_callback_eligible(owner, ctx, callback);
+    if (eligible == 0) d_error(ctx, "InvalidStateError", "The host callback is inactive");
+    return eligible > 0;
+}
+
 bool d_exception_catchable(JSContext *ctx)
 {
     JSClassID id = os64_js_class_id(&anchor_slot);
@@ -314,8 +409,11 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
         }
         d_string_free(dom, &initial);
     }
-    if (magic == 0 && dom->options.alert != NULL)
+    if (magic == 0 && dom->options.alert != NULL) {
+        if (!d_provider_begin(dom, ctx)) { d_string_free(dom, &message); return JS_EXCEPTION; }
         dom->options.alert(dom->options.alert_opaque, message.data != NULL ? message.data : "", message.length);
+        d_provider_leave(dom);
+    }
     d_string_free(dom, &message);
     return magic == 1 ? JS_FALSE : magic == 2 ? JS_NULL : JS_UNDEFINED;
 }
@@ -481,80 +579,13 @@ fail:
     return NULL;
 }
 
-static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
-                              os64_html_document_t *document, os64_page_state_t *state,
-                              const os64_dom_options_t *options, os64_js_outcome_t *outcome,
-                              os64_dom_cluster_t *cluster, bool *consumed)
+/* Trusted bootstrap: install interfaces and private algorithms, without
+ * exposing the candidate or invoking author code. */
+static int install_binding(os64_dom_t *dom, JSContext *ctx)
 {
-    if (outcome == NULL) return NULL;
-    JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
-    if (ctx == NULL) return NULL;
-    if (os64_js_realm_from_context(runtime, ctx, OS64_JS_ABI_ID, outcome) != realm) return NULL;
-    if (document == NULL || state == NULL || os64_page_state_document(state) != document) {
-        outcome->status = OS64_JS_BAD_ARGUMENT;
-        return NULL;
-    }
-    if (cluster) {
-        if (cluster->poisoned || cluster->drained || cluster->count == D_REALMS) {
-            outcome->status = OS64_JS_BAD_ARGUMENT;
-            return NULL;
-        }
-        for (size_t i = 0; i < cluster->count; ++i)
-            if (cluster->members[i]->realm == realm) {
-                outcome->status = OS64_JS_BAD_ARGUMENT;
-                return NULL;
-            }
-        if (os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
-            !os64_page_state_group_check(cluster->page, state) ||
-            sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes) {
-            outcome->status = OS64_JS_HOST_FAILURE;
-            return NULL;
-        }
-    } else if (JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&anchor_slot)) ||
-               JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&cluster_slot))) {
-        outcome->status = OS64_JS_BAD_ARGUMENT;
-        return NULL;
-    }
-    os64_dom_options_t selected = options != NULL ? *options : os64_dom_default_options();
-    if (selected.max_bytes < sizeof(os64_dom_t)) {
-        outcome->status = OS64_JS_HOST_FAILURE;
-        return NULL;
-    }
-    os64_dom_t *dom = os64_calloc(1, sizeof(*dom));
-    if (dom == NULL) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
-    dom->runtime = runtime;
-    dom->realm = realm;
-    dom->cluster = cluster;
-    dom->wa_borrowed_floor = UINT64_MAX;
-    /* A cluster member can adopt targets whose effects predate its admission. */
-    dom->wa_index_stale = true;
-    dom->observers = cluster ? cluster->observers : NULL;
-    dom->engine = JS_GetRuntime(ctx);
-    dom->document = document;
-    dom->state = state;
-    dom->options = selected;
-    dom->bytes = sizeof(*dom);
-    dom->memory[OS64_DOM_MEM_OTHER] = (os64_dom_mem_t){sizeof(*dom), 1, 1};
-    dom->anchor_class = os64_js_class_id(&anchor_slot);
-    dom->node_class = os64_js_class_id(&node_slot);
-    dom->collection_class = os64_js_class_id(&collection_slot);
-    dom->style_class = os64_js_class_id(&style_slot);
-    dom->token_class = os64_js_class_id(&token_slot);
-    dom->map_class = os64_js_class_id(&map_slot);
-    if (cluster) {
-        /* Both ledgers were preflighted and no script has run since then.
-         * Admission itself allocates nothing; ownership changes as one pair. */
-        if (os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
-            os64_free(dom);
-            return NULL;
-        }
-        if (os64_html_group_add(cluster->html, document, (uint8_t)cluster->count) != OS64_HTML_OK ||
-            !os64_page_state_group_add(cluster->page, state))
-            os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
-        cluster->members[cluster->count++] = dom;
-        cluster->bytes += sizeof(*dom);
-        *consumed = true;
-    }
+    os64_dom_options_t selected = dom->options;
+    os64_html_document_t *document = dom->document;
+    os64_dom_cluster_t *cluster = dom->cluster;
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
     const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
     const JSClassDef style_definition = {.class_name = "CSSStyleDeclaration", .finalizer = clear_opaque};
@@ -635,6 +666,95 @@ static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *r
     /* Last: from here the runtime hands the binding its script's failures
      * (report.c), which a binding that failed to be made never sees. */
     if (installed < 0 || !d_report_host(dom)) goto fail;
+    return 0;
+fail:
+    return -1;
+}
+
+static os64_dom_t *allocate_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+    JSContext *ctx, os64_html_document_t *document, os64_page_state_t *state,
+    os64_dom_options_t selected, os64_dom_cluster_t *cluster, os64_js_outcome_t *outcome)
+{
+    os64_dom_t *dom = os64_calloc(1, sizeof(*dom));
+    if (dom == NULL) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
+    dom->runtime = runtime;
+    dom->realm = realm;
+    dom->cluster = cluster;
+    dom->wa_borrowed_floor = UINT64_MAX;
+    /* A cluster member can adopt targets whose effects predate its admission. */
+    dom->wa_index_stale = true;
+    dom->observers = cluster ? cluster->observers : NULL;
+    dom->engine = JS_GetRuntime(ctx);
+    dom->document = document;
+    dom->state = state;
+    dom->options = selected;
+    dom->bytes = sizeof(*dom);
+    dom->memory[OS64_DOM_MEM_OTHER] = (os64_dom_mem_t){sizeof(*dom), 1, 1};
+    dom->anchor_class = os64_js_class_id(&anchor_slot);
+    dom->node_class = os64_js_class_id(&node_slot);
+    dom->collection_class = os64_js_class_id(&collection_slot);
+    dom->style_class = os64_js_class_id(&style_slot);
+    dom->token_class = os64_js_class_id(&token_slot);
+    dom->map_class = os64_js_class_id(&map_slot);
+    return dom;
+}
+
+static os64_dom_t *create_binding(os64_js_runtime_t *runtime, os64_js_realm_t *realm,
+                              os64_html_document_t *document, os64_page_state_t *state,
+                              const os64_dom_options_t *options, os64_js_outcome_t *outcome,
+                              os64_dom_cluster_t *cluster, bool *consumed)
+{
+    if (outcome == NULL) return NULL;
+    JSContext *ctx = os64_js_realm_context(realm, OS64_JS_ABI_ID, outcome);
+    if (ctx == NULL) return NULL;
+    if (os64_js_realm_from_context(runtime, ctx, OS64_JS_ABI_ID, outcome) != realm) return NULL;
+    if (document == NULL || state == NULL || os64_page_state_document(state) != document) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return NULL;
+    }
+    if (cluster) {
+        if (cluster->poisoned || cluster->drained || cluster->count == D_REALMS) {
+            outcome->status = OS64_JS_BAD_ARGUMENT;
+            return NULL;
+        }
+        for (size_t i = 0; i < cluster->count; ++i)
+            if (cluster->members[i]->realm == realm) {
+                outcome->status = OS64_JS_BAD_ARGUMENT;
+                return NULL;
+            }
+        if (os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
+            !os64_page_state_group_check(cluster->page, state) ||
+            sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes) {
+            outcome->status = OS64_JS_HOST_FAILURE;
+            return NULL;
+        }
+    } else if (JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&anchor_slot)) ||
+               JS_IsRegisteredClass(JS_GetRuntime(ctx), os64_js_class_id(&cluster_slot))) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return NULL;
+    }
+    os64_dom_options_t selected = options != NULL ? *options : os64_dom_default_options();
+    if (selected.max_bytes < sizeof(os64_dom_t)) {
+        outcome->status = OS64_JS_HOST_FAILURE;
+        return NULL;
+    }
+    os64_dom_t *dom = allocate_binding(runtime, realm, ctx, document, state, selected, cluster, outcome);
+    if (!dom) return NULL;
+    if (cluster) {
+        /* Both ledgers were preflighted and no script has run since then.
+         * Admission itself allocates nothing; ownership changes as one pair. */
+        if (os64_js_realm_task_begin(realm, OS64_JS_ABI_ID, "DOM installation", outcome) != OS64_JS_OK) {
+            os64_free(dom);
+            return NULL;
+        }
+        if (os64_html_group_add(cluster->html, document, (uint8_t)cluster->count) != OS64_HTML_OK ||
+            !os64_page_state_group_add(cluster->page, state))
+            os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+        cluster->members[cluster->count++] = dom;
+        cluster->bytes += sizeof(*dom);
+        *consumed = true;
+    }
+    if (install_binding(dom, ctx) < 0) goto fail;
     if (cluster) {
         if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) {
             cluster->poisoned = true;
@@ -668,6 +788,221 @@ fail:
     os64_dom_drain(dom);
     os64_dom_free(dom);
     return NULL;
+}
+
+os64_js_status_t os64_dom_depart(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    return os64_js_realm_retire(dom ? dom->realm : NULL, OS64_JS_ABI_ID, outcome);
+}
+
+static bool departure_busy(const os64_dom_t *dom)
+{
+    if (dom->closed) return false;
+    return dom->departure_finishing || dom->dispatching || dom->current_event ||
+        dom->animation_running || dom->wa_running || dom->idle_running ||
+        dom->pointer.running || dom->pointer.canceling || dom->pointer.draining ||
+        dom->clicking || dom->submitting || d_custom_busy(dom) || d_observers_busy(dom) ||
+        d_intersections_busy(dom) || d_resizes_busy(dom);
+}
+
+static void departure_detach(os64_dom_t *dom)
+{
+    /* Keep copied configuration and cached values; none of these host
+     * callbacks or opaque pointers may outlive a successful finish. */
+    dom->options.alert = NULL;
+    dom->options.alert_opaque = NULL;
+    dom->options.now_ms = NULL;
+    dom->options.now_us = NULL;
+    dom->options.script_connected = NULL;
+    dom->options.activate = NULL;
+    dom->options.write = NULL;
+    dom->options.timing = NULL;
+    dom->options.zoom = NULL;
+    dom->options.broken = NULL;
+    dom->options.failed = NULL;
+    dom->options.entropy = NULL;
+    dom->options.focus = NULL;
+    dom->options.host_opaque = NULL;
+    os64_memset(&dom->image_provider, 0, sizeof(dom->image_provider));
+    os64_memset(&dom->canvas_text, 0, sizeof(dom->canvas_text));
+    dom->geometry = NULL; dom->geometry_opaque = NULL;
+    dom->svg_hit = NULL; dom->svg_hit_opaque = NULL;
+    dom->hit = NULL; dom->hit_opaque = NULL;
+    dom->text_rects = NULL; dom->text_rects_opaque = NULL;
+    dom->user_agent = NULL; dom->user_agent_opaque = NULL;
+    os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
+    os64_memset(&dom->view, 0, sizeof(dom->view));
+    dom->computed = NULL; dom->computed_opaque = NULL;
+    os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
+    dom->intersections_provider = NULL; dom->intersections_opaque = NULL;
+    dom->resizes_provider = NULL; dom->resizes_opaque = NULL;
+    os64_dom_set_global_miss(dom, NULL, NULL);
+}
+
+static bool child_runtime_failed(os64_js_status_t status)
+{
+    return status == OS64_JS_FAILED_RUNTIME || status == OS64_JS_LIMIT ||
+        status == OS64_JS_CANCELLED || status == OS64_JS_HOST_FAILURE;
+}
+
+static os64_js_status_t child_install(os64_js_realm_t *realm, JSContext *ctx, void *opaque)
+{
+    (void)realm;
+    os64_dom_t *dom = opaque;
+    if (install_binding(dom, ctx) == 0) return OS64_JS_OK;
+    return JS_HasException(ctx) ? OS64_JS_EXCEPTION : OS64_JS_ADMISSION_REFUSED;
+}
+
+/* Bootstrap creates private interfaces and wrapper records, not author
+ * registrations or native tasks. Keep its shell for engine finalizers, but
+ * remove its wrappers and newly created dispatchers from sibling lookup. */
+static void child_abort(os64_dom_t *dom, struct DObservers *observers, struct DCustomAgent *custom)
+{
+    os64_dom_cluster_t *cluster = dom->cluster;
+    dom->closed = true;
+    d_mutation_stop(dom);
+    departure_detach(dom);
+    dom->options.url = dom->options.referrer = NULL;
+    for (size_t b = 0; b < D_BUCKETS; ++b)
+        for (DValue **at = &cluster->buckets[b]; *at;) {
+            DValue *entry = *at;
+            if (entry->dom != dom) { at = &entry->hash_next; continue; }
+            *at = entry->hash_next;
+            entry->hash_next = NULL;
+        }
+    cluster->observers = observers;
+    cluster->custom_agent = custom;
+    for (size_t i = 0; i < cluster->count; ++i)
+        if (!cluster->members[i]->closed) cluster->members[i]->observers = observers;
+    for (DValue *entry = dom->values; entry; entry = entry->next) {
+        JS_FreeValueRT(dom->engine, entry->value);
+        entry->value = JS_UNDEFINED;
+    }
+    dom->retained = 0;
+    dom->installing = false;
+}
+
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
+    os64_html_document_t *document, os64_page_state_t *state,
+    const os64_dom_options_t *options, const os64_dom_installation_t *installation,
+    os64_js_outcome_t *outcome)
+{
+    os64_dom_child_t child = {0};
+    os64_js_runtime_t *runtime = cluster ? cluster->runtime : NULL;
+    /* The engine owns active-outcome alias protection, including invalid
+     * native requests made while an enclosing call borrows that outcome. */
+    os64_js_status_t status = os64_js_realm_preflight(runtime, OS64_JS_ABI_ID,
+        installation ? installation->engine_headroom : 1, outcome);
+    if (status != OS64_JS_OK) {
+        if (child_runtime_failed(status)) child.state = OS64_DOM_CHILD_RUNTIME_FAILED;
+        return child;
+    }
+    if (!installation || cluster->poisoned || cluster->drained || !document || !state ||
+        os64_page_state_document(state) != document) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return child;
+    }
+    if (cluster->provider_borrows) { outcome->status = OS64_JS_BUSY; return child; }
+    if (cluster->count == D_REALMS) { outcome->status = OS64_JS_REALM_LIMIT; return child; }
+    os64_dom_options_t selected = options ? *options : os64_dom_default_options();
+    if (selected.max_bytes < sizeof(os64_dom_t) ||
+        sizeof(os64_dom_t) > cluster->limits.dom_bytes - cluster->bytes ||
+        os64_html_group_check(cluster->html, document) != OS64_HTML_OK ||
+        !os64_page_state_group_check(cluster->page, state)) {
+        outcome->status = OS64_JS_ADMISSION_REFUSED;
+        return child;
+    }
+    JSContext *ctx = os64_js_context(runtime, OS64_JS_ABI_ID, outcome);
+    if (!ctx) { child.state = OS64_DOM_CHILD_RUNTIME_FAILED; return child; }
+    os64_dom_t *dom = allocate_binding(runtime, NULL, ctx, document, state, selected, cluster, outcome);
+    if (!dom) { outcome->status = OS64_JS_ADMISSION_REFUSED; return child; }
+    status = os64_js_realm_stage(runtime, OS64_JS_ABI_ID, installation->engine_headroom,
+                                 &child.realm, outcome);
+    if (status != OS64_JS_OK) {
+        os64_free(dom);
+        if (child_runtime_failed(status)) child.state = OS64_DOM_CHILD_RUNTIME_FAILED;
+        return child;
+    }
+    dom->realm = child.realm;
+    dom->installing = true;
+    dom->clock_seen_ms = installation->now_ms;
+    dom->clock_seen_us = installation->now_us;
+    dom->timing_seen = installation->timing;
+    dom->time_origin_us = installation->timing.origin_us;
+    dom->time_origin_epoch_us = installation->timing.origin_epoch_us;
+    if (os64_html_group_add(cluster->html, document, (uint8_t)cluster->count) != OS64_HTML_OK ||
+        !os64_page_state_group_add(cluster->page, state))
+        os64_exit((int32_t)OS64_PAGE_FATAL_EXIT);
+    cluster->members[cluster->count++] = dom;
+    cluster->bytes += sizeof(*dom);
+    child.binding = dom;
+    child.consumed = true;
+    struct DObservers *observers = cluster->observers;
+    struct DCustomAgent *custom = cluster->custom_agent;
+    status = os64_js_realm_setup(child.realm, OS64_JS_ABI_ID, child_install, dom, outcome);
+    if (status == OS64_JS_OK)
+        status = os64_js_realm_activate(child.realm, OS64_JS_ABI_ID, outcome);
+    if (status == OS64_JS_OK) {
+        dom->installing = false;
+        child.state = OS64_DOM_CHILD_ACTIVE;
+    } else {
+        os64_js_outcome_t retired;
+        (void)os64_js_realm_retire(child.realm, OS64_JS_ABI_ID, &retired);
+        child_abort(dom, observers, custom);
+        child.state = child_runtime_failed(status) ? OS64_DOM_CHILD_RUNTIME_FAILED : OS64_DOM_CHILD_FAILED;
+    }
+    return child;
+}
+
+os64_js_status_t os64_dom_depart_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    /* Query first: in particular, do not overwrite an outcome borrowed by
+     * an enclosing engine call, even when a DOM precondition also fails. */
+    os64_js_status_t status = os64_js_quiescent(dom ? dom->runtime : NULL, OS64_JS_ABI_ID, outcome);
+    if (status != OS64_JS_OK) return status;
+    if (dom->closed || (dom->cluster && (dom->cluster->poisoned || dom->cluster->drained)))
+        return outcome->status = OS64_JS_FAILED_RUNTIME;
+    if (!os64_js_realm_is_retired(dom->realm)) return outcome->status = OS64_JS_BAD_ARGUMENT;
+    if (d_provider_busy(dom)) return outcome->status = OS64_JS_BUSY;
+    if (dom->cluster) {
+        if (dom->cluster->dispatching) return outcome->status = OS64_JS_BUSY;
+        for (size_t i = 0; i < dom->cluster->count; ++i)
+            if (departure_busy(dom->cluster->members[i])) return outcome->status = OS64_JS_BUSY;
+    } else if (departure_busy(dom)) return outcome->status = OS64_JS_BUSY;
+    if (dom->departure_finished) return OS64_JS_OK;
+    dom->departure_finishing = true;
+    /* These native callbacks still own their opaque storage. Reentrant
+     * finish, including a sibling's, sees the finishing flag or their loan. */
+    d_storage_drain(dom);
+    d_fetch_drain(dom);
+    status = os64_js_quiescent(dom->runtime, OS64_JS_ABI_ID, outcome);
+    if (status != OS64_JS_OK) goto done;
+    status = os64_js_realm_set_module_loader(dom->realm, OS64_JS_ABI_ID, NULL, outcome);
+    if (status != OS64_JS_OK) goto done;
+    d_report_drain(dom);
+    d_timer_drain(dom);
+    d_timer_free(dom);
+    d_idle_drain(dom);
+    d_idle_free(dom);
+    d_animation_drain(dom);
+    d_message_cancel(dom);
+    d_pointer_drain(dom);
+    d_web_animations_cancel(dom);
+    d_custom_cancel(dom);
+    d_observers_cancel(dom);
+    d_intersections_cancel(dom);
+    d_performance_cancel(dom);
+    if (dom->subtle_queue) {
+        JS_FreeValueRT(dom->engine, dom->subtle_queue->value);
+        dom->subtle_queue->value = JS_UNDEFINED;
+    }
+    dom->subtle_head = dom->subtle_tail = 0;
+    dom->subtle_drain_queued = false;
+    departure_detach(dom);
+    dom->departure_finished = true;
+done:
+    dom->departure_finishing = false;
+    return status;
 }
 
 static void binding_drain(os64_dom_t *dom)

@@ -1,6 +1,6 @@
 # JavaScript runtime API contract
 
-Status: embedding ABI 4, including admission, retirement, staged setup and job ownership, 2026-11-12.
+Status: embedding ABI 5, including the owner-thread quiescence query, 2026-11-12.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
@@ -115,8 +115,11 @@ the check immediately before ordinary realm creation, including when nested
 inside a parent callback. It publishes no handle on refusal. The legacy
 `os64_js_realm_create` keeps its existing slot-only admission. Neither path
 promises that arbitrary later allocations or system OOM are recoverable.
-The DOM installation reserve and its profile-specific measurements belong to
-F.3b; a bare engine realm's size is not the cost of an installed DOM binding.
+libdom's `os64_dom_create_child` supplies staged installation and native
+rollback; its 8 MiB admission allowance includes the measured interface peak
+and sibling margin. [F.3b's measurements](../../docs/design/pending/IFRAME_F3_DOM_VALIDATION.md)
+cover both allocator profiles. A bare engine realm's size is not the cost of
+an installed DOM binding.
 
 `os64_js_realm_stage` performs guarded creation and reserves an Installing
 slot. It exposes a native handle for private installation, but ordinary
@@ -165,13 +168,32 @@ JavaScript stacks may finish/unwind, and live scripts may directly call
 retained ordinary functions. Retirement neither frees context/global/native
 storage nor removes queued entries under an active stack.
 
+`os64_js_quiescent` is an owner-thread, allocation-free snapshot for native
+cleanup. It returns BUSY while an engine call, task/turn, checkpoint, installer
+or queued job remains. The queue check also rejects malformed raw work outside
+a turn; it does not authorize executing such work. FAILED_RUNTIME covers latched failure, unobserved allocator
+failure or cancellation, and destruction; that result requires the root cleanup
+path after its normal unwind. An ordinary sibling exception does not prevent a
+later OK result. Argument and ABI errors are ordinary refusals, and an aliased
+active outcome is left untouched.
+
+The query does not run jobs, sample the clock, change budgets or latch a failure.
+OK is not a lock or permission to free arbitrary binding state: the host must
+also exclude native dispatch, reactions and provider borrows, and perform no
+intervening engine entry before the protected cleanup. ABI 5 publishes this
+entry; the bytecode engine identity is unchanged because the engine sources
+and compilation profile are unchanged.
+
 Script reporting and new module-provider/output activity stop at the mark.
 At the host's safe point after active entries and checkpoints, clear script
 and module hooks before freeing their opaque storage. Context/member queries
 and module release remain available while their ordinary runtime-health rules
 allow them. The libjs mark is not DOM departure: a DOM host must separately
-stop its timers, observers, network activity and binding providers. F.3b owns
-that integration and its cleanup proof.
+stop its timers, observers, network activity and binding providers.
+libdom's `os64_dom_depart_finish` joins this engine barrier with native walk
+and provider-loan checks, clears obsolete work and detaches providers while
+retaining exported objects. Its successful return permits releasing provider
+opaque storage; a sticky failure requires root teardown instead.
 
 Queued work carries native execution context, callback/code owner and an
 optional activity owner. Patch 0019 retains these independently. Promise
@@ -185,6 +207,16 @@ checks the registry's activity realm. Dynamic imports retain importing context
 ownership. Binding jobs default to the enqueuing context; native hosts can use
 `JS_EnqueueJobOwned` for explicit or neutral ownership and must gate records
 inside a neutral shared delivery queue themselves.
+
+Patch 0021 adds `JS_NewCFunctionDataNeutral` for trusted native continuations
+used by self-hosted bindings. It retains the ordinary function realm and data
+holds, including `JS_GetFunctionRealm` results, but promise-job discovery treats
+it as neutral through direct, bound and proxy references. It does not exempt a
+job from execution budgets or installation transaction tagging. The binding
+must check author callback eligibility inside the continuation. Libdom uses
+this constructor only behind its private Streams factory; page JavaScript has
+no API for assigning neutral ownership. The generated engine identity changes
+with the patch; the wrapper's public configuration and value layouts do not.
 
 Manual drains, task checkpoints and candidate drains inspect before execution. Dead entries release their holds without
 running a job or settling its promises, preserving surviving FIFO order.

@@ -1,0 +1,68 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -6169,6 +6169,7 @@
+     uint8_t length;
+     uint8_t data_len;
+     uint16_t magic;
++    BOOL neutral_job; /* trusted host continuation; realm identity is retained */
+     JSValue data[0];
+ } JSCFunctionDataRecord;
+ 
+@@ -6244,12 +6245,28 @@
+     s->length = length;
+     s->data_len = data_len;
+     s->magic = magic;
++    s->neutral_job = FALSE;
+     for(i = 0; i < data_len; i++)
+         s->data[i] = JS_DupValue(ctx, data[i]);
+     JS_SetOpaque(func_obj, s);
+     js_function_set_properties(ctx, func_obj,
+                                JS_ATOM_empty_string, length);
+     return func_obj;
++}
++
++/* Native-only host continuations keep their data/context holds and ordinary
++   function realm, but promise job discovery gives them neutral ownership.
++   Callers must gate any author callback reached by the continuation. */
++JSValue JS_NewCFunctionDataNeutral(JSContext *ctx, JSCFunctionData *func,
++                                  int length, int magic, int data_len,
++                                  JSValueConst *data)
++{
++    JSValue function = JS_NewCFunctionData(ctx, func, length, magic, data_len, data);
++    if (!JS_IsException(function)) {
++        JSCFunctionDataRecord *s = JS_GetOpaque(function, JS_CLASS_C_FUNCTION_DATA);
++        s->neutral_job = TRUE;
++    }
++    return function;
+ }
+ 
+ static JSContext *js_autoinit_get_realm(JSProperty *pr)
+@@ -20936,8 +20953,11 @@
+         switch (p->class_id) {
+         case JS_CLASS_C_FUNCTION:
+             return p->u.cfunc.realm;
+-        case JS_CLASS_C_FUNCTION_DATA:
+-            return p->u.c_function_data_record ? p->u.c_function_data_record->realm : ctx;
++        case JS_CLASS_C_FUNCTION_DATA: {
++            JSCFunctionDataRecord *s = p->u.c_function_data_record;
++            if (revoked_fallback && s && s->neutral_job) return NULL;
++            return s ? s->realm : ctx;
++        }
+         case JS_CLASS_ASYNC_FUNCTION_RESOLVE:
+         case JS_CLASS_ASYNC_FUNCTION_REJECT:
+             return p->u.async_function_data ? p->u.async_function_data->realm : ctx;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1102,6 +1102,12 @@
+ JSValue JS_NewCFunctionData(JSContext *ctx, JSCFunctionData *func,
+                             int length, int magic, int data_len,
+                             JSValueConst *data);
++/* Trusted native continuation with neutral promise-job ownership. This does
++   not alter JS_GetFunctionRealm, budget charging, or installation tagging.
++   The host must separately gate author callbacks reached by its function. */
++JSValue JS_NewCFunctionDataNeutral(JSContext *ctx, JSCFunctionData *func,
++                                  int length, int magic, int data_len,
++                                  JSValueConst *data);
+ 
+ static inline JSValue JS_NewCFunction(JSContext *ctx, JSCFunction *func, const char *name,
+                                       int length)

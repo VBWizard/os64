@@ -5,9 +5,9 @@
  * (the .incbin below) and run in each realm by the Modern Web's streams
  * row. This file does three things:
  *
- *   - it captures the INTRINSICS streams.js runs on, from the realm as it
- *     stands at its start, before any page script ran, and hands them over
- *     as one null-prototype object; streams.js refuses to load without any
+ *   - it captures the INTRINSICS streams.js runs on, before page script,
+ *     and supplies private callback and continuation helpers in the same
+ *     null-prototype object; streams.js refuses to load without any
  *     one of them, so this list and its own cannot drift apart unseen;
  *   - it defines the interfaces streams.js returns on the global, as
  *     WebIDL defines an interface object (writable, configurable, not
@@ -147,7 +147,6 @@ static const struct {
     {"Float64Array", "Float64Array", VALUE},
     {"BigInt64Array", "BigInt64Array", VALUE},
     {"BigUint64Array", "BigUint64Array", VALUE},
-    {"queueMicrotask", "queueMicrotask", VALUE},
     {"structuredClone", "structuredClone", VALUE},
     {"Symbol_asyncIterator", "Symbol.asyncIterator", VALUE},
     {"Symbol_iterator", "Symbol.iterator", VALUE},
@@ -157,10 +156,6 @@ static const struct {
     {"AbortController_signal", "AbortController.prototype.signal", GETTER},
     {"AbortSignal_aborted", "AbortSignal.prototype.aborted", GETTER},
     {"AbortSignal_reason", "AbortSignal.prototype.reason", GETTER},
-    /* EventTarget's, as an AbortSignal inherits them: the pipes listen on
-     * a signal and on nothing else. */
-    {"EventTarget_addEventListener", "AbortSignal.prototype.addEventListener", VALUE},
-    {"EventTarget_removeEventListener", "AbortSignal.prototype.removeEventListener", VALUE},
     /* The Encoding standard's streams decode and encode through the
      * realm's TextDecoder and TextEncoder, and look at a string's code
      * units through String's own methods. */
@@ -233,9 +228,90 @@ static JSValue async_iterator_prototype(JSContext *ctx)
     return iterator_prototype;
 }
 
-/* The intrinsics object, or JS_EXCEPTION. A capture that is missing is
+/* The self-hosted algorithms invoke author callbacks through this private
+ * guard. Pure stream records are not document activity; the actual callback
+ * realm controls invocation, including through a retained constructor. */
+static JSValue require_callback(JSContext *ctx, JSValueConst self, int argc,
+                                 JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected a stream callback");
+    return d_require_callback(dom, ctx, argv[0]) ? JS_UNDEFINED : JS_EXCEPTION;
+}
+
+/* The hidden doors retain raw private-field probes, never public methods or
+ * page-controlled properties. A retained foreign object keeps its genuine
+ * brand after departure; probing does not schedule activity in its realm. */
+static JSValue foreign_stream_slot(JSContext *ctx, JSValueConst self, int argc,
+                                   JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (argc < 2 || !JS_IsObject(argv[1]) || !dom->cluster) return JS_UNDEFINED;
+    for (size_t i = 0; i < dom->cluster->count; ++i) {
+        os64_dom_t *member = dom->cluster->members[i];
+        if (member == dom || member->closed || !member->streams_door) continue;
+        JSValue probe = JS_GetPropertyStr(ctx, member->streams_door->value, "brand");
+        if (JS_IsException(probe)) return probe;
+        JSValue record = JS_Call(ctx, probe, JS_UNDEFINED, 2, argv);
+        JS_FreeValue(ctx, probe);
+        if (!JS_IsUndefined(record)) return record;
+    }
+    return JS_UNDEFINED;
+}
+
+/* Only the private factory can supply these functions. Their algorithms keep
+ * settled data usable after creator departure; author invocation goes through
+ * RequireCallback inside streams.js, rather than inheriting neutrality. */
+static JSValue internal_reaction_call(JSContext *ctx, JSValueConst self, int argc,
+                                     JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    return JS_Call(ctx, data[0], JS_UNDEFINED, argc, argv);
+}
+
+static JSValue internal_reaction(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (!argc || JS_IsUndefined(argv[0])) return JS_UNDEFINED;
+    if (!JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected an internal stream reaction");
+    return JS_NewCFunctionDataNeutral(ctx, internal_reaction_call, 1, 0, 1, argv);
+}
+
+static JSValue internal_microtask_run(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    (void)argc;
+    return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+}
+
+static JSValue internal_microtask(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (!argc || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "Expected an internal stream microtask");
+    if (JS_EnqueueJobOwned(ctx, NULL, NULL, internal_microtask_run, 1, argv) < 0) return JS_EXCEPTION;
+    return JS_UNDEFINED;
+}
+
+static JSValue internal_abort_add(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (argc < 2) return JS_ThrowTypeError(ctx, "Expected a signal and internal abort algorithm");
+    return d_signal_add_internal(ctx, argv[0], argv[1]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static JSValue internal_abort_remove(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    if (argc >= 2) d_signal_remove_internal(ctx, argv[0], argv[1]);
+    return JS_UNDEFINED;
+}
+
+/* The intrinsics object and private callback guard, or JS_EXCEPTION. A capture that is missing is
  * left out, and streams.js names it when it refuses to load. */
-static JSValue intrinsics(JSContext *ctx, JSValueConst global)
+static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue object = JS_NewObjectProto(ctx, JS_NULL);
     if (JS_IsException(object)) return object;
@@ -248,6 +324,19 @@ static JSValue intrinsics(JSContext *ctx, JSValueConst global)
     JSValue prototype = async_iterator_prototype(ctx);
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
+    if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
+    if (d_method(dom, ctx, object, "ForeignStreamSlot", foreign_stream_slot, 2, 0) < 0) goto fail;
+    static const struct { const char *name; JSCFunction *function; int length; } helpers[] = {
+        {"InternalReaction", internal_reaction, 1},
+        {"InternalMicrotask", internal_microtask, 1},
+        {"AddAbortAlgorithm", internal_abort_add, 2},
+        {"RemoveAbortAlgorithm", internal_abort_remove, 2},
+    };
+    for (size_t i = 0; i < sizeof(helpers) / sizeof(helpers[0]); i++) {
+        JSValue function = JS_NewCFunction(ctx, helpers[i].function, helpers[i].name, helpers[i].length);
+        if (JS_IsException(function)) goto fail;
+        if (JS_DefinePropertyValueStr(ctx, object, helpers[i].name, function, JS_PROP_C_W_E) < 0) goto fail;
+    }
     return object;
 fail:
     JS_FreeValue(ctx, object);
@@ -269,7 +358,7 @@ int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue factory = streams_factory(ctx);
     if (JS_IsException(factory)) return -1;
-    JSValue captured = intrinsics(ctx, global);
+    JSValue captured = intrinsics(dom, ctx, global);
     if (JS_IsException(captured)) {
         JS_FreeValue(ctx, factory);
         return -1;

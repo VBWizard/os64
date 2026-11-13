@@ -969,6 +969,28 @@ JS_PUBLIC bool os64_js_realm_is_retired(const os64_js_realm_t *realm)
     return realm != NULL && realm->retired;
 }
 
+JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
+                                            const char *caller_abi,
+                                            os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    /* Observe raw allocator/cancellation failure without changing the latch
+     * or calling the clock beneath an entry that is still unwinding. */
+    if (runtime->destroying || runtime->failure != OS64_JS_OK || runtime->allocator.failures ||
+        __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
+        return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime requires root cleanup");
+    if (runtime->active || runtime->turn || runtime->task || runtime->checkpointing ||
+        runtime->setup_calls || runtime->setup_realm || JS_IsJobPending(runtime->engine))
+        return status(outcome, OS64_JS_BUSY, "runtime has unfinished engine work");
+    return OS64_JS_OK;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_realm_preflight(os64_js_runtime_t *runtime,
                                                  const char *caller_abi,
                                                  size_t required_headroom,
@@ -2510,6 +2532,11 @@ static char *module_normalize(JSContext *context, const char *base, const char *
     }
     char *name = realm->loader.resolve != NULL
         ? realm->loader.resolve(realm->loader.opaque, base, specifier) : NULL;
+    if (realm->retired || realm->staged) {
+        os64_free(name);
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
     if (name == NULL) {
         JS_ThrowTypeError(context, "cannot resolve module specifier '%s'", specifier);
         return NULL;
@@ -2535,9 +2562,15 @@ static JSModuleDef *module_load(JSContext *context, const char *name, void *opaq
     }
     const char *bytes = NULL;
     size_t length = 0;
-    if (realm->loader.source == NULL ||
-        !realm->loader.source(realm->loader.opaque, name, &bytes, &length) ||
-        (bytes == NULL && length != 0)) {
+    bool loaded = realm->loader.source != NULL &&
+        realm->loader.source(realm->loader.opaque, name, &bytes, &length);
+    /* The wrapper's active-call barrier keeps the source loan alive. A host
+     * that retires its document cannot start another compilation on return. */
+    if (realm->retired || realm->staged) {
+        JS_ThrowTypeError(context, "module realm is not active");
+        return NULL;
+    }
+    if (!loaded || (bytes == NULL && length != 0)) {
         JS_ThrowReferenceError(context, "could not load module '%s'", name);
         return NULL;
     }

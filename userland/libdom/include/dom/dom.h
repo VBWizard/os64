@@ -400,9 +400,61 @@ os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
+
+/* Admission allowance for the installed DOM interfaces, including shadow
+ * trees and ranges, plus sibling work. Validated under the 64 MiB engine cap
+ * with both allocator profiles; this check does not reserve heap storage. */
+#define OS64_DOM_CHILD_ENGINE_HEADROOM (8u * 1024u * 1024u)
+
+/* Fresh private child installation. The host supplies measured engine peak
+ * plus sibling headroom, and a copied creation-time snapshot in its clock
+ * domains. Setup does not call option providers. Timing offsets use
+ * OS64_DOM_TIMING_NOT_YET for milestones that have not happened.
+ * A nested installation borrows the parent's task budget and preserves its
+ * queued jobs. Use an outcome distinct from the enclosing engine call.
+ * CHILD_REFUSED leaves document/state ownership with the caller. Once consumed is
+ * true, the cluster retains the binding shell and backing, including failure;
+ * only CHILD_ACTIVE publishes a usable child. CHILD_FAILED leaves siblings usable;
+ * CHILD_RUNTIME_FAILED requires root teardown after executing stacks unwind.
+ * Failed consumed slots and native charges are retained until root teardown. */
+typedef struct {
+    size_t engine_headroom;
+    uint64_t now_ms, now_us;
+    os64_dom_timing_t timing;
+} os64_dom_installation_t;
+typedef enum {
+    OS64_DOM_CHILD_REFUSED = 0,
+    OS64_DOM_CHILD_ACTIVE,
+    OS64_DOM_CHILD_FAILED,
+    OS64_DOM_CHILD_RUNTIME_FAILED
+} os64_dom_child_state_t;
+typedef struct {
+    os64_dom_child_state_t state;
+    os64_dom_t *binding;
+    os64_js_realm_t *realm;
+    bool consumed;
+} os64_dom_child_t;
+os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *, os64_html_document_t *,
+    os64_page_state_t *, const os64_dom_options_t *, const os64_dom_installation_t *,
+    os64_js_outcome_t *);
 void os64_dom_cluster_drain(os64_dom_cluster_t *);
 void os64_dom_cluster_free(os64_dom_cluster_t *);
 os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);
+
+/* Owner-thread document departure. Mark is allocation-free and idempotent;
+ * it stops new activity, including when called from a native callback, but
+ * does not release records beneath the executing stack. Use a separate
+ * outcome from the enclosing engine call.
+ * Finish requires a marked binding and returns BUSY until engine tasks/jobs,
+ * DOM dispatch/reaction walks and provider loans across the cluster unwind.
+ * It commits storage once, cancels owned requests and queued deliveries, and
+ * detaches host providers. Only OK permits freeing their opaque storage.
+ * Exported objects, document/state ownership and layout borrows survive;
+ * finish is not drain or free. Repeated finish is harmless. FAILED_RUNTIME
+ * requires the root teardown path after its executing stacks unwind; it is
+ * not evidence that teardown is already safe. */
+os64_js_status_t os64_dom_depart(os64_dom_t *, os64_js_outcome_t *);
+os64_js_status_t os64_dom_depart_finish(os64_dom_t *, os64_js_outcome_t *);
 
 /* Owner-thread browser identity provider, borrowed text for the getter call.
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
@@ -450,7 +502,7 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained (the page departing: os64_dom_drain); sooner when the
+ * binding is drained (os64_dom_drain); sooner when the
  * changes not yet handed over would pass the quota or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
@@ -480,7 +532,10 @@ typedef enum {
  * again with room when it did not fit, a few times; a store still
  * outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
- * os64_dom_storage_merge's format), merged onto the store as it stands. */
+ * os64_dom_storage_merge's format), merged onto the store as it stands.
+ * Calls hold provider loans. A callback may mark retirement, but must keep
+ * opaque storage valid through the call; normal reads/settlement then stop.
+ * Final native cleanup can still commit changes owed before retirement. */
 typedef struct {
     uint64_t (*identity)(void *opaque, const char *origin);
     int64_t (*load)(void *opaque, const char *origin, void *out, size_t cap);
@@ -489,23 +544,28 @@ typedef struct {
     void *opaque;
 } os64_dom_storage_t;
 /* Copied; NULL removes the area's provider. Install before the first
- * script: an area already touched keeps what it has and reads the store
- * at its next touch. */
+ * script or outside callbacks: an area already touched keeps what it has
+ * and reads the store at its next touch. Changes while the cluster has a
+ * provider loan are ignored; inactive documents accept removal only. */
 void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area,
                           const os64_dom_storage_t *storage);
 /* Between tasks: the task that just ran is over, so the next touch asks the
  * provider again, and an area with changes commits them when they are due:
  * at once when the area has not committed for OS64_DOM_STORAGE_COMMIT_MS
  * of the host's now_ms (or ever), else that long after its last commit.
- * os64_dom_drain commits what is left, due or not. A host that never
- * settles asks the provider once per area and commits at drain. */
+ * Inactive documents and calls during provider loans do no work.
+ * os64_dom_drain makes a final attempt for what is left, due or not, and
+ * detaches storage providers. Serialization failure at that final attempt
+ * drops the owed changes; ordinary allocation failure waits for a retry.
+ * A host that never settles asks once per area and commits at drain. */
 void os64_dom_storage_settle(os64_dom_t *dom);
 /* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
- * to commit. */
+ * to commit or the document is inactive. */
 uint64_t os64_dom_storage_due(const os64_dom_t *dom);
 /* Forgets both areas' maps and their changes not yet committed, so their
  * next touch reads the store as it is: "Clear page storage" while a page
- * is open. Owner thread, outside callbacks. */
+ * is open. Owner thread, outside callbacks; ignored for inactive documents
+ * or while the cluster has a provider loan. */
 void os64_dom_storage_forget(os64_dom_t *dom);
 
 /* THE STORE'S BYTES, libdom's format and the host's to move: an image is a
@@ -535,7 +595,8 @@ bool os64_dom_storage_walk(const void *bytes, size_t length,
  * name a lookup on window did not find, before the lookup answers as it
  * always does, so what the page sees is unchanged. The name is borrowed
  * for the call; `heard` must not enter JS. NULL stops it. Install outside
- * callbacks. */
+ * callbacks. Inactive documents neither call the hook nor accept a new one;
+ * NULL can still clear it while the binding remains open. */
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque);
 
@@ -693,39 +754,43 @@ typedef struct {
      * JSON (NULL for null; copied), and when `push` the entry that was
      * current stays behind it. No event, whatever the fragment did. False
      * when the host could not (no memory): QuotaExceededError, and nothing
-     * changed. */
+     * changed. If the callback retires the document, the binding refuses
+     * local completion with SecurityError, irrespective of this result. */
     bool (*update)(void *opaque, const char *url, const char *state, size_t length, bool push);
     /* A fragment navigation the document's script asked for (location.hash
      * =, or an address that differs from the document's only in its
      * fragment): the host adds the entry `url` (replaces the current one
      * when `replace`), scrolls to its fragment, and owes hashchange when
      * the fragment moved (os64_dom_history_event). On true the binding
-     * makes `url` the document's address and null its state, and fires
+     * makes `url` the active document's address and null its state, and fires
      * popstate itself, inside the script that asked (HTML § Navigate to a
      * fragment, whose "update document for history step application"
      * fires it then and there). False when the host could not: nothing
      * changed, and the binding asks for the address as a navigation
-     * instead (os64_dom_take_navigation). */
+     * instead (os64_dom_take_navigation). Retirement during the callback
+     * prevents local completion and fallback navigation. */
     bool (*fragment)(void *opaque, const char *url, bool replace);
     /* history.length: the entries in the session. */
     uint32_t (*length)(void *opaque);
     void *opaque;
 } os64_dom_history_t;
-/* Copied; NULL removes it, after which pushState and replaceState change
- * only the document's own address and state, a fragment navigation is an
- * ask (os64_dom_take_navigation), and history.length reads 1. The
+/* Copied; NULL removes it, after which an active document's pushState and
+ * replaceState change only the document's own address and state, a fragment
+ * navigation is an ask (os64_dom_take_navigation), and history.length reads 1. The
  * callbacks are owner-thread, inside a script's task: they must not enter
- * JS. Install outside callbacks. */
+ * JS. Install outside callbacks. A callback may mark retirement; its opaque
+ * storage must remain valid until the provider loan has ended. */
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
 /* The session moved to another entry of this document without a fetch: a
  * traversal (Back, Forward, history.go) or a fragment navigation the host
  * began (a link to `#x`). The document's address becomes `url`, its state
  * `length` bytes of the JSON the host kept (NULL for null), read the next
  * time history.state is. Nothing is dispatched: the host follows with
- * os64_dom_history_event. False on no memory, nothing changed; it is the
- * step of a move that can fail, so a host calls it before its own entries
- * move and moves them only on true, or the window would show one address
- * while the page's scripts read another. Owner thread, outside JS. */
+ * os64_dom_history_event. False on an inactive document or no memory, with
+ * nothing changed; it is the step of a move that can fail, so a host calls
+ * it before its own entries move and moves them only on true, or the window
+ * would show one address while the page's scripts read another. Owner thread,
+ * outside JS. */
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
 /* The document's current entry and its state, named: a new name at every
  * state update, fragment navigation and move. A host takes it when it owes
@@ -750,8 +815,8 @@ typedef struct {
     uint64_t entry;
 } os64_dom_history_event_t;
 /* `popstate` or `hashchange` at window, as one task. OK with nothing run
- * when modern is off or nothing could hear it; BAD_ARGUMENT for a
- * hashchange without both addresses, or a length with no state. */
+ * when the document is retired, modern is off or nothing could hear it;
+ * BAD_ARGUMENT for a hashchange without both addresses, or a length with no state. */
 os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
                                         os64_js_outcome_t *outcome);
 /* Whether the page set history.scrollRestoration to "manual": the host
@@ -1062,10 +1127,14 @@ typedef struct {
     uint64_t (*version)(void *opaque);
     void *opaque;
 } os64_dom_css_animations_t;
-/* Copied; NULL removes it, after which getAnimations answers a script's
- * animations alone and no CSS animation event fires. The callbacks are
- * owner-thread, inside a script's task: they must not enter JS. Install
- * outside callbacks. */
+/* Copied; NULL removes it, after which active getAnimations queries answer
+ * script animations alone and no CSS animation event fires. A CSS snapshot
+ * holds a provider loan from count through record consumption; drive/version
+ * calls also hold loans. Replacement while a provider is borrowed is ignored.
+ * Callbacks are owner-thread and must not enter JS. Version may be queried
+ * outside a script task by the native scheduler. Inactive getAnimations and
+ * timeline-scheduling methods refuse with InvalidStateError; exported object
+ * identity and pure retained effect/time data remain available. */
 void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css);
 
 /* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
@@ -1120,7 +1189,9 @@ size_t os64_dom_intersections_observed(const os64_dom_t *dom);
  * its first observation, or the last step passed one over for its
  * observer's `delay` and that delay has run (options.now_ms's clock), or a
  * required provider or batch allocation refused. And
- * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
+ * when that delay runs out, for the host to wake at; UINT64_MAX for none.
+ * Inactive observer documents and inactive explicit-root documents owe no
+ * measurements; retained registrations can resume after root adoption. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
 uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
@@ -1159,7 +1230,9 @@ void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider,
  * first report, the last step's loop passed one over (its loop error),
  * which the next step reports, or the last step left work undone (the
  * provider refused, or a callback's entries could not be made), so what
- * it did not measure or deliver waits for the next. */
+ * it did not measure or deliver waits for the next. Inactive observer or
+ * target documents owe no measurements. Registrations remain intact so
+ * adopting a target into an active document can make it eligible again. */
 size_t os64_dom_resizes_observed(const os64_dom_t *dom);
 bool os64_dom_resizes_owed(const os64_dom_t *dom);
 /* THE RESIZE STEP, the standard's loop as ONE task: gather what moved,
@@ -1201,13 +1274,16 @@ bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_
 /* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
- * one before it. False when there is none. */
+ * one before it. False when there is none or the document is inactive;
+ * taking from an inactive document discards the owed ask and its node holds. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken, here or by os64_dom_script_ended, which
- * always takes it: the outcome when that is OK, else a line told to
- * options.failed. False when there is none. */
+ * first one is kept until taken here or consumed when a DOM task closes,
+ * including os64_dom_script_ended: the outcome when that is OK, else a line
+ * told to this binding's options.failed. A cluster task closes reports from
+ * its members; settle a directly run script before opening another task.
+ * False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* A script the host is about to run with os64_js_run is compiled under the
  * name this writes to `out` (`os64-script:<n>`, the binding's), never its
@@ -1266,7 +1342,10 @@ const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t 
  * an UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
  * those past the outcome's first failure are told to options.failed. No
  * engine entry when nothing is owed. False for a missing argument or a
- * drained binding. */
+ * drained binding, or reentry from a borrowed provider. In a cluster, report
+ * settlement visits its members under one budget, using an active member
+ * as the driver if the original service owner retired. Error events and
+ * diagnostic providers retain their own binding identities. */
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
@@ -1297,7 +1376,10 @@ bool os64_dom_javascript_mime(const char *value, size_t length);
  * that is none, or a scope that is none; each thrown before any entry is
  * walked) is reported at the window as a task's exception is, and is the
  * outcome: the host registers nothing then. Integrity's entries are not
- * walked. Owner thread, between tasks. */
+ * walked. The visitor table is copied for the walk. Retirement stops later
+ * entries and returns REALM_RETIRED, including when the last visited entry
+ * was accepted; the host must discard that partial result. Provider-reentrant
+ * entry is refused. Owner thread, between tasks. */
 typedef struct {
     void *opaque;
     bool (*entry)(void *opaque, const char *scope, const char *key, const char *value);
@@ -1370,22 +1452,26 @@ typedef struct {
  * pieces (os64_dom_fetch_head, below).
  * cancel: the id's answer is no longer wanted (a fetch aborted, an XHR's
  * abort(), a body's stream cancelled, a page leaving); a cancelled request
- * never answers, not even the rest of a body.
+ * should stop producing answers, including the rest of a body. Late payloads
+ * already in flight remain the host's to release; they cannot revive a token.
  * run: a synchronous XMLHttpRequest's request, run to its end before this
  * returns, filling `*response`, which stays the host's until `release`;
  * false when it could not be run, which the page sees as a network error.
  * The run asks `stop(stop_ctx)` between its waits and gives up when it says
- * yes: the binding's answer is the script task's own budget (the task's
- * deadline, and libjs's cancel), so a synchronous request ends when the
- * task that made it would, as one mechanism.
+ * yes: the binding checks document activity and the script task's budget
+ * (the task's deadline and libjs's cancel).
  * more: the binding wants the next bytes of the id's body (a streamed
  * answer's, below): a reader waits on it. It is called from inside a
  * task, so the host answers later, never inside the call: a piece through
  * os64_dom_fetch_body once it has one, and the binding asks again when it
  * wants another. Pieces nobody asked for are the host's to send too (the
  * streamed answer below). NULL leaves the host to deliver as it pleases.
- * With no network, every request is a network error. Copied; NULL removes
- * it. Install before the first script. */
+ * With no network, an active document's request is a network error. Copied;
+ * NULL removes the installed table. Each accepted request retains its
+ * producer's callbacks/opaque until completion or cancellation; a synchronous
+ * response retains its original release through the call. Replacing/clearing
+ * the installed table does not release those outstanding producer lifetimes.
+ * Installing a non-NULL table on an inactive document is ignored. */
 typedef struct {
     uint64_t (*start)(void *opaque, const os64_dom_request_t *request, uint32_t token);
     void (*cancel)(void *opaque, uint64_t id);
@@ -1400,8 +1486,11 @@ void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
  * runtime's memory (a body the runtime has no room for is the runtime's
  * memory limit, as any allocation a script makes is), the fetch's promise
  * is settled or the XMLHttpRequest's events fire, and the microtasks run.
- * An answer for a token nothing waits on (aborted, or after drain) does
- * nothing. The outcome is the task's, as os64_dom_dispatch's is. */
+ * An answer for an unknown token or an inactive document is discarded before
+ * engine entry; delivery during a provider callback is also discarded. The
+ * host keeps ownership of these borrowed response buffers on every path.
+ * A closed binding reports FAILED_RUNTIME. Otherwise the outcome is the
+ * task's, as os64_dom_dispatch's is. */
 os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
                                   os64_js_outcome_t *outcome);
 /* A STREAMED ANSWER (STREAMS.md § 5, S3): the answer in pieces, each ONE
@@ -1421,10 +1510,12 @@ os64_js_status_t os64_dom_fetch_head(os64_dom_t *dom, uint32_t token, const os64
 os64_js_status_t os64_dom_fetch_body(os64_dom_t *dom, uint32_t token, const void *bytes, size_t length,
                                      os64_js_outcome_t *outcome);
 os64_js_status_t os64_dom_fetch_end(os64_dom_t *dom, uint32_t token, bool ok, os64_js_outcome_t *outcome);
-/* How many requests the binding has out. os64_dom_drain cancels each
- * through the network's cancel and forgets it. */
+/* How many requests the binding owns, including ineligible work awaiting
+ * native cleanup. Binding/cluster drain cancels these through their original
+ * producer and forgets them. */
 size_t os64_dom_fetches_pending(const os64_dom_t *dom);
-/* Whether request `token` is out, so its answer would run a task. */
+/* Whether request `token` is out on an active binding. Delivery still requires
+ * a quiescent provider boundary and an admissible engine task. */
 bool os64_dom_fetch_waiting(const os64_dom_t *dom, uint32_t token);
 
 #pragma GCC visibility pop

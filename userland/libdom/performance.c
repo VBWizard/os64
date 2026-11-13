@@ -11,13 +11,15 @@
  * microsecond clock (options.now_us) against it. Both now() and timeOrigin
  * are coarsened to 100 microseconds, the resolution HR-Time recommends for
  * a context that is not cross-origin isolated, which none here is.
+ * Live clock requests refuse inactive documents; explicit mark/measure
+ * timestamps and saved navigation timing remain readable after departure.
  *
  * THE ENTRIES. Marks and measures are kept in the order made, in an engine
  * object the registry holds, so the collector sees what they hold: one
  * with no prototype, which no page is ever handed, counted in C; an
  * entry's own state (its name, times and detail) is engine memory traced
  * by the collector, as an Event's is. The navigation entry is made once and
- * reads the host's timing as it stands whenever asked. A query answers the
+ * reads live host timing while active, then retains the last sample. A query answers the
  * matching entries in the order of their startTime, ties in the order
  * made. Nothing else is recorded: `resource`, `paint` and every other type
  * answers an empty list, which is what a browser that records none of them
@@ -92,8 +94,7 @@ static bool page_is(const os64_dom_t *dom, const char *prefix)
 
 static uint64_t now_us(const os64_dom_t *dom)
 {
-    if (dom->options.now_us != NULL) return dom->options.now_us(dom->options.host_opaque);
-    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) * 1000 : 0;
+    return d_host_now_us(dom);
 }
 
 /* Microseconds as milliseconds, to the 100 microseconds HR-Time
@@ -111,9 +112,22 @@ double d_performance_now(const os64_dom_t *dom)
 
 static void timing_read(const os64_dom_t *dom, os64_dom_timing_t *t)
 {
-    os64_memset(t, 0, sizeof(*t));
-    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) t->at[i] = OS64_DOM_TIMING_NOT_YET;
-    if (dom->options.timing != NULL) dom->options.timing(dom->options.host_opaque, t);
+    *t = dom->timing_seen;
+    os64_dom_t *owner = (os64_dom_t *)dom;
+    if (dom->options.timing != NULL && d_provider_enter(owner)) {
+        os64_memset(t, 0, sizeof(*t));
+        for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) t->at[i] = OS64_DOM_TIMING_NOT_YET;
+        dom->options.timing(dom->options.host_opaque, t);
+        owner->timing_seen = *t;
+        d_provider_leave(owner);
+    }
+}
+
+static bool current_time(os64_dom_t *dom, JSContext *ctx, double *time)
+{
+    if (!d_require_active(dom, ctx)) return false;
+    *time = d_performance_now(dom);
+    return d_require_active(dom, ctx);
 }
 
 /* An attribute of `timing`'s, as milliseconds since the Unix epoch
@@ -399,6 +413,7 @@ typedef struct {
     JSValue anchor, callback;
     JSValue *entries;
     uint32_t count, cap, script;
+    os64_dom_t *report_owner;
     uint8_t mode, kinds;
     bool dropped_owed;
 } DObserver;
@@ -523,6 +538,17 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = 0; i < count && !JS_IsException(result); i++) {
         DObserver *o = JS_GetOpaque(notify[i], os64_js_class_id(&observer_slot));
         if (o == NULL || o->count == 0) continue;
+        int eligible = d_delivery_eligible(dom, ctx, o->callback);
+        if (eligible <= 0) {
+            /* Consume obsolete entries without allocating an author-facing
+             * list, retaining the observer itself and its registration. */
+            values_free(dom->engine, o->entries, o->count);
+            o->entries = NULL;
+            o->count = o->cap = 0;
+            o->dropped_owed = false;
+            if (eligible < 0 && !report_pending(o->report_owner, ctx, o->script)) result = JS_EXCEPTION;
+            continue;
+        }
         /* This browser drops no entry (marks and measures are kept without
          * limit, and the navigation entry's buffer holds the one there
          * is), so a count owed is 0. */
@@ -540,16 +566,17 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
         }
         o->dropped_owed = false;
         uint32_t script = o->script;
+        os64_dom_t *report_owner = o->report_owner;
         JSValue callback = JS_DupValue(ctx, o->callback);
         JSValueConst args[3] = {list, notify[i], options};
-        DScripts before = d_script_enter(dom, script);
+        DScripts before = d_script_enter(report_owner, script);
         JSValue called = JS_Call(ctx, callback, notify[i], 3, args);
-        d_script_leave(dom, &before, false);
+        d_script_leave(report_owner, &before, false);
         JS_FreeValue(ctx, callback);
         JS_FreeValue(ctx, list);
         JS_FreeValue(ctx, options);
         if (!JS_IsException(called)) JS_FreeValue(ctx, called);
-        else if (!report_pending(dom, ctx, script)) result = JS_EXCEPTION;
+        else if (!report_pending(report_owner, ctx, script)) result = JS_EXCEPTION;
     }
     for (uint32_t i = 0; i < count; i++) JS_FreeValue(ctx, notify[i]);
     d_free(dom, notify);
@@ -564,7 +591,7 @@ static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValu
  * with an exception pending only when the runtime is stopping. */
 static int queue_task(os64_dom_t *dom, JSContext *ctx)
 {
-    if (dom->performance_task_queued) return 0;
+    if (!d_delivery_active(dom) || dom->performance_task_queued) return 0;
     JSValue data[1] = {dom->anchor->value};
     JSValue fired = JS_NewCFunctionData(ctx, observer_task, 0, 0, 1, data);
     if (!JS_IsException(fired) && d_timer_add(dom, ctx, fired, 0) != 0) {
@@ -695,7 +722,9 @@ static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
         d_error(ctx, "SyntaxError", "A mark may not take a name of PerformanceTiming's");
         goto done;
     }
-    if (JS_IsUndefined(start)) time = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+    if (JS_IsUndefined(start)) {
+        if (!current_time(dom, ctx, &time)) goto done;
+    }
     else if (time < 0) {
         JS_ThrowTypeError(ctx, "A mark's startTime may not be negative");
         goto done;
@@ -780,7 +809,7 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
         ok = mark_time(dom, ctx, member[3], &begin);
         if (ok == 0) ok = duration_time(ctx, duration);
         end = begin + duration;
-    } else end = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+    } else if (!current_time(dom, ctx, &end)) ok = -1;
     JS_FreeValue(ctx, end_mark);
     if (ok == 0) {
         if (has_start) ok = mark_time(dom, ctx, member[3], &begin);
@@ -941,7 +970,10 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
     if (JS_GetOpaque(self, os64_js_class_id(&performance_slot)) == NULL)
         return JS_ThrowTypeError(ctx, "Expected the Performance object");
     switch (magic) {
-    case M_NOW: return JS_NewFloat64(ctx, d_performance_now(dom));
+    case M_NOW: {
+        double time;
+        return current_time(dom, ctx, &time) ? JS_NewFloat64(ctx, time) : JS_EXCEPTION;
+    }
     case M_TIME_ORIGIN: return JS_NewFloat64(ctx, coarse(dom->time_origin_epoch_us));
     case M_TIMING: return JS_DupValue(ctx, dom->performance_timing->value);
     case M_NAVIGATION: return JS_DupValue(ctx, dom->performance_navigation->value);
@@ -1079,18 +1111,22 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     /* A mark's and a measure's detail are structured clones. */
     if (d_clone_setup(dom, ctx, global) < 0) return -1;
-    /* The time origin, read once. */
-    os64_dom_timing_t t;
-    timing_read(dom, &t);
-    if (dom->options.timing != NULL) {
-        dom->time_origin_us = t.origin_us;
-        dom->time_origin_epoch_us = t.origin_epoch_us;
-    } else {
-        os64_time_t wall;
-        dom->time_origin_us = now_us(dom);
-        dom->time_origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
-            ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
-            : 0;
+    /* Staged installation uses the caller's copied creation snapshot. */
+    if (!dom->installing) {
+        for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) dom->timing_seen.at[i] = OS64_DOM_TIMING_NOT_YET;
+        os64_dom_timing_t t;
+        timing_read(dom, &t);
+        if (dom->options.timing != NULL) {
+            dom->time_origin_us = t.origin_us;
+            dom->time_origin_epoch_us = t.origin_epoch_us;
+            dom->clock_seen_us = t.origin_us;
+        } else {
+            os64_time_t wall;
+            dom->time_origin_us = now_us(dom);
+            dom->time_origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
+                ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
+                : 0;
+        }
     }
 
     /* The prototypes: Performance's, the entries', timing's, navigation's. */
@@ -1240,7 +1276,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "A PerformanceObserver needs a callback function");
-    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    os64_dom_t *report_owner;
+    uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     JSClassID id = os64_js_class_id(&observer_slot);
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
@@ -1255,6 +1292,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->anchor = JS_DupValue(ctx, dom->anchor->value);
     o->callback = JS_DupValue(ctx, argv[0]);
     o->script = script;
+    o->report_owner = report_owner;
     JS_SetOpaque(object, o);
     return object;
 }
@@ -1525,6 +1563,19 @@ int d_performance_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueCons
         return -1;
     return JS_IsException(interface_of(ctx, global, "PerformanceObserverEntryList", 0, NULL, list->value,
                                        JS_UNDEFINED)) ? -1 : 0;
+}
+
+void d_performance_cancel(os64_dom_t *dom)
+{
+    for (uint32_t i = 0; i < dom->performance_observer_count; ++i) {
+        DObserver *o = JS_GetOpaque(dom->performance_observers[i], os64_js_class_id(&observer_slot));
+        if (!o) continue;
+        values_free(dom->engine, o->entries, o->count);
+        o->entries = NULL;
+        o->count = o->cap = 0;
+        o->dropped_owed = false;
+    }
+    dom->performance_task_queued = false;
 }
 
 /* Before the engine goes: the registered observers, which the list holds. */

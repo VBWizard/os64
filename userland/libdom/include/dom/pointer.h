@@ -15,14 +15,16 @@ typedef struct {
     os64_dom_event_t event;
     const os64_html_node_t *hit;
 } os64_dom_pointer_sample_t;
-/* The browser's default follows a dispatched mouse/activation event, outside
- * listener execution but within the sample's task. It may update native
- * widgets; it must not start a nested script task. False abandons the packet.
- * node/event are borrowed for this call. */
+/* A native default follows mouse/activation listeners, or runs directly for
+ * quiet hover. It may update native widgets; it must not start a nested script
+ * task. The callback holds a provider
+ * loan through its borrowed node/event; retirement stops later defaults in the
+ * packet. False abandons the packet. */
 typedef bool (*os64_dom_pointer_default_t)(void *opaque, const os64_html_node_t *node,
                                           const os64_dom_event_t *event, bool prevented);
 /* ran reports whether a script task was opened; quiet hover still updates
- * native state and its default without creating a script task. */
+ * native state and its default without creating a script task. Inactive input
+ * is discarded with ran=false; provider-reentrant input is refused. */
 os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *, const os64_dom_pointer_sample_t *,
                                             os64_dom_pointer_default_t, void *, bool *ran, os64_js_outcome_t *);
 /* A host interruption is recorded without allocating or calling script. The

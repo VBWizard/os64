@@ -34,8 +34,13 @@ Hosts detach provider hooks only after active entries/checkpoints return,
 and release exported values before root destruction as before. Retirement
 cannot clear cancellation, allocator flags or an interrupt outcome. Tests
 cover surviving siblings, pending retired jobs and modules, retained direct
-functions and clean root teardown in both profiles. DOM-specific departure
-and failed installation cleanup remain separate F.3b work.
+functions and clean root teardown in both profiles. libdom's departure finish
+waits for engine quiescence and native walks/provider loans before releasing
+obsolete tasks and detaching providers. Staged DOM installation failures keep
+closed native shells and backing, while releasing candidate registry roots
+and restoring shared lookup/dispatcher state. Neither operation frees a realm
+slot or its context; the cluster drains before engine destruction and frees
+its native owners afterward. See [libdom's lifecycle](../libdom/LIBDOM.md).
 
 ## Detection and reclamation
 

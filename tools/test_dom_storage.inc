@@ -869,7 +869,7 @@ static void dom_storage_page_code_cases(void)
 }
 
 /* A commit that could not even write its change list down (no memory)
- * waits COMMIT_MS for the next: the host's loop is told a time to wait
+ * waits OS64_DOM_STORAGE_COMMIT_MS for the next: the host's loop is told a time to wait
  * for, not "now" turn after turn. */
 static void dom_storage_commit_memory_cases(void)
 {

@@ -100,9 +100,47 @@ static JSValue staging_at_cap(JSContext *context, JSValueConst self, int argc, J
     return JS_UNDEFINED;
 }
 
+static os64_js_status_t staging_native_install(os64_js_realm_t *realm, JSContext *context, void *opaque)
+{
+    (void)realm;
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue function = JS_NewCFunctionDataNeutral(context, retirement_native_step, 1, 0, 0, NULL);
+    if (JS_IsException(function)) { JS_FreeValue(context, global); return OS64_JS_EXCEPTION; }
+    int result = JS_SetPropertyStr(context, global, "neutral", function);
+    JS_FreeValue(context, global);
+    if (result < 0) return OS64_JS_EXCEPTION;
+    const char *source = "Promise.resolve().then(neutral)";
+    JSValue value = JS_Eval(context, source, os64_strlen(source), "private-native-continuation", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(value)) return OS64_JS_EXCEPTION;
+    JS_FreeValue(context, value);
+    return *(bool *)opaque ? OS64_JS_ADMISSION_REFUSED : OS64_JS_OK;
+}
+
+static void staging_native_cases(unsigned policy)
+{
+    for (unsigned abort = 0; abort < 2; ++abort) {
+        os64_js_realm_t *a, *b, *c, *candidate = NULL;
+        os64_js_runtime_t *runtime = retirement_fixture(policy, 100, &a, &b, &c);
+        if (!runtime) return;
+        os64_js_outcome_t out;
+        check(os64_js_realm_stage(runtime, OS64_JS_ABI_ID, 256 * 1024, &candidate, &out) == OS64_JS_OK,
+              "native continuation candidate staged");
+        retirement_native_hits = 0;
+        bool refuse = abort != 0;
+        check(os64_js_realm_setup(candidate, OS64_JS_ABI_ID, staging_native_install, &refuse, &out) ==
+              (refuse ? OS64_JS_ADMISSION_REFUSED : OS64_JS_OK), "neutral candidate setup result");
+        check(retirement_native_hits == (refuse ? 0u : 1u) &&
+              out.jobs_discarded == (refuse ? 1u : 0u), "neutral ownership preserves candidate commit and abort tagging");
+        check(realm_execute(a, "true", &out) == OS64_JS_OK && retirement_native_hits == (refuse ? 0u : 1u),
+              "aborted neutral continuation cannot escape into sibling checkpoint");
+        os64_js_destroy(runtime);
+    }
+}
+
 static void staging_cases(void)
 {
     for (unsigned policy = 0; policy < 2; policy++) {
+        staging_native_cases(policy);
         for (unsigned mode = 0; mode < 5; mode++) {
             os64_js_realm_t *a, *b, *c;
             os64_js_runtime_t *runtime = retirement_fixture(policy, 100, &a, &b, &c);

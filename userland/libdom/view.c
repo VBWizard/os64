@@ -49,18 +49,20 @@ static int expose(JSContext *ctx, JSValueConst global, const char *name, int len
 
 // ── The view ────────────────────────────────────────────────────────────
 
-static os64_dom_view_t view_now(const os64_dom_t *dom)
+static os64_dom_view_t view_now(os64_dom_t *dom)
 {
     os64_dom_view_t v;
     os64_memset(&v, 0, sizeof(v));
-    if (dom->view.read != NULL)
+    if (dom->view.read != NULL && d_provider_enter(dom)) {
         dom->view.read(dom->view.opaque, &v);
+        d_provider_leave(dom);
+    }
     return v;
 }
 
 void os64_dom_set_view(os64_dom_t *dom, const os64_dom_view_provider_t *view)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (view != NULL) dom->view = *view;
     else os64_memset(&dom->view, 0, sizeof(dom->view));
     dom->view_seen = view_now(dom);
@@ -134,12 +136,14 @@ static int scroll_options(JSContext *ctx, JSValueConst options, bool *has_left, 
 // layout it made is charged to the script. With no provider, nothing.
 static JSValue view_scroll_to(os64_dom_t *dom, JSContext *ctx, double x, double y)
 {
+    if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
     if (dom->view.scroll == NULL) return JS_UNDEFINED;
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!budget(dom, ctx) || !d_provider_begin(dom, ctx)) return JS_EXCEPTION;
     os64_dom_geometry_stats_t cost = {0};
     bool ready = dom->view.scroll(dom->view.opaque, x, y, &cost);
+    d_provider_leave(dom);
     charge(dom, cost.layouts, cost.elapsed_us);
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!budget(dom, ctx) || !d_require_active(dom, ctx)) return JS_EXCEPTION;
     if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
     return JS_UNDEFINED;
 }
@@ -228,7 +232,7 @@ void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t
 
 void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->computed = provider;
     dom->computed_opaque = opaque;
 }
@@ -251,10 +255,11 @@ static int snapshot_of(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     s->refused = false;
     s->layouts = s->elapsed_us = 0;
     os64_memset(s->put, 0, sizeof(s->put));
-    if (!budget(dom, ctx)) return -1;
+    if (!budget(dom, ctx) || !d_provider_begin(dom, ctx)) return -1;
     bool ready = dom->computed(dom->computed_opaque, element, s);
+    d_provider_leave(dom);
     charge(dom, s->layouts, s->elapsed_us);
-    if (!budget(dom, ctx)) return -1;
+    if (!budget(dom, ctx) || !d_require_active(dom, ctx)) return -1;
     if (s->refused) {
         d_error(ctx, "QuotaExceededError", "No room for a computed style");
         return -1;
@@ -895,13 +900,15 @@ static int scroll_owner(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 static JSValue element_scroll_to(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int owner,
                                  double x, double y, bool by)
 {
+    if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
     if (owner == SCROLLS_VIEW) return view_scroll_to(dom, ctx, x, y);
     if (owner != SCROLLS_OWN || dom->view.scroll_element == NULL) return JS_UNDEFINED;
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!budget(dom, ctx) || !d_provider_begin(dom, ctx)) return JS_EXCEPTION;
     os64_dom_geometry_stats_t cost = {0};
     bool ready = dom->view.scroll_element(dom->view.opaque, element, x, y, by, &cost);
+    d_provider_leave(dom);
     charge(dom, cost.layouts, cost.elapsed_us);
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!budget(dom, ctx) || !d_require_active(dom, ctx)) return JS_EXCEPTION;
     if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
     return JS_UNDEFINED;
 }
@@ -1032,7 +1039,9 @@ static JSValue view_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
             if (n->kind == OS64_HTML_ELEMENT) return d_wrap(dom, ctx, n);
         return JS_NULL;
     }
+    if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
     os64_dom_view_t v = view_now(dom);
+    if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
     switch (magic) {
     case V_SCROLL_X: case V_PAGE_X_OFFSET: return JS_NewFloat64(ctx, v.scroll_x);
     case V_SCROLL_Y: case V_PAGE_Y_OFFSET: return JS_NewFloat64(ctx, v.scroll_y);
@@ -1106,11 +1115,11 @@ static void *media_grow(void *ctx, void *old, size_t old_size, size_t new_size)
     return grown;
 }
 
-static bool media_matches(const os64_dom_t *dom, const DMedia *m, const os64_dom_view_t *v)
+static bool media_matches(os64_dom_t *dom, const DMedia *m, const os64_dom_view_t *v)
 {
     garb_env_t env = {.width = v->width, .height = v->height, .dark = v->dark,
                       .reduced_motion = v->reduced_motion, .scripting = dom->options.scripting};
-    d_screen_media(dom, &env.device_width, &env.device_height, &env.resolution);
+    if (!d_screen_media(dom, &env.device_width, &env.device_height, &env.resolution)) return false;
     return !m->unread && garb_media_text_matches(m->query, env);
 }
 
@@ -1229,6 +1238,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         if (argc < 1) return JS_ThrowTypeError(ctx, "matchMedia needs a query");
         DString query = {0};
         if (!d_string(dom, ctx, argv[0], &query)) return JS_EXCEPTION;
+        if (!d_require_active(dom, ctx)) { d_string_free(dom, &query); return JS_EXCEPTION; }
         media_sweep(dom);
         // Serialised once, into the binding's own storage (media_grow);
         // NULL is a list libgarb could not read whole.
@@ -1254,6 +1264,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         m->media = media;
         os64_dom_view_t v = view_now(dom);
         m->matches = media_matches(dom, m, &v);
+        if (!d_require_active(dom, ctx)) { JS_FreeValue(ctx, object); media_free(dom, m); return JS_EXCEPTION; }
         if (dom->media_last != NULL) dom->media_last->next = m;
         else dom->media = m;
         dom->media_last = m;
@@ -1265,8 +1276,11 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     switch (magic) {
     case M_MEDIA: return JS_NewString(ctx, m->media);
     case M_MATCHES: {
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
         os64_dom_view_t v = view_now(dom);
-        return JS_NewBool(ctx, media_matches(dom, m, &v));
+        if (!d_require_active(dom, ctx)) return JS_EXCEPTION;
+        bool matches = media_matches(dom, m, &v);
+        return d_require_active(dom, ctx) ? JS_NewBool(ctx, matches) : JS_EXCEPTION;
     }
     case M_ADD_LISTENER: case M_REMOVE_LISTENER:
         return d_listener_change(dom, ctx, self, argc > 0 ? argv[0] : JS_UNDEFINED, magic == M_ADD_LISTENER);
@@ -1383,9 +1397,10 @@ static bool hears_change(const DValue *entry)
 bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
-    if (dom == NULL || outcome == NULL || dom->closed || !dom->options.modern || dom->view.read == NULL)
+    if (!d_delivery_active(dom) || outcome == NULL || !dom->options.modern || dom->view.read == NULL)
         return false;
     os64_dom_view_t now = view_now(dom), *seen = &dom->view_seen;
+    if (!d_delivery_active(dom)) return false;
     // The resize steps, then the scroll steps (HTML § Update the rendering).
     if (now.width != seen->width || now.height != seen->height) {
         seen->width = now.width;
@@ -1417,6 +1432,7 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
         for (DMedia *m = dom->media; m != NULL; m = m->next) {
             if (m->collected && m->entry == NULL) continue;
             bool matches = media_matches(dom, m, &now);
+            if (!d_delivery_active(dom)) return false;
             if (matches != m->matches) {
                 m->matches = matches;
                 m->owed = !m->owed;     // a change and its undoing owe nothing

@@ -719,7 +719,7 @@ enum {
 
 void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->text_rects = provider;
     dom->text_rects_opaque = opaque;
 }
@@ -758,7 +758,12 @@ static int text_rects(JSContext *ctx, Rects *r, const os64_html_node_t *n, size_
     if (dom->text_rects == NULL) return 0;
     double few[4 * 8];
     os64_dom_geometry_stats_t cost = {0};
+    if (!d_provider_begin(dom, ctx)) return -1;
     size_t count = dom->text_rects(dom->text_rects_opaque, n, from, to, few, 8, &cost);
+    d_provider_leave(dom);
+    dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, cost.layouts);
+    dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
+    if (!d_require_active(dom, ctx)) return -1;
     const double *source = few;
     double *more = NULL;
     if (count > 8) {
@@ -768,14 +773,15 @@ static int text_rects(JSContext *ctx, Rects *r, const os64_html_node_t *n, size_
             return -1;
         }
         os64_dom_geometry_stats_t again = {0};
+        if (!d_provider_begin(dom, ctx)) { d_free(dom, more); return -1; }
         size_t got = dom->text_rects(dom->text_rects_opaque, n, from, to, more, count, &again);
-        cost.layouts = rect_add_sat(cost.layouts, again.layouts);
-        cost.elapsed_us = rect_add_sat(cost.elapsed_us, again.elapsed_us);
+        d_provider_leave(dom);
+        dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, again.layouts);
+        dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, again.elapsed_us);
+        if (!d_require_active(dom, ctx)) { d_free(dom, more); return -1; }
         count = got < count ? got : count;
         source = more;
     }
-    dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, cost.layouts);
-    dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
     int result = rects_room(r, count) < 0 ? (d_error(ctx, "QuotaExceededError", "DOM range quota exceeded"), -1) : 0;
     if (result == 0) {
         os64_memcpy(r->v + r->count * 4, source, count * 4 * sizeof(double));
