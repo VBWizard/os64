@@ -244,11 +244,22 @@ mutants = [
      '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd',
      '    case GARB_BACKGROUND_SIZE: {\n        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);\n        flow_backgrounds_t *gd', FLOW),
     ('a-mask-position-repaints-past-its-box', 'userland/libflow/motion.c',
-     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
-     '    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
     ('a-mask-position-does-not-tick', 'userland/libflow/motion.c',
-     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BORDER_TOP_COLOR:',
-     '    case GARB_BORDER_TOP_COLOR:', FLOW),
+     '    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:\n    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    # A size repaints in place and ticks: a layout for a value a layout
+    # places repaints the whole view (MASKS.md § 5).
+    ('a-size-repaints-past-its-box', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_LEFT_RADIUS:',
+     '    case GARB_BORDER_TOP_LEFT_RADIUS:', FLOW),
+    ('a-mask-size-does-not-tick', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_BACKGROUND_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    ('a-background-size-does-not-tick', 'userland/libflow/motion.c',
+     '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
+     '    case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

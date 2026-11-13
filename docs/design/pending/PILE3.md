@@ -1892,8 +1892,8 @@ what they do to the page's structure is fixed for their life:
 
 - every property any of its animations sets is one of the TICK SET: the
   transform's four properties and `transform-origin`, `opacity`,
-  `background-color`, `background-position`, `mask-position` (MASKS.md
-  § 5), the four border colours and
+  `background-color`, `background-position` and `-size`, `mask-position`
+  and `-size` (MASKS.md § 5), the four border colours and
   `box-shadow`. None is inherited, so no other element's style reads
   them — but by keyword, so
 - no child takes one of them by `inherit` (FStyled.taken): the child's

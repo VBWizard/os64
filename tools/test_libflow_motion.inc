@@ -3412,7 +3412,7 @@ static void motion_incomplete_cases(void)
 // lists mixed as matrices, an origin and the individual three, opacity over
 // a value underneath and in steps, colours with currentColor at one end,
 // background positions of 2 and 3 items mixed to 6, a mask's positions
-// the same, shadows in
+// the same, both sizes, shadows in
 // currentColor, a hold between equal keyframes, an element inside a
 // turned one, and an inline-block turning on its line, whose frame is its
 // atom's. `w`, last on the page, moves by layouts.
@@ -3427,6 +3427,8 @@ static const char kTickPage[] = MOTION_STYLE
     "to{background-color:rgba(0,0,255,.5);border-color:green}}"
     "@keyframes pos{from{background-position:0 0,10px 20%}to{background-position:50% 3em,1px 2px,30% 40%}}"
     "@keyframes mpos{from{mask-position:0 0,10px 20%}to{-webkit-mask-position:50% 3em,1px 2px,30% 40%}}"
+    "@keyframes msize{from{mask-size:10px auto,20% 30%}to{mask-size:40px auto,1em 2px,5px 50%}}"
+    "@keyframes bsize{from{background-size:auto 10px}to{background-size:auto 3em,50% 40px}}"
     "@keyframes glow{from{box-shadow:0 0 0 red}"
     "to{box-shadow:5px 5px 10px 2px currentColor,inset 0 0 4px blue}}"
     "@keyframes origin{from{transform-origin:0 0}"
@@ -3438,9 +3440,9 @@ static const char kTickPage[] = MOTION_STYLE
     "#c{opacity:.3;animation:fade 700ms steps(4) infinite,over 900ms infinite}"
     "#d{color:orange;border:3px solid;animation:hue 1.1s cubic-bezier(.3,1.6,.6,-.4) infinite}"
     "#e{background-image:linear-gradient(red,blue),linear-gradient(green,white);"
-    "animation:pos 1.7s infinite}"
+    "animation:pos 1.7s infinite,bsize 1.1s infinite}"
     "#f{color:teal;animation:glow 1s infinite reverse}"
-    "#m{mask-image:linear-gradient(red,blue),radial-gradient(red,#0000);animation:mpos 1.3s infinite}"
+    "#m{mask-image:linear-gradient(red,blue),radial-gradient(red,#0000);animation:mpos 1.3s infinite,msize .9s infinite}"
     "#g{font-size:12px;animation:origin 1.5s infinite}"
     "#h{animation:hold 1s ease infinite}"
     "#wrap{transform:rotate(10deg)}"
@@ -3455,6 +3457,23 @@ static const char *const kTickIds[] = {"a", "b", "c", "d", "e", "f", "m", "g", "
 static const flow_frame_t *own_frame(const flow_box_t *b)
 {
     return b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM ? b->frame : NULL;
+}
+
+// Whether two size lists are one, field by field.
+static bool sizes_same(const flow_backgrounds_t *x, const flow_backgrounds_t *y)
+{
+    if (x->nsize != y->nsize)
+        return false;
+    for (int32_t i = 0; i < x->nsize; i++) {
+        const flow_bg_size_t *p = &x->size[i], *q = &y->size[i];
+        if (p->fit != q->fit)
+            return false;
+        for (int k = 0; k < 2; k++)
+            if (p->size[k].kind != q->size[k].kind || p->size[k].value != q->size[k].value ||
+                p->size[k].offset != q->size[k].offset)
+                return false;
+    }
+    return true;
 }
 
 // What first differs between two styles in the tick set, to the bit, or
@@ -3483,6 +3502,10 @@ static const char *tick_differs(const flow_style_t *a, const flow_style_t *b)
         (x->nx > 0 && memcmp(x->x, y->x, (size_t)x->nx * sizeof(*x->x)) != 0) ||
         (x->ny > 0 && memcmp(x->y, y->y, (size_t)x->ny * sizeof(*x->y)) != 0))
         return "the mask's position";
+    if (!sizes_same(&a->backgrounds, &b->backgrounds))
+        return "the background's size";
+    if (!sizes_same(&a->masks.layers, &b->masks.layers))
+        return "the mask's size";
     if (a->nbox_shadows != b->nbox_shadows ||
         (a->nbox_shadows > 0 &&
          memcmp(a->box_shadows, b->box_shadows, (size_t)a->nbox_shadows * sizeof(*a->box_shadows)) != 0))
@@ -3597,8 +3620,8 @@ static void motion_tick_condition_cases(void)
          't'},
         {"every property of the tick set ticks together",
          "@keyframes k{to{transform:scale(2);translate:1px;rotate:5deg;scale:2;transform-origin:0 0;"
-         "opacity:.5;background-color:red;background-position:1px 2px;mask-position:3px 4px;"
-         "border-color:blue;box-shadow:1px 1px red}}"
+         "opacity:.5;background-color:red;background-position:1px 2px;background-size:5px 6px;"
+         "mask-position:3px 4px;mask-size:7px 8px;border-color:blue;box-shadow:1px 1px red}}"
          "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
          "<div id=x></div>", true, 't'},
         {"a face that does not tick lays it out",
@@ -3610,10 +3633,14 @@ static void motion_tick_condition_cases(void)
          "@keyframes k{to{mask-position:10px 50%}}"
          "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
          "<div id=x></div>", true, 't'},
-        {"a mask's size is laid out, as a background's",
+        {"a mask's size ticks",
          "@keyframes k{to{mask-size:10px}}"
          "#x{mask-image:linear-gradient(red,red);animation:k 1s infinite}",
-         "<div id=x></div>", true, 'l'},
+         "<div id=x></div>", true, 't'},
+        {"a background's size ticks",
+         "@keyframes k{to{background-size:10px 20%}}"
+         "#x{background-image:linear-gradient(red,blue);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
         {"a colour is laid out, inherited",
          "@keyframes k{to{color:red;transform:none}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
          'l'},
@@ -4484,23 +4511,31 @@ static void motion_entries_cases(void)
                n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
         moving_close(&m);
     }
-    // A mask's position repaints in place too (MASKS.md § 5): what a mask
-    // paints is inside what its element already draws.
-    for (int below = 0; below < 2; below++) {
-        char html[1024];
-        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes slide{to{mask-position:20px 0}}"
-                 ".f{width:16px;height:16px;mask-image:linear-gradient(red,#0000);"
-                 "animation:slide 1s linear infinite}</style>%s<div class=f></div>",
-                 below ? "<div style='height:2000px'></div>" : "");
-        Moving m;
-        moving_open_for(&m, html, 100, false);
-        flow_motion_entry_t e;
-        int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, &e, 1);
-        expect(below ? "entries: a mask's position below the view is not counted"
-                     : "entries: a mask's position in view is counted",
-               n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
-        moving_close(&m);
-    }
+    // A mask's position and size, and a background's size, repaint in
+    // place too (MASKS.md § 5): what a mask or a background paints is
+    // inside what its element already draws.
+    static const char *const kPlaced[][2] = {
+        {"mask-position:20px 0", "a mask's position"},
+        {"mask-size:4px 4px", "a mask's size"},
+        {"background-size:4px 4px", "a background's size"},
+    };
+    for (size_t k = 0; k < sizeof(kPlaced) / sizeof(kPlaced[0]); k++)
+        for (int below = 0; below < 2; below++) {
+            char html[1024], name[160];
+            snprintf(html, sizeof(html), MOTION_STYLE "@keyframes slide{to{%s}}"
+                     ".f{width:16px;height:16px;mask-image:linear-gradient(red,#0000);"
+                     "background-image:linear-gradient(red,blue);"
+                     "animation:slide 1s linear infinite}</style>%s<div class=f></div>",
+                     kPlaced[k][0], below ? "<div style='height:2000px'></div>" : "");
+            Moving m;
+            moving_open_for(&m, html, 100, false);
+            flow_motion_entry_t e;
+            int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, &e, 1);
+            snprintf(name, sizeof(name), "entries: %s %s", kPlaced[k][1],
+                     below ? "below the view is not counted" : "in view is counted");
+            expect(name, n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
+            moving_close(&m);
+        }
     // More than `cap`: the count is all of them, `out` holds the first.
     Moving m;
     moving_open_for(&m, MOTION_STYLE "@keyframes spin{to{transform:rotate(360deg)}}"
