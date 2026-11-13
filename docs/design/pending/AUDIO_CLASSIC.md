@@ -426,7 +426,8 @@ scan enable the link believes is set.
 LE scanning. The Classic manager is smaller. With a bond and `automatic`:
 page the headphones at boot, after a retryable disconnection, and after a
 page they did not answer, on one ladder: 5 s doubling to 60 s, starting
-again at `READY`. Page scan is on as well, for headphones that call.
+again once a connection has lasted half a minute. Page scan is on as
+well, for headphones that call.
 
 The first cut paged once and then waited for their call, reasoning that a
 page is 5 s of radio time the keyboard shares. The P5 run of 2026-11-13
@@ -435,6 +436,11 @@ paged) and never once called, with no audio connection ever made to it.
 So an unanswered page is asked again. The cost is one page a minute while
 bonded headphones are off; `slot 2 disconnect` stops it, and it is the
 figure to look at first if a keyboard or mouse stutters once a minute.
+
+The ladder used to start again at `READY`, however brief. The P5's first
+run of part S showed what that costs: the headphones answered every page,
+hung up two seconds after `READY` (see § S, as built), and were paged
+again five seconds later, round and round every ten seconds.
 
 ### L, proof
 
@@ -665,7 +671,11 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
   them.
 - **One query a connection, made by us, and never retried on it.** At
   `READY` the host opens the SDP channel; the client starts when it is
-  open; DONE or FAILED closes it. A channel refused, unanswered, or closed
+  open; DONE or FAILED leaves it open, and what arrives on it afterwards
+  is ignored. The first cut closed it, and the Bose pair hung up (reason
+  0x13) two seconds after its last channel closed, every time: a link
+  with a channel on it is one they keep, and until A.3 opens AVDTP this
+  channel is the only one there is. A channel refused, unanswered, or closed
   before the answer is whole ends the query as "not made", with the
   reason in the status and the log (DEBTS). A link that drops mid-query
   takes the query with it and says nothing of it: the link's own line is

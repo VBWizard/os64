@@ -1341,7 +1341,8 @@ static void classic_unavailable(void)
 
 // Reconnection: a page once at boot; a drop the headphones may come back
 // from, and a page they did not answer, is paged after 5 s, then 10, 20,
-// 40, 60, 60; READY starts the ladder again; forget stops it; a drop they
+// 40, 60, 60; a connection that lasts half a minute starts the ladder
+// again, a shorter one does not; forget stops it; a drop they
 // will not come back from waits.
 static void classic_reconnection(void)
 {
@@ -1360,7 +1361,7 @@ static void classic_reconnection(void)
     assert(pages>=5 && pages<=8);     // 5, 10, 20, 40 s, then a minute apart
     CM.present=true; CM.has_key=true; memcpy(CM.key,PH_KEY,16);
     for(unsigned i=0;i<61000 && host.classic.phase!=BT_CLASSIC_READY;i++) step();
-    assert(host.classic.phase==BT_CLASSIC_READY && !host.classic_backoff_ms);
+    assert(host.classic.phase==BT_CLASSIC_READY && host.classic_backoff_ms);
     // A page the controller ends for a reason of its own waits for them.
     setup(); CM.present=false; CM.page_status=0x0d; classic_slot(&b,true);
     for(unsigned i=0;i<70000;i++) step();
@@ -1406,9 +1407,23 @@ static void classic_reconnection(void)
         assert(host.classic.phase==BT_CLASSIC_STOPPED && host.classic.retryable);
         stopped_at=now;
     }
-    // Back: READY starts the ladder again.
+    // Back, and gone again within moments: the ladder carries on where it
+    // was, so headphones that answer and hang up are not paged every few
+    // seconds.
     CM.present=true; CM.page_status=0;
     while(host.classic.phase!=BT_CLASSIC_READY && now<stopped_at+70000) step();
+    assert(host.classic.phase==BT_CLASSIC_READY && host.classic_backoff_ms==60000);
+    for(unsigned i=0;i<2000;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_READY && host.classic_backoff_ms==60000);
+    cm_disconn(0,0x13); step(); stopped_at=now;
+    assert(host.classic_page_at==stopped_at+60000);
+    // Back for half a minute: a connection that lasted starts the ladder again.
+    while(host.classic.phase!=BT_CLASSIC_READY && now<stopped_at+70000) step();
+    assert(host.classic.phase==BT_CLASSIC_READY);
+    uint64_t ready_at=now;
+    while(now<ready_at+29990) step();
+    assert(host.classic_backoff_ms==60000);
+    while(now<ready_at+30010) step();
     assert(host.classic.phase==BT_CLASSIC_READY && !host.classic_backoff_ms);
     cm_disconn(0,0x08); step(); stopped_at=now;
     assert(host.classic_page_at==stopped_at+5000);
@@ -1454,7 +1469,7 @@ static void classic_reconnection(void)
     // A bond made as another adapter is no bond: nothing is paged.
     setup(); bt_classic_bond_t other=b; other.local[0]^=1; classic_slot(&other,true);
     assert(!host.classic.bond.valid && !host.classic_auto && !host.classic_page_at && CM.scan==0);
-    puts("PASS: Classic reconnection pages once at boot, backs off 5 to 60 s after retryable drops, restarts at READY, stops at forget");
+    puts("PASS: Classic reconnection pages once at boot, backs off 5 to 60 s after retryable drops, starts over after a connection that lasted, stops at forget");
 }
 
 // Which slot takes which address, and what each command is refused for.
@@ -1596,13 +1611,14 @@ static void keyboard_completes(void)
 
 // READY, and with no typing: we open the SDP channel, it is configured both
 // ways, the query goes out and is answered in three parts, the channel is
-// closed, and nothing more is asked on that connection.
+// left open (headphones hang up a link whose last channel closed), and
+// nothing more is asked on that connection.
 static void classic_sdp_query(void)
 {
     classic_bonded();
     sdp_settle();
     assert(HP.conn_reqs==1 && HP.out_open && HP.sdp_requests==3 && HP.served==sizeof(HP_RECORD));
-    assert(HP.disc_reqs==1 && HP.out_closed && l2cap_all_free());
+    assert(HP.disc_reqs==0 && !HP.out_closed && !l2cap_all_free());
     assert(status_has(SDP_SINK_LINE) && status_has("sdp requests answered: 0 dropped: 0\n"));
     assert(!strcmp(host.sdp_line,SDP_SINK_LINE) && host.sdp_ended==1);
     const bt_sdp_sink_t *r=&host.sdp_result;

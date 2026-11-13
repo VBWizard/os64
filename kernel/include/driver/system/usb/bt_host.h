@@ -101,10 +101,11 @@ typedef struct {
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at
     // classic_page_at (0: no page owed), the wait doubling from 5 s to
-    // 60 s and starting again at READY. Any other end waits for them to
-    // call (page scan is on) or for the user.
+    // 60 s and starting again once a connection has lasted half a minute
+    // (classic_ready_since: when this READY began, 0 when not READY). Any
+    // other end waits for them to call (page scan is on) or for the user.
     bool classic_auto;
-    uint64_t classic_page_at;
+    uint64_t classic_page_at, classic_ready_since;
     uint32_t classic_backoff_ms;
     // Why the Classic bond file could not be read or written (a string
     // literal, from whoever keeps the file); NULL when it could.

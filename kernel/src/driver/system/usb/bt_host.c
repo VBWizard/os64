@@ -227,12 +227,14 @@ static void host_sdp_ended(bt_host_t *h,const char *not_made)
 }
 // One query a connection, ours: once the link is READY, a channel to the
 // headphones' SDP; once it is open, the client, with the smaller of the two
-// MTUs; its requests queued as the channel's payload slot frees; when it is
-// DONE or FAILED, the channel closed. A channel refused, unanswered or
-// closed before the answer is whole ends the query as not made, and it is
-// not asked again on this connection. The client's own five seconds start
-// only when the channel is open, so L2CAP's ten-second RTX is not inside
-// them.
+// MTUs; its requests queued as the channel's payload slot frees. When it is
+// DONE or FAILED the channel is LEFT OPEN, and whatever arrives on it after
+// that is ignored: headphones hang up a link whose last channel has just
+// closed, and until an audio channel exists this one is all there is. A
+// channel refused, unanswered or closed before the answer is whole ends the
+// query as not made, and it is not asked again on this connection. The
+// client's own five seconds start only when the channel is open, so
+// L2CAP's ten-second RTX is not inside them.
 static void host_sdp_step(bt_host_t *h,uint64_t now)
 {
     bt_l2cap_t *l=&h->l2cap;
@@ -252,11 +254,7 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     bool gone=c->state==BT_L2CAP_FREE || !c->outgoing || c->cid!=h->sdp_cid;
     // An answer finished on the way in counts even if the channel went in
     // the same pass.
-    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {
-        if(!gone) bt_l2cap_close(l,ch,now);
-        host_sdp_ended(h,NULL);
-        return;
-    }
+    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) { host_sdp_ended(h,NULL); return; }
     if(gone) {
         // Refused or unanswered while connecting (L2CAP records why; ours
         // is the only channel this part asks for), or closed later.
@@ -280,10 +278,7 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
         host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
     }
     state=bt_sdp_client_state(&h->sdp);
-    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {     // the client's own limit, this tick
-        bt_l2cap_close(l,ch,now);
-        host_sdp_ended(h,NULL);
-    }
+    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) host_sdp_ended(h,NULL);     // the client's own limit, this tick
 }
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)
@@ -470,11 +465,21 @@ static void host_retire(bt_host_t *h,bool usb_done)
 }
 // Reconnection (bt_host.h): one page at classic_page_at, when the link is
 // quiescent and nothing else is setting up or scanning.
+#define BT_HOST_CLASSIC_SETTLED_MS 30000
 static void host_classic_policy(bt_host_t *h,uint64_t now)
 {
     bt_classic_t *c=&h->classic;
     if(!h->initialized || h->failed || !h->classic_available) return;
-    if(c->phase==BT_CLASSIC_READY) { h->classic_backoff_ms=0; h->classic_page_at=0; return; }
+    // The ladder starts again only once a connection has LASTED: headphones
+    // that answer the page and hang up moments later would otherwise be
+    // paged every few seconds for as long as they did it.
+    if(c->phase==BT_CLASSIC_READY) {
+        if(!h->classic_ready_since) h->classic_ready_since=now?now:1;
+        if(now-h->classic_ready_since>=BT_HOST_CLASSIC_SETTLED_MS) h->classic_backoff_ms=0;
+        h->classic_page_at=0;
+        return;
+    }
+    h->classic_ready_since=0;
     // An attempt under way, theirs or ours, takes the place of a page that
     // was owed: how IT ends decides whether another is. Without this, a
     // page armed by an unanswered one fired after their call had ended in

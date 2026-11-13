@@ -518,8 +518,9 @@ virtio because its drain waits for the tick.
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
   headphones, 178 mutants): `scan classic`, then `slot 2 bond <address>`,
   `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
-  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute, until
-  `READY` or `slot 2 disconnect`: the P5's pair held our key and never
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
+  wait starts over once a connection has lasted half a minute), until
+  `slot 2 disconnect`: the P5's pair held our key and never
   called us back. Secure Simple Pairing as
   a device with no keys or display; the bond is
   `/home/bluetooth_bond_classic`; page scan is on only while a bond is
@@ -532,7 +533,8 @@ virtio because its drain waits for the tick.
   (`bt_l2cap.c`, pure, Basic mode, admitting SDP alone for now), and at
   `READY` the host asks the headphones one SDP question a connection, what
   Audio Sink they are (`bt_sdp.c`, pure, which also answers for os64's
-  Audio Source record); L2CAP sends only after the LE peers have had their
+  Audio Source record), and LEAVES THAT CHANNEL OPEN: the P5's pair hangs
+  up a link whose last channel has closed; L2CAP sends only after the LE peers have had their
   turn, while the count gives it a buffer and a send slot is left for LE.
   Slot 2's status shows L2CAP's channels and counters, the `sdp:` line
   (versions, features and AVDTP's PSM, or why the query was not made) and
