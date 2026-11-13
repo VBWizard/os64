@@ -36,7 +36,8 @@ typedef enum {
     BT_L2CAP_FREE,
     BT_L2CAP_CONNECTING,        // our Connection Request is out
     BT_L2CAP_CONFIG,            // connected; configuring, or open when both directions are done
-    BT_L2CAP_DISCONNECTING      // our Disconnection Request is out
+    BT_L2CAP_DISCONNECTING,     // our Disconnection Request is out
+    BT_L2CAP_AWAITING_SECURITY  // the peer's request was answered "pending" until the link is encrypted
 } bt_l2cap_state_t;
 
 typedef struct {
@@ -55,10 +56,18 @@ typedef struct {
     uint8_t our_rounds, peer_rounds;
     // Our one outstanding request on this channel: its identifier (0 =
     // none) and its timer, which runs from when the request is handed to
-    // the controller.
+    // the controller (or at once, if a full queue dropped it).
     uint8_t ident;
     bool timer;
     uint64_t deadline;
+    // AWAITING_SECURITY: the identifier of the peer's Connection Request,
+    // which the deferred answer carries, and when the wait ends in a
+    // security block.
+    uint8_t peer_ident;
+    uint64_t security_deadline;
+    // CONFIG: when a channel still not open is closed. Set on entering
+    // configuration, and again when the peer reconfigures an open channel.
+    uint64_t config_deadline;
     // The one data payload waiting for a turn, as a whole PDU.
     bool queued;
     uint16_t queued_bytes;
@@ -68,7 +77,7 @@ typedef struct {
 
 typedef struct {
     uint8_t bytes;
-    uint8_t channel;            // the channel a request belongs to; 0xff for an answer
+    uint8_t channel;            // the channel a request belongs to; 0xff for an answer, or a request no channel stands behind
     uint8_t ident;
     bool request;
     uint8_t pdu[BT_L2CAP_SIGNAL_BYTES];
@@ -102,12 +111,17 @@ typedef struct bt_l2cap {
     uint32_t unfinished;        // a PDU abandoned by a new start
     uint32_t closed_cid;        // data on a CID that is not an open channel, or over the MTU we stated for it
     uint32_t fixed_cid;         // connectionless or reserved CIDs
-    uint32_t strays;            // a response that answers nothing outstanding
+    uint32_t strays;            // a response that answers nothing outstanding (a late success is also disconnected)
     uint32_t queue_full;        // signalling dropped for want of a queue row
 } bt_l2cap_t;
 
 void bt_l2cap_init(bt_l2cap_t *l);                       // the link came up: everything cleared, admitted PSMs too
 void bt_l2cap_reset(bt_l2cap_t *l);                      // the link went down: every channel closed, nothing queued
+// Encryption on: every channel awaiting security is sent its deferred
+// success and enters configuration, its deadline counted from the last
+// `now` handed in. Off: nothing already open is touched, channels already
+// waiting go on waiting, and the next request for a PSM other than SDP
+// waits too.
 void bt_l2cap_set_encrypted(bt_l2cap_t *l, bool on);
 // Which PSMs an incoming Connection Request may open, a list of
 // BT_L2CAP_ADMITTED. A PSM that is not valid (Vol 3 Part A § 4.2), or one
@@ -131,7 +145,8 @@ void bt_l2cap_receive(bt_l2cap_t *l, const uint8_t *acl, size_t bytes, uint64_t 
 // not valid.
 int bt_l2cap_connect(bt_l2cap_t *l, uint16_t psm, uint64_t now);
 // A connected channel is sent a Disconnection Request and freed when it is
-// answered or its timer runs out; one still connecting is freed at once.
+// answered or its timer runs out; one still connecting is freed at once;
+// one awaiting security is refused (security block) and freed.
 void bt_l2cap_close(bt_l2cap_t *l, unsigned channel, uint64_t now);
 bool bt_l2cap_is_open(const bt_l2cap_t *l, unsigned channel);          // both directions configured
 bool bt_l2cap_is_free(const bt_l2cap_t *l, unsigned channel);
@@ -141,7 +156,9 @@ uint16_t bt_l2cap_peer_mtu(const bt_l2cap_t *l, unsigned channel);     // the la
 // taken, or it is too long.
 bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t bytes);
 
-// One step: runs the timers, then, when `may_send`, hands AT MOST ONE whole
+// One step: runs the timers (a request unanswered for 10 s, or 60 s after
+// "pending"; security awaited for 30 s; configuration unfinished after
+// 30 s), then, when `may_send`, hands AT MOST ONE whole
 // L2CAP PDU (4-byte header + payload, never more than BT_L2CAP_MTU+4) to
 // `send`: signalling before data, oldest first.
 typedef void (*bt_l2cap_send_t)(void *context, const uint8_t *pdu, size_t bytes);

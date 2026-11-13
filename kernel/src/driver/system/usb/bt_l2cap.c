@@ -6,8 +6,10 @@
 #include "driver/system/usb/bt_l2cap.h"
 #include "strings/sprintf.h"
 
-#define L2_RTX_MS      2000
+#define L2_RTX_MS      10000
 #define L2_ERTX_MS     60000
+#define L2_SECURITY_MS 30000        // how long a request answered "pending" waits for encryption
+#define L2_CONFIG_MS   30000        // how long a connected channel may take to open
 #define L2_ROUNDS      4
 #define L2_MIN_MTU     48
 #define L2_DEFAULT_MTU 672          // a peer that states no MTU takes this much (§ 5.1)
@@ -62,8 +64,9 @@ static void l2_sig_purge(bt_l2cap_t *l, unsigned ch)
 }
 
 // One command as a whole C-frame. A full queue drops it, newest first; a
-// dropped request's timer starts at once, so the channel is recovered by
-// RTX as if the request had been lost on the air.
+// dropped request of a channel's starts that channel's timer at once, so
+// the channel is recovered by RTX as if the request had been lost on the
+// air.
 static void l2_signal(bt_l2cap_t *l, int ch, uint8_t code, uint8_t ident, const uint8_t *data, size_t n)
 {
     bool request=code==L2_CONN_REQ || code==L2_CONF_REQ || code==L2_DISC_REQ;
@@ -117,11 +120,33 @@ static void l2_send_config(bt_l2cap_t *l, unsigned i)
     l2_request(l,i,L2_CONF_REQ,d,sizeof(d));
 }
 
+// The final Connection Response to the peer's request that waited for
+// security: success with our CID, or a refusal with none.
+static void l2_answer_waiting(bt_l2cap_t *l, unsigned i, uint16_t result)
+{
+    bt_l2cap_channel_t *c=&l->ch[i];
+    uint8_t r[8];
+    l2_put(r,result ? 0 : c->cid); l2_put(r+2,c->dcid); l2_put(r+4,result); l2_put(r+6,0);
+    l2_signal(l,-1,L2_CONN_RSP,c->peer_ident,r,sizeof(r));
+}
+
+// A channel connected, by either side: its configuration begins, with our
+// request and the deadline for the whole of it.
+static void l2_enter_config(bt_l2cap_t *l, unsigned i)
+{
+    bt_l2cap_channel_t *c=&l->ch[i];
+    c->state=BT_L2CAP_CONFIG; c->ident=0; c->timer=false;
+    c->config_deadline=l->now+L2_CONFIG_MS;
+    l2_send_config(l,i);
+}
+
 // A connected channel is asked to disconnect and held until it is
-// answered or its timer runs out; one not yet connected is simply freed.
+// answered or its timer runs out; one awaiting security is refused; one
+// not yet connected is simply freed.
 static void l2_close(bt_l2cap_t *l, unsigned i)
 {
     bt_l2cap_channel_t *c=&l->ch[i];
+    if(c->state==BT_L2CAP_AWAITING_SECURITY) l2_answer_waiting(l,i,0x0003);
     if(c->state!=BT_L2CAP_CONFIG) { l2_free(l,i); return; }
     uint8_t d[4];
     l2_put(d,c->dcid); l2_put(d+2,c->cid);
@@ -168,31 +193,40 @@ static bool l2_admitted(const bt_l2cap_t *l, uint16_t psm)
 
 // ── Signalling commands ─────────────────────────────────────────────────────
 
+// The peer's Connection Request. A PSM other than SDP on a link not yet
+// encrypted is not refused: it is answered "pending, authentication
+// pending" with a channel held for it, as the stacks headphones are tested
+// against do, and gets its final answer when encryption arrives or its
+// wait runs out.
 static void l2_conn_req(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n)
 {
     if(n!=4) { l2_not_understood(l,ident); return; }
-    uint16_t psm=l2_u16(d), scid=l2_u16(d+2), result;
+    uint16_t psm=l2_u16(d), scid=l2_u16(d+2), result, status=0;
     int i=-1;
     bool scid_taken=false;
     for(unsigned k=0;k<BT_L2CAP_CHANNELS;k++)
         if(l->ch[k].state!=BT_L2CAP_FREE && l->ch[k].dcid==scid) scid_taken=true;
     if(!l2_psm_valid(psm) || !l2_admitted(l,psm)) result=0x0002;
-    else if(psm!=BT_L2CAP_PSM_SDP && !l->encrypted) result=0x0003;
     else if(scid<L2_CID_DYNAMIC) result=0x0006;
     else if(scid_taken) result=0x0007;
     else if((i=l2_free_channel(l))<0) result=0x0004;
+    else if(psm!=BT_L2CAP_PSM_SDP && !l->encrypted) { result=0x0001; status=0x0001; }
     else result=0x0000;
     uint8_t r[8];
     uint16_t cid=0;
-    if(!result) {
+    if(result<=0x0001) {
         bt_l2cap_channel_t *c=&l->ch[i];
         l2_wipe(c,sizeof(*c));
-        c->state=BT_L2CAP_CONFIG; c->psm=psm; c->cid=cid=l2_new_cid(l); c->dcid=scid;
+        c->psm=psm; c->cid=cid=l2_new_cid(l); c->dcid=scid;
         c->our_mtu=BT_L2CAP_MTU;
+        if(result) {
+            c->state=BT_L2CAP_AWAITING_SECURITY; c->peer_ident=ident;
+            c->security_deadline=l->now+L2_SECURITY_MS;
+        }
     }
-    l2_put(r,cid); l2_put(r+2,scid); l2_put(r+4,result); l2_put(r+6,0);
+    l2_put(r,cid); l2_put(r+2,scid); l2_put(r+4,result); l2_put(r+6,status);
     l2_signal(l,-1,L2_CONN_RSP,ident,r,sizeof(r));
-    if(!result) l2_send_config(l,(unsigned)i);
+    if(!result) l2_enter_config(l,(unsigned)i);
 }
 
 static void l2_conn_rsp(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n)
@@ -200,12 +234,25 @@ static void l2_conn_rsp(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
     if(n!=8) { l2_not_understood(l,ident); return; }
     uint16_t dcid=l2_u16(d), scid=l2_u16(d+2), result=l2_u16(d+4);
     int i=l2_by_ident(l,ident,BT_L2CAP_CONNECTING);
-    if(i<0 || l->ch[i].cid!=scid) { l->strays++; return; }
+    if(i<0 || l->ch[i].cid!=scid) {
+        l->strays++;
+        // A success for a channel we no longer hold (closed, or timed out,
+        // while connecting) leaves the peer's end open: it is asked to
+        // disconnect, with no channel of ours behind the request, so its
+        // answer is a stray too. A success naming a channel we do hold is
+        // a duplicate and is left alone.
+        if(result==0x0000 && dcid>=L2_CID_DYNAMIC && !l2_cid_used(l,scid)) {
+            uint8_t q[4];
+            l2_put(q,dcid); l2_put(q+2,scid);
+            l2_signal(l,-1,L2_DISC_REQ,l2_ident(l),q,sizeof(q));
+        }
+        return;
+    }
     bt_l2cap_channel_t *c=&l->ch[i];
     if(result==0x0001) { c->timer=true; c->deadline=l->now+L2_ERTX_MS; return; }
     if(result==0x0000 && dcid>=L2_CID_DYNAMIC) {
-        c->state=BT_L2CAP_CONFIG; c->dcid=dcid; c->ident=0; c->timer=false;
-        l2_send_config(l,(unsigned)i);
+        c->dcid=dcid;
+        l2_enter_config(l,(unsigned)i);
         return;
     }
     if(result==0x0000) { l->malformed++; result=0xfffd; }     // success naming a CID no channel may have
@@ -276,6 +323,7 @@ static void l2_conf_req(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
     if(c->peer_rounds>=L2_ROUNDS) { l2_close(l,(unsigned)i); return; }
     c->peer_rounds++;
     if(!c->peer_partial) c->peer_mtu_pending=L2_DEFAULT_MTU;
+    if(l2_open(c)) c->config_deadline=l->now+L2_CONFIG_MS;     // a reconfiguration gets its own time
     c->peer_done=false;
     uint8_t r[BT_L2CAP_SIGNAL_BYTES];
     l2_put(r,c->dcid);
@@ -324,7 +372,7 @@ static void l2_disc_req(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
     uint16_t dcid=l2_u16(d), scid=l2_u16(d+2);
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
         bt_l2cap_channel_t *c=&l->ch[i];
-        if((c->state==BT_L2CAP_CONFIG || c->state==BT_L2CAP_DISCONNECTING) && c->cid==dcid && c->dcid==scid) {
+        if(c->state>=BT_L2CAP_CONFIG && c->cid==dcid && c->dcid==scid) {
             l2_signal(l,-1,L2_DISC_RSP,ident,d,4);
             l2_free(l,i);
             return;
@@ -503,7 +551,15 @@ void bt_l2cap_reset(bt_l2cap_t *l)
     l->next_ident=1; l->next_cid=L2_CID_DYNAMIC;
 }
 
-void bt_l2cap_set_encrypted(bt_l2cap_t *l, bool on) { l->encrypted=on; }
+void bt_l2cap_set_encrypted(bt_l2cap_t *l, bool on)
+{
+    l->encrypted=on;
+    if(!on) return;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) if(l->ch[i].state==BT_L2CAP_AWAITING_SECURITY) {
+        l2_answer_waiting(l,i,0x0000);
+        l2_enter_config(l,i);
+    }
+}
 
 void bt_l2cap_admit(bt_l2cap_t *l, uint16_t psm, bool admit)
 {
@@ -563,10 +619,18 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
 {
     l->now=now;
     // An unanswered Connection or Disconnection Request frees the channel;
-    // an unanswered Configuration Request closes it. The link stays.
+    // an unanswered Configuration Request, or a configuration still not
+    // finished at its deadline, closes it, once, whichever comes first. A
+    // wait for security that runs out is refused. The link stays.
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
         bt_l2cap_channel_t *c=&l->ch[i];
-        if(c->state==BT_L2CAP_FREE || !c->timer || now<c->deadline) continue;
+        if(c->state==BT_L2CAP_AWAITING_SECURITY) {
+            if(now>=c->security_deadline) l2_close(l,i);
+            continue;
+        }
+        bool unanswered=c->timer && now>=c->deadline;
+        bool unfinished=c->state==BT_L2CAP_CONFIG && !l2_open(c) && now>=c->config_deadline;
+        if(c->state==BT_L2CAP_FREE || (!unanswered && !unfinished)) continue;
         if(c->state==BT_L2CAP_CONNECTING) { l->refused=0xffff; l->refused_psm=c->psm; }
         if(c->state==BT_L2CAP_CONFIG) l2_close(l,i);
         else l2_free(l,i);
@@ -616,7 +680,7 @@ static const char *l2_refusal_text(uint16_t r)
 
 size_t bt_l2cap_status(const bt_l2cap_t *l, char *out, size_t cap)
 {
-    static const char *const states[]={"free","connecting","configuring","disconnecting"};
+    static const char *const states[]={"free","connecting","configuring","disconnecting","awaiting security"};
     size_t at=0;
     int n=snprintf(out,cap,"l2cap: link %s, %s\n",l->up ? "up" : "down",l->encrypted ? "encrypted" : "not encrypted");
     if(n>0) at=(size_t)n;
@@ -624,7 +688,7 @@ size_t bt_l2cap_status(const bt_l2cap_t *l, char *out, size_t cap)
         const bt_l2cap_channel_t *c=&l->ch[i];
         if(c->state==BT_L2CAP_FREE) continue;
         n=snprintf(out+at,cap-at,"channel %u: %s psm %04x cid %04x peer cid %04x %s mtu ours %u peer %u%s%s\n",
-                   i,l2_open(c) ? "open" : states[c->state & 3],c->psm,c->cid,c->dcid,
+                   i,l2_open(c) ? "open" : c->state<=BT_L2CAP_AWAITING_SECURITY ? states[c->state] : "?",c->psm,c->cid,c->dcid,
                    c->outgoing ? "outgoing" : "incoming",(unsigned)c->our_mtu,(unsigned)c->peer_mtu,
                    c->ours_done ? "" : " (ours unconfigured)",c->peer_done ? "" : " (peer's unconfigured)");
         if(n>0) at+=(size_t)n;

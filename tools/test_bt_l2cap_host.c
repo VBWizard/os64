@@ -281,23 +281,256 @@ static void test_peer_opens_avdtp(void)
     peer_cmd(CONN_REQ, 4, BYTES(W(0x0019), W(0x0060)));
     expect_cmd(CONN_RSP, 4, BYTES(W(0), W(0x0060), W(2), W(0)));
     bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    // Admitted, not yet encrypted: pending, authentication pending, with a
+    // channel held and our CID named.
     peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
-    expect_cmd(CONN_RSP, 5, BYTES(W(0), W(0x0060), W(3), W(0)));
-    CHECK(bt_l2cap_is_free(&L, 0));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    expect_nothing();
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_AWAITING_SECURITY);
+    CHECK(!bt_l2cap_is_free(&L, 0) && !bt_l2cap_is_open(&L, 0));
+    peer_data(0x0040, BYTES(1));
+    CHECK_EQ(delivered, 0);
+    // Encryption: the final answer under the request's identifier, then
+    // configuration exactly as for a channel accepted at once, to open.
+    T += 3000;
+    tick(true);
     bt_l2cap_set_encrypted(&L, true);
-    peer_cmd(CONN_REQ, 6, BYTES(W(0x0019), W(0x0060)));
-    expect_cmd(CONN_RSP, 6, BYTES(W(0x0040), W(0x0060), W(0), W(0)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(0), W(0)));
     expect_cmd(CONF_REQ, 1, BYTES(W(0x0060), W(0), 0x01, 2, MTU_OPT));
     CHECK_EQ(L.ch[0].psm, 0x0019);
-    // Taken back out: refused again.
-    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, false);
+    CHECK_EQ(L.ch[0].config_deadline, T + 30000);
+    peer_cmd(CONF_RSP, 1, BYTES(W(0x0040), W(0), W(0)));
+    peer_cmd(CONF_REQ, 6, BYTES(W(0x0040), W(0), 0x01, 2, W(895)));
+    expect_cmd(CONF_RSP, 6, BYTES(W(0x0060), W(0), W(0)));
+    CHECK(bt_l2cap_is_open(&L, 0));
+    CHECK_EQ(bt_l2cap_peer_mtu(&L, 0), 895);
+    peer_data(0x0040, BYTES(1));
+    CHECK_EQ(delivered, 1);
+    CHECK_EQ(got_psm, 0x0019);
+    // Once encrypted, accepted at once.
     peer_cmd(CONN_REQ, 7, BYTES(W(0x0019), W(0x0061)));
-    expect_cmd(CONN_RSP, 7, BYTES(W(0), W(0x0061), W(2), W(0)));
-    // Encryption turned off: a security block again.
+    expect_cmd(CONN_RSP, 7, BYTES(W(0x0041), W(0x0061), W(0), W(0)));
+    expect_cmd(CONF_REQ, 2, BYTES(W(0x0061), W(0), 0x01, 2, MTU_OPT));
+    // Taken back out: refused.
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, false);
+    peer_cmd(CONN_REQ, 8, BYTES(W(0x0019), W(0x0062)));
+    expect_cmd(CONN_RSP, 8, BYTES(W(0), W(0x0062), W(2), W(0)));
+    // Encryption turned off: the next request waits again; the channels
+    // already open are untouched.
     bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
     bt_l2cap_set_encrypted(&L, false);
-    peer_cmd(CONN_REQ, 8, BYTES(W(0x0019), W(0x0062)));
-    expect_cmd(CONN_RSP, 8, BYTES(W(0), W(0x0062), W(3), W(0)));
+    peer_cmd(CONN_REQ, 9, BYTES(W(0x0019), W(0x0062)));
+    expect_cmd(CONN_RSP, 9, BYTES(W(0x0042), W(0x0062), W(1), W(1)));
+    CHECK(bt_l2cap_is_open(&L, 0));
+}
+
+static void test_security_pending(void)
+{
+    // Pending, then the wait runs out: a security block 30 s after the request.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_SDP, true);
+    uint64_t at = T;
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    // The same source CID again while it waits: already allocated.
+    peer_cmd(CONN_REQ, 7, BYTES(W(0x0019), W(0x0060)));
+    expect_cmd(CONN_RSP, 7, BYTES(W(0), W(0x0060), W(7), W(0)));
+    // A source CID outside the dynamic range is refused for that, not left waiting.
+    peer_cmd(CONN_REQ, 8, BYTES(W(0x0019), W(0x0030)));
+    expect_cmd(CONN_RSP, 8, BYTES(W(0), W(0x0030), W(6), W(0)));
+    bt_l2cap_set_encrypted(&L, false);            // still not encrypted: nothing to answer
+    expect_nothing();
+    T = at + 29999; tick(true);
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_AWAITING_SECURITY);
+    T = at + 30000;
+    expect_cmd(CONN_RSP, 5, BYTES(W(0), W(0x0060), W(3), W(0)));
+    CHECK(bt_l2cap_is_free(&L, 0));
+    expect_nothing();
+    // Encryption after that answers nothing.
+    bt_l2cap_set_encrypted(&L, true);
+    expect_nothing();
+
+    // SDP needs no encryption: accepted at once beside a channel that waits.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_SDP, true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    peer_cmd(CONN_REQ, 6, BYTES(W(0x0001), W(0x0070)));
+    expect_cmd(CONN_RSP, 6, BYTES(W(0x0041), W(0x0070), W(0), W(0)));
+    expect_cmd(CONF_REQ, 1, BYTES(W(0x0070), W(0), 0x01, 2, MTU_OPT));
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_AWAITING_SECURITY);
+
+    // Pending, then the link goes down: freed, nothing said.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    bt_l2cap_reset(&L);
+    CHECK(bt_l2cap_is_free(&L, 0));
+    CHECK(!bt_l2cap_wants_send(&L));
+    bt_l2cap_set_encrypted(&L, true);
+    expect_nothing();
+    T += 40000;
+    expect_nothing();
+
+    // Two waiting, answered in order when encryption arrives.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    peer_cmd(CONN_REQ, 9, BYTES(W(0x0019), W(0x0061)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    expect_cmd(CONN_RSP, 9, BYTES(W(0x0041), W(0x0061), W(1), W(1)));
+    bt_l2cap_set_encrypted(&L, true);
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(0), W(0)));
+    expect_cmd(CONF_REQ, 1, BYTES(W(0x0060), W(0), 0x01, 2, MTU_OPT));
+    expect_cmd(CONN_RSP, 9, BYTES(W(0x0041), W(0x0061), W(0), W(0)));
+    expect_cmd(CONF_REQ, 2, BYTES(W(0x0061), W(0), 0x01, 2, MTU_OPT));
+    // Encryption announced again changes nothing.
+    bt_l2cap_set_encrypted(&L, true);
+    expect_nothing();
+
+    // A waiting channel the host closes is refused; one the peer gives up
+    // on is answered and freed.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    peer_cmd(CONN_REQ, 6, BYTES(W(0x0019), W(0x0061)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0x0040), W(0x0060), W(1), W(1)));
+    expect_cmd(CONN_RSP, 6, BYTES(W(0x0041), W(0x0061), W(1), W(1)));
+    bt_l2cap_close(&L, 0, T);
+    expect_cmd(CONN_RSP, 5, BYTES(W(0), W(0x0060), W(3), W(0)));
+    CHECK(bt_l2cap_is_free(&L, 0));
+    peer_cmd(DISC_REQ, 7, BYTES(W(0x0041), W(0x0061)));
+    expect_cmd(DISC_RSP, 7, BYTES(W(0x0041), W(0x0061)));
+    CHECK(bt_l2cap_is_free(&L, 1));
+    bt_l2cap_set_encrypted(&L, true);
+    expect_nothing();
+
+    // With every channel taken, no resources, not pending.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    for (int i = 0; i < BT_L2CAP_CHANNELS; i++) CHECK(bt_l2cap_connect(&L, 1, T) == i);
+    for (int i = 0; i < BT_L2CAP_CHANNELS; i++) tick(true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    expect_cmd(CONN_RSP, 5, BYTES(W(0), W(0x0060), W(4), W(0)));
+    char text[512];
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_AVDTP, true);
+    peer_cmd(CONN_REQ, 5, BYTES(W(0x0019), W(0x0060)));
+    bt_l2cap_status(&L, text, sizeof(text));
+    CHECK(strstr(text, "channel 0: awaiting security psm 0019") != NULL);
+}
+
+static void test_config_deadline(void)
+{
+    // The peer accepts our configuration and never sends its own.
+    fresh();
+    we_connect();
+    uint64_t at = T;
+    peer_cmd(CONF_RSP, 2, BYTES(W(0x0040), W(0), W(0)));
+    T = at + 29999; tick(true);
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
+    T = at + 30000;
+    expect_cmd(DISC_REQ, 3, BYTES(W(0x0070), W(0x0040)));
+    expect_nothing();
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_DISCONNECTING);
+    peer_cmd(DISC_RSP, 3, BYTES(W(0x0070), W(0x0040)));
+    CHECK(bt_l2cap_is_free(&L, 0));
+    // The same for a channel the peer opened.
+    fresh();
+    bt_l2cap_admit(&L, BT_L2CAP_PSM_SDP, true);
+    at = T;
+    peer_connects(BT_L2CAP_PSM_SDP, 9);
+    peer_cmd(CONF_RSP, 1, BYTES(W(0x0040), W(0), W(0)));
+    T = at + 29999; tick(true);
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
+    T = at + 30000;
+    expect_cmd(DISC_REQ, 2, BYTES(W(0x0055), W(0x0040)));
+    // Our request's RTX and the deadline running out in one tick close once.
+    fresh();
+    CHECK_EQ(bt_l2cap_connect(&L, 1, T), 0);
+    expect_cmd(CONN_REQ, 1, BYTES(W(0x0001), W(0x0040)));
+    at = T;
+    peer_cmd(CONN_RSP, 1, BYTES(W(0x0070), W(0x0040), W(0), W(0)));
+    for (int i = 0; i < 20; i++) { T += 1000; tick(false); }
+    expect_cmd(CONF_REQ, 2, BYTES(W(0x0070), W(0), 0x01, 2, MTU_OPT));     // at +20 s: its RTX ends at +30 s
+    T = at + 29999; tick(true);
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
+    T = at + 30000;
+    expect_cmd(DISC_REQ, 3, BYTES(W(0x0070), W(0x0040)));
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_DISCONNECTING);
+    expect_nothing();
+    T = at + 39999; tick(true);
+    CHECK(!bt_l2cap_is_free(&L, 0));
+    T = at + 40000; tick(true);
+    CHECK(bt_l2cap_is_free(&L, 0));
+    // An open channel has no deadline.
+    fresh();
+    open_outgoing();
+    T += 120000;
+    expect_nothing();
+    CHECK(bt_l2cap_is_open(&L, 0));
+    // A reconfiguration gets its own 30 s from when it begins.
+    at = T;
+    peer_cmd(CONF_REQ, 20, BYTES(W(0x0040), W(1)));
+    expect_cmd(CONF_RSP, 20, BYTES(W(0x0070), W(1), W(0)));
+    CHECK(!bt_l2cap_is_open(&L, 0));
+    T = at + 29999; tick(true);
+    CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
+    T = at + 30000;
+    expect_cmd(DISC_REQ, 3, BYTES(W(0x0070), W(0x0040)));
+}
+
+static void test_late_success(void)
+{
+    // A channel closed while connecting, then the peer's success arrives:
+    // the peer's end is asked to disconnect, nothing of ours is allocated.
+    fresh();
+    CHECK_EQ(bt_l2cap_connect(&L, 1, T), 0);
+    expect_cmd(CONN_REQ, 1, BYTES(W(0x0001), W(0x0040)));
+    bt_l2cap_close(&L, 0, T);
+    peer_cmd(CONN_RSP, 1, BYTES(W(0x0070), W(0x0040), W(0), W(0)));
+    CHECK_EQ(L.strays, 1);
+    for (unsigned i = 0; i < BT_L2CAP_CHANNELS; i++) CHECK(bt_l2cap_is_free(&L, i));
+    expect_cmd(DISC_REQ, 2, BYTES(W(0x0070), W(0x0040)));
+    expect_nothing();
+    T += 30000;                      // no timer behind it
+    expect_nothing();
+    peer_cmd(DISC_RSP, 2, BYTES(W(0x0070), W(0x0040)));
+    CHECK_EQ(L.strays, 2);
+    CHECK_EQ(L.malformed, 0);
+    // A request that timed out, answered late.
+    fresh();
+    CHECK_EQ(bt_l2cap_connect(&L, 1, T), 0);
+    expect_cmd(CONN_REQ, 1, BYTES(W(0x0001), W(0x0040)));
+    T += 10000; tick(true);
+    CHECK(bt_l2cap_is_free(&L, 0));
+    peer_cmd(CONN_RSP, 1, BYTES(W(0x0071), W(0x0040), W(0), W(0)));
+    expect_cmd(DISC_REQ, 2, BYTES(W(0x0071), W(0x0040)));
+    // Not a success, or a destination outside the dynamic range: nothing to disconnect.
+    peer_cmd(CONN_RSP, 3, BYTES(W(0x0072), W(0x0041), W(1), W(0)));
+    peer_cmd(CONN_RSP, 4, BYTES(W(0x0072), W(0x0041), W(2), W(0)));
+    peer_cmd(CONN_RSP, 5, BYTES(W(0x003f), W(0x0041), W(0), W(0)));
+    expect_nothing();
+    CHECK_EQ(L.strays, 4);
+    // A duplicate success for a channel we hold is left alone.
+    fresh();
+    open_outgoing();
+    peer_cmd(CONN_RSP, 1, BYTES(W(0x0070), W(0x0040), W(0), W(0)));
+    CHECK_EQ(L.strays, 1);
+    expect_nothing();
+    CHECK(bt_l2cap_is_open(&L, 0));
+    // With the queue full, counted and dropped.
+    fresh();
+    uint8_t c[64], f[80];
+    size_t n = 0;
+    for (int i = 0; i < 8; i++) { c[n++] = ECHO_REQ; c[n++] = (uint8_t)(i + 1); c[n++] = 0; c[n++] = 0; }
+    peer_pdu(f, frame(f, 1, c, n));
+    peer_cmd(CONN_RSP, 9, BYTES(W(0x0070), W(0x0040), W(0), W(0)));
+    CHECK_EQ(L.queue_full, 1);
+    CHECK_EQ(L.strays, 1);
 }
 
 static void test_connection_refusals(void)
@@ -421,9 +654,9 @@ static void test_rtx(void)
     CHECK(!bt_l2cap_is_free(&L, 0));
     expect_cmd(CONN_REQ, 1, BYTES(W(0x0001), W(0x0040)));
     uint64_t at = T;
-    T = at + 1999; tick(true);
+    T = at + 9999; tick(true);
     CHECK(!bt_l2cap_is_free(&L, 0));
-    T = at + 2000; tick(true);
+    T = at + 10000; tick(true);
     CHECK(bt_l2cap_is_free(&L, 0));
     CHECK_EQ(L.refused, 0xffff);
     CHECK(L.up);
@@ -435,15 +668,15 @@ static void test_rtx(void)
     // An unanswered Configuration Request closes the channel, whose
     // Disconnection Request frees it when that goes unanswered too.
     at = T;
-    T = at + 1999; tick(true);
+    T = at + 9999; tick(true);
     CHECK_EQ(L.ch[0].state, BT_L2CAP_CONFIG);
-    T = at + 2000;
+    T = at + 10000;
     expect_cmd(DISC_REQ, 4, BYTES(W(0x0071), W(0x0041)));
     CHECK_EQ(L.ch[0].state, BT_L2CAP_DISCONNECTING);
     at = T;
-    T = at + 1999; tick(true);
+    T = at + 9999; tick(true);
     CHECK(!bt_l2cap_is_free(&L, 0));
-    T = at + 2000; tick(true);
+    T = at + 10000; tick(true);
     CHECK(bt_l2cap_is_free(&L, 0));
     CHECK(L.up);
 }
@@ -1041,7 +1274,10 @@ static void test_queue(void)
     peer_pdu(f, frame(f, 1, c, n));
     CHECK_EQ(bt_l2cap_connect(&L, 1, T), 0);
     CHECK_EQ(L.queue_full, 1);
-    T += 2000;
+    T += 9999;
+    tick(false);
+    CHECK(!bt_l2cap_is_free(&L, 0));
+    T += 1;
     tick(false);
     CHECK(bt_l2cap_is_free(&L, 0));
 
@@ -1234,7 +1470,7 @@ static void random_signal(uint8_t *c, size_t *n)
 
 // How far the fuzz reached, so a fuzz that never opens a channel cannot pass
 // by testing nothing.
-static long fuzz_open, fuzz_delivered;
+static long fuzz_open, fuzz_delivered, fuzz_waiting;
 
 static void check_invariants(void)
 {
@@ -1245,7 +1481,11 @@ static void check_invariants(void)
             if (!(c->ours_done && c->peer_done && c->state == BT_L2CAP_CONFIG)) { failures++; printf("FAIL open without both configs\n"); }
             if (bt_l2cap_peer_mtu(&L, i) < 48) { failures++; printf("FAIL an open channel's peer MTU %u\n", bt_l2cap_peer_mtu(&L, i)); }
         }
-        if (c->state > BT_L2CAP_DISCONNECTING) { failures++; printf("FAIL state %u\n", c->state); }
+        if (c->state > BT_L2CAP_AWAITING_SECURITY) { failures++; printf("FAIL state %u\n", c->state); }
+        if (c->state == BT_L2CAP_AWAITING_SECURITY) {
+            fuzz_waiting++;
+            if (!c->peer_ident || L.encrypted) { failures++; printf("FAIL a channel waiting with identifier %u, encrypted %d\n", c->peer_ident, L.encrypted); }
+        }
         if (c->state != BT_L2CAP_FREE && c->cid < 0x40) { failures++; printf("FAIL cid %04x\n", c->cid); }
         if (c->our_mtu && (c->our_mtu < 48 || c->our_mtu > BT_L2CAP_MTU)) { failures++; printf("FAIL our mtu %u\n", c->our_mtu); }
         for (unsigned k = i + 1; k < BT_L2CAP_CHANNELS; k++)
@@ -1340,8 +1580,9 @@ static void fuzz(int rounds)
         fuzz_delivered += delivered;
         if (failures > 20) return;
     }
-    printf("fuzz: %ld open-channel observations, %ld deliveries\n", fuzz_open, fuzz_delivered);
-    if (rounds >= 100 && (fuzz_open < rounds || fuzz_delivered < rounds / 10)) {
+    printf("fuzz: %ld open-channel observations, %ld deliveries, %ld waiting for security\n",
+           fuzz_open, fuzz_delivered, fuzz_waiting);
+    if (rounds >= 100 && (fuzz_open < rounds || fuzz_delivered < rounds / 10 || fuzz_waiting < rounds / 10)) {
         failures++; printf("FAIL the fuzz did not reach open channels\n");
     }
 }
@@ -1353,6 +1594,9 @@ int main(int argc, char **argv)
     test_we_open_sdp_peers_first();
     test_peer_opens_sdp();
     test_peer_opens_avdtp();
+    test_security_pending();
+    test_config_deadline();
+    test_late_success();
     test_connection_refusals();
     test_outgoing_refused_and_pending();
     test_rtx();
