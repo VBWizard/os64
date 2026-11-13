@@ -396,8 +396,11 @@ int main(void)
             double m[6];
             int exact = t % 8 == 0;
             if (exact) {
-                static const double q[4][4] = {{0, 1, -1, 0}, {0, -1, 1, 0}, {-1, 0, 0, 1}, {1, 0, 0, -1}};
-                const double *e = q[rnd() % 4];
+                // Every quarter turn and mirror: the turns, the flips, the
+                // half turn and the two transposes.
+                static const double q[8][4] = {{0, 1, -1, 0}, {0, -1, 1, 0}, {-1, 0, 0, 1}, {1, 0, 0, -1},
+                                               {-1, 0, 0, -1}, {0, 1, 1, 0}, {0, -1, -1, 0}, {1, 0, 0, 1}};
+                const double *e = q[rnd() % 8];
                 m[0] = e[0];
                 m[1] = e[1];
                 m[2] = e[2];
@@ -485,6 +488,26 @@ int main(void)
         memcpy(was, d, 12 * 8 * 4);
         int ok = lay(d, 12, (os64_gui_rect_t){0, 0, 12, 8}, &s, m, 255) && memcmp(d, was, 12 * 8 * 4) == 0;
         expect("warp: a step past what fixed point holds is not stepped", ok);
+        free(d);
+        free(was);
+        group_free(&g);
+    }
+
+    // A tall sheet squeezed across and turned an eighth: its step fits
+    // fixed point, but the corners of its box go back billions of pixels
+    // from it — further than fixed point holds — and the clip cuts every
+    // row to nothing. So the box is worked pixel by pixel, never stepped
+    // from a corner, and nothing is laid.
+    {
+        Group g;
+        group_make(&g, 4, 4096, 0);
+        yonder_sheets_t s = {g.black, g.white, 4, 4096};
+        const double r = sqrt(0.5), m[6] = {r * 7.1e-7, r * 7.1e-7, -r, r, 3000, 10};
+        uint32_t *d = backdrop(300, 2000), *was = malloc(300 * 2000 * 4);
+        memcpy(was, d, 300 * 2000 * 4);
+        int ok = lay(d, 300, (os64_gui_rect_t){0, 0, 300, 2000}, &s, m, 255) &&
+                 memcmp(d, was, 300 * 2000 * 4) == 0;
+        expect("warp: a box whose corners go back past fixed point is not stepped", ok);
         free(d);
         free(was);
         group_free(&g);

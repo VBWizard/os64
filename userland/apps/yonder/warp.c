@@ -269,9 +269,10 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
         for (int32_t x = ax0; x < ax1; x++) {
             long double cx = x + 0.5L;
             long double u = back_u(inv, cx, cy, off), v = back_v(inv, cx, cy, off);
-            // Inside the sheets' landing a centre goes back inside the
-            // sheets; this holds the fixed point to what it can say should
-            // an inverse that does not undo `m` ever be handed in.
+            // A centre that goes back FAR or more is off the sheets, whose
+            // sides are below FAR: skipped before it is held in fixed
+            // point. A squeezed sheet's box has such centres, and so would
+            // an inverse that does not undo `m`.
             if (!near(u) || !near(v))
                 continue;
             int64_t U = fixed(u), V = fixed(v);
