@@ -4192,7 +4192,8 @@ static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, flow_point_
 }
 
 // What each element a tick changes paints, handed to `mark` in page
-// coordinates at `scroll`: a group's bounds (group_bounds) taken out
+// coordinates at `scroll` (and the canvas's possible owner whatever it
+// reaches, below): a group's bounds (group_bounds) taken out
 // through every matrix; any other element's boxes' overflow rects grown by
 // their ink and cut to their clips, as a group holds them (layer_reach);
 // either, in a filtered group, by that group's bounds (mark_filtered).
@@ -4220,16 +4221,31 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
                 mark(ctx, g, r);
             continue;
         }
+        bool marked = false;
         for (int32_t j = 0; j < e->nboxes; j++) {
             const flow_box_t *b = e->boxes[j];
             os64_gui_rect_t r;
-            if (b->unpainted || mark_filtered(t, b, scroll, &memo, bounds, mark, ctx) ||
-                !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
+            if (b->unpainted)
+                continue;
+            if (mark_filtered(t, b, scroll, &memo, bounds, mark, ctx)) {
+                marked = true;
+                continue;
+            }
+            if (!layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
                 continue;
             r = space_rect(b->frame, r, scroll);
-            if (r.w > 0 && r.h > 0)
+            if (r.w > 0 && r.h > 0) {
                 mark(ctx, b, r);
+                marked = true;
+            }
         }
+        // The element whose background the canvas may take paints the
+        // whole view wherever its box is, a box that reaches nothing among
+        // them — a body whose content is all positioned out of it: it is
+        // handed over with an empty rectangle, and the painter says
+        // whether it paints the view (may_own_canvas).
+        if (!marked && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))
+            mark(ctx, e->boxes[0], (os64_gui_rect_t){0, 0, 0, 0});
     }
     os64_free(bounds);
 }

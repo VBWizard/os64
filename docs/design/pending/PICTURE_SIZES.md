@@ -33,8 +33,10 @@ After every layout, the walk that already visits every box for sheet pictures
 (`css_pictures_under`) also asks each shown still raster how big it is drawn;
 and once more after pictures arrive that move nothing (a background never
 does), since no layout follows them (`pictures_judge_owed`, run by
-`pictures_settle`, once however many arrived). Its need is the largest, over
-all its uses, of
+`pictures_settle`, once however many arrived). A tick, which moves
+animations without a layout, does not ask, so a size that names a picture
+never ticks: libflow lays it out (`sizes_a_picture`). Its need is the
+largest, over all its uses, of
 
 - an `img`: the rectangle `object-fit` places it in, in device pixels at the
   laid zoom (the whole rectangle, cropped or not: `cover` draws past its box);

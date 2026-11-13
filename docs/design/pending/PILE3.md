@@ -1508,8 +1508,9 @@ And at the edges of what a page can write (10/14, for the input domain,
   when a frame is due, as often as a layout's cost allows. Every
   property moves correctly; a frame costs a layout.
 - **S8b, in place.** The properties that change only what is painted —
-  the transform's, `opacity`, the background's colour and position, the
-  border colours, `box-shadow`: nine animations in ten — move between
+  the transform's, `opacity`, the background's colour, position and size,
+  the mask's position and size, the border colours, `box-shadow`: nine
+  animations in ten — move between
   layouts: libflow rewrites the element's style, its frame and its ink,
   and the face repaints what moved.
 
@@ -1759,7 +1760,8 @@ and that is a change of structure: the face is due a layout at its end.
 `flow_motion_due(tree, view, scroll)` answers the earliest time an
 animation that can show in `view` shows another value. One that only
 repaints where its element draws — a colour, a fade, visibility, a
-background's position, the corners' curves — can show there when its
+background's or a mask's position and size, the corners' curves — can
+show there when its
 element can be seen: all its box paints, the ink its shadows and the
 like reach past it included, through any transform — for an inline
 element, whose pieces may
@@ -1974,7 +1976,10 @@ rectangle (§ The one dirty rectangle, below), and one outside the view
 would stretch it across the view — and the whole view for the canvas's
 owner, whose background it paints across the view, told by the
 painter's own rule from the box, asked at each mark: a tick may change
-which box that is, the root's background being what moves. An element out of view is marked
+which box that is, the root's background being what moves. libflow
+hands that element over whatever its boxes reach — with an empty
+rectangle when they reach nothing, as a body whose content is all
+positioned out of it does — so the painter is always asked. An element out of view is marked
 nothing, and a tick that marks nothing paints nothing. A tick that moved a frame places
 the page's live controls again (`forms_place`), so a field inside a
 sliding panel slides with it.

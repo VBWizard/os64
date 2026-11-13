@@ -4315,10 +4315,32 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     return r;
 }
 
+// Whether an animation of `m` sets a size whose layers in `s` name a
+// picture: how big a copy of a picture is kept is worked out after each
+// layout from the size it is drawn at (PICTURE_SIZES.md § The needed
+// size), so a picture's size moves by layouts. A gradient's is drawn at
+// whatever size it has.
+static bool sizes_a_picture(const FMotion *m, const flow_style_t *s)
+{
+    bool bg = false, mask = false;
+    for (int32_t a = 0; a < m->nanims; a++) {
+        bg |= f_props_has(&m->anims[a].props, GARB_BACKGROUND_SIZE);
+        mask |= f_props_has(&m->anims[a].props, GARB_MASK_SIZE);
+    }
+    for (int32_t i = 0; bg && i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).image != NULL)
+            return true;
+    for (int32_t i = 0; mask && i < flow_mask_layers(s); i++)
+        if (flow_mask_layer(s, i).layer.image != NULL)
+            return true;
+    return false;
+}
+
 // Whether the element's animations TICK (PILE3.md § Animations in place,
 // What ticks), `s` its style at the layout's time: every property they set
-// is of the tick set, none of their lists was dropped, and its background
-// is not cut to its text; then every keyframe is resolved — once each, as
+// is of the tick set, none of their lists was dropped, its background is
+// not cut to its text, and no size they set is a picture's
+// (sizes_a_picture); then every keyframe is resolved — once each, as
 // the mix resolves it, against the font size and colour the animations
 // leave, which they do not move — and kept for the ticks, none of their
 // lists refused. A child's `inherit` of one of them takes the ticks away
@@ -4334,6 +4356,8 @@ static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
     for (int32_t i = 0; i < flow_background_layers(s); i++)
         if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
             return true;
+    if (sizes_a_picture(m, s))
+        return true;
     for (int32_t a = 0; a < m->nanims; a++)
         for (int32_t j = 0; j < m->anims[a].nframes; j++) {
             const FResolved *r = keyframe_resolved(mix, a, j, s);

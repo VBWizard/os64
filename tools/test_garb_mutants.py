@@ -260,6 +260,12 @@ mutants = [
     ('a-background-size-does-not-tick', 'userland/libflow/motion.c',
      '    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:',
      '    case GARB_MASK_SIZE:\n    case GARB_BORDER_TOP_COLOR:', FLOW),
+    ('a-picture-size-ticks', STYLE,
+     '    if (sizes_a_picture(m, s))\n        return true;',
+     '    if (false && sizes_a_picture(m, s))\n        return true;', FLOW),
+    ('an-empty-canvas-owner-is-not-marked', FLOWC,
+     '        if (!marked && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))',
+     '        if (false && !marked && e->nboxes > 0 && !e->boxes[0]->unpainted && may_own_canvas(t, e->boxes[0]->node))', FLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

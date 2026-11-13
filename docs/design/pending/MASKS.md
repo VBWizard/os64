@@ -157,10 +157,11 @@ layers and its size; that is a measured follow-up, not this slice.
   code). Both are in the tick set and the in-place class beside
   `background-position` and `-size` (PILE3.md § Animations in place):
   only painting reads them, and what a mask paints is inside what its
-  element already draws, so their frames move without a layout. A size
-  moved by layouts until Lamplighter's breathing halo showed the cost on
-  the P5: a layout for a value a layout places repaints the whole view,
-  4,488 times in one session's record.
+  element already draws, so their frames move without a layout — but a
+  size whose layers name a picture moves by layouts, since how big a
+  copy of a picture is kept is worked out after a layout
+  (PICTURE_SIZES.md § The needed size). A layout's frame of one repaints
+  only the element, the in-place class's rule.
 
 ## 6. yonder
 

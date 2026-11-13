@@ -3427,8 +3427,8 @@ static const char kTickPage[] = MOTION_STYLE
     "to{background-color:rgba(0,0,255,.5);border-color:green}}"
     "@keyframes pos{from{background-position:0 0,10px 20%}to{background-position:50% 3em,1px 2px,30% 40%}}"
     "@keyframes mpos{from{mask-position:0 0,10px 20%}to{-webkit-mask-position:50% 3em,1px 2px,30% 40%}}"
-    "@keyframes msize{from{mask-size:10px auto,20% 30%}to{mask-size:40px auto,1em 2px,5px 50%}}"
-    "@keyframes bsize{from{background-size:auto 10px}to{background-size:auto 3em,50% 40px}}"
+    "@keyframes msize{from{mask-size:10px auto,20% 30%}to{mask-size:40px auto,1em 2px}}"
+    "@keyframes bsize{from{background-size:auto 10px}to{background-size:auto 3em,auto 40px}}"
     "@keyframes glow{from{box-shadow:0 0 0 red}"
     "to{box-shadow:5px 5px 10px 2px currentColor,inset 0 0 4px blue}}"
     "@keyframes origin{from{transform-origin:0 0}"
@@ -3641,6 +3641,18 @@ static void motion_tick_condition_cases(void)
          "@keyframes k{to{background-size:10px 20%}}"
          "#x{background-image:linear-gradient(red,blue);animation:k 1s infinite}",
          "<div id=x></div>", true, 't'},
+        {"a picture's size is laid out: how big a copy is kept follows a layout",
+         "@keyframes k{to{background-size:300%}}"
+         "#x{background-image:linear-gradient(red,blue),url(p.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 'l'},
+        {"a mask picture's size is laid out",
+         "@keyframes k{to{mask-size:300%}}"
+         "#x{mask-image:url(m.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 'l'},
+        {"a background's position over a picture still ticks",
+         "@keyframes k{to{background-position:10px 0}}"
+         "#x{background-image:url(p.png);animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
         {"a colour is laid out, inherited",
          "@keyframes k{to{color:red;transform:none}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
          'l'},
@@ -3834,6 +3846,23 @@ static void motion_tick_mark_cases(void)
     moved = true;
     (void)flow_motion_tick(m.tree, 500, o, NULL, NULL, &moved);
     expect("tick marks: a tick of colours moves no frame", !moved, NULL);
+    moving_close(&m);
+    // The canvas's possible owner is marked though its box reaches
+    // nothing: a body whose content is all positioned out of it.
+    static const char kEmptyBody[] = MOTION_STYLE
+        "@keyframes z{from{background-size:100% 100%}to{background-size:50% 50%}}"
+        "body{margin:0;background-image:linear-gradient(red,blue);animation:z 1s infinite}"
+        "#f{position:fixed;left:0;top:0;width:50px;height:50px}"
+        "</style><div id=f></div>";
+    moving_open_for(&m, kEmptyBody, 0, true);
+    TickMarks e = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &e, NULL);
+    const flow_box_t *body = NULL;
+    for (const flow_box_t *b = flow_root(m.tree) != NULL ? flow_root(m.tree)->first : NULL; b != NULL; b = b->next)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_BODY)
+            body = b;
+    expect("tick marks: the body, empty, whose background the canvas may take",
+           body != NULL && marks_box(&e, body), NULL);
     moving_close(&m);
 }
 
