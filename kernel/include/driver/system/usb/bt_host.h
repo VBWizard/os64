@@ -57,6 +57,9 @@ typedef struct {
     bool classic_auto;
     uint64_t classic_page_at;
     uint32_t classic_backoff_ms;
+    // Why the Classic bond file could not be read or written (a string
+    // literal, from whoever keeps the file); NULL when it could.
+    const char *classic_storage;
     // Why the last command was refused, when the refusal has words (a
     // string literal); NULL when it was taken or has none.
     const char *refused_why;

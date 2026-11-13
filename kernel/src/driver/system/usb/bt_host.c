@@ -578,6 +578,11 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }
+    if(h->classic_storage && used<cap-1) {
+        n=snprintf(out+used,cap-used,"bond storage: %s\n",h->classic_storage);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
     if(used<cap-1) {
         n=snprintf(out+used,cap-used,"acl packets received and not read: %u\n",(unsigned)h->classic_rx_unread);
         if(n<0) return used;
