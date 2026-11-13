@@ -106,8 +106,8 @@ before a proxy can be exposed. Existing consumers do not opt in. See
 
 The raw engine exposes explicitly enabled execution-scope observations for
 trusted diagnostics. `JS_EnableExecutionScopeTracking` must run on the owner
-thread outside engine entry, before code to be observed executes. The wrapper
-does not enable tracking. `JS_VisitExecutionScopes` is allocation-free and
+thread outside engine entry, before code to be observed executes. Default wrapper
+setup leaves tracking disabled. `JS_VisitExecutionScopes` is allocation-free and
 visits borrowed incoming-context/code-environment facts, innermost first,
 including pending calls before their interrupt poll. Its visitor must not
 allocate, reenter the engine, release values or mutate runtime state.
@@ -117,6 +117,32 @@ explicit; observations do not certify complete interrupted-environment
 attribution, browser caller authority or native consistency. Scope tracking
 does not change eligibility, failure or budget behavior and cannot recover a
 runtime. See [the F16 scope checkpoint](../../docs/design/pending/IFRAME_F16_SCOPES_VALIDATION.md).
+
+## Dormant executable containment
+
+`JS_MarkContextExecutableFailed` is an irreversible raw-engine mark, separate
+from document retirement and wrapper failure. A trusted owner calls it after
+engine/native unwind, with scope tracking enabled; tracked active entry is
+refused without changing the mark. It allocates/releases nothing and does not
+change queues, pending exceptions, cancellation or task budgets. Marking alone
+grants no permission to resume a failed wrapper; reuse follows its results
+and task contract.
+
+Marked function/code contexts cannot be reentered through raw calls,
+constructors, native/data/neutral functions, eval, module handles or suspended
+resumptions. Marked execution/callback/activity contexts also block native job
+bodies. Unknown custom call classes and over-deep wrapper chains refuse
+conservatively once executable failure has been seen. Healthy callers receive
+a catchable TypeError unless an uncatchable exception remains pending; that
+original exception is preserved. A consumed exception marker does not suppress
+a fresh refusal. Allocation/host failure retains the existing sticky contract.
+
+Identity, ordinary data and initialized namespace exports remain retained.
+Property access that invokes code still crosses the guard. Module creation
+contexts are explicitly retained and GC-marked, including for native/unlinked
+modules. These are ownership facts; they grant no origin authority and prove
+no interrupted native algorithm consistent. Ordinary departed functions retain
+their existing behavior. See [the engine checkpoint](../../docs/design/pending/IFRAME_F16_ENGINE_VALIDATION.md).
 
 ## Realms
 

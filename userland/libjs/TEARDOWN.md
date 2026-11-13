@@ -50,7 +50,17 @@ engine roots. Call/eval/constructor/resume wrappers pop on ordinary and
 exceptional return; a job pops after body/value cleanup and before releasing
 its context and owner references. Snapshot visitors must not release values
 or reenter the engine. An empty snapshot is not a native cleanup certificate
-and does not clear wrapper failure. The wrapper leaves tracking disabled.
+and does not clear wrapper failure. Default wrapper setup leaves tracking disabled.
+
+## Executable containment and module owners
+
+An explicit raw-engine executable-failure mark does not drain values, free
+contexts, discard queues or alter wrapper teardown. Retained functions remain
+GC roots but their failed code cannot execute. Modules hold a GC-marked context
+reference independently of membership in the context's module list; module
+release drops that hold. Native modules follow the same ownership rule, so an
+externally retained module cannot lose the context used by its failure check.
+Both wrapper teardown policies still require zero leaked roots.
 
 ## Detection and reclamation
 
