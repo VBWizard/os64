@@ -1139,6 +1139,20 @@ static void classic_reconnection(void)
     from=CM.n;
     for(unsigned i=0;i<70000;i++) step();
     assert(op_index(0x0405,from)<0);
+    // A page is owed after an unanswered one, and they call meanwhile with
+    // a key that is not ours: their call takes the owed page's place, and
+    // its end (authentication, not to be paged after) stands.
+    setup(); CM.present=false; classic_slot(&b,true);
+    for(unsigned i=0;i<200;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && host.classic.retryable && host.classic_page_at);
+    CM.has_key=true; memcpy(CM.key,PH_NEW_KEY,16); CM.they_secure=true;
+    from=CM.n;
+    cm_request(0,PH); step(); step();
+    assert(host.classic.phase!=BT_CLASSIC_STOPPED && !host.classic_page_at);
+    for(unsigned i=0;i<3000 && host.classic.phase!=BT_CLASSIC_STOPPED;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_STOPPED && !host.classic.retryable);
+    for(unsigned i=0;i<70000;i++) step();
+    assert(op_index(0x0405,from)<0 && host.classic_auto && !host.classic_page_at);
     // A bond made as another adapter is no bond: nothing is paged.
     setup(); bt_classic_bond_t other=b; other.local[0]^=1; classic_slot(&other,true);
     assert(!host.classic.bond.valid && !host.classic_auto && !host.classic_page_at && CM.scan==0);
