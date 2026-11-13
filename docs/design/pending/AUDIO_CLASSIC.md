@@ -37,14 +37,20 @@ P5 run.
 
 ## The headphones this is proven with
 
-Chris's older pair of Bose QuietComfort Ultra Headphones (over-ear, the
-2023 generation), with the newer pair as a spare. Checked against Bose's
-published specifications on 2026-11-13, not yet observed: Bluetooth 5.3;
-SBC, AAC and aptX Adaptive, all carried over Classic A2DP; no LE Audio on
-that generation. (The 2025 generation is Bluetooth 5.4 with the same
-Classic codecs, and LE Audio as an optional beta that stays off for this
-work.) Both do multipoint, two hosts at once. The older pair is bonded to
-one other device, so it has a place free for the P5.
+Chris's older Bose over-ear pair, with his Bose QuietComfort Ultra
+Headphones (2023: Bluetooth 5.3; SBC, AAC and aptX Adaptive over Classic
+A2DP; no LE Audio on that generation; checked against Bose's published
+specifications, not yet observed) as the spare.
+
+**The older pair's model is not yet known.** Chris gave it as the
+QuietComfort 15, "probably from 2019"; the QuietComfort 15 is a wired pair
+from 2009 with no radio, so the name or the year is off. Bose's Bluetooth
+over-ear pairs of those years (QuietComfort 35 and 35 II, Noise Cancelling
+Headphones 700, QuietComfort 45) are all Classic A2DP with SBC and AAC, so
+the plan does not turn on which it is; what may differ is the Bluetooth
+version (4.1 to 5.1) and so how old a pairing procedure it expects. The
+model is confirmed before part L's P5 run, and § L3 says what an older
+pair could need.
 
 ## What is there now (read at `014d9809`)
 
@@ -276,7 +282,10 @@ Events answered in any linked state, because the far end may start them:
   Request** (0x33): accepted (0x042c). That is Just Works, which is all a
   device with no keys and no display can do.
 - **PIN Code Request** (0x16): negative reply (0x040e). Legacy pairing is
-  not offered.
+  not offered. Simple Pairing has been mandatory since Bluetooth 2.1
+  (2007), so any pair with a version of 4 or more does it; a PIN request
+  from the test pair would be a finding to bring to Chris, not a case to
+  code for now.
 - **Link Key Notification** (0x18): the key and its type become the pending
   bond, saved when encryption comes up, as LE's is saved when its keys
   are distributed.
