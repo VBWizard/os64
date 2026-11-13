@@ -55,6 +55,7 @@
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
 #include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
+#include "kusb.h"                  // the USB drainer, minted beside it
 #include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
@@ -152,6 +153,12 @@ bool kEnableNet = true;
 // here that has one, so this flag exists for the day that machine needs to
 // boot WITHOUT its NIC in order to diagnose something else.
 bool kEnableR8125 = true;
+// Set by USBPOLL — no xHCI controller is given an interrupt; kusb wakes only
+// when the tick rings it (XHCI_INTERRUPT.md's flashlight).
+bool kUsbPoll = false;
+// USBIMOD=<n> — the xHCI interrupt moderation interval for this boot, in
+// 250 ns units; negative (absent) leaves the driver's own value.
+int kUsbImod = -1;
 // Set by NETPOLL — every NIC stays tick-driven: no INTx probe, no MSI, and
 // knet wakes only when processSignals rings it (DOORBELL.md's flashlight).
 bool kNetPoll = false;
@@ -558,6 +565,21 @@ void kernel_init()
 		       "kernel_init: enabling /knet (pinned to the BSP; task=0x%08x, thread=0x%08x)\n",
 		       kKnetTask->taskID, kKnetTask->threads->threadID);
 		scheduler_submit_new_task(kKnetTask);
+	}
+
+	// THE USB DRAINER (XHCI_INTERRUPT.md § The design). knet's sibling:
+	// pinned to the BSP, parked on a bell the tick rings, and from the moment
+	// the scheduler runs the one consumer of every xHCI event ring. Minted
+	// only when a controller came up: with none there is nothing to drain
+	// and no Bluetooth to clock.
+	if (kEnableUSB && xhci_controller_count() != 0)
+	{
+		kKusbTask = task_create("/kusb", 0, NULL, kKernelTask, true, BSP_CPU);
+		kKusbTask->autoReap = true;
+		printd(DEBUG_TASK | DEBUG_DETAILED,
+		       "kernel_init: enabling /kusb (pinned to the BSP; task=0x%08x, thread=0x%08x)\n",
+		       kKusbTask->taskID, kKusbTask->threads->threadID);
+		scheduler_submit_new_task(kKusbTask);
 	}
 
 	    scheduler_enable();

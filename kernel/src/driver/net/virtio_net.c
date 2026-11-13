@@ -355,7 +355,7 @@ bool virtio_net_drain(struct net_device* dev)
 	if (!vn->driver_ok)
 		return false;
 
-	// Cheap reentry guard (the xhci_poll idiom): if another core is mid-
+	// Cheap reentry guard (a test-and-set flag): if another core is mid-
 	// drain, skip — frames aren't lost, the next drain collects them.
 	static volatile uint32_t busy = 0;
 	if (__sync_lock_test_and_set(&busy, 1))

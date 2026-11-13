@@ -1681,6 +1681,23 @@ static bool length_same(flow_length_t a, flow_length_t b)
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
+// The layer lists a position or a size, `p`, places in: a mask's, which
+// are a background's lists (MASKS.md § 5), or the background's own.
+static bool mask_placed(garb_prop_t p)
+{
+    return p == GARB_MASK_POSITION_X || p == GARB_MASK_POSITION_Y || p == GARB_MASK_SIZE;
+}
+
+static const flow_backgrounds_t *layers_of(garb_prop_t p, const flow_style_t *s)
+{
+    return mask_placed(p) ? &s->masks.layers : &s->backgrounds;
+}
+
+static flow_backgrounds_t *layers_in(garb_prop_t p, flow_style_t *s)
+{
+    return mask_placed(p) ? &s->masks.layers : &s->backgrounds;
+}
+
 // Two transform functions with one value. Two mixes of tails
 // (FLOW_FN_BLEND) are one only as one mix: a keyframe's declarations never
 // hold one, so the mixes an interval's two ends can hold are the value
@@ -1773,12 +1790,12 @@ static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t 
     case GARB_BACKDROP_FILTER:
         return filters_same(a->backdrop_filter, a->nbackdrop_filter, b->backdrop_filter,
                             b->nbackdrop_filter);
-    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        bool x = p == GARB_BACKGROUND_POSITION_X;
-        int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;
-        int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
-        const flow_length_t *la = x ? a->backgrounds.x : a->backgrounds.y;
-        const flow_length_t *lb = x ? b->backgrounds.x : b->backgrounds.y;
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y: {
+        bool x = p == GARB_BACKGROUND_POSITION_X || p == GARB_MASK_POSITION_X;
+        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);
+        int32_t na = x ? ga->nx : ga->ny, nb = x ? gb->nx : gb->ny;
+        const flow_length_t *la = x ? ga->x : ga->y, *lb = x ? gb->x : gb->y;
         if (na != nb)
             return false;
         for (int32_t i = 0; i < na; i++)
@@ -1786,16 +1803,18 @@ static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t 
                 return false;
         return true;
     }
-    case GARB_BACKGROUND_SIZE:
-        if (a->backgrounds.nsize != b->backgrounds.nsize)
+    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE: {
+        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);
+        if (ga->nsize != gb->nsize)
             return false;
-        for (int32_t i = 0; i < a->backgrounds.nsize; i++) {
-            const flow_bg_size_t *x = &a->backgrounds.size[i], *y = &b->backgrounds.size[i];
+        for (int32_t i = 0; i < ga->nsize; i++) {
+            const flow_bg_size_t *x = &ga->size[i], *y = &gb->size[i];
             if (x->fit != y->fit || !length_same(x->size[0], y->size[0]) ||
                 !length_same(x->size[1], y->size[1]))
                 return false;
         }
         return true;
+    }
     default: {
         flow_style_t x;
         os64_memcpy(&x, b, sizeof(x));
@@ -1842,24 +1861,26 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         d->border_color[i] = mix_colour(a->border_color[i], b->border_color[i], t);
         hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
         return true;
-    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        bool x = p == GARB_BACKGROUND_POSITION_X;
-        const flow_length_t *la = x ? a->backgrounds.x : a->backgrounds.y;
-        const flow_length_t *lb = x ? b->backgrounds.x : b->backgrounds.y;
-        int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;
-        int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y: {
+        bool x = p == GARB_BACKGROUND_POSITION_X || p == GARB_MASK_POSITION_X;
+        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);
+        flow_backgrounds_t *gd = layers_in(p, d);
+        const flow_length_t *la = x ? ga->x : ga->y, *lb = x ? gb->x : gb->y;
+        int32_t na = x ? ga->nx : ga->ny, nb = x ? gb->nx : gb->ny;
         if (!mix_lengths(la, na, lb, nb, t, NULL, NULL, alloc, ctx))
             break;
-        return mix_lengths(la, na, lb, nb, t, x ? &d->backgrounds.x : &d->backgrounds.y,
-                           x ? &d->backgrounds.nx : &d->backgrounds.ny, alloc, ctx);
+        return mix_lengths(la, na, lb, nb, t, x ? &gd->x : &gd->y, x ? &gd->nx : &gd->ny,
+                           alloc, ctx);
     }
-    case GARB_BACKGROUND_SIZE:
-        if (!mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
-                       b->backgrounds.nsize, t, NULL, NULL, alloc, ctx))
+    case GARB_BACKGROUND_SIZE: case GARB_MASK_SIZE: {
+        const flow_backgrounds_t *ga = layers_of(p, a), *gb = layers_of(p, b);
+        flow_backgrounds_t *gd = layers_in(p, d);
+        if (!mix_sizes(ga->size, ga->nsize, gb->size, gb->nsize, t, NULL, NULL, alloc, ctx))
             break;
-        return mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
-                         b->backgrounds.nsize, t, &d->backgrounds.size, &d->backgrounds.nsize,
+        return mix_sizes(ga->size, ga->nsize, gb->size, gb->nsize, t, &gd->size, &gd->nsize,
                          alloc, ctx);
+    }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         i = p - GARB_MARGIN_TOP;
         if (!mix_length(a->margin[i], b->margin[i], t, &d->margin[i]))
@@ -2778,6 +2799,7 @@ static bool repaints_in_place(garb_prop_t p)
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR: case GARB_OPACITY: case GARB_VISIBILITY:
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:
     case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
     case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
         return true;
@@ -2812,6 +2834,7 @@ static bool ticks_in_place(garb_prop_t p)
     case GARB_TRANSFORM: case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE:
     case GARB_TRANSFORM_ORIGIN: case GARB_OPACITY: case GARB_BACKGROUND_COLOR:
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_MASK_POSITION_X: case GARB_MASK_POSITION_Y:
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR: case GARB_BOX_SHADOW:
         return true;

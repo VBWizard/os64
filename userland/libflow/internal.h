@@ -101,38 +101,50 @@ static inline bool f_transformed(const flow_style_t *s)
     return f_transforms(s) && s->display != FLOW_DISPLAY_INLINE;
 }
 
-// Whether a `filter` or a `backdrop-filter` other than none is granted
-// (FILTER.md § 2): a plain inline's is not drawn and makes nothing, as its
-// opacity is painted opaque (flow_style_t.filter).
-static inline bool f_filtered(const flow_style_t *s)
+// The effects below are GRANTED to any box but a plain inline's, whose
+// pieces on lines are no one layer, so its effects are not drawn and make
+// nothing, as its opacity is painted opaque. An ATOM on a line is never a
+// plain inline whatever its display says — a picture's is `inline` — so
+// each gate takes `atom`: whether the box asked about is one
+// (FLOW_BOX_ATOMIC, f_atom); false where no box is known, an element's
+// box being then a block's or a plain inline's.
+static inline bool f_atom(const flow_box_t *b)
 {
-    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && s->display != FLOW_DISPLAY_INLINE;
+    return b->kind == FLOW_BOX_ATOMIC;
+}
+
+static inline bool f_granted(const flow_style_t *s, bool atom)
+{
+    return atom || s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether a `filter` or a `backdrop-filter` other than none is granted
+// (FILTER.md § 2; flow_style_t.filter).
+static inline bool f_filtered(const flow_style_t *s, bool atom)
+{
+    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && f_granted(s, atom);
 }
 
 // Whether its `filter` makes a box a group (flow_visit_groups): granted,
 // and not only a `backdrop-filter`, which is drawn without one.
-static inline bool f_group_filter(const flow_style_t *s)
+static inline bool f_group_filter(const flow_style_t *s, bool atom)
 {
-    return s->nfilter > 0 && f_filtered(s);
+    return s->nfilter > 0 && f_filtered(s, atom);
 }
 
 // Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
-// a stacking context and a group laid by its mode; a plain inline's does
-// nothing, and an inline-block's is not drawn (it is no stacked box), as
-// their opacity is painted opaque.
-static inline bool f_blended(const flow_style_t *s)
+// a stacking context and a group laid by its mode.
+static inline bool f_blended(const flow_style_t *s, bool atom)
 {
-    return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
+    return s->mix_blend != FLOW_BLEND_NORMAL && f_granted(s, atom);
 }
 
 // Whether a mask is granted (MASKS.md § 3): a layer has a picture or a
-// gradient — a mask of only `none` layers is no mask — on a box that is no
-// plain inline, whose mask does nothing, as its opacity is painted opaque.
-// A stacking context and a group; an inline-block's is neither, being no
-// stacked box (flow_style_t.masks).
-static inline bool f_masked(const flow_style_t *s)
+// gradient — a mask of only `none` layers is no mask. A stacking context
+// and a group.
+static inline bool f_masked(const flow_style_t *s, bool atom)
 {
-    if (s->display == FLOW_DISPLAY_INLINE)
+    if (!f_granted(s, atom))
         return false;
     for (int32_t i = 0; i < s->masks.layers.nimage; i++)
         if (s->masks.layers.image[i].url != NULL || s->masks.layers.image[i].gradient != NULL)
@@ -190,9 +202,9 @@ static inline bool f_take_mask(garb_prop_t p, flow_style_t *d, const flow_style_
 }
 
 // Whether `isolation: isolate` is granted: a stacking context, no group.
-static inline bool f_isolated(const flow_style_t *s)
+static inline bool f_isolated(const flow_style_t *s, bool atom)
 {
-    return s->isolate && s->display != FLOW_DISPLAY_INLINE;
+    return s->isolate && f_granted(s, atom);
 }
 
 // A containing block for the absolute boxes inside it: an element whose
@@ -203,7 +215,7 @@ static inline bool f_isolated(const flow_style_t *s)
 // or `none` makes no box for.
 static inline bool f_contains_absolute(const flow_style_t *s)
 {
-    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s))
+    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s, false))
         return false;
     switch (s->display) {
     case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
@@ -221,7 +233,7 @@ static inline bool f_contains_absolute(const flow_style_t *s)
 // transformed or filtered.
 static inline bool f_contains_fixed(const flow_style_t *s)
 {
-    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s));
+    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s, false));
 }
 
 // The same two answers for an element, `root` the document's root: the
@@ -231,7 +243,7 @@ static inline bool f_contains_fixed(const flow_style_t *s)
 // grayscale(1) }` leaves a fixed header fixed to the viewport.
 static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
 {
-    if (root && f_filtered(s)) {
+    if (root && f_filtered(s, false)) {
         flow_style_t plain = *s;
         plain.nfilter = plain.nbackdrop_filter = 0;
         return fixed ? f_contains_fixed(&plain) : f_contains_absolute(&plain);

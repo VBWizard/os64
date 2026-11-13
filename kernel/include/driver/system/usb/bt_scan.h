@@ -22,8 +22,9 @@ typedef enum {
     BT_SCAN_CLEANUP, BT_SCAN_STOPPED, BT_SCAN_FAILED
 } bt_scan_phase_t;
 
-// Owned by the serialized USB poll path. No allocation, waits or logging in
-// the decoder: radio traffic can arrive while the scheduler lock is held.
+// Owned by whoever holds USB's serializing flag (xhci.c). No allocation,
+// waits or logging in the decoder: it runs inside kusb's pass, against that
+// pass's deadline.
 typedef struct {
     bt_scan_phase_t phase;
     uint64_t deadline, total_deadline;
@@ -31,6 +32,12 @@ typedef struct {
     uint8_t credits, status, error_status, address[6], features[8];
     bool pending, command_done, bad_reply, hardware_error, inquiry_done, radio_active;
     bool le_only, shared_controller;
+    // When the recorded error is a command timeout: had the USB transfer
+    // that carries the command completed, and had the controller's reply
+    // arrived? They fail differently (a command that never left, a reply
+    // that never came or was not recognised), and the error line says
+    // which.
+    bool timed_out, timeout_usb_done, timeout_reply;
     uint8_t inquiry_status;
     const char *error;
     unsigned count, dropped, malformed_reports;
@@ -48,5 +55,8 @@ void bt_scan_event(void *context, const uint8_t *event, size_t bytes);
 void bt_scan_tick(bt_scan_t *s, uint64_t now_ms, bool usb_done, bool usb_failed,
                   bt_scan_send_t send, void *context);
 size_t bt_scan_status(const bt_scan_t *s, char *out, size_t capacity);
+// "" when the recorded error is not a timeout; else which half was missing,
+// as a clause to follow the error. A string literal either way.
+const char *bt_scan_timeout_text(const bt_scan_t *s);
 size_t bt_scan_devices(const bt_scan_t *s, char *out, size_t capacity);
 #endif

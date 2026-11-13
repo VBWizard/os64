@@ -35,8 +35,8 @@ typedef struct {
     // at all: the depth it opened at, plus one, or 0.
     int32_t hidden;
     // What is left of the paint's budget for layers (filtered, masked and
-    // blended groups', and a mask's captures) and backdrops, in pixels
-    // (yonder_paint_layers_refused):
+    // blended groups', and a mask's captures) and backdrops, in pixels of
+    // the whole view (yonder_paint_layers_refused):
     // here, where every box's painter shares it, not in the Painter each
     // box is handed a copy of.
     int64_t filter_left;
@@ -2600,7 +2600,7 @@ static bool mask_reference(const flow_layer_t *l)
 // and verbs to capture its coverage and lay its layer by it.
 static bool mask_drawn(const Painter *p, const flow_box_t *box)
 {
-    if (!flow_masked(box->style) || p->v->layer_open == NULL || p->v->layer_close == NULL ||
+    if (!flow_masked(box) || p->v->layer_open == NULL || p->v->layer_close == NULL ||
         p->v->layer_take == NULL)
         return false;
     for (int32_t i = 0; i < flow_mask_layers(box->style); i++) {
@@ -2618,7 +2618,7 @@ static bool mask_drawn(const Painter *p, const flow_box_t *box)
 static bool mask_hides_whole(const flow_box_t *box)
 {
     const flow_style_t *s = box->style;
-    if (!flow_masked(s))
+    if (!flow_masked(box))
         return false;
     for (int32_t i = 0; i < flow_mask_layers(s); i++) {
         flow_layer_t l = flow_mask_layer(s, i).layer;
@@ -2698,16 +2698,19 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL && !masked)
         return false;
     int32_t out[4];
-    flow_filter_reach(box->style, out);
+    flow_filter_reach(box, out);
     const int32_t in[4] = {out[FLOW_BOTTOM], out[FLOW_LEFT], out[FLOW_TOP], out[FLOW_RIGHT]};
     os64_gui_rect_t layer = cut(cut(b, grown_by(p->view, in)), outside);
     if (layer.w <= 0 || layer.h <= 0) {
         p->view = (os64_gui_rect_t){0, 0, 0, 0};
         return true;
     }
-    // Charged what it shows in the view, not its margin: a paint of a
-    // small part of the window (a caret's) has a small budget, and the
-    // same group must not be refused there and drawn filtered beside it.
+    // Charged what it shows in the part painted, not its margin, against a
+    // budget measured by the whole view: whatever a repaint of the whole
+    // window draws in a layer, a repaint of any part of it does too, so no
+    // part shows a group plain beside where it was drawn — layers stacked
+    // over a small part are not charged several times its area against a
+    // budget of twice it.
     // Inside a group laid through its matrix it is charged in that
     // group's own pixels, before the matrix.
     // A masked group is charged its mask's captures too, one a layer, so the
@@ -2890,7 +2893,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         p->shift.x = sum32(p->shift.x, upright.x);
         p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000 && !filter_drawn(p, box) &&
-            blend_of(p, box, d) == FLOW_BLEND_NORMAL && !flow_masked(box->style))
+            blend_of(p, box, d) == FLOW_BLEND_NORMAL && !flow_masked(box))
             return;
         outside = clip;
     } else if (box->clipped) {
@@ -2984,12 +2987,12 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 }
 
 
-void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
-                  yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
+void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                  flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                  yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
     PaintGroups groups = {.depth = 0,
-                          .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h};
+                          .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h};
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .tree = tree, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,

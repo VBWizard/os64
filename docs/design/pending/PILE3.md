@@ -291,7 +291,8 @@ list no longer holds it.
 not positioned, painted as one group after the paragraph written after
 it, its bounds, and hit over the flow it overlaps; a positioned group's
 bounds holding an absolute member 50 below it; nested groups; an
-inline-block left unstacked; `opacity: 0` opening nothing. One style dump
+inline-block stacked as its atom once, a group of its own (since the atom
+group, 2026-11-12), and hit where it is; `opacity: 0` opening nothing. One style dump
 changed by rule: a translucent background keeps its alpha in or out of
 the flow (`bg=#000000/128`). `tools/test_yonder_cases.inc`: translucent
 fill and text reach the verbs with their alpha; a group recorded open,
@@ -309,7 +310,7 @@ through the card AND through its green, the in-flow block over the card.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `opacity` on an inline box or an inline-block | an inline box is pieces on lines and an inline-block's content is painted where its atom is, so neither is one layer to group; both are painted opaque | a page whose faded link or badge matters |
+| `opacity` on a plain inline box | an inline box is pieces on lines, no one layer to group; it is painted opaque. (An inline-block's, and an inline picture's, is drawn since 2026-11-12: the atom on its line is stacked whole, `public_frag`.) | a page whose faded link matters |
 | Form widgets and a box's scroll bars in a group | libui widgets are windows' children drawn after the page, and the bars are drawn after it too; both stay opaque | a faded form, or a faded scrolling panel |
 | The root's own opacity over the canvas | the canvas is painted before the walk, so a translucent `html` fades the page over its own background, not over nothing | a page that fades `html` |
 | Groups past 32 deep, or a group whose copy finds no memory | painted opaque | a page that nests them that deep |
@@ -1679,7 +1680,7 @@ out, and a layout at a time is the page at that time.
 | `line-height` | a number with a number, a length with a length; else discrete |
 | `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
 | a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above, and a pair both `currentColor` stays `currentColor` (Appendix A) |
-| `background-position`, `background-size` | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
+| `background-position`, `background-size`, and a mask's `mask-position` and `mask-size` (MASKS.md § 5) | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
 | a transform | below |
 | everything else — keywords, families, pictures and gradients, grid tracks | discrete |
 
@@ -1891,7 +1892,8 @@ what they do to the page's structure is fixed for their life:
 
 - every property any of its animations sets is one of the TICK SET: the
   transform's four properties and `transform-origin`, `opacity`,
-  `background-color`, `background-position`, the four border colours and
+  `background-color`, `background-position`, `mask-position` (MASKS.md
+  § 5), the four border colours and
   `box-shadow`. None is inherited, so no other element's style reads
   them — but by keyword, so
 - no child takes one of them by `inherit` (FStyled.taken): the child's
@@ -2155,7 +2157,7 @@ the perf slice.
 | Grid track lists interpolated | discrete here | a page that animates its grid |
 | Custom properties in a keyframe, and registered ones (`@property`) | ignored: a keyframe's `--x` would have to reach the `var()`s that read it, which libgarb replaces at the cascade | a page whose animated variable matters |
 | `will-change` beyond the transforms and `opacity` — `position`, `z-index`, and what yonder draws nothing of | read, and given no effect | a page whose stacking depends on one |
-| The properties yonder draws nothing of — `filter`, `clip-path`, masks, `stroke-dashoffset` | animating them animates nothing | the slices that draw them |
+| The properties yonder draws nothing of — `clip-path`, `stroke-dashoffset` — and, of those it draws, `filter` and a mask's images and operators | animating the first animates nothing; the rest are discrete, flipping at the midpoint (a mask's position and size interpolate, MASKS.md § 5) | the slices that draw or mix them |
 | Animations on `::before` and `::after` | yonder generates no content for them at all | the slice that does |
 | Inherited properties in place — `color`, `visibility`, `text-shadow`, the fill | they move by layouts, whose cost is ruled (S8a, the face); in place they would need every inheriting descendant's style rewritten | a page whose inherited animation costs too much in layouts |
 | A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |

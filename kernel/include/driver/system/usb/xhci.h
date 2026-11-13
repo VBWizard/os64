@@ -9,10 +9,11 @@
 // that's kind of the whole point." — the owner, correctly.)
 //
 // SHAPE OF V1 (each limit is a decision, not an accident):
-//   - POLLING, not interrupts: no MSI/IOAPIC wiring. The event ring lives in
-//     ordinary RAM; xhci_poll() checks one cycle bit per scheduler pass
-//     (processSignals), the same liveness path the console reader uses.
-//     Latency follows scheduler dispatch frequency (see DEBTS.md).
+//   - A DAEMON DRAINS THE EVENT RINGS: kusb (kusb.h), rung by each
+//     controller's MSI or MSI-X message and by the tick. A controller with
+//     neither capability runs on the tick alone, where an event waits
+//     about a tick (/sys/usb says how each is driven and measures it;
+//     docs/design/pending/XHCI_INTERRUPT.md is the design). No INTx.
 //   - ROOT PORTS ONLY, no hubs: input devices must be plugged straight into
 //     the machine. (Devices with built-in hubs enumerate AS hubs — those
 //     need the hub slice, which is future work.)
@@ -48,15 +49,42 @@
 // upper half so every later task inherits it.
 void init_xHCI(void);
 
-// Drain every active controller's event ring: completed keyboard/mouse reports
-// are translated and delivered, transfer TRBs are re-armed, and Bluetooth
-// discovery and LE peer states advance without waiting for commands. Called
-// every scheduler pass from processSignals; internally serialized across cores and
-// cheap when idle. Safe to call before init or with no USB input devices.
-void xhci_poll(void);
-// Task-context bond storage; publishes restored bonds to the connection manager.
-// USB polling also advances automatic connection policy without disk I/O.
+// How many controllers came up. kusb exists only when this is not zero.
+uint32_t xhci_controller_count(void);
+// One pass by kusb, and nobody else: drain each controller's event ring
+// until it is empty or the TSC passes `deadline` (completed keyboard and
+// mouse reports are translated and delivered, transfer TRBs re-armed), then
+// advance Bluetooth discovery, the LE peers, the connection policy and the
+// keyboards' typematic repeat. `wake_began` is the TSC at the top of the
+// wake, for the measurements. Returns false, having done nothing, when the
+// serializing flag was held; the holder's release rings kUsbDoorbell.
+// `*work_left` says a controller was stopped by the deadline or not
+// reached, and the caller should come straight back.
+bool xhci_pass(uint64_t wake_began, uint64_t deadline, bool *work_left);
+
+// One vector for every controller: class 4, beside the NICs', above the
+// APs' priority bar and below the scheduler's class.
+#define XHCI_IRQ_VECTOR 0x47
+// Give each controller the interrupt it offers (MSI, else MSI-X; the tick
+// stays for one that offers neither, for the USBPOLL boot, and for one
+// whose programming does not read back). kusb calls it once its bell is
+// registered and signal processing is on. False: USB's serializing flag was
+// held and nothing was done; ask again.
+bool xhci_interrupts_enable(void);
+// The top half; called only from handler_xhci_irq_asm.
+void xhci_isr(void);
+// Task-context bond storage; publishes restored bonds to the connection
+// manager and rings kusb, whose pass runs the connection policy.
 void xhci_bluetooth_maintain(void);
+// Reset the Bluetooth adapter before a reboot or power-off, so the next boot
+// does not meet firmware still holding this boot's links. begin() asks and
+// returns at once; quiescing() is true until the adapter answers (the
+// caller bounds the wait); the verdict says how it ended, as words for the
+// descent to print: reset, refused (a failing status), or no answer. With
+// no adapter in service, begin() asks nothing and quiescing() is false.
+void xhci_bluetooth_quiesce_begin(void);
+bool xhci_bluetooth_quiescing(void);
+const char *xhci_bluetooth_quiesce_verdict(void);
 // Enable the manager after boot-time mounts and configuration have settled.
 void xhci_bluetooth_start_manager(void);
 
@@ -65,5 +93,10 @@ bool xhci_bluetooth_scan(void);
 bool xhci_bluetooth_connection(const char *data, size_t bytes);
 // file: 0 scan status, 1 discovery results, 2 LE connection status.
 size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file);
+// /sys/usb: the controllers and what is on each, kusb's passes and
+// latencies, how long an event on each controller may have waited, and the
+// Bluetooth timeline. Returns the bytes written, terminated;
+// a caller that finds USB busy is told so in the text.
+size_t xhci_usb_report(char *out, size_t cap);
 
 #endif

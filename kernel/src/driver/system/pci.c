@@ -404,6 +404,8 @@ void pci_print_discovery_results()
 	printd(DEBUG_PCI, "\n");
 }
 
+static void pci_caps_capture(void);
+
 void init_PCI()
  {
 
@@ -478,6 +480,7 @@ void init_PCI()
 		printf("PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
 		printd(DEBUG_BOOT, "PCI: %u function(s) did not fit the tables and were not recorded\n", sPCIDropped);
 	}
+	pci_caps_capture();
 	pci_print_discovery_results();
  }
 
@@ -491,21 +494,176 @@ pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t fu
     return configSpace;
 }
 
+// pci_caps_walk's `read`, over this machine's configuration space.
+typedef struct { uint8_t bus, device, function; } pci_caps_bdf_t;
+
+static uint32_t pci_caps_read_config(void *ctx, uint8_t offset)
+{
+	pci_caps_bdf_t *at = ctx;
+	return readPCIRegister(at->bus, at->device, at->function, offset);
+}
+
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
 {
-	// Status bit 4 says the list exists at all; a function without it may
-	// carry garbage at 0x34, and following garbage is how walks wander.
-	uint32_t status_cmd = readPCIRegister(bus, device, function, 0x04);
-	if (((status_cmd >> 16) & 0x0010) == 0)
-		return 0;
+	pci_caps_bdf_t at = { bus, device, function };
+	pci_caps_t caps;
+	pci_caps_walk(pci_caps_read_config, &at, &caps);
+	return pci_caps_find(&caps, cap_id);
+}
 
-	uint8_t ptr = (uint8_t)(readPCIRegister(bus, device, function, 0x34) & 0xFC);
-	for (int hops = 0; ptr != 0 && hops < 48; hops++)
-	{
-		uint32_t entry = readPCIRegister(bus, device, function, ptr);
-		if ((entry & 0xFF) == cap_id)
-			return ptr;
-		ptr = (uint8_t)((entry >> 8) & 0xFC);
+// One row a recorded function: its capability list as enumeration read it.
+typedef struct
+{
+	uint8_t    bus, device, function;
+	pci_caps_t caps;
+} pci_caps_row_t;
+
+static pci_caps_row_t *sPCICaps;
+static uint32_t        sPCICapsCount;
+
+static void pci_caps_record(uint8_t bus, uint8_t device, uint8_t function)
+{
+	pci_caps_row_t *row = &sPCICaps[sPCICapsCount++];
+	pci_caps_bdf_t at = { bus, device, function };
+	row->bus = bus;  row->device = device;  row->function = function;
+	pci_caps_walk(pci_caps_read_config, &at, &row->caps);
+}
+
+// Read every recorded function's capability list into the table
+// pci_caps_of answers from. The lists are read here, while enumeration is
+// reading configuration space anyway, so that a later question about a
+// device touches no hardware.
+static void pci_caps_capture(void)
+{
+	uint32_t total = (uint32_t)kPCIDeviceCount + kPCIFunctionCount + kPCIBridgeCount;
+	if (total == 0)
+		return;
+	sPCICaps = kmalloc(sizeof(pci_caps_row_t) * total);
+	for (int i = 0; i < kPCIDeviceCount; i++)
+		pci_caps_record(kPCIDeviceHeaders[i].busNo, kPCIDeviceHeaders[i].deviceNo, kPCIDeviceHeaders[i].funcNo);
+	for (int i = 0; i < kPCIFunctionCount; i++)
+		pci_caps_record(kPCIDeviceFunctions[i].busNo, kPCIDeviceFunctions[i].deviceNo, kPCIDeviceFunctions[i].funcNo);
+	for (int i = 0; i < kPCIBridgeCount; i++)
+		pci_caps_record(kPCIBridgeHeaders[i].busNo, kPCIBridgeHeaders[i].deviceNo, kPCIBridgeHeaders[i].funcNo);
+}
+
+const pci_caps_t *pci_caps_of(uint8_t bus, uint8_t device, uint8_t function)
+{
+	for (uint32_t i = 0; i < sPCICapsCount; i++)
+		if (sPCICaps[i].bus == bus && sPCICaps[i].device == device && sPCICaps[i].function == function)
+			return &sPCICaps[i].caps;
+	return NULL;
+}
+
+// ── Message-signalled interrupts (pci.h has the contract) ───────────────────
+
+#define MSI_CTRL_ENABLE      (1u << 16)   // Message Control is the capability dword's high half
+#define MSI_CTRL_MME_MASK    (7u << 20)   // multiple message enable: 0 = one vector
+#define MSI_CTRL_64BIT       (1u << 23)
+#define MSIX_CTRL_ENABLE     (1u << 31)
+#define MSIX_CTRL_FMASK      (1u << 30)   // function mask: every entry masked while set
+#define MSIX_ENTRY_MASKED    1u           // an entry's Vector Control, bit 0
+#define MSI_ADDRESS_BASE     0xFEE00000u  // the LAPIC's message window; bits 12..19 name an APIC ID
+
+static void pci_intx_disable(uint8_t bus, uint8_t device, uint8_t function)
+{
+	// A LIVE read-modify-write of the command word: enumeration's copy may
+	// be stale by the time a driver gets here.
+	uint32_t live = readPCIRegister(bus, device, function, 4) & 0xFFFF;
+	writePCIRegister(bus, device, function, 4, live | PCI_COMMAND_INTX_DISABLE);
+}
+
+pci_msi_result_t pci_msi_enable(uint8_t bus, uint8_t device, uint8_t function,
+                                uint8_t vector, uint8_t apic_id)
+{
+	pci_msi_result_t r = { 0 };
+	r.cap = pci_find_capability(bus, device, function, PCI_CAP_MSI);
+	if (r.cap == 0)
+		return r;
+
+	uint32_t ctrl = readPCIRegister(bus, device, function, r.cap);
+	r.control_before = (uint16_t)(ctrl >> 16);
+	r.is64 = (ctrl & MSI_CTRL_64BIT) != 0;
+	uint32_t address = MSI_ADDRESS_BASE | ((uint32_t)apic_id << 12);
+	uint8_t data_at = r.cap + (r.is64 ? 12 : 8);
+
+	writePCIRegister(bus, device, function, r.cap + 4, address);
+	if (r.is64)
+		writePCIRegister(bus, device, function, r.cap + 8, 0);
+	writePCIRegister(bus, device, function, data_at, vector);
+	writePCIRegister(bus, device, function, r.cap, (ctrl & ~MSI_CTRL_MME_MASK) | MSI_CTRL_ENABLE);
+	pci_intx_disable(bus, device, function);
+
+	uint32_t ctrl_back = readPCIRegister(bus, device, function, r.cap);
+	r.control_after = (uint16_t)(ctrl_back >> 16);
+	r.address = readPCIRegister(bus, device, function, r.cap + 4);
+	r.data = readPCIRegister(bus, device, function, data_at) & 0xFFFF;
+	r.took = (ctrl_back & MSI_CTRL_ENABLE) != 0 && r.address == address && r.data == vector;
+	return r;
+}
+
+pci_msix_result_t pci_msix_enable_one(uint8_t bus, uint8_t device, uint8_t function,
+                                      const uint32_t bars[6], uint8_t vector, uint8_t apic_id)
+{
+	pci_msix_result_t r = { 0 };
+	r.cap = pci_find_capability(bus, device, function, PCI_CAP_MSIX);
+	if (r.cap == 0)
+		return r;
+
+	uint32_t ctrl = readPCIRegister(bus, device, function, r.cap);
+	uint32_t where = readPCIRegister(bus, device, function, r.cap + 4);
+	r.entries = (uint16_t)(((ctrl >> 16) & 0x7FF) + 1);
+	r.bar = (uint8_t)(where & 7);
+	r.offset = where & ~7u;
+	if (r.bar > 5 || (bars[r.bar] & 1)) {
+		r.refused = "its table is not in a memory BAR";
+		return r;
 	}
-	return 0;
+	uint64_t base = bars[r.bar] & ~0xFull;
+	if ((bars[r.bar] & 0x6) == 0x4) {
+		if (r.bar == 5) {
+			r.refused = "its table's BAR is 64-bit with no upper half";
+			return r;
+		}
+		base |= (uint64_t)bars[r.bar + 1] << 32;
+	}
+	if (base == 0) {
+		r.refused = "its table's BAR is unassigned";
+		return r;
+	}
+
+	// The table at its upper-half alias. A page the driver has already
+	// mapped there (the table sharing a BAR with its registers) is mapped
+	// again to the same frame, which changes nothing.
+	uint64_t table = base + r.offset;
+	uint64_t first = table & ~(uint64_t)(PAGE_SIZE - 1);
+	uint64_t bytes = (table - first) + (uint64_t)r.entries * 16;
+	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + first, first,
+	                 (bytes + PAGE_SIZE - 1) / PAGE_SIZE,
+	                 PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	volatile uint32_t *entry = (volatile uint32_t *)(kHHDMOffset + table);
+
+	// Enabled with everything masked while the table is written: enabling
+	// is what takes the function off INTx, and the mask is what keeps a
+	// half-written entry from sending anything.
+	uint32_t held = (ctrl & 0xFFFF) | MSIX_CTRL_ENABLE | MSIX_CTRL_FMASK;
+	writePCIRegister(bus, device, function, r.cap, held);
+	uint32_t address = MSI_ADDRESS_BASE | ((uint32_t)apic_id << 12);
+	// Vector Control's other bits are reserved and kept as read.
+	for (uint32_t i = 0; i < r.entries; i++)
+		entry[i * 4 + 3] |= MSIX_ENTRY_MASKED;
+	entry[0] = address;
+	entry[1] = 0;
+	entry[2] = vector;
+	entry[3] &= ~MSIX_ENTRY_MASKED;
+	writePCIRegister(bus, device, function, r.cap, held & ~MSIX_CTRL_FMASK);
+	pci_intx_disable(bus, device, function);
+
+	uint32_t ctrl_back = readPCIRegister(bus, device, function, r.cap);
+	r.control_after = (uint16_t)(ctrl_back >> 16);
+	r.address = entry[0];
+	r.data = entry[2];
+	r.took = (ctrl_back & MSIX_CTRL_ENABLE) != 0 && (ctrl_back & MSIX_CTRL_FMASK) == 0 &&
+	         r.address == address && r.data == vector && (entry[3] & MSIX_ENTRY_MASKED) == 0;
+	return r;
 }

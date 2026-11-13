@@ -73,7 +73,8 @@ upstream of the reviewer, not a filter on it.
 **WORKING AN HTTP/2 SLICE?** `docs/design/pending/HTTP2.md` § 0 says how
 `HTTP2_TRACKER.csv` beside it is kept — which rows a branch may touch, when
 a row flips, and that `tools/http2_tracker.py` passes before a push. It is
-that arc's rule alone; no other arc has a tracker.
+that arc's rule alone: an arc with a tracker keeps its own rules beside its
+design (`tools/TRACKERS.md` is the shared format).
 
 ## Project Overview
 
@@ -443,7 +444,11 @@ print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
 virtio because its drain waits for the tick.
 
 **System Drivers:**
-- **PCI** (`pci.c`): PCI device enumeration and configuration
+- **PCI** (`pci.c`): PCI device enumeration and configuration. Each
+  function's capability list is read at enumeration (`pci_caps.c`, pure,
+  `tools/test_pci_caps_host.sh`) and printed by its `/sys/bus/pci` node:
+  `capabilities:` in list order, then `msi:` and `msix:` with what the
+  device can ask for. Read it before planning an interrupt for a device
 - **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
   reachable from Limine's RSDP. **Firmware puts its tables wherever it
   likes**, so each is mapped by its own address and Length (the header
@@ -459,6 +464,44 @@ virtio because its drain waits for the tick.
   boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
   firmware's boot logo, and the walk's problems. Read it FIRST on a machine
   meeting os64 for the first time.
+- **USB** (`usb/xhci.c`, `kusb.c`): the xHCI controllers, drained by
+  **`kusb`**, a kernel daemon pinned to the BSP and parked on a doorbell the
+  controllers' interrupt and the tick both ring (`knet`'s shape; docs/design/pending/XHCI_INTERRUPT.md § The
+  design). It is the one consumer of the event rings once the scheduler
+  runs. A wake is one PASS (`xhci_pass`): each controller drained until its
+  ring is empty or a one-tick deadline passes (checked before every event;
+  the controller that used the time is served last next pass), then
+  Bluetooth's clockwork and the keyboards' typematic repeat. Input is
+  therefore delivered from a THREAD, not from inside the scheduler's pass.
+  USB's serializing flag (`s_poll_busy`) has one release door for everyone
+  but `kusb`, and that door rings `kusb` if a held flag turned it away. The
+  arithmetic (the drain, what `ERDP` is owed, the wait bound, the visit's
+  order) is `xhci_service.c`, pure: `tools/test_xhci_service_host.sh`
+  drives it against a model controller and `tools/test_xhci_service_mutants.py`
+  breaks each rule (`mutants_parallel.py ... --with kernel`). **`/sys/usb`**
+  says which controller carries the keyboard, the mouse and the Bluetooth
+  adapter and how each is driven; per controller, how long an event may
+  have waited (from the last time its ring was seen empty); `kusb`'s wakes
+  and latencies in `/sys/net/knet`'s words; passes refused the flag and the
+  longest wait; the gap between passes, which is a cadence and NOT a wait;
+  and a timeline of Bluetooth's scans and connection steps. The
+  `since_read` maxima start again at each read, so reading it before and
+  after a workload measures that workload. Read it FIRST when a USB or
+  Bluetooth device answers late. **Each controller interrupts** (MSI where
+  it offers it, MSI-X where that is all it offers; `driven=` says which, or
+  `tick (why)`): one vector, 0x47, for all of them, addressed at the BSP.
+  The top half (`xhci_isr`) acknowledges `USBSTS.EINT` then `IMAN.IP`,
+  marks the controller and rings `kusb`'s bell; it takes no lock and
+  touches no event ring. `kusb` enables the interrupts itself, at its
+  first wake that finds USB's flag free, marking each controller so its
+  next drain takes what boot left on the ring. The tick still
+  rings the bell, which is all a tick-driven controller has. Per
+  interrupting controller `/sys/usb` gives `fires` and the time from an
+  interrupt to the drain that answered it; `interrupt_spurious` counts
+  handler entries that found nobody signalling. MSI and MSI-X are
+  programmed by `pci_msi_enable` / `pci_msix_enable_one` (pci.c), which
+  read back what they wrote and say whether it took; the RTL8125 uses the
+  first
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
@@ -890,6 +933,14 @@ the library serves every process). How it fits together:
     MSI — and knet wakes only when the tick rings it (DOORBELL.md's
     flashlight, the path that carried every packet before the doorbell).
     Like every token: it does NOT travel to the P5 by itself
+  - `USBPOLL`: no xHCI controller is given an interrupt; `kusb` drains them
+    when the tick rings it (XHCI_INTERRUPT.md's flashlight). `/sys/usb`
+    then reads `driven=tick (USBPOLL)`. Like every token it does NOT travel
+    to the P5
+  - `USBIMOD=<n>`: the xHCI interrupt moderation interval for this boot, in
+    250 ns units, 0 to 65535 (absent = the driver's 1000, which is 250 us;
+    0 = none).
+    A measuring dial; it does not travel to the P5 either
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —

@@ -72,7 +72,9 @@ static void blend_cases(void)
     // A positioned group's bounds hold its positioned members, wherever
     // they are: the absolute box 50 below reaches 60. Inside it a nested
     // group opens and closes within it. An inline-block below full opacity
-    // is not stacked: its content is painted where its atom is.
+    // is stacked as its atom whole, a group of its own after the flow; the
+    // block box inside the atom is its element's again, and is not stacked
+    // a second time.
     sheeted_open(&q, "<!doctype html><style>body{margin:0}"
                      "#r{position:relative;opacity:0.5;height:10px}"
                      ".abs{position:absolute;top:50px;width:10px;height:10px}"
@@ -86,10 +88,27 @@ static void blend_cases(void)
     flow_visitor_t nv = {glog_visit, glog_open, glog_close, &n, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &nv);
     expect("blend: a group holds its positioned members, and groups nest",
-           n.opens == 2 && strncmp(n.log, "t ( ( ) ) ", 10) == 0 && n.bounds[0].y == 0 &&
+           n.opens == 3 && strcmp(n.log, "( ( ) ) ( t ) ") == 0 && n.bounds[0].y == 0 &&
                n.bounds[0].h == 60 && n.bounds[1].h == 5, n.log);
-    expect("blend: an inline-block below full opacity is not stacked",
-           ib != NULL && ib->first != NULL && !ib->first->stacked, NULL);
+    expect("blend: an inline-block below full opacity is stacked as its atom, once",
+           ib != NULL && ib->kind == FLOW_BOX_ATOMIC && ib->stacked && ib->first != NULL &&
+               !ib->first->stacked, NULL);
+    const flow_box_t *on = ib != NULL ? flow_hit(t, ib->rect.x + 1, ib->rect.y + 1, top) : NULL;
+    expect("blend: the stacked atom is hit where it is", on != NULL && inside_of(on, ib), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+    // Stacked, an atom still reaches where its line is: a 200px-wide one
+    // below full opacity in a 50px scroller can be scrolled 150 to.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "#s{overflow:auto;width:50px;height:50px}"
+                     "#s span{display:inline-block;opacity:0.5;width:200px;height:10px}"
+                     "</style><div id=s><span></span></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    int32_t sc = t != NULL ? flow_scroller_for(t, box_with_id(t, q.doc->document, "s")->node) : -1;
+    flow_point_t range = sc >= 0 ? flow_scroll_range(t, sc) : (flow_point_t){0, 0};
+    expect("blend: a stacked atom reaches its scroller as its line does", sc >= 0 && range.x == 150,
+           NULL);
     flow_free(t);
     sheeted_close(&q);
 
@@ -270,6 +289,37 @@ static void gradient_style_cases(void)
         " mask-mode=luminance\n"
         "    div block\n"
         "    span inline mask=0 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
+    // -webkit-mask-composite is mask-composite (MASKS.md § 4): one
+    // property in the cascade, the later declaration winning by either
+    // name, its legacy operators read as the standard ones they compute —
+    // and only by its own name. A word neither name reads drops the
+    // declaration, so what came before it stands.
+    cascade_case("masks: -webkit-mask-composite, legacy words and cascade", 400,
+        "<!doctype html><style>"
+        "div{mask-image:linear-gradient(#000 0 0)}"
+        ".a{mask-composite:intersect;-webkit-mask-composite:xor}"
+        ".b{-webkit-mask-composite:xor;mask-composite:intersect}"
+        ".c{mask-composite:xor}"
+        ".d{-webkit-mask-composite:source-out}"
+        ".e{-webkit-mask-composite:destination-in}"
+        ".f{mask-composite:exclude;-webkit-mask-composite:destination-out}"
+        ".g{-webkit-mask-composite:source-over}"
+        ".h{mask-image:linear-gradient(#000 0 0),linear-gradient(#000 0 0);"
+        "-webkit-mask-composite:source-in,xor}"
+        "</style><div class=a></div><div class=b></div><div class=c></div><div class=d></div>"
+        "<div class=e></div><div class=f></div><div class=g></div><div class=h></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=subtract\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0\n"
+        "    div block mask=0 gradient=linear:180000:#000000@0,#000000@0 mask-composite=intersect"
+        " mask=1 gradient=linear:180000:#000000@0,#000000@0 mask-composite=exclude\n");
     // An angle is taken round the circle before it is scaled: 1e20 degrees
     // is fmod's 280, not whatever an overflowed integer makes of it.
     cascade_case("gradients: an angle of any size", 400,

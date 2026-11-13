@@ -187,9 +187,9 @@ static void svg_cases(const char *dir)
     assert(pixel(&p, 30, 50) == 0xffe87925 && pixel(&p, 60, 50) == 0);
     save_ppm(dir, "connection", &p);
     pixels_free(&l, &p);
-    Rec rec = {{0}, {0, 0, 256, 256}, false, f.page};
+    Rec rec = {{0}, {0, 0, 256, 256}, false, f.page, {{{0}, NULL}}, 0};
     yonder_verbs_t verbs = verbs_of(&rec);
-    yonder_paint(f.tree, rec.view, (flow_point_t){0}, 0xffffffff, NULL, NULL, NULL, &verbs);
+    yonder_paint(f.tree, rec.view, rec.view, (flow_point_t){0}, 0xffffffff, NULL, NULL, NULL, &verbs);
     assert(rec.out.v && strstr(rec.out.v, "image"));
     free(rec.out.v);
     // Change the real document, rebuild its cascade/layout, then render again.

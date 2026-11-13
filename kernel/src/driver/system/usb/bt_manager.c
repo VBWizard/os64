@@ -19,7 +19,7 @@ void bt_manager_observe(bt_manager_t *m,const bt_le_t *s,uint64_t now)
 {
     if(m->revision_seen==s->bond_revision) return;
     m->revision_seen=s->bond_revision; m->generation++; m->dirty=true;
-    m->automatic=s->bond.valid; m->suppressed=false; m->blocked=false;
+    m->automatic=s->bond.valid; m->suppressed=false; m->blocked=false; m->mic_drops=0;
     m->next_attempt=now; m->next_save=now; m->backoff_ms=2000;
 }
 static bool manager_candidate(const bt_le_t *s,const bt_scan_t *scan)
@@ -39,9 +39,17 @@ void bt_manager_step(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,uint64_t now)
     bt_manager_observe(m,s,now);
     if(!m->loaded || !m->automatic || m->suppressed || !s->bond.valid || m->blocked) return;
     if(s->phase==BT_LE_FAILED || scan->phase==BT_SCAN_FAILED) { m->blocked=true; return; }
-    if(bt_le_input_active(s)) { m->backoff_ms=2000; return; }
+    // A link that is ready has earned the short backoff; only one that has
+    // DELIVERED input ends a run of integrity drops, or a device that sets
+    // up, drops and sets up again would never reach the cap.
+    if(bt_le_input_active(s)) { m->backoff_ms=2000; if(s->reports) m->mic_drops=0; return; }
     if(!bt_le_quiescent(s)) return;
     if(s->phase==BT_LE_STOPPED && !s->retryable) { m->blocked=true; return; }
+    // Each integrity-check drop is counted once, by the time it happened.
+    if(s->phase==BT_LE_STOPPED && s->disconnect_reason==0x3d && m->mic_seen_ms!=s->disconnected_ms) {
+        m->mic_seen_ms=s->disconnected_ms;
+        if(++m->mic_drops>=BT_MANAGER_MIC_DROPS) { m->blocked=true; return; }
+    }
     if(m->scan_owned) {
         if(scan->phase!=BT_SCAN_DONE && scan->phase!=BT_SCAN_STOPPED) return;
         m->scan_owned=false;
@@ -62,7 +70,7 @@ bool bt_manager_command(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,
     if(manager_word(p,n,"auto on") || manager_word(p,n,"auto off")) {
         bool enabled=manager_word(p,n,"auto on");
         if(enabled && !s->bond.valid) return false;
-        m->automatic=enabled; m->suppressed=false; m->blocked=false;
+        m->automatic=enabled; m->suppressed=false; m->blocked=false; m->mic_drops=0;
         m->generation++; m->dirty=true; m->next_save=now; m->next_attempt=now;
         return true;
     }
@@ -83,7 +91,7 @@ bool bt_manager_command(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,
     bt_manager_observe(m,s,now);
     if(disconnect) m->suppressed=true;
     else if(!manager_word(p,n,"inspect")) {
-        m->suppressed=false; m->blocked=false; m->scan_owned=false;
+        m->suppressed=false; m->blocked=false; m->mic_drops=0; m->scan_owned=false;
         m->next_attempt=now;
         bt_le_reconnect_scan(s,scan);
     }

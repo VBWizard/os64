@@ -360,3 +360,19 @@ The `NETPOLL` flashlight was proven on the QEMU e1000 rig the same evening:
 no probe, `mode: tick-driven (NETPOLL)`, the download back at its tick-bound
 1.44 s, suite green — the path that carried every packet before the
 doorbell, one token away.
+
+## A second customer (2026-11-12)
+
+(Since the xHCI interrupt, `kUsbDoorbell` has a second ringer beside the
+tick: `xhci_isr`, the controllers' shared top half. It rings exactly as a
+NIC's handler does, and nothing in the doorbell changed for it either.)
+
+`kusb` (`kernel/src/kusb.c`) parks on the same primitive: a daemon pinned
+to the BSP, its bell `kUsbDoorbell` rung by the tick once a tick, draining
+every xHCI controller's event ring. Nothing in the doorbell changed for it.
+Two things it does differently from `knet`, each for a reason
+docs/design/pending/XHCI_INTERRUPT.md § The design gives: its work is one
+pass against a deadline checked before every event, not rounds with a
+budget checked between them; and a pass refused by a held flag is brought
+back by the holder's release ringing the bell, not by the daemon ringing
+itself. The registry holds eight bells and this is the third.
