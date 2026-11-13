@@ -67,8 +67,11 @@ typedef struct {
     uint64_t since;
 } bt_classic_answer_t;
 
-// Refusals: answers to anyone the link is not paging, accepting or linked
-// to (while CLOSING, that is everyone), and to a voice link from anyone.
+// Refusals: a call the link will not take (a stranger's, reason 0x0f; the
+// bonded peer's while the link is busy, reason 0x0d, unless it is the
+// address being paged, whose call crosses ours and is accepted), pairing
+// asks from anyone the link is not paging, accepting or linked to (while
+// CLOSING, that is everyone), and a voice link from anyone.
 // They never touch the link's state. A queue that is full drops the
 // newest, and one that has waited 25 s is dropped; the controller's own
 // timeout then refuses it.
@@ -107,6 +110,12 @@ typedef struct bt_classic {
     // A Connection Complete is still owed for `peer`: Create Connection or
     // Accept Connection Request was sent and nothing has ended it.
     bool link_may_active;
+    // Two calls crossed: `peer` called us while we paged it, and its call
+    // is accepted (latched or sent). The controller completes one of the
+    // two and fails the other, so while this is set a failing Connection
+    // Complete, or a refused page or accept, is one of the two ending and
+    // not the attempt.
+    bool crossing;
     // Disconnect has been sent for the live handle; Link Key Request Reply
     // gave the bond's key in this attempt; the peer that called us has
     // begun authenticating, so we wait for it rather than start our own.
@@ -122,6 +131,10 @@ typedef struct bt_classic {
     // The key a `bond` session's pairing produced, kept until READY.
     bool have_key;
     uint8_t new_key[16], new_key_type;
+    // This session's pairing produced a debug key (type 0x03, Simple
+    // Pairing debug mode, which anyone listening can compute): the link
+    // used it and the bond did not keep it.
+    bool debug_key;
     bt_classic_bond_t bond;
     bool bond_dirty, bond_loaded;
     // Write Scan Enable: wanted is 0x02 (page scan only) exactly while a

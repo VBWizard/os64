@@ -63,6 +63,7 @@ typedef struct {
     uint8_t expect_reason;   // what a Disconnect must give (0: not checked)
     bool silent;             // nothing answers
     bool reply_only;         // command replies, no events after them
+    uint8_t key_type;        // what Link Key Notification says the new key is
 } model_t;
 
 static model_t M;
@@ -167,9 +168,9 @@ static void model_send(void *context, uint16_t op, const uint8_t *p, uint8_t len
         ev_role(m, 35, m->addr, 0x01);
         if (m->they_secure) { m->they_authenticating = true; ev_addr(m, 60, 0x17, m->addr); }
         break;
-    case 0x040a:
-        WANT(len == 7); WANT(p[6] == 0x0f);
-        ev_cs(m, 1, 0, op); ev_conn(m, 20, TAG_NONE, 0x0f, 0, p, 1);
+    case 0x040a:   // unacceptable address, or the bonded peer while busy (each test checks which)
+        WANT(len == 7); WANT(p[6] == 0x0f || p[6] == 0x0d);
+        ev_cs(m, 1, 0, op); ev_conn(m, 20, TAG_NONE, p[6], 0, p, 1);
         break;
     case 0x042a:
         WANT(len == 7); WANT(p[6] == 0x0d);
@@ -200,7 +201,7 @@ static void model_send(void *context, uint16_t op, const uint8_t *p, uint8_t len
         ev_cc_addr(m, 1, op, 0, p);
         if (m->reply_only) break;
         ev_ssp(m, 30, 0, m->addr);
-        ev_key_notify(m, 35, m->addr, NEW_KEY, 0x04);
+        ev_key_notify(m, 35, m->addr, NEW_KEY, m->key_type);
         m->has_key = true; memcpy(m->key, NEW_KEY, 16);
         if (m->they_authenticating) ev_enc(m, 45, 0, m->handle, 1);
         else ev_auth(m, 45, 0, m->handle);
@@ -243,7 +244,7 @@ static void model_reset(void)
 {
     memset(&M, 0, sizeof M);
     memcpy(M.addr, PHONES, 6);
-    M.present = true; M.key_size = 16; M.next_handle = 0x0b; M.control = true; M.expect_auth = 0x04;
+    M.present = true; M.key_size = 16; M.next_handle = 0x0b; M.control = true; M.expect_auth = 0x04; M.key_type = 0x04;
 }
 
 // One 10 ms step: what has arrived is delivered, then the link ticks.
@@ -437,6 +438,41 @@ static void test_connect_session(void)
     check_no_key(&c, NEW_KEY);
 }
 
+// A debug link key (type 0x03) gives a session that works and a bond that
+// is not kept, and the status file says why.
+static void test_debug_key(void)
+{
+    for (int had = 0; had < 2; had++) {
+        bt_classic_t c;
+        bt_classic_bond_t none = {0};
+        bt_classic_bond_t old = bond_for(STRANGER, OLD_KEY);
+        start(&c, had ? &old : &none);
+        M.key_type = 0x03;
+        unsigned writes = M.scan_writes;
+        char text[64];
+        snprintf(text, sizeof text, "bond %s", PHONES_TEXT);
+        CHECK(request(&c, text, NULL, NULL));
+        CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+        run(&c, &M, 200);
+        CHECK(c.connected); CHECK(c.encrypted); CHECK(c.debug_key);
+        CHECK(!c.bond_dirty); CHECK(!c.have_key); CHECK(all_zero(c.new_key, 16));
+        CHECK_EQ(M.scan_writes, writes);
+        if (had) { CHECK(c.bond.valid); CHECK(!memcmp(c.bond.peer, STRANGER, 6)); CHECK(!memcmp(c.bond.key, OLD_KEY, 16)); }
+        else CHECK(!c.bond.valid);
+        CHECK_TEXT(&c, "bond: not kept (debug link key); held: ");
+        CHECK_TEXT(&c, had ? "held: 06:05:04:03:02:01 key type 04" : "held: none (to save: no)");
+        check_no_key(&c, NEW_KEY);
+        // The next attempt says nothing of it.
+        CHECK(request(&c, "disconnect", NULL, NULL));
+        run(&c, &M, 200);
+        M.key_type = 0x04;
+        CHECK(request(&c, text, NULL, NULL));
+        CHECK(!c.debug_key);
+        CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+        CHECK(c.bond.valid); CHECK(c.bond_dirty); CHECK(!memcmp(c.bond.peer, PHONES, 6));
+    }
+}
+
 // ── 2: reconnecting with the bond ───────────────────────────────────────────
 
 static void test_reconnect(void)
@@ -552,7 +588,7 @@ static void test_refusals(void)
     run(&c, &M, 100);
     static const uint16_t ops[] = {0x040a};
     expect_ops("stranger", ops, 1, from);
-    CHECK(!memcmp(M.log[from].p, STRANGER, 6));
+    CHECK(!memcmp(M.log[from].p, STRANGER, 6)); CHECK_EQ(M.log[from].p[6], 0x0f);
     CHECK_EQ(c.phase, BT_CLASSIC_IDLE); CHECK(bt_classic_quiescent(&c));
     // Pairing asks from a stranger: the negative forms.
     from = M.logn;
@@ -574,12 +610,21 @@ static void test_refusals(void)
     expect_ops("voice", sco, 2, from);
     CHECK(!memcmp(M.log[from].p, PHONES, 6));
     CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(c.connected); CHECK(c.encrypted);
-    // The bonded peer calling while the link is busy is refused too.
+    // The bonded peer calling while the link is busy is refused too, as
+    // limited resources: it is welcome, just not now.
     from = M.logn;
     ev_request(&M, 0, PHONES, 1);
     run(&c, &M, 100);
     static const uint16_t busy[] = {0x040a};
     expect_ops("busy", busy, 1, from);
+    CHECK_EQ(M.log[from].p[6], 0x0d);
+    CHECK_EQ(c.phase, BT_CLASSIC_READY);
+    // A stranger calling while the link is busy is still unacceptable.
+    from = M.logn;
+    ev_request(&M, 0, STRANGER, 1);
+    run(&c, &M, 100);
+    expect_ops("busy stranger", busy, 1, from);
+    CHECK_EQ(M.log[from].p[6], 0x0f);
     CHECK_EQ(c.phase, BT_CLASSIC_READY);
     // A call from the bonded address with no bond loaded is a stranger's.
     bt_classic_bond_t none = {0};
@@ -588,7 +633,222 @@ static void test_refusals(void)
     ev_request(&M, 0, PHONES, 1);
     run(&c, &M, 100);
     expect_ops("no bond", busy, 1, from);
+    CHECK_EQ(M.log[from].p[6], 0x0f);
     CHECK_EQ(c.phase, BT_CLASSIC_IDLE);
+    // The bonded peer calling while we page someone else: busy.
+    bt_classic_bond_t b2 = bond_for(PHONES, OLD_KEY);
+    start(&c, &b2);
+    M.silent = true;
+    char other[64];
+    snprintf(other, sizeof other, "connect 06:05:04:03:02:01");
+    CHECK(request(&c, other, NULL, NULL));
+    step(&c, &M, 10);
+    ev_cs(&M, 0, 0, 0x0405);
+    step(&c, &M, 10);
+    from = M.logn;
+    ev_request(&M, 0, PHONES, 1);
+    ev_cs(&M, 20, 0, 0x040a);   // the silent model answers nothing; the refusal still needs its reply
+    run(&c, &M, 50);
+    CHECK(find_op(0x040a, from) && find_op(0x040a, from)->p[6] == 0x0d);
+    CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.crossing);
+}
+
+// ── Two calls that cross ────────────────────────────────────────────────────
+
+// We page the headphones as they page us. Their call is accepted, the
+// controller completes one of the two and fails the other, in either
+// order, and the link is whichever succeeded.
+static void test_crossing(void)
+{
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    for (int order = 0; order < 4; order++) {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        CHECK(c.pending && c.opcode == 0x0405);
+        ev_cs(&M, 0, 0, 0x0405);
+        ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(c.crossing);
+        CHECK_EQ(c.phase, BT_CLASSIC_PAGING);
+        CHECK(c.pending && c.opcode == 0x0409);   // accepted, not refused
+        CHECK_EQ(c.refusal_count, 0);
+        ev_cs(&M, 0, 0, 0x0409);
+        step(&c, &M, 10);
+        CHECK(c.link_may_active);
+        // order 0: fail then succeed; 1: succeed then fail; 2: both fail;
+        // 3: the accept refused, then the page succeeds.
+        if (order == 0) {
+            ev_conn(&M, 0, TAG_NONE, 0x0b, 0, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.error); CHECK(!c.crossing); CHECK(c.link_may_active);
+            ev_conn(&M, 0, TAG_NONE, 0, 0x0040, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.connected); CHECK_EQ(c.handle, 0x0040);
+        } else if (order == 1) {
+            ev_conn(&M, 0, TAG_NONE, 0, 0x0041, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.connected); CHECK(!c.crossing);
+            ev_cs(&M, 0, 0, 0x0411);
+            ev_conn(&M, 0, TAG_NONE, 0x0b, 0, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.connected); CHECK(!c.error);
+        } else if (order == 2) {
+            ev_conn(&M, 0, TAG_NONE, 0x0b, 0, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.error);
+            ev_conn(&M, 0, TAG_NONE, 0x04, 0, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+            CHECK(c.error && !strcmp(c.error, "the connection was not made")); CHECK_EQ(c.error_status, 0x04);
+            CHECK(!c.link_may_active); CHECK(!c.crossing);
+        } else {
+            // The accept was answered with success above; replay the case
+            // where it is refused instead.
+            start(&c, &b);
+            M.silent = true;
+            CHECK(request(&c, "reconnect", NULL, NULL));
+            step(&c, &M, 10);
+            ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK(c.pending && c.opcode == 0x0409);
+            ev_cs(&M, 0, 0x0c, 0x0409);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_PAGING); CHECK(!c.error); CHECK(!c.crossing); CHECK(c.link_may_active);
+            ev_conn(&M, 0, TAG_NONE, 0, 0x0042, PHONES, 1);
+            step(&c, &M, 10);
+            CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.connected);
+        }
+    }
+    // The page succeeds while the crossing call's accept is still latched:
+    // the accept is not sent for a link already made.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        M.control = false;
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(c.crossing); CHECK(bt_classic_urgent(&c));
+        ev_conn(&M, 0, TAG_NONE, 0, 0x0043, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(!c.crossing); CHECK(!bt_classic_urgent(&c));
+        unsigned from = M.logn;
+        M.control = true;
+        step(&c, &M, 10);
+        CHECK(find_op(0x0411, from)); CHECK(!find_op(0x0409, from));
+    }
+    // The page succeeds while the accept is in flight, and the controller
+    // then refuses the accept (the call it was for is the link now): the
+    // link stands.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(c.pending && c.opcode == 0x0409);
+        ev_conn(&M, 0, TAG_NONE, 0, 0x0045, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.pending && c.opcode == 0x0409);
+        ev_cs(&M, 0, 0x02, 0x0409);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_AUTHENTICATING); CHECK(c.connected); CHECK(!c.error);
+        CHECK(c.pending && c.opcode == 0x0411);
+    }
+    // Closed while crossing with the cancel answered "Unknown Connection":
+    // the page is over, the accepted call still owes its completion.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0409);
+        step(&c, &M, 10);
+        CHECK(request(&c, "disconnect", NULL, NULL));
+        step(&c, &M, 10);
+        CHECK(c.pending && c.opcode == 0x0408);
+        ev_cc_addr(&M, 0, 0x0408, 0x02, PHONES);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_CLOSING); CHECK(c.link_may_active); CHECK(!c.crossing);
+        ev_conn(&M, 0, TAG_NONE, 0x10, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(!c.error);
+    }
+    // Closed while the crossing call's accept is still latched: it becomes
+    // a reject, and the page's failing completion then ends the attempt at
+    // once (nothing else is owed).
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        M.control = false;
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(request(&c, "disconnect", NULL, NULL));
+        CHECK(!c.crossing); CHECK_EQ(c.refusal_count, 1);
+        ev_conn(&M, 0, TAG_NONE, 0x02, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK(!c.error);
+    }
+    // A second call while one already crosses is busy, and refused.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(c.crossing); CHECK_EQ(c.refusal_count, 1); CHECK_EQ(c.refusal[0].reason, 0x0d);
+    }
+    // Closed while crossing: the cancel and the accepted call both end it.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0405); ev_request(&M, 0, PHONES, 1);
+        step(&c, &M, 10);
+        ev_cs(&M, 0, 0, 0x0409);
+        step(&c, &M, 10);
+        CHECK(request(&c, "disconnect", NULL, NULL));
+        CHECK_EQ(c.phase, BT_CLASSIC_CLOSING);
+        step(&c, &M, 10);
+        CHECK(c.pending && c.opcode == 0x0408);
+        ev_cc_addr(&M, 0, 0x0408, 0, PHONES); ev_conn(&M, 0, TAG_NONE, 0x02, 0, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_CLOSING);   // the accepted call still owes its completion
+        ev_conn(&M, 0, TAG_NONE, 0, 0x0044, PHONES, 1);
+        step(&c, &M, 10);
+        CHECK(c.pending && c.opcode == 0x0406);
+        ev_cs(&M, 0, 0, 0x0406); ev_disconn(&M, 0, 0, 0x0044, 0x16);
+        run(&c, &M, 50);
+        check_clean(&c, "closed while crossing");
+    }
+    // A stranger's call while paging is not a crossing call.
+    {
+        bt_classic_t c;
+        start(&c, &b);
+        M.silent = true;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        step(&c, &M, 10);
+        ev_request(&M, 0, STRANGER, 1);
+        step(&c, &M, 10);
+        CHECK(!c.crossing); CHECK_EQ(c.refusal_count, 1); CHECK_EQ(c.refusal[0].reason, 0x0f);
+    }
 }
 
 // ── 5, 6, 7: failures ───────────────────────────────────────────────────────
@@ -2081,12 +2341,14 @@ int main(int argc, char **argv)
     unsigned rounds = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 2000;
     test_bond();
     test_connect_session();
+    test_debug_key();
     test_reconnect();
     test_reconnect_ignores_new_key();
     test_inbound(true);
     test_inbound(false);
     test_inbound_slow_peer();
     test_refusals();
+    test_crossing();
     test_stale_bond();
     test_auth_failed();
     test_weak_key();

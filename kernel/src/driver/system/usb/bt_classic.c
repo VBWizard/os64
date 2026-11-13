@@ -80,12 +80,14 @@ static void cl_refuse(bt_classic_t *c, uint16_t op, const uint8_t *address, uint
 }
 
 // End the link. A live handle is disconnected; a page still owed its
-// Connection Complete is cancelled; an accepted call cannot be cancelled,
-// so its Connection Complete is waited for; an accept not yet sent becomes
-// a reject. With none of these it is over at once.
+// Connection Complete is cancelled (a crossing call accepted beside it
+// still owes one, which CLOSING takes as it comes); an accepted call cannot
+// be cancelled, so its Connection Complete is waited for; an accept not yet
+// sent becomes a reject. With none of these it is over at once.
 static void cl_close(bt_classic_t *c, uint8_t reason)
 {
     if(c->answer[BT_CLASSIC_ANSWER_ACCEPT].set) cl_refuse(c,0x040a,c->peer,0x0f);
+    c->crossing=c->crossing && !c->answer[BT_CLASSIC_ANSWER_ACCEPT].set;   // a crossing call refused is owed nothing
     cl_answers_clear(c);
     cl_key_wipe(c);
     c->next_op=0; c->waiting=false; c->close_reason=reason;
@@ -107,7 +109,7 @@ static void cl_fail(bt_classic_t *c, const char *why, uint16_t op, uint8_t statu
 static void cl_give_up(bt_classic_t *c, const char *why, uint16_t op, uint8_t status)
 {
     cl_error(c,why,op,status,false);
-    c->connected=false; c->encrypted=false; c->link_may_active=false;
+    c->connected=false; c->encrypted=false; c->link_may_active=false; c->crossing=false;
     c->next_op=0; c->waiting=false; c->phase=BT_CLASSIC_STOPPED;
 }
 
@@ -121,8 +123,8 @@ static void cl_session(bt_classic_t *c, bt_classic_session_t kind, const uint8_t
     c->error=NULL; c->error_opcode=0; c->error_status=0; c->retryable=false;
     c->timed_out=c->timeout_usb_done=c->timeout_reply=false;
     c->disconnect_reason=0; c->connected=false; c->encrypted=false; c->handle=0;
-    c->link_may_active=false; c->disconnect_sent=false; c->key_given=false;
-    c->peer_authenticating=false; c->close_reason=0;
+    c->link_may_active=false; c->crossing=false; c->disconnect_sent=false; c->key_given=false;
+    c->peer_authenticating=false; c->close_reason=0; c->debug_key=false;
     c->role_known=c->mode_known=c->peer_io_known=c->ssp_done=false;
     c->role=c->mode=c->key_size=c->refresh_status=0; c->mode_interval=0;
     c->peer_io[0]=c->peer_io[1]=c->peer_io[2]=0;
@@ -288,7 +290,10 @@ bool bt_classic_event(bt_classic_t *c, const uint8_t *e, size_t n)
         if(c->phase!=BT_CLASSIC_PAGING && c->phase!=BT_CLASSIC_ACCEPTING &&
            !(c->phase==BT_CLASSIC_CLOSING && c->link_may_active)) return true;
         if(!status && cl_u16(e+3)>0x0eff) { c->malformed++; return true; }
-        c->link_may_active=false;
+        if(status && c->crossing) { c->crossing=false; return true; }   // the other call is still owed
+        // A crossing call not yet answered is now the link made, or ended.
+        if(c->crossing) c->answer[BT_CLASSIC_ANSWER_ACCEPT].set=false;
+        c->link_may_active=false; c->crossing=false;
         if(status) {
             // The controller has ended the call itself; an accept still
             // latched has nobody to answer.
@@ -308,13 +313,20 @@ bool bt_classic_event(bt_classic_t *c, const uint8_t *e, size_t n)
         const uint8_t *a=e+2;
         if(e[11]>2) { c->malformed++; return true; }
         if(e[11]!=1) { cl_refuse(c,0x042a,a,0x0d); return true; }   // SCO or eSCO: no voice links
-        if(c->bond.valid && cl_equal(a,c->bond.peer,6) &&
-           (c->phase==BT_CLASSIC_IDLE || c->phase==BT_CLASSIC_STOPPED)) {
+        bool bonded=c->bond.valid && cl_equal(a,c->bond.peer,6);
+        if(bonded && (c->phase==BT_CLASSIC_IDLE || c->phase==BT_CLASSIC_STOPPED)) {
             cl_session(c,BT_CLASSIC_SESSION_INBOUND,a,c->bond.name);
             c->phase=BT_CLASSIC_ACCEPTING; cl_latch(c,BT_CLASSIC_ANSWER_ACCEPT);
             return true;
         }
-        cl_refuse(c,0x040a,a,0x0f);
+        // The address being paged calls us at the same moment: its call
+        // crosses ours, and whichever the controller completes is the link.
+        if(c->phase==BT_CLASSIC_PAGING && !c->crossing && cl_equal(a,c->peer,6)) {
+            c->crossing=true; cl_latch(c,BT_CLASSIC_ANSWER_ACCEPT);
+            return true;
+        }
+        // Busy is the truth for the bonded peer; unacceptable for anyone else.
+        cl_refuse(c,0x040a,a,bonded ? 0x0d : 0x0f);
         return true;
     }
     case 0x05:     // Disconnection Complete: status, handle, reason
@@ -400,12 +412,17 @@ static void cl_ready(bt_classic_t *c)
 {
     c->phase=BT_CLASSIC_READY; c->waiting=false;
     if(c->session==BT_CLASSIC_SESSION_BOND && c->have_key) {
-        cl_wipe(&c->bond,sizeof(c->bond));
-        c->bond.valid=true;
-        cl_copy(c->bond.peer,c->peer,6); cl_copy(c->bond.local,c->local,6);
-        cl_copy(c->bond.key,c->new_key,16); c->bond.key_type=c->new_key_type;
-        cl_copy(c->bond.name,c->peer_name,sizeof(c->bond.name));
-        c->bond_dirty=true; cl_want_scan(c);
+        // A debug key is one anyone listening can compute: used for this
+        // session, never kept.
+        if(c->new_key_type==0x03) c->debug_key=true;
+        else {
+            cl_wipe(&c->bond,sizeof(c->bond));
+            c->bond.valid=true;
+            cl_copy(c->bond.peer,c->peer,6); cl_copy(c->bond.local,c->local,6);
+            cl_copy(c->bond.key,c->new_key,16); c->bond.key_type=c->new_key_type;
+            cl_copy(c->bond.name,c->peer_name,sizeof(c->bond.name));
+            c->bond_dirty=true; cl_want_scan(c);
+        }
     }
     cl_key_wipe(c);
 }
@@ -422,10 +439,13 @@ static void cl_finish(bt_classic_t *c)
     }
     if(!c->command_link || c->command_attempt!=c->attempt) return;
     if(op==0x0408) {
-        // Unknown Connection: no page was outstanding. Anything else
-        // (Connection Already Exists among it) leaves the Connection
-        // Complete to say how the page ended.
-        if(st==0x02) c->link_may_active=false;
+        // Unknown Connection: no page was outstanding (an accepted
+        // crossing call may still be). Anything else (Connection Already
+        // Exists among it) leaves the Connection Complete to say how the
+        // page ended.
+        if(st==0x02) {
+            if(c->crossing) c->crossing=false; else c->link_may_active=false;
+        }
         return;
     }
     if(op==0x0406) {
@@ -433,6 +453,9 @@ static void cl_finish(bt_classic_t *c)
         else if(st) cl_give_up(c,"the controller refused to disconnect",op,st);
         return;
     }
+    // A page or accept refused while two calls cross is one of the two
+    // ending: the other is still owed, or is already the link.
+    if(st && (op==0x0405 || op==0x0409) && (c->crossing || c->connected)) { c->crossing=false; return; }
     if(st) {
         if(op==0x0405 || op==0x0409) c->link_may_active=false;
         cl_fail(c,"HCI command rejected",op,st,false,0x13);
@@ -613,12 +636,14 @@ size_t bt_classic_status(const bt_classic_t *c, char *out, size_t cap)
     static const char *const sessions[]={"bond","session only (nothing kept)","reconnect to the bond","called by the bonded peer"};
     static const char *const modes[]={"active","hold","sniff"};
     const bt_classic_bond_t *b=&c->bond;
-    char bond[96], io[64], role[40];
+    char held[96], bond[160], io[64], role[40];
     if(b->valid)
-        snprintf(bond,sizeof(bond),"%02x:%02x:%02x:%02x:%02x:%02x key type %02x name %s",
+        snprintf(held,sizeof(held),"%02x:%02x:%02x:%02x:%02x:%02x key type %02x name %s",
                  b->peer[5],b->peer[4],b->peer[3],b->peer[2],b->peer[1],b->peer[0],b->key_type,
                  b->name[0] ? b->name : "(none)");
-    else snprintf(bond,sizeof(bond),"none");
+    else snprintf(held,sizeof(held),"none");
+    if(c->debug_key) snprintf(bond,sizeof(bond),"not kept (debug link key); held: %s",held);
+    else snprintf(bond,sizeof(bond),"%s",held);
     if(c->peer_io_known) snprintf(io,sizeof(io),"IO %02x OOB %02x authentication %02x",c->peer_io[0],c->peer_io[1],c->peer_io[2]);
     else snprintf(io,sizeof(io),"unknown");
     if(c->mode_known) snprintf(role,sizeof(role),"%s interval %u",c->mode<3 ? modes[c->mode] : "unknown",(unsigned)c->mode_interval);
