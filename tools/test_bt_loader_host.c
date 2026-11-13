@@ -392,13 +392,15 @@ static void send_slots(void)
     CHECK(p->host.failed);
     // What is still queued is the controller's to read, failed transport or
     // not: neither slot is touched, and the endpoint is not called idle.
-    CHECK(p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,0)[0]==0x51 && xhci_bt_tx_slot(p,1)[0]==0x51);
+    unsigned held=p->tx_oldest;   // the ring has moved on: these two are wherever it now is
+    CHECK(p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51 &&
+          xhci_bt_tx_slot(p,(held+1)%BT_TX_SLOTS)[0]==0x51);
     // The same when the failure is the control endpoint's: the bulk
     // endpoint is still running.
     p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
     kTicksSinceStart=first; s_hc->control_slot=p->device->slot; s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_USB_TRANSACTION_ERROR;
     xhci_bt_runtime_poll();
-    CHECK(p->host.failed && p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,0)[0]==0x51);
+    CHECK(p->host.failed && p->tx_slots==2 && !p->tx_done && xhci_bt_tx_slot(p,held)[0]==0x51);
     s_hc->control_slot=0; s_hc->xfer_cc=TRB_CC_SUCCESS;
 
     // A fifth packet with four in flight, and one too long for a slot:
