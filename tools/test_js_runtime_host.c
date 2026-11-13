@@ -2578,6 +2578,12 @@ static void module_bytecode_cases(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--native-call-contexts")) {
+        native_call_context_cases();
+        check(live == 0, "native context cases release allocations");
+        printf("libjs native call contexts: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--global-this")) {
         global_this_cases();
         check(live == 0, "global this cases release allocations");
