@@ -4,6 +4,8 @@
 #undef main
 #include "../kernel/src/driver/system/usb/bt_acl.c"
 #include "../kernel/src/driver/system/usb/bt_classic.c"
+#include "../kernel/src/driver/system/usb/bt_l2cap.c"
+#include "../kernel/src/driver/system/usb/bt_sdp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
 
@@ -816,12 +818,13 @@ static void classic_bond_while_typing(void)
     assert(host.acl_classic==CM.handle+1u);
     assert(status_has("\nslot 2:\nkind: classic\nstate: ready\n") && status_has("automatic: yes; connected\n"));
     assert(!status_shows_key(PH_NEW_KEY));
-    // A packet on the Classic handle is counted and dropped; the keyboard's still arrive.
+    // A packet on the Classic handle is its L2CAP's (a signalling frame too
+    // short to hold a command: counted malformed); the keyboard's still arrive.
     const uint8_t classic_packet[]={0x40,0x20,5,0,1,0,1,0,0x02};
-    unsigned before=input_count[0];
+    unsigned before=input_count[0], malformed=host.l2cap.malformed;
     multi_wire(classic_packet,sizeof(classic_packet)); notify_keyboard();
-    assert(host.classic_rx_unread==1 && input_count[0]==before+1);
-    assert(status_has("acl packets received and not read: 1\n"));
+    assert(host.l2cap.malformed==malformed+1 && input_count[0]==before+1);
+    assert(status_has("\nl2cap: link up, encrypted\n"));
     // Its completions are the count's; the keyboard's handle is untouched.
     const uint8_t stray[]={0x13,5,1,0x40,0,1,0}; multi_event(stray,sizeof(stray));
     assert(host.acl_bad_completions==1);
@@ -1214,7 +1217,11 @@ static void classic_status(void)
 {
     setup();
     host.initialized=false;
-    assert(status_has("\nslot 2:\nkind: classic\nunavailable: the controller is not ready\nacl packets received and not read: 0\n"));
+    // Not ready: the slot says so, and nothing of its services is shown.
+    static char text[BT_SCAN_TEXT_BYTES];
+    bt_host_status(&host,text,sizeof(text));
+    static const char not_ready[]="\nslot 2:\nkind: classic\nunavailable: the controller is not ready\n";
+    assert(strlen(text)>=strlen(not_ready) && !strcmp(text+strlen(text)-strlen(not_ready),not_ready));
     host.initialized=true;
     bt_classic_bond_t b=ph_bond(); classic_slot(&b,true);
     assert(status_has("\nslot 2:\nkind: classic\nstate: "));
@@ -1222,7 +1229,6 @@ static void classic_status(void)
     assert(!status_shows_key(PH_KEY));
     host.classic_auto=false; assert(status_has("automatic: no\n"));
     // After the LE slots, and the commands line names slot N.
-    static char text[BT_SCAN_TEXT_BYTES];
     bt_host_status(&host,text,sizeof(text));
     char *s0=strstr(text,"\nslot 0:\n"),*s1=strstr(text,"\nslot 1:\n"),*s2=strstr(text,"\nslot 2:\n");
     assert(s0 && s1 && s2 && s0<s1 && s1<s2);

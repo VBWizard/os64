@@ -1,7 +1,16 @@
 #include "driver/system/usb/bt_host.h"
 #include "strings/sprintf.h"
 
+// A whole Classic ACL packet (its 4-byte header, then an L2CAP PDU of
+// BT_L2CAP_MTU + 4) fits the assembler (bt_host.h).
+_Static_assert(sizeof(((bt_host_t *)0)->wire)>=4+BT_L2CAP_MTU+4,"a whole Classic ACL packet fits the ACL assembler");
+
 static uint16_t host_u16(const uint8_t *p) { return p[0] | (uint16_t)p[1]<<8; }
+static void host_wipe(void *p,size_t n)
+{
+    volatile uint8_t *v=p;
+    while(n--) *v++=0;
+}
 static bool host_setup(const bt_host_t *h)
 {
     for(unsigned i=0;i<BT_HOST_PEERS;i++) {
@@ -18,9 +27,10 @@ void bt_host_init(bt_host_t *h,uint64_t now)
     bt_scan_start_le(&h->scan,now);
 }
 // Bring the count's links in line with the peers: one for each LE peer that
-// is connected and one for a connected Classic link, under its handle.
-// Called wherever a peer may have connected or let go (its events, its
-// tick), before the count is asked or told anything.
+// is connected and one for a connected Classic link, under its handle; and
+// the Classic link's L2CAP with it. Called wherever a peer may have
+// connected or let go (its events, its tick), before the count is asked or
+// told anything, and before an ACL packet on a new link can be routed.
 static void host_acl_link(bt_host_t *h,uint16_t *counted,bool connected,uint16_t handle,bool le)
 {
     uint16_t now=connected?(uint16_t)((handle&0xfff)+1):0;   // the handle plus one (bt_host.h)
@@ -29,13 +39,18 @@ static void host_acl_link(bt_host_t *h,uint16_t *counted,bool connected,uint16_t
     if(now) (void)bt_acl_link_up(&h->acl,(uint16_t)(now-1),le);
     *counted=now;
 }
+static void host_services_link(bt_host_t *h,bool up);
 static void host_acl_links(bt_host_t *h)
 {
     for(unsigned i=0;i<BT_HOST_PEERS;i++) {
         const bt_le_t *s=&h->peers[i].le;
         host_acl_link(h,&h->acl_link[i],s->connected,s->handle,true);
     }
+    // The Classic link's L2CAP follows the same edge: a connection under a
+    // new handle, or none, starts it over.
+    uint16_t before=h->acl_classic;
     host_acl_link(h,&h->acl_classic,h->classic.connected,h->classic.handle,false);
+    if(h->acl_classic!=before) host_services_link(h,h->acl_classic!=0);
 }
 // An event that cannot be right. Once the controller is known to be up that
 // is the end of the host. During start-up it is the end of the ROUND, which
@@ -115,6 +130,169 @@ static void host_wire_empty(bt_host_t *h)
     for(size_t i=0;i<h->wire_used;i++) wipe[i]=0;
     h->wire_used=h->wire_need=0;
 }
+// ── Slot 2's services: L2CAP and SDP (AUDIO_CLASSIC.md part S) ────────────
+//
+// The largest L2CAP payload this host sends on a channel: the peer's MTU,
+// ours, and what one Classic ACL packet of the controller's carries after
+// the 4-byte L2CAP header, whichever is least. 0 when the channel is not
+// open or the controller's sizes are not known.
+static size_t host_l2cap_room(const bt_host_t *h,unsigned channel)
+{
+    size_t room=bt_l2cap_peer_mtu(&h->l2cap,channel);
+    size_t packet=bt_acl_packet_size(&h->acl,false);
+    if(room>BT_L2CAP_MTU) room=BT_L2CAP_MTU;
+    return packet<4?0:room<packet-4?room:packet-4;
+}
+static void host_sdp_answer_drop(bt_host_t *h)
+{
+    host_wipe(h->sdp_answer,h->sdp_answer_bytes);
+    h->sdp_answer_bytes=0;
+}
+// The held answer, offered again: taken, or dropped when its channel is no
+// longer the open one it was made for or the peer's MTU no longer admits it.
+static void host_sdp_answer_offer(bt_host_t *h)
+{
+    if(!h->sdp_answer_bytes) return;
+    unsigned ch=h->sdp_answer_channel;
+    if(!bt_l2cap_is_open(&h->l2cap,ch) || h->l2cap.ch[ch].cid!=h->sdp_answer_cid ||
+       h->sdp_answer_bytes>host_l2cap_room(h,ch)) {
+        h->sdp_dropped++; host_sdp_answer_drop(h); return;
+    }
+    if(bt_l2cap_send(&h->l2cap,ch,h->sdp_answer,h->sdp_answer_bytes)) {
+        h->sdp_answered++; host_sdp_answer_drop(h);
+    }
+}
+// A whole PDU on an open SDP channel (the only PSM admitted or asked for).
+// On the channel we opened, it is the answer to our query. On one the
+// headphones opened, it is their question, answered from our record into
+// the host's buffer and queued; with L2CAP's one payload slot still taken
+// the answer is held (one at most) and offered every tick.
+static void host_l2cap_deliver(void *context,unsigned channel,uint16_t psm,const uint8_t *data,size_t bytes)
+{
+    bt_host_t *h=context;
+    if(psm!=BT_L2CAP_PSM_SDP || channel>=BT_L2CAP_CHANNELS) return;
+    const bt_l2cap_channel_t *c=&h->l2cap.ch[channel];
+    if(c->outgoing) {
+        if(h->sdp_channel==channel+1 && c->cid==h->sdp_cid) bt_sdp_client_receive(&h->sdp,data,bytes);
+        return;
+    }
+    if(h->sdp_answer_bytes) { h->sdp_dropped++; return; }
+    size_t n=bt_sdp_respond(data,bytes,h->sdp_answer,host_l2cap_room(h,channel));
+    if(!n) return;
+    h->sdp_answer_bytes=(uint16_t)n; h->sdp_answer_channel=(uint8_t)channel; h->sdp_answer_cid=c->cid;
+    host_sdp_answer_offer(h);
+}
+// What belongs to one connection: the query's state, the request and the
+// answer held, the client. The result found stays, now an earlier
+// connection's.
+static void host_sdp_clear(bt_host_t *h)
+{
+    h->sdp_asked=false; h->sdp_channel=0; h->sdp_cid=0;
+    h->sdp_not_made=NULL; h->sdp_refused=0;
+    host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
+    host_sdp_answer_drop(h);
+    host_wipe(&h->sdp,sizeof(h->sdp));          // BT_SDP_IDLE
+    h->sdp_result_current=false;
+}
+// The Classic link connected (up) or went: L2CAP starts over, admitting SDP
+// alone (AVDTP is A.3's), and so does everything the last connection held.
+static void host_services_link(bt_host_t *h,bool up)
+{
+    if(up) {
+        bt_l2cap_init(&h->l2cap);
+        bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_SDP,true);
+    } else bt_l2cap_reset(&h->l2cap);
+    h->l2cap_encrypted=false;
+    host_sdp_clear(h);
+}
+// The query is over, one way or another: its line is kept and the
+// transport says it once (sdp_ended).
+static void host_sdp_ended(bt_host_t *h,const char *not_made)
+{
+    if(not_made) {
+        h->sdp_not_made=not_made;
+        snprintf(h->sdp_line,sizeof(h->sdp_line),"sdp: not made: %s\n",not_made);
+        host_wipe(&h->sdp,sizeof(h->sdp));
+    } else {
+        bt_sdp_client_status(&h->sdp,h->sdp_line,sizeof(h->sdp_line));
+        if(bt_sdp_client_state(&h->sdp)==BT_SDP_DONE) {
+            h->sdp_result=*bt_sdp_client_result(&h->sdp);
+            h->sdp_result_valid=h->sdp_result_current=true;
+            bt_sdp_client_status(&h->sdp,h->sdp_result_line,sizeof(h->sdp_result_line));
+        }
+    }
+    h->sdp_channel=0;
+    host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
+    h->sdp_ended++;
+}
+// One query a connection, ours: once the link is READY, a channel to the
+// headphones' SDP; once it is open, the client, with the smaller of the two
+// MTUs; its requests queued as the channel's payload slot frees; when it is
+// DONE or FAILED, the channel closed. A channel refused, unanswered or
+// closed before the answer is whole ends the query as not made, and it is
+// not asked again on this connection. The client's own five seconds start
+// only when the channel is open, so L2CAP's ten-second RTX is not inside
+// them.
+static void host_sdp_step(bt_host_t *h,uint64_t now)
+{
+    bt_l2cap_t *l=&h->l2cap;
+    if(h->classic.phase==BT_CLASSIC_READY && !h->sdp_asked) {
+        h->sdp_asked=true;
+        // SDP may precede encryption. A channel to any other PSM must wait
+        // for the link to be encrypted, and that guard is the host's to
+        // keep when it opens one (A.3): L2CAP does not refuse it.
+        int ch=bt_l2cap_connect(l,BT_L2CAP_PSM_SDP,now);
+        if(ch<0) { host_sdp_ended(h,"no L2CAP channel was free"); return; }
+        h->sdp_channel=(uint8_t)(ch+1); h->sdp_cid=l->ch[ch].cid;
+    }
+    if(!h->sdp_channel) return;
+    unsigned ch=h->sdp_channel-1u;
+    const bt_l2cap_channel_t *c=&l->ch[ch];
+    bt_sdp_state_t state=bt_sdp_client_state(&h->sdp);
+    if(c->state==BT_L2CAP_FREE || !c->outgoing || c->cid!=h->sdp_cid) {
+        // Refused or unanswered while connecting (L2CAP records why; ours
+        // is the only channel this part asks for), or closed later.
+        if(state==BT_SDP_IDLE && l->refused) {
+            h->sdp_refused=l->refused; h->l2cap_refusals++;
+            host_sdp_ended(h,l->refused==0xffff?"the headphones did not answer the SDP channel's request":
+                             "the headphones refused the SDP channel");
+        } else host_sdp_ended(h,state==BT_SDP_IDLE?"the SDP channel closed before it opened":
+                                 "the SDP channel closed before the answer was whole");
+        return;
+    }
+    if(state==BT_SDP_IDLE) {
+        if(!bt_l2cap_is_open(l,ch)) return;
+        uint16_t mtu=bt_l2cap_peer_mtu(l,ch);
+        bt_sdp_client_start(&h->sdp,now,mtu<c->our_mtu?mtu:c->our_mtu);
+    }
+    bt_sdp_client_tick(&h->sdp,now);
+    if(!h->sdp_request_bytes)
+        h->sdp_request_bytes=(uint8_t)bt_sdp_client_request(&h->sdp,h->sdp_request,sizeof(h->sdp_request));
+    if(h->sdp_request_bytes && bt_l2cap_send(l,ch,h->sdp_request,h->sdp_request_bytes)) {
+        host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
+    }
+    state=bt_sdp_client_state(&h->sdp);
+    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {
+        bt_l2cap_close(l,ch,now);
+        host_sdp_ended(h,NULL);
+    }
+}
+// Slot 2's services, each tick of a host whose Classic link is connected.
+static void host_services_tick(bt_host_t *h,uint64_t now)
+{
+    if(!h->l2cap.up) return;
+    if(h->classic.encrypted!=h->l2cap_encrypted) {
+        // L2CAP's clock first: a channel that was waiting for encryption
+        // has its configuration deadline counted from the last `now` it
+        // was handed, which must be this tick's.
+        bt_l2cap_tick(&h->l2cap,now,false,NULL,NULL);
+        bt_l2cap_set_encrypted(&h->l2cap,h->classic.encrypted);
+        h->l2cap_encrypted=h->classic.encrypted;
+    }
+    host_sdp_step(h,now);
+    host_sdp_answer_offer(h);
+    bt_l2cap_tick(&h->l2cap,now,false,NULL,NULL);
+}
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)
 {
@@ -152,9 +330,11 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
             bt_le_receive(s,h->wire,h->wire_need,host_report,&call);
             routed=true;
         }
-        // The Classic link's packets have no reader yet: counted and dropped,
-        // as is a packet for a handle nobody holds.
-        if(!routed && h->classic.connected && h->classic.handle==handle) h->classic_rx_unread++;
+        // The Classic link's packets are its L2CAP's. This function has no
+        // clock of its own: the time is the Classic link's, that of its
+        // last tick. A packet for a handle nobody holds is dropped.
+        if(!routed && h->classic.connected && h->classic.handle==handle)
+            bt_l2cap_receive(&h->l2cap,h->wire,h->wire_need,h->classic.now,host_l2cap_deliver,h);
         host_wire_empty(h);
     }
     // The transfer is over and the packet is not: what is held was never
@@ -339,6 +519,7 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
         if(s->phase==BT_LE_FAILED) h->failed=true;
     }
     if(classic && !classic_first) host_classic_tick(h,now,usb_done,&call);
+    if(classic && !h->failed) host_services_tick(h,now);
     if(classic && h->owner==BT_HOST_OWNER_CLASSIC && !h->classic.pending &&
        now>=h->classic.command_deadline+BT_HOST_CLASSIC_REPLY_GRACE_MS) h->failed=true;
     // A controller failure affects every connection, even if detected by the
@@ -511,6 +692,36 @@ bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
     }
     return bt_manager_command(&peer->manager,&peer->le,&h->scan,p,n,now);
 }
+// Slot 2's services, after the link's own lines: L2CAP's text, the query
+// on this connection, what an earlier connection's query found when this
+// one has found nothing yet, and the questions the headphones asked us.
+static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size_t cap)
+{
+    used+=bt_l2cap_status(&h->l2cap,out+used,cap-used);
+    if(used>=cap-1) return used;
+    int n;
+    if(bt_sdp_client_state(&h->sdp)!=BT_SDP_IDLE) {
+        used+=bt_sdp_client_status(&h->sdp,out+used,cap-used);
+        n=0;
+    }
+    else if(h->sdp_not_made) n=snprintf(out+used,cap-used,"sdp: not made: %s\n",h->sdp_not_made);
+    else if(h->sdp_channel) n=snprintf(out+used,cap-used,"sdp: opening its channel\n");
+    else n=snprintf(out+used,cap-used,"sdp: not asked\n");
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(h->sdp_result_valid && !h->sdp_result_current && used<cap-1) {
+        n=snprintf(out+used,cap-used,"earlier connection's %s",h->sdp_result_line);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    if(used<cap-1) {
+        n=snprintf(out+used,cap-used,"sdp requests answered: %u dropped: %u\n",
+                   (unsigned)h->sdp_answered,(unsigned)h->sdp_dropped);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    return used;
+}
 size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
 {
     if(!cap) return 0;
@@ -590,10 +801,6 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }
-    if(used<cap-1) {
-        n=snprintf(out+used,cap-used,"acl packets received and not read: %u\n",(unsigned)h->classic_rx_unread);
-        if(n<0) return used;
-        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
-    }
+    if(h->initialized && h->classic_available && used<cap-1) used=host_services_status(h,out,used,cap);
     return used;
 }
