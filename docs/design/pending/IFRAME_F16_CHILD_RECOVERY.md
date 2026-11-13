@@ -1,5 +1,7 @@
 # F.16c — opt-in libjs child recovery
 
+Implementation PR: **#582**, source `9d2b1265`.
+
 This chapter composes the merged terminal records (#577) and F4 current-realm
 engine (#579) with an executable recovery path for an audited native host.
 It implements the libjs protocol and its engine fence together. F.16 remains
