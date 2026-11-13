@@ -14,9 +14,10 @@ happens. Run it from a clean tree, and never beside another harness that
 edits the same tree; the per-mutant logs are in --logs.
 
 Two breaks are left out because nothing can tell them apart from the code:
-warp's skip of a pixel the mask does not cover (laid at coverage 0, a pixel
-is what it was), and the pen's refusal of a box that is not text (the clip
-set hands it text alone).
+warp's skip of a pixel the mask does not cover or nothing painted reaches
+(laid at coverage 0, or laid from nothing painted, a pixel is what it was),
+and the pen's refusal of a box that is not text (the clip set hands it text
+alone).
 """
 import argparse
 import pathlib
@@ -143,8 +144,8 @@ mutants = [
      '            if (false && g != NULL && stops_resolve(g, 100, s->color, &stops)) {'),
     # warp: the masked lay.
     ('coverage-is-ignored', WARP,
-     '                           c / 255.0) << (16 - 8 * k);',
-     '                           1.0) << (16 - 8 * k);'),
+     '            row[x] = lay_px(B, W, row[x], c);',
+     '            row[x] = lay_px(B, W, row[x], 255);'),
     ('the-offset-is-not-applied', WARP,
      '            size_t at = j * (size_t)s->w + (size_t)(x - dx);',
      '            size_t at = j * (size_t)s->w + (size_t)(x - x0);'),

@@ -35,7 +35,8 @@ typedef struct {
 // and its translation whole, an exact copy; else BILINEAR, B and T mixed
 // apart from the four pixels round it, outside the sheets nothing painted.
 // A pixel nothing reaches is left as it is. False, and nothing laid, when
-// there is no `inv` or nothing to lay.
+// there is no `inv`, nothing to lay, or a sheet side past 2^30 pixels
+// (the warp holds coordinates in fixed point; no sheet comes near).
 bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yonder_sheets_t *s,
                  const double m[6], const double inv[6], uint8_t alpha);
 
