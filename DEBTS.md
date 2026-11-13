@@ -842,6 +842,18 @@ how a worklist fills with things nobody intends to do.
 | **A page with more trees standing than its scripts follow keeps every buried keyframe until it goes** (`TreeMarks`, 16): no moment is known to be safe to free one, so none is freed | Memory | XS | a page that somehow holds sixteen layouts at once | yonder `scripts.c` (`yonder_scripts_tree_made`) |
 | **21 of `test_motion_mutants.py`'s mutants no longer find their anchors**: they were stale on `userland` before this slice moved the timing into libgarb (the 14 that slice moved were re-anchored) | Cleanup | S | the next run of the motion mutants that wants all of them | `tools/test_motion_mutants.py` |
 
+## Sound (the seam, AUDIO_SEAM.md, 2026-11-13 — booked the day it was built)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **One stream, one owner, no mixer**: a second open of `/dev/audio` is refused (`OS64_AUDIO_BUSY`), so two programs cannot sound at once and a notification cannot play over music. The design's answer is a ring-3 daemon that owns `/dev/audio` and offers something else, as logd owns the log sink | Feature | Large | A second program that wants to make sound while the first is playing | AUDIO_SEAM.md § What A.1 leaves out; `audio_stream_open` |
+| **One format**: signed 16-bit stereo at 48 kHz. `format` in `/dev/audioctl` is the door and accepts only that line; a program with other sound resamples (libos64's resampler is A.1's second pull request) | Feature | Medium | A sink that wants another rate, or a consumer for whom resampling costs too much | `audio_control`; os64/audio.h |
+| **No real sink**: the null sink is the only one until the A2DP sink of the Bluetooth arc (AUDIO_TRACKER.csv A.2, A.3). `audio_sink_attach`, `_detach`, `_failed` and a pull refused as not the sink's are proven on the host only | Proof | With A.3 | The first real sink | audio.c § The sinks and the pull; `tools/test_audio_stream_host.c` `test_sinks` |
+| **`heard` runs ahead after an underrun**: it is `taken` less the sink's delay, and for that delay after a dry spell ends the frames inside the sink include silence the subtraction does not know about, so the estimate is early by up to the silence's length. Exact again once the delay has passed. Cured by remembering where silence was inserted, bounded | Correctness (an estimate) | Small | A video player seen to slip after an underrun | `audio_stream_position`; AUDIO_SEAM.md § The position |
+| **The volume is forgotten at reboot**: it is a number in the kernel. Keeping it is a conf question for whoever builds the slider | Feature | Small | A volume control in the desktop | `audio_volume_write` |
+| **No recording, and one listener at the tap**: `/dev/audiotap` is the proof's ear and takes one open; there is no input device at all | Feature | Large | A microphone, or a second program that wants to watch what plays | `audio_stream_tap_open` |
+| **A killed player leaves up to 200 ms playing**: a close never cuts the sound, and a program that dies with no chance to write `flush` leaves its ring to play out | Behaviour | Small | It being heard as a fault | AUDIO_SEAM.md § Close never waits |
+
 ## Text on the glass
 
 | Debt | Class | Size | Trigger | Where |

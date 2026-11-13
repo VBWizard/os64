@@ -468,6 +468,7 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_NET_LISTENER: return "listener";
 		case HANDLE_GLASS:        return "glass";
 		case HANDLE_BELL:         return "bell";
+		case HANDLE_AUDIO:        return "audio";
 		case HANDLE_RESERVED:    return "reserved";
 		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";

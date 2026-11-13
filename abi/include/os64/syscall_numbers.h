@@ -44,10 +44,11 @@
 // Write's patience is arg3 of SYSCALL_WRITE, mirroring read below:
 // 0 polls, finite milliseconds round up to ticks, OS64_WAIT_FOREVER blocks.
 // Queue while room exists; once waiting would exceed the deadline, return
-// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain TCP's
-// responsibility and timeout leaves the handle open. TCP honors finite
-// patience; nonempty writes on other handle types refuse it rather than
-// silently blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
+// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain the
+// connection's or the stream's responsibility and timeout leaves the handle
+// open. TCP and the audio stream (os64/audio.h) honor finite patience;
+// nonempty writes on other handle types refuse it rather than silently
+// blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
 // os64_write_for exposes the argument. Raw syscall callers must set it too.
 
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
@@ -73,7 +74,8 @@
 // (0 = now, forever spelled out), which is the family this call belongs to.
 //
 // Finite patience is supported by console input, pipes, UDP/TCP/ICMP,
-// listeners, STREAM PTY masters, glass readers, and bells. Other handles refuse
+// listeners, STREAM PTY masters, glass readers, bells, and the audio tap (the
+// audio position takes it and never waits). Other handles refuse
 // it rather than silently blocking. Ready pipe bytes and EOF precede the
 // deadline check: a zero-time poll can still return either.
 #define OS64_WAIT_FOREVER  UINT64_C(0xFFFFFFFFFFFFFFFF)   // ((uint64_t)-1)

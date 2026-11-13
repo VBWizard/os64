@@ -58,6 +58,9 @@ typedef enum handle_type
 	                       // its pixels, os64/glass.h)
 	HANDLE_BELL,           // object = bell_t*, a bit to wait on (bell.h;
 	                       // read = wait for a ring, write = ring)
+	HANDLE_AUDIO,          // object = audio_open_t*, one face of the sound
+	                       // stream (audio/audio.h): /dev/audio (write PCM),
+	                       // /dev/audiopos, /dev/audiotap
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

@@ -502,6 +502,40 @@ virtio because its drain waits for the tick.
   programmed by `pci_msi_enable` / `pci_msix_enable_one` (pci.c), which
   read back what they wrote and say whether it took; the RTL8125 uses the
   first
+- **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
+  docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
+  machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
+  **`/dev/audio`** and a SINK empties the ring by PULLING (`audio_pull`),
+  from its own thread at its own pace. The seam never calls into a sink
+  with a fact: a pause and a flush are what the sink's next pull tells it
+  (`paused`, a new `generation`). With no sink attached the NULL SINK is the
+  sink: **`kaudio`**, a daemon in `knet`'s shape, takes frames at the rate
+  a real output would and discards them, so `play` on a machine with no
+  headphones runs for the length of the song. The tick rings `kaudio` only
+  while `kAudioClocked` is set, a flag it reads WITHOUT the stream's lock:
+  the tick runs inside the scheduler's pass, and the stream's lock is one a
+  wake is made under, so it is taken before the queue lock and never under
+  it. `/dev/audio`, **`/dev/audiopos`** (the playback position, one record
+  a read) and **`/dev/audiotap`** (what the sink was given, as records) are
+  handle kinds (`HANDLE_AUDIO`, three faces; devfs.h § THE ALIAS): the
+  write and the tap's read wait, and the position is asked for often enough
+  that it must cost a syscall and no more. **`/dev/audioctl`** (`pause`,
+  `resume`, `flush`, `format`) and **`/dev/volume`** (0 to 100, applied at
+  the pull) are plain devfs text, and anyone may write them. The write
+  takes write's patience (forever, some milliseconds, none). One open of
+  the stream at a time (`OS64_AUDIO_BUSY`); a close never waits and never
+  cuts the sound, and the next open's frames follow under a new
+  GENERATION, which is also what a flush and a change of sink move. Every
+  rule (the ring, the split frame, the states, underruns, the gain, the
+  position, the null sink's clock, the tap's records) is `audio_stream.c`,
+  pure: `tools/test_audio_stream_host.sh` runs it beside a model and
+  `tools/test_audio_stream_mutants.py` breaks each one
+  (`mutants_parallel.py ... --with kernel`). **`/sys/audio`** is the
+  report: read it FIRST when sound stutters (`underruns_since_read`,
+  `kaudio_gap_max_since_read_us` and `clock_slips` separate a player that
+  fell behind from a pump that was held off). Fixture: `/tests/audiotest`.
+  `micros()`'s clock is `micros_now()` (micros.c), which the position
+  stamps with so a player can compare
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
