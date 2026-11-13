@@ -277,22 +277,6 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
         host_sdp_ended(h,NULL);
     }
 }
-// Slot 2's services, each tick of a host whose Classic link is connected.
-static void host_services_tick(bt_host_t *h,uint64_t now)
-{
-    if(!h->l2cap.up) return;
-    if(h->classic.encrypted!=h->l2cap_encrypted) {
-        // L2CAP's clock first: a channel that was waiting for encryption
-        // has its configuration deadline counted from the last `now` it
-        // was handed, which must be this tick's.
-        bt_l2cap_tick(&h->l2cap,now,false,NULL,NULL);
-        bt_l2cap_set_encrypted(&h->l2cap,h->classic.encrypted);
-        h->l2cap_encrypted=h->classic.encrypted;
-    }
-    host_sdp_step(h,now);
-    host_sdp_answer_offer(h);
-    bt_l2cap_tick(&h->l2cap,now,false,NULL,NULL);
-}
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)
 {
@@ -355,12 +339,92 @@ static void host_classic_command(void *context,uint16_t op,const uint8_t *p,uint
     h->credits=0; h->command_done=false;
     c->command(c->context,op,p,n);
 }
+// ── The send slots (bt_host.h tx_from) ─────────────────────────────────────
+//
+// The transport says how many slots are in flight. They complete oldest
+// first, so when fewer are in flight than were recorded, the oldest records
+// are the ones that finished.
+static void host_tx_settle(bt_host_t *h,unsigned in_flight)
+{
+    if(in_flight>BT_HOST_TX_SLOTS) in_flight=BT_HOST_TX_SLOTS;
+    while(h->tx_count>in_flight) { h->tx_head=(uint8_t)((h->tx_head+1)%BT_HOST_TX_SLOTS); h->tx_count--; }
+    h->tx_unknown=(uint8_t)(in_flight-h->tx_count);
+}
+static unsigned host_tx_free(const bt_host_t *h) { return BT_HOST_TX_SLOTS-h->tx_count-h->tx_unknown; }
+static void host_tx_sent(bt_host_t *h,unsigned from)
+{
+    // A packet sent with no slot free fails the transport (xhci.c), so
+    // there is nothing to record it against.
+    if(!host_tx_free(h)) return;
+    h->tx_from[(h->tx_head+h->tx_count)%BT_HOST_TX_SLOTS]=(uint8_t)from;
+    h->tx_count++;
+}
+// Slots in flight for one sender, or (from == BT_HOST_PEERS + 1) for any LE
+// peer. Slots the host did not fill count against every LE peer.
+static unsigned host_tx_of(const bt_host_t *h,unsigned from)
+{
+    bool le=from!=BT_HOST_PEERS;
+    unsigned n=le?h->tx_unknown:0;
+    for(unsigned i=0;i<h->tx_count;i++) {
+        unsigned who=h->tx_from[(h->tx_head+i)%BT_HOST_TX_SLOTS];
+        if(who==from || (from==BT_HOST_PEERS+1 && who<BT_HOST_PEERS)) n++;
+    }
+    return n;
+}
 static void host_acl(void *context,const uint8_t *p,size_t n)
 {
     host_call_t *c=context; c->host->tx_used=true;
     c->host->poll_peer=(c->peer+1)%BT_HOST_PEERS;
     if(n>=2) (void)bt_acl_sent(&c->host->acl,host_u16(p)&0xfff);
+    host_tx_sent(c->host,c->peer);
     c->acl(c->context,p,n);
+}
+// One L2CAP PDU as one Classic ACL packet: the link's handle, packet
+// boundary 0b10 (a first, automatically flushable fragment: LE's 0b00 on a
+// Classic link needs a feature bit) and broadcast 0, the length, the PDU.
+// L2CAP never hands over more than BT_L2CAP_MTU + 4; one the controller's
+// Classic packets cannot carry is dropped and counted, never cut.
+static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
+{
+    host_call_t *c=context; bt_host_t *h=c->host;
+    if(n>BT_L2CAP_MTU+4 || n>bt_acl_packet_size(&h->acl,false)) { h->l2cap_unsendable++; return; }
+    uint16_t handle=h->classic.handle&0xfff;
+    uint8_t packet[4+BT_L2CAP_MTU+4];
+    packet[0]=(uint8_t)handle; packet[1]=(uint8_t)(handle>>8|0x20);
+    packet[2]=(uint8_t)n; packet[3]=(uint8_t)(n>>8);
+    for(size_t i=0;i<n;i++) packet[4+i]=pdu[i];
+    (void)bt_acl_sent(&h->acl,handle);
+    host_tx_sent(h,BT_HOST_PEERS);
+    c->acl(c->context,packet,4+n);
+    host_wipe(packet,4+n);
+}
+// L2CAP may hand over a packet only when it costs the LE peers nothing:
+// the count gives the Classic link a buffer of the controller's (it is the
+// sender held to the count); a send slot is free with another left over,
+// since an LE peer needs one at a time; and no LE peer is still holding a
+// packet it could not send this tick.
+static bool host_l2cap_may_send(const bt_host_t *h)
+{
+    if(!bt_acl_may_send(&h->acl,h->classic.handle&0xfff) || host_tx_free(h)<2) return false;
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) if(h->peers[i].le.queue_count) return false;
+    return true;
+}
+// Slot 2's services, each tick of a host whose Classic link is connected,
+// after the LE peers.
+static void host_services_tick(bt_host_t *h,uint64_t now,host_call_t *call)
+{
+    if(!h->l2cap.up) return;
+    if(h->classic.encrypted!=h->l2cap_encrypted) {
+        // L2CAP's clock first: a channel that was waiting for encryption
+        // has its configuration deadline counted from the last `now` it
+        // was handed, which must be this tick's.
+        bt_l2cap_tick(&h->l2cap,now,false,NULL,NULL);
+        bt_l2cap_set_encrypted(&h->l2cap,h->classic.encrypted);
+        h->l2cap_encrypted=h->classic.encrypted;
+    }
+    host_sdp_step(h,now);
+    host_sdp_answer_offer(h);
+    bt_l2cap_tick(&h->l2cap,now,host_l2cap_may_send(h),host_l2cap_send,call);
 }
 static bool host_control(const bt_host_t *h,unsigned owner,bool usb_done)
 { return usb_done && (h->owner==owner || (!h->owner && h->credits)); }
@@ -454,13 +518,18 @@ static void host_classic_begin(bt_host_t *h)
 // peers starved in silence; the controller is failed instead, as it is
 // when an LE command goes unanswered.
 #define BT_HOST_CLASSIC_REPLY_GRACE_MS 3000
-void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool failed,
+void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,unsigned tx_in_flight,bool failed,
                   bt_scan_send_t command,bt_le_acl_send_t acl,bt_host_report_t report,void *ctx)
 {
     h->failed|=failed;
     host_retire(h,usb_done);
     host_acl_links(h);   // before any peer below may send
-    h->tx_used=!bulk_done;
+    // The LE peers send one packet at a time between them: none while an
+    // LE packet is in a send slot or the controller has not completed one,
+    // or no slot is free. A Classic packet in flight is not theirs to wait
+    // for while a slot is free.
+    host_tx_settle(h,tx_in_flight);
+    h->tx_used=host_tx_of(h,BT_HOST_PEERS+1)>0 || !host_tx_free(h);
     for(unsigned i=0;i<BT_HOST_PEERS;i++)
         if(h->peers[i].le.outstanding) h->tx_used=true;
     host_call_t call={.host=h,.peer=BT_HOST_PEERS,.command=command,.acl=acl,.report=report,.context=ctx};
@@ -511,15 +580,18 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,bool bulk_done,bool fa
     for(unsigned count=0;count<BT_HOST_PEERS;count++) {
         unsigned i=(first+count)%BT_HOST_PEERS;
         bt_le_t *s=&h->peers[i].le; call.peer=i; s->credits=h->credits;
+        // A peer cleaning up waits for its own packets to leave the send
+        // slots, not for the Classic link's (AUDIO_CLASSIC.md § T2).
         bt_le_tick(s,now,host_control(h,BT_HOST_OWNER_PEER0+i,usb_done),
-                   s->phase==BT_LE_CLEANUP?bulk_done:!h->tx_used,
+                   s->phase==BT_LE_CLEANUP?!host_tx_of(h,i):!h->tx_used,
                    h->failed,host_command,host_acl,host_report,&call);
         host_retire(h,usb_done);
         host_acl_links(h);
         if(s->phase==BT_LE_FAILED) h->failed=true;
     }
     if(classic && !classic_first) host_classic_tick(h,now,usb_done,&call);
-    if(classic && !h->failed) host_services_tick(h,now);
+    // After the LE peers have had their turn at the send slots.
+    if(classic && !h->failed) host_services_tick(h,now,&call);
     if(classic && h->owner==BT_HOST_OWNER_CLASSIC && !h->classic.pending &&
        now>=h->classic.command_deadline+BT_HOST_CLASSIC_REPLY_GRACE_MS) h->failed=true;
     // A controller failure affects every connection, even if detected by the
@@ -717,6 +789,12 @@ static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size
     if(used<cap-1) {
         n=snprintf(out+used,cap-used,"sdp requests answered: %u dropped: %u\n",
                    (unsigned)h->sdp_answered,(unsigned)h->sdp_dropped);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    if(h->l2cap_unsendable && used<cap-1) {
+        n=snprintf(out+used,cap-used,"l2cap pdus longer than a classic acl packet, dropped: %u\n",
+                   (unsigned)h->l2cap_unsendable);
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }

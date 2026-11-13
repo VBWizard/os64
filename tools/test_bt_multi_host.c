@@ -31,6 +31,11 @@ static struct {
     uint8_t page_status, scan, key[16], new_key_type;
     uint16_t handle;
     unsigned scan_writes;
+    // ACL data on the Classic link: packets the host sent, and how many
+    // the controller has not yet completed (Number Of Completed Packets
+    // delivered, or the link gone), which the host's count must equal.
+    unsigned acl_packets;
+    uint16_t acl_out;
 } CM;
 static void multi_event(const uint8_t *p,size_t n)
 {
@@ -38,6 +43,14 @@ static void multi_event(const uint8_t *p,size_t n)
         uint16_t op=p[0]==0x0e?le_u16(p+3):le_u16(p+4);
         if(op==CM.owed) CM.owed=0;
     }
+    if(p[0]==0x13 && n>=3 && n==3u+4u*p[2])
+        for(unsigned i=0;i<p[2];i++)
+            if((le_u16(p+3+4*i)&0xfff)==CM.handle && host.classic.connected) {
+                // More than is out is a bad count: the host zeroes the link's.
+                uint16_t k=le_u16(p+5+4*i);
+                CM.acl_out=k<=CM.acl_out?(uint16_t)(CM.acl_out-k):0;
+            }
+    if(p[0]==0x05 && n==6 && le_u16(p+3)==CM.handle) CM.acl_out=0;
     bt_host_event(&host,p,n);
 }
 static void multi_wire(const uint8_t *p,size_t n)
@@ -72,7 +85,8 @@ static void multi_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 // The controller-wide count (bt_acl.h) must agree with each peer's own at
 // every step of every scenario here: a link for each connected peer, under
 // its handle, with as many packets out as the peer believes it has, and
-// one for a connected Classic link.
+// one for a connected Classic link, with as many out as the controller's
+// model has not completed.
 static void acl_agrees(void)
 {
     unsigned links=0;
@@ -89,7 +103,7 @@ static void acl_agrees(void)
         bool found=false;
         for(unsigned i=0;i<BT_ACL_LINKS;i++)
             found|=host.acl.link[i].live && host.acl.link[i].handle==host.classic.handle && !host.acl.link[i].le;
-        assert(found && !bt_acl_outstanding(&host.acl,host.classic.handle));
+        assert(found && bt_acl_outstanding(&host.acl,host.classic.handle)==CM.acl_out);
     } else assert(!host.acl_classic);
     unsigned live=0;
     for(unsigned i=0;i<BT_ACL_LINKS;i++) live+=host.acl.link[i].live;
@@ -108,10 +122,24 @@ static void classic_deliver(void)
         multi_event(e.b,e.n);
     }
 }
+// What leaves for the controller as ACL data: the Classic link's packets
+// go to the headphones' model, the LE peers' to the LE model, as before.
+// A Classic packet is one whole L2CAP PDU, first automatically flushable.
+static void headphones_acl(const uint8_t *p,size_t n);
+static void multi_acl(void *ctx,const uint8_t *p,size_t n)
+{
+    assert(n>=4 && n==4u+le_u16(p+2));
+    uint16_t handle=le_u16(p)&0xfff;
+    if(host.classic.connected && handle==host.classic.handle) {
+        assert((le_u16(p)>>12)==2 && n>=8 && le_u16(p+4)==n-8);
+        headphones_acl(p,n); return;
+    }
+    acl(ctx,p,n);
+}
 static void step(void)
 {
     ++now; classic_deliver();
-    bt_host_tick(&host,now,true,true,false,multi_command,acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,true,0,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static void notify_keyboard(void)
 {
@@ -241,7 +269,7 @@ static void credits_and_faults(void)
     step(); assert(host.owner==3 && cmd_n);
     const uint8_t ok[]={0x0e,10,1,9,0x10,0,1,2,3,4,5,6};
     cmd_n=0; multi_event(ok,sizeof(ok));
-    bt_host_tick(&host,++now,false,true,false,multi_command,acl,multi_report,NULL);
+    bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
     assert(!cmd_n && host.owner==3 && host.peers[1].le.pending);
     step(); assert(cmd_n && le_u16(cmd)==0x2002);
     // A truncated mouse report must release that source without inventing motion.
@@ -414,7 +442,7 @@ static void start_up_rounds(void)
     // A failed transport is not a round to repeat.
     setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
     step(); now=host.init_retry_at; cmd_n=0; step();
-    bt_host_tick(&host,++now,true,true,true,multi_command,acl,multi_report,NULL);
+    bt_host_tick(&host,++now,true,0,true,multi_command,multi_acl,multi_report,NULL);
     assert(host.failed && host.init_failed_rounds==0);
     puts("PASS: an unanswered start-up round is run again with its credit restored, three failures fail the host, a failed transport is not retried");
 }
@@ -534,7 +562,7 @@ static void mouse_interval(void)
         if(failure!=1 && failure!=3) multi_event(updated,sizeof(updated));
         // Command status can precede USB completion and an inspect request.
         assert(bt_host_command(&host,"slot 1 inspect",14,now));
-        bt_host_tick(&host,++now,false,true,false,multi_command,acl,multi_report,NULL);
+        bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(s->pending && host.owner==3 && !cmd_n);
         s->phase=BT_LE_READY; step();
         assert(!s->pending && !host.owner && !cmd_n && !s->error && !host.failed);
@@ -644,6 +672,14 @@ static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
     default: printf("unexpected Classic command %04x\n",op); assert(0);
     }
 }
+// The headphones' end of the Classic link's ACL data.
+static void headphones_acl(const uint8_t *p,size_t n)
+{
+    (void)p; (void)n;
+    CM.acl_packets++; CM.acl_out++;
+    // The controller completes it a step later.
+    CM_PUSH(1,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),1,0);
+}
 // The LE model answers what it knows; the scan's two commands are
 // answered here, as scan_recovery does.
 static void answer_le(void)
@@ -670,6 +706,8 @@ static int op_index(uint16_t op,unsigned from)
 static void classic_slot(const bt_classic_bond_t *bond,bool boot_page)
 {
     memcpy(host.scan.address,CM_LOCAL,6); host.scan.features[4]=0x40;
+    // The AX210's two pools (AUDIO_CLASSIC.md § T, as built).
+    bt_acl_sizes(&host.acl,1021,4,251,6);
     bt_classic_init(&host.classic,CM_LOCAL);
     host.classic_available=true; host.classic_unavailable=NULL;
     assert(bt_host_classic_bond(&host,bond,now));
@@ -691,7 +729,7 @@ static void step_watched(void)
     w_free=!host.owner || (host.command_done && !host_owner_pending(&host));
     w_urgent=bt_classic_urgent(&host.classic);
     w_before=CM.n;
-    bt_host_tick(&host,now,true,true,false,multi_command,acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,true,0,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static bt_classic_bond_t ph_bond(void)
 {
@@ -831,7 +869,7 @@ static void classic_bond_while_typing(void)
     // The headphones go: the link is down, the count lets it go.
     cm_disconn(0,0x13); step();
     assert(host.classic.phase==BT_CLASSIC_STOPPED && !host.classic.connected && !host.acl_classic);
-    puts("PASS: slot 2 bond pairs, encrypts and keeps the bond while the keyboard types; ACL counted, Classic data dropped and counted");
+    puts("PASS: slot 2 bond pairs, encrypts and keeps the bond while the keyboard types; ACL counted, Classic data goes to its L2CAP");
 }
 
 // The controller asks the Classic link something (Link Key Request) while
@@ -967,13 +1005,13 @@ static void classic_owner_bounds(void)
     uint64_t sent_at=now;
     for(unsigned i=0;i<4900;i++) {
         ++now; classic_deliver();   // the model's reply arrives; the transfer never completes
-        bt_host_tick(&host,now,false,true,false,multi_command,acl,multi_report,NULL);
+        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(!host.failed && host.owner==BT_HOST_OWNER_CLASSIC);
         if(i==100) assert(host.command_done);
     }
     for(unsigned i=0;i<300 && !host.failed;i++) {
         ++now; classic_deliver();
-        bt_host_tick(&host,now,false,true,false,multi_command,acl,multi_report,NULL);
+        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
     }
     assert(host.failed && now>=sent_at+5000 && now<sent_at+5200);
     puts("PASS: every command-slot owner is bounded in routing and retirement; a Classic command unanswered, or answered with its transfer never done, fails the controller; a late reply frees the slot");
@@ -1237,7 +1275,7 @@ static void classic_status(void)
     for(size_t cap=1;cap<sizeof(small);cap++) { size_t n=bt_host_status(&host,small,cap); assert(n<cap && !small[n]); }
     size_t whole=bt_host_status(&host,text,sizeof(text));
     for(size_t cap=whole-200;cap<=whole+1;cap++) { size_t n=bt_host_status(&host,text,cap); assert(n<cap && !text[n]); }
-    puts("PASS: slot 2's status: not ready, unavailable with the reason, the link, automatic connection, unread data; no key");
+    puts("PASS: slot 2's status: not ready, unavailable with the reason, the link, automatic connection, the services; no key");
 }
 
 int main(void)

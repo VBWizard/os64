@@ -7,6 +7,10 @@
 #include "driver/system/usb/bt_sdp.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
+// The transport's ACL send slots (xhci.c): each holds one packet until its
+// USB transfer completes, and they complete in the order they were filled.
+// The Classic link always leaves one free for the LE peers.
+#define BT_HOST_TX_SLOTS 4
 // The Classic link is slot 2 to a person (docs/design/pending/AUDIO_CLASSIC.md
 // § L1): the slot after the LE peers'. BT_HOST_PEERS also sizes the LE bond
 // files, keyboards and pointers, so the Classic slot is not one of them.
@@ -55,6 +59,9 @@ typedef struct {
     // `l2cap_encrypted` is what it was last told of the link's encryption.
     bt_l2cap_t l2cap;
     bool l2cap_encrypted;
+    // PDUs L2CAP handed over that one of the controller's Classic ACL
+    // packets cannot carry: dropped, never cut (bt_host.c host_l2cap_send).
+    uint32_t l2cap_unsendable;
     // One SDP query a connection, made by us once the link is READY: the
     // channel we opened to the headphones' SDP PLUS ONE (0: none being
     // followed, so a host made by zeroing is right) and its CID, so a
@@ -107,15 +114,25 @@ typedef struct {
     const char *refused_why;
     // The controller's ACL buffers (bt_acl.h): sized from the start-up
     // round, a link for each connected LE peer and for the Classic link,
-    // every packet sent and completed counted. The LE peers still send one packet at a time by
-    // their own rule (tx_used); this is the count a link that sends more
-    // will be held to. acl_link[i] is the handle peer i is counted under
-    // PLUS ONE, zero when it has none, so a host made by zeroing is right.
+    // every packet sent and completed counted. The LE peers still send one
+    // packet at a time between them by their own rule (tx_used); the
+    // Classic link's L2CAP sends only while the count gives it a buffer.
+    // acl_link[i] is the handle peer i is counted under PLUS ONE, zero when
+    // it has none, so a host made by zeroing is right.
     bt_acl_t acl;
     uint16_t acl_link[BT_HOST_PEERS];
     // Number Of Completed Packets events the count could not take: not
     // well formed, or giving a link back more than it had out.
     uint32_t acl_bad_completions;
+    // Who sent each packet still in the transport's send slots, oldest
+    // first: LE peer i (i), or the Classic link (BT_HOST_PEERS). The
+    // transport reports only how many are in flight; since they complete in
+    // order, the oldest are the ones that finished. Slots in flight that
+    // this host did not fill (`tx_unknown`) are counted against every LE
+    // peer, as the whole endpoint's business was before there were two
+    // kinds of sender.
+    uint8_t tx_from[BT_HOST_TX_SLOTS];
+    uint8_t tx_head, tx_count, tx_unknown;
     uint8_t duplicate_slot; // Last refused peer's owning slot plus one; zero means none.
     uint64_t init_retry_at;
     // Start-up rounds that ended FAILED: a first error, and then a cleanup
@@ -153,7 +170,14 @@ void bt_host_event(bt_host_t *, const uint8_t *, size_t);
 // the host failed.
 void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
-void bt_host_tick(bt_host_t *, uint64_t, bool, bool, bool,
+// One step. `usb_done`: no command's control transfer is in flight.
+// `tx_in_flight`: how many of the transport's BT_HOST_TX_SLOTS send slots
+// hold a packet whose USB transfer has not completed. `failed`: the
+// transport is gone. ACL packets leave through the `bt_le_acl_send_t`
+// callback, whole, never more than one slot's worth, and only into a free
+// slot: the LE peers first, then the Classic link's L2CAP, which waits
+// whenever its packet could make an LE peer wait.
+void bt_host_tick(bt_host_t *, uint64_t now, bool usb_done, unsigned tx_in_flight, bool failed,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
 bool bt_host_scan(bt_host_t *, uint64_t);

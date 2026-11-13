@@ -185,8 +185,9 @@ typedef struct {
 // it; after that page come BT_TX_SLOTS send slots. A packet is copied into
 // a free slot and queued, so several can be with the controller at once and
 // none can reach the command's bytes, whatever its length. Each slot lies
-// inside one page.
-#define BT_TX_SLOTS       4
+// inside one page. The host is told how many are in flight each pass, and
+// keeps one free for the LE peers (bt_host.h).
+#define BT_TX_SLOTS       BT_HOST_TX_SLOTS
 #define BT_TX_SLOT_STRIDE 2048
 #define BT_TX_SLOT_BYTES  (BT_LE_ACL_MAX + 4)   // an HCI ACL packet as large as the receive side assembles
 #define BT_TX_BYTES       (PAGE_SIZE + BT_TX_SLOTS * BT_TX_SLOT_STRIDE)
@@ -1663,7 +1664,7 @@ static void xhci_bt_runtime_poll(void)
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
     bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-                 usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
+                 usb_done, p->tx_slots, usb_failed, xhci_bt_runtime_send,
                  xhci_bt_acl_send, xhci_bt_input_report, p);
     if (p->scan_history.valid && !p->scan_history.finished &&
         (bt_scan_quiescent(scan) || scan->phase == BT_SCAN_FAILED)) {
