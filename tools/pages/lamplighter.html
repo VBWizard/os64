@@ -123,8 +123,8 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
 #check td{padding:5px 6px;border-top:1px solid #213a68;vertical-align:top}
 #check .ok{color:#7ddc8f;font-weight:bold}#check .no{color:#ff8a80;font-weight:bold}
 #check p{font-size:13px;color:var(--dim);margin:8px 0 0}
-/* The frame meter sits in the harbour's corner, where the eyes are. */
-#fps{position:absolute;right:8px;top:8px;z-index:11;padding:4px 10px;border-radius:8px;background:#000a;color:#7ddc8f;font:14px monospace;display:none}
+/* The frame meter: a badge on the lamps' line, just above the harbour. */
+#fps{display:none;background:#000;color:#7ddc8f;font-family:monospace}
 </style>
 <main>
 <p class="eyebrow">YONDER / THE PROVING GROUND</p>
@@ -132,13 +132,12 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
 <p class="sub">Light every lamp in the harbour. Mind the boats, and the fog.</p></div>
 <p id="status">Lamplighter needs scripts: turn on Scripts (and Modern Web), then reload.</p>
 <div id="level"><b id="lname">-</b><span id="lshows"></span></div>
-<p id="hud">Lamps <span id="hlamps"></span> &nbsp;<span class="badge" id="hmoves">moves 0</span> <span class="badge" id="hbest">best -</span></p>
+<p id="hud">Lamps <span id="hlamps"></span> &nbsp;<span class="badge" id="hmoves">moves 0</span> <span class="badge" id="hbest">best -</span> <span class="badge" id="fps">-- fps</span></p>
 <p id="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>space</kbd> light a lamp &nbsp; <kbd>N</kbd>/<kbd>B</kbd> next/back level &nbsp; <kbd>R</kbd> restart &nbsp; <kbd>?</kbd> self-check &nbsp; <kbd>F</kbd> frames a second</p>
 <div id="arena">
  <div id="banner"></div>
  <section id="check"><h2>Self-check</h2><table id="checks"></table>
  <p>A check says the engine <b>read</b> the feature. Whether it <b>drew</b> it is your eyes' call: each row says what to look for, and the same file opened in another browser is the answer key.</p></section>
- <div id="fps">-- fps</div>
 </div>
 </main>
 <script>
@@ -174,7 +173,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       check: function () { var h = document.querySelector('.hl.out'); return !h || cs(h, 'opacity') === '0.3'; } },
     legacy: { name: '-webkit-mask-composite\'s legacy words', from: 'masks M2',
       look: 'The red and white channel buoys are rings you can see the water through, not solid discs. Chrome and Safari draw rings; Firefox, which reads only the standard word, draws discs.',
-      check: function () { var b = arena.querySelector('.buoy'); return !!b && (cs(b, 'mask-composite').indexOf('exclude') === 0 || cs(b, '-webkit-mask-composite').indexOf('xor') === 0); } },
+      check: function () { return probed('buoy', function (b) { return cs(b, 'mask-composite').indexOf('exclude') === 0 || cs(b, '-webkit-mask-composite').indexOf('xor') === 0; }); } },
     maskpos: { name: 'mask-position animated', from: 'masks M2',
       look: 'Moonlight glints slide along the bright row of water; they move, not just shine.',
       check: function () { return midway('mask-position', '0px 0px', '20px 20px') === '10px 10px'; } },
@@ -182,6 +181,17 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       look: 'The glow round the lighthouse breathes: it grows and shrinks, always soft-edged.',
       check: function () { return midway('mask-size', '0px 0px', '20px 20px') === '10px 10px'; } }
   };
+
+  // What `read` says of a probe of class `cls` of its own, so a check
+  // reads on every level, not only the one whose pieces carry the class.
+  function probed(cls, read) {
+    var p = document.createElement('div'), v = false;
+    p.className = cls; p.style.cssText = 'position:absolute;width:10px;height:10px;visibility:hidden';
+    arena.appendChild(p);
+    try { v = !!read(p); } catch (e) { v = false; }
+    arena.removeChild(p);
+    return v;
+  }
 
   // A property's computed value halfway through a paused animation from
   // `a` to `b` on a probe of its own: the self-check of an animated
@@ -255,12 +265,9 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     // outlives its element in a browser, so a lane removed while its
     // animation runs is kept, and visited, for the page's life.
     if (lanes) lanes.forEach(function (lane) { if (lane.anim) lane.anim.cancel(); });
-    // Everything but the banner, the self-check and the meter, which
-    // outlive a level.
-    var check = $('check'), meter = $('fps');
-    Array.prototype.slice.call(arena.children).forEach(function (c) {
-      if (c !== banner && c !== check && c !== meter) arena.removeChild(c);
-    });
+    // Everything but the banner and the self-check, which outlive a level.
+    var check = $('check');
+    Array.prototype.slice.call(arena.children).forEach(function (c) { if (c !== banner && c !== check) arena.removeChild(c); });
     banner.style.display = 'none';
     moves = 0; done = false; boatClock.advanced = false;
     if (level.glint !== undefined) {
@@ -389,7 +396,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     });
     frames++;
     if (now - since >= 500) {
-      if ($('fps').style.display === 'block') $('fps').textContent = Math.round(frames * 1000 / (now - since)) + ' fps';
+      if ($('fps').style.display === 'inline-block') $('fps').textContent = Math.round(frames * 1000 / (now - since)) + ' fps';
       frames = 0; since = now;
     }
     requestAnimationFrame(frame);
@@ -421,7 +428,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     else if (k === 'b') build(at - 1);
     else if (k === 'r') build(at);
     else if (k === '?' || k === '/') { var c = $('check'); c.style.display = c.style.display === 'block' ? 'none' : 'block'; if (c.style.display === 'block') checks(); }
-    else if (k === 'f') { var m = $('fps'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
+    else if (k === 'f') { var m = $('fps'); m.style.display = m.style.display === 'inline-block' ? 'none' : 'inline-block'; }
     else handled = false;
     if (handled) e.preventDefault();
   });

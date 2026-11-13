@@ -526,6 +526,9 @@ static const char *const kWebkitMaskComposite[] = {
 static const char *const kWebkitMaskCompositeAs[] = {
     "add", "subtract", "intersect", "exclude",
     "add", "subtract", "intersect", "exclude", "intersect"};
+_Static_assert(sizeof(kWebkitMaskCompositeAs) / sizeof(kWebkitMaskCompositeAs[0]) + 1 ==
+                   sizeof(kWebkitMaskComposite) / sizeof(kWebkitMaskComposite[0]),
+               "each -webkit-mask-composite word reads as one standard word");
 static const char *const kMaskMode[] = {"alpha", "luminance", "match-source", NULL};
 // CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
@@ -4607,8 +4610,9 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
 // The legacy name aliases that are read — the Compatibility Standard's (§
 // 3.4.1), and those a specification names itself: a prefixed name every
 // engine reads as its standard twin is no one engine's dialect, so it is
-// the twin — a longhand's or a shorthand's. `modern` as Prop's; an alias
-// of a marked twin is unknown with it anyway.
+// the twin — a longhand's or a shorthand's, read with the twin's grammar
+// but where a row says otherwise. `modern` as Prop's; an alias of a marked
+// twin is unknown with it anyway.
 static const struct {
     const char *name, *twin;
     bool modern;
@@ -4627,9 +4631,11 @@ static const struct {
     {"-webkit-animation-delay", "animation-delay", false},
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
     // Every engine reads the prefixed mask names as the standard ones
-    // (MASKS.md § 4). -webkit-mask-composite is mask-composite too, read
-    // with the legacy operators' words beside the standard ones
-    // (longhand_named).
+    // (MASKS.md § 4). -webkit-mask-composite is not quite one: it is
+    // mask-composite in the cascade but has words of its own, which
+    // longhand_named reads with their own reader; its row gives it the
+    // name tables' place (its accessors, the names listed) and whether it
+    // is known.
     {"-webkit-mask-composite", "mask-composite", true},
     {"-webkit-mask", "mask", true},
     {"-webkit-mask-image", "mask-image", true},
@@ -4715,18 +4721,22 @@ static bool unalias(const char **name, size_t *len, bool modern_off)
 
 // The longhand a declaration's name names, by its own name or an alias;
 // NULL for none. These two are where a name is known or not, so they are
-// where `modern_off` takes the marked names away.
+// where `modern_off` takes the marked names away. -webkit-mask-composite
+// is known as its alias row says, and read with its own words (MASKS.md
+// § 4).
 static const Longhand *longhand_named(const char *name, size_t len, bool modern_off)
 {
     static const Longhand kWebkitComposite = {GARB_MASK_COMPOSITE, G_MASK_LEGACY,
                                               kWebkitMaskComposite};
-    if (ieq(name, len, "-webkit-mask-composite"))
-        return modern_off ? NULL : &kWebkitComposite;
+    bool legacy = ieq(name, len, "-webkit-mask-composite");
     if (!unalias(&name, &len, modern_off))
         return NULL;
     for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
-        if (ieq(name, len, kProps[kLonghands[k].prop].name))
-            return modern_off && garb_prop_modern(kLonghands[k].prop) ? NULL : &kLonghands[k];
+        if (ieq(name, len, kProps[kLonghands[k].prop].name)) {
+            if (modern_off && garb_prop_modern(kLonghands[k].prop))
+                return NULL;
+            return legacy ? &kWebkitComposite : &kLonghands[k];
+        }
     return NULL;
 }
 

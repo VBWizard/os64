@@ -1681,8 +1681,8 @@ static bool length_same(flow_length_t a, flow_length_t b)
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
-// The layer lists property `p` places in: a mask's, which are a
-// background's lists (MASKS.md § 5), or the background's own.
+// The layer lists a position or a size, `p`, places in: a mask's, which
+// are a background's lists (MASKS.md § 5), or the background's own.
 static bool mask_placed(garb_prop_t p)
 {
     return p == GARB_MASK_POSITION_X || p == GARB_MASK_POSITION_Y || p == GARB_MASK_SIZE;

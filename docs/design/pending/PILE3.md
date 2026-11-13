@@ -1680,7 +1680,7 @@ out, and a layout at a time is the page at that time.
 | `line-height` | a number with a number, a length with a length; else discrete |
 | `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
 | a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above, and a pair both `currentColor` stays `currentColor` (Appendix A) |
-| `background-position`, `background-size` | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
+| `background-position`, `background-size`, and a mask's `mask-position` and `mask-size` (MASKS.md § 5) | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
 | a transform | below |
 | everything else — keywords, families, pictures and gradients, grid tracks | discrete |
 
@@ -2157,7 +2157,7 @@ the perf slice.
 | Grid track lists interpolated | discrete here | a page that animates its grid |
 | Custom properties in a keyframe, and registered ones (`@property`) | ignored: a keyframe's `--x` would have to reach the `var()`s that read it, which libgarb replaces at the cascade | a page whose animated variable matters |
 | `will-change` beyond the transforms and `opacity` — `position`, `z-index`, and what yonder draws nothing of | read, and given no effect | a page whose stacking depends on one |
-| The properties yonder draws nothing of — `filter`, `clip-path`, masks, `stroke-dashoffset` | animating them animates nothing | the slices that draw them |
+| The properties yonder draws nothing of — `clip-path`, `stroke-dashoffset` — and, of those it draws, `filter` and a mask's images and operators | animating the first animates nothing; the rest are discrete, flipping at the midpoint (a mask's position and size interpolate, MASKS.md § 5) | the slices that draw or mix them |
 | Animations on `::before` and `::after` | yonder generates no content for them at all | the slice that does |
 | Inherited properties in place — `color`, `visibility`, `text-shadow`, the fill | they move by layouts, whose cost is ruled (S8a, the face); in place they would need every inheriting descendant's style rewritten | a page whose inherited animation costs too much in layouts |
 | A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |

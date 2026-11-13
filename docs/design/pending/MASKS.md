@@ -119,10 +119,11 @@ layers and its size; that is a measured follow-up, not this slice.
 - **The shorthand** `mask` (Masking 1 § 7.9): a background's shorthand
   without the colour, plus `mask-mode` and `mask-composite`, and the
   `<geometry-box>` pair as background's is.
-- **`-webkit-` names**: every `-webkit-mask-*` but `-webkit-mask-composite`
-  is an alias of its longhand, as the browsers alias them, and
-  `-webkit-mask` of the shorthand. `-webkit-mask-composite` (slice M2, § 7)
-  is `mask-composite` too, one property in the cascade, and takes the
+- **`-webkit-` names**: every `-webkit-mask-*` is an alias of its
+  longhand, as the browsers alias them, and `-webkit-mask` of the
+  shorthand, read with the standard grammar — all but
+  `-webkit-mask-composite`, which is `mask-composite` in the cascade, one
+  property, but has words of its own: it takes the
   standard words and the legacy compositing operators' that pages write,
   each read as the standard operator it computes for one channel of
   coverage: `source-over` add, `source-in` intersect, `source-out`
@@ -184,8 +185,15 @@ layers and its size; that is a measured follow-up, not this slice.
   the icon pattern among them.
 - **M2, the rest**: `-webkit-mask-composite` and its legacy keywords (§ 4;
   M1 left the name unread, so a page that wrote only `xor` drew its layers
-  added); `mask-position` and `-size` animated (§ 5); and the coverage
-  cache, if measurement asks for it (§ 3).
+  added); `mask-position` and `-size` animated (§ 5).
+- **The coverage cache** (§ 3) is its own slice, if the P5 asks for it:
+  Lamplighter's beam, a masked gradient turning, costs about 1.5 ms a
+  frame at 100% zoom and 4–5 ms zoomed in on the P5 (Chris's frame meter,
+  2026-11-12), growing with the pixels it covers; yonder's record splits
+  a paint into its stages (gradients, layers, warps), which says how much
+  of that a kept coverage would save. The beam is drawn in its own
+  coordinates and turned after, so its coverage is the same bytes from
+  frame to frame wherever the view does not cut it.
 
 Each slice gets a cold read before Codex and mutants of its rules, as this
 arc's slices have.
