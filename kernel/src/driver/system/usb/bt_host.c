@@ -474,6 +474,11 @@ static void host_classic_policy(bt_host_t *h,uint64_t now)
     bt_classic_t *c=&h->classic;
     if(!h->initialized || h->failed || !h->classic_available) return;
     if(c->phase==BT_CLASSIC_READY) { h->classic_backoff_ms=0; h->classic_page_at=0; return; }
+    // An attempt under way, theirs or ours, takes the place of a page that
+    // was owed: how IT ends decides whether another is. Without this, a
+    // page armed by an unanswered one fired after their call had ended in
+    // a way nothing should be paged after (a stale key).
+    if(c->phase!=BT_CLASSIC_IDLE && c->phase!=BT_CLASSIC_STOPPED) { h->classic_page_at=0; return; }
     if(!h->classic_auto || !c->bond.valid || !bt_classic_quiescent(c)) return;
     if(!h->classic_page_at) {
         // Only an end the far end may come back from is paged again.
