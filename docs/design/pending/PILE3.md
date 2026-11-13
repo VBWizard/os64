@@ -1127,9 +1127,23 @@ painted over black and white and laid in place lands as the content
 over any backdrop (opaque and empty paint exactly); a quarter turn and
 a mirror copied by index, pixel for pixel; a scale and a turn bilinear
 against the reference to within one level; the opacity rule; the clip;
-a matrix that cannot be undone laying nothing.
+a matrix that cannot be undone laying nothing; three hundred random
+groups with holes through random matrices, opacities and clips, each
+pixel the contract's and each pixel nothing painted reaches untouched
+to the bit; rows two thousand pixels long; opaque black, which is
+painted. It runs every frame of a turning box, so its arithmetic is
+whole numbers (warp speed, after the P5 record of 2026-11-13 put half
+of a lit Lamplighter's paint in it): a position in 1/2^32 pixels
+stepped along each row from the row's own centre, a mix in 1/65536 of
+a level, one exact division to lay it; a pixel all of whose four sheet
+pixels are nothing painted is skipped, which leaves it exactly as
+laying it would; and a row is walked only over the stretch that can
+reach the sheets. A step too big for fixed point, or a corner past
+2^30 pixels, works each pixel alone instead. About five times the old
+rate on the host's CPU, beam and rays alike.
 `tools/test_libflow_transform_mutants.py` breaks each rule, painter's
-included. In the guest, the fixture's last two rows beside headless
+included, and `tools/test_yonder_warp_mutants.py` the warp's own
+arithmetic. In the guest, the fixture's last two rows beside headless
 Chrome: turned, grown, a half-turned chevron, a mirror, a skew.
 
 ## The text clip (slice S7c, `background-clip: text`)

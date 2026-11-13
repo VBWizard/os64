@@ -101,6 +101,90 @@ static bool lay(uint32_t *d, uint32_t pitch, os64_gui_rect_t clip, const yonder_
     return yonder_warp(d, pitch, clip, s, m, inv, alpha);
 }
 
+static int blank_px(uint32_t b, uint32_t w)
+{
+    return (b & 0xffffffu) == 0 && (w & 0xffffffu) == 0xffffffu;
+}
+
+// The contract's pixel, worked here in doubles apart from the warp: dst
+// (x, y)'s centre taken back through `m` and sampled from the sheets — by
+// index if `exact`, else the four pixels round it, off the sheets nothing
+// painted — then laid on `was` at `alpha`; only a pixel inside the whole
+// pixels holding where the sheets land is laid. *touched is 0 where
+// nothing painted reaches the centre: there the pixel must be `was`, to
+// the bit.
+static uint32_t contract(const Group *g, const double m[6], int exact, int32_t x, int32_t y,
+                         uint32_t was, uint8_t alpha, int *touched)
+{
+    double lx0 = INFINITY, ly0 = INFINITY, lx1 = -INFINITY, ly1 = -INFINITY;
+    for (int k = 0; k < 4; k++) {
+        double cx = k & 1 ? g->w : 0, cy = k & 2 ? g->h : 0;
+        lx0 = fmin(lx0, m[0] * cx + m[2] * cy + m[4]);
+        lx1 = fmax(lx1, m[0] * cx + m[2] * cy + m[4]);
+        ly0 = fmin(ly0, m[1] * cx + m[3] * cy + m[5]);
+        ly1 = fmax(ly1, m[1] * cx + m[3] * cy + m[5]);
+    }
+    *touched = 0;
+    if (x < floor(lx0 + 1e-6) || x >= ceil(lx1 - 1e-6) || y < floor(ly0 + 1e-6) ||
+        y >= ceil(ly1 - 1e-6))
+        return was;
+    double det = m[0] * m[3] - m[1] * m[2];
+    double px = x + 0.5 - m[4], py = y + 0.5 - m[5];
+    double u = (m[3] * px - m[2] * py) / det, v = (m[0] * py - m[1] * px) / det;
+    double b[3] = {0, 0, 0}, w[3] = {0, 0, 0};
+    int painted = 0;
+    if (exact) {
+        int i = (int)floor(u), j = (int)floor(v);
+        if (i >= 0 && j >= 0 && i < g->w && j < g->h) {
+            uint32_t pb = g->black[j * g->w + i], pw = g->white[j * g->w + i];
+            painted = !blank_px(pb, pw);
+            for (int c = 0; c < 3; c++) {
+                b[c] = (pb >> (16 - 8 * c)) & 0xff;
+                w[c] = (pw >> (16 - 8 * c)) & 0xff;
+            }
+        }
+    } else {
+        double su = u - 0.5, sv = v - 0.5, fx = floor(su), fy = floor(sv);
+        if (fx >= -1 && fy >= -1 && fx < g->w && fy < g->h)
+            for (int k = 0; k < 4; k++) {
+                int i = (int)fx + (k & 1), j = (int)fy + (k >> 1);
+                double wt = (k & 1 ? su - fx : 1 - (su - fx)) * (k >> 1 ? sv - fy : 1 - (sv - fy));
+                int in = i >= 0 && j >= 0 && i < g->w && j < g->h;
+                uint32_t pb = in ? g->black[j * g->w + i] : 0;
+                uint32_t pw = in ? g->white[j * g->w + i] : 0xffffffu;
+                painted |= !blank_px(pb, pw);
+                for (int c = 0; c < 3; c++) {
+                    b[c] += wt * ((pb >> (16 - 8 * c)) & 0xff);
+                    w[c] += wt * ((pw >> (16 - 8 * c)) & 0xff);
+                }
+            }
+    }
+    *touched = painted;
+    if (!painted)
+        return was;
+    double a = alpha / 255.0;
+    uint32_t out = was & 0xff000000u;
+    for (int c = 0; c < 3; c++) {
+        double d = (was >> (16 - 8 * c)) & 0xff, t = (w[c] - b[c]) / 255;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        out |= (uint32_t)(a * b[c] + (1 - a + a * t) * d + 0.5) << (16 - 8 * c);
+    }
+    return out;
+}
+
+// A group some of whose pixels are nothing painted: a third of them, the
+// rest random content, translucent or not.
+static void group_holes(Group *g, int32_t w, int32_t h, int translucent)
+{
+    group_make(g, w, h, translucent);
+    for (int32_t k = 0; k < w * h; k++)
+        if (rnd() % 3 == 0) {
+            g->content[k] &= 0xffffffu;
+            g->black[k] = over(g->content[k], 0);
+            g->white[k] = over(g->content[k], 0xffffffu);
+        }
+}
+
 int main(void)
 {
     // Laid where it is, the content over any backdrop, opaque, empty or
@@ -295,6 +379,171 @@ int main(void)
             ok = ok && (d[y * 24 + y] & 0xffffffu) == 0x336699u;
         expect("warp: a diagonal whose inverse terms cancel past a double is laid", ok);
         free(d);
+    }
+
+    // Random groups with holes through random matrices — turns, scales and
+    // shears, an eighth of them quarter turns and mirrors at whole pixels —
+    // at random opacities and clips: each pixel the contract's, to within
+    // the level two roundings part by (two under an opacity), and a pixel
+    // nothing painted reaches is what it was, to the bit.
+    {
+        int ok = 1, laid = 0, kept = 0;
+        for (int t = 0; t < 300 && ok; t++) {
+            Group g;
+            int32_t gw = 1 + (int32_t)(rnd() % 40), gh = 1 + (int32_t)(rnd() % 40);
+            group_holes(&g, gw, gh, t & 1);
+            yonder_sheets_t s = {g.black, g.white, gw, gh};
+            double m[6];
+            int exact = t % 8 == 0;
+            if (exact) {
+                // Every quarter turn and mirror: the turns, the flips, the
+                // half turn and the two transposes.
+                static const double q[8][4] = {{0, 1, -1, 0}, {0, -1, 1, 0}, {-1, 0, 0, 1}, {1, 0, 0, -1},
+                                               {-1, 0, 0, -1}, {0, 1, 1, 0}, {0, -1, -1, 0}, {1, 0, 0, 1}};
+                const double *e = q[rnd() % 8];
+                m[0] = e[0];
+                m[1] = e[1];
+                m[2] = e[2];
+                m[3] = e[3];
+                m[4] = 10 + (double)(rnd() % 50);
+                m[5] = 10 + (double)(rnd() % 40);
+            } else {
+                double ang = (rnd() % 6283) / 1000.0, sc = 0.3 + (rnd() % 2700) / 1000.0;
+                m[0] = cos(ang) * sc;
+                m[1] = sin(ang) * sc;
+                m[2] = -sin(ang) * sc * (0.5 + (rnd() % 1000) / 1000.0);
+                m[3] = cos(ang) * sc;
+                m[4] = 5 + (rnd() % 60000) / 1000.0;
+                m[5] = 5 + (rnd() % 50000) / 1000.0;
+            }
+            uint8_t alpha = t % 3 == 0 ? (uint8_t)(rnd() & 0xff) : 255;
+            int32_t dw = 90, dh = 80, cx = (int32_t)(rnd() % 20), cy = (int32_t)(rnd() % 20);
+            os64_gui_rect_t clip = {cx, cy, 50 + (int32_t)(rnd() % (uint32_t)(dw - 50 - cx + 1)),
+                                    40 + (int32_t)(rnd() % (uint32_t)(dh - 40 - cy + 1))};
+            uint32_t *d = backdrop(dw, dh), *was = malloc((size_t)dw * dh * 4);
+            memcpy(was, d, (size_t)dw * dh * 4);
+            ok = ok && exact == yonder_warp_exact(m) && lay(d, (uint32_t)dw, clip, &s, m, alpha);
+            for (int32_t y = 0; y < dh && ok; y++)
+                for (int32_t x = 0; x < dw && ok; x++) {
+                    int touched = 0, in = x >= clip.x && y >= clip.y && x < clip.x + clip.w &&
+                                         y < clip.y + clip.h;
+                    uint32_t want = contract(&g, m, exact, x, y, was[y * dw + x], alpha, &touched);
+                    if (in && touched) {
+                        laid++;
+                        ok = near(d[y * dw + x], want, alpha == 255 ? 1 : 2) &&
+                             (d[y * dw + x] >> 24) == 0xab;
+                    } else {
+                        kept++;
+                        ok = d[y * dw + x] == was[y * dw + x];
+                    }
+                    if (!ok)
+                        printf("  case %d: (%d, %d) is %06x, the contract %06x%s\n", t, x, y,
+                               d[y * dw + x] & 0xffffffu, want & 0xffffffu,
+                               in && touched ? "" : " (nothing painted reaches it)");
+                }
+            free(d);
+            free(was);
+            group_free(&g);
+        }
+        expect("warp: random groups and matrices laid as the contract says", ok && laid > 0 &&
+                                                                              kept > 0);
+    }
+
+    // A row is stepped by adding, from each row's own centre: along rows
+    // two thousand pixels long, a hair's turn of hard-edged content lands
+    // where each pixel worked alone says, to within one level at the far
+    // end too. A step held to 16 bits of a pixel drifts several levels
+    // there.
+    {
+        Group g;
+        group_make(&g, 2000, 6, 0);
+        yonder_sheets_t s = {g.black, g.white, 2000, 6};
+        const double m[6] = {cos(0.0007), sin(0.0007), -sin(0.0007), cos(0.0007), 3.37, 4.61};
+        int32_t dw = 2010, dh = 14;
+        uint32_t *d = backdrop(dw, dh), *was = malloc((size_t)dw * dh * 4);
+        memcpy(was, d, (size_t)dw * dh * 4);
+        int ok = lay(d, (uint32_t)dw, (os64_gui_rect_t){0, 0, dw, dh}, &s, m, 255);
+        for (int32_t y = 0; y < dh; y++)
+            for (int32_t x = 0; x < dw; x++) {
+                int touched = 0;
+                uint32_t want = contract(&g, m, 0, x, y, was[y * dw + x], 255, &touched);
+                ok = ok && (touched ? near(d[y * dw + x], want, 1) : d[y * dw + x] == was[y * dw + x]);
+            }
+        expect("warp: rows two thousand pixels long, stepped, land where each pixel says", ok);
+        free(d);
+        free(was);
+        group_free(&g);
+    }
+
+    // Sheets squeezed into one column, a millionth of a pixel wide: the
+    // inverse's step along a row is ten billion pixels, past what a step
+    // can hold, while the one centre goes back inside FAR — off the
+    // sheets, so the column is as it was.
+    {
+        Group g;
+        group_make(&g, 20000, 4, 0);
+        yonder_sheets_t s = {g.black, g.white, 20000, 4};
+        const double m[6] = {1e-10, 0, 0, 1, 5.45, 2};
+        uint32_t *d = backdrop(12, 8), *was = malloc(12 * 8 * 4);
+        memcpy(was, d, 12 * 8 * 4);
+        int ok = lay(d, 12, (os64_gui_rect_t){0, 0, 12, 8}, &s, m, 255) && memcmp(d, was, 12 * 8 * 4) == 0;
+        expect("warp: a step past what fixed point holds is not stepped", ok);
+        free(d);
+        free(was);
+        group_free(&g);
+    }
+
+    // A tall sheet squeezed across and turned an eighth: its step fits
+    // fixed point, but the corners of its box go back billions of pixels
+    // from it — further than fixed point holds — and the clip cuts every
+    // row to nothing. So the box is worked pixel by pixel, never stepped
+    // from a corner, and nothing is laid.
+    {
+        Group g;
+        group_make(&g, 4, 4096, 0);
+        yonder_sheets_t s = {g.black, g.white, 4, 4096};
+        const double r = sqrt(0.5), m[6] = {r * 7.1e-7, r * 7.1e-7, -r, r, 3000, 10};
+        uint32_t *d = backdrop(300, 2000), *was = malloc(300 * 2000 * 4);
+        memcpy(was, d, 300 * 2000 * 4);
+        int ok = lay(d, 300, (os64_gui_rect_t){0, 0, 300, 2000}, &s, m, 255) &&
+                 memcmp(d, was, 300 * 2000 * 4) == 0;
+        expect("warp: a box whose corners go back past fixed point is not stepped", ok);
+        free(d);
+        free(was);
+        group_free(&g);
+    }
+
+    // Nothing painted anywhere: turned and scaled, the sheets leave every
+    // pixel as it was, to the bit.
+    {
+        uint32_t black[30 * 20], white[30 * 20];
+        for (int k = 0; k < 30 * 20; k++) {
+            black[k] = 0xff000000u;
+            white[k] = 0xffffffffu;
+        }
+        yonder_sheets_t s = {black, white, 30, 20};
+        uint32_t *d = backdrop(64, 64), *was = malloc(64 * 64 * 4);
+        memcpy(was, d, 64 * 64 * 4);
+        const double m[6] = {1.3 * cos(0.4), 1.3 * sin(0.4), -1.3 * sin(0.4), 1.3 * cos(0.4), 20.3, 2.7};
+        int ok = lay(d, 64, (os64_gui_rect_t){0, 0, 64, 64}, &s, m, 200) && memcmp(d, was, 64 * 64 * 4) == 0;
+        expect("warp: sheets with nothing painted leave the backdrop to the bit", ok);
+        // Opaque black is black on both sheets, and is painted: laid
+        // where it is, every pixel black.
+        for (int k = 0; k < 30 * 20; k++)
+            white[k] = 0xff000000u;
+        memcpy(d, was, 64 * 64 * 4);
+        const double id[6] = {1, 0, 0, 1, 0, 0}, turn[6] = {cos(0.4), sin(0.4), -sin(0.4), cos(0.4), 20, 2};
+        ok = lay(d, 64, (os64_gui_rect_t){0, 0, 64, 64}, &s, id, 255);
+        for (int y = 0; y < 20; y++)
+            for (int x = 0; x < 30; x++)
+                ok = ok && (d[y * 64 + x] & 0xffffffu) == 0;
+        // Turned, the middle of it too.
+        memcpy(d, was, 64 * 64 * 4);
+        ok = ok && lay(d, 64, (os64_gui_rect_t){0, 0, 64, 64}, &s, turn, 255) &&
+             (d[(2 + 13) * 64 + 20 + 10] & 0xffffffu) == 0;
+        expect("warp: opaque black is painted, not taken for nothing", ok);
+        free(d);
+        free(was);
     }
 
     // Re-basing a sheet's matrix: cancelling huge terms come to what they

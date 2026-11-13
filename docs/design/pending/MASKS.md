@@ -196,7 +196,14 @@ layers and its size; that is a measured follow-up, not this slice.
   a paint into its stages (gradients, layers, warps), which says how much
   of that a kept coverage would save. The beam is drawn in its own
   coordinates and turned after, so its coverage is the same bytes from
-  frame to frame wherever the view does not cut it.
+  frame to frame wherever the view does not cut it. The record of
+  2026-11-13 (level 3, every lamp lit, 150%) answered first for the
+  turning itself: warps 19.8 ms of a 38.3 ms paint, gradients 7.4,
+  layers 6.6. So the warp went first (warp speed, PILE3.md § Transforms,
+  the painter); the cache is weighed against the record that follows it,
+  as a cache of a turning box's sheets — its gradients and masks drawn
+  once while only its angle changes — rather than of a mask's coverage
+  alone.
 
 Each slice gets a cold read before Codex and mutants of its rules, as this
 arc's slices have.

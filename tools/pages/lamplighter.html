@@ -111,6 +111,17 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       mask:radial-gradient(closest-side,#000 40%,#0000) center/30% 30% no-repeat;
       animation:breathe 1.8s ease-in-out infinite alternate}
 @keyframes breathe{to{-webkit-mask-size:100% 100%;mask-size:100% 100%}}
+/* Whirlpools: an eight-armed conic, softened by a radial mask, turning
+   while drawn larger than its tile (rotate and scale, the warp enlarged). */
+.whirl{background:repeating-conic-gradient(#6fb3e0 0 12deg,#1d5a86 12deg 45deg);
+       -webkit-mask:radial-gradient(closest-side,#000 30%,#0000);mask:radial-gradient(closest-side,#000 30%,#0000);
+       animation:whirl 3s linear infinite}
+@keyframes whirl{from{transform:rotate(0deg) scale(1.7)}to{transform:rotate(-360deg) scale(1.7)}}
+/* The lighthouse lens: a lit quadrant that clicks round a quarter turn at
+   a time (steps(4) of a whole turn, each a quarter turn the warp copies). */
+#lens{position:absolute;left:30%;top:6%;width:40%;height:40%;border-radius:50%;
+      background:conic-gradient(#fffbe6 0 90deg,#0000 90deg);animation:quarter 2s steps(4) infinite}
+@keyframes quarter{to{transform:rotate(360deg)}}
 #banner{position:absolute;left:10%;right:10%;top:36%;padding:14px;text-align:center;border-radius:12px;
         background:#0b1630e6;border:2px solid var(--gold);font-size:22px;z-index:9;display:none}
 #banner small{display:block;font-size:15px;color:var(--dim);margin-top:6px}
@@ -160,7 +171,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       look: 'The beam sweeps round, a lit lamp\'s rays turn, the keeper\'s ring spins.',
       check: function () { return cs($('beam'), 'animation-name') === 'sweep'; } },
     waapi: { name: 'Web Animations API', from: '#524',
-      look: 'Boats sail their lanes; bump into one and you are sent back to the dock.',
+      look: 'Boats sail their lanes; bump into one and you are sent back to the dock, and every lamp you lit goes out.',
       check: function () { return boatClock.advanced; } },
     masks: { name: 'masks', from: '#551',
       look: 'Rocks, boats and the keeper are silhouettes, not squares; fog banks have soft edges.',
@@ -179,7 +190,22 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       check: function () { return midway('mask-position', '0px 0px', '20px 20px') === '10px 10px'; } },
     masksize: { name: 'mask-size animated', from: 'masks M2',
       look: 'The glow round the lighthouse breathes: it grows and shrinks, always soft-edged.',
-      check: function () { return midway('mask-size', '0px 0px', '20px 20px') === '10px 10px'; } }
+      check: function () { return midway('mask-size', '0px 0px', '20px 20px') === '10px 10px'; } },
+    turnscale: { name: 'turned and enlarged boxes, drawn quick', from: 'warp speed',
+      look: 'Whirlpools turn smoothly while drawn larger than their tiles, soft-edged. Light every lamp and press F: the meter holds up with all their rays turning.',
+      check: function () {
+        return probed('', function (p) {
+          p.style.transform = 'rotate(30deg) scale(1.6)';
+          var m = /^matrix\(([^)]*)\)$/.exec(cs(p, 'transform'));
+          var v = m ? m[1].split(',').map(parseFloat) : [];
+          return v.length === 6 && Math.abs(v[0] - 1.3856) < 0.01 && Math.abs(v[1] - 0.8) < 0.01;
+        });
+      } },
+    steps: { name: 'steps() timing', from: 'warp speed',
+      look: 'The lighthouse lens clicks round a quarter turn at a time, crisp at every stop.',
+      check: function () {
+        return probed('', function (p) { p.style.animationTimingFunction = 'steps(4)'; return cs(p, 'animation-timing-function') === 'steps(4)'; });
+      } }
   };
 
   // What `read` says of a probe of class `cls` of its own, so a check
@@ -216,7 +242,9 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   // The levels. Tiles are [column, row] from the top left; a lane is a row
   // boats sail along, `dur` milliseconds a crossing, `dir` 1 rightward.
   // Buoys block the way as rocks do; `glint` is the row the moon's path
-  // lies on, and `halo` puts a breathing glow round the tower.
+  // lies on, and `halo` puts a breathing glow round the tower. Steering
+  // into a whirlpool (`whirls`) sends the keeper back as a boat does;
+  // `lens` sets the tower's lens turning.
   var LEVELS = [
     { name: 'First Light', shows: ['aspect', 'conic', 'cssanim', 'waapi'],
       start: [0, 7], tower: [11, 0],
@@ -244,7 +272,15 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
       buoys: [[0, 1], [3, 1], [8, 5], [5, 5]],
       fog: [[11, 5, 1]],
       lanes: [{ row: 2, dur: 10000, dir: 1, boats: [0, 0.5] }, { row: 4, dur: 8000, dir: -1, boats: [0.25, 0.75] },
-              { row: 6, dur: 9000, dir: 1, boats: [0.1, 0.6] }] }
+              { row: 6, dur: 9000, dir: 1, boats: [0.1, 0.6] }] },
+    { name: 'Maelstrom', shows: ['turnscale', 'steps'],
+      start: [0, 7], tower: [11, 0], lens: true,
+      lamps: [[1, 0], [6, 0], [3, 2], [10, 2], [7, 4], [0, 5], [11, 6], [5, 7]],
+      rocks: [[4, 0], [9, 4], [3, 5], [8, 7]],
+      whirls: [[5, 2], [2, 4], [8, 5]],
+      fog: [[10, 2, 1]],
+      lanes: [{ row: 1, dur: 9000, dir: -1, boats: [0, 0.5] }, { row: 3, dur: 11000, dir: 1, boats: [0.2, 0.7] },
+              { row: 6, dur: 8000, dir: -1, boats: [0.15, 0.65] }] }
   ];
 
   function cs(el, prop) { return el ? getComputedStyle(el).getPropertyValue(prop).trim() : ''; }
@@ -252,7 +288,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
   function tile(cls, x, y) { var d = document.createElement('div'); d.className = 'tile ' + cls; place(d, x, y); arena.appendChild(d); return d; }
   function store(key, value) { try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) {} return null; }
 
-  var at = 0, level, keeper, pos, lamps, rocks, fogs, lanes, moves, done, beam;
+  var at = 0, level, keeper, pos, lamps, rocks, whirls, fogs, lanes, moves, done, beam;
   // Whether any boat's animation clock has moved since its last frame,
   // each lane's against its own last sample (the self-check's Web
   // Animations row).
@@ -286,7 +322,9 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     beam.style.left = ((level.tower[0] + 0.5) * 100 / COLS) + '%';
     beam.style.top = ((level.tower[1] + 0.5) * 100 / ROWS - 20) + '%';
     arena.appendChild(beam);
-    tile('', level.tower[0], level.tower[1]).id = 'tower';
+    var tower = tile('', level.tower[0], level.tower[1]); tower.id = 'tower';
+    if (level.lens) { var lens = document.createElement('div'); lens.id = 'lens'; tower.appendChild(lens); }
+    whirls = {}; (level.whirls || []).forEach(function (w) { tile('whirl', w[0], w[1]); whirls[w[0] + ',' + w[1]] = true; });
     rocks = {}; level.rocks.forEach(function (r) { tile('rock', r[0], r[1]); rocks[r[0] + ',' + r[1]] = true; });
     (level.buoys || []).forEach(function (b) { tile('buoy', b[0], b[1]); rocks[b[0] + ',' + b[1]] = true; });
     rocks[level.tower[0] + ',' + level.tower[1]] = true;
@@ -345,6 +383,7 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS || rocks[x + ',' + y]) return;
     pos = [x, y]; place(keeper, x, y); moves++;
     clearFog(); hud();
+    if (whirls[x + ',' + y]) bumped();
   }
 
   function light() {
@@ -372,9 +411,13 @@ h1{margin:0;font-size:34px;letter-spacing:1px;color:var(--gold);
     return out;
   }
 
+  // Hit by a boat or caught by a whirlpool: back to the dock, and every
+  // lamp lit goes out.
   function bumped() {
     keeper.className = 'tile';
     pos = level.start.slice(); place(keeper, pos[0], pos[1]);
+    lamps.forEach(function (l) { l.lit = false; l.el.className = 'tile lamp'; });
+    hud();
     if (keeper.animate) keeper.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 500, iterations: 2 });
   }
 
