@@ -211,18 +211,18 @@ classic and le together, ...`.)
 
 ### T, as built
 
-- **Nothing is gated on the count yet.** The accountant is sized, told of
+- **Part T gated nothing on the count.** The accountant is sized, told of
   every link, send and completion, and shown in the status file; the LE
   peers are still serialized among themselves by `tx_used`, exactly as
   before, so the keyboard's path decides nothing new. The first sender held
-  to the count is the Classic link (part L). The multi-peer suite asserts
-  at every step that the controller-wide count agrees with each LE peer's
-  own.
+  to the count is the Classic link's L2CAP (§ S, as built). The multi-peer
+  suite asserts at every step that the controller-wide count agrees with
+  each peer's own.
 - **§ T3 is deferred to part L**, which is the first to have a second kind
   of receiver. `bt_host_receive` is unchanged.
-- **"Nothing of mine is in flight", per link, is deferred to the part that
-  first sends Classic data** (S). With only LE sending, one packet at a
-  time, "the endpoint is idle" is still the same question.
+- **"Nothing of mine is in flight", per link, was left to the part that
+  first sends Classic data** (§ S, as built has it). With only LE sending,
+  one packet at a time, "the endpoint is idle" is the same question.
 - **A completion that is not the oldest slot's is counted, not fatal**
   (`unmatched`, as the receive endpoints count theirs): an event for a
   transfer from before the runtime began must not end the transport. A
@@ -563,12 +563,14 @@ the radio with the keyboard; and everything about real headphones.
   parameters" with Basic mode; a flush timeout is accepted as a hint.
 - **Admission**: an incoming Connection Request is accepted for PSM 0x0001
   (SDP) now, and for 0x0019 (AVDTP) from A.3; anything else is "PSM not
-  supported" (result 0x0002). SDP may precede encryption; any other PSM
-  asked for on a link that is not yet encrypted is answered "security
-  block" (0x0003), not "not supported", so the peer tries again later.
-- Every request we send has a timer (the RTX of § 6.2.1, 2 s here). A
+  supported" (result 0x0002). SDP may precede encryption; any other
+  admitted PSM asked for on a link that is not yet encrypted is answered
+  "pending, authentication pending" and held until encryption arrives
+  (then success) or 30 s pass (then "security block", 0x0003).
+- Every request we send has a timer (the RTX of § 6.2.1, 10 s here). A
   Connection Response of "pending" replaces it with the long one (ERTX,
-  60 s). An unanswered request closes the channel, not the link.
+  60 s). An unanswered request closes the channel, not the link, and so
+  does a configuration still unfinished 30 s after it began.
 
 ### S2. SDP, asked
 
@@ -580,9 +582,9 @@ Audio Sink class (0x110B), attributes 0x0000 to 0xFFFF.
   5 s, and the query ends with what it has, marked incomplete.
 - The data-element parser is bounded: depth 6, every length checked
   against the bytes that remain, no recursion.
-- What is kept: the AVDTP version from the protocol descriptor list, the
-  A2DP profile version, the supported-features word. They go to the status
-  file and to A.3.
+- What is kept: the AVDTP version and the L2CAP PSM from the protocol
+  descriptor list, the A2DP profile version, the supported-features word.
+  They go to the status file and to A.3.
 
 ### S3. SDP, answered
 
@@ -602,8 +604,8 @@ against the parser:
 The responder answers Service Search, Service Attribute and Service Search
 Attribute requests for it, each within the requester's stated maximum and
 with continuation when the record does not fit, and an Error Response for
-a malformed request. It holds no state between requests but a continuation
-offset.
+a malformed request. It holds no state between requests: the continuation
+state it issues carries the offset.
 
 ### S, proof
 
@@ -614,12 +616,94 @@ that asks our responder everything, with small maxima; both parsers fuzzed.
 P5: after `READY`, the status file gains
 
 ```
-sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0003 (complete)
+sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0003, psm 0019 (complete)
 ```
 
 and the headphones stay connected instead of dropping an idle link after
 their own timeout. If they do drop it, that is recorded, and A.3 is where
 a stream gives them a reason to stay.
+
+### S, as built
+
+The two pure cores (`bt_l2cap.c`, `bt_sdp.c`) and their wiring into the
+host were built by Opus builders from written briefs
+(`~/os64-opus-kit/BRIEF_BT_SERVICES_INTEGRATION.md` is the wiring's).
+Where the code departs from §§ S1 to S3, or settles what they left open:
+
+- **"Pending" before encryption, not a security block.** A request for an
+  admitted PSM other than SDP on a link not yet encrypted is answered
+  "pending, authentication pending" with a channel held for it; encryption
+  sends its success, under the request's own identifier, and starts its
+  configuration; 30 s without it, the security block. The stacks the
+  headphones are tested against do this, and an immediate block makes some
+  peers give up instead of trying again.
+- **RTX is 10 s**, not 2: legal either way, and a radio busy with pairing
+  or sniff can be slow to answer. ERTX stays 60 s.
+- **A channel connected but not open 30 s after its configuration began**
+  (or after the peer began reconfiguring it) is closed with a
+  Disconnection Request, so a peer that never sends its own Configuration
+  Request cannot leave one half-open. When that deadline and an
+  unanswered request's RTX fall in one tick, the channel is closed once.
+- **Settled in the L2CAP core**: Connection Responses 0x0006 and 0x0007
+  for a source CID outside the dynamic range or already in use; an
+  unanswered Configuration Request closes the channel with a Disconnection
+  Request; the peer's count of configuration rounds starts over when it
+  agrees; Echo data is cut to 44 bytes so the response fits a 48-byte
+  signalling MTU; our CIDs rotate rather than reuse the one just freed;
+  a success that answers a request we no longer hold is sent a
+  Disconnection Request for the pair it names.
+- **The SDP line carries the PSM** the headphones' record names for
+  AVDTP, which A.3 opens. Its continuation state is an offset plus a check
+  against the request it continues, so a state the responder did not issue
+  is refused. A deeper nesting than six is stepped over by its size, and a
+  32- or 128-bit UUID on the Bluetooth base equals its 16-bit form.
+- **The query's MTU is the smaller of the channel's two**: the peer's, and
+  the one we stated for the channel (1,017, unless the peer's answer to our
+  configuration asked us lower). The client's five seconds start when the
+  channel is open, so L2CAP's RTX and the configuration are not inside
+  them.
+- **One query a connection, made by us, and never retried on it.** At
+  `READY` the host opens the SDP channel; the client starts when it is
+  open; DONE or FAILED closes it. A channel refused, unanswered, or closed
+  before the answer is whole ends the query as "not made", with the
+  reason in the status and the log (DEBTS).
+- **The result outlives its connection**, marked as the current one's or
+  an earlier one's; the status file shows an earlier connection's while
+  this one has found nothing.
+- **What we answer** is bounded by the smallest of the peer's MTU, ours,
+  and one of the controller's Classic ACL packets after the L2CAP header.
+  L2CAP queues one payload a channel; an answer it cannot take yet is held
+  by the host (one) and offered every tick, and a question that arrives
+  while one is held is dropped and counted (`sdp requests answered: N
+  dropped: N`).
+- **The send turn: LE goes first.** Each host tick L2CAP is offered one PDU
+  after the LE peers have had theirs, and may send it only when the
+  accountant gives the Classic link a buffer (the first sender held to the
+  count), a send slot is free with another left over, and no LE peer is
+  still holding a packet it could not send. The transport reports how many
+  of its four send slots are in flight (`bt_host_tick`'s `tx_in_flight`,
+  replacing one "endpoint idle" flag, which could not say "busy, with a
+  slot free"); slots complete in order, so the host knows who filled each.
+  The LE peers' rule decides what it did when only LE sends.
+- **"Nothing of mine is in flight", per link** (§ T2): an LE peer cleaning
+  up waits for its own packets to leave the send slots, not the Classic
+  link's. It is the slots, not the controller's buffers: waiting for its
+  completions would make a cleanup after link loss wait for completions
+  that never come.
+- **A PDU one Classic ACL packet cannot carry is dropped and counted**,
+  never cut: what we send is at most 1,021 bytes, which the AX210's
+  packets carry; a controller with smaller ones is booked in DEBTS.
+- The ACL assembler's buffer was already 1,028 bytes; a static assertion
+  now ties it to a whole Classic packet.
+- Proof: `test_bt_l2cap_host` (every case scripted byte for byte, 3,000
+  fuzz rounds) and 199 mutants; `test_bt_sdp_host` (the client against a
+  model server cut at every byte, the responder asked everything, the
+  cross check, fuzz) and 123 mutants; `test_bt_multi_host` (the query after
+  `slot 2 bond`, LE first on a slow transport kept busy, the Classic pool
+  exhausted, our SDP asked across continuations and three questions at
+  once, AVDTP refused, a drop mid-query, a refused channel, a full-size
+  Classic packet, an LE cleanup with Classic packets in the slots, and no
+  L2CAP byte without a link).
 
 ## What is seen and logged
 

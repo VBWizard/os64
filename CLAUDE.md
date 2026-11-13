@@ -528,8 +528,15 @@ virtio because its drain waits for the tick.
   command slot, which it takes ahead of the scan and the LE peers when an
   answer is waiting. The start-up round's Classic setup commands may be
   REFUSED without costing the round: the slot then says why it is
-  unavailable and LE is untouched. Its data packets are not read yet
-  (L2CAP is the next part). § L, as built is the record
+  unavailable and LE is untouched. Its data packets are its L2CAP's
+  (`bt_l2cap.c`, pure, Basic mode, admitting SDP alone for now), and at
+  `READY` the host asks the headphones one SDP question a connection, what
+  Audio Sink they are (`bt_sdp.c`, pure, which also answers for os64's
+  Audio Source record); L2CAP sends only after the LE peers have had their
+  turn, while the count gives it a buffer and a send slot is left for LE.
+  Slot 2's status shows L2CAP's channels and counters, the `sdp:` line
+  (versions, features and AVDTP's PSM, or why the query was not made) and
+  the questions answered. §§ L and S, as built are the record
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
