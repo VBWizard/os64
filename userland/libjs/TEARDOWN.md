@@ -46,10 +46,10 @@ its native owners afterward. See [libdom's lifecycle](../libdom/LIBDOM.md).
 
 Opt-in raw-engine execution scope records live on the native stack and borrow
 contexts held by their active operation. They add no independently retained
-engine roots. Call/eval/constructor/resume wrappers pop on ordinary and
-exceptional return; a job pops after body/value cleanup and before releasing
-its context and owner references. Snapshot visitors must not release values
-or reenter the engine. An empty snapshot is not a native cleanup certificate
+engine roots. Call/eval/constructor/resume wrappers and optimized native iterator
+dispatch pop on ordinary and exceptional return; a job pops after body/value
+cleanup and before releasing its context and owner references. Snapshot visitors
+must not release values or reenter the engine. An empty snapshot is not a native cleanup certificate
 and does not clear wrapper failure. Default wrapper setup leaves tracking disabled.
 
 ## Executable containment and module owners

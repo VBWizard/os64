@@ -144,6 +144,104 @@ static void failed_wrapper_cases(void)
               "failed alias wrapper teardown releases roots under selected policy");
     }
 }
+static JSContext *failed_iterator_caller, *failed_iterator_defining;
+static unsigned failed_iterator_hits;
+static bool failed_iterator_observe, failed_iterator_throw;
+static JSValue failed_iterator_next(JSContext *ctx, JSValueConst self, int argc,
+                                    JSValueConst *argv, int *done, int magic)
+{
+    (void)self;
+    failed_iterator_hits++;
+    if (failed_iterator_observe) {
+        check(ctx == failed_iterator_caller && argc == 0 && JS_IsUndefined(argv[0]) && magic == 17,
+              "optimized iterator preserves incoming callback context and argument ABI");
+        execution_take(JS_GetRuntime(ctx));
+        check(execution_snapshot.count && execution_snapshot.items[0].caller == failed_iterator_caller &&
+              execution_snapshot.items[0].code == failed_iterator_defining &&
+              execution_snapshot.items[0].code_kind == JS_EXECUTION_CODE_NATIVE,
+              "optimized iterator records native execution scope before callback");
+        JSNativeCallContexts native;
+        check(JS_GetNativeCallContexts(JS_GetRuntime(ctx), &native) &&
+              native.incoming == failed_iterator_caller && native.defining == failed_iterator_defining,
+              "optimized iterator publishes separate incoming and defining contexts");
+    }
+    *done = true;
+    return failed_iterator_throw ? JS_ThrowTypeError(ctx, "native iterator probe") : JS_UNDEFINED;
+}
+static JSValue failed_iterator_outer(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self; (void)argc; (void)argv;
+    JSNativeCallContexts before = {0}, after = {0};
+    check(JS_GetNativeCallContexts(JS_GetRuntime(ctx), &before) &&
+          before.incoming == ctx && before.defining == ctx,
+          "outer native invocation establishes its own context pair");
+    const char *source = "for(const value of iteratorB){}";
+    JSValue result = JS_Eval(ctx, source, strlen(source), "nested-iterator.js", JS_EVAL_TYPE_GLOBAL);
+    check(JS_GetNativeCallContexts(JS_GetRuntime(ctx), &after) &&
+          after.incoming == before.incoming && after.defining == before.defining,
+          "optimized iterator restores enclosing native pair before JS reentry returns");
+    return result;
+}
+static void failed_iterator_cases(void)
+{
+    size_t before = live;
+    JSRuntime *runtime = JS_NewRuntime();
+    JSContext *a = runtime ? JS_NewContext(runtime) : NULL;
+    JSContext *b = runtime ? JS_NewContext(runtime) : NULL;
+    check(a && b, "optimized iterator fixture creates caller and defining contexts");
+    if (!a || !b) goto done;
+    JS_EnableExecutionScopeTracking(runtime);
+    failed_iterator_caller = a; failed_iterator_defining = b;
+    failed_iterator_observe = true; failed_iterator_throw = false; failed_iterator_hits = 0;
+    JSCFunctionType callback = { .iterator_next = failed_iterator_next };
+    JSValue next = JS_NewCFunction2(b, callback.generic, "foreignNext", 1, JS_CFUNC_iterator_next, 17);
+    JSValue global = JS_GetGlobalObject(a);
+    check(JS_SetPropertyStr(a, global, "nextB", JS_DupValue(a, next)) == 1,
+          "foreign optimized native iterator installed");
+    check(JS_SetPropertyStr(a, global, "outerIterator",
+          JS_NewCFunction(a, failed_iterator_outer, "outerIterator", 0)) == 1,
+          "enclosing native iterator probe installed");
+    JS_FreeValue(a, global);
+    failed_eval(a, "globalThis.iteratorB={next:nextB,[Symbol.iterator](){return this}};"
+                   "for(const value of iteratorB){}", false,
+                   "healthy optimized native iterator is callable across contexts");
+    check(failed_iterator_hits == 1, "healthy optimized iterator invokes its callback exactly once");
+    JSNativeCallContexts native;
+    check(!JS_GetNativeCallContexts(runtime, &native), "optimized iterator restores outer native facts on success");
+    execution_idle(runtime);
+    failed_eval(a, "[...iteratorB];Array.from(iteratorB);"
+                   "for(const value of Iterator.from(iteratorB)){};outerIterator()", false,
+                   "healthy optimized iteration supports collection and nested helper routes");
+    check(failed_iterator_hits == 5, "healthy iterator routes reach their native callbacks");
+    check(!JS_GetNativeCallContexts(runtime, &native), "nested iterator leaves no native context pair");
+    failed_iterator_throw = true;
+    failed_eval(a, "outerIterator()", true,
+                   "optimized iterator propagates callback exceptions");
+    check(!JS_GetNativeCallContexts(runtime, &native), "optimized iterator restores outer native facts on exception");
+    execution_idle(runtime);
+    failed_iterator_observe = false; failed_iterator_throw = false; failed_iterator_hits = 0;
+    check(JS_MarkContextExecutableFailed(b), "optimized iterator defining context marked failed");
+    JSValue result = JS_Call(a, next, JS_UNDEFINED, 0, NULL);
+    check(JS_IsException(result), "direct native iterator call refuses failed defining context");
+    if (JS_IsException(result)) JS_FreeValue(a, JS_GetException(a));
+    JS_FreeValue(a, result);
+    const char *blocked[] = {
+        "for(const value of iteratorB){}",
+        "[...iteratorB]",
+        "Array.from(iteratorB)",
+        "for(const value of Iterator.from(iteratorB)){}"
+    };
+    for (size_t i = 0; i < sizeof(blocked)/sizeof(blocked[0]); i++)
+        failed_eval(a, blocked[i], true, "optimized iterator consumption refuses failed code");
+    check(failed_iterator_hits == 0, "optimized iterator never invokes failed-context native callback");
+    JS_FreeValue(a, next);
+    execution_idle(runtime);
+done:
+    if (a) JS_FreeContext(a);
+    if (b) JS_FreeContext(b);
+    if (runtime) JS_FreeRuntime(runtime);
+    check(live == before, "optimized native iterator fixture releases all engine allocations");
+}
 static void failed_code_cases(void)
 {
     size_t before = live;
@@ -337,4 +435,5 @@ done:
     check(live==before,"failed-code contexts, modules, suspended frames and queues release every allocation");
     failed_wrapper_cases();
     failed_unwind_cases();
+    failed_iterator_cases();
 }

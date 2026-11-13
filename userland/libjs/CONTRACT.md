@@ -1077,15 +1077,19 @@ conversion of both a Latin-1 and a wide string and checks teardown ownership.
 ## Native call context facts
 
 `JS_GetNativeCallContexts` is an additive raw-engine query for the innermost
-active generic/data C-function invocation. It copies borrowed `incoming` and
-`defining` contexts without allocation, reference changes or exception access.
+active C-function/data invocation, including optimized native iterator dispatch.
+It copies borrowed `incoming` and `defining` contexts without allocation,
+reference changes or exception access.
 No invocation (or a null runtime) returns false and clears a supplied output;
 a null output returns false. Query on the owner thread and do not retain the
 borrowed pair beyond the native invocation.
 
 Generic C functions receive their defining context as their callback argument;
 data functions receive the incoming context while retaining their defining
-context. The query preserves those conventions. Nested calls restore the
+context. Optimized `iterator_next` callbacks also receive the incoming context;
+their direct dispatcher checks executable containment and records an opt-in
+native execution scope before invoking the callback, without boxing its result.
+The query preserves those conventions. Nested calls restore the
 enclosing pair on normal or abrupt return. During JS reentry, that enclosing
 pair still describes the native invocation, not the current JS realm. Other
 class/provider callbacks do not establish a new pair.

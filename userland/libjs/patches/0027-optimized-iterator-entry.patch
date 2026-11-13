@@ -1,0 +1,66 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -1195,6 +1195,7 @@
+                                int atom_type);
+ static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p);
+ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b);
++static BOOL js_failed_call_allowed(JSContext *ctx, JSValueConst func_obj);
+ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
+                                   JSValueConst this_obj,
+                                   int argc, JSValueConst *argv, int flags);
+@@ -17014,6 +17015,24 @@
+             p->u.cfunc.cproto == JS_CFUNC_iterator_next) {
+             JSCFunctionType func;
+             JSValueConst args[1];
++            JSRuntime *rt = ctx->rt;
++            JSExecutionScope scope;
++            JSNativeCallContexts contexts = { ctx, p->u.cfunc.realm };
++            const JSNativeCallContexts *previous;
++            JSValue result;
++
++            /* This dispatch bypasses JS_CallInternal to avoid result boxing,
++               so containment and native attribution must precede the callback. */
++            if (!js_failed_call_allowed(ctx, method)) {
++                js_throw_failed_code(ctx);
++                goto fail;
++            }
++            if (rt->execution_scope_tracking)
++                js_execution_scope_enter(rt, &scope, (JSExecutionScopeInfo){
++                    ctx, p->u.cfunc.realm, JS_EXECUTION_SCOPE_CALL,
++                    JS_EXECUTION_CODE_NATIVE });
++            previous = rt->native_call_contexts;
++            rt->native_call_contexts = &contexts;
+ 
+             /* in case the function expects one argument */
+             if (argc == 0) {
+@@ -17021,8 +17040,13 @@
+                 argv = args;
+             }
+             func = p->u.cfunc.c_function;
+-            return func.iterator_next(ctx, enum_obj, argc, argv,
+-                                      pdone, p->u.cfunc.magic);
++            /* Optimized iterator callbacks receive the incoming context. */
++            result = func.iterator_next(ctx, enum_obj, argc, argv,
++                                        pdone, p->u.cfunc.magic);
++            rt->native_call_contexts = previous;
++            if (rt->execution_scope_tracking)
++                js_execution_scope_leave(rt, &scope);
++            return result;
+         }
+     }
+     obj = JS_Call(ctx, method, enum_obj, argc, argv);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -445,8 +445,10 @@
+ void JS_SetContextOpaque(JSContext *ctx, void *opaque);
+ JSRuntime *JS_GetRuntime(JSContext *ctx);
+ /* Borrowed facts for the innermost active C-function/data invocation, including
+-   across its JS reentry. Incoming is the dispatcher argument; defining is the
+-   function's creation context. Neither is an HTML settings/security decision.
++   optimized iterator_next dispatch and JS reentry. Incoming is the dispatcher
++   argument; defining is the function's creation context. Optimized iterator_next
++   callbacks receive incoming; generic C-function callbacks receive defining.
++   Neither context is an HTML settings/security decision.
+    Query on the owner thread; results expire when that invocation returns.
+    Returns false and clears output outside a native invocation or for null rt.
+    A null output returns false. No allocation, exception or refcount changes. */

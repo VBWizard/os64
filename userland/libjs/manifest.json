@@ -214,6 +214,11 @@
       "path": "patches/0026-settings-scopes.patch",
       "sha256": "30d85402e6c28f20d285a099a5612c8066997c1ceb94f386279950755f9a40ee",
       "reason": "Track bounded host entry and callback incumbent scopes separately from script-bearing activations, native dispatch contexts and task ownership."
+    },
+    {
+      "path": "patches/0027-optimized-iterator-entry.patch",
+      "sha256": "314ee7bd15a9e88e766ffcee19d79995f4030b31dbfdd6af1b8ca2158a4aa467",
+      "reason": "Guard and attribute optimized native iterator entry without changing its incoming-context callback ABI."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

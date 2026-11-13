@@ -5,7 +5,8 @@ This implements the engine primitives in the approved
 [scope checkpoint](IFRAME_F16_SCOPES_VALIDATION.md). The initial integration baseline
 is `650b51a4` (accepted F4 native-call facts), including F4 global-this and
 source-tracked patches 0022/0025. The merge-forward qualification below adds
-accepted F4 settings scopes at `e7708cec`. **Child-local runtime recovery remains
+accepted F4 settings scopes at `e7708cec`; the iterator review correction adds
+patch 0027. **Child-local runtime recovery remains
 unimplemented and disabled.** This is an engine foundation cut, not F16
 completion or certification of DOM/native consistency after interruption.
 
@@ -28,6 +29,13 @@ caught at their actual function entry. Discovery reads engine links without
 calling author code. Over-deep wrapper chains and unknown custom call classes
 fail closed once executable failure has been seen. This conservative policy
 persists for that runtime; it is not a count of currently retained contexts.
+
+Patch 0027 applies the same entry guard to the optimized native iterator path,
+which bypasses `JS_CallInternal` to return an unboxed iteration result. It
+records the native execution scope and incoming/defining context pair before
+the callback, then restores both on normal or exceptional return. The callback
+still receives the incoming context; this native scope supplies no script
+provenance or browser settings authority.
 
 A marked execution, callback or activity context blocks a queued native job
 before its body can load modules, resume an algorithm or call author handlers.
@@ -199,3 +207,49 @@ campaigns were not repeated for this harness merge. The new F4 native settings
 body remains a separate quiescence obligation for the future recovery protocol;
 entry/incumbent getters and a successful raw context mark certify no native
 unwind on their own.
+
+## Review correction: optimized native iterator entry
+
+The regression reproduced the reviewed bypass against the merged engine:
+ordinary `JS_Call` refused the failed callback, but `for...of`, spread,
+`Array.from` and `Iterator.from` still invoked it. The initial probe reported
+nine failures, including missing native scope and context-pair facts.
+
+Patch `0027-optimized-iterator-entry.patch` guards that direct callback and
+brackets it with execution-scope and native-context records. It preserves the
+incoming callback context, argument convention and unboxed result; normal,
+exceptional and nested return restore the enclosing records. The sibling native
+iterator dispatch already passes through guarded `JS_CallInternal`. Existing
+patches 0023–0026 retain their hashes. Native-context contracts now describe the
+optimized dispatch explicitly.
+
+Prepared identity:
+`da43badc52c71c121b1be56f8f08077531c31fcacdb9a82b6751f6baad739b94`.
+Patch 0027 SHA-256:
+`314ee7bd15a9e88e766ffcee19d79995f4030b31dbfdd6af1b8ca2158a4aa467`.
+
+The focused command builds and runs both engine profiles:
+
+```sh
+ASAN_OPTIONS=detect_leaks=1 CCACHE_DISABLE=1 \
+JS_RUNTIME_FOCUSED_SELECTOR=--failed-code-only \
+bash tools/test_js_runtime_host.sh
+```
+
+Both profiles pass **244 containment checks**, execution scopes **119**,
+settings scopes **724**, native-call facts **324** and global-this **67**.
+Complete runtime passes **14,753 shipping checks** and **62,101 instrumented
+checks**, zero failures and zero live allocations. Both compiler-refusal
+matrices (40 checks each), shipping raw construction and both profiles' fatal
+and reclaim invariant checks pass. ASan/UBSan and leak detection remain enabled;
+leak-enabled runs use the supported environment outside the attachment-restricted
+sandbox. Header/manifest checks, six preparation tests and teardown audit pass.
+
+Complete shipping DOM passes **322,022 checks** and **12,941 native allocation
+cuts**. Instrumented routing (**678**), retirement (**9,770**), departure
+(**353**), Streams (**104**) and child installation/engine budgets (**1,306**)
+pass. Unchanged DOM/native objects are reused with rebuilt engine and
+identity-bearing wrapper objects; these checks qualify this prepared identity.
+Tracker, shell syntax, stale-reference and diff checks pass. These remain
+entry-boundary regressions with wrapper recovery disabled, not native recovery
+certification or guest/WPT/P5 acceptance.
