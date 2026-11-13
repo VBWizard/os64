@@ -28,6 +28,7 @@ static struct {
     unsigned classic;       // commands the Classic model was given
     // The controller and the headphones behind it.
     bool present, hold_auth, silent, they_secure, has_key, live;
+    bool no_credit_1408;        // the key-size reply gives no command credit back
     uint8_t page_status, scan, key[16], new_key_type;
     uint16_t handle;
     unsigned scan_writes;
@@ -726,7 +727,7 @@ static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
     case 0x040e: case 0x042d: case 0x0434: cm_cc_addr(1,op,p); break;
     case 0x0411: assert(n==2); cm_cs(1,0,op); if(!CM.hold_auth) cm_addr_event(10,0x17,PH); break;
     case 0x0413: assert(n==3 && p[2]==1); cm_cs(1,0,op); cm_enc(10); break;
-    case 0x1408: CM_PUSH(1,0x0e,7,1,0x08,0x14,0,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),16); break;
+    case 0x1408: CM_PUSH(1,0x0e,7,CM.no_credit_1408?0:1,0x08,0x14,0,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),16); break;
     case 0x0c45: cm_cc(1,op,0); break;
     case 0x0401:
         cm_cs(1,0,op);
@@ -1108,6 +1109,29 @@ static void classic_bond_while_typing(void)
 // The controller asks the Classic link something (Link Key Request) while
 // an LE peer holds the command slot through its pairing: the answer goes at
 // the first turn the slot is free, ahead of the LE peer's next command.
+// A reply that gives no command credit back still finishes its command:
+// the link reaches READY and lets the slot go, and nothing is sent until
+// the controller gives a credit (a Command Status for no command).
+static void classic_reply_without_credit(void)
+{
+    setup(); bt_classic_bond_t none={0}; classic_slot(&none,false);
+    char text[64]; snprintf(text,sizeof text,"slot 2 bond %s",PH_TEXT);
+    host.scan.count=1; host.scan.devices[0]=(bt_scan_device_t){.le=false};
+    memcpy(host.scan.devices[0].address,PH,6);
+    CM.no_credit_1408=true;
+    assert(classic_cmd(text));
+    for(unsigned i=0;i<3000 && host.classic.phase!=BT_CLASSIC_READY;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_READY && host.classic.key_size==16);
+    unsigned sent=CM.n;
+    for(unsigned i=0;i<5000;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_READY && !host.classic.error && !host.classic.timed_out);
+    assert(!host.failed && host.owner==BT_HOST_OWNER_NONE && !host.credits && CM.n==sent);
+    cm_cs(0,0,0);
+    for(unsigned i=0;i<200;i++) step();
+    assert(host.credits && host.classic.phase==BT_CLASSIC_READY && !host.failed);
+    puts("PASS: a reply with no command credit finishes its command; nothing is sent until a credit comes");
+}
+
 static void classic_urgent_order(void)
 {
     setup(); bt_classic_bond_t b=ph_bond(); classic_slot(&b,true);
@@ -1863,6 +1887,7 @@ int main(void)
     classic_quiet();
     classic_takes_only_its_own();
     classic_bond_while_typing();
+    classic_reply_without_credit();
     classic_urgent_order();
     classic_inbound_during_scan();
     classic_owner_bounds();

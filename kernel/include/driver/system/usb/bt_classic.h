@@ -153,6 +153,10 @@ typedef struct bt_classic {
     uint8_t error_status, disconnect_reason;
     bool retryable, timed_out, timeout_usb_done, timeout_reply;
     uint32_t malformed;
+    // Set by the owner before each tick: the controller has given back no
+    // command credit, so no command may be sent. A command already
+    // answered is still finished: a reply may itself say "none yet".
+    bool no_credit;
 } bt_classic_t;
 
 void bt_classic_init(bt_classic_t *c, const uint8_t local[6]);
@@ -176,9 +180,10 @@ bool bt_classic_request(bt_classic_t *c, const char *text, size_t bytes,
 // live handle. Number Of Completed Packets is never its.
 bool bt_classic_event(bt_classic_t *c, const uint8_t *event, size_t bytes);
 // One step. `control`: the command slot is this link's and the previous
-// command's USB transfer is done; only then is `send` called, at most once,
-// and never in the tick that gives up waiting for a reply (the controller
-// keeps that command's credit until it answers).
+// command's USB transfer is done; only then is an answered command
+// finished, and only then, with `no_credit` clear, is `send` called, at
+// most once, and never in the tick that gives up waiting for a reply (the
+// controller keeps that command's credit until it answers).
 // `failed`: the transport is gone; FAILED, and nothing is sent again.
 void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
                      bt_scan_send_t send, void *context);
