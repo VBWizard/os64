@@ -452,6 +452,80 @@ that has just connected asks its host questions over L2CAP at once
 a few seconds. `READY` reached from each end is L's pass; staying connected
 is S's. The disconnect reason is shown either way.
 
+### L, as built
+
+The core (`bt_classic.c`) and its wiring were built by two Opus builders
+from written briefs (`~/os64-opus-kit/BRIEF_BT_CLASSIC_CORE.md`,
+`BRIEF_BT_CLASSIC_INTEGRATION.md`) and read by Fable. Every command and
+event layout was checked against Linux 6.12's `hci.h`: no disagreement.
+Where the code departs from the text above, or settles what it left open:
+
+- **Every phase is entered at the event that decides it**, and its command
+  waits for a turn. So a page that connects goes straight to
+  `AUTHENTICATING`; `LINKED` is only the wait after an inbound call.
+- **A failure with a link up closes it first** (`CLOSING`, a Disconnect,
+  then `STOPPED`): a stale bond, a failed authentication, a weak key, lost
+  encryption, a failed pairing, a refused command, a timeout.
+- **The order answers are sent in**: the accept (the controller waits five
+  seconds), the link key, the IO capability, the confirmation, the PIN
+  refusal; then refusals to strangers, oldest first; then the link's own
+  command; Write Scan Enable last.
+- **"The first free turn" is the end of whoever holds the slot's chain of
+  commands**, since chained commands do not release it between them. The
+  bound is the chain's length, tens of milliseconds as a rule; the
+  25-second limit on a latched answer covers the worst.
+- **Waits the text did not give**: 40 s for an Authentication Complete
+  (the controller's own 30 s reports first), 10 s for the Encryption
+  Change, 6 s for an accepted call's Connection Complete. A caller that
+  has begun to authenticate is waited for up to 40 s, since starting ours
+  as well would collide with it.
+- **Retryable** (paged again, after 5 s doubling to 60): the far end went
+  away and may be back (reasons 0x08, 0x13, 0x14, 0x15, 0x22). **Not**: a
+  page that timed out (the headphones will call when they are on), key or
+  authentication trouble, `forget`, `disconnect`.
+- **Page scan** is written once the bond file has been read, 0x02 with a
+  bond and 0x00 without, and again only when that changes. A write the
+  controller refuses is not repeated until then.
+- **A Classic command still unanswered three seconds after the link gave
+  up on it fails the controller**, as an unanswered LE command does. The
+  link holds the command slot with no credit until a reply comes, and
+  left there it would starve the keyboard silently.
+- **The link sends only with a credit the controller has given back**
+  (the core counts none of its own), and never in the tick it gave up on
+  a command.
+- **Two crossing calls cannot be told apart** by their Connection
+  Completes, which carry the same address: the rule is only as good as
+  the controller's promise to complete one and fail the other. A refused
+  accept after the page's link is up is harmless.
+- **The setup phase is `BT_SCAN_LOCAL_NAME`** (`BT_SCAN_NAME` was taken).
+  The mask bytes came out as predicted: 0xbf, 0xe0, 0xee, 0, 0x02, 0xc0,
+  0x27, 0x20.
+- **Slot 2 is also unavailable on a controller with no LE**: the round
+  ends before the Classic setup. Not a machine in scope; DEBTS.
+- **`slot 2 forget` works on a failed controller**, as LE's does. **`slot
+  2 disconnect` turns automatic connection off** even when there was no
+  link to close: the person still meant stop.
+- **The "use slot 2" refusal on slots 0 and 1** applies only to a command
+  that names an address the last scan heard as Classic alone.
+- **The bond file is never deleted**: `forget` writes a record that says
+  "no bond". A record made as another adapter is treated as none.
+- Proof: `test_bt_classic_host` (a model headphone through every phase,
+  2,000 rounds of soup) and its 176 mutants; `test_bt_scan_host` (the
+  mask with and without BR/EDR, the six phases, each refused, `scan
+  classic`, its cleanup); `test_bt_multi_host` (with no bond and nobody
+  typing, 10,000 ticks of LE traffic send one Classic command, Write Scan
+  Enable(0), and every earlier LE scenario holds; a bond end to end beside
+  a typing keyboard; the urgent turn; the owner's bounds; the refusals;
+  reconnection); `test_bt_loader_host` (the real start-up with the six
+  commands, the 248-byte name against a guard); `test_bt_bond_store_host`.
+
+**What the P5 run is the first to try** (most worrying first): six new
+commands in every start-up round, one of them 251 bytes over the control
+endpoint, where silence (not refusal) fails the round; a Write Scan
+Enable on every boot; Encryption Key Refresh Complete now unmasked, which
+the adapter has never been free to send us; a five-second page sharing
+the radio with the keyboard; and everything about real headphones.
+
 ## Part S: the services
 
 ### S1. Classic L2CAP
