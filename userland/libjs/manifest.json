@@ -199,6 +199,11 @@
       "path": "patches/0023-execution-scope-snapshot.patch",
       "sha256": "5ba6411600ad9ad4237c7c36eb516a56110b019dae69a6d2fd6fbb00f49a5ee4",
       "reason": "Expose opt-in allocation-free execution scope facts before interrupt polling; unknown dispatch and native invariant coverage remain explicit, with recovery disabled."
+    },
+    {
+      "path": "patches/0025-native-call-contexts.patch",
+      "sha256": "9a7db65d417f2e8fb98a7ac8ba3cd47ca7989009d0228f1dacd35133dab3b3bd",
+      "reason": "Expose borrowed incoming and defining context facts for active native function calls without treating either as browser security authority or changing callback context delivery."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

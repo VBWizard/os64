@@ -1,0 +1,17 @@
+{
+  "release": "1.2.1",
+  "tag": "SpeexDSP-1.2.1",
+  "commit": "1b28a0f61bc31162979e1f26f3981fc3637095c8",
+  "archive": "speexdsp-1.2.1.tar.gz",
+  "archive_url": "https://downloads.xiph.org/releases/speex/speexdsp-1.2.1.tar.gz",
+  "archive_sha256": "8c777343e4a6399569c72abc38a95b24db56882c83dbdb6c6424a5f4aeb54d3d",
+  "archive_prefix": "speexdsp-1.2.1/",
+  "patches": [],
+  "files": {
+    "AUTHORS": "6e5a9d92c5f9ccd28fe0b15ad59443fbf435bfc6ab2221f532006d3717ddf642",
+    "COPYING": "2654a4264b2bfe298dedc508748d140111840c315cc8eb646a3a68c13fa75b01",
+    "include/speex/speex_resampler.h": "7e439ec0dd30c32216b3ced17135f8992e5aaf53389d3f5996a7d900c453e65f",
+    "libspeexdsp/arch.h": "102f6a14a95f8ae0bcfc69270f3a9e3fbba08b63bba688ca524f71e3faa48c23",
+    "libspeexdsp/resample.c": "c28fabfc082d0e7634eb678e2e3a2bc091148bbb8324e3d06669c9a9faf6793a"
+  }
+}

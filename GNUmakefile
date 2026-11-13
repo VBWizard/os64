@@ -208,7 +208,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libwebp.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so userland/bin/libdom.so userland/bin/libxml.so userland/bin/libsvg.so userland/bin/libdraw2d.so userland/bin/libcanvas.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libwebp.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libsound.so userland/bin/libjs.so userland/bin/libdom.so userland/bin/libxml.so userland/bin/libsvg.so userland/bin/libdraw2d.so userland/bin/libcanvas.so
 # The engine's pinned notice travels with both image copies of libjs.
 QUICKJS_LICENSE := userland/libjs/upstream/LICENSE
 
@@ -517,7 +517,7 @@ ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
 ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
 ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -550,6 +550,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/speexdsp-LICENSE /etc/licenses/speexdsp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -593,7 +594,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -685,6 +686,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/speexdsp-LICENSE ::/etc/licenses/speexdsp.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
