@@ -31,6 +31,17 @@ QEMU (it has had no Bluetooth since version 5), so every layer is pure code
 with a host model of its peer, as `bt_le.c` is, and each part ends with a
 P5 run.
 
+## The headphones this is proven with
+
+Chris's older pair of Bose QuietComfort Ultra Headphones (over-ear, the
+2023 generation), with the newer pair as a spare. Checked against Bose's
+published specifications on 2026-11-13, not yet observed: Bluetooth 5.3;
+SBC, AAC and aptX Adaptive, all carried over Classic A2DP; no LE Audio on
+that generation. (The 2025 generation is Bluetooth 5.4 with the same
+Classic codecs, and LE Audio as an optional beta that stays off for this
+work.) Both do multipoint, two hosts at once. The older pair is bonded to
+one other device, so it has a place free for the P5.
+
 ## What is there now (read at `014d9809`)
 
 - `bt_host.c` owns the controller: one command in flight (`owner`,
