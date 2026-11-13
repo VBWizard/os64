@@ -410,10 +410,20 @@ static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
 // the count gives the Classic link a buffer of the controller's (it is the
 // sender held to the count); a send slot is free with another left over,
 // since an LE peer needs one at a time; and no LE peer is still holding a
-// packet it could not send this tick.
+// packet it could not send this tick. In a pool the two kinds share, the
+// Classic link also leaves a buffer for each LE slot this host has,
+// connected or not: an LE peer does not ask the count before it sends, so
+// one that connects while Classic packets are out must find its buffer
+// there. The count's own reserve covers only the LE links live now.
 static bool host_l2cap_may_send(const bt_host_t *h)
 {
-    if(!bt_acl_may_send(&h->acl,h->classic.handle&0xfff) || host_tx_free(h)<2) return false;
+    uint16_t handle=h->classic.handle&0xfff;
+    if(!bt_acl_may_send(&h->acl,handle) || host_tx_free(h)<2) return false;
+    if(bt_acl_shared(&h->acl)) {
+        unsigned total=h->acl.classic_total;
+        unsigned most=total>BT_HOST_PEERS?total-BT_HOST_PEERS:1;    // always one, as the count allows
+        if(bt_acl_outstanding(&h->acl,handle)>=most) return false;
+    }
     for(unsigned i=0;i<BT_HOST_PEERS;i++) if(h->peers[i].le.queue_count) return false;
     return true;
 }

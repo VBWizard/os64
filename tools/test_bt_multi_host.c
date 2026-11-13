@@ -931,11 +931,14 @@ static int op_index(uint16_t op,unsigned from)
 // the bond the transport read (`bond->valid` false: none); stepped until
 // the link's page scan write is answered. Without `boot_page` the page a
 // loaded bond is owed is taken back first.
+static bool shared_pool;
 static void classic_slot(const bt_classic_bond_t *bond,bool boot_page)
 {
     memcpy(host.scan.address,CM_LOCAL,6); host.scan.features[4]=0x40;
-    // The AX210's two pools (AUDIO_CLASSIC.md § T, as built).
-    bt_acl_sizes(&host.acl,1021,4,251,6);
+    // The AX210's two pools (AUDIO_CLASSIC.md § T, as built), or one pool
+    // of four that both kinds share.
+    if(shared_pool) bt_acl_sizes(&host.acl,1021,4,0,0);
+    else bt_acl_sizes(&host.acl,1021,4,251,6);
     bt_classic_init(&host.classic,CM_LOCAL);
     host.classic_available=true; host.classic_unavailable=NULL;
     assert(bt_host_classic_bond(&host,bond,now));
@@ -1651,6 +1654,29 @@ static void classic_pool_exhausted(void)
     puts("PASS: the Classic pool exhausted: L2CAP stops at four, the keyboard carries on, the rest go on completion");
 }
 
+// One pool for both kinds: the Classic link stops with a buffer left for
+// each LE slot the host has, so a peer that connects while its packets are
+// out, and does not ask the count, cannot overrun the controller.
+static void classic_shared_pool(void)
+{
+    shared_pool=true; classic_bonded(); sdp_settle(); shared_pool=false;
+    assert(bt_acl_shared(&host.acl));
+    CM.withhold=true;
+    unsigned before=CM.acl_packets;
+    for(unsigned i=0;i<6;i++) HP_CMD(8,HP.ident++,0xaa);
+    for(unsigned i=0;i<300;i++) {
+        notify_keyboard(); keyboard_sends(); step(); keyboard_completes();
+        assert(bt_acl_in_use(&host.acl,false)<=4);
+    }
+    assert(CM.acl_packets==before+4-BT_HOST_PEERS && bt_acl_outstanding(&host.acl,CM.handle)==4-BT_HOST_PEERS);
+    assert(bt_l2cap_wants_send(&host.l2cap) && !host.failed);
+    CM.withhold=false;
+    CM_PUSH(0,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),(uint8_t)(4-BT_HOST_PEERS),0); CM.withheld=0;
+    for(unsigned i=0;i<60;i++) { notify_keyboard(); step(); }
+    assert(CM.acl_packets==before+6 && !bt_l2cap_wants_send(&host.l2cap));
+    puts("PASS: a shared pool: the Classic link leaves a buffer for each LE slot, connected or not");
+}
+
 // They ask our SDP: Service Search Attribute for Audio Source with a small
 // maximum, followed through every continuation, each answer byte for byte
 // what bt_sdp_respond gives; then three at once with the payload slot
@@ -1833,6 +1859,7 @@ int main(void)
     classic_sdp_query();
     classic_le_first();
     classic_pool_exhausted();
+    classic_shared_pool();
     classic_sdp_asked();
     classic_sdp_drop();
     classic_sdp_refused();
