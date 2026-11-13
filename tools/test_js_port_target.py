@@ -15,7 +15,17 @@ runtime_exports = {'os64_js_' + name for name in
                    'create context class_id eval run run_file install_output install_args install_intl drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report '
                    'set_script_host take_rejection run_bytecode module_compile_bytecode turn_open '
                    'set_module_loader module_compile module_requests module_run module_state module_release '
-                   'heap_bytes heap_census heap_peak'.split()}
+                   'heap_bytes heap_census heap_peak heap_headroom '
+                   'primary_realm realm_create realm_create_with_headroom realm_context realm_from_context '
+                   'realm_preflight realm_stage realm_setup realm_activate realm_retire realm_is_retired '
+                   'realm_is_failed realm_run realm_run_bytecode realm_call realm_task_begin '
+                   'realm_install_intl realm_install_output realm_set_script_host realm_take_rejection '
+                   'realm_set_module_loader realm_module_compile realm_module_compile_bytecode '
+                   'realm_module_requests realm_module_run realm_module_state realm_module_release '
+                   'realm_with_settings settings_realm callback_capture callback_clear callback_mark '
+                   'callback_with_settings quiescent set_rejection_router create_with_failure_records '
+                   'observe_failure create_with_child_recovery recovery_inspect recovery_prepare '
+                   'recovery_commit'.split()}
 
 def run(*args):
     return subprocess.check_output(args, cwd=root, text=True)

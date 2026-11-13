@@ -36,6 +36,7 @@ struct os64_js_realm {
     struct os64_js_module *modules;
     JSValue promise_then;
     bool retired; /* eligibility only; contexts and values stay retained */
+    bool failed; /* irreversible executable containment; backing stays charged */
     bool staged, setup_complete;
     JSJobGroup setup_jobs; /* stable until engine teardown releases entries */
     bool hosted, host_configured, loader_configured;
@@ -84,6 +85,11 @@ struct os64_js_runtime {
     os64_js_failure_record_t failure_record;
     const JSJobInfo *failure_job;
     bool failure_records_enabled;
+    bool recovery_enabled, interrupt_observation, recovery_finalized;
+    os64_js_recovery_state_t recovery_state;
+    uint64_t recovery_generation, recovery_final_jobs, recovery_final_discarded;
+    JSRecoveryBarrier recovery_barrier;
+    os64_js_recovery_host_t recovery_host;
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
     bool ran_jobs;
@@ -183,11 +189,24 @@ static void latch(os64_js_runtime_t *runtime, os64_js_status_t value,
         runtime->failed_limit = limit;
         runtime->host_error = error;
         if (runtime->failure_records_enabled) failure_capture(runtime, value, limit, error);
+        if (runtime->recovery_enabled) {
+            runtime->recovery_finalized = false;
+            runtime->recovery_final_jobs = runtime->recovery_final_discarded = 0;
+            if (runtime->recovery_generation == UINT64_MAX) {
+                runtime->recovery_state = OS64_JS_RECOVERY_GLOBAL;
+            } else {
+                runtime->recovery_generation++;
+                runtime->recovery_state = recovery_capture_eligible(runtime)
+                    ? OS64_JS_RECOVERY_ABORTED : OS64_JS_RECOVERY_GLOBAL;
+            }
+        }
     }
     if (runtime->failure_records_enabled &&
         !(value == OS64_JS_LIMIT && limit == OS64_JS_LIMIT_EXECUTION) &&
         runtime->failure_record.global.status == OS64_JS_OK)
         runtime->failure_record.global = (os64_js_failure_cause_t){value, limit, error};
+    if (runtime->recovery_enabled && runtime->failure_record.global.status != OS64_JS_OK)
+        runtime->recovery_state = OS64_JS_RECOVERY_GLOBAL;
 }
 
 /* An interrupt or allocator refusal is sticky even if script catches the
@@ -202,7 +221,7 @@ static bool observe(os64_js_runtime_t *runtime)
         latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
     /* A diagnostic runtime keeps observing global health after a timeout;
      * the original terminal verdict and deadline are never replaced. */
-    bool after_timeout = runtime->failure_records_enabled &&
+    bool after_timeout = runtime->failure != OS64_JS_OK && runtime->failure_records_enabled &&
         runtime->failure_record.original.status == OS64_JS_LIMIT &&
         runtime->failure_record.original.limit == OS64_JS_LIMIT_EXECUTION &&
         runtime->failure_record.global.status == OS64_JS_OK;
@@ -219,7 +238,12 @@ static bool observe(os64_js_runtime_t *runtime)
 static int interrupt(JSRuntime *engine, void *opaque)
 {
     (void)engine;
-    return observe(opaque);
+    os64_js_runtime_t *runtime = opaque;
+    bool previous = runtime->interrupt_observation;
+    runtime->interrupt_observation = true;
+    int result = observe(runtime);
+    runtime->interrupt_observation = previous;
+    return result;
 }
 
 /* The table's removed slot: no Rejection lives at this address. */
@@ -615,7 +639,7 @@ static bool job_context_eligible(os64_js_runtime_t *runtime, JSContext *context)
     if (context == NULL) return true;
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (realm == NULL) jsport_fatal("job owner membership", __FILE__, __LINE__);
-    return !realm->retired && (!realm->staged || runtime->setup_realm == realm);
+    return !realm->failed && !realm->retired && (!realm->staged || runtime->setup_realm == realm);
 }
 
 static bool job_eligible(os64_js_runtime_t *runtime, const JSJobInfo *info)
@@ -730,7 +754,7 @@ static os64_js_status_t setup_enter(os64_js_realm_t *realm, os64_js_outcome_t *o
     if (runtime->destroying || runtime->failure != OS64_JS_OK)
         return status(out, OS64_JS_FAILED_RUNTIME, "runtime has failed");
     if (realm->retired)
-        return status(out, OS64_JS_REALM_RETIRED, "realm has retired");
+        return status(out, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged && runtime->setup_realm != realm)
         return status(out, OS64_JS_REALM_INSTALLING, "realm requires its setup guard");
     bool borrowed = runtime->active;
@@ -920,6 +944,8 @@ JS_PUBLIC os64_js_status_t os64_js_observe_failure(os64_js_runtime_t *runtime,
     return OS64_JS_OK;
 }
 
+#include "recovery.inc"
+
 JS_PUBLIC JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
                                     os64_js_outcome_t *outcome)
 {
@@ -943,6 +969,10 @@ JS_PUBLIC JSContext *os64_js_realm_context(os64_js_realm_t *realm, const char *c
     if (runtime->destroying || runtime->failure != OS64_JS_OK ||
         __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE)) {
         status(outcome, OS64_JS_FAILED_RUNTIME, "runtime has failed");
+        return NULL;
+    }
+    if (realm->failed) {
+        status(outcome, OS64_JS_REALM_FAILED, "realm executable state has failed");
         return NULL;
     }
     return realm->context;
@@ -1019,6 +1049,11 @@ JS_PUBLIC os64_js_status_t os64_js_realm_retire(os64_js_realm_t *realm,
     return OS64_JS_OK;
 }
 
+JS_PUBLIC bool os64_js_realm_is_failed(const os64_js_realm_t *realm)
+{
+    return realm != NULL && realm->failed;
+}
+
 JS_PUBLIC bool os64_js_realm_is_retired(const os64_js_realm_t *realm)
 {
     return realm != NULL && realm->retired;
@@ -1050,7 +1085,7 @@ static os64_js_status_t settings_eligible(os64_js_runtime_t *runtime, os64_js_re
     if (realm == NULL || !realm_member(runtime, realm))
         return status(out, OS64_JS_ADMISSION_REFUSED, "settings realm is not a member");
     if (realm->retired)
-        return status(out, OS64_JS_REALM_RETIRED, "settings realm has retired");
+        return status(out, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "settings realm has retired");
     if (realm->staged)
         return status(out, OS64_JS_REALM_INSTALLING, "settings realm is installing");
     return OS64_JS_OK;
@@ -1314,7 +1349,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_setup(os64_js_realm_t *realm,
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
     if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
-    if (realm->retired) return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->retired) return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (!realm->staged || realm->setup_complete || installer == NULL)
         return status(outcome, OS64_JS_BAD_ARGUMENT, "unused staged realm and installer are required");
     if (runtime->setup_realm != NULL)
@@ -1372,7 +1407,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_activate(os64_js_realm_t *realm,
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
     if (os64_js_realm_context(realm, caller_abi, outcome) == NULL) return outcome->status;
-    if (realm->retired) return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+    if (realm->retired) return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (!realm->staged || !realm->setup_complete || runtime->setup_realm != NULL)
         return status(outcome, OS64_JS_BAD_ARGUMENT, "candidate setup has not completed");
     JSJobInfo info;
@@ -1671,7 +1706,7 @@ static os64_js_status_t eval_text(os64_js_realm_t *realm, const void *source, si
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if ((source == NULL && length != 0) || source_name == NULL) {
@@ -1788,7 +1823,7 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (path == NULL || path[0] == 0)
@@ -1891,7 +1926,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, cons
     os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (source_name == NULL)
@@ -1927,7 +1962,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
     os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (argc < 0 || (argc != 0 && argv == NULL))
@@ -1936,7 +1971,9 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
     realm->evaluated = true;
     JSContext *callback_context = JS_GetFunctionRealm(realm->context, function);
     if (callback_context != NULL && !job_context_eligible(runtime, callback_context))
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "callback realm has retired");
+        return refuse(runtime, outcome,
+            realm_for_context(runtime, callback_context)->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED,
+            "callback realm is no longer executable");
     JSValue value = callback_context != NULL
         ? JS_Call(realm->context, function, this_value, argc, argv) : JS_EXCEPTION;
     if (JS_IsException(value)) {
@@ -2087,7 +2124,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm,
         return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
     if (runtime->destroying) return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
     if (realm->retired && host != NULL)
-        return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (runtime->active && (host == NULL || realm->evaluated || realm->host_configured)) return status(outcome, OS64_JS_BUSY, "runtime is executing");
     realm->hosted = host != NULL;
     realm->host_configured |= host != NULL;
@@ -2850,7 +2887,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *real
     if (runtime->destroying)
         return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
     if (realm->retired && loader != NULL)
-        return status(outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (runtime->active && (loader == NULL || realm->evaluated || realm->loader_configured))
         return status(outcome, OS64_JS_BUSY, "runtime is executing");
     if (loader != NULL) realm->loader = *loader;
@@ -2900,7 +2937,7 @@ static os64_js_status_t module_compile(os64_js_realm_t *realm, const char *calle
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (caller_abi == NULL || os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
@@ -3020,7 +3057,7 @@ JS_PUBLIC os64_js_status_t os64_js_realm_module_run(os64_js_realm_t *realm, cons
     os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
     if (result != OS64_JS_OK) return result;
     if (realm->retired)
-        return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "realm has retired");
+        return refuse(runtime, outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
     if (realm->staged)
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (!module_owned(realm, module) || module->run)

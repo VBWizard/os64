@@ -223,6 +223,11 @@
     {
       "path": "patches/0028-current-realm.patch",
       "sha256": "6a57b9475aa8dbc6620d7cb6fbcdb24502dfeccf93c865a225b1fc9e1e57e60b"
+    },
+    {
+      "path": "patches/0029-recovery-entry-barrier.patch",
+      "sha256": "36b3f6e7877adc06c1007016277b95ecd6eca607d760e56268e698b35da39a5b",
+      "reason": "Expose opt-in engine activity markers and a generation-checked raw recovery entry fence without resetting wrapper failures or certifying external native state."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
