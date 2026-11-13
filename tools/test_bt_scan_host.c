@@ -5,19 +5,31 @@
 #include "driver/system/usb/bt_scan.h"
 
 static uint16_t sent_op;
-static uint8_t sent_params[8], sent_length;
+static uint8_t sent_params[255], sent_length;
 static unsigned sends;
+// Every command sent, in order, with the parameters of the last of each
+// of a few opcodes the tests read back.
+static uint16_t sent_log[256];
+static unsigned sent_logged;
+static uint8_t mask_params[8], name_params[248];
+static unsigned name_length;
 static void send_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 {
     (void)ctx; sent_op=op; sent_length=n; sends++;
-    assert(n<=sizeof(sent_params)); memcpy(sent_params,p,n);
+    memcpy(sent_params,p,n);   // a uint8_t length always fits
+    if(sent_logged<256) sent_log[sent_logged++]=op;
     if(op==0x2001) assert(n==8 && p[0]==7); // Include Connection Update Complete.
+    if(op==0x0c01) { assert(n==8); memcpy(mask_params,p,8); }
+    if(op==0x0c13) { assert(n<=sizeof(name_params)); memcpy(name_params,p,n); name_length=n; }
 }
+// LMP features byte 4 the model controller reports: LE supported (0x40);
+// BR/EDR Not Supported (0x20) when a test says so.
+static uint8_t features4=0x40;
 static void complete(bt_scan_t *s,uint8_t status)
 {
     uint8_t e[14]={0x0e,4,1,(uint8_t)(s->opcode&255),(uint8_t)(s->opcode>>8),status};
     size_t n=6;
-    if (!status && s->opcode==0x1003) { n=14;e[1]=12;e[10]=0x40;e[12]=1; }
+    if (!status && s->opcode==0x1003) { n=14;e[1]=12;e[10]=features4;e[12]=1; }
     if (!status && s->opcode==0x1009) { n=12;e[1]=10;e[6]=0x11;e[11]=0xaa; }
     // Read Buffer Size: 1021-byte ACL packets, 8 of them. LE Read Buffer Size: 251 bytes, 3.
     if (!status && s->opcode==0x1005) { n=13;e[1]=11;e[6]=0xfd;e[7]=3;e[8]=64;e[9]=8;e[11]=8; }
@@ -107,7 +119,8 @@ static void buffers(void)
     assert(s.phase==BT_SCAN_LE_BUFFER && sent_op==0x2002 && !s.buffers_known);
     assert(s.acl_size==1021 && s.acl_total==8);
     complete(&s,0); tick(&s,32);
-    assert(s.phase==BT_SCAN_LE_PARAMS && s.buffers_known && s.le_acl_size==251 && s.le_acl_total==3);
+    // On to the Classic setup, which follows the buffers.
+    assert(s.phase==BT_SCAN_SSP && sent_op==0x0c56 && s.buffers_known && s.le_acl_size==251 && s.le_acl_total==3);
     char out[512]; bt_scan_status(&s,out,sizeof(out));
     for(int which=0;which<2;which++) for(int delta=-1;delta<=1;delta+=2) {
         s=(bt_scan_t){0}; assert(bt_scan_start_le(&s,0));
@@ -127,6 +140,195 @@ static void buffers(void)
     s.phase=BT_SCAN_LE_BUFFER; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: initializing"));
     s.phase=BT_SCAN_LE_PARAMS; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: LE scan"));
 }
+// Run a start-up round (LE only, as the host starts it) to its end,
+// answering every command with success except `refuse` (answered with
+// `status`), or leaving `silent` unanswered. Returns where it stopped.
+static bt_scan_phase_t startup(bt_scan_t *s,uint16_t refuse,uint8_t status,uint16_t silent)
+{
+    *s=(bt_scan_t){0}; assert(bt_scan_start_le(s,0));
+    sent_logged=0; name_length=0; memset(mask_params,0,sizeof(mask_params));
+    uint64_t now=0;
+    for(unsigned i=0;i<200 && s->phase!=BT_SCAN_DONE && s->phase!=BT_SCAN_STOPPED && s->phase!=BT_SCAN_FAILED;i++) {
+        tick(s,now);
+        if(s->pending && s->opcode!=silent) complete(s,s->opcode==refuse?status:0);
+        now+=s->phase==BT_SCAN_LE_WAIT?2000:10;
+    }
+    return s->phase;
+}
+static bool logged(uint16_t op)
+{
+    for(unsigned i=0;i<sent_logged;i++) if(sent_log[i]==op) return true;
+    return false;
+}
+static const uint16_t classic_setup_ops[6]={0x0c56,0x0c13,0x0c24,0x080f,0x0c18,0x0c16};
+
+// The start-up round's Classic setup (AUDIO_CLASSIC.md § L2): one widened
+// event mask, six commands after the buffers, a refusal that costs only
+// the Classic slot, and none of it on a controller with no BR/EDR.
+static void classic_setup(void)
+{
+    bt_scan_t s;
+    features4=0x40;
+    assert(startup(&s,0,0,0)==BT_SCAN_DONE && !s.classic_setup_refused);
+    // Bit n of the mask is event code n+1: the LE mask plus 0x03 0x04 0x06,
+    // 0x12 0x14 0x16 0x17 0x18, 0x30, 0x31 0x32 0x33 0x36.
+    static const uint8_t classic_mask[8]={0xbf,0xe0,0xee,0x00,0x02,0xc0,0x27,0x20};
+    assert(!memcmp(mask_params,classic_mask,8));
+    // The order: buffers, the six, then the LE scan.
+    unsigned at=0;
+    while(at<sent_logged && sent_log[at]!=0x2002) at++;
+    assert(at+7<sent_logged);
+    for(unsigned i=0;i<6;i++) assert(sent_log[at+1+i]==classic_setup_ops[i]);
+    assert(sent_log[at+7]==0x200b);
+    // Their parameters, exactly.
+    for(unsigned i=0;i<6;i++) {
+        bt_scan_t t={0}; assert(bt_scan_start_le(&t,0));
+        for(unsigned k=0;k<40 && !(t.pending && t.opcode==classic_setup_ops[i]);k++) {
+            if(t.pending) complete(&t,0);
+            tick(&t,k);
+        }
+        assert(t.pending && t.opcode==classic_setup_ops[i] && sent_op==classic_setup_ops[i]);
+        switch(i) {
+        case 0: assert(sent_length==1 && sent_params[0]==1); break;
+        case 1:
+            assert(sent_length==248 && name_length==248 && !memcmp(name_params,"os64",4));
+            for(unsigned b=4;b<248;b++) assert(!name_params[b]);
+            break;
+        case 2: assert(sent_length==3 && sent_params[0]==0x04 && sent_params[1]==0x01 && sent_params[2]==0x20); break;
+        case 3: assert(sent_length==2 && sent_params[0]==0x05 && sent_params[1]==0x00); break;
+        case 4: assert(sent_length==2 && sent_params[0]==0x00 && sent_params[1]==0x20); break;
+        case 5: assert(sent_length==2 && sent_params[0]==0xa0 && sent_params[1]==0x1f); break;
+        }
+    }
+    // Each refused: the round still reaches DONE, every later setup command
+    // is still sent, and the refusal is recorded.
+    for(unsigned i=0;i<6;i++) {
+        assert(startup(&s,classic_setup_ops[i],0x0c,0)==BT_SCAN_DONE);
+        assert(!s.error && s.classic_setup_refused);
+        assert(s.classic_refused_opcode==classic_setup_ops[i] && s.classic_refused_status==0x0c);
+        for(unsigned k=0;k<6;k++) assert(logged(classic_setup_ops[k]));
+        assert(logged(0x200b) && logged(0x200c));
+        assert(s.buffers_known);
+    }
+    // Two refused: the first is the one recorded.
+    {
+        bt_scan_t t={0}; assert(bt_scan_start_le(&t,0));
+        for(unsigned k=0;k<200 && t.phase!=BT_SCAN_DONE;k++) {
+            tick(&t,k*10+(t.phase==BT_SCAN_LE_WAIT?3000:0));
+            if(t.pending) complete(&t,t.opcode==0x0c13?0x12:t.opcode==0x080f?0x0c:0);
+        }
+        assert(t.phase==BT_SCAN_DONE && t.classic_refused_opcode==0x0c13 && t.classic_refused_status==0x12);
+    }
+    // One unanswered fails the round as any command does.
+    for(unsigned i=0;i<6;i++) {
+        bt_scan_t t={0}; assert(bt_scan_start_le(&t,0));
+        uint64_t now=0;
+        for(unsigned k=0;k<400 && t.phase!=BT_SCAN_CLEANUP;k++) {
+            tick(&t,now);
+            if(t.pending && t.opcode!=classic_setup_ops[i]) complete(&t,0);
+            now+=10;
+        }
+        assert(t.phase==BT_SCAN_CLEANUP && t.error && !strcmp(t.error,"HCI command timed out"));
+        assert(t.error_opcode==classic_setup_ops[i] && !t.classic_setup_refused);
+    }
+    // A failing status on any other start-up command still fails the round.
+    assert(startup(&s,0x1005,0x0c,0)==BT_SCAN_STOPPED);
+    assert(s.error && !strcmp(s.error,"HCI command rejected") && !s.classic_setup_refused);
+    // No BR/EDR: none of the six, and the mask is byte for byte the LE one.
+    features4=0x60;
+    assert(startup(&s,0,0,0)==BT_SCAN_DONE && !s.classic_setup_refused);
+    for(unsigned k=0;k<6;k++) assert(!logged(classic_setup_ops[k]));
+    static const uint8_t le_mask[8]={0x93,0xe0,0x04,0x00,0x02,0x40,0x00,0x20};
+    assert(!memcmp(mask_params,le_mask,8));
+    unsigned at2=0;
+    while(at2<sent_logged && sent_log[at2]!=0x2002) at2++;
+    assert(at2+1<sent_logged && sent_log[at2+1]==0x200b);
+    features4=0x40;
+    char out[1024];
+    s=(bt_scan_t){.phase=BT_SCAN_POLICY}; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: initializing"));
+}
+
+// `scan classic`: an inquiry on a controller in service, then the LE scan,
+// and nothing of the start-up round.
+static void classic_scan(void)
+{
+    bt_scan_t s;
+    features4=0x40;
+    assert(startup(&s,0,0,0)==BT_SCAN_DONE);
+    // Not in service yet.
+    assert(!bt_scan_start_classic(&s,100));
+    s.shared_controller=true;
+    sent_logged=0;
+    assert(bt_scan_start_classic(&s,100) && s.phase==BT_SCAN_INQUIRY_MODE && !s.le_only);
+    // Busy.
+    assert(!bt_scan_start_classic(&s,100) && !bt_scan_start_le(&s,100));
+    char out[1024];
+    tick(&s,100); assert(sent_op==0x0c45 && sent_length==1 && sent_params[0]==2);
+    bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"state: Classic inquiry"));
+    complete(&s,0); tick(&s,101);
+    assert(s.phase==BT_SCAN_INQUIRY && sent_op==0x0401 && s.inquiry_active && s.radio_active);
+    complete(&s,0); tick(&s,102); assert(s.phase==BT_SCAN_CLASSIC_WAIT);
+    const uint8_t found[]={2,15,1,9,8,7,6,5,4,1,0,0,1,2,3,0,0};
+    bt_scan_event(&s,found,sizeof(found)); assert(s.count==1 && !s.devices[0].le);
+    const uint8_t done[]={1,1,0}; bt_scan_event(&s,done,sizeof(done)); assert(!s.inquiry_active);
+    tick(&s,5000); assert(s.phase==BT_SCAN_LE_PARAMS && sent_op==0x200b);
+    complete(&s,0); tick(&s,5001); assert(s.phase==BT_SCAN_LE_ENABLE);
+    complete(&s,0); tick(&s,5002); assert(s.phase==BT_SCAN_LE_WAIT);
+    tick(&s,14000); assert(s.phase==BT_SCAN_LE_WAIT);
+    tick(&s,15002); assert(s.phase==BT_SCAN_LE_DISABLE);
+    complete(&s,0); tick(&s,15003); assert(s.phase==BT_SCAN_DONE && !s.error && s.count==1);
+    static const uint16_t want[]={0x0c45,0x0401,0x200b,0x200c,0x200c};
+    assert(sent_logged==5 && !memcmp(sent_log,want,sizeof(want)));
+    // No BR/EDR: refused.
+    s.features[4]|=0x20; assert(!bt_scan_start_classic(&s,20000)); s.features[4]&=~0x20;
+    // A failed inquiry on a controller in service is cancelled, then the LE
+    // scan is stopped; the controller is never reset.
+    for(unsigned refuse=0;refuse<2;refuse++) {
+        assert(bt_scan_start_classic(&s,20000));
+        sent_logged=0;
+        tick(&s,20000); complete(&s,0); tick(&s,20001); complete(&s,0); tick(&s,20002);
+        assert(s.phase==BT_SCAN_CLASSIC_WAIT && s.inquiry_active);
+        tick(&s,32002); assert(s.phase==BT_SCAN_CLEANUP && !strcmp(s.error,"Classic inquiry timed out"));
+        tick(&s,32003); assert(sent_op==0x0402 && sent_length==0);
+        // Refused: no inquiry was running after all. Still an answer.
+        complete(&s,refuse?0x0c:0); tick(&s,32004);
+        assert(s.phase==BT_SCAN_CLEANUP && !s.inquiry_active && sent_op==0x200c && sent_length==2 && !sent_params[0]);
+        complete(&s,0); tick(&s,32005);
+        assert(s.phase==BT_SCAN_STOPPED && !s.radio_active);
+        static const uint16_t cleanup[]={0x0c45,0x0401,0x0402,0x200c};
+        assert(sent_logged==4 && !memcmp(sent_log,cleanup,sizeof(cleanup)));
+    }
+    // The cancel unanswered: the cleanup fails as any cleanup does.
+    assert(bt_scan_start_classic(&s,40000));
+    tick(&s,40000); complete(&s,0); tick(&s,40001); complete(&s,0); tick(&s,40002);
+    tick(&s,52002); tick(&s,52003); assert(sent_op==0x0402);
+    tick(&s,54003); assert(s.phase==BT_SCAN_FAILED);
+    // A refused inquiry: cleaned up the same way.
+    s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true,.features={[4]=0x40}};
+    assert(bt_scan_start_classic(&s,0));
+    sent_logged=0;
+    tick(&s,0); complete(&s,0); tick(&s,1); complete(&s,0x0c); tick(&s,2);
+    assert(s.phase==BT_SCAN_CLEANUP && !strcmp(s.error,"HCI command rejected"));
+    tick(&s,3); assert(sent_op==0x0402);
+    complete(&s,0x0c); tick(&s,4); assert(sent_op==0x200c);
+    complete(&s,0); tick(&s,5); assert(s.phase==BT_SCAN_STOPPED);
+    // An LE scan's cleanup is what it was: the LE scan stopped, nothing else.
+    s=(bt_scan_t){.phase=BT_SCAN_DONE,.shared_controller=true,.features={[4]=0x40}};
+    assert(bt_scan_start_le(&s,0));
+    sent_logged=0;
+    tick(&s,0); complete(&s,0x12); tick(&s,1);
+    assert(s.phase==BT_SCAN_CLEANUP); tick(&s,2);
+    complete(&s,0); tick(&s,3); assert(s.phase==BT_SCAN_STOPPED);
+    static const uint16_t le_cleanup[]={0x200b,0x200c};
+    assert(sent_logged==2 && !memcmp(sent_log,le_cleanup,sizeof(le_cleanup)));
+    // A Classic scan on an exclusive controller (the start-up round) still
+    // resets in its cleanup, and goes on to the LE setup after the inquiry.
+    s=(bt_scan_t){0}; assert(bt_scan_start(&s,0));
+    sent_logged=0;
+    for(unsigned k=0;k<40 && s.phase!=BT_SCAN_CLASSIC_WAIT;k++) { if(s.pending) complete(&s,0); tick(&s,k); }
+    tick(&s,13000); assert(s.phase==BT_SCAN_CLEANUP); tick(&s,13001); assert(sent_op==0x0c03);
+}
+
 static void late_completion(void)
 {
     bt_scan_t s={0}; assert(bt_scan_start(&s,0)); tick(&s,0);
@@ -191,7 +393,11 @@ int main(void)
     assert(bt_scan_request_valid("scan\n",5) && bt_scan_request_valid(" \tscan\r\n",8));
     assert(!bt_scan_request_valid("scan x",6) && !bt_scan_request_valid("scan\0",5));
     assert(!bt_scan_request_valid("",0));
-    reports(); buffers(); late_completion();
+    assert(bt_scan_request_valid("scan classic\n",13) && bt_scan_request_classic(" scan classic\r\n",15));
+    assert(!bt_scan_request_classic("scan\n",5) && !bt_scan_request_classic("scan  classic",13));
+    assert(!bt_scan_request_valid("scan classicx",13) && !bt_scan_request_valid("scan classi",11));
+    assert(!bt_scan_request_valid("scan  classic",13) && !bt_scan_request_classic("scan classic\0",13));
+    reports(); buffers(); late_completion(); classic_setup(); classic_scan();
     bt_scan_t s={0};assert(bt_scan_start(&s,0));assert(!bt_scan_start(&s,0));
     tick(&s,0);assert(sent_op==0x0c03);
     complete(&s,0);unsigned before=sends;
@@ -248,10 +454,15 @@ int main(void)
     assert(bt_scan_start_le(&s,3000) && s.phase==BT_SCAN_LE_PARAMS);
     assert(!memcmp(s.address,address,6) && !memcmp(s.features,features,8));
     bt_scan_status(&s,out,sizeof(out));
-    assert(strstr(out,"controller: aa:00:00:00:00:11") && strstr(out,"LE discovery (about 2 seconds)"));
-    assert(!strstr(out,"Classic then"));
+    // The last line promises what each spelling of a write starts.
+    assert(strstr(out,"controller: aa:00:00:00:00:11"));
+    assert(strstr(out,"\nwrite scan to start LE discovery (about 2 seconds), or scan classic to start "
+                      "Classic then LE discovery (about 21 seconds)\n"));
     s.phase=BT_SCAN_DONE; s.shared_controller=false;
     assert(bt_scan_start(&s,4000) && !s.le_only);
-    bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"Classic then LE discovery"));
+    bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"or scan classic to start Classic then LE discovery"));
+    s.features[4]|=0x20; bt_scan_status(&s,out,sizeof(out));
+    assert(strstr(out,"\nwrite scan to start LE discovery (about 2 seconds); this controller has no Classic radio\n"));
+    assert(!strstr(out,"scan classic"));
     puts("test_bt_scan_host: command sequencing, deadlines, cleanup, Classic/LE reports and bounded names passed");
 }

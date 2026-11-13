@@ -21,6 +21,13 @@ typedef enum {
     // The controller's ACL buffers, asked once: a scan on a controller
     // already in service starts at LE_PARAMS, past them.
     BT_SCAN_BUFFER, BT_SCAN_LE_BUFFER,
+    // The controller's Classic setup (docs/design/pending/AUDIO_CLASSIC.md
+    // § L2), once, and past for the same reason; skipped on a controller
+    // with no BR/EDR. One the controller REFUSES is recorded
+    // (classic_setup_refused) and the round carries on: it costs the
+    // Classic slot, never LE. Silence still fails the round.
+    BT_SCAN_SSP, BT_SCAN_LOCAL_NAME, BT_SCAN_CLASS, BT_SCAN_POLICY,
+    BT_SCAN_PAGE_TIMEOUT, BT_SCAN_ACCEPT_TIMEOUT,
     BT_SCAN_LE_PARAMS, BT_SCAN_LE_ENABLE,
     BT_SCAN_LE_WAIT, BT_SCAN_LE_DISABLE, BT_SCAN_DONE,
     BT_SCAN_CLEANUP, BT_SCAN_STOPPED, BT_SCAN_FAILED
@@ -49,6 +56,15 @@ typedef struct {
     bool buffers_known;
     uint16_t acl_size, acl_total, le_acl_size;
     uint8_t le_acl_total;
+    // The first Classic setup command the controller refused, and its
+    // status. Cleared by a later scan like the sizes above.
+    bool classic_setup_refused;
+    uint16_t classic_refused_opcode;
+    uint8_t classic_refused_status;
+    // An inquiry was sent and its Inquiry Complete has not come: on a
+    // controller in service, a failed scan's cleanup cancels it before it
+    // stops the LE scan.
+    bool inquiry_active;
     const char *error;
     unsigned count, dropped, malformed_reports;
     bt_scan_device_t devices[BT_SCAN_DEVICES];
@@ -58,9 +74,18 @@ typedef void (*bt_scan_send_t)(void *context, uint16_t opcode,
                               const uint8_t *params, uint8_t length);
 bool bt_scan_start(bt_scan_t *s, uint64_t now_ms);
 bool bt_scan_start_le(bt_scan_t *s, uint64_t now_ms);
+// A Classic inquiry and then the LE scan, on a controller already in
+// service (shared_controller): none of the start-up round is repeated.
+// False when the controller is not in service, a scan is running, or the
+// controller has no BR/EDR.
+bool bt_scan_start_classic(bt_scan_t *s, uint64_t now_ms);
 // STOPPED retains the error after confirmed scan cleanup and USB completion.
 bool bt_scan_quiescent(const bt_scan_t *s);
+// What a write to /sys/bluetooth/scan may say, surrounding whitespace
+// aside: "scan" (LE) or "scan classic" (Classic, then LE). _classic is
+// true for the second alone.
 bool bt_scan_request_valid(const char *data, size_t bytes);
+bool bt_scan_request_classic(const char *data, size_t bytes);
 void bt_scan_event(void *context, const uint8_t *event, size_t bytes);
 void bt_scan_tick(bt_scan_t *s, uint64_t now_ms, bool usb_done, bool usb_failed,
                   bt_scan_send_t send, void *context);
