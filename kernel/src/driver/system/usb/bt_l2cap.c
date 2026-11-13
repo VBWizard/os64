@@ -279,9 +279,11 @@ static void l2_conf_req(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
         if(l->ch[k].state==BT_L2CAP_CONFIG && l->ch[k].cid==dcid) i=(int)k;
     if(i<0) { l2_reject(l,ident,0x0002,dcid,0,2); return; }
     bt_l2cap_channel_t *c=&l->ch[i];
-    // The answer lists the unknown option types, or else the unacceptable
-    // options with values we take; whatever does not fit the queue row is
-    // left off the list, never off the verdict.
+    // The answer returns the unknown options whole, as received (§ 4.5), or
+    // else the unacceptable options with values we take. Each goes on the
+    // list whole if it fits the room the queue row leaves and is left off
+    // if it does not, never cut; one left off still decides the result, and
+    // when none fits the result is sent with an empty list.
     uint8_t unknown[BT_L2CAP_SIGNAL_BYTES], fix[BT_L2CAP_SIGNAL_BYTES];
     const size_t room=BT_L2CAP_SIGNAL_BYTES-8-6;
     size_t nu=0, nf=0, at=4;
@@ -320,7 +322,7 @@ static void l2_conf_req(bt_l2cap_t *l, uint8_t ident, const uint8_t *d, size_t n
         default:        // with the hint bit set, an option we may skip
             if(type & 0x80) break;
             any_unknown=true;
-            if(nu<room) unknown[nu++]=type;
+            if(nu+2u+len<=room) { l2_copy(unknown+nu,v-2,2u+len); nu+=2u+len; }
             break;
         }
     }

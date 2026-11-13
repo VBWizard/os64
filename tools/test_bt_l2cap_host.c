@@ -57,6 +57,12 @@ static bool tick(bool may)
             if (L.ch[i].dcid == cid && bt_l2cap_is_open(&L, i) && sent_n - 4 <= L.ch[i].peer_mtu) fits = true;
         if (!fits) { failures++; printf("FAIL data on cid %04x, %zu bytes, with no open channel that takes it\n", cid, sent_n - 4); }
     }
+    // A Configuration Response refusing unknown options lists them whole.
+    if (sends == 1 && cid == 1 && sent_n >= 14 && sent[4] == 0x05 && sent[12] == 3 && sent[13] == 0) {
+        size_t at = 14;
+        while (at < sent_n && sent_n - at >= 2 && sent[at + 1] <= sent_n - at - 2) at += 2u + sent[at + 1];
+        if (at != sent_n) { failures++; printf("FAIL an unknown option cut in a response of %zu bytes\n", sent_n); }
+    }
     return sends == 1;
 }
 
@@ -869,12 +875,47 @@ static void test_config_options(void)
     expect_cmd(CONF_RSP, 28, BYTES(W(0x0055), W(0), W(0)));
     CHECK(bt_l2cap_is_open(&L, 0));
 
-    // Unknown options listed by type; a hinted one skipped; unknown beats unacceptable.
+    // Unknown options returned whole, in order; a hinted one skipped;
+    // unknown beats unacceptable.
     conf_setup();
+    peer_cmd(CONF_REQ, 29, BYTES(W(0x0040), W(0), 0x09, 1, 0xaa));
+    expect_cmd(CONF_RSP, 29, BYTES(W(0x0055), W(0), W(3), 0x09, 1, 0xaa));
     peer_cmd(CONF_REQ, 30, BYTES(W(0x0040), W(0), 0x09, 1, 0xaa, 0x89, 3, 1, 2, 3, 0x06, 16,
-             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 2, W(40)));
-    expect_cmd(CONF_RSP, 30, BYTES(W(0x0055), W(0), W(3), 0x09, 0x06));
+             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0x01, 2, W(40)));
+    expect_cmd(CONF_RSP, 30, BYTES(W(0x0055), W(0), W(3), 0x09, 1, 0xaa, 0x06, 16,
+             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
     CHECK(!bt_l2cap_is_open(&L, 0));
+    // The room for the list is the queue row's 64 bytes less the C-frame's
+    // 8 and the response's 6: 50. An option too long for it is left off,
+    // never cut, and the next one that fits still goes.
+    uint8_t q[80], want[64];
+    size_t qn = 0, wn = 0;
+    q[qn++] = 0x40; q[qn++] = 0; q[qn++] = 0; q[qn++] = 0;
+    q[qn++] = 0x0a; q[qn++] = 49; for (int k = 0; k < 49; k++) q[qn++] = (uint8_t)k;
+    q[qn++] = 0x0b; q[qn++] = 2; q[qn++] = 0xde; q[qn++] = 0xad;
+    conf_setup();                                    // each refusal is a round: a fresh channel
+    peer_cmd(CONF_REQ, 32, q, qn);
+    want[wn++] = 0x55; want[wn++] = 0; want[wn++] = 0; want[wn++] = 0; want[wn++] = 3; want[wn++] = 0;
+    want[wn++] = 0x0b; want[wn++] = 2; want[wn++] = 0xde; want[wn++] = 0xad;
+    expect_cmd(CONF_RSP, 32, want, wn);
+    // None fits: the result with an empty list.
+    peer_cmd(CONF_REQ, 33, q, 4 + 51);
+    expect_cmd(CONF_RSP, 33, BYTES(W(0x0055), W(0), W(3)));
+    // Exactly the room fits; once it is full, the next is left off.
+    qn = 4;
+    q[qn++] = 0x0c; q[qn++] = 46; for (int k = 0; k < 46; k++) q[qn++] = (uint8_t)(0x80 + k);
+    q[qn++] = 0x0d; q[qn++] = 0;
+    q[qn++] = 0x0e; q[qn++] = 0;
+    conf_setup();
+    peer_cmd(CONF_REQ, 34, q, qn);
+    wn = 6;
+    memcpy(want + wn, q + 4, 50); wn += 50;
+    expect_cmd(CONF_RSP, 34, want, wn);
+    // A hinted unknown option alone is skipped: success.
+    peer_cmd(CONF_REQ, 35, BYTES(W(0x0040), W(0), 0x8a, 3, 1, 2, 3));
+    expect_cmd(CONF_RSP, 35, BYTES(W(0x0055), W(0), W(0)));
+    CHECK(bt_l2cap_is_open(&L, 0));
+    conf_setup();
     peer_cmd(CONF_REQ, 31, BYTES(W(0x0040), W(0), 0x89, 3, 1, 2, 3, 0x81, 2, W(100)));
     expect_cmd(CONF_RSP, 31, BYTES(W(0x0055), W(0), W(0)));
     CHECK(bt_l2cap_is_open(&L, 0));
@@ -934,7 +975,7 @@ static void test_config_continuation(void)
     peer_cmd(CONF_REQ, 55, BYTES(W(0x0040), W(1), 0x01, 2, W(200)));
     expect_cmd(CONF_RSP, 55, BYTES(W(0x0055), W(1), W(0)));
     peer_cmd(CONF_REQ, 56, BYTES(W(0x0040), W(1), 0x0f, 0));
-    expect_cmd(CONF_RSP, 56, BYTES(W(0x0055), W(0), W(3), 0x0f));
+    expect_cmd(CONF_RSP, 56, BYTES(W(0x0055), W(0), W(3), 0x0f, 0));
     peer_cmd(CONF_REQ, 57, BYTES(W(0x0040), W(0)));
     expect_cmd(CONF_RSP, 57, BYTES(W(0x0055), W(0), W(0)));
     CHECK_EQ(bt_l2cap_peer_mtu(&L, 0), 672);
