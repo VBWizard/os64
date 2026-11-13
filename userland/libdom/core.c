@@ -579,6 +579,15 @@ fail:
     return NULL;
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_timer_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    if (os64_js_enable_host_settings(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return NULL;
+    os64_dom_cluster_t *cluster = os64_dom_cluster_create(runtime, limits, outcome);
+    if (cluster) cluster->timer_settings = true;
+    return cluster;
+}
+
 /* Trusted bootstrap: install interfaces and private algorithms, without
  * exposing the candidate or invoking author code. */
 static int install_binding(os64_dom_t *dom, JSContext *ctx)

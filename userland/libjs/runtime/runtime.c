@@ -68,6 +68,7 @@ struct os64_js_runtime {
     SetupCall *setup_calls;
     os64_js_realm_t *setup_realm;
     SettingsCall *settings_calls;
+    bool host_settings_enabled;
     os64_js_realm_t realms[OS64_JS_MAX_REALMS];
     size_t realm_count;
     os64_js_realm_t *turn_owner;
@@ -1104,6 +1105,39 @@ JS_PUBLIC os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
     return outcome->status;
 }
 
+/* Opt in before the host has started a task or evaluated a realm. Existing
+ * embeddings retain their entry behavior unless explicitly configured. */
+JS_PUBLIC os64_js_status_t os64_js_enable_host_settings(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (runtime->active || runtime->turn || JS_IsJobPending(runtime->engine))
+        return status(outcome, OS64_JS_BUSY, "settings configuration requires an idle runtime");
+    for (size_t i = 0; i < runtime->realm_count; i++)
+        if (runtime->realms[i].evaluated)
+            return status(outcome, OS64_JS_BUSY, "settings configuration precedes execution");
+    runtime->host_settings_enabled = true;
+    return OS64_JS_OK;
+}
+
+/* Called inside an admitted wrapper entry. It keeps the same guard, task and
+ * deadline; the scope also makes checked queries available to native bindings. */
+static JSValue host_settings(os64_js_realm_t *entry, os64_js_realm_t *incumbent,
+    os64_js_settings_body_t *body, void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = entry->runtime;
+    SettingsCall call = {runtime->settings_calls, entry, outcome, body, opaque};
+    JSValue value = JS_UNDEFINED;
+    runtime->settings_calls = &call;
+    bool admitted = JS_RunWithSettings(entry->context, incumbent ? incumbent->context : NULL,
+                                      settings_body, &call, &value);
+    runtime->settings_calls = call.previous;
+    if (!admitted)
+        return JS_ThrowInternalError(entry->context, "settings scope nesting limit reached");
+    return value;
+}
+
 JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome)
 {
@@ -1617,6 +1651,37 @@ static JSValue round_trip(os64_js_realm_t *realm, const char *source, size_t len
 }
 #endif
 
+typedef struct {
+    os64_js_realm_t *realm;
+    const char *source, *source_name;
+    size_t length;
+    os64_js_bytecode_t *bytecode;
+} EvalBody;
+
+static JSValue eval_body(JSContext *context, void *opaque)
+{
+    EvalBody *call = opaque;
+    os64_js_realm_t *realm = call->realm;
+    const char *source = call->source, *source_name = call->source_name;
+    size_t length = call->length;
+    os64_js_bytecode_t *bytecode = call->bytecode;
+    JSValue value;
+#ifdef OS64_JS_BYTECODE_ROUND_TRIP
+    if (bytecode == NULL) {
+        value = round_trip(realm, source, length, source_name);
+        if (!JS_IsException(value)) value = JS_EvalFunction(context, value);
+    } else {
+#else
+    if (bytecode == NULL) {
+        value = JS_Eval(context, source, length, source_name, JS_EVAL_TYPE_GLOBAL);
+    } else {
+#endif
+        value = prepare(realm, source, length, source_name, bytecode);
+        if (!JS_IsException(value)) value = JS_EvalFunction(context, value);
+    }
+    return value;
+}
+
 /* Both buffer and file entry points own an accounted, terminated source here.
  * Loading and source copying finish before the execution deadline starts; a
  * blob's read and a compile are inside it, as the compile always was. */
@@ -1637,20 +1702,10 @@ static os64_js_status_t evaluate(os64_js_realm_t *realm, const char *source,
         runtime->turn = true;
         runtime->turn_owner = realm;
         realm->evaluated = true;
-        JSValue value;
-#ifdef OS64_JS_BYTECODE_ROUND_TRIP
-        if (bytecode == NULL) {
-            value = round_trip(realm, source, length, source_name);
-            if (!JS_IsException(value)) value = JS_EvalFunction(realm->context, value);
-        } else {
-#else
-        if (bytecode == NULL) {
-            value = JS_Eval(realm->context, source, length, source_name, JS_EVAL_TYPE_GLOBAL);
-        } else {
-#endif
-            value = prepare(realm, source, length, source_name, bytecode);
-            if (!JS_IsException(value)) value = JS_EvalFunction(realm->context, value);
-        }
+        EvalBody call = {realm, source, source_name, length, bytecode};
+        JSValue value = runtime->host_settings_enabled
+            ? host_settings(realm, NULL, eval_body, &call, outcome)
+            : eval_body(realm->context, &call);
         if (JS_IsException(value)) {
             JSValue error = JS_GetException(realm->context);
             caught(runtime, realm->context, error);
@@ -1917,10 +1972,25 @@ JS_PUBLIC os64_js_status_t os64_js_realm_task_begin(os64_js_realm_t *realm, cons
     return leave(runtime, outcome);
 }
 
-JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char *caller_abi,
+typedef struct {
+    JSContext *context;
+    JSValue function, this_value;
+    int argc;
+    JSValue *argv;
+} CallBody;
+
+static JSValue call_body(JSContext *entry, void *opaque)
+{
+    (void)entry;
+    CallBody *call = opaque;
+    return JS_Call(call->context, call->function, call->this_value, call->argc, call->argv);
+}
+
+static os64_js_status_t realm_call(os64_js_realm_t *realm, const char *caller_abi,
                                       JSValue function, JSValue this_value, int argc,
                                       JSValue *argv, bool *returned_false,
-                                      os64_js_outcome_t *outcome)
+                                      os64_js_outcome_t *outcome,
+                                      os64_js_realm_t *entry, os64_js_realm_t *incumbent)
 {
     os64_js_runtime_t *runtime = realm != NULL ? realm->runtime : NULL;
     if (returned_false != NULL) *returned_false = false;
@@ -1932,13 +2002,30 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
         return refuse(runtime, outcome, OS64_JS_REALM_INSTALLING, "realm is installing");
     if (argc < 0 || (argc != 0 && argv == NULL))
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "argument array is invalid");
+    if (entry != NULL) {
+        result = settings_eligible(runtime, entry, outcome);
+        if (result == OS64_JS_OK) result = settings_eligible(runtime, incumbent, outcome);
+        if (result != OS64_JS_OK) return refuse(runtime, outcome, result, "callback settings unavailable");
+    }
     if (observe(runtime)) return leave(runtime, outcome);
     realm->evaluated = true;
-    JSContext *callback_context = JS_GetFunctionRealm(realm->context, function);
-    if (callback_context != NULL && !job_context_eligible(runtime, callback_context))
+    /* Realm discovery can allocate a revoked-proxy error. Keep the callback
+     * rooted before that allocation can run native finalizers. */
+    CallBody call = {entry ? entry->context : realm->context,
+                     JS_DupValue(realm->context, function), this_value, argc, argv};
+    JSContext *callback_context = JS_GetFunctionRealm(call.context, call.function);
+    if (callback_context != NULL && !job_context_eligible(runtime, callback_context)) {
+        JS_FreeValue(realm->context, call.function);
         return refuse(runtime, outcome, OS64_JS_REALM_RETIRED, "callback realm has retired");
-    JSValue value = callback_context != NULL
-        ? JS_Call(realm->context, function, this_value, argc, argv) : JS_EXCEPTION;
+    }
+    JSValue value = JS_EXCEPTION;
+    if (callback_context != NULL) {
+        if (entry != NULL || runtime->host_settings_enabled)
+            value = host_settings(entry ? entry : realm, incumbent, call_body, &call, outcome);
+        else
+            value = call_body(realm->context, &call);
+    }
+    JS_FreeValue(realm->context, call.function);
     if (JS_IsException(value)) {
         JSValue error = JS_GetException(realm->context);
         caught(runtime, realm->context, error);
@@ -1951,6 +2038,29 @@ JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char
     }
     JS_FreeValue(realm->context, value);
     return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char *caller_abi,
+    JSValue function, JSValue this_value, int argc, JSValue *argv, bool *returned_false,
+    os64_js_outcome_t *outcome)
+{
+    return realm_call(realm, caller_abi, function, this_value, argc, argv, returned_false,
+                      outcome, NULL, NULL);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_callback_call(os64_js_realm_t *report,
+    os64_js_realm_t *entry, const char *caller_abi, const os64_js_callback_t *record,
+    JSValue this_value, int argc, JSValue *argv, os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = report ? report->runtime : NULL;
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (!entry || !record || record->runtime != runtime || !record->incumbent ||
+        !JS_IsObject(record->value))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "a captured callback and entry are required");
+    /* realm_call holds the value before reentry; it never reads record. */
+    return realm_call(report, caller_abi, record->value, this_value, argc, argv, NULL,
+                      outcome, entry, record->incumbent);
 }
 
 /* A checkpoint drains to exhaustion. A job that throws is reported (the first
@@ -3013,6 +3123,13 @@ JS_PUBLIC os64_js_status_t os64_js_realm_module_requests(os64_js_realm_t *realm,
     return leave(runtime, outcome);
 }
 
+static JSValue module_body(JSContext *context, void *opaque)
+{
+    os64_js_module_t *module = opaque;
+    if (JS_ResolveModule(context, module->module) < 0) return JS_EXCEPTION;
+    return JS_EvalFunction(context, JS_DupValue(context, module->module));
+}
+
 JS_PUBLIC os64_js_status_t os64_js_realm_module_run(os64_js_realm_t *realm, const char *caller_abi,
                                             os64_js_module_t *module, os64_js_outcome_t *outcome)
 {
@@ -3028,9 +3145,9 @@ JS_PUBLIC os64_js_status_t os64_js_realm_module_run(os64_js_realm_t *realm, cons
     if (observe(runtime)) return leave(runtime, outcome);
     module->run = true;
     realm->evaluated = true;
-    JSValue promise = JS_EXCEPTION;
-    if (JS_ResolveModule(realm->context, module->module) == 0)
-        promise = JS_EvalFunction(realm->context, JS_DupValue(realm->context, module->module));
+    JSValue promise = runtime->host_settings_enabled
+        ? host_settings(realm, NULL, module_body, module, outcome)
+        : module_body(realm->context, module);
     if (JS_IsException(promise)) {
         // Resolving or linking threw: no evaluation, so no promise.
         JSValue error = JS_GetException(realm->context);

@@ -398,6 +398,13 @@ typedef struct {
 } os64_dom_admission_t;
 os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Native opt-in timer callback settings, configured before runtime execution.
+ * Enables host root scopes and conversion-time timer capture. Promise jobs and
+ * other callback kinds require their own preparation; absent settings refuse
+ * timer registration. No origin gates or iframe publication are enabled.
+ * Failure may leave host settings enabled; destroy the failed runtime. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_timer_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 
