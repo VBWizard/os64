@@ -1,0 +1,178 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -390,7 +390,17 @@
+     JSShape **shape_hash;
+     void *user_opaque;
+     const JSNativeCallContexts *native_call_contexts;
++    struct JSSettingsFrame *settings_script_frame;
++    JSContext *settings_entry;
++    JSContext *settings_backup;
++    unsigned settings_depth;
+ };
++
++typedef struct JSSettingsFrame {
++    struct JSSettingsFrame *previous;
++    JSContext *context;
++    unsigned skip;
++} JSSettingsFrame;
+ 
+ struct JSClass {
+     uint32_t class_id; /* 0 means free entry */
+@@ -1031,6 +1041,7 @@
+     uint8_t has_immutable_prototype : 1; /* cannot modify the prototype */
+     uint8_t tmp_mark : 1; /* used in JS_WriteObjectRec() */
+     uint8_t is_HTMLDDA : 1; /* specific annex B IsHtmlDDA behavior */
++    uint8_t has_script_provenance : 1; /* bytecode closure has ScriptOrModule */
+     uint16_t class_id; /* see JS_CLASS_x */
+     /* count the number of weak references to this object. The object
+        structure is freed only if header.ref_count = 0 and
+@@ -3028,6 +3039,70 @@
+     return TRUE;
+ }
+ 
++JSContext *JS_GetEntryContext(JSRuntime *rt)
++{
++    return rt ? rt->settings_entry : NULL;
++}
++
++JSContext *JS_GetIncumbentContext(JSRuntime *rt)
++{
++    JSSettingsFrame *frame;
++    if (!rt || !rt->settings_entry)
++        return NULL;
++    frame = rt->settings_script_frame;
++    return frame && !frame->skip ? frame->context : rt->settings_backup;
++}
++
++JS_BOOL JS_RunWithSettings(JSContext *entry, JSContext *incumbent,
++                          JSSettingsBody *body, void *opaque, JSValue *out)
++{
++    JSRuntime *rt;
++    JSContext *previous_entry, *previous_backup;
++    JSSettingsFrame *skipped;
++    JSValue result;
++    if (!entry || !body || !out || (incumbent && incumbent->rt != entry->rt))
++        return FALSE;
++    rt = entry->rt;
++    if (rt->settings_depth == JS_SETTINGS_SCOPE_LIMIT)
++        return FALSE;
++    previous_entry = rt->settings_entry;
++    previous_backup = rt->settings_backup;
++    skipped = incumbent ? rt->settings_script_frame : NULL;
++    rt->settings_entry = entry;
++    rt->settings_depth++;
++    if (incumbent)
++        rt->settings_backup = incumbent;
++    if (skipped)
++        skipped->skip++;
++    result = body(entry, opaque);
++    /* Engine reentry must have unwound before the native body returns. */
++    if (skipped) {
++        assert(rt->settings_script_frame == skipped && skipped->skip > 0);
++        skipped->skip--;
++    }
++    rt->settings_backup = previous_backup;
++    rt->settings_entry = previous_entry;
++    rt->settings_depth--;
++    *out = result;
++    return TRUE;
++}
++
++static void js_settings_script_enter(JSRuntime *rt, JSSettingsFrame *frame,
++                                      JSContext *context, BOOL has_script)
++{
++    frame->previous = rt->settings_script_frame;
++    frame->context = context;
++    frame->skip = 0;
++    if (has_script)
++        rt->settings_script_frame = frame;
++}
++
++static void js_settings_script_leave(JSRuntime *rt, JSSettingsFrame *frame)
++{
++    assert(frame->skip == 0);
++    rt->settings_script_frame = frame->previous;
++}
++
+ static void update_stack_limit(JSRuntime *rt)
+ {
+     if (rt->stack_size == 0) {
+@@ -5821,6 +5896,7 @@
+     p->has_immutable_prototype = 0;
+     p->tmp_mark = 0;
+     p->is_HTMLDDA = 0;
++    p->has_script_provenance = 0;
+     p->weakref_count = 0;
+     p->u.opaque = NULL;
+     p->shape = sh;
+@@ -17587,6 +17663,13 @@
+ 
+     p = JS_VALUE_GET_OBJ(func_obj);
+     p->u.func.function_bytecode = b;
++    /* Eval inherits its immediate execution context: direct eval has sf,
++       indirect eval runs under a native builtin with no ScriptOrModule.
++       Ordinary closures use GetActiveScriptOrModule's presence instead. */
++    p->has_script_provenance = m != NULL ||
++        (is_eval ? (!b->is_direct_or_indirect_eval ||
++                    (sf && JS_VALUE_GET_OBJ(sf->cur_func)->has_script_provenance))
++                 : ctx->rt->settings_script_frame != NULL);
+     p->u.func.home_object = NULL;
+     p->u.func.var_refs = NULL;
+     if (b->closure_var_count) {
+@@ -18132,6 +18215,7 @@
+     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
+     JSVarRef **var_refs;
+     size_t alloca_size;
++    JSSettingsFrame settings_frame;
+ 
+ #if !DIRECT_DISPATCH
+ #define SWITCH(pc)      switch (opcode = *pc++)
+@@ -18179,6 +18263,7 @@
+             pc = sf->cur_pc;
+             sf->prev_frame = rt->current_stack_frame;
+             rt->current_stack_frame = sf;
++            js_settings_script_enter(rt, &settings_frame, ctx, p->has_script_provenance);
+             if (s->throw_flag)
+                 goto exception;
+             else
+@@ -18244,6 +18329,7 @@
+     sf->prev_frame = rt->current_stack_frame;
+     rt->current_stack_frame = sf;
+     ctx = b->realm; /* set the current realm */
++    js_settings_script_enter(rt, &settings_frame, ctx, p->has_script_provenance);
+ 
+  restart:
+     for(;;) {
+@@ -20957,6 +21043,7 @@
+         }
+     }
+     rt->current_stack_frame = sf->prev_frame;
++    js_settings_script_leave(rt, &settings_frame);
+     return ret_val;
+ }
+ 
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -412,6 +412,22 @@
+     JSContext *defining;
+ } JSNativeCallContexts;
+ JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out);
++/* Trusted owner-thread scope. entry and optional callback incumbent must stay
++   alive through body and belong to the same runtime. A non-null incumbent
++   selects callback preparation (including suppression of the caller's script
++   frame); null selects ordinary script entry. False means refusal before body,
++   with output and pending exception unchanged. A true result transfers body's
++   return value through out, including JS_EXCEPTION, after restoring scopes.
++   These scopes do not open tasks, drain jobs, validate browser lifecycle or
++   change budgets. Bindings must supply captured callback context explicitly. */
++#define JS_SETTINGS_SCOPE_LIMIT 64
++typedef JSValue JSSettingsBody(JSContext *entry, void *opaque);
++JS_BOOL JS_RunWithSettings(JSContext *entry, JSContext *incumbent,
++                          JSSettingsBody *body, void *opaque, JSValue *out);
++/* Borrowed contexts; null outside an explicit settings scope, or when no
++   incumbent can be determined. No allocation, script or exception access. */
++JSContext *JS_GetEntryContext(JSRuntime *rt);
++JSContext *JS_GetIncumbentContext(JSRuntime *rt);
+ void JS_SetClassProto(JSContext *ctx, JSClassID class_id, JSValue obj);
+ JSValue JS_GetClassProto(JSContext *ctx, JSClassID class_id);
+ 

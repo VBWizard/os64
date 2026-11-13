@@ -1,10 +1,9 @@
 # F.4b — settings attribution interfaces
 
-Source baseline: `7f647d4e`, including F.4a (#568 delivered to `userland`
-through #570). F.4b is split into native call facts, settings bookkeeping,
-and callback/job integration. This first implementation supplies **native
-call facts only**. It does not supply a browser permission check or a complete
-current/entry/incumbent query. F.4 remains in progress.
+F.4b supplies raw native call facts (#571) and explicit engine entry/incumbent
+scopes. Browser callback capture, job integration, lifecycle validation and
+operation-specific security checks remain acceptance gates. These primitives
+have no production DOM consumer; F.4 remains in progress.
 
 ## Roles and source findings
 
@@ -41,7 +40,7 @@ or incumbent identities. A raw host can choose the incoming context explicitly.
 A proxy trap that executes in B can create a different incoming context from
 an empty proxy around the same native target.
 
-## Implemented raw interface
+## Native invocation facts
 
 Patch `0025-native-call-contexts.patch` adds:
 
@@ -79,45 +78,116 @@ The query neither modifies nor interprets F.16 execution scopes/failure state.
 The tracking is intrinsic to these two dispatchers, with no script-visible
 switch, caller substitution or browser exposure.
 
+## Explicit entry and incumbent scopes
+
+Patch `0026-settings-scopes.patch` adds:
+
+```c
+#define JS_SETTINGS_SCOPE_LIMIT 64
+typedef JSValue JSSettingsBody(JSContext *entry, void *opaque);
+JS_BOOL JS_RunWithSettings(JSContext *entry, JSContext *incumbent,
+                          JSSettingsBody *body, void *opaque, JSValue *out);
+JSContext *JS_GetEntryContext(JSRuntime *rt);
+JSContext *JS_GetIncumbentContext(JSRuntime *rt);
+```
+
+This is a trusted owner-thread raw interface. The host keeps both contexts
+alive through the body and supplies contexts belonging to the same runtime.
+It validates browser lifecycle and execution eligibility before entering; the
+raw primitive does not authorize execution or certify quiescence. It does not
+open a task, reset a budget, clear a failure/cancellation latch, or drain jobs.
+Public wrapper ABI layouts and `OS64_JS_ABI_ID` are unchanged.
+
+A null `incumbent` opens an ordinary host entry. A non-null `incumbent` also
+prepares a callback: it supplies the captured backup and increments the top
+script-bearing activation's suppression counter. A newly executing script
+activation can then supply its own incumbent. A native-only callback instead
+observes the captured backup. Ordinary nested entries preserve that backup
+and suppression state. Returning from the native body restores entry, backup
+and suppression before transferring its result to `out`, including when the
+result is `JS_EXCEPTION`. Bodies must return normally in C; nonlocal jumps and
+runtime destruction while the body is active violate the raw contract.
+
+Null entry/body/output, a foreign-runtime incumbent, and nesting beyond 64
+are refused before the body runs. Refusal returns false and preserves output
+and the pending exception; it does not manufacture a JS exception. True means
+the scope was admitted, not that its body succeeded. The scope bookkeeping
+allocates nothing and adds no retained roots. Each nested call saves its state
+on the native stack. Runtime depth remains nonzero throughout the native
+body, including intervals without JS frames; F.16 quiescence must account for
+this state before recovery can commit.
+
+The entry getter returns the most recent explicit host entry. The incumbent
+getter selects the top script-bearing activation when its suppression count
+is zero, otherwise the current callback backup. Both getters return null
+without an explicit entry, and the incumbent getter can also return null
+inside an entry with neither a script-bearing activation nor a backup. They
+do not substitute the native defining context, incoming context, task owner,
+or target binding. They borrow their results and do not touch exceptions.
+
+### Script provenance and suspension
+
+The engine records the **presence** of ScriptOrModule on each bytecode closure,
+not the identity of a Script Record or Module Record. Script/module roots
+establish that presence. Ordinary closures, including dynamic functions,
+inherit presence from the active script-bearing chain when instantiated.
+Direct eval inherits its immediate calling frame's presence; indirect eval's
+root has none. A function created inside indirect eval can still inherit the
+active outer script's presence. This distinction follows
+[PerformEval](https://tc39.es/ecma262/multipage/global-object.html#sec-performeval)
+and [OrdinaryFunctionCreate](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryfunctioncreate).
+
+The marker uses a spare bit in the object header and is initialized with the
+object. It does not retain a context or record, and it is derived again when
+cached bytecode is instantiated. Each ordinary bytecode call or generator/
+async resume creates an automatic activation record with its execution realm
+and a zero suppression count. Suspension, normal return and exception unwind
+restore the previous chain; no pointer to a suspended native stack survives.
+Null-provenance code does not mask an older script-bearing activation.
+Tracking runs even outside opt-in scopes so closures created there remain
+correct when later invoked inside one. Queries still require explicit entry.
+
+This presence marker is sufficient for this incumbent-selection primitive.
+It is not an active-script-record API or the Promise HostMakeJobCallback
+capture record. Queue ownership from the existing job API remains separate.
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
 
-- A bounded native script-entry stack independent of `turn_owner`, with
-  runtime/lifecycle validation and restoration across nested host entry,
-  setup, exceptions and interruption. Relevant settings come from the target
-  binding; they cannot be inferred from the active call pair.
-- Explicit callback capture and invocation state, preserving the incumbent
-  captured at WebIDL conversion rather than deriving it from the callable,
-  event target, timer owner or task owner. Engine script-bearing state and
-  callback suppression must be represented; a native-call stack alone cannot
-  supply them.
-- Promise reaction and thenable capture/invocation, including a bound foreign
-  native method with no author frame above it, plus module/eval and suspended
-  async/generator cases. Queue ownership and cancellation eligibility remain
-  separate from settings provenance.
-- A role-specific wrapper query and a pre-member-check boundary whose missing
-  settings refuse access. Specify the exact wrapper signatures after the
-  callback registry/entry-map audit, then test three distinct roles in one call.
-  A trusted bootstrap path must not become a guessed fallback caller.
+- Wrapper entry/lifecycle validation and role-specific current/relevant
+  settings attribution. Relevant settings come from the target binding.
+- WebIDL callback capture at conversion and invocation, preserving the
+  captured incumbent independently of callable realm, target and task owner.
+- Promise reaction and thenable capture/invocation, including bound foreign
+  native methods. Supply host scopes per invocation rather than treating a
+  checkpoint's queue context as the captured callback incumbent. Exact active
+  script/module records needed by those algorithms are separate work.
+- A pre-member-check boundary that refuses missing settings, with no guessed
+  bootstrap caller. Security/lifetime review precedes browser publication.
 
-These are required before F.4b completion and F.4d's browser publication API.
-This raw primitive is not a substitute for any of them. No security gate may
-use `incoming` or `defining` without the operation-specific attribution proof.
+These remain F.4b completion gates and prerequisites for F.4d. The raw APIs
+are not security checks. No binding may substitute native dispatch facts or
+an entry/incumbent context for the operation-specific attribution algorithm.
 
-Final evidence is recorded in [IFRAME_F4_NATIVE_CONTEXT_VALIDATION.md](IFRAME_F4_NATIVE_CONTEXT_VALIDATION.md).
+## Proof and limits
 
-## Focused proof
+[Native context evidence](IFRAME_F4_NATIVE_CONTEXT_VALIDATION.md) records #571.
+[Settings scope evidence](IFRAME_F4_SETTINGS_SCOPE_VALIDATION.md) records the
+entry/incumbent cut. Shared host/guest fixtures are `native_call_contexts.h`
+and `settings_scopes.h`; focused host selectors are `--native-call-contexts`
+and `--settings-scopes`. Both teardown policies run with independently
+identified A/B/C contexts.
 
-Shared host/guest fixture `userland/libjs/tests/native_call_contexts.h` runs
-through both teardown policies; the host selector is `--native-call-contexts`.
-It uses independent A/B/C context identities and compares direct, borrowed,
-reflected, spread, bound, proxy, getter/setter and constructor calls. It also
-covers raw host invocation, nested JS/native calls, eval, generated functions,
-generator/async execution, Promise jobs, exception preservation and cancellation.
+The settings fixture distinguishes host entry A, author code B and native
+binding C; callbacks with and without author frames; repeated suppression;
+ordinary nested entry; foreign call/Reflect/proxy paths; eval and dynamic
+functions with and without provenance; cached script/module roots; generator
+return/finally; async/module resumes; explicit job scopes; exception identity;
+scope overflow; and cancellation. The native Promise fixture uses an explicit
+test-host backup, not automatic callback capture. It proves scope selection
+and restoration, not browser Promise integration.
 
-The full runtime suites must retain their existing verdicts. Run the selector
-against both target and fully instrumented engines, with leak checking enabled;
-record counts, mutations, engine identity and limitations in the validation
-companion. Guest compilation is not guest execution. Default browser behavior
-is unchanged; no WindowProxy security, WPT or P5 acceptance is claimed here.
+Full runtime regressions, focused tests, and fault-injected variants run on
+host engines with leak checks. Guest compilation is not guest execution.
+No WindowProxy security, WPT, QEMU or P5 acceptance is claimed for this cut.
