@@ -1094,6 +1094,69 @@ neither, so the two never disagree. The painter keeps 64 groups open;
 past that an opacity group is painted opaque, and a group drawn through
 its matrix not at all.
 
+### Kept drawings
+
+A box that only turns paints the same two sheets every frame: Chris's
+record of a lit Lamplighter (2026-11-13, after warp speed) spent most of
+a 16.6 ms paint on the beam's and the rays' gradients and masks, all of
+it inside groups whose insides never change. So the face KEEPS a group's
+sheets between paints of one tree and lays them through each frame's
+matrix, and the painter paints nothing inside.
+
+**What a drawing is made from**, the key (paint.h, `yonder_keep_key_t`):
+the tree (`flow_tree_serial`, since a freed tree's box may share an
+address with a later one's), the box, the box's `drawn` stamp, the
+group's bounds in its own coordinates, and the page's scroll — plus a
+stamp of the face's own. A drawing is laid only under the key and stamp
+it was made under.
+
+- **`drawn` is libflow's** (flow_box_t.drawn): a tick that changes a
+  value a box draws stamps that box, and every box it is inside, with a
+  stamp later than any before it; a scroll does the same from its
+  container. A turn or a fade stamps only the boxes it is inside — the
+  transform's properties and `opacity` say how a group is laid, not what
+  it draws — so a box that only turns keeps its key. A layout is a new
+  tree, so a new key.
+- **The face's stamp moves at every mark of the view but a tick's**: a
+  picture arriving or moving, a canvas drawn, a control, a script's
+  change, a scroll, a settings change. Any of those may change what a
+  group draws while its box's `drawn` holds still.
+- **What a kept drawing cannot hold is never kept** (the painter's
+  spoil): a picture, a control, a canvas or a stand-in inside the group,
+  or anything drawn otherwise than a later paint would draw it — a layer
+  refused for the budget or for memory, a group inside drawn upright, a
+  text clip drawn in one colour.
+
+**The protocol** (paint.h, `keep`): the painter asks the face before it
+opens a drawn-through group. NO, and it is painted as ever, cut to what
+shows. MAKE, and it is opened with all of its bounds and painted whole —
+the walk culls nothing inside it (flow_visitor_t.inside) — and at its
+close the face is told whether what was painted may be kept. HAVE, and
+it is opened with its bounds, the walk culls everything inside it, and
+its close lays the kept sheets. The face answers MAKE only for a group
+asked about in two paints under one key and stamp — two dirty parts of
+one paint are one paint, so a lantern whose candle changes every frame
+is never made — so a drawing painted once is never painted whole for
+nothing; and a group whose making was spoiled
+is NO until its key or stamp moves, so it is never painted whole every
+frame for nothing either.
+
+**The store** (keep.c, pure, `tools/test_yonder_keep_host.sh`): one row
+for each group asked about, at most 256, the one asked longest ago
+forgotten first; sheets held within 64 MiB (a lit Lamplighter at 150%
+holds about 16), the least recently asked let go for room, never one
+this paint asked for; everything let go when another tree is painted.
+yonder's record says what it saved: `kept drawings:` drawings laid,
+made, groups seen afresh, makings spoiled, drawings past the budget,
+and what is held.
+
+What it removes, per frame of a box that only turns: its gradients and
+mask captures worked onto two sheets, the masks combined and the layer
+recovered and laid. What it keeps: the warp and the lay, and what the
+page under the box repaints. What it costs: the second paint of each
+such group after a layout paints it whole rather than cut to what
+shows, and the memory its sheets hold.
+
 ### Booked
 
 | Debt | Why it waits | Trigger |
@@ -1107,6 +1170,8 @@ its matrix not at all.
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
+| A kept drawing does not outlive its tree: a script's change, a layout for an animation, and every other layout start each turning group's keeping again | a box is the tree's; carrying a drawing across trees means proving the two subtrees draw alike, box by box | a record whose `kept drawings:` line shows most groups seen afresh |
+| A turning group with a picture inside (an icon spinner with a mask from a URL) is painted every frame, never kept | a picture arrives, moves and is let go with no tick to say so; the face's stamp moves for each of those, but whether every such path marks the view is not yet proved | a record of a page whose turning icon is the cost |
 | `background-clip: text` | — | done in S7c, § The text clip, below |
 
 ### Proof

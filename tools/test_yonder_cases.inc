@@ -796,6 +796,220 @@ static void paint_cases(void)
                     "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
                     "fill 39 0 61 20 #00ff00\n"
                     "end through 255\n");
+    // KEPT DRAWINGS (PILE3.md § Transforms, the painter: Kept drawings). The
+    // same turned block, with a 20px square in its left end that the view
+    // taken back does not reach. A face that keeps drawings is asked
+    // first, with the tree, the box, its `drawn` (0: laid out, no tick
+    // since), the group's own bounds whole and the scroll. Answered NO, it
+    // is painted as above, the square cut away.
+    s_keeps = true;
+    static const char kKeptPage[] =
+        "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+        " background: #00ff00; transform: rotate(90deg) } .c { width: 20px; height: 20px;"
+        " background: #0000ff }</style><div class=t><div class=c></div></div>";
+    s_keep_answer = YONDER_KEEP_NO;
+    paint_page_case("a face that keeps is asked first; answered no, it is painted as ever",
+                    kKeptPage, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
+                    "end through 255\n");
+    // MAKE: opened with all of its bounds and painted whole, the square
+    // the view cannot show included, and kept at its close.
+    s_keep_answer = YONDER_KEEP_MAKE;
+    paint_page_case("made to be kept, a turned block is painted whole and kept",
+                    kKeptPage, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "fill 0 0 20 20 #0000ff\n"
+                    "end through 255 kept\n");
+    // HAVE: opened with its bounds, nothing painted inside, its close laying
+    // what was kept.
+    s_keep_answer = YONDER_KEEP_HAVE;
+    paint_page_case("a kept turned block is laid with nothing painted",
+                    kKeptPage, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 have\n"
+                    "end through 255\n");
+    // A HAVE the face refuses (the drawing was let go) is opened again as
+    // NO, and painted as ever.
+    s_have_refused = true;
+    paint_page_case("a kept drawing let go is painted as ever",
+                    kKeptPage, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
+                    "end through 255\n");
+    s_have_refused = false;
+    // What a kept drawing cannot hold spoils it: made, painted whole, and
+    // not kept. A turned group inside the face has no memory for, drawn
+    // upright: a later paint might lay it.
+    // The square turned about its own centre: asked, refused as MAKE and
+    // again as NO, so drawn upright where it was laid out.
+    s_keep_answer = YONDER_KEEP_MAKE;
+    s_inner_through_refused = true;
+    paint_page_case("a group inside drawn upright spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } .c { width: 20px;"
+                    " height: 20px; background: #0000ff; transform: rotate(90deg) }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "keep? div drawn 0 bounds 0 0 20 20 scroll 0 0 tree set\n"
+                    "fill 0 0 20 20 #0000ff\n"
+                    "end through 255\n");
+    s_inner_through_refused = false;
+    // A layer refused inside: its group drawn plain, which a later paint
+    // might not.
+    s_filter_refused = true;
+    paint_page_case("a layer refused inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } .c { width: 20px;"
+                    " height: 20px; background: #0000ff; filter: invert(1) }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "group 0 0 20 20\n"
+                    "fill 0 0 20 20 #0000ff\n"
+                    "end group 255\n"
+                    "end through 255\n");
+    s_filter_refused = false;
+    // A picture inside comes, moves and goes with no tick to say so.
+    paint_page_case("a picture inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } img { display: block;"
+                    " width: 20px; height: 20px }</style>"
+                    "<div class=t><img src=p.png></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "image 0 0 20 20 clip 0 0 100 20\n"
+                    "end through 255\n");
+    // Made whole, the walk culls nothing inside: moved 30 back and turned a
+    // quarter about (50, 10) — (x, y) to (30 - y, x - 40) — the square at
+    // the start lands above the view, and where an upright drawing puts
+    // it, 30 back, is left of it, so the walk passes it by unless asked
+    // for all.
+    paint_page_case("made whole, the walk hands over what it would cull",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: translateX(-30px) rotate(90deg) }"
+                    " .c { width: 20px; height: 20px; background: #0000ff }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 30000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "fill 0 0 20 20 #0000ff\n"
+                    "end through 255 kept\n");
+    // A kept drawing is laid layer and all: a filtered turned box opens no
+    // layer when its drawing is kept.
+    s_keep_answer = YONDER_KEEP_HAVE;
+    paint_page_case("a kept filtered block opens no layer",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg); filter: invert(1) }</style>"
+                    "<div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 have\n"
+                    "end through 255\n");
+    s_keep_answer = YONDER_KEEP_MAKE;
+    // Each other thing a kept drawing cannot hold spoils it: a frame's
+    // stand-in, a control, a background picture, a mask picture.
+    paint_page_case("a frame inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } iframe { display: block;"
+                    " width: 20px; height: 20px; border: 0 }</style>"
+                    "<div class=t><iframe src=f.html></iframe></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "stand-in iframe link 0 0 0 20 20 ink 0000ee paper f0f0f0\n"
+                    "end through 255\n");
+    paint_page_case("a control inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) }</style>"
+                    "<div class=t><input type=checkbox></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 160 26 scroll 0 0 tree set\n"
+                    "through 0 0 160 26 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "control 0 0 0 160 20\n"
+                    "end through 255\n");
+    paint_page_case("a background picture inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } .c { width: 20px;"
+                    " height: 20px; background-image: url(p.png) }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "backdrop 0 0 20 20 layer 0 origin 0 0 20 20\n"
+                    "end through 255\n");
+    paint_page_case("a mask picture inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } .c { width: 20px;"
+                    " height: 20px; background: #0000ff; mask-image: url(m.png) }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "filter 0 0 20 20\n"
+                    "fill 0 0 20 20 #0000ff\n"
+                    "filter 0 0 20 20\n"
+                    "backdrop 0 0 20 20 mask 0 origin 0 0 20 20\n"
+                    "take\n"
+                    "end filter 0 #101010 255 cover 0\n"
+                    "end through 255\n");
+    paint_page_case("an inline box's picture inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " transform: rotate(90deg) } span { background-image: url(p.png) }</style>"
+                    "<div class=t><span>Hi</span></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #101010 clip 0 0 100 20\n"
+                    "end through 255\n");
+    // A text clip the face cannot make: its text drawn in one colour.
+    s_clip_refused = true;
+    paint_page_case("a text clip drawn in one colour spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " transform: rotate(90deg); background: linear-gradient(#ff0000, #0000ff);"
+                    " background-clip: text; color: transparent }</style>"
+                    "<div class=t>Hi</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "text \"Hi\" 0 14 #800080 clip 0 0 100 20\n"
+                    "text \"Hi\" 0 14 #000000/0 clip 0 0 100 20\n"
+                    "end through 255\n");
+    s_clip_refused = false;
+    s_keeps = false;
+    s_keep_answer = YONDER_KEEP_NO;
     // A face with no room for it has it drawn upright where its origin
     // goes: moved 30 across first, the centre goes 30 across.
     s_through_refused = true;

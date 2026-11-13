@@ -870,9 +870,9 @@ mutants = [
      '        ok = f_motion_style(m, e->at, &e->worked, tick_alloc, tick_resolved, &k, NULL, true);',
      '        ok = f_motion_style(m, e->at, &e->worked, tick_alloc, tick_resolved, &k, NULL, false);', LIBFLOW),
     ('the-marks-before-are-left-out', FLOW,
-     '        e->changed = f_motion_changed(e->st->motion, &e->st->style, &e->worked);\n    }\n'
+     '            drawn_changed(e->boxes[j], own, stamp);\n    }\n'
      '    if (mark != NULL)\n        tick_marks(tree, scroll, mark, ctx);',
-     '        e->changed = f_motion_changed(e->st->motion, &e->st->style, &e->worked);\n    }', LIBFLOW),
+     '            drawn_changed(e->boxes[j], own, stamp);\n    }', LIBFLOW),
     ('the-marks-after-are-left-out', FLOW,
      '    if (mark != NULL)\n        tick_marks(tree, scroll, mark, ctx);\n    tree->live = to;',
      '    tree->live = to;', LIBFLOW),

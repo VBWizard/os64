@@ -14,7 +14,7 @@ static GroupLog filter_walk(const char *html, int32_t width)
     GroupLog g = {{0}, 0, {{0}}, 0};
     sheeted_open(&q, html, width, 600);
     flow_tree_t *t = flow_layout(q.doc, q.page, width, &q.env);
-    flow_visitor_t v = {glog_visit, glog_open, glog_close, &g, NULL};
+    flow_visitor_t v = {glog_visit, glog_open, glog_close, &g, NULL, NULL};
     if (t != NULL)
         flow_visit_groups(t, (os64_gui_rect_t){0, 0, width, 600}, (flow_point_t){0, 0}, &v);
     flow_free(t);
@@ -115,7 +115,7 @@ static void filter_group_cases(void)
                  800, 600);
     flow_tree_t *t = flow_layout(q.doc, q.page, 800, &q.env);
     GroupLog c = {{0}, 0, {{0}}, 0};
-    flow_visitor_t cv = {glog_visit, glog_open, glog_close, &c, NULL};
+    flow_visitor_t cv = {glog_visit, glog_open, glog_close, &c, NULL, NULL};
     if (t != NULL)
         flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, (flow_point_t){0, 0}, &cv);
     expect("filter: a member the blur reaches into the view is painted",
