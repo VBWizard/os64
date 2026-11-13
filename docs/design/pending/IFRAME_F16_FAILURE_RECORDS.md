@@ -154,3 +154,34 @@ syntax, six preparation tests, teardown audit, tracker, shell syntax, diff and
 stale-reference checks pass. The earlier scope prose that said libjs never
 enables tracking is corrected for the opt-in constructor. These tests establish
 terminal diagnostic behavior, not a recovered browser or guest/WPT acceptance.
+
+## Merge-forward qualification: captured callbacks
+
+PR #576 advanced `userland` to `60357e71`. The resolution retains both
+`js_failure.h` and `js_callbacks.h`, and accepts both `--failure-records` and
+`--callback-settings` in the focused shell allowlist. Both selectors and both
+lanes in the complete realm matrix remain present. Callback capture/invocation
+still use checked settings admission; clear/mark preserve their failure,
+retirement and finalizer ownership rules. No F16 failure policy changes in
+this merge.
+
+The prepared engine, patch hashes and private wrapper layout are unchanged.
+The wrapper and runtime fixture sources are rebuilt against both APIs;
+matching engine objects are reused. Unchanged DOM/native objects are relinked
+with the rebuilt identity-bearing wrapper. The full shipping DOM allocation
+campaign and 13-mutant totals above qualify the preceding F16 record cohort;
+those campaigns are not repeated for this include/selector resolution.
+
+Both profiles pass failure records **819**, captured callbacks **197**, checked
+settings bridge **769**, containment **244**, execution scopes **119**, settings
+scopes **724**, native-call facts **324** and global-this **67** checks. Complete
+runtime passes **16,536 shipping checks** and **63,884 instrumented checks**,
+zero failures and zero live allocations. Compiler refusal (40 each), shipping
+raw construction and both fatal/reclaim invariant matrices pass with leak
+detection enabled outside the sandbox.
+
+Both DOM profiles pass routing **678**, retirement **9,770**, departure **353**
+and Streams **104**; child installation/engine budgets pass **1,402 shipping**
+and **1,306 instrumented** checks. Target library/consumer links, header/manifest,
+tracker, shell syntax, diff and stale-reference checks pass. The prior preparation
+and teardown audits continue to qualify the unchanged prepared engine.

@@ -1,5 +1,6 @@
 #include "os64/js_engine.h"
 #include "os64/js_failure.h"
+#include "os64/js_callbacks.h"
 #include "os64/mem.h"
 #include "os64/io.h"
 #include "os64/proc.h"
@@ -1120,6 +1121,86 @@ JS_PUBLIC os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     os64_js_realm_t *realm = realm_for_context(runtime, context);
     if (settings_eligible(runtime, realm, outcome) != OS64_JS_OK) return NULL;
     return realm;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_callback_capture(os64_js_runtime_t *runtime,
+    const char *caller_abi, JSValueConst value, os64_js_callback_t *record,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (record == NULL || record->runtime != NULL || record->incumbent != NULL ||
+        !JS_IsUndefined(record->value) || !JS_IsObject(value))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "an object and empty callback record are required");
+    os64_js_realm_t *incumbent = os64_js_settings_realm(runtime, caller_abi,
+        OS64_JS_SETTINGS_INCUMBENT, outcome);
+    if (incumbent == NULL) return outcome->status;
+    *record = (os64_js_callback_t){JS_DupValueRT(runtime->engine, value), runtime, incumbent};
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_callback_clear(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_callback_t *record, os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (outcome_in_use(runtime, outcome)) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL || record == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime, ABI and callback record are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (record->runtime == NULL) {
+        if (record->incumbent == NULL && JS_IsUndefined(record->value)) return OS64_JS_OK;
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "callback record is not initialized");
+    }
+    if (record->runtime != runtime)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "callback belongs to another runtime");
+    JSValue held = record->value;
+    *record = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
+    /* Finalizers can reenter native cleanup; the holder already looks empty. */
+    JS_FreeValueRT(runtime->engine, held);
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC void os64_js_callback_mark(JSRuntime *engine, const os64_js_callback_t *record,
+                                    JS_MarkFunc *mark)
+{
+    if (record == NULL || record->runtime == NULL) return;
+    if (record->runtime->engine != engine)
+        jsport_fatal("callback mark runtime ownership", __FILE__, __LINE__);
+    JS_MarkValue(engine, record->value, mark);
+}
+
+typedef struct CallbackInvocation {
+    const os64_js_callback_t *record;
+    os64_js_callback_body_t *body;
+    void *opaque;
+} CallbackInvocation;
+
+static JSValue callback_settings_body(JSContext *entry, void *opaque)
+{
+    CallbackInvocation *call = opaque;
+    JSValue held = JS_DupValue(entry, call->record->value);
+    /* Do not touch the record after author reentry: its holder may be gone. */
+    JSValue result = call->body(entry, held, call->opaque);
+    JS_FreeValue(entry, held);
+    return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_callback_with_settings(os64_js_realm_t *entry,
+    const char *caller_abi, const os64_js_callback_t *record,
+    os64_js_callback_body_t *body, void *opaque, JSValue *value,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_runtime_t *runtime = entry != NULL ? entry->runtime : NULL;
+    os64_js_status_t result = settings_ready(runtime, caller_abi, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (record == NULL || record->runtime != runtime || record->incumbent == NULL ||
+        !JS_IsObject(record->value) || body == NULL || value == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "a matching callback record, body and value output are required");
+    CallbackInvocation call = {record, body, opaque};
+    return os64_js_realm_with_settings(entry, record->incumbent, caller_abi,
+        callback_settings_body, &call, value, outcome);
 }
 
 JS_PUBLIC os64_js_status_t os64_js_quiescent(os64_js_runtime_t *runtime,
