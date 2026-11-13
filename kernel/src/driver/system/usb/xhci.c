@@ -1452,12 +1452,16 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 		const bt_le_t *s = &h->peers[i].le;
 		const bt_manager_t *m = &h->peers[i].manager;
 		// A slot that stopped or failed with an error. Said when the error
-		// CHANGES: a device that is simply switched off is "not found" at
-		// every scan round, and that is one line, not one a round. Input
-		// flowing again clears the memory.
+		// CHANGES, so a slot failing the same way at every attempt is one
+		// line, not one an attempt. Input flowing again clears the memory.
+		// A retryable stop that never had a link and carries no failing
+		// status is a device that is not there yet (off, or not yet
+		// advertising after a boot): ordinary, and not said.
+		bool absent = s->phase == BT_LE_STOPPED && s->retryable &&
+		              s->disconnect_reason == 0 && s->error_status == 0;
 		if (bt_le_input_active(s)) {
 			p->logged.error[i] = NULL;
-		} else if ((s->phase == BT_LE_STOPPED || s->phase == BT_LE_FAILED) && s->error &&
+		} else if ((s->phase == BT_LE_STOPPED || s->phase == BT_LE_FAILED) && s->error && !absent &&
 		           s->error != p->logged.error[i]) {
 			p->logged.error[i] = s->error;
 			printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u stopped: %s (command %04x status %02x, disconnect reason %02x); %s\n",
