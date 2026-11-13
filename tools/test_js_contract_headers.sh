@@ -14,6 +14,10 @@ for source in userland/libjs/examples/runner.c userland/libjs/examples/jobs.c; d
     x86_64-elf-gcc -std=c11 -ffreestanding -m64 -Wall -Wextra -Werror \
         -I userland/libjs/include -fsyntax-only "$source"
 done
+for compiler in cc x86_64-elf-gcc; do
+    "$compiler" -std=c11 -ffreestanding -Wall -Wextra -Werror -I userland/libjs/include \
+        -include os64/js_failure.h -x c -fsyntax-only /dev/null
+done
 # Binding syntax uses upstream's host headers here; R1 target compatibility
 # headers remain separate work. Do not describe this as an os64 binding build.
 cc -std=c11 -Wall -Wextra -Werror -I userland/libjs/include \

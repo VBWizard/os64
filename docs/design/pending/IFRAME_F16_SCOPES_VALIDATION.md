@@ -8,8 +8,10 @@ The shipping wrapper retains its ABI 5 runtime-wide failure semantics.
 ## Implemented primitive
 
 Manifest patch `0023-execution-scope-snapshot.patch` adds owner-thread,
-explicitly enabled raw-engine scope tracking. Default construction leaves it
-disabled; libjs does not enable it. `JS_EnableExecutionScopeTracking` is a
+explicitly enabled raw-engine scope tracking. Default constructors leave it
+disabled. The [failure-record constructor](IFRAME_F16_FAILURE_RECORDS.md) enables
+it before exposure; the engine evidence below qualifies the earlier scope cut.
+`JS_EnableExecutionScopeTracking` is a
 pre-execution host operation. `JS_VisitExecutionScopes` visits borrowed facts,
 innermost first, without allocating, retaining values, executing jobs or
 changing failure/budget state. Visitors must not reenter or mutate the engine.
@@ -33,7 +35,8 @@ are deliberately insufficient for a recovery completeness certificate.
 Scopes borrow contexts held by the active engine operation; they introduce
 no engine roots or independent native resources. Enabling tracking cannot
 clear interruption, cancel scheduled work or permit failed wrapper entry.
-The separate original-task/global-health state machine remains unimplemented.
+The recovery state machine remains outside this checkpoint. The failure-record
+cut adds terminal diagnostics without authorizing recovery.
 
 ## Focused evidence
 

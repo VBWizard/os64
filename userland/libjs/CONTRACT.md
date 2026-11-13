@@ -144,6 +144,61 @@ modules. These are ownership facts; they grant no origin authority and prove
 no interrupted native algorithm consistent. Ordinary departed functions retain
 their existing behavior. See [the engine checkpoint](../../docs/design/pending/IFRAME_F16_ENGINE_VALIDATION.md).
 
+## Opt-in failure records
+
+`os64/js_failure.h` adds `os64_js_create_with_failure_records`, with the existing
+configuration, teardown policy, ABI and publication rules. It enables engine
+scope tracking before publishing the runtime. Default constructors leave
+tracking disabled. The fixed record is part of the charged wrapper allocation;
+capture and observation add no allocations or retained engine roots. Existing
+public layouts and embedding ABI 5 are unchanged.
+
+`os64_js_observe_failure` runs on the owner thread, including native callbacks
+and after failure/task closure. It returns OK when it copied a record, not when
+the runtime is healthy. NULL arguments return BAD_ARGUMENT; ABI mismatch returns
+ABI_MISMATCH; a default runtime returns ADMISSION_REFUSED; destruction returns
+FAILED_RUNTIME. Refusal leaves record storage unchanged. Use separate storage
+from active outcomes. The operation runs no script, consumes no exception,
+drains no jobs and renews no budget.
+
+`original` freezes the first terminal verdict, its armed deadline, task owner,
+explicit/implicit task state and counts at that observation, before unwind.
+The owner can name an unpublished setup slot; it is a diagnostic role, not a
+published-realm or settings capability.
+Outside a turn, owner/deadline/counts are zero rather than inherited from an
+earlier task. Final task-close counters remain in the existing outcome;
+`jobs_pending` reflects the queue even on failure-close, without draining it.
+`global` independently preserves the first non-EXECUTION cause observed: JOBS,
+SOURCE, memory refusal, OOM, cancellation or host failure. An EXECUTION timeout
+does not suppress later cancellation/allocator observation or negative-clock
+polling, including after turn/task closure. Once a global cause is recorded it
+remains first; the original task verdict is not replaced. Healthy idle
+observation does not sample a deadline. These are observed causes, not an
+atomic guarantee against a cancellation arriving after the poll.
+
+The record contains up to 65 deduplicated code-candidate realm handles. Capture
+uses engine scope facts; incoming native call context and task ownership do not
+invent author frames. Native definition realms are not added as author code.
+Wrapper job execution/callback/activity handles are recorded separately, and a
+job ownership slot is not treated as author code. Raw-only jobs have no wrapper
+provenance; a nested raw job retains the enclosing wrapper dispatch's facts,
+which do not identify the nested job. Membership uses the wrapper table rather than context
+opaque storage. Handles remain borrowed until runtime destruction.
+
+`scope_issues` exposes unknown code, foreign contexts, native/job scopes, setup,
+checked settings bodies, missing scopes and capacity failure. Incomplete eval
+and module preparation remain unknown. `scopes_classified` means the visited
+scope facts were classified, not that native cleanup or affected-set coverage
+has been certified. Primary author frames can be present even when that flag
+is true. An empty `global` cause, a classified scope set or a closed task
+grants no admission: these constructors retain terminal runtime-wide failures.
+No failure-reset, generation token, cleanup barrier or recovery commit is
+provided by this diagnostic cut. Native/provider/Streams consistency and the
+opt-in recovery protocol remain F16 follow-ons.
+
+Evidence and the next protocol boundary:
+[IFRAME_F16_FAILURE_RECORDS.md](../../docs/design/pending/IFRAME_F16_FAILURE_RECORDS.md).
+
 ## Realms
 
 One runtime owns one engine and up to `OS64_JS_MAX_REALMS` (65) contexts:
