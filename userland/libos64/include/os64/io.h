@@ -26,7 +26,8 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len);
 
 // Write with caller patience: 0 polls, finite milliseconds bound waiting
 // for room (rounded up to ticks), OS64_WAIT_FOREVER is ordinary os64_write.
-// TCP honors finite waits; other handle types refuse them on nonempty writes.
+// TCP and /dev/audio honor finite waits; other handle types refuse them on
+// nonempty writes.
 // Queue while room exists, then return progress or OS64_ERR_TIMEOUT if a
 // full ring reaches the deadline before any bytes were queued. Ready room
 // precedes timeout. Retain any suffix; timeout does not close/reset the handle.

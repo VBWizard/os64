@@ -63,6 +63,7 @@
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
 #include "driver/net/tcp.h"        // tcp_conn_release / tcp_listener_close — the TCP kinds' releases
 #include "bell.h"                    // bell_ref / _release / _close — the bell's holders
+#include "audio/audio.h"   // the object behind HANDLE_AUDIO
 #include "gui/glass.h"               // glass_view_ref / _release / _close — the /dev/glass viewer's
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
@@ -241,6 +242,7 @@ static void handle_object_ref(handle_type_t type, void *object)
 		case HANDLE_PTY_MASTER:    pty_master_hold((tty_t *)object); break;
 		case HANDLE_GLASS:         glass_view_ref((glass_view_t *)object); break;
 		case HANDLE_BELL:          bell_ref((bell_t *)object); break;
+		case HANDLE_AUDIO:         audio_open_ref((audio_open_t *)object); break;
 		default: break;
 	}
 }
@@ -303,6 +305,7 @@ void handle_unpin(const handle_t *pinned)
 		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;
 		case HANDLE_GLASS:         glass_view_release((glass_view_t *)pinned->object); break;
 		case HANDLE_BELL:          bell_release((bell_t *)pinned->object); break;
+		case HANDLE_AUDIO:         audio_open_release((audio_open_t *)pinned->object); break;
 		default: break;
 	}
 }
@@ -337,6 +340,9 @@ bool handle_share(struct task *t, int h, handle_t *out)
 			__sync_fetch_and_add(&((vfs_file_t *)object)->holds, VFS_HOLD_PIN | 1);
 			break;
 		case HANDLE_NET_TCP:      tcp_conn_ref((tcp_conn_t *)object); break;
+		// The stream face is a byte stream two tasks can hold; the position
+		// and the tap answer false here.
+		case HANDLE_AUDIO:        shareable = audio_open_share((audio_open_t *)object); break;
 		default:                  shareable = false; break;   // free, mid-close, or not a stream
 	}
 	spinlock_release_irqrestore(&task->handleLock, flags);
@@ -377,6 +383,7 @@ void handle_unshare(const handle_t *shared)
 			break;
 		}
 		case HANDLE_NET_TCP:      tcp_conn_release((tcp_conn_t *)shared->object); break;
+		case HANDLE_AUDIO:        audio_open_close((audio_open_t *)shared->object); break;
 		default: break;
 	}
 }
@@ -714,6 +721,12 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 			// A waiter parked in it wakes to CLOSED, and the last holder
 			// frees it (bell.h).
 			bell_close((bell_t *)object);
+			break;
+		case HANDLE_AUDIO:
+			// One handle fewer names the open. The last one's close wakes
+			// an operation parked in it, and for /dev/audio leaves what is
+			// queued to play out: it never waits (audio/audio.h).
+			audio_open_close((audio_open_t *)object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port, wakes a parked reader to

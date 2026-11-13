@@ -56,6 +56,7 @@
 #include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
 #include "kusb.h"                  // the USB drainer, minted beside it
+#include "audio/audio.h"           // the sound stream, and kaudio, the null sink's pump
 #include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
@@ -581,6 +582,17 @@ void kernel_init()
 		       kKusbTask->taskID, kKusbTask->threads->threadID);
 		scheduler_submit_new_task(kKusbTask);
 	}
+
+	// THE NULL SINK'S PUMP (AUDIO_SEAM.md). The sound stream exists on every
+	// boot, and with no real output attached something has to take its
+	// frames at the rate one would, or a player would never finish. kaudio
+	// is that: knet's shape, pinned to the BSP because the tick that rings
+	// it is the BSP's. It is rung only while it has a stream to keep time
+	// for (kAudioClocked).
+	audio_init();
+	kKaudioTask = task_create("/kaudio", 0, NULL, kKernelTask, true, BSP_CPU);
+	kKaudioTask->autoReap = true;
+	scheduler_submit_new_task(kKaudioTask);
 
 	    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);

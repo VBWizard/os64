@@ -7,10 +7,12 @@ checked against the tree at `a86b0f18`. It settles Q8 (the position's
 contract) and leaves Q7 (what a flush does inside the headphones) where it
 was: a proof for A.3 on the real pair.*
 
-*Status: read once by someone other than the author (a cold Opus read
-against the source, 2026-11-13; its fourteen findings are folded in, the
-largest being that the seam no longer calls into a sink at all). Awaiting
-Chris. § For Chris lists what is his to rule.*
+*Status: BUILT, the kernel half (the first of the two pull requests). Read
+once before code by someone other than the author (a cold Opus read against
+the source, 2026-11-13; its fourteen findings are folded in, the largest
+being that the seam no longer calls into a sink at all), and cleared by
+Chris the same day. § As built says where the code departs from the text
+above it; § For Chris records what was put to him.*
 
 ## What A.1 is
 
@@ -203,8 +205,9 @@ ringing it.
 **Volume is applied at the pull**, not at the write, so a change is heard
 within what the sink holds and not 200 ms of ring later. `/dev/volume`'s 0
 to 100 becomes a gain of `(v/100)^2` in Q15 (a square is the cheapest curve
-that makes the slider's middle sound like half), multiplied and saturated
-per sample. 100 is exactly unity and copies without arithmetic. The value
+that makes the slider's middle sound like half), multiplied per sample and
+rounded toward zero (a gain of at most one cannot overflow). 100 is exactly
+unity and copies without arithmetic. The value
 is the kernel's until reboot; keeping it across boots is a conf question
 for whoever builds the slider.
 
@@ -353,7 +356,8 @@ state it is naming the usual case, not overriding them.
 | write, no room | `PLAYING`, `PAUSED` | (unchanged) | parks, or answers by its patience (§ The write) |
 | pull, frames | `PLAYING`, `DRAINING` | by the facts | `STARVED` if it emptied a written generation, `WAITING` if the new owner has not written yet, `IDLE` with no handle; writer woken |
 | pull, dry | `STARVED`, `WAITING` | (unchanged) | all silence; an underrun counted by the rule above |
-| pull | `PAUSED`, `FAILED`, `IDLE` | (unchanged) | takes nothing |
+| pull | `PAUSED` | (unchanged) | takes nothing and leaves the sink's buffer alone |
+| pull | `FAILED`, `IDLE` | (unchanged) | all silence |
 | `pause` | `WAITING`, `PLAYING`, `STARVED` | `PAUSED` | sink nudged |
 | `pause` | `IDLE`, `DRAINING`, `PAUSED`, `FAILED` | (unchanged) | refused: nothing is open to pause, or it already is |
 | `resume` | `PAUSED` | by the facts | sink nudged; null sink's clock anchored. No underrun is counted for being empty at a resume: only a dry pull counts one |
@@ -471,7 +475,7 @@ and what it dropped. Read it first when sound stutters.
 |---|---|---|
 | `kernel/src/audio/audio_stream.c` | PURE (no kernel headers): the ring, the split frame, every counter, the state, the gain, the position record, the tap's record framing. The caller gives it storage and the clock | `tools/test_audio_stream_host.sh` under ASan and UBSan against a plain model; `tools/test_audio_stream_mutants.py` |
 | `kernel/src/audio/audio.c` | The lock, the park, the sink table, the handle faces, the control and volume verbs, `/sys/audio`'s text | QEMU fixture |
-| `kernel/src/audio/kaudio.c` | The daemon and the null sink's clock arithmetic (the arithmetic itself in the pure file) | QEMU fixture |
+| `kernel/src/audio/kaudio.c` | The daemon's loop. The null sink's pump is `audio_null_pump` in audio.c, under the stream's lock; its clock arithmetic is in the pure file | QEMU fixture |
 | `devfs.c`, `handle.c`, `procfs.c`, `syscall.c`, `sysfs.c`, `signals.c`, `kernel.c` | The names and the abandon arm; the tag's rows (pin, unpin, close, share and unshare for the stream face, its name in `/proc/<pid>/handles`); write's patience and read's for the new tag; `micros` as a kernel function; the report; the tick's ring; the daemon's birth | |
 | `abi/include/os64/audio.h` | The two records, the states, the result codes | Size and offsets static-asserted both sides |
 | `userland/tests/audiotest/` | The fixture | |
@@ -552,7 +556,50 @@ proof is a host test: a sine through 44.1 to 48 kHz comes out a sine at the
 same frequency within a stated error. Which resampler is confirmed when
 that pull request opens; nothing in the kernel seam depends on it.
 
+## As built (the kernel seam)
+
+What the code does that the text above does not say, or says differently:
+
+- **The result codes** are -20 (`OS64_AUDIO_BUSY`), -21 (`_FLUSHED`), -22
+  (`_FAILED`). A write on a handle closed under it, a read of the stream, a
+  write to the position or the tap, and a tap read with a buffer smaller
+  than one full record all answer -1.
+- **`nudge` is called with the stream's lock held** and interrupts off, not
+  after it is released: it may set a flag or ring a doorbell and nothing
+  else. That is what keeps two nudges in the order of the changes they
+  announce, though a nudge carries no fact for the order to matter to.
+- **A pull's silence is counted as time.** The null sink's clock advances by
+  every frame it was given, sound or fill, so a dry stream is still paced.
+- **A write looks for a pending signal before it looks for room.** A write
+  made with a caught signal pending places nothing and answers
+  `OS64_INTERRUPTED`; the handler runs and the program writes again.
+- **Bytes cross from the program 16 KiB at a time** (85 ms of sound), each
+  piece copied in before the lock is taken.
+- **A tap read takes at most sixteen full records** in one hold of the lock.
+- **The frames of two earlier opens**, both still in the ring when a third
+  opens, are both shown at the tap under the later one's generation.
+- **`/sys/audio` also gives** the writer's parks and longest wait, pulls
+  refused to a sink that was not the sink, and the longest gap between two
+  of `kaudio`'s wakes since boot and since the file was last read.
+- **`micros()` moved** into `kernel/src/micros.c` as `micros_now()`; the
+  syscall calls it.
+
+Measured in QEMU (TCG, so the absolute figures mean little and the ratio
+some): a position read costs 5.2 microseconds against 3.5 for `micros()`,
+which is the syscall floor. Q5's "no more than a syscall would" holds to
+within the handle's pin and one lock. The P5's figure is taken with the
+first real use.
+
+Proven: `tools/test_audio_stream_host.sh` (twelve named cases and random
+rounds beside the model), `tools/test_audio_stream_mutants.py` (110
+mutants), and `/tests/audiotest` (eleven steps, in `testrun`) on 8 CPUs and
+on the sparse 24.
+
 ## For Chris
+
+*Put to Chris 2026-11-13 with the leans below; he cleared the design to
+proceed on them.*
+
 
 1. **The bell.** § The write drops the kernel-rung bell and gives the write
    patience instead. Lean: drop it. Its cost was a kernel object reaching

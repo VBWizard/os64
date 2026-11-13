@@ -24,6 +24,7 @@
 #include "random.h"     // the entropy pool's tick source — stirred once per tick
 #include "knet.h"
 #include "kusb.h"                // kUsbDoorbell — the tick rings it
+#include "audio/audio.h"   // kAudioDoorbell, kAudioClocked — the null sink's pump
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
@@ -932,6 +933,18 @@ void processSignals()
 	{
 		s_net_rung_at_tick = kTicksSinceStart;
 		doorbell_ring_in_pass(&kNetDoorbell);
+	}
+
+	// The null sink's pump, while it has a stream to keep time for
+	// (AUDIO_SEAM.md). kAudioClocked is read bare: this pass holds the
+	// queue lock, and the stream's lock is one a wake is made under, so it
+	// may never be taken here. A flag that turns true just after this look
+	// waits one tick, which the pump's clock arithmetic absorbs.
+	static uint64_t s_audio_rung_at_tick;
+	if (kKaudioTask != NULL && kAudioClocked && kTicksSinceStart != s_audio_rung_at_tick)
+	{
+		s_audio_rung_at_tick = kTicksSinceStart;
+		doorbell_ring_in_pass(&kAudioDoorbell);
 	}
 
 	// The tick is the entropy pool's one guaranteed timing source: a NIC

@@ -18,11 +18,14 @@
 #include "handle.h"
 #include "kmalloc.h"
 #include "memset.h"
+#include "memcpy.h"
 #include "strings/strings.h"
 #include "serial_logging.h"
 #include "CONFIG.h"
 #include "random.h"            // /dev/random: the entropy pool's door
 #include "gui/glass.h"         // /dev/glass: a viewer of the screen
+#include "audio/audio.h"       // /dev/audio and its neighbours: the sound stream
+#include "os64/audio.h"
 
 // ── The node vocabulary ─────────────────────────────────────────────────────
 
@@ -35,7 +38,12 @@ typedef enum
 	DEV_NODE_FULL,       // "/full"
 	DEV_NODE_RANDOM,     // "/random" — the entropy pool's door (random.h)
 	DEV_NODE_TTY,        // "/tty" — never opened as a file (see devfs.h)
-	DEV_NODE_GLASS       // "/glass" — the screen; never opened as a file either
+	DEV_NODE_GLASS,      // "/glass" — the screen; never opened as a file either
+	DEV_NODE_AUDIO,      // "/audio" — the sound stream; a handle kind (its write waits)
+	DEV_NODE_AUDIOPOS,   // "/audiopos" — the playback position; a handle kind (its read is asked for every picture a player shows)
+	DEV_NODE_AUDIOTAP,   // "/audiotap" — what the sink was given; a handle kind (its read waits)
+	DEV_NODE_AUDIOCTL,   // "/audioctl" — pause, resume, flush, format: a line of text
+	DEV_NODE_VOLUME      // "/volume" — 0 to 100: a line of text
 } dev_node_t;
 
 // ONE table, walked by every path lookup and by readdir alike. Counted, never
@@ -55,16 +63,22 @@ static const dev_entry_t kDevNodes[] = {
 	{ "random", DEV_NODE_RANDOM },
 	{ "tty",  DEV_NODE_TTY  },
 	{ "glass", DEV_NODE_GLASS },
+	{ "audio", DEV_NODE_AUDIO },
+	{ "audiopos", DEV_NODE_AUDIOPOS },
+	{ "audiotap", DEV_NODE_AUDIOTAP },
+	{ "audioctl", DEV_NODE_AUDIOCTL },
+	{ "volume", DEV_NODE_VOLUME },
 };
 static const int kDevNodeCount = (int)(sizeof(kDevNodes) / sizeof(kDevNodes[0]));
 
-// The open file's private state. There is no position, no snapshot, and no
-// buffer — a device answers from its nature, not from stored bytes. The node
-// tag is the entire handle, which is the honest measure of how little state a
-// void requires.
+// The open file's private state. There is no snapshot and no buffer — a
+// device answers from its nature, not from stored bytes. The two text nodes
+// (audioctl, volume) keep how far this open has read, so `cat` sees a line
+// and then the end; for every other node the tag is the entire handle.
 typedef struct
 {
 	dev_node_t node;
+	size_t     text_read;
 } dev_file_handle_t;
 
 // The directory handle: a cursor into kDevNodes, nothing more.
@@ -131,13 +145,14 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	     mode[0] != 'c' && mode[0] != 'u'))
 		return -1;
 
-	// ROOT is a directory (dops), NONE does not exist, and TTY and GLASS
-	// never get here at all — syscall_open answers them as handle aliases
-	// before the filesystem is ever asked to open anything (devfs.h, THE
-	// ALIAS). If one somehow arrives, refusing is the honest answer: this
-	// layer cannot produce a terminal or a screen.
+	// ROOT is a directory (dops), NONE does not exist, and the handle
+	// aliases (TTY, GLASS, the audio stream, its position and its tap) are
+	// answered by syscall_open before the filesystem is asked to open
+	// anything (devfs.h, THE ALIAS). One that arrives here was asked for in
+	// a mode its alias does not take, and refusing is the honest answer:
+	// this layer cannot produce a terminal, a screen or a stream.
 	if (node != DEV_NODE_NULL && node != DEV_NODE_ZERO && node != DEV_NODE_FULL &&
-	    node != DEV_NODE_RANDOM)
+	    node != DEV_NODE_RANDOM && node != DEV_NODE_AUDIOCTL && node != DEV_NODE_VOLUME)
 		return -1;
 
 	dev_file_handle_t *h = kmalloc(sizeof(dev_file_handle_t));
@@ -151,6 +166,7 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	}
 
 	h->node = node;
+	h->text_read = 0;
 
 	// The allocator zeroes everything, so every field not set here — the
 	// pipe pointers, the open-registry links, the position lock — starts at
@@ -231,6 +247,24 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			random_bytes(buffer, size);
 			return (int)size;
 
+		case DEV_NODE_AUDIOCTL:
+		case DEV_NODE_VOLUME:
+		{
+			// A few lines of text, rendered at each read and served from
+			// where this open's last read stopped, then EOF.
+			char text[96];
+			size_t have = h->node == DEV_NODE_VOLUME ? audio_volume_text(text, sizeof(text))
+			                                         : audio_control_text(text, sizeof(text));
+			if (h->text_read >= have)
+				return 0;
+			size_t n = have - h->text_read;
+			if (n > size)
+				n = size;
+			memcpy(buffer, text + h->text_read, n);
+			h->text_read += n;
+			return (int)n;
+		}
+
 		default:
 			return -1;
 	}
@@ -272,6 +306,13 @@ static int dev_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 			if (size)
 				random_mix(buffer, size);
 			return (int)size;
+
+		// One verb, or one number, a write: taken whole or refused. Neither
+		// waits; both take the stream's lock for a moment (audio/audio.h).
+		case DEV_NODE_AUDIOCTL:
+			return audio_control(buffer, size) ? (int)size : -1;
+		case DEV_NODE_VOLUME:
+			return audio_volume_write(buffer, size) ? (int)size : -1;
 
 		default:
 			return -1;
@@ -413,13 +454,32 @@ static vfs_filesystem_t *kDevFilesystem = NULL;   // set at mount; the identity
                                                   // check the alias hook needs
 
 bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
-                        const char *mode, handle_type_t *type, void **object)
+                        const char *mode, handle_type_t *type, void **object,
+                        long *refusal)
 {
 	if (fs == NULL || fs != kDevFilesystem || type == NULL || object == NULL)
 		return false;
 
 	*object = NULL;
 	dev_node_t node = dev_parse_path(path);
+	if (node == DEV_NODE_AUDIO || node == DEV_NODE_AUDIOPOS || node == DEV_NODE_AUDIOTAP)
+	{
+		// The stream is written (or appended to, which is the same thing
+		// for a stream); its position and its tap are read. Any other mode
+		// falls through to the ordinary open, which refuses it as a file.
+		bool writes = mode != NULL && (mode[0] == 'w' || mode[0] == 'a') && mode[1] == '\0';
+		bool reads  = mode != NULL && mode[0] == 'r' && mode[1] == '\0';
+		if (node == DEV_NODE_AUDIO ? !writes : !reads)
+			return false;
+		audio_face_t face = node == DEV_NODE_AUDIO ? AUDIO_FACE_STREAM
+		                  : node == DEV_NODE_AUDIOPOS ? AUDIO_FACE_POSITION : AUDIO_FACE_TAP;
+		long why = -1;
+		*object = audio_open(face, &why);
+		*type = *object != NULL ? HANDLE_AUDIO : HANDLE_NONE;
+		if (*object == NULL && refusal != NULL)
+			*refusal = why;   // OS64_AUDIO_BUSY: the stream and the tap are one open at a time
+		return true;
+	}
 	if (node == DEV_NODE_GLASS)
 	{
 		// One viewer per open: "r" watches, "u" watches and types
@@ -459,6 +519,10 @@ void devfs_handle_alias_abandon(handle_type_t type, void *object)
 {
 	if (type == HANDLE_GLASS && object != NULL)
 		glass_view_close((glass_view_t *)object);
+	// The open was granted before the table had no room for it: closing it
+	// is what frees the name for the next open.
+	if (type == HANDLE_AUDIO && object != NULL)
+		audio_open_close((audio_open_t *)object);
 }
 
 // ── Mounting ────────────────────────────────────────────────────────────────
