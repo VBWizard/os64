@@ -249,7 +249,15 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
     unsigned ch=h->sdp_channel-1u;
     const bt_l2cap_channel_t *c=&l->ch[ch];
     bt_sdp_state_t state=bt_sdp_client_state(&h->sdp);
-    if(c->state==BT_L2CAP_FREE || !c->outgoing || c->cid!=h->sdp_cid) {
+    bool gone=c->state==BT_L2CAP_FREE || !c->outgoing || c->cid!=h->sdp_cid;
+    // An answer finished on the way in counts even if the channel went in
+    // the same pass.
+    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {
+        if(!gone) bt_l2cap_close(l,ch,now);
+        host_sdp_ended(h,NULL);
+        return;
+    }
+    if(gone) {
         // Refused or unanswered while connecting (L2CAP records why; ours
         // is the only channel this part asks for), or closed later.
         if(state==BT_SDP_IDLE && l->refused) {
@@ -272,7 +280,7 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
         host_wipe(h->sdp_request,sizeof(h->sdp_request)); h->sdp_request_bytes=0;
     }
     state=bt_sdp_client_state(&h->sdp);
-    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {
+    if(state==BT_SDP_DONE || state==BT_SDP_FAILED) {     // the client's own limit, this tick
         bt_l2cap_close(l,ch,now);
         host_sdp_ended(h,NULL);
     }
