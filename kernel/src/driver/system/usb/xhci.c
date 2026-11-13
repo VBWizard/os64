@@ -255,6 +255,7 @@ typedef struct {
 		bool blocked[BT_HOST_PEERS];
 		const char *classic_error;
 		bool classic_refused;
+		uint32_t sdp_ended, l2cap_refusals;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -1621,6 +1622,21 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 		       BT_HOST_CLASSIC_SLOT, c->error, c->error_opcode, c->error_status, c->disconnect_reason,
 		       c->phase == BT_CLASSIC_FAILED ? "the controller has failed" :
 		       c->retryable ? "it may be paged again" : "it waits for the headphones or the user");
+	}
+	// Slot 2's services: a channel we asked for that the headphones refused
+	// or never answered, and the end of the one SDP query a connection
+	// makes, in the words of its status line. The query's end is said
+	// whatever it found, fault or not: it is one line a connection, and
+	// what it found is what audio will depend on. Nothing per packet.
+	if (h->l2cap_refusals != p->logged.l2cap_refusals) {
+		p->logged.l2cap_refusals = h->l2cap_refusals;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u l2cap: the headphones %s the channel we asked for (psm %04x, result %04x)\n",
+		       BT_HOST_CLASSIC_SLOT, h->sdp_refused == 0xffff ? "did not answer" : "refused",
+		       h->l2cap.refused_psm, h->sdp_refused);
+	}
+	if (h->sdp_ended != p->logged.sdp_ended) {
+		p->logged.sdp_ended = h->sdp_ended;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u %s", BT_HOST_CLASSIC_SLOT, h->sdp_line);
 	}
 }
 
