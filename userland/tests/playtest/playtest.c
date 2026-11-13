@@ -7,10 +7,16 @@
 //      squares, under two counts in 12,000 left over (resampletest's bar);
 //   2. the same at 48 kHz stereo, which needs no resampler: the tap hears
 //      the file's samples exactly;
-//   3. a file that is not a WAV, and one that is not 16-bit, are refused
-//      with exit 2 and nothing reaches the device.
+//   3. a file that is not a WAV, one that is not 16-bit, and one that is
+//      not there, are refused with exit 2 and nothing reaches the device.
 //
-// Exit codes: 0x91A10000 success, 0x91A100NN the step that failed.
+// It takes no arguments. The file it plays is its own, written under a name
+// no person would pick (/home/playtest-<task>.tmp.wav) and removed at the
+// end; play's own messages go to /dev/null, since three of them are
+// refusals this test asks for and would read as failures.
+//
+// Exit codes: 0x91A10000 success, 0x91A100NN the step that failed (99: it
+// was given arguments).
 
 #include "os64/os64.h"
 #include "os64/audio.h"
@@ -104,7 +110,12 @@ static int play(const char *path)
     gHeard = 0;
     gTapDropped = false;
     waiter_t w = { 0, -1, false };
-    w.kid = os64_spawn("/bin/play", (char *[]){ "/bin/play", (char *)path, 0 });
+    int64_t quiet = os64_open("/dev/null", "w");
+    if (quiet < 0)
+        return -1;
+    w.kid = os64_spawn_redirected("/bin/play", (char *[]){ "/bin/play", (char *)path, 0 },
+                                  -1, (int32_t)quiet, (int32_t)quiet, 0);
+    os64_close((int32_t)quiet);   // the child has its own hold
     if (w.kid < 0)
         return -1;
     int64_t thread = os64_thread(collect, &w);
@@ -129,8 +140,19 @@ static int play(const char *path)
     return -1;   // the thread is left waiting; the test is failing anyway
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argv;
+    if (argc != 1)
+    {
+        os64_printf("playtest: takes no arguments; it writes, plays and removes a file of its own.\n"
+                    "          To play a file of yours: play -v file.wav\n");
+        return (int)STEP(99);
+    }
+    char wav[64], missing[64];
+    os64_snprintf(wav, sizeof(wav), "/home/playtest-%lu.tmp.wav", (unsigned long)os64_taskid());
+    os64_snprintf(missing, sizeof(missing), "/home/playtest-%lu.none.wav", (unsigned long)os64_taskid());
+
     gPos = (int32_t)os64_open("/dev/audiopos", "r");
     gTap = (int32_t)os64_open("/dev/audiotap", "r");
     if (gPos < 0 || gTap < 0)
@@ -146,9 +168,9 @@ int main(void)
     os64_close((int32_t)ctl);
 
     // 1. Mono at 44.1 kHz, through the resampler.
-    if (!write_wav("/home/playtest.wav", 1, 44100, 16, 11025))
+    if (!write_wav(wav, 1, 44100, 16, 11025))
         return die(1, "could not write the test file", 0);
-    int code = play("/home/playtest.wav");
+    int code = play(wav);
     if (code != 0)
         return die(1, "play did not exit 0", code);
     if (gTapDropped)
@@ -167,9 +189,9 @@ int main(void)
         return die(1, "what the tap heard is not the file's sine", lrint(residual * 100.0));
 
     // 2. Stereo at the device's rate: sample for sample.
-    if (!write_wav("/home/playtest.wav", 2, 48000, 16, 12000))
+    if (!write_wav(wav, 2, 48000, 16, 12000))
         return die(2, "could not write the test file", 0);
-    code = play("/home/playtest.wav");
+    code = play(wav);
     if (gTapDropped)
         return die(2, "the tap dropped records: this test was held off for too long to judge", 0);
     if (code != 0 || gHeard != 12000)
@@ -182,22 +204,22 @@ int main(void)
     }
 
     // 3. Refusals.
-    int64_t h = os64_open("/home/playtest.wav", "w");
+    int64_t h = os64_open(wav, "w");
     os64_write((int32_t)h, "this is not a wave file at all", 30);
     os64_close((int32_t)h);
-    code = play("/home/playtest.wav");
+    code = play(wav);
     if (code != 2 || gHeard != 0)
         return die(3, "a file that is not a WAV was not refused with exit 2", code);
-    if (!write_wav("/home/playtest.wav", 2, 48000, 8, 100))
+    if (!write_wav(wav, 2, 48000, 8, 100))
         return die(3, "could not write the test file", 0);
-    code = play("/home/playtest.wav");
+    code = play(wav);
     if (code != 2 || gHeard != 0)
         return die(3, "an 8-bit file was not refused with exit 2", code);
-    code = play("/home/no-such-file.wav");
+    code = play(missing);
     if (code != 2)
         return die(3, "a missing file was not refused with exit 2", code);
 
-    os64_unlink("/home/playtest.wav");
+    os64_unlink(wav);
     os64_close(gTap);
     os64_close(gPos);
     os64_printf("playtest: all steps passed\n");

@@ -626,6 +626,11 @@ on the sparse 24.
   44.1 kHz mono file and a 48 kHz stereo one, heard at the tap, and three
   refusals), `tools/test_sound_audit.py`.
 
+On the P5 (Chris, 2026-11-13): `/tests/resampletest` and `/tests/audiotest`
+pass, and `play` on a 22.05 kHz file of 12.8 s ran for 12.65 s by the
+`time` utility, which is the song less the last of the ring that the close
+leaves playing.
+
 ## For Chris
 
 *Put to Chris 2026-11-13 with the leans below; he cleared the design to
