@@ -1695,7 +1695,10 @@ static void xhci_bt_runtime_poll(void)
     const bt_classic_t *classic = &p->host.classic;
     if (classic->phase != p->timeline_classic_phase) {
         bool paging = p->timeline_classic_phase == BT_CLASSIC_STOPPED && classic->phase == BT_CLASSIC_PAGING;
-        bool unanswered = p->timeline_classic_phase == BT_CLASSIC_PAGING && classic->phase == BT_CLASSIC_STOPPED;
+        // Only a page timeout is one of the run: a page that ends any
+        // other way is written, and ends the run.
+        bool unanswered = p->timeline_classic_phase == BT_CLASSIC_PAGING && classic->phase == BT_CLASSIC_STOPPED &&
+                          classic->error_status == 0x04 && classic->retryable;
         if (paging && p->timeline_classic_unanswered) {
             p->timeline_classic_quiet = true;
         } else if (unanswered && p->timeline_classic_quiet) {
