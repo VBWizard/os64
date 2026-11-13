@@ -3,18 +3,19 @@
 //     play song.wav            play it; Ctrl+C stops it at once
 //     play -v song.wav         and say what the file is
 //
-// The file: RIFF/WAVE, PCM, 16 bits, one or two channels, any rate. One
+// The file: RIFF/WAVE, PCM, 16 bits, one or two channels, 4 to 384 kHz. One
 // channel is doubled. A rate that is not the device's goes through
 // libsound's resampler (os64/resample.h). The ordinary blocking write is
 // the clock: it returns when the device has taken the sound, so this
 // program runs for the length of the song with no timing of its own.
 //
 // It does not wait for the last of the sound before exiting. A close leaves
-// what is queued to play out (a fifth of a second at most), and the next
-// `play` follows it, which is what makes `play a.wav; play b.wav` gapless.
+// what is queued to play out (a fifth of a second at most), and a `play`
+// started within that follows it without a cut.
 //
 // Exit codes: 0 played; 1 usage; 2 the file would not open or is not a WAV
-// this plays; 3 the device refused; 130 stopped by Ctrl+C.
+// this plays; 3 the device refused or failed, or the resampler could not be
+// made or stopped; 130 stopped by Ctrl+C.
 
 #include "os64/os64.h"
 #include "os64/audio.h"
@@ -43,7 +44,8 @@ static size_t read_fully(int32_t h, void *buf, size_t want)
     return have;
 }
 
-static bool skip(int32_t h, uint32_t bytes)
+// 64 bits wide: a chunk's size plus its pad byte may not fit in 32.
+static bool skip(int32_t h, uint64_t bytes)
 {
     static uint8_t sink[512];
     while (bytes > 0)
@@ -51,7 +53,7 @@ static bool skip(int32_t h, uint32_t bytes)
         size_t piece = bytes < sizeof(sink) ? bytes : sizeof(sink);
         if (read_fully(h, sink, piece) != piece)
             return false;
-        bytes -= (uint32_t)piece;
+        bytes -= piece;
     }
     return true;
 }
@@ -101,7 +103,7 @@ static const char *wav_open(int32_t h, wav_t *w)
             if (w->rate < 4000 || w->rate > 384000)
                 return "a sample rate nobody records at";
             have_format = true;
-            if (!skip(h, size - take + (size & 1)))
+            if (!skip(h, (uint64_t)size - take + (size & 1)))
                 return "cut short after its format chunk";
         }
         else if (os64_memcmp(chunk, "data", 4) == 0)
@@ -111,7 +113,7 @@ static const char *wav_open(int32_t h, wav_t *w)
             w->data_bytes = size;
             return NULL;
         }
-        else if (!skip(h, size + (size & 1)))   // chunks are padded to an even length
+        else if (!skip(h, (uint64_t)size + (size & 1)))   // chunks are padded to an even length
             return "cut short inside a chunk";
     }
 }

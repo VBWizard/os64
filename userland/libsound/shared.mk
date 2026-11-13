@@ -16,8 +16,8 @@ SOUND_OBJS    := $(patsubst %,$(OBJ)/sound/%.o,$(SOUND_UPSTREAM_SRCS) $(SOUND_PO
 # visibility hook, emptied: exports.map decides what leaves the library.
 SOUND_FLAGS := $(LIBOS64_CFLAGS) -O2 -std=c11 -fvisibility=hidden -fno-builtin \
     -mno-avx -mno-fma -DOUTSIDE_SPEEX -DRANDOM_PREFIX=os64_speex -DFLOATING_POINT -DEXPORT= \
-    -Ilibsound/port/compat -Ilibsound/port -Ilibsound/upstream/include/speex \
-    -Ilibsound/upstream/include -Ilibsound/upstream/libspeexdsp -Ilibsound/include
+    -Ilibsound/port/compat -Ilibsound/upstream/include/speex \
+    -Ilibsound/upstream/libspeexdsp -Ilibsound/include
 
 # UPSTREAM FILES ONLY, each flag for a diagnosed reason (libsound/README.md
 # § Warnings). os64's own code keeps the full alarm.

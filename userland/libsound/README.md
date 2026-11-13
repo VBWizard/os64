@@ -14,14 +14,13 @@ this arc is ported and proven, not written here (BLUETOOTH_AUDIO.md
 
 speexdsp 1.2.1 (tag `SpeexDSP-1.2.1`, commit `1b28a0f6`, released
 2022-06-13), from the release archive `manifest.json` names and pins by
-SHA-256. Six files, each pinned by its own hash:
+SHA-256. Five files, each pinned by its own hash:
 
 | File | What it is |
 |---|---|
 | `libspeexdsp/resample.c` | the resampler: 1,239 lines, the one translation unit built |
 | `libspeexdsp/arch.h` | its type and arithmetic macros |
 | `include/speex/speex_resampler.h` | its interface |
-| `include/speex/speexdsp_types.h` | its integer type names |
 | `COPYING`, `AUTHORS` | the notice |
 
 **Nothing else in speexdsp is here**: not the echo canceller, the
@@ -39,15 +38,17 @@ manifest on every run.
 
 `resample.c` is compiled with `OUTSIDE_SPEEX`, the switch upstream provides
 for taking this one file into another project: it then needs only its own
-two headers, `<stdlib.h>` for three allocator names, and `<math.h>`.
+two headers, `<stdlib.h>` for three allocator names, `<math.h>` and
+`<limits.h>`. Under that switch `speex_resampler.h` defines speexdsp's four
+integer names itself (`short`, `int` and their unsigned forms), so
+`speexdsp_types.h` and the header `configure` would generate are not used
+and are not vendored.
 
 - `FLOATING_POINT`: upstream's reference arithmetic. Userland has floating
   point; the 16-bit entry points convert at the edges.
 - `RANDOM_PREFIX=os64_speex`: the name prefix its header insists on outside
   speexdsp. None of those names leaves the library (`exports.map`).
 - `port/compat/stdlib.h` gives `calloc`, `realloc` and `free` as libos64's.
-- `port/speexdsp_config_types.h` is the header speexdsp's `configure`
-  would have generated: its four integer names, from `<stdint.h>`.
 - `port/resample.c` is `os64/resample.h`: about sixty lines over
   `speex_resampler_init`, `_process_interleaved_int`,
   `_get_input_latency` and `_destroy`, at quality 5 (upstream's "desktop").

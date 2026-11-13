@@ -18,8 +18,7 @@ S=userland/libsound
 cc -std=c11 -g -O1 -Wall -Wextra -Werror \
    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
    -DOUTSIDE_SPEEX -DRANDOM_PREFIX=os64_speex -DFLOATING_POINT -DEXPORT= \
-   -I "$work" -I $S/port -I $S/upstream/include/speex -I $S/upstream/include \
-   -I $S/upstream/libspeexdsp -I $S/include -I userland/tests/resampletest \
+   -I "$work" -I $S/upstream/include/speex -I $S/include \
    -c $S/port/resample.c -o "$work/port.o"
 cc -std=c11 -g -O1 -Wall -Wextra -Werror \
    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
@@ -29,7 +28,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror \
 cc -std=c11 -g -O1 -Wall -Wextra -Werror -Wno-sign-compare \
    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
    -DOUTSIDE_SPEEX -DRANDOM_PREFIX=os64_speex -DFLOATING_POINT -DEXPORT= \
-   -I $S/port -I $S/upstream/include/speex -I $S/upstream/include -I $S/upstream/libspeexdsp \
+   -I $S/upstream/include/speex -I $S/upstream/libspeexdsp \
    -c $S/upstream/libspeexdsp/resample.c -o "$work/upstream.o"
 cc -fsanitize=address,undefined "$work/port.o" "$work/test.o" "$work/upstream.o" -lm -o "$work/test_resample"
 

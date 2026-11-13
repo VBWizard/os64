@@ -35,7 +35,7 @@ os64_resampler_t *os64_resampler_create(uint32_t channels, uint32_t in_rate, uin
 // *out_frames how many `out` has room for; on return they are how many
 // were consumed and produced. It stops at whichever runs out first, so a
 // caller loops until its input is consumed. Returns 0, or -1 for a NULL
-// argument.
+// argument or a resampler that reports an error.
 int os64_resampler_run(os64_resampler_t *r, const int16_t *in, uint32_t *in_frames,
                        int16_t *out, uint32_t *out_frames);
 

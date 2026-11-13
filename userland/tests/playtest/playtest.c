@@ -61,47 +61,72 @@ static bool write_wav(const char *path, uint32_t channels, uint32_t rate, uint32
 
 static int32_t gTap = -1, gPos = -1;
 static uint32_t gHeard;            // sound frames in rc_out, stereo
+static bool gTapDropped;           // the tap lost records: what was heard is not the whole of it
 
-// Run play on `path` and collect what the tap hears until the stream is
-// idle again. Returns play's exit code.
-static int play(const char *path)
+// Collects the player on its own thread, so the main one can go on reading
+// the tap while it plays: an unread tap fills in about a second.
+typedef struct { int64_t kid; int32_t code; volatile bool gone; } waiter_t;
+
+static int64_t collect(void *arg)
+{
+    waiter_t *w = arg;
+    w->code = -1;
+    os64_wait(w->kid, &w->code);
+    __atomic_store_n(&w->gone, true, __ATOMIC_RELEASE);
+    return 0;
+}
+
+static void listen(uint64_t ms)
 {
     static uint8_t buf[8 * OS64_AUDIO_TAP_READ_MIN];
-    gHeard = 0;
-    int64_t kid = os64_spawn("/bin/play", (char *[]){ "/bin/play", (char *)path, 0 });
-    if (kid < 0)
-        return -1;
-    bool seen = false;
-    for (int quiet = 0, turns = 0; quiet < 4 && turns < 600; turns++)
+    int64_t n = os64_read_for(gTap, buf, sizeof(buf), ms);
+    for (size_t at = 0; n > 0 && at < (size_t)n;)
     {
-        int64_t n = os64_read_for(gTap, buf, sizeof(buf), 50);
-        for (size_t at = 0; n > 0 && at < (size_t)n;)
+        os64_audio_tap_t h;
+        os64_memcpy(&h, buf + at, sizeof(h));
+        at += sizeof(h);
+        if (h.dropped != 0)
+            gTapDropped = true;
+        if (!h.silence && gHeard + h.frames <= RC_MAX)
         {
-            os64_audio_tap_t h;
-            os64_memcpy(&h, buf + at, sizeof(h));
-            at += sizeof(h);
-            if (!h.silence && gHeard + h.frames <= RC_MAX)
-            {
-                os64_memcpy(rc_out + gHeard * 2, buf + at, h.frames * 4);
-                gHeard += h.frames;
-                seen = true;
-            }
-            at += h.frames * 4;
+            os64_memcpy(rc_out + gHeard * 2, buf + at, h.frames * 4);
+            gHeard += h.frames;
         }
+        at += h.frames * 4;
+    }
+}
+
+// Run play on `path` and collect what the tap hears, until the player has
+// exited AND the sound it left queued has played out. Returns play's exit
+// code, or -1 when it could not be run or did not end within a minute.
+static int play(const char *path)
+{
+    gHeard = 0;
+    gTapDropped = false;
+    waiter_t w = { 0, -1, false };
+    w.kid = os64_spawn("/bin/play", (char *[]){ "/bin/play", (char *)path, 0 });
+    if (w.kid < 0)
+        return -1;
+    int64_t thread = os64_thread(collect, &w);
+    if (thread < 0)
+        return -1;
+    for (int turns = 0; turns < 1200; turns++)
+    {
+        listen(50);
+        if (!__atomic_load_n(&w.gone, __ATOMIC_ACQUIRE))
+            continue;
         os64_audio_position_t p;
         os64_memset(&p, 0, sizeof(p));
         (void)os64_read(gPos, &p, sizeof(p));
-        // Idle and nothing new for a few turns: the player has come and
-        // gone, whether it played or refused. (A refusal never opens the
-        // device, so it is given a moment to have started at all.)
-        if (p.state == OS64_AUDIO_IDLE && n <= 0 && (seen || turns > 20))
-            quiet++;
-        else
-            quiet = 0;
+        if (p.state == OS64_AUDIO_IDLE)
+        {
+            listen(0);   // what the last pull left at the tap
+            os64_thread_join((int32_t)thread, NULL);
+            os64_close((int32_t)thread);
+            return w.code;
+        }
     }
-    int32_t code = -1;
-    os64_wait(kid, &code);
-    return code;
+    return -1;   // the thread is left waiting; the test is failing anyway
 }
 
 int main(void)
@@ -111,12 +136,23 @@ int main(void)
     if (gPos < 0 || gTap < 0)
         return die(1, "the position or the tap would not open", gPos < 0 ? gPos : gTap);
 
+    // Whatever an earlier program left: gone, and a known volume. The tap
+    // hears the sound after the gain.
+    int64_t ctl = os64_open("/dev/audioctl", "w");
+    if (ctl >= 0) { os64_write((int32_t)ctl, "flush\n", 6); os64_close((int32_t)ctl); }
+    ctl = os64_open("/dev/volume", "w");
+    if (ctl < 0 || os64_write((int32_t)ctl, "100\n", 4) != 4)
+        return die(1, "could not set the volume to 100", ctl);
+    os64_close((int32_t)ctl);
+
     // 1. Mono at 44.1 kHz, through the resampler.
     if (!write_wav("/home/playtest.wav", 1, 44100, 16, 11025))
         return die(1, "could not write the test file", 0);
     int code = play("/home/playtest.wav");
     if (code != 0)
         return die(1, "play did not exit 0", code);
+    if (gTapDropped)
+        return die(1, "the tap dropped records: this test was held off for too long to judge", 0);
     // 11,025 frames and the 40 the resampler holds, at 48,000 for 44,100.
     if (gHeard < 12043 - 4 || gHeard > 12043 + 4)
         return die(1, "the tap did not hear a quarter second and the latency", gHeard);
@@ -134,6 +170,8 @@ int main(void)
     if (!write_wav("/home/playtest.wav", 2, 48000, 16, 12000))
         return die(2, "could not write the test file", 0);
     code = play("/home/playtest.wav");
+    if (gTapDropped)
+        return die(2, "the tap dropped records: this test was held off for too long to judge", 0);
     if (code != 0 || gHeard != 12000)
         return die(2, "play did not play the 48 kHz file whole", code != 0 ? code : (int)gHeard);
     for (uint32_t i = 0; i < 12000; i++)

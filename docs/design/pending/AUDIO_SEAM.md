@@ -542,7 +542,7 @@ error after an underrun; `/dev/audiotap` for more than one listener.
 ## `play` and the resampler (the second pull request)
 
 `play file.wav`: reads a RIFF/WAVE file of 16-bit PCM, one or two channels,
-any rate; writes it to `/dev/audio`; prints nothing unless asked; on
+any rate (4 to 384 kHz as built); writes it to `/dev/audio`; prints nothing unless asked; on
 Ctrl+C writes `flush` and exits. Mono is doubled. A rate that is not the
 device's goes through a resampler (§ As built says where it lives), which yonder's media element
 will need for the same reason (a great deal of the web's sound is 44.1
