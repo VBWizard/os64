@@ -713,6 +713,39 @@ integration with the other cleanup seams. Animation creation/timeline routing
 for adopted receivers remains an explicit follow-up proof. These internal
 checks do not authorize freeing provider storage or replace guest/WPT evidence.
 
+## Animation creation and timeline routing checkpoint
+
+`Element.animate` keeps the receiver's creation realm for effects, animation
+prototypes and promises while selecting the default timeline from its current
+document after argument/keyframe conversion. Borrowed methods and adoption
+inside getters follow the same rule. Explicit cluster document timelines and
+null timelines are accepted by `animate` and `Animation`; inactive timelines
+cannot be restarted. This follows [Web Animations § 6.8](https://www.w3.org/TR/web-animations-1/#dom-animatable-animate).
+
+The native animation registry and scheduler follow the selected timeline;
+effect data retains its allocation owner. Retiring the object-creation realm
+therefore does not freeze a live sibling timeline, while retiring that timeline
+does. Native finish notifications carry explicit timeline activity ownership.
+Playback events and replacement ready/finished promises retain the animation's
+creation realm. Borrowed Document/AnimationTimeline getters use their receiver.
+
+The final `--animation-routing` fixture passes **564 instrumented checks**:
+six creation/adoption routes, retirement before/after creation, and both teardown
+policies. Its initial version found **92 baseline failures**; expanded borrowed
+getter/promise checks found **100 failures** before their corrections, including
+follow-on failures after failed assertions. Instrumented animation retirement
+(**1,196**), Web Animations (**675**) and realms (**678**) pass with ASan/UBSan/LSan.
+The full shipping suite passes **60,454 checks**, including **3,991 native
+binding allocation sweeps**. The target DOM library builds.
+
+Seven isolated mutations are caught: wrong default timeline, wrong creation
+context, finish-job ownership, promise owner, playback-event prototype, and
+borrowed timeline/document getter ownership. The finish-job oracle calls a
+retained ordinary function from the departed realm, so the test distinguishes
+native notification activity from its execution context. Cumulative caught
+mutants: **194**. This closes the adopted-receiver creation proof identified
+above; public departure finish remains open.
+
 ## Remaining F.3b work
 
 - Publish the allocation-free departure mark and idempotent safe-point

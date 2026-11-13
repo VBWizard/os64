@@ -89,7 +89,8 @@ struct DWaEffect {
 typedef struct DWaAnimation DWaAnimation;
 struct DWaAnimation {
     DValue target;                  /* first: the plain event target's entry, in the object */
-    os64_dom_t *dom;
+    os64_dom_t *dom;               /* native registry, activity and timeline owner */
+    os64_dom_t *creation;          /* object realm, independent of its timeline */
     DWaAnimation *prev, *next;      /* dom->wa_first..wa_last, in the order they were made */
     uint64_t serial;
     JSValue effect;                 /* the KeyframeEffect object, or null */
@@ -386,9 +387,13 @@ static void free3(JSContext *ctx, JSValue *p, JSValue *res, JSValue *rej)
     *p = *res = *rej = JS_UNDEFINED;
 }
 
-/* A new pending promise into `p`, its resolving functions beside it. */
-static int promise_new(JSContext *ctx, JSValue *p, JSValue *res, JSValue *rej)
+/* Replacement promises keep the animation's realm even when another
+ * document's scheduler or a borrowed method creates them. */
+static int animation_promise(DWaAnimation *a, JSValue *p, JSValue *res, JSValue *rej)
 {
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_realm_context(a->creation->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return -1;
     JSValue funcs[2];
     JSValue made = JS_NewPromiseCapability(ctx, funcs);
     if (JS_IsException(made)) return -1;
@@ -445,10 +450,10 @@ static void resolve_ready(JSContext *ctx, DWaAnimation *a)
 
 /* A ready promise that is resolved is replaced by a new pending one, as
  * play and pause do when they schedule a task. */
-static int ready_pending(JSContext *ctx, DWaAnimation *a)
+static int ready_pending(DWaAnimation *a)
 {
     if (!a->ready_done) return 0;
-    if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0) return -1;
+    if (animation_promise(a, &a->ready, &a->ready_resolve, &a->ready_reject) < 0) return -1;
     a->ready_done = false;
     return 0;
 }
@@ -549,11 +554,16 @@ static void update_finished(JSContext *ctx, DWaAnimation *a, bool did_seek, bool
         } else if (!a->notify_queued) {
             a->notify_queued = true;
             JSValue arg = a->target.value;
-            if (JS_EnqueueJob(ctx, finish_job, 1, &arg) < 0) a->notify_queued = false;
+            os64_js_outcome_t access;
+            JSContext *activity = os64_js_realm_context(a->dom->realm, OS64_JS_ABI_ID, &access);
+            /* This native notification follows the timeline. Its promise's
+             * author reactions have their own callable eligibility. */
+            if (activity == NULL || JS_EnqueueJobOwned(ctx, NULL, activity, finish_job, 1, &arg) < 0)
+                a->notify_queued = false;
         }
     }
     if (!finished && a->finished_done) {
-        if (promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) == 0)
+        if (animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) == 0)
             a->finished_done = false;
     }
     wa_changed(a);
@@ -634,7 +644,7 @@ static int play(JSContext *ctx, DWaAnimation *a, bool auto_rewind)
         has_ready = true;
     }
     if (isnan(a->held) && !aborted_pause && !a->has_pending_rate) return 0;
-    if (!has_ready && ready_pending(ctx, a) < 0) return -1;
+    if (!has_ready && ready_pending(a) < 0) return -1;
     a->pending_play = true;
     update_finished(ctx, a, false, false);
     return 0;
@@ -663,7 +673,7 @@ static int pause(JSContext *ctx, DWaAnimation *a)
         a->pending_play = false;
         has_ready = true;
     }
-    if (!has_ready && ready_pending(ctx, a) < 0) return -1;
+    if (!has_ready && ready_pending(a) < 0) return -1;
     a->pending_pause = true;
     update_finished(ctx, a, false, false);
     return 0;
@@ -735,7 +745,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
             mark_handled(a->dom, ctx, a->ready);
             JS_FreeValue(ctx, reason);
             JSValue resolved = JS_UNDEFINED, res = JS_UNDEFINED, rej = JS_UNDEFINED;
-            if (promise_new(ctx, &resolved, &res, &rej) < 0) return -1;
+            if (animation_promise(a, &resolved, &res, &rej) < 0) return -1;
             promise_call(ctx, res, a->target.value);
             free3(ctx, &a->ready, &a->ready_resolve, &a->ready_reject);
             a->ready = resolved;
@@ -749,7 +759,7 @@ static int cancel(JSContext *ctx, DWaAnimation *a)
             mark_handled(a->dom, ctx, a->finished);
             JS_FreeValue(ctx, reason);
         }
-        if (promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) return -1;
+        if (animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) return -1;
         a->finished_done = false;
         a->notify_queued = false;
         queue_event(ctx, a, "cancel", NAN, wa_now(a->dom), wa_now(a->dom));
@@ -1895,6 +1905,7 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     }
     d_event_target_init(dom, &a->target, object);
     a->dom = dom;
+    a->creation = d_binding(ctx);
     a->id = id;
     a->start = a->held = a->previous = NAN;
     a->rate = 1;
@@ -1912,8 +1923,8 @@ static JSValue animation_new(os64_dom_t *dom, JSContext *ctx, JSValueConst effec
     index_dirty(dom);
     /* A new animation's ready promise is resolved, its finished one
      * pending (an animation's initial state, § 4.4.7 and § 4.4.11). */
-    if (promise_new(ctx, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
-        promise_new(ctx, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) {
+    if (animation_promise(a, &a->ready, &a->ready_resolve, &a->ready_reject) < 0 ||
+        animation_promise(a, &a->finished, &a->finished_resolve, &a->finished_reject) < 0) {
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
@@ -2350,9 +2361,21 @@ static JSValue effect_make(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCon
     return effect_new(dom, ctx, element, d, &spec, prototype);
 }
 
-/* `new Animation(effect, timeline)` (§ 6.4, Animation): idle, of `effect` (null or
- * undefined for none), on the document's timeline unless `timeline` is
- * null; any other timeline is not one this binding has. */
+/* Resolve a supported document timeline by identity, without invoking page
+ * properties. Registry ownership follows the chosen timeline from creation. */
+static os64_dom_t *timeline_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst timeline)
+{
+    size_t count = dom->cluster ? dom->cluster->count : 1;
+    for (size_t i = 0; i < count; ++i) {
+        os64_dom_t *member = dom->cluster ? dom->cluster->members[i] : dom;
+        if (member->wa_timeline && JS_StrictEq(ctx, timeline, member->wa_timeline->value)) return member;
+    }
+    JS_ThrowTypeError(ctx, "An animation's timeline is a document timeline or null");
+    return NULL;
+}
+
+/* The constructor's realm supplies its prototype and default timeline;
+ * an explicit cluster timeline can belong to another document. */
 static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     os64_dom_t *dom = d_binding(ctx);
@@ -2362,8 +2385,10 @@ static JSValue animation_construct(JSContext *ctx, JSValueConst new_target, int 
         return JS_ThrowTypeError(ctx, "An animation's effect is a KeyframeEffect or null");
     JSValueConst timeline = argc > 1 ? argv[1] : JS_UNDEFINED;
     bool none = JS_IsNull(timeline);
-    if (!none && !JS_IsUndefined(timeline) && !JS_StrictEq(ctx, timeline, dom->wa_timeline->value))
-        return JS_ThrowTypeError(ctx, "An animation's timeline is the document's or null");
+    if (!none && !JS_IsUndefined(timeline)) {
+        dom = timeline_owner(dom, ctx, timeline);
+        if (dom == NULL) return JS_EXCEPTION;
+    }
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     if (JS_IsException(prototype)) return prototype;
     JSValue animation = animation_new(dom, ctx, effect, NULL, prototype);
@@ -2390,10 +2415,18 @@ static JSValue animation_member(JSContext *ctx, JSValueConst self, int argc, JSV
     magic &= ~D_SET;
     JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (magic == T_CURRENT) {
+        dom = timeline_owner(dom, ctx, self);
+        if (dom == NULL) return JS_EXCEPTION;
         if (d_delivery_active(dom)) dom->wa_wanted = true;
         return JS_NewFloat64(ctx, wa_now(dom));
     }
-    if (magic == D_TIMELINE) return JS_DupValue(ctx, dom->wa_timeline->value);
+    if (magic == D_TIMELINE) {
+        const os64_html_node_t *node = d_node(dom, ctx, self);
+        if (node == NULL || node->kind != OS64_HTML_DOCUMENT)
+            return JS_ThrowTypeError(ctx, "Document.timeline needs a document");
+        dom = d_owner(dom, node);
+        return JS_DupValue(ctx, dom->wa_timeline->value);
+    }
     DWaAnimation *a = wa_state(self);
     if (a == NULL) return JS_ThrowTypeError(ctx, "Expected an Animation");
     if (a->dom == NULL) return JS_UNDEFINED;
@@ -2509,12 +2542,28 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
     timing_default(&timing, &spec);
     if (timing_of(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, &timing, &spec, WA_TIMING_ANIMATE) < 0)
         return JS_EXCEPTION;
+    JSValue timeline = argc > 1 && JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], "timeline") : JS_UNDEFINED;
+    if (JS_IsException(timeline)) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    bool none = JS_IsNull(timeline), default_timeline = JS_IsUndefined(timeline);
+    os64_dom_t *activity = none || default_timeline ? NULL : timeline_owner(dom, ctx, timeline);
+    JS_FreeValue(ctx, timeline);
+    if (!none && !default_timeline && activity == NULL) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    /* Adoption preserves the receiver's realm and the allocation owner of
+     * its effect. The default timeline is chosen after keyframe conversion,
+     * which can adopt the receiver again. */
+    dom = d_creation_owner(dom, element);
+    os64_js_outcome_t access;
+    JSContext *creation = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (creation == NULL) { js_free(ctx, spec.id); return JS_EXCEPTION; }
+    ctx = creation;
     DWaData *d = keyframes_data(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (d == NULL) {
         js_free(ctx, spec.id);
         return JS_EXCEPTION;
     }
-    if (!d_require_active(dom, ctx)) {
+    if (default_timeline) activity = d_owner(dom, element);
+    if (none) activity = dom;
+    if (!none && !d_require_active(activity, ctx)) {
         data_free(dom, d);
         js_free(ctx, spec.id);
         return JS_EXCEPTION;
@@ -2525,11 +2574,13 @@ static JSValue animate_method(JSContext *ctx, JSValueConst self, int argc, JSVal
         js_free(ctx, spec.id);
         return effect;
     }
-    JSValue animation = animation_new(dom, ctx, effect, spec.id, JS_UNDEFINED);
+    JSValue animation = animation_new(activity, ctx, effect, spec.id, JS_UNDEFINED);
     JS_FreeValue(ctx, effect);
     if (JS_IsException(animation)) return animation;
     DWaAnimation *a = wa_state(animation);
-    if (!d_require_active(dom, ctx) || play(ctx, a, true) < 0 || !d_require_active(dom, ctx)) {
+    a->no_timeline = none;
+    if ((!none && !d_require_active(activity, ctx)) || play(ctx, a, true) < 0 ||
+        (!none && !d_require_active(activity, ctx))) {
         JS_FreeValue(ctx, animation);
         return JS_EXCEPTION;
     }
@@ -2716,7 +2767,7 @@ static DWaAnimation *css_wrap(os64_dom_t *dom, JSContext *ctx, const os64_dom_cs
     } else if (!r->canceled && r->start_ms > now) {
         a->held = 0;
         a->pending_play = true;
-        if (ready_pending(ctx, a) < 0) {
+        if (ready_pending(a) < 0) {
             JS_FreeValue(ctx, effect);
             JS_FreeValue(ctx, animation);
             return NULL;
@@ -3365,7 +3416,7 @@ bool os64_dom_web_animations_update(os64_dom_t *dom, uint64_t now, os64_js_outco
                     (void)d_dispatch_node_task(dom, ctx, event, e->element, out);
                 JS_FreeValue(ctx, event);
             } else if (ctx != NULL && d_delivery_active(dom) && a != NULL) {
-                JSValue event = d_event_new_proto(dom, ctx, dom->wa_event_prototype->value, e->type, false,
+                JSValue event = d_event_new_proto(a->creation, ctx, a->creation->wa_event_prototype->value, e->type, false,
                                                   false, true);
                 if (!JS_IsException(event)) {
                     JSValue current = time_value(ctx, e->current), timeline = time_value(ctx, e->timeline);

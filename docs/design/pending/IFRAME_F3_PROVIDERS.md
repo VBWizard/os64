@@ -126,7 +126,7 @@ successful public finish can promise that opaque storage is no longer borrowed.
 | Provider family | Entry sites | Required treatment |
 |---|---|---|
 | Script/module/report hosts and console detachment | `report.c`, libjs host installation | Integrate guarded routes into safe-point finish without deleting siblings' state. |
-| CSS animation cleanup and current-document services | `webanimation.c` | Integrate guarded snapshots and retained-effect cleanup into public finish; complete animation creation/timeline routing proofs for adopted receivers. Do not reuse destructive animation drain. |
+| CSS animation cleanup and current-document services | `webanimation.c` | Integrate guarded snapshots and retained-effect cleanup into public finish. Creation/adoption tests now distinguish retained object realms from live timeline activity. Do not reuse destructive animation drain. |
 
 Provider replacement contracts and departure cleanup must agree: clearing a
 provider cannot erase the release operation for an existing loan. Image and
