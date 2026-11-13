@@ -6,9 +6,13 @@ argument and carries Quinn's review; this file is what gets built, checked
 against the tree at `014d9809`. Specification sections are from Bluetooth
 Core 5.4 unless another is named.*
 
-*Status: awaiting one read by someone other than the author. Chris is in
-and out (2026-11-13): each part is reviewed and the next stacked on it, and
-he reads as he can. § For Chris lists what is his to overrule.*
+*Status: read once by someone other than the author (a cold Opus read
+against the source and from memory of the specification, 2026-11-13;
+eighteen findings, folded in). Chris is in and out: each part is reviewed
+and the next stacked on it, and he reads as he can. § For Chris lists what
+is his to overrule. Where a fact about Bluetooth below is marked
+(recalled), it came from the reader's memory or mine and is checked against
+the specification when its part is built.*
 
 ## What A.2 is, and why it is three pull requests
 
@@ -65,11 +69,22 @@ one other device, so it has a place free for the P5.
 - `Read Buffer Size` (0x1005) and `LE Read Buffer Size` (0x2002) are sent
   by each LE peer during its own bring-up (`BT_LE_BUFFER`,
   `BT_LE_SHARED_BUFFER`) and the answers kept per peer (`acl_size`).
-- `bt_scan.c` runs Classic inquiry beside the LE scan and lists both in
-  `/sys/bluetooth/devices`.
-- Bonds: two fixed slots, an 80-byte record each, `/home/bluetooth_bond`
-  and `/home/bluetooth_bond_1`, loaded and saved from task context
-  (`xhci_bluetooth_maintain`).
+- `bt_scan.c` CAN run a Classic inquiry (`bt_scan_start`), but the kernel
+  never asks it to: every scan is `bt_scan_start_le`. So no Classic address
+  is ever listed today, and a result keeps neither the page-scan repetition
+  mode nor the clock offset an inquiry reports.
+- The start-up round writes one event mask (`BT_SCAN_MASK`); of the events
+  part L needs, it lets through only Disconnection Complete, Encryption
+  Change and Number Of Completed Packets.
+- An owner holds the one command slot across a whole chain of its commands
+  (the start-up round, an LE pairing): tens of milliseconds as a rule, two
+  seconds on a command that then fails.
+- Bonds: two fixed slots, an 80-byte record each with the magic `OS64BT01`
+  and no version byte, `/home/bluetooth_bond` and `/home/bluetooth_bond_1`.
+  `BT_BOND_SLOTS` is also `BT_HOST_PEERS` and sizes the keyboards, the
+  pointers and the timeline in `xhci.c`, so it cannot simply become three.
+- In LE's words `connect` makes a session and saves nothing; `bond` pairs
+  and saves; `reconnect` needs a saved bond.
 
 ## Part T: the transport
 
@@ -92,19 +107,27 @@ void bt_acl_link_up(bt_acl_t *, uint16_t handle, bool le);
 void bt_acl_link_down(bt_acl_t *, uint16_t handle);        // its outstanding packets are the controller's to drop: the buffers come back
 ```
 
-- **The two replies are read once, by the host**, in the scan's start-up
-  round (two phases added after `BT_SCAN_ADDRESS`), not by each LE peer.
-  The LE peers' `BT_LE_BUFFER` and `BT_LE_SHARED_BUFFER` phases go; a peer
-  takes `acl_size` from the accountant.
-- **Shared or separate** is decided from `le_total`: zero means one pool
-  (Vol 4 Part E § 4.1.1, § 7.8.2).
+- **The host reads the two sizes once**, in the start-up round, after the
+  event mask, and keeps them in `bt_host_t` (the scan's struct is cleared
+  by every scan). **The LE peers keep their own reads.** Each LE connection
+  re-reads the sizes today (`BT_LE_BUFFER`, `BT_LE_SHARED_BUFFER`) and three
+  host suites pin those phases; part T is the part that must not move the
+  keyboard, so it leaves them. Two readers of one fact is booked in DEBTS.
+- **Shared or separate**: one pool when LE Read Buffer Size answers a
+  packet length of zero or a count of zero (Vol 4 Part E § 4.1.1, § 7.8.2;
+  the specification's test is the length, the code's today is the count,
+  and either means there is no LE pool to use).
 - **In one pool, LE is kept room.** A Classic link may not take the last
-  `1 + live LE links` buffers. That reserve is what keeps a keystroke's
-  acknowledgement from waiting behind audio. With two pools nothing is
-  reserved.
-- **A count that goes wrong fails the host closed**: a completion for a
-  handle with nothing outstanding, or for more than is outstanding, is what
-  `le_bad` treats it as today.
+  buffers, one for each live LE link, and is always left at least one. That
+  reserve is what keeps a keystroke's acknowledgement from waiting behind
+  audio. With two pools nothing is reserved. The AX210's real numbers are
+  not known until part T prints them on the P5 (recalled: about four
+  Classic buffers); the reserve is re-judged then.
+- **What a wrong count costs is the link, not the host.** A completion for
+  a handle the table does not hold, or with a count of zero, is ignored and
+  counted, as LE ignores it today. One for more than a link has outstanding
+  ends THAT link's session (LE's `le_fail`, which cleans up one peer). The
+  host fails only for what already fails it.
 - Each LE peer still sends one packet at a time (its `outstanding` stays,
   as its own rule); it asks the accountant instead of `!tx_used`.
 
@@ -114,9 +137,22 @@ void bt_acl_link_down(bt_acl_t *, uint16_t handle);        // its outstanding pa
   their own: `BT_TX_SLOTS` (4) buffers of `BT_ACL_WIRE_MAX` (1,028) bytes.
   A packet is copied into a free slot and a TRB queued on the bulk OUT
   ring; the ring already holds more than one.
-- A slot is free again when ITS transfer completes. Completions on one
-  endpoint arrive in the order queued, so the slots are a ring and a
-  completion frees the oldest. `tx_done` becomes "no slot is in flight".
+- A slot is free again when ITS transfer completes. Each slot remembers
+  the TRB it queued and the link it was for. A completion is matched by its
+  TRB pointer against the OLDEST slot in flight: on one ring completions
+  come in the order queued while nothing fails, so anything else is a
+  failed transport, never "free the oldest and carry on". A transfer that
+  does not succeed halts the endpoint and the later ones never complete;
+  that already fails the host (`xhci_bt_transfer`), and every slot still
+  with the controller is wiped then.
+- **Each slot has its own five-second deadline.** Today one deadline is
+  pushed back by every send, which with several in flight would let the
+  oldest wait for ever.
+- **"Nothing of mine is in flight" is asked per link.** An LE peer's
+  cleanup waits for the bulk endpoint to be idle and fails the whole host
+  if it is not within three seconds; with Classic traffic sharing the
+  endpoint that would cost the keyboard for a busy headphone. Cleanup waits
+  for its own link's slots only.
 - **Two completions, two meanings**, kept apart in the names: the USB
   transfer finishing gives the SLOT back (`xhci.c`); Number Of Completed
   Packets gives the controller's BUFFER back (`bt_acl.c`).
@@ -131,7 +167,8 @@ void bt_acl_link_down(bt_acl_t *, uint16_t handle);        // its outstanding pa
 
 `bt_host_receive` looks the handle up in the accountant's link table and
 calls that link's receiver: an LE peer's `bt_le_receive`, or (from part L)
-the Classic link's. `wire` is already 1,028 bytes, which holds the AX210's
+the Classic link's. The receiver is handed the whole HCI packet, header
+and all, so the packet-boundary flag reaches part S's reassembly. `wire` is already 1,028 bytes, which holds the AX210's
 1,021-byte Classic packet and its header; a static assertion ties it to
 `BT_ACL_WIRE_MAX`.
 
@@ -155,34 +192,57 @@ and `/sys/usb` shows no new wait. No behaviour a person can see changes.
 ### L1. A third slot, of another kind
 
 `bt_host_t` gains `classic[BT_CLASSIC_PEERS]` (one, for now) beside
-`peers[]`. To a person it is **slot 2** of the same list, with the same
-words (Chris's ruling, Q4):
+`peers[]`, a struct of its own: `BT_HOST_PEERS` stays two, because it also
+sizes the keyboards, the pointers and the bond files. To a person it is
+**slot 2** of the same list, with LE's words meaning what they mean there
+(Chris's ruling, Q4):
 
 ```
-slot 2 connect 4c:87:5d:xx:xx:xx     # an address from /sys/bluetooth/devices
-slot 2 reconnect
+scan classic                         # an inquiry: Classic devices join /sys/bluetooth/devices
+slot 2 bond 4c:87:5d:xx:xx:xx        # pair, and save the bond
+slot 2 connect 4c:87:5d:xx:xx:xx     # pair for this session only; nothing is saved
+slot 2 reconnect                     # needs a saved bond
 slot 2 forget
 ```
 
-`/sys/bluetooth/connection` prints it after slots 0 and 1, with a `kind:
-classic` line. A Classic address given to slot 0 or 1, or an LE one to
-slot 2, is refused with a line saying which slot takes it. The owner
-numbering in `bt_host.c` (`1` the scan, `2..` the LE peers) grows by one
-kind.
+- **A Classic scan has to exist first.** `scan classic` runs
+  `bt_scan_start` (the inquiry the code already has and nothing calls), and
+  a result keeps the page-scan repetition mode and clock offset the inquiry
+  reported, which make the page that follows quick.
+- `bt_host_command` parses `slot 2` on a path of its own (today any digit
+  past `BT_HOST_PEERS` is refused) and gives it to the Classic link.
+- **A slot says what kind of address it takes.** Dual-mode headphones use
+  one public address for LE and Classic, so the address cannot say. An
+  address the last scan listed as the other kind is refused with a line
+  naming the slot to use; one the scan never saw is taken at its word.
+- The owner of the command slot becomes a kind and an index, bounded where
+  it is read: `host_retire` today indexes `peers[]` with any owner of two
+  or more, and `bt_host_event` drops the reply to an owner it does not
+  know.
+- `/sys/bluetooth/connection` prints slot 2 after slots 0 and 1, with a
+  `kind: classic` line.
 
 ### L2. The controller's Classic setup
 
-Sent once, in the start-up round, after the buffer sizes:
+Sent once, in the start-up round. The event mask is ONE write, the round's
+existing `BT_SCAN_MASK`, widened: a second mask written later would be
+overwritten by it.
 
 | Command | Value | Why |
 |---|---|---|
-| Set Event Mask (0x0c01) | adds Connection Request/Complete, Disconnection, Authentication Complete, Encryption Change, Link Key Request/Notification, PIN Code Request, Role Change, Mode Change, IO Capability Request/Response, User Confirmation Request, Simple Pairing Complete, Number Of Completed Packets | the events below |
+| Set Event Mask (0x0c01) | adds Connection Complete (0x03), Connection Request (0x04), Authentication Complete (0x06), Role Change (0x12), Mode Change (0x14), PIN Code Request (0x16), Link Key Request (0x17), Link Key Notification (0x18), Encryption Key Refresh Complete (0x30), IO Capability Request (0x31) and Response (0x32), User Confirmation Request (0x33), Simple Pairing Complete (0x36) | the events below |
 | Write Simple Pairing Mode (0x0c56) | on | SSP, § 7.3.59 |
 | Write Local Name (0x0c13) | `os64` | headphones show it, and some refuse a nameless host |
 | Write Class Of Device (0x0c24) | 0x200104 | service class Audio, major class Computer, minor class Desktop: a computer that is a source of sound |
 | Write Default Link Policy Settings (0x080f) | role switch and sniff allowed | a sink that asks to be master is let |
 | Write Page Timeout (0x0c18) | 5.12 s (the default) | stated, not left to the controller's last host |
-| Write Scan Enable (0x0c1a) | page scan ONLY while slot 2 holds a bond; inquiry scan never | see L4 |
+| Write Connection Accept Timeout (0x0c16) | 5.06 s (the default) | how long the controller holds a caller while we find a turn to answer: the bound § L3's latching is built against |
+
+**Write Scan Enable (0x0c1a) is not a start-up command.** Whether there is
+a bond is not known until `xhci_bluetooth_maintain` has read the disk,
+after start-up. It is the Classic link's own command, sent when a bond is
+loaded, saved or forgotten: page scan only (0x02) while a bond is held,
+nothing otherwise, inquiry scan never.
 
 Secure Connections host support is left off: P-192 Simple Pairing is what
 every sink does, and it keeps the link key type to one case.
@@ -197,9 +257,10 @@ like an LE peer and given the events that are its own.
 | `IDLE` | boot; `forget`; a failed attempt's cleanup | `connect` / `reconnect` → `PAGING`; Connection Request from the bonded address → `ACCEPTING` |
 | `PAGING` | Create Connection (0x0405) sent, with the inquiry's page-scan repetition mode and clock offset when the scan has them | Connection Complete: status 0 → `LINKED`; else → `STOPPED` with the status |
 | `ACCEPTING` | Accept Connection Request (0x0409), role: stay slave unless asked | Connection Complete, as above |
-| `LINKED` | a handle; `bt_acl_link_up` | we called and hold a bond → `AUTHENTICATING`; we called and hold none → `AUTHENTICATING` (which pairs); they called → wait for their authentication, or start ours after 2 s |
+| `LINKED` | a handle; `bt_acl_link_up` | we called → `AUTHENTICATING` (which pairs when there is no key); they called → Encryption Change on → `CHECKING` (the side that did not ask for authentication is sent no Authentication Complete: recalled), or after 2 s with no encryption → `AUTHENTICATING` |
 | `AUTHENTICATING` | Authentication Requested (0x0411) | Authentication Complete: 0 → `ENCRYPTING`; key missing (0x06) with a bond → the bond is stale: `STOPPED`, "re-pair"; else `STOPPED` |
-| `ENCRYPTING` | Set Connection Encryption (0x0413) on | Encryption Change: on → `READY`; else `STOPPED` |
+| `ENCRYPTING` | Set Connection Encryption (0x0413) on | Encryption Change: on → `CHECKING`; else `STOPPED` |
+| `CHECKING` | Read Encryption Key Size (0x1408) | 16 bytes → `READY`; fewer → `CLOSING`, "weak encryption refused" (the key-size negotiation attack) |
 | `READY` | encrypted | Disconnection Complete → `STOPPED` (retryable or not by reason, as LE's manager judges); `forget` → `CLOSING` |
 | `CLOSING` | Disconnect (0x0406) sent, or a cancel of a page (0x0408) | Disconnection Complete, or Connection Complete with an error → `STOPPED` |
 | `STOPPED` | any failure, after its cleanup is confirmed | the manager's next attempt, or a command |
@@ -221,11 +282,25 @@ Events answered in any linked state, because the far end may start them:
   are distributed.
 - **Role Change** (0x12), **Mode Change** (0x14): recorded for the status
   file. Sniff is A.4's.
-- **Connection Request** (0x04) from any address but the bonded one, or
-  for a link type other than ACL: Reject (0x040a, reason 0x0f, "unacceptable
-  address").
+- **Connection Request** (0x04) from any address but the bonded one:
+  Reject Connection Request (0x040a, reason 0x0f, "unacceptable address").
+  For a synchronous link (SCO, eSCO), from anyone: Reject Synchronous
+  Connection Request (0x042a; recalled).
 
-One command is in flight at a time, as now; the link is a new owner kind.
+**Answering in time with one command slot.** These events want an answer
+while the scan or an LE peer may hold the slot. The controller waits about
+five seconds for a Connection Request's answer and thirty for a pairing
+step's (recalled), and an owner holds the slot for tens of milliseconds as
+a rule and two seconds at the worst, so one command at a time is enough,
+given three things the code must do: every such event is LATCHED in the
+link (what was asked, for whom) and never answered from the event path; a
+link with an answer latched takes the FIRST turn when the slot is released,
+ahead of the scan and the LE peers; and an answer that has waited past its
+bound is dropped with the link, and logged. The link's data packets say
+what kind of fragment they are: a first fragment is sent as "start,
+automatically flushable" (packet boundary 0b10), which every controller
+takes; LE's 0b00 on a Classic link needs a feature bit (recalled).
+
 Every command has the scan's deadline and its `timed_out` detail.
 
 ### L4. Who may call us
@@ -239,11 +314,14 @@ rule, kept.
 
 ### L5. The bond
 
-`bt_classic_bond_t`: the address, the 16-byte link key, its type, and the
-name the inquiry heard (for the status file). One more fixed record,
-`/home/bluetooth_bond_2`, same 80 bytes, same atomic replace, a version
-byte that says "classic". Loaded and saved by `xhci_bluetooth_maintain`
-with the other two. `forget` deletes it and turns page scan off.
+`bt_classic_bond_t`: the headphones' address, our own (a bond made as one
+adapter is not offered as another, as LE checks), the 16-byte link key, its
+type, and the name the inquiry heard. It has a codec, a file and a manager
+of its own, apart from LE's arrays: `/home/bluetooth_bond_classic`, a fixed
+record with the magic `OS64BC01`, written by the same atomic replace.
+`xhci_bluetooth_maintain` loads and saves it beside the two LE records.
+`bond` saves it when encryption comes up; `forget` deletes it and turns
+page scan off.
 
 ### L6. Reconnection
 
@@ -262,13 +340,19 @@ for a role switch, and send every event out of order; random event soup
 under the sanitizers; a mutant harness for the state table and the bond
 codec. P5, by Chris, with `/sys/bluetooth/connection` open:
 
-1. `scan`, then `slot 2 connect <address>` with the headphones in pairing
-   mode: `READY`, encrypted, and the headphones say "connected".
+1. `scan classic`, then `slot 2 bond <address>` with the headphones in
+   pairing mode: `READY`, encrypted, and the headphones say "connected".
 2. Switch the headphones off and on: they call us, and it is `READY` again
    with no typing.
 3. Reboot: `READY` again.
 4. Type and move the mouse through all of it.
 5. `slot 2 forget`; switch them off and on: nothing connects.
+
+**What part L does not promise:** that the headphones STAY. A headphone
+that has just connected asks its host questions over L2CAP at once
+(recalled), and part L answers none of them, so the pair may hang up after
+a few seconds. `READY` reached from each end is L's pass; staying connected
+is S's. The disconnect reason is shown either way.
 
 ## Part S: the services
 
@@ -292,10 +376,12 @@ codec. P5, by Chris, with `/sys/bluetooth/connection` open:
   parameters" with Basic mode; a flush timeout is accepted as a hint.
 - **Admission**: an incoming Connection Request is accepted for PSM 0x0001
   (SDP) now, and for 0x0019 (AVDTP) from A.3; anything else is "PSM not
-  supported". Only on an encrypted link, except SDP, which the
-  specification lets precede it.
-- Every request we send has a timer (the RTX of § 6.2.1, 2 s here); an
-  unanswered one closes the channel, not the link.
+  supported" (result 0x0002). SDP may precede encryption; any other PSM
+  asked for on a link that is not yet encrypted is answered "security
+  block" (0x0003), not "not supported", so the peer tries again later.
+- Every request we send has a timer (the RTX of § 6.2.1, 2 s here). A
+  Connection Response of "pending" replaces it with the long one (ERTX,
+  60 s). An unanswered request closes the channel, not the link.
 
 ### S2. SDP, asked
 
@@ -319,7 +405,9 @@ against the parser:
 
 | Attribute | Value |
 |---|---|
+| ServiceRecordHandle (0x0000) | 0x00010001: mandatory, and what a Service Search returns |
 | ServiceClassIDList | Audio Source (0x110A) |
+| BrowseGroupList | PublicBrowseRoot (0x1002), for a peer that browses |
 | ProtocolDescriptorList | L2CAP, PSM 0x0019; AVDTP 1.3 |
 | BluetoothProfileDescriptorList | Advanced Audio Distribution (0x110D) 1.3 |
 | SupportedFeatures | 0x0001 (player) |
@@ -357,7 +445,8 @@ a stream gives them a reason to stay.
 
 ## What A.2 leaves out, on purpose
 
-Booked in DEBTS.md by each part: more than one Classic peer; legacy (PIN)
+Booked in DEBTS.md by each part: two readers of the controller's buffer
+sizes (T); more than one Classic peer; legacy (PIN)
 pairing; Secure Connections; being discoverable; sniff (A.4); any L2CAP
 mode but Basic; SDP for anything but the one record; a capture from
 another host to compare against (worth having, and Chris's to take if a
@@ -375,3 +464,6 @@ Proceeding on these leans; say so to overrule one.
    with audio.
 5. **T goes in by itself first**, with a P5 run that should show nothing
    new, before any Classic code.
+6. **Encryption with a key shorter than 16 bytes is refused**, and the
+   link closed.
+7. **`slot 2 bond` saves, `slot 2 connect` does not**, as for the keyboard.
