@@ -3864,6 +3864,22 @@ static void motion_tick_mark_cases(void)
     expect("tick marks: the body, empty, whose background the canvas may take",
            body != NULL && marks_box(&e, body), NULL);
     moving_close(&m);
+    // And so when that body is a group, whose bounds are empty too.
+    static const char kEmptyGroupBody[] = MOTION_STYLE
+        "@keyframes z{from{background-size:100% 100%}to{background-size:50% 50%}}"
+        "html{height:600px}"
+        "body{margin:0;opacity:.9;background-image:linear-gradient(red,blue);animation:z 1s infinite}"
+        "</style>";
+    moving_open_for(&m, kEmptyGroupBody, 0, true);
+    TickMarks eg = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &eg, NULL);
+    body = NULL;
+    for (const flow_box_t *b = flow_root(m.tree) != NULL ? flow_root(m.tree)->first : NULL; b != NULL; b = b->next)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_BODY)
+            body = b;
+    expect("tick marks: the body, empty and a group, whose background the canvas may take",
+           body != NULL && marks_box(&eg, body), NULL);
+    moving_close(&m);
 }
 
 // The page laid out again at `now` beside the tree on screen, not shown:
