@@ -227,6 +227,13 @@ typedef struct {
 	input_pointer_source_t pointers[BT_HOST_PEERS];
 	uint8_t timeline_phase[BT_HOST_PEERS];   // each slot's phase as /sys/usb's timeline last wrote it
 	uint8_t timeline_classic_phase;          // the same, for the Classic link (slot 2)
+	// Headphones left off are paged again and again, and each page is two
+	// moves (stopped, paging, stopped). The first unanswered page is
+	// written; the ones after it are counted here until the link does
+	// anything else, so they cannot push every other line out of the
+	// timeline. `quiet`: the page under way is one of those.
+	bool timeline_classic_unanswered, timeline_classic_quiet;
+	uint64_t timeline_classic_unlisted;
 	// When a Classic bond save that failed is tried again (ms); 0: at once.
 	uint64_t classic_save_at;
 	// The adapter's port, as its status-change events left it, and control
@@ -1687,7 +1694,18 @@ static void xhci_bt_runtime_poll(void)
     // the same reason as the LE slots'.
     const bt_classic_t *classic = &p->host.classic;
     if (classic->phase != p->timeline_classic_phase) {
-        xhci_timeline_add(XHCI_TL_CLASSIC_PHASE, BT_HOST_CLASSIC_SLOT, p->timeline_classic_phase, classic->phase);
+        bool paging = p->timeline_classic_phase == BT_CLASSIC_STOPPED && classic->phase == BT_CLASSIC_PAGING;
+        bool unanswered = p->timeline_classic_phase == BT_CLASSIC_PAGING && classic->phase == BT_CLASSIC_STOPPED;
+        if (paging && p->timeline_classic_unanswered) {
+            p->timeline_classic_quiet = true;
+        } else if (unanswered && p->timeline_classic_quiet) {
+            p->timeline_classic_quiet = false;
+            p->timeline_classic_unlisted++;
+        } else {
+            xhci_timeline_add(XHCI_TL_CLASSIC_PHASE, BT_HOST_CLASSIC_SLOT, p->timeline_classic_phase, classic->phase);
+            p->timeline_classic_unanswered = unanswered;
+            p->timeline_classic_quiet = false;
+        }
         printd(DEBUG_USB, "xhci: AX210 slot %u Classic phase=%u error=%s opcode=%04x status=%02x\n",
                BT_HOST_CLASSIC_SLOT, classic->phase, classic->error ? classic->error : "none",
                classic->error_opcode, classic->error_status);
@@ -2044,6 +2062,10 @@ size_t xhci_usb_report(char *out, size_t cap)
 	// line above (since boot, for the first line ever written).
 	uint64_t shown = s_timeline_count < XHCI_TIMELINE ? s_timeline_count : XHCI_TIMELINE;
 	xhci_report_addf(out, cap, &len, "timeline: %lu of %lu lines\n", shown, s_timeline_count);
+	// A run of unanswered Classic pages is one pair of lines and this count.
+	if (s_bluetooth_hc)
+		xhci_report_addf(out, cap, &len, "slot %u classic pages not answered and not listed: %lu\n",
+		                 BT_HOST_CLASSIC_SLOT, s_bluetooth_hc->bluetooth.timeline_classic_unlisted);
 	for (uint64_t n = s_timeline_count - shown; n < s_timeline_count; n++) {
 		const xhci_timeline_entry_t *e = &s_timeline[n % XHCI_TIMELINE];
 		xhci_report_addf(out, cap, &len, "  ms=%lu polls=%u events=%u gap_max_us=%lu ",

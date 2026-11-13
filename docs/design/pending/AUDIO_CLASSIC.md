@@ -425,10 +425,17 @@ scan enable the link believes is set.
 
 `bt_manager.c`'s policy is the model, not the code: it is written around
 LE scanning. The Classic manager is smaller. With a bond and `automatic`:
-page the headphones once at boot and after a retryable disconnection, with
-the same backoff ladder, and otherwise wait, because page scan is on and
-headphones switched on will call us. A page is 5 s of radio time the
-keyboard shares, so it is not repeated on a short timer.
+page the headphones at boot, after a retryable disconnection, and after a
+page they did not answer, on one ladder: 5 s doubling to 60 s, starting
+again at `READY`. Page scan is on as well, for headphones that call.
+
+The first cut paged once and then waited for their call, reasoning that a
+page is 5 s of radio time the keyboard shares. The P5 run of 2026-11-13
+ended that: the Bose pair held our key (it reconnected in 70 ms when
+paged) and never once called, with no audio connection ever made to it.
+So an unanswered page is asked again. The cost is one page a minute while
+bonded headphones are off; `slot 2 disconnect` stops it, and it is the
+figure to look at first if a keyboard or mouse stutters once a minute.
 
 ### L, proof
 
@@ -439,9 +446,10 @@ under the sanitizers; a mutant harness for the state table and the bond
 codec. P5, by Chris, with `/sys/bluetooth/connection` open:
 
 1. `scan classic`, then `slot 2 bond <address>` with the headphones in
-   pairing mode: `READY`, encrypted, and the headphones say "connected".
-2. Switch the headphones off and on: they call us, and it is `READY` again
-   with no typing.
+   pairing mode: `READY`, encrypted. (Headphones announce "connected"
+   when an audio connection opens, which is A.3's.)
+2. Switch the headphones off and on: it is `READY` again with no typing,
+   by their call or by our next page.
 3. Reboot: `READY` again.
 4. Type and move the mouse through all of it.
 5. `slot 2 forget`; switch them off and on: nothing connects.
@@ -480,9 +488,9 @@ Where the code departs from the text above, or settles what it left open:
   has begun to authenticate is waited for up to 40 s, since starting ours
   as well would collide with it.
 - **Retryable** (paged again, after 5 s doubling to 60): the far end went
-  away and may be back (reasons 0x08, 0x13, 0x14, 0x15, 0x22). **Not**: a
-  page that timed out (the headphones will call when they are on), key or
-  authentication trouble, `forget`, `disconnect`.
+  away and may be back (reasons 0x08, 0x13, 0x14, 0x15, 0x22), or did
+  not answer a page (0x04). **Not**: key or authentication trouble, a
+  page the controller ended for another reason, `forget`, `disconnect`.
 - **Page scan** is written once the bond file has been read, 0x02 with a
   bond and 0x00 without, and again only when that changes. A write the
   controller refuses is not repeated until then.

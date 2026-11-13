@@ -214,7 +214,7 @@ static void host_classic_policy(bt_host_t *h,uint64_t now)
     if(c->phase==BT_CLASSIC_READY) { h->classic_backoff_ms=0; h->classic_page_at=0; return; }
     if(!h->classic_auto || !c->bond.valid || !bt_classic_quiescent(c)) return;
     if(!h->classic_page_at) {
-        // Only a drop the far end may come back from is paged again.
+        // Only an end the far end may come back from is paged again.
         if(c->phase!=BT_CLASSIC_STOPPED || !c->retryable) return;
         if(!h->classic_backoff_ms) h->classic_backoff_ms=5000;
         h->classic_page_at=now+h->classic_backoff_ms;

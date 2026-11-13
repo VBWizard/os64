@@ -50,10 +50,11 @@ typedef struct {
     uint16_t acl_classic;
     uint32_t classic_rx_unread;
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
-    // page the headphones once when the bond is loaded and after a drop
-    // they may come back from, at classic_page_at (0: no page owed), the
-    // wait doubling from 5 s to 60 s and starting again at READY. Any other
-    // end waits: page scan is on, and headphones switched on call us.
+    // page the headphones once when the bond is loaded, and again after a
+    // drop they may come back from or a page they did not answer, at
+    // classic_page_at (0: no page owed), the wait doubling from 5 s to
+    // 60 s and starting again at READY. Any other end waits for them to
+    // call (page scan is on) or for the user.
     bool classic_auto;
     uint64_t classic_page_at;
     uint32_t classic_backoff_ms;

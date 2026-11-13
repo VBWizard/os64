@@ -55,6 +55,7 @@ typedef struct {
     // The headphones.
     uint8_t addr[6];
     bool present;            // answers a page
+    uint8_t page_status;     // how an unanswered page ends (0: page timeout, 0x04)
     bool has_key; uint8_t key[16];   // the key they hold for us
     uint8_t key_size;
     bool they_secure;        // after a link they called, they authenticate and encrypt themselves
@@ -142,7 +143,7 @@ static void model_send(void *context, uint16_t op, const uint8_t *p, uint8_t len
         if (m->reply_only) break;
         m->page_outstanding = true; m->they_authenticating = false;
         if (m->present) { m->live = true; m->handle = m->next_handle++; ev_conn(m, 60, TAG_PAGE, 0, m->handle, m->addr, 1); }
-        else ev_conn(m, 5120, TAG_PAGE, 0x04, 0, m->addr, 1);
+        else ev_conn(m, 5120, TAG_PAGE, m->page_status ? m->page_status : 0x04, 0, m->addr, 1);
         break;
     case 0x0408:
         WANT(len == 6); WANT(ours);
@@ -937,8 +938,17 @@ static void test_page_timeout(void)
     expect_ops("page timeout", ops, 1, from);
     CHECK(c.error && !strcmp(c.error, "the connection was not made"));
     CHECK_EQ(c.error_status, 0x04);
-    CHECK(!c.retryable);    // page scan lets bonded headphones call us when they come back
+    CHECK(c.retryable);     // switched off or out of reach: they may come back
     check_clean(&c, "page timeout");
+    // A page the controller ends for a reason of its own (no room for
+    // another link) is not the far end gone.
+    start(&c, &b);
+    M.present = false; M.page_status = 0x0d;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    CHECK(run_until_phase(&c, &M, BT_CLASSIC_STOPPED, 6000));
+    CHECK_EQ(c.error_status, 0x0d);
+    CHECK(!c.retryable);
+    check_clean(&c, "page refused");
     // A controller that never reports the page's end: cancelled at 6 s.
     start(&c, &b);
     M.present = false;

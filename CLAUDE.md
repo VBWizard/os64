@@ -515,8 +515,11 @@ virtio because its drain waits for the tick.
   says what is counted but not yet gated
   **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
-  headphones, 176 mutants): `scan classic`, then `slot 2 bond <address>`,
-  `connect`, `reconnect`, `disconnect`, `forget`. Secure Simple Pairing as
+  headphones, 177 mutants): `scan classic`, then `slot 2 bond <address>`,
+  `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute, until
+  `READY` or `slot 2 disconnect`: the P5's pair held our key and never
+  called us back. Secure Simple Pairing as
   a device with no keys or display; the bond is
   `/home/bluetooth_bond_classic`; page scan is on only while a bond is
   held, and only the bonded address is accepted. Whatever the controller

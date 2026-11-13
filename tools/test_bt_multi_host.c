@@ -1042,21 +1042,33 @@ static void classic_unavailable(void)
 }
 
 // Reconnection: a page once at boot; a drop the headphones may come back
-// from is paged after 5 s, then 10, 20, 40, 60, 60; READY starts the
-// ladder again; forget stops it; a drop they will not come back from waits.
+// from, and a page they did not answer, is paged after 5 s, then 10, 20,
+// 40, 60, 60; READY starts the ladder again; forget stops it; a drop they
+// will not come back from waits.
 static void classic_reconnection(void)
 {
     bt_classic_bond_t b=ph_bond();
-    // At boot, with the headphones off: one page, then nothing.
+    // At boot, with the headphones off: the page is not answered, and it
+    // is asked again on the ladder; switched on, they are found by the
+    // next one.
     setup(); CM.present=false; classic_slot(&b,true);
     for(unsigned i=0;i<200;i++) step();
-    assert(op_index(0x0405,0)>=0 && host.classic.phase==BT_CLASSIC_STOPPED && !host.classic.retryable);
+    assert(op_index(0x0405,0)>=0 && host.classic.phase==BT_CLASSIC_STOPPED && host.classic.retryable);
+    assert(host.classic.error_status==0x04 && host.classic_page_at>now && host.classic_page_at<=now+5000);
     unsigned pages=0; for(unsigned i=0;i<CM.n;i++) pages+=CM.ops[i]==0x0405;
     assert(pages==1);
-    assert(status_has("automatic: yes; waiting for the headphones to call\n"));
+    for(unsigned i=0;i<200000;i++) step();
+    pages=0; for(unsigned i=0;i<CM.n;i++) pages+=CM.ops[i]==0x0405;
+    assert(pages>=5 && pages<=8);     // 5, 10, 20, 40 s, then a minute apart
+    CM.present=true; CM.has_key=true; memcpy(CM.key,PH_KEY,16);
+    for(unsigned i=0;i<61000 && host.classic.phase!=BT_CLASSIC_READY;i++) step();
+    assert(host.classic.phase==BT_CLASSIC_READY && !host.classic_backoff_ms);
+    // A page the controller ends for a reason of its own waits for them.
+    setup(); CM.present=false; CM.page_status=0x0d; classic_slot(&b,true);
     for(unsigned i=0;i<70000;i++) step();
     pages=0; for(unsigned i=0;i<CM.n;i++) pages+=CM.ops[i]==0x0405;
-    assert(pages==1 && !host.classic_page_at);
+    assert(pages==1 && !host.classic_page_at && !host.classic.retryable);
+    assert(status_has("automatic: yes; waiting for the headphones to call\n"));
     // A page held while an LE peer sets up (connecting, nothing to send),
     // and then while a scan runs.
     setup();

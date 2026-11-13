@@ -38,9 +38,7 @@ static bool cl_our_handle(const bt_classic_t *c, const uint8_t *p)
 { return c->connected && cl_u16(p)==c->handle; }
 // The far end went away and may come back: connection timeout, remote
 // user ended it, remote low resources, remote power off, LMP response
-// timeout. Authentication and key trouble, a page nobody answered (page
-// scan lets bonded headphones call us when they are switched on), and an
-// end we asked for are not.
+// timeout. Authentication and key trouble and an end we asked for are not.
 static bool cl_far_end_gone(uint8_t reason)
 { return reason==0x08 || reason==0x13 || reason==0x14 || reason==0x15 || reason==0x22; }
 
@@ -296,9 +294,12 @@ bool bt_classic_event(bt_classic_t *c, const uint8_t *e, size_t n)
         c->link_may_active=false; c->crossing=false;
         if(status) {
             // The controller has ended the call itself; an accept still
-            // latched has nobody to answer.
+            // latched has nobody to answer. A page nobody answered (page
+            // timeout, 0x04) is headphones switched off or out of reach,
+            // which is the far end gone: headphones do not always call a
+            // host back, so page scan alone does not bring them home.
             c->answer[BT_CLASSIC_ANSWER_ACCEPT].set=false;
-            cl_fail(c,"the connection was not made",0,status,cl_far_end_gone(status),0x13);
+            cl_fail(c,"the connection was not made",0,status,status==0x04 || cl_far_end_gone(status),0x13);
             return true;
         }
         c->connected=true; c->handle=cl_u16(e+3); c->encrypted=false; c->disconnect_sent=false;
