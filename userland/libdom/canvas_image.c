@@ -5,7 +5,7 @@
 enum { I_DRAW,I_SMOOTH,I_QUALITY,I_EXPORT,I_WIDTH,I_HEIGHT,I_COMPLETE,I_CORS,I_CURRENT };
 void os64_dom_set_images(os64_dom_t *dom,const os64_dom_image_provider_t *provider)
 {
-    if(dom&&!dom->closed)dom->image_provider=provider?*provider:(os64_dom_image_provider_t){0};
+    if(dom&&!dom->closed&&!dom->departure_finishing&&!dom->departure_finished)dom->image_provider=provider?*provider:(os64_dom_image_provider_t){0};
 }
 typedef struct {
     os64_dom_t *owner;

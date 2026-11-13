@@ -152,7 +152,7 @@ static void sweep(os64_dom_t *dom)
 
 void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->resizes_provider = provider;
     dom->resizes_opaque = opaque;
 }
@@ -728,6 +728,11 @@ void d_resizes_drain(os64_dom_t *dom)
             JS_FreeValueRT(dom->engine, o->object);
         }
     dom->resizes_held = 0;
+}
+
+bool d_resizes_busy(const os64_dom_t *dom)
+{
+    return dom->resizes && dom->resizes->walking;
 }
 
 void d_resizes_free(os64_dom_t *dom)

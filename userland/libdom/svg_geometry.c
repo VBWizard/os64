@@ -20,7 +20,7 @@ JSValueConst d_svg_prototype(os64_dom_t *dom,const os64_html_node_t *n)
 }
 void os64_dom_set_svg_hit(os64_dom_t *dom,os64_dom_svg_hit_provider_t provider,void *opaque)
 {
-    if(!dom||dom->closed)return;
+    if(!dom||dom->closed||dom->departure_finishing||dom->departure_finished)return;
     dom->svg_hit=provider;dom->svg_hit_opaque=opaque;
 }
 static uint64_t add_sat(uint64_t a,uint64_t b) {return b>UINT64_MAX-a?UINT64_MAX:a+b;}

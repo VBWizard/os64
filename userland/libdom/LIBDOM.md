@@ -39,15 +39,32 @@ existing local caps; counters include headers and retained backing.
 For an explicit admission, `consumed == false` leaves document/state ownership
 with the caller. Once installation begins, failure consumes them, poisons the
 cluster and drains its bindings. Destroy the shared runtime and free the
-cluster; child-only rollback and independent retirement are not implemented.
+cluster; child-only installation rollback remains an F.3b obligation.
 Public individual drain/free calls do nothing for explicit-cluster members.
 
-Stop host deliveries, drain the cluster, destroy its runtime once, release
+`os64_dom_depart` marks a document ineligible for new activity without freeing
+records beneath a running callback. `os64_dom_depart_finish` returns BUSY while
+the shared engine has active work or pending jobs, or any member has DOM walks
+or provider loans. At a safe point it commits storage once, cancels this
+binding's request tokens and obsolete task payloads, freezes timeline activity,
+and detaches provider pointers and module/report hosts. It does not close the
+binding, release exported objects, stop tree mutation tracking or acknowledge
+layout generations. Provider setters cannot attach fresh pointers during or
+after successful finish. The console's borrowed descriptor remains engine
+state, protected by irreversible realm retirement and the engine barrier.
+
+Only a successful finish permits releasing provider opaque storage. A sticky
+runtime failure requires root teardown after its stacks unwind; FAILED_RUNTIME
+from finish does not certify that unwind. Ordinary sibling exceptions do not
+prevent finishing a marked child. Repeated mark and finish are harmless.
+
+For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
 layout borrowers, then free the cluster. Native records and allocation-owner
 descriptors survive finalizers and all native sweeps. Document records remain
 arena-owned while detached nodes may name them; this does not pin ordinary
 fragment churn. Retired animation data uses a shared generation and the oldest
-borrowing host. Provider opaque storage must survive through drain.
+borrowing host. Providers not detached by successful departure finish must
+survive through drain.
 
 The legacy sequence remains drain, runtime destruction, native binding free,
 then state/document release; layout borrowers must be gone before native free.

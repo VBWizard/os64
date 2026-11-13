@@ -394,6 +394,7 @@ struct os64_dom {
     /* `bytes` by kind; the kinds sum to it. */
     os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
+    bool departure_finishing, departure_finished;
     size_t provider_borrows;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
@@ -788,6 +789,15 @@ struct os64_dom {
     void *global_miss_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
+/* Native walks not wholly described by the engine's task state. */
+bool d_custom_busy(const os64_dom_t *);
+bool d_observers_busy(const os64_dom_t *);
+bool d_intersections_busy(const os64_dom_t *);
+bool d_resizes_busy(const os64_dom_t *);
+void d_custom_cancel(os64_dom_t *);
+void d_observers_cancel(os64_dom_t *);
+void d_intersections_cancel(os64_dom_t *);
+void d_performance_cancel(os64_dom_t *);
 /* d_callback_script's answer when the runtime must stop: the exception is
  * pending, uncatchable, and the caller fails before it records anything. */
 #define D_SCRIPT_FAILED (UINT32_MAX - 1)

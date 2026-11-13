@@ -1563,6 +1563,19 @@ int d_performance_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueCons
                                        JS_UNDEFINED)) ? -1 : 0;
 }
 
+void d_performance_cancel(os64_dom_t *dom)
+{
+    for (uint32_t i = 0; i < dom->performance_observer_count; ++i) {
+        DObserver *o = JS_GetOpaque(dom->performance_observers[i], os64_js_class_id(&observer_slot));
+        if (!o) continue;
+        values_free(dom->engine, o->entries, o->count);
+        o->entries = NULL;
+        o->count = o->cap = 0;
+        o->dropped_owed = false;
+    }
+    dom->performance_task_queued = false;
+}
+
 /* Before the engine goes: the registered observers, which the list holds. */
 void d_performance_drain(os64_dom_t *dom)
 {

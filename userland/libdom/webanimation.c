@@ -3057,7 +3057,7 @@ static uint64_t css_due(os64_dom_t *dom)
 
 void os64_dom_set_css_animations(os64_dom_t *dom, const os64_dom_css_animations_t *css)
 {
-    if (dom == NULL || d_provider_busy(dom)) return;
+    if (dom == NULL || d_provider_busy(dom) || dom->departure_finishing || dom->departure_finished) return;
     if (css != NULL) dom->wa_css = *css;
     else os64_memset(&dom->wa_css, 0, sizeof(dom->wa_css));
 }

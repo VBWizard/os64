@@ -5,7 +5,9 @@
 `e696277f`, the merge of F.3a PR #552 into design PR #546. The F.3a review
 was clean; the six design findings on #546 have evidence replies and are
 resolved. Draft PR #553 carries the first DOM checkpoint at `0f9055d3`.
-F.3 remains `code`, not complete.
+F.3 remains `code`, not complete. Sections below record successive checkpoints;
+the public departure protocol is described in the latest checkpoint before
+“Remaining F.3b work.”
 
 The rendering-provider checkpoint merges `userland` through `a965756f` in
 `231c9f60`. Its host objects were rebuilt for the merged headers and added
@@ -776,16 +778,57 @@ checks remain enabled with ASan/UBSan. Target libjs/libdom builds, source
 manifest/header checks, tracker, stale-reference and diff checks pass.
 No new guest or pinned-WPT result is claimed.
 
+## Public departure mark and finish
+
+`os64_dom_depart` is the allocation-free idempotent realm mark.
+`os64_dom_depart_finish` joins the engine quiescence snapshot to cluster-wide
+provider loans, dispatch, reaction frames/walks, observer walks and native
+scheduler activity. BUSY leaves provider ownership with the host. Sticky
+failure requires root teardown after unwind, rather than granting permission
+to free a child's opaque storage. A catchable sibling exception does not
+prevent cleanup.
+
+Finish commits owed storage and cancels original-producer requests while
+native providers are valid. Reentrant finish sees a busy loan/finishing flag.
+It then drops timers, idle/rAF payloads, messages and pending port messages,
+reports, SubtleCrypto settlements and inactive observer/reaction payloads;
+freezes timeline activity; and detaches host tables plus module/script hosts.
+Exported objects, registrations, adopted-node ownership, retained pixels and
+bytes, and borrowed effect generations survive. Provider setters cannot
+reattach pointers during/after finish. The console descriptor remains engine
+state with irreversible retirement gating and no outstanding engine call.
+
+The new `--departure` fixture covers idle and callback marks, sibling native
+provider reentry outside an engine task, storage/cancel reentry, open tasks,
+shared reaction frames and sibling dispatch, ordinary exceptions, sticky
+failure, repeated finish, live sibling timers, shared owed reactions, and
+retained nodes/functions/Blob/Canvas/animation/observer/port operations. The
+child queues native mutations before the sibling; cleanup releases its
+payloads before live sibling delivery. An allocation-refused custom queue
+record with no queue hold is also settled during cleanup.
+
+Both shipping and instrumented profiles pass **353 departure checks**. The
+full shipping DOM suite passes **60,807 checks**, with **3,991 native binding
+allocation sweeps**. Instrumented combined retirement (**9,770**), transport
+(**1,084**), animation retirement (**1,196**), animation routing (**564**) and
+callback reporting (**1,118**) pass. Ten isolated mutations are caught:
+provider/reaction/dispatch exclusion, request cancellation, final storage
+commit, timer release, provider detachment, custom and observer payload
+release, and the unqueued custom-record release. Cumulative caught total:
+**213**. The initial allocation-refusal fixture incorrectly expected no
+quota-loss diagnostic; its corrected expectation preserves that report and
+verifies live sibling delivery. No production diagnostic was suppressed.
+
+The target DOM library builds. ASan/UBSan/LSan remain enabled. Tracker and diff
+checks pass; stale-reference output was inspected (the retained design-brief
+filename is a prose-only false positive, not a deleted file). No new guest or
+pinned-WPT acceptance is claimed.
+
 ## Remaining F.3b work
 
-- Publish the allocation-free departure mark and idempotent safe-point
-  finish protocol, with reentrant dispatch/reaction/provider-borrow proofs.
-- Audit and gate the other host delivery paths, self-hosted Streams callbacks,
-  report routing and provider
-  entry points. Inventory and detach provider storage only after borrowers
-  finish; preserve retained DOM/Canvas/WebAnimation identities.
-- Integrate native request and scheduled-payload cleanup into safe-point
-  finish, including the separate module-loading path.
+- Complete the mixed-realm Streams private-brand repair and integration audit;
+  retained cross-realm `ReadableStream.pipeTo(WritableStream)` must work before
+  and after creator retirement.
 - Install a child DOM transactionally with staged engine setup and native
   rollback, preserving siblings and accounting for retained failed shells.
 - Measure installation peak and retained active/departed charges under both

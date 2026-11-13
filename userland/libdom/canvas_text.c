@@ -13,7 +13,7 @@ static const char *const metric_names[]={"width","actualBoundingBoxLeft","actual
     "fontBoundingBoxAscent","fontBoundingBoxDescent","actualBoundingBoxAscent","actualBoundingBoxDescent",
     "emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"};
 void os64_dom_set_text(os64_dom_t *dom,const os64_dom_text_provider_t *provider)
-{ if(dom&&!dom->closed)dom->canvas_text=provider?*provider:(os64_dom_text_provider_t){0}; }
+{ if(dom&&!dom->closed&&!dom->departure_finishing&&!dom->departure_finished)dom->canvas_text=provider?*provider:(os64_dom_text_provider_t){0}; }
 static bool word(const garb_val_t *v,const char *s)
 { return v->kind==GARB_V_KEYWORD&&!os64_strcmp(v->keyword,s); }
 typedef struct {

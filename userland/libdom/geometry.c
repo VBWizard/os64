@@ -7,7 +7,7 @@ enum {
 
 void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->geometry = provider;
     dom->geometry_opaque = opaque;
 }

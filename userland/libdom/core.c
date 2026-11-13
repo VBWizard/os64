@@ -768,6 +768,105 @@ fail:
     return NULL;
 }
 
+os64_js_status_t os64_dom_depart(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    return os64_js_realm_retire(dom ? dom->realm : NULL, OS64_JS_ABI_ID, outcome);
+}
+
+static bool departure_busy(const os64_dom_t *dom)
+{
+    return dom->departure_finishing || dom->dispatching || dom->current_event ||
+        dom->animation_running || dom->wa_running || dom->idle_running ||
+        dom->pointer.running || dom->pointer.canceling || dom->pointer.draining ||
+        dom->clicking || dom->submitting || d_custom_busy(dom) || d_observers_busy(dom) ||
+        d_intersections_busy(dom) || d_resizes_busy(dom);
+}
+
+static void departure_detach(os64_dom_t *dom)
+{
+    /* Keep copied configuration and cached values; none of these host
+     * callbacks or opaque pointers may outlive a successful finish. */
+    dom->options.alert = NULL;
+    dom->options.alert_opaque = NULL;
+    dom->options.now_ms = NULL;
+    dom->options.now_us = NULL;
+    dom->options.script_connected = NULL;
+    dom->options.activate = NULL;
+    dom->options.write = NULL;
+    dom->options.timing = NULL;
+    dom->options.zoom = NULL;
+    dom->options.broken = NULL;
+    dom->options.failed = NULL;
+    dom->options.entropy = NULL;
+    dom->options.focus = NULL;
+    dom->options.host_opaque = NULL;
+    os64_memset(&dom->image_provider, 0, sizeof(dom->image_provider));
+    os64_memset(&dom->canvas_text, 0, sizeof(dom->canvas_text));
+    dom->geometry = NULL; dom->geometry_opaque = NULL;
+    dom->svg_hit = NULL; dom->svg_hit_opaque = NULL;
+    dom->hit = NULL; dom->hit_opaque = NULL;
+    dom->text_rects = NULL; dom->text_rects_opaque = NULL;
+    dom->user_agent = NULL; dom->user_agent_opaque = NULL;
+    os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
+    os64_memset(&dom->view, 0, sizeof(dom->view));
+    dom->computed = NULL; dom->computed_opaque = NULL;
+    os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
+    dom->intersections_provider = NULL; dom->intersections_opaque = NULL;
+    dom->resizes_provider = NULL; dom->resizes_opaque = NULL;
+    os64_dom_set_global_miss(dom, NULL, NULL);
+}
+
+os64_js_status_t os64_dom_depart_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    /* Query first: in particular, do not overwrite an outcome borrowed by
+     * an enclosing engine call, even when a DOM precondition also fails. */
+    os64_js_status_t status = os64_js_quiescent(dom ? dom->runtime : NULL, OS64_JS_ABI_ID, outcome);
+    if (status != OS64_JS_OK) return status;
+    if (dom->closed || (dom->cluster && (dom->cluster->poisoned || dom->cluster->drained)))
+        return outcome->status = OS64_JS_FAILED_RUNTIME;
+    if (!os64_js_realm_is_retired(dom->realm)) return outcome->status = OS64_JS_BAD_ARGUMENT;
+    if (d_provider_busy(dom)) return outcome->status = OS64_JS_BUSY;
+    if (dom->cluster) {
+        if (dom->cluster->dispatching) return outcome->status = OS64_JS_BUSY;
+        for (size_t i = 0; i < dom->cluster->count; ++i)
+            if (departure_busy(dom->cluster->members[i])) return outcome->status = OS64_JS_BUSY;
+    } else if (departure_busy(dom)) return outcome->status = OS64_JS_BUSY;
+    if (dom->departure_finished) return OS64_JS_OK;
+    dom->departure_finishing = true;
+    /* These native callbacks still own their opaque storage. Reentrant
+     * finish, including a sibling's, sees the finishing flag or their loan. */
+    d_storage_drain(dom);
+    d_fetch_drain(dom);
+    status = os64_js_quiescent(dom->runtime, OS64_JS_ABI_ID, outcome);
+    if (status != OS64_JS_OK) goto done;
+    status = os64_js_realm_set_module_loader(dom->realm, OS64_JS_ABI_ID, NULL, outcome);
+    if (status != OS64_JS_OK) goto done;
+    d_report_drain(dom);
+    d_timer_drain(dom);
+    d_timer_free(dom);
+    d_idle_drain(dom);
+    d_idle_free(dom);
+    d_animation_drain(dom);
+    d_message_cancel(dom);
+    d_pointer_drain(dom);
+    d_web_animations_cancel(dom);
+    d_custom_cancel(dom);
+    d_observers_cancel(dom);
+    d_intersections_cancel(dom);
+    d_performance_cancel(dom);
+    if (dom->subtle_queue) {
+        JS_FreeValueRT(dom->engine, dom->subtle_queue->value);
+        dom->subtle_queue->value = JS_UNDEFINED;
+    }
+    dom->subtle_head = dom->subtle_tail = 0;
+    dom->subtle_drain_queued = false;
+    departure_detach(dom);
+    dom->departure_finished = true;
+done:
+    dom->departure_finishing = false;
+    return status;
+}
+
 static void binding_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;

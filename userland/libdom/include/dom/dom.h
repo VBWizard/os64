@@ -404,6 +404,21 @@ void os64_dom_cluster_drain(os64_dom_cluster_t *);
 void os64_dom_cluster_free(os64_dom_cluster_t *);
 os64_dom_cluster_limits_t os64_dom_cluster_bytes(const os64_dom_cluster_t *);
 
+/* Owner-thread document departure. Mark is allocation-free and idempotent;
+ * it stops new activity, including when called from a native callback, but
+ * does not release records beneath the executing stack. Use a separate
+ * outcome from the enclosing engine call.
+ * Finish requires a marked binding and returns BUSY until engine tasks/jobs,
+ * DOM dispatch/reaction walks and provider loans across the cluster unwind.
+ * It commits storage once, cancels owned requests and queued deliveries, and
+ * detaches host providers. Only OK permits freeing their opaque storage.
+ * Exported objects, document/state ownership and layout borrows survive;
+ * finish is not drain or free. Repeated finish is harmless. FAILED_RUNTIME
+ * requires the root teardown path after its executing stacks unwind; it is
+ * not evidence that teardown is already safe. */
+os64_js_status_t os64_dom_depart(os64_dom_t *, os64_js_outcome_t *);
+os64_js_status_t os64_dom_depart_finish(os64_dom_t *, os64_js_outcome_t *);
+
 /* Owner-thread browser identity provider, borrowed text for the getter call.
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);

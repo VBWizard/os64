@@ -506,14 +506,14 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
 
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *), void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->user_agent = provider;
     dom->user_agent_opaque = opaque;
 }
 
 void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (cookies != NULL) dom->cookies = *cookies;
     else os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
 }

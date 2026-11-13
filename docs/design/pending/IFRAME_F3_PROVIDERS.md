@@ -1,19 +1,20 @@
 # F.3b provider lifetime inventory
 
 Work in progress, 2026-11-12. This is the implementation inventory required by
-[the retirement brief](IFRAME_F3_RETIREMENT.md), not a claim that departure
-finish is available. `d_provider_enter` refuses inactive document activity and
-counts a native loan on both the binding and its cluster. `d_provider_leave`
-ends the loan after consuming and releasing the provider's output. A sibling
-can observe an outstanding loan through `d_provider_busy`.
+[the retirement brief](IFRAME_F3_RETIREMENT.md). `os64_dom_depart` publishes
+retirement before releasing obsolete work. `os64_dom_depart_finish` integrates
+the ABI 5 engine quiescence check with cluster-wide dispatch, reaction,
+observer, scheduler and provider-loan exclusion. Only a successful finish
+permits releasing provider opaque storage; a sticky runtime failure requires
+the root path after unwind.
 
-The owner thread publishes retirement before releasing obsolete work. Provider
-callbacks may mark retirement; they must not free opaque storage while a loan
-is outstanding. The public finish operation still needs the complete inventory,
-engine/dispatch/reaction barriers and cancellation cleanup. ABI 5 now supplies
-`os64_js_quiescent` for the engine-side check; DOM borrow exclusion and cleanup
-integration remain separate work. Internal counters
-alone do not authorize freeing provider storage.
+`d_provider_enter` refuses inactive activity and counts a loan on both binding
+and cluster. `d_provider_leave` ends it after consuming and releasing the
+producer's output. The finish operation first commits storage and cancels
+requests while their providers are valid, then releases obsolete task payloads
+and detaches callback tables. Its finishing flag excludes recursive cleanup,
+including cleanup entered through a sibling. Retained object records and
+layout generations remain owned until their existing release paths.
 
 ## Guarded rendering providers
 
@@ -97,9 +98,10 @@ remain ordinary DOM objects. Import-map type support remains a pure query.
 | `libjs/runtime/runtime.c`: module resolver/source | Module's realm | The engine active-call barrier retains the loader table and source loan. Retirement during a callback prevents further linking or source compilation; an owned resolved name is freed. Loader/script-host replacement is BUSY during the callback and can detach after unwinding. |
 | `libjs/runtime/runtime.c`: console output | Console's realm | Existing eligibility checks precede output and are repeated after conversions and between writes. Output uses a borrowed handle under the engine barrier, rather than a DOM callback table. |
 
-These guards do not yet implement public finish or host-route detachment.
-The engine barrier and DOM provider counters protect different entry paths;
-finish must observe both before releasing loader, diagnostic or output state.
+Public finish observes both the engine barrier and DOM provider counters
+before detaching loaders and diagnostic hosts. The console descriptor is
+borrowed engine state; irreversible retirement prevents further output writes
+after finish certifies that the enclosing engine stack has unwound.
 The callback-owner helper is shared with events. Task settlement visits the
 cluster's report queues under the enclosing budget, and close consumes the
 members' diagnostic debt. If a directly run script retired its service owner,
@@ -112,7 +114,7 @@ Hosts must settle a directly run script before starting another native task.
 |---|---|---|
 | `webanimation.c`: CSS count/at/version snapshots | Queried or stepped document | One loan spans count, records and consumption, including nested clock pushes. Retirement stops later records and prevents partial script queries. Replacement and scheduler reentry are refused while the cluster has a provider loan. |
 | `webanimation.c`: CSS clock drive and scheduler version | Animation's document | Captured provider and opaque stay borrowed through the response. Retirement suppresses later host calls and scheduling. Version can run outside a script task; the previous public comment claiming all callbacks were inside tasks was incorrect. |
-| `webanimation.c`: native activity cleanup | Departed animation owner | Internal quiescent cleanup detaches CSS services, frees event payloads, freezes clocks and releases activity holds. Exported animation/effect records and layout generations survive. Public finish must supply the engine/dispatch/reaction barrier before invoking this seam. |
+| `webanimation.c`: native activity cleanup | Departed animation owner | Internal quiescent cleanup detaches CSS services, frees event payloads, freezes clocks and releases activity holds. Exported animation/effect records and layout generations survive. Public finish supplies the engine/dispatch/reaction barrier before invoking this seam. |
 
 Retained current-time seeks, effect edits and cancellation do not restore
 departed activity. Starting a timeline, including `startTime` assignment after
@@ -120,20 +122,25 @@ argument conversion, refuses. Native layout data outlives JavaScript's last
 reference until the borrowing trees acknowledge release; another document's
 acknowledgement does not stand in for the borrowing document's.
 
-## Entries still to integrate
+## Finish and retained ownership
 
-These are open implementation obligations. They must be handled before a
-successful public finish can promise that opaque storage is no longer borrowed.
+Finish clears the option callbacks and opaque pointers, geometry/hit/text/image
+providers, viewport/computed/history/cookie/user-agent services, storage and
+network tables, observer measurement providers, CSS animation service and
+global-miss route. Module loaders and script hosts detach through libjs's
+realm-specific APIs. Cancellation is request-local and retains the original
+producer; no shared HTTP/2 connection is closed by this cleanup.
 
-| Provider family | Entry sites | Required treatment |
-|---|---|---|
-| Script/module/report hosts and console detachment | `report.c`, libjs host installation | Integrate guarded routes into safe-point finish without deleting siblings' state. |
-| CSS animation cleanup and current-document services | `webanimation.c` | Integrate guarded snapshots and retained-effect cleanup into public finish. Creation/adoption tests now distinguish retained object realms from live timeline activity. Do not reuse destructive animation drain. |
+Queued timers, idle/rAF callbacks, messages (including unstarted ports),
+reports, SubtleCrypto settlement payloads and inactive observer records are
+released. Shared custom/mutation queues retain live siblings' work. Custom
+reactions on adopted nodes are judged by the current document. Exported
+listeners, definitions, registrations, wrappers, Canvas pixels, settled bytes,
+animation identities and tree generations are preserved.
 
-Provider replacement contracts and departure cleanup must agree: clearing a
-provider cannot erase the release operation for an existing loan. Image and
-transport loans capture the producer explicitly. The owner-thread finish barrier must protect
-other borrowed output and the shared registry walks before clearing callbacks.
+Provider replacement cannot erase an owed release. Image and transport loans
+capture the producer explicitly; finish refuses while those loans are held.
+Setters cannot install fresh host pointers during or after successful finish.
 
-Validation and remaining limits are recorded in
+Validation and remaining F.3b limits are recorded in
 [IFRAME_F3_DOM_VALIDATION.md](IFRAME_F3_DOM_VALIDATION.md).

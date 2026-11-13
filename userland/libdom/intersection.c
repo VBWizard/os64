@@ -214,7 +214,7 @@ static void sweep(os64_dom_t *dom)
 
 void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->intersections_provider = provider;
     dom->intersections_opaque = opaque;
 }
@@ -1303,8 +1303,21 @@ int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     return 0;
 }
 
-/* Teardown: the objects the binding holds, let go with the engine's values
- * (os64_dom_drain); everything else after the engine. */
+bool d_intersections_busy(const os64_dom_t *dom)
+{
+    return dom->intersections && dom->intersections->walking;
+}
+
+void d_intersections_cancel(os64_dom_t *dom)
+{
+    struct DIntersections *s = dom->intersections;
+    if (!s) return;
+    for (DIObserver *o = s->observers; o != NULL; o = o->next) entries_clear(dom, o);
+    s->queued = false;
+    s->lost = 0;
+}
+
+/* Root teardown releases registration holds; departure only clears payloads. */
 void d_intersections_drain(os64_dom_t *dom)
 {
     struct DIntersections *s = dom->intersections;

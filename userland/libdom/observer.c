@@ -88,6 +88,7 @@ struct DObservers {
     uint64_t changes;
     /* The notify microtask: queued, or owed when no turn will drain it. */
     bool queued, owed;
+    size_t walking;
     /* Records the listener could not keep for want of memory, reported at
      * the next notify. */
     uint64_t lost;
@@ -526,6 +527,7 @@ static int signal_failed(os64_dom_t *dom, JSContext *ctx)
 static int notify(os64_dom_t *dom, JSContext *ctx)
 {
     struct DObservers *s = dom->observers;
+    s->walking++;
     s->queued = false;
     s->owed = false;
     report_lost(dom, ctx);
@@ -601,7 +603,23 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         os64_html_release(dom->document, signals.slots[i]);
     }
     d_free(dom, signals.slots);
+    s->walking--;
     return status;
+}
+
+bool d_observers_busy(const os64_dom_t *dom)
+{
+    return dom->observers && dom->observers->walking;
+}
+
+void d_observers_cancel(os64_dom_t *dom)
+{
+    if (!dom->observers) return;
+    for (DObserver *o = dom->observers->observers; o != NULL; o = o->next)
+        if (o->dom == dom) {
+            queue_clear(dom, o);
+            registrations_drop(dom, transient_for, o);
+        }
 }
 
 static JSValue notify_job(JSContext *ctx, int argc, JSValueConst *argv)

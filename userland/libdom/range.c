@@ -719,7 +719,7 @@ enum {
 
 void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->text_rects = provider;
     dom->text_rects_opaque = opaque;
 }

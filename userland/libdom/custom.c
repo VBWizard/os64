@@ -101,7 +101,7 @@ struct DCustomAgent {
     os64_dom_t *owner;
     DCustom *records[D_CUSTOM_BUCKETS];
     DElementQueue *stack;
-    size_t depth, stack_cap;
+    size_t depth, stack_cap, walking;
     DElementQueue backup;
     bool requested, owed;
     uint64_t lost;
@@ -628,6 +628,7 @@ static void report_lost(os64_dom_t *dom, JSContext *ctx)
  * of, even after a failure that stops it. */
 static int invoke_queue(os64_dom_t *dom, JSContext *ctx, DElementQueue *q)
 {
+    dom->custom->agent->walking++;
     report_lost(dom, ctx);
     int status = 0;
     size_t i = 0;
@@ -642,7 +643,46 @@ static int invoke_queue(os64_dom_t *dom, JSContext *ctx, DElementQueue *q)
         record_settle(dom, q->items[i]);
     }
     q->count = 0;
+    dom->custom->agent->walking--;
     return status;
+}
+
+bool d_custom_busy(const os64_dom_t *dom)
+{
+    return dom->custom && (dom->custom->agent->depth || dom->custom->agent->walking ||
+                           dom->custom->agent->adopting);
+}
+
+void d_custom_cancel(os64_dom_t *dom)
+{
+    if (!dom->custom) return;
+    struct DCustomAgent *agent = dom->custom->agent;
+    /* The shared queue can contain live reactions for adopted nodes. Remove
+     * only records whose current activity document has departed; callable
+     * eligibility of the survivors is checked at invocation. */
+    for (size_t b = 0; b < D_CUSTOM_BUCKETS; ++b)
+        for (DCustom *r = agent->records[b]; r != NULL;) {
+            DCustom *next = r->hash_next;
+            if (!d_delivery_active(d_owner(dom, r->element))) {
+                while (r->first) {
+                    DReaction *reaction = r->first;
+                    r->first = reaction->next;
+                    reaction_free(dom, reaction);
+                }
+                r->last = NULL;
+                /* Queue admission can fail after making the record. */
+                record_settle(dom, r);
+            }
+            r = next;
+        }
+    size_t kept = 0;
+    for (size_t i = 0; i < agent->backup.count; ++i) {
+        DCustom *r = agent->backup.items[i];
+        if (r->first) agent->backup.items[kept++] = r;
+        else { r->queued--; record_settle(dom, r); }
+    }
+    agent->backup.count = kept;
+    if (!kept) agent->requested = agent->owed = false;
 }
 
 static int process_backup(os64_dom_t *dom, JSContext *ctx)

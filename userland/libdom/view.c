@@ -62,7 +62,7 @@ static os64_dom_view_t view_now(os64_dom_t *dom)
 
 void os64_dom_set_view(os64_dom_t *dom, const os64_dom_view_provider_t *view)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (view != NULL) dom->view = *view;
     else os64_memset(&dom->view, 0, sizeof(dom->view));
     dom->view_seen = view_now(dom);
@@ -232,7 +232,7 @@ void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t
 
 void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provider, void *opaque)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     dom->computed = provider;
     dom->computed_opaque = opaque;
 }

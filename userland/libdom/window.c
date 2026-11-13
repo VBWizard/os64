@@ -794,7 +794,7 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history)
 {
-    if (dom == NULL || dom->closed) return;
+    if (dom == NULL || dom->closed || dom->departure_finishing || dom->departure_finished) return;
     if (history != NULL) dom->history_host = *history;
     else os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
 }
