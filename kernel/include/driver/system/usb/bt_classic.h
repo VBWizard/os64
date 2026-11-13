@@ -176,7 +176,9 @@ bool bt_classic_request(bt_classic_t *c, const char *text, size_t bytes,
 // live handle. Number Of Completed Packets is never its.
 bool bt_classic_event(bt_classic_t *c, const uint8_t *event, size_t bytes);
 // One step. `control`: the command slot is this link's and the previous
-// command's USB transfer is done; only then is `send` called, at most once.
+// command's USB transfer is done; only then is `send` called, at most once,
+// and never in the tick that gives up waiting for a reply (the controller
+// keeps that command's credit until it answers).
 // `failed`: the transport is gone; FAILED, and nothing is sent again.
 void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
                      bt_scan_send_t send, void *context);

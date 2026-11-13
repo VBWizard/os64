@@ -2097,6 +2097,23 @@ static void test_more_rules(void)
     CHECK(!c.error); CHECK(!c.retryable); CHECK_EQ(c.error_status, 0);
     CHECK_TEXT(&c, "error: none (opcode 0000 status 00)");
 
+    // The tick that gives up on an unanswered command sends nothing, even
+    // with control: that command's credit is still the controller's.
+    start(&c, &b);
+    M.silent = true;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    step(&c, &M, 10);
+    CHECK(c.pending && c.opcode == 0x0405);
+    from = M.logn;
+    uint64_t deadline = c.command_deadline;
+    while (M.now + 10 < deadline) step(&c, &M, 10);
+    CHECK(c.pending); CHECK_EQ(M.logn, from);
+    step(&c, &M, 10);
+    CHECK(!c.pending); CHECK(c.error && !strcmp(c.error, "HCI command timed out"));
+    CHECK_EQ(c.phase, BT_CLASSIC_CLOSING); CHECK_EQ(c.next_op, 0x0408); CHECK_EQ(M.logn, from);
+    step(&c, &M, 10);
+    CHECK_EQ(M.logn, from + 1); CHECK(find_op(0x0408, from));
+
     // A cancel queued when the page completes is not sent: a Disconnect is.
     start(&c, &b);
     M.reply_only = true;

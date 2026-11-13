@@ -491,12 +491,16 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
         cl_answers_clear(c); c->refusal_count=0; cl_key_wipe(c);
         return;
     }
+    // A command given up on this tick still holds the controller's command
+    // credit, which comes back only with its reply: nothing more is sent
+    // until a later tick's `control` says the slot is free again.
+    bool gave_up=false;
     if(c->pending) {
         if(c->command_done && control) { c->pending=false; cl_finish(c); }
         else if(now>=c->command_deadline) {
             bool first=!c->error;
             bool usb_done=control, reply=c->command_done;
-            c->pending=false; cl_timeout(c);
+            c->pending=false; cl_timeout(c); gave_up=true;
             if(first && c->error) { c->timed_out=true; c->timeout_usb_done=usb_done; c->timeout_reply=reply; }
         }
     }
@@ -525,7 +529,7 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
         if(c->connected && !c->disconnect_sent && !c->next_op) c->next_op=0x0406;
         if(!c->connected && !c->link_may_active) { c->next_op=0; c->waiting=false; c->phase=BT_CLASSIC_STOPPED; }
     }
-    if(c->pending || !control) return;
+    if(c->pending || !control || gave_up) return;
     uint8_t p[22]={0}, len=0;
     uint16_t op=0;
     bool link=true;
