@@ -2575,9 +2575,21 @@ static void module_bytecode_cases(void)
 
 #include "../userland/libjs/tests/realms.h"
 #include "test_js_realms_host.inc"
+#include "test_js_execution_scopes.inc"
+#include "test_js_failed_code.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--failed-code-only")) {
+        failed_code_cases();
+        printf("libjs failed code: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--execution-scopes-only")) {
+        execution_scope_cases();
+        printf("libjs execution scopes: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--settings-bridge")) {
         settings_bridge_cases(); settings_bridge_host_cases();
         check(live == 0, "settings bridge releases allocations");
@@ -2666,6 +2678,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    execution_scope_cases(); failed_code_cases();
     realm_cases(); realm_host_cases();
     task_cases();
     script_host_cases();

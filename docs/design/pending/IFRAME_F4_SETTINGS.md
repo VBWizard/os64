@@ -52,9 +52,11 @@ typedef struct JSNativeCallContexts {
 JS_BOOL JS_GetNativeCallContexts(JSRuntime *rt, JSNativeCallContexts *out);
 ```
 
-The query copies the innermost dynamically active generic/data native
-invocation's context pair. It returns false and clears a non-null output when
-there is no such invocation or `rt` is null. A null output is refused. It does
+The query copies the innermost dynamically active C-function/data invocation's
+context pair, including optimized `iterator_next` dispatch via patch 0027.
+Optimized iterator callbacks receive the incoming context; their defining
+context remains independently observable. It returns false and clears a non-null
+output when there is no such invocation or `rt` is null. A null output is refused. It does
 not allocate, change reference counts, invoke script, or consume an exception.
 
 Both pointers are borrowed for the duration of that native invocation, on the
@@ -75,7 +77,7 @@ DOM and Yonder do not consume this API.
 Public wrapper layouts and `OS64_JS_ABI_ID` remain unchanged. The generated
 engine identity changes; engine objects and headers must be rebuilt together.
 The query neither modifies nor interprets F.16 execution scopes/failure state.
-The tracking is intrinsic to these two dispatchers, with no script-visible
+The tracking is intrinsic to native function dispatch, with no script-visible
 switch, caller substitution or browser exposure.
 
 ## Explicit entry and incumbent scopes
