@@ -530,7 +530,7 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
         if(c->connected && !c->disconnect_sent && !c->next_op) c->next_op=0x0406;
         if(!c->connected && !c->link_may_active) { c->next_op=0; c->waiting=false; c->phase=BT_CLASSIC_STOPPED; }
     }
-    if(c->pending || !control || gave_up) return;
+    if(c->pending || !control || gave_up || c->no_credit) return;
     uint8_t p[22]={0}, len=0;
     uint16_t op=0;
     bool link=true;

@@ -966,6 +966,31 @@ static void test_page_timeout(void)
     check_clean(&c, "page silence");
 }
 
+// No command credit: nothing is sent, and a command already answered is
+// still finished (its reply may be what said "none yet").
+static void test_no_credit(void)
+{
+    bt_classic_t c;
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    start(&c, &b);
+    M.has_key = true; memcpy(M.key, OLD_KEY, 16);
+    unsigned from = M.logn;
+    c.no_credit = true;
+    CHECK(request(&c, "reconnect", NULL, NULL));
+    run(&c, &M, 500);
+    CHECK_EQ(M.logn, from); CHECK_EQ(c.phase, BT_CLASSIC_PAGING);
+    c.no_credit = false;
+    // The last command of the way up is answered while credit is withheld.
+    for (unsigned i = 0; i < 400 && !(M.logn > from && M.log[M.logn - 1].op == 0x1408); i++) step(&c, &M, 10);
+    CHECK(M.logn > from && M.log[M.logn - 1].op == 0x1408);
+    c.no_credit = true;
+    unsigned sent = M.logn;
+    run(&c, &M, 4000);
+    CHECK_EQ(c.phase, BT_CLASSIC_READY); CHECK(!c.error); CHECK(!c.timed_out); CHECK(!c.pending);
+    CHECK_EQ(M.logn, sent);
+    c.no_credit = false;
+}
+
 // Disconnection reasons: the far end that may come back, and the rest.
 static void test_retryable(void)
 {
@@ -2380,6 +2405,7 @@ int main(int argc, char **argv)
     test_auth_failed();
     test_weak_key();
     test_page_timeout();
+    test_no_credit();
     test_retryable();
     test_every_phase();
     test_cancel_race();

@@ -184,14 +184,15 @@ static void host_acl(void *context,const uint8_t *p,size_t n)
 }
 static bool host_control(const bt_host_t *h,unsigned owner,bool usb_done)
 { return usb_done && (h->owner==owner || (!h->owner && h->credits)); }
-// The Classic link counts no credits of its own: holding the slot is leave
-// to finish the command in flight, and to send the next only with a credit
-// the controller has given back. After a command it gave up waiting for it
-// holds the slot with none, and sends nothing until some reply brings one.
+// Holding the slot is leave to finish the command in flight, whatever
+// credit its reply carried: a reply may give none back yet. Sending the
+// next waits for a credit (the link's `no_credit`, set at its tick). After
+// a command it gave up waiting for it holds the slot with none, and sends
+// nothing until some reply brings one.
 static bool host_classic_control(const bt_host_t *h,bool usb_done)
 {
     if(h->owner!=BT_HOST_OWNER_CLASSIC) return host_control(h,BT_HOST_OWNER_CLASSIC,usb_done);
-    return usb_done && (h->credits || (h->classic.pending && !h->command_done));
+    return usb_done;
 }
 static bool host_owner_pending(const bt_host_t *h)
 {
@@ -252,6 +253,7 @@ void bt_host_policy(bt_host_t *h,uint64_t now)
 }
 static void host_classic_tick(bt_host_t *h,uint64_t now,bool usb_done,host_call_t *call)
 {
+    h->classic.no_credit=!h->credits;
     bt_classic_tick(&h->classic,now,host_classic_control(h,usb_done),h->failed,host_classic_command,call);
     host_retire(h,usb_done);
     host_acl_links(h);

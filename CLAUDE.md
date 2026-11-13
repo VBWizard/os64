@@ -515,7 +515,7 @@ virtio because its drain waits for the tick.
   says what is counted but not yet gated
   **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
-  headphones, 177 mutants): `scan classic`, then `slot 2 bond <address>`,
+  headphones, 178 mutants): `scan classic`, then `slot 2 bond <address>`,
   `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
   drop or do not answer are PAGED AGAIN, 5 s doubling to a minute, until
   `READY` or `slot 2 disconnect`: the P5's pair held our key and never

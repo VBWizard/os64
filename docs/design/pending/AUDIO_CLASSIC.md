@@ -506,8 +506,9 @@ Where the code departs from the text above, or settles what it left open:
   disable**: a disable for a scan that is not running is a command a
   controller may refuse, and a refusal in a scan's cleanup fails the host.
 - **The link sends only with a credit the controller has given back**
-  (the core counts none of its own), and never in the tick it gave up on
-  a command.
+  (the host tells it each tick whether there is one: `no_credit`), and
+  never in the tick it gave up on a command. Finishing a command that was
+  answered needs no credit: the reply itself may carry none.
 - **Two crossing calls cannot be told apart** by their Connection
   Completes, which carry the same address: the rule is only as good as
   the controller's promise to complete one and fail the other. A refused
