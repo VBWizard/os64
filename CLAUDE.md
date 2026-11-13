@@ -536,6 +536,13 @@ virtio because its drain waits for the tick.
   fell behind from a pump that was held off). Fixture: `/tests/audiotest`.
   `micros()`'s clock is `micros_now()` (micros.c), which the position
   stamps with so a player can compare
+  **`play file.wav`** is the first player (16-bit PCM, mono or stereo, any
+  rate). Sound at another rate goes through **`libsound.so`**
+  (`os64/resample.h`): speexdsp's resampler, one file, unpatched, pinned by
+  `userland/libsound/manifest.json`; its README is the inventory and the
+  record of what was checked upstream. `tools/test_resample_host.sh`,
+  `/tests/resampletest` and `/tests/playtest` prove it; run
+  `tools/test_sound_audit.py` after a build that touches it
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
