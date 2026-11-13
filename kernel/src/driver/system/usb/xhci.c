@@ -207,8 +207,8 @@ typedef struct {
 	bt_intel_events_t events;
 	uint64_t deadline;
 	uint32_t tx_bytes;
-	// No transmit is with the controller. At runtime that is "no send slot
-	// is in flight"; bring-up has the one transfer.
+	// No transmit is with the controller. Bring-up, which has one transfer
+	// at a time, waits on it; the runtime host is given tx_slots.
 	bool tx_done;
 	// The send slots in flight, oldest first: tx_slots of them, starting at
 	// slot tx_oldest. Transfers on one endpoint complete in the order they

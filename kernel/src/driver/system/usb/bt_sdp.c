@@ -332,8 +332,10 @@ static size_t sdp_seq(uint8_t *out, size_t n)
 }
 
 // The continuation state we issue: the offset the next part starts at and
-// a check of it against the request it continues, so a state we did not
-// issue, or one moved to another request, is refused.
+// a check of it against the request it continues, so a state that does
+// not match its request (damaged, or moved to another one) is refused. The
+// check is not a secret: a peer can compute one for any offset, and gets
+// what that offset of our own record holds.
 #define SDP_STATE_BYTES 6
 static uint32_t sdp_check(const uint8_t *a, size_t an, const uint8_t *b, size_t bn, uint8_t pdu, uint16_t offset)
 {

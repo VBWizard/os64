@@ -589,7 +589,8 @@ void bt_host_tick(bt_host_t *h,uint64_t now,bool usb_done,unsigned tx_in_flight,
         unsigned i=(first+count)%BT_HOST_PEERS;
         bt_le_t *s=&h->peers[i].le; call.peer=i; s->credits=h->credits;
         // A peer cleaning up waits for its own packets to leave the send
-        // slots, not for the Classic link's (AUDIO_CLASSIC.md § T2).
+        // slots, and nobody else's: not the Classic link's, and not the
+        // other LE peer's (AUDIO_CLASSIC.md § T2).
         bt_le_tick(s,now,host_control(h,BT_HOST_OWNER_PEER0+i,usb_done),
                    s->phase==BT_LE_CLEANUP?!host_tx_of(h,i):!h->tx_used,
                    h->failed,host_command,host_acl,host_report,&call);

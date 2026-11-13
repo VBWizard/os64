@@ -221,8 +221,7 @@ classic and le together, ...`.)
 - **§ T3 is deferred to part L**, which is the first to have a second kind
   of receiver. `bt_host_receive` is unchanged.
 - **"Nothing of mine is in flight", per link, was left to the part that
-  first sends Classic data** (§ S, as built has it). With only LE sending,
-  one packet at a time, "the endpoint is idle" is the same question.
+  first sends Classic data** (§ S, as built has it).
 - **A completion that is not the oldest slot's is counted, not fatal**
   (`unmatched`, as the receive endpoints count theirs): an event for a
   transfer from before the runtime began must not end the transport. A
@@ -654,8 +653,9 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
   Disconnection Request for the pair it names.
 - **The SDP line carries the PSM** the headphones' record names for
   AVDTP, which A.3 opens. Its continuation state is an offset plus a check
-  against the request it continues, so a state the responder did not issue
-  is refused. A deeper nesting than six is stepped over by its size, and a
+  against the request it continues, so a state that does not match its
+  request is refused (the check is not a secret, and need not be: the
+  offset is bounded by our own record). A deeper nesting than six is stepped over by its size, and a
   32- or 128-bit UUID on the Bluetooth base equals its 16-bit form.
 - **The query's MTU is the smaller of the channel's two**: the peer's, and
   the one we stated for the channel (1,017, unless the peer's answer to our
@@ -666,7 +666,9 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
   `READY` the host opens the SDP channel; the client starts when it is
   open; DONE or FAILED closes it. A channel refused, unanswered, or closed
   before the answer is whole ends the query as "not made", with the
-  reason in the status and the log (DEBTS).
+  reason in the status and the log (DEBTS). A link that drops mid-query
+  takes the query with it and says nothing of it: the link's own line is
+  the reason.
 - **The result outlives its connection**, marked as the current one's or
   an earlier one's; the status file shows an earlier connection's while
   this one has found nothing.
@@ -684,10 +686,13 @@ Where the code departs from §§ S1 to S3, or settles what they left open:
   of its four send slots are in flight (`bt_host_tick`'s `tx_in_flight`,
   replacing one "endpoint idle" flag, which could not say "busy, with a
   slot free"); slots complete in order, so the host knows who filled each.
-  The LE peers' rule decides what it did when only LE sends.
+  The LE peers' sending rule decides what it did when only LE sends. An
+  LE packet still queues behind Classic packets already on the one
+  transmit ring (at most three), which is A.3's to measure.
 - **"Nothing of mine is in flight", per link** (§ T2): an LE peer cleaning
-  up waits for its own packets to leave the send slots, not the Classic
-  link's. It is the slots, not the controller's buffers: waiting for its
+  up waits for its own packets to leave the send slots: not the Classic
+  link's, and no longer the other LE peer's either, which the old
+  "endpoint idle" question also waited for. It is the slots, not the controller's buffers: waiting for its
   completions would make a cleanup after link loss wait for completions
   that never come.
 - **A PDU one Classic ACL packet cannot carry is dropped and counted**,

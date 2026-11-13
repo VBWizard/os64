@@ -116,7 +116,8 @@ typedef struct {
     // round, a link for each connected LE peer and for the Classic link,
     // every packet sent and completed counted. The LE peers still send one
     // packet at a time between them by their own rule (tx_used); the
-    // Classic link's L2CAP sends only while the count gives it a buffer.
+    // Classic link's L2CAP is the sender held to the count (and to the
+    // send slots: bt_host_tick).
     // acl_link[i] is the handle peer i is counted under PLUS ONE, zero when
     // it has none, so a host made by zeroing is right.
     bt_acl_t acl;
@@ -175,8 +176,10 @@ void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
 // hold a packet whose USB transfer has not completed. `failed`: the
 // transport is gone. ACL packets leave through the `bt_le_acl_send_t`
 // callback, whole, never more than one slot's worth, and only into a free
-// slot: the LE peers first, then the Classic link's L2CAP, which waits
-// whenever its packet could make an LE peer wait.
+// slot: the LE peers first, then the Classic link's L2CAP, which leaves
+// a slot free for them and waits while one of them holds a packet. An LE
+// packet is therefore never kept waiting for a slot or a buffer; it does
+// queue behind Classic packets already on the one transmit ring.
 void bt_host_tick(bt_host_t *, uint64_t now, bool usb_done, unsigned tx_in_flight, bool failed,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
