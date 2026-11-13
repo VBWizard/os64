@@ -15,6 +15,10 @@ from the bytes read before the change, checked byte for byte, whatever
 happens. Run it from a clean tree, and never beside another harness that
 edits the same tree; the per-mutant logs are in --logs.
 
+The face's half (yonder.c: pane_keep, pane_through_open and close, what
+owns the sheets, the scratch's refusals read at a making's close) is built
+by no host suite; QEMU's probe page checks it, with yonder's record.
+
 Left out because nothing can tell them apart from the code: the walk asked
 to cull nothing inside a group whose kept drawing is laid (the painter's
 view there is empty, so it paints nothing either way, only slower), and
@@ -36,6 +40,7 @@ root = pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True, exist_ok=True)
 
 KEEP = 'userland/apps/yonder/keep.c'
+SCRATCH = 'userland/apps/yonder/scratch.c'
 PAINT = 'userland/apps/yonder/paint.c'
 FLOW = 'userland/libflow/flow.c'
 YONDER_CASES = 'bash tools/test_yonder_keep_host.sh && bash tools/test_yonder_host.sh'
@@ -49,10 +54,10 @@ mutants = [
      '        k->seen++;\n        return YONDER_KEEP_MAKE;'),
     ('two-parts-of-one-paint-are-two-paints', KEEP,
      '    if (r->state == K_NO || !earlier)',
-     '    if (r->state == K_NO)'),
+     '    if (r->state == K_NO || (!earlier && false))'),
     ('the-face-stamp-is-not-the-key', KEEP,
      '           a->scroll.x == key->scroll.x && a->scroll.y == key->scroll.y && r->face == face;',
-     '           a->scroll.x == key->scroll.x && a->scroll.y == key->scroll.y;'),
+     '           a->scroll.x == key->scroll.x && a->scroll.y == key->scroll.y && (r->face == face || true);'),
     ('drawn-is-not-the-key', KEEP,
      '    return a->tree == key->tree && a->box == key->box && a->drawn == key->drawn &&',
      '    return a->tree == key->tree && a->box == key->box &&'),
@@ -74,9 +79,12 @@ mutants = [
     ('a-put-takes-a-row-already-held', KEEP,
      '    if (r == NULL || r->state != K_SEEN || !same(r, key, face) || black == NULL || white == NULL)',
      '    if (r == NULL || !same(r, key, face) || black == NULL || white == NULL)'),
+    ('laid-is-counted-at-the-ask', KEEP,
+     '    if (r->state == K_MADE)\n        return YONDER_KEEP_HAVE;',
+     '    if (r->state == K_MADE) {\n        k->laid++;\n        return YONDER_KEEP_HAVE;\n    }'),
     ('sheets-are-handed-out-under-another-key', KEEP,
      '    if (r == NULL || r->state != K_MADE || !same(r, key, face))\n        return false;\n    *black',
-     '    if (r == NULL || r->state != K_MADE)\n        return false;\n    *black'),
+     '    if (r == NULL || r->state != K_MADE || (!same(r, key, face) && false))\n        return false;\n    *black'),
     # The painter's half.
     ('a-making-is-painted-cut', PAINT,
      '                      : keep == YONDER_KEEP_MAKE ? bounds : own;',
@@ -84,9 +92,6 @@ mutants = [
     ('a-making-opens-cut', PAINT,
      '                    p->v->through_open(p->v->ctx, keep == YONDER_KEEP_NO ? own : bounds, m, clip, keep);',
      '                    p->v->through_open(p->v->ctx, own, m, clip, keep);'),
-    ('a-kept-drawing-opens-its-layer', PAINT,
-     '            if (keep != YONDER_KEEP_HAVE)\n                (void)layer_try(p, box, bounds, bounds, d);',
-     '            (void)layer_try(p, box, bounds, bounds, d);'),
     ('a-refused-have-is-not-asked-again', PAINT,
      '        if (!open && keep != YONDER_KEEP_NO) {',
      '        if (false) {'),
@@ -113,11 +118,29 @@ mutants = [
      '            spoil(p);\n            p->v->stand_in(',
      '            p->v->stand_in('),
     ('a-background-picture-inside-is-kept', PAINT,
-     '        if (l.image != NULL)\n            spoil(p);',
-     ''),
+     '        if (l.image != NULL ||\n            (making(p)',
+     '        if (false ||\n            (making(p)'),
     ('an-inline-picture-inside-is-kept', PAINT,
      '    if (l.image != NULL) {\n        spoil(p);\n        os64_gui_rect_t area',
      '    if (l.image != NULL) {\n        os64_gui_rect_t area'),
+    ('a-canvas-inside-is-kept', PAINT,
+     '            spoil(p);\n            p->v->canvas(',
+     '            p->v->canvas('),
+    ('a-background-attribute-inside-is-kept', PAINT,
+     '            (making(p) && p->v->backdrop(p->v->ctx, b, -1, NULL, (os64_gui_rect_t){0}, 0, 0,',
+     '            (false && p->v->backdrop(p->v->ctx, b, -1, NULL, (os64_gui_rect_t){0}, 0, 0,'),
+    ('an-empty-view-opens-a-layer', PAINT,
+     '    if (p->view.w <= 0 || p->view.h <= 0)\n        return true;\n    // A blend asked',
+     '    // A blend asked'),
+    ('a-refused-making-is-not-asked-again', PAINT,
+     '        if (!open && keep != YONDER_KEEP_NO) {',
+     '        if (!open && keep == YONDER_KEEP_HAVE) {'),
+    ('a-scratch-refusal-is-not-counted', SCRATCH,
+     '    if (p == NULL && s != NULL && bytes != 0)\n        s->counts.refused++;',
+     ''),
+    ('a-take-of-nothing-is-a-refusal', SCRATCH,
+     '    if (p == NULL && s != NULL && bytes != 0)',
+     '    if (p == NULL && s != NULL)'),
     ('a-mask-picture-inside-is-kept', PAINT,
      '    } else if (l.image != NULL) {\n        spoil(p);\n        os64_gui_rect_t origin',
      '    } else if (l.image != NULL) {\n        os64_gui_rect_t origin'),
@@ -127,6 +150,18 @@ mutants = [
     # libflow's stamps and walk.
     ('a-turn-stamps-its-own-box', FLOW,
      '        f_props_remove(&props, GARB_TRANSFORM);',
+     ''),
+    ('translate-stamps-its-own-box', FLOW,
+     '        f_props_remove(&props, GARB_TRANSLATE);',
+     ''),
+    ('rotate-stamps-its-own-box', FLOW,
+     '        f_props_remove(&props, GARB_ROTATE);',
+     ''),
+    ('scale-stamps-its-own-box', FLOW,
+     '        f_props_remove(&props, GARB_SCALE);',
+     ''),
+    ('transform-origin-stamps-its-own-box', FLOW,
+     '        f_props_remove(&props, GARB_TRANSFORM_ORIGIN);',
      ''),
     ('a-fade-stamps-its-own-box', FLOW,
      '        f_props_remove(&props, GARB_OPACITY);',
@@ -145,13 +180,16 @@ mutants = [
      '    if (false && (f->at.x != was.x || f->at.y != was.y))\n        drawn_changed(f->box, true, ++tree->drawn);'),
     ('a-held-scroll-stamps', FLOW,
      '    if (f->at.x != was.x || f->at.y != was.y)\n        drawn_changed(',
-     '    if (true)\n        drawn_changed('),
+     '    if (true || f->at.x != was.x || f->at.y != was.y)\n        drawn_changed('),
     ('trees-share-a-serial', FLOW,
      '    tree->serial = __atomic_add_fetch(&s_tree_serials, 1, __ATOMIC_RELAXED);',
-     '    tree->serial = 1;'),
+     '    tree->serial = 1 + 0 * __atomic_add_fetch(&s_tree_serials, 1, __ATOMIC_RELAXED);'),
     ('the-walk-culls-what-it-is-asked-for-whole', FLOW,
      '                    } else if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL) {',
      '                    } else if (view.w == kWholePlane.w) {'),
+    ('a-group-inside-none-gets-a-view', FLOW,
+     '                    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE) {',
+     '                    if (asked == FLOW_INSIDE_NONE) {'),
     ('the-walk-hands-over-what-it-is-asked-for-none-of', FLOW,
      '                    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE) {',
      '                    if (view.w <= 0 || view.h <= 0) {'),

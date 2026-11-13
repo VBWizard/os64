@@ -57,7 +57,17 @@ static void *lend(yonder_scratch_t *s, Slot *sl)
     return sl->at;
 }
 
+static void *take(yonder_scratch_t *s, size_t bytes);
+
 void *yonder_scratch_take(yonder_scratch_t *s, size_t bytes)
+{
+    void *p = take(s, bytes);
+    if (p == NULL && s != NULL && bytes != 0)
+        s->counts.refused++;
+    return p;
+}
+
+static void *take(yonder_scratch_t *s, size_t bytes)
 {
     // An eighth to spare, so a box that grows a little between paints
     // keeps its buffer. Past what may be kept, a buffer would be freed on

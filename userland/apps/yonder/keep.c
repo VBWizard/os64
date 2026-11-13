@@ -163,10 +163,8 @@ int yonder_keeps_ask(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64_t f
         k->seen++;
         return YONDER_KEEP_NO;
     }
-    if (r->state == K_MADE) {
-        k->laid++;
+    if (r->state == K_MADE)
         return YONDER_KEEP_HAVE;
-    }
     // Seen under this key once already, but only in this paint: a group
     // the paint met in two of its parts has not yet held still.
     if (r->state == K_NO || !earlier)
@@ -188,6 +186,7 @@ bool yonder_keeps_sheets(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64
         return false;
     *black = r->sheet[0];
     *white = r->sheet[1];
+    k->laid++;
     return true;
 }
 

@@ -1118,14 +1118,18 @@ it was made under.
   it draws — so a box that only turns keeps its key. A layout is a new
   tree, so a new key.
 - **The face's stamp moves at every mark of the view but a tick's**: a
-  picture arriving or moving, a canvas drawn, a control, a script's
-  change, a scroll, a settings change. Any of those may change what a
-  group draws while its box's `drawn` holds still.
+  picture arriving or moving, a canvas drawn, a script's change, a
+  scroll, a settings change. Any of those may change what a group draws
+  while its box's `drawn` holds still. (A control marks its own widget,
+  not the view; a group with one inside is never kept.)
 - **What a kept drawing cannot hold is never kept** (the painter's
-  spoil): a picture, a control, a canvas or a stand-in inside the group,
-  or anything drawn otherwise than a later paint would draw it — a layer
-  refused for the budget or for memory, a group inside drawn upright, a
-  text clip drawn in one colour.
+  spoil): a picture (a sheet's or the `background` attribute's), a
+  control, a canvas or a stand-in inside the group, or anything drawn
+  otherwise than a later paint would draw it — a layer refused for the
+  budget or for memory, a group inside drawn upright, a text clip drawn
+  in one colour, and (the face's check) any buffer the paint's scratch
+  could not lend while the group was painted. A making whose sheets the
+  face cannot open is not tried again until its key moves.
 
 **The protocol** (paint.h, `keep`): the painter asks the face before it
 opens a drawn-through group. NO, and it is painted as ever, cut to what

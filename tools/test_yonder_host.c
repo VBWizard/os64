@@ -360,6 +360,15 @@ static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gu
     out(&rec->out, "\n");
 }
 
+static void rec_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    (void)b;
+    Rec *rec = ctx;
+    out(&rec->out, "canvas %d %d %d %d", c.x, c.y, c.w, c.h);
+    clip_note(rec, clip);
+    out(&rec->out, "\n");
+}
+
 static void rec_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
                          uint32_t ink, uint32_t paper)
 {
@@ -433,6 +442,11 @@ static int s_keep_answer;
 // When set, the face has no memory for a group laid inside another: one
 // inside a group being kept is drawn upright.
 static bool s_inner_through_refused;
+// When set, an open with MAKE is refused (its sheets past the face's
+// limits): it is opened again with NO.
+static bool s_make_refused;
+// When set, the face draws a canvas's pixels (paint.h, `canvas`).
+static bool s_canvas_verb;
 static const char *const kKeepNames[] = {"no", "make", "have"};
 
 static int rec_keep(void *ctx, const yonder_keep_key_t *key)
@@ -450,7 +464,8 @@ static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6
                              os64_gui_rect_t clip, int keep)
 {
     Rec *rec = ctx;
-    if (s_through_refused || (keep == YONDER_KEEP_HAVE && s_have_refused))
+    if (s_through_refused || (keep == YONDER_KEEP_HAVE && s_have_refused) ||
+        (keep == YONDER_KEEP_MAKE && s_make_refused))
         return false;
     if (s_inner_through_refused && rec->throughs > 0)
         return false;
@@ -671,7 +686,8 @@ static yonder_verbs_t verbs_of(Rec *rec)
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,
                             s_keeps ? rec_keep : NULL, rec_through_open,
-                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL,
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
+                            s_canvas_verb ? rec_canvas : NULL,
                             rec_layer_open, rec_layer_close, rec_backdrop_filter,
                             rec_layer_take};
 }
@@ -3173,6 +3189,21 @@ static void scratch_cases(void)
     expect("scratch: a request past the keep is the heap's",
            past != NULL && s_mallocs == m0 + 1 && d.unpooled == c.unpooled + 1 && d.made == c.made &&
            d.lent == 0 && yonder_scratch_counts(s).idle == 4, NULL);
+
+    // A take that finds no memory, pooled or not, is counted (what a kept
+    // drawing asks); a take of nothing is no refusal.
+    c = yonder_scratch_counts(s);
+    s_alloc_refuse_once = true;
+    void *pooled = yonder_scratch_take(s, part + part / 2);   // more than any idle buffer holds
+    s_alloc_refuse_once = true;
+    void *tiny = yonder_scratch_take(s, 64);
+    d = yonder_scratch_counts(s);
+    expect("scratch: a take that finds no memory is counted",
+           pooled == NULL && tiny == NULL && d.refused == c.refused + 2, NULL);
+    void *nothing = yonder_scratch_take(s, 0);
+    yonder_scratch_give(s, nothing);
+    expect("scratch: a take of nothing is no refusal", yonder_scratch_counts(s).refused == d.refused,
+           NULL);
 
     // No scratch at all: the heap's, every time.
     m0 = s_mallocs;

@@ -103,9 +103,11 @@ typedef struct {
     // something inside it can change while the box's `drawn` holds still
     // (a picture, a control, a canvas, a stand-in) or was drawn otherwise
     // than the face would draw it again (a layer, sheets or a clip
-    // refused); or YONDER_KEEP_HAVE, and it is opened with HAVE and
+    // refused), and the face may still decline what its own verbs drew
+    // short of memory; or YONDER_KEEP_HAVE, and it is opened with HAVE and
     // `key->bounds`, nothing is painted inside it, and its close lays what
-    // was kept. An open with HAVE that is refused is made again with NO.
+    // was kept. An open with MAKE or HAVE that is refused is made again
+    // with NO.
     // The open (or the two) that follow a `keep` are the group it was
     // asked for, with no verb between. NULL: nothing is kept, every open
     // is NO and every close's `keep` false.

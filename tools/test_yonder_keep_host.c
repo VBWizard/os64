@@ -96,6 +96,11 @@ static void two_paints_then_held(void)
     // A later paint of the same tree keeps it.
     yonder_keeps_paint(k, 7);
     expect("held across paints", yonder_keeps_ask(k, &key, 1) == YONDER_KEEP_HAVE);
+    // Laid is counted when the sheets are handed out, not at the ask: a
+    // HAVE the face then cannot open is no drawing laid.
+    expect("an ask alone lays nothing", yonder_keeps_counts(k).laid == 1);
+    expect("sheets handed out lay one", yonder_keeps_sheets(k, &key, 1, &b, &w) &&
+                                            yonder_keeps_counts(k).laid == 2);
     yonder_keeps_free(k);
     expect("all freed", s_blocks == 0);
 }

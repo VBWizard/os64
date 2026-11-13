@@ -3536,7 +3536,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     // bilinear sample at the view's edge mixes the source pixel beyond),
     // joined with it moved back to where an upright drawing puts the group
     // — the face may refuse to lay it through (flow_box_through's
-    // `upright`), and the walk is over before it is asked. A filtered
+    // `upright`), and the walk is not told which it did. A filtered
     // group's view is grown by how far from outside it what its filter
     // draws there can come (filter_sources), in the group's own coordinates
     // (taken back through its matrix first, when it has one): a box that

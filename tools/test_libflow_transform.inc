@@ -769,8 +769,9 @@ static void transform_through_cases(void)
     t = flow_layout(q.doc, q.page, 400, &q.env);
     tb = box_with_id(t, q.doc->document, "t");
     cb = box_with_id(t, q.doc->document, "c");
+    const flow_box_t *nb = box_with_id(t, q.doc->document, "n");
     const flow_inside_t modes[3] = {FLOW_INSIDE_VIEW, FLOW_INSIDE_ALL, FLOW_INSIDE_NONE};
-    bool child[3], own[3];
+    bool child[3], own[3], nested[3];
     int32_t opens[3], asked[3];
     for (int i = 0; i < 3; i++) {
         s_xform_inside = modes[i];
@@ -788,14 +789,23 @@ static void transform_through_cases(void)
         iv.ctx = &self;
         flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &iv);
         own[i] = self.seen;
+        XformGroups inner = {0};
+        inner.watch = nb;
+        iv.ctx = &inner;
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &iv);
+        nested[i] = inner.seen;
     }
-    char said[160];
-    snprintf(said, sizeof(said), "child %d %d %d own %d %d %d opens %d %d %d asked %d %d %d",
-             child[0], child[1], child[2], own[0], own[1], own[2], opens[0], opens[1], opens[2],
-             asked[0], asked[1], asked[2]);
+    char said[192];
+    snprintf(said, sizeof(said),
+             "child %d %d %d own %d %d %d nested %d %d %d opens %d %d %d asked %d %d %d",
+             child[0], child[1], child[2], own[0], own[1], own[2], nested[0], nested[1], nested[2],
+             opens[0], opens[1], opens[2], asked[0], asked[1], asked[2]);
+    // The turned group inside, which shows, is handed over unless the walk
+    // was asked for none of the group around it.
     expect("transform: a face may ask the walk for all of a turned group, or none of it",
-           tb != NULL && cb != NULL && !child[0] && child[1] && !child[2] && own[0] && own[1] &&
-               !own[2] && opens[0] == 2 && opens[1] == 2 && opens[2] == 2 && asked[0] == 2 &&
+           tb != NULL && cb != NULL && nb != NULL && !child[0] && child[1] && !child[2] &&
+               own[0] && own[1] && !own[2] && nested[0] && nested[1] && !nested[2] &&
+               opens[0] == 2 && opens[1] == 2 && opens[2] == 2 && asked[0] == 2 &&
                asked[1] == 2 && asked[2] == 2,
            said);
     flow_free(t);

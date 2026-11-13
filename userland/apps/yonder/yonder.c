@@ -1374,9 +1374,11 @@ static struct {
 static void mark_part(os64_gui_rect_t r);
 
 // The face's half of a kept drawing's key (keep.h): moved by every mark
-// of the view but a tick's — a picture arriving or moving, a canvas
-// drawn, a control, a script's change, a scroll — since any of those may
-// change what a group draws while its box's `drawn` holds still. A tick
+// of the view made through mark_part or mark_whole but a tick's — a
+// picture arriving or moving, a canvas drawn, a script's change, a scroll
+// — since any of those may change what a group draws while its box's
+// `drawn` holds still. A control marks its own widget, not the view; the
+// painter never keeps a group with one inside (paint.h, `keep`). A tick
 // changes only what libflow stamps (flow_box_t.drawn); `s_tick_marking`
 // says a mark is one.
 static uint64_t s_face_stamp;
@@ -15211,10 +15213,12 @@ typedef struct {
     // A laid group's kept drawing (keep.h): how it was opened
     // (YONDER_KEEP_*), and for MAKE or HAVE its key and the face's stamp.
     // MAKE's sheets come from the heap, to be given to the store; HAVE's
-    // are the store's, laid and never freed here.
+    // are the store's, laid and never freed here. For MAKE, the paint's
+    // scratch's refusals when it opened (yonder_scratch_counts_t.refused).
     int keep;
     yonder_keep_key_t key;
     uint64_t face;
+    uint64_t refused;
 } GlassThrough;
 
 // A TEXT CLIP (PILE3.md § The text clip): a mask the clip's text is drawn
@@ -15367,12 +15371,12 @@ static void pane_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32
     GlassPane *gp = ctx;
     if (r.w <= 0 || r.h <= 0)
         return;
-    uint32_t *row = os64_malloc((size_t)r.w * sizeof(*row));
+    uint32_t *row = glass_take((size_t)r.w * sizeof(*row));
     if (row == NULL)
         return;
     for (int32_t k = 0; k < gp->n; k++)
         glass_mask(gp->now[k], r, alpha, colour, row);
-    os64_free(row);
+    glass_give(row);
 }
 
 static void pane_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
@@ -15532,18 +15536,21 @@ static GlassThrough *pane_sheets_close(GlassPane *gp)
 
 // Whether the group about to open is kept (keep.h): the store's answer,
 // the question and the face's stamp remembered for the open after it.
+// Nothing is kept without the paint's scratch, whose refusals say whether
+// a making was short of memory (pane_through_close).
 static int pane_keep(void *ctx, const yonder_keep_key_t *key)
 {
     GlassPane *gp = ctx;
     gp->asked = *key;
     gp->asked_face = s_face_stamp;
-    return yonder_keeps_ask(g.keeps, key, s_face_stamp);
+    return g.paint_scratch != NULL ? yonder_keeps_ask(g.keeps, key, s_face_stamp) : YONDER_KEEP_NO;
 }
 
 // The two sheets of a group laid through its matrix, `bounds` of its own
 // coordinates (pane_sheets_open) — made to be kept (MAKE), or what was
 // kept (HAVE, pane_sheets_kept). Refused, the painter draws it upright, or
-// for HAVE asks again with NO.
+// for MAKE or HAVE opens it again with NO; a refused MAKE is the store's
+// to know, so that it is not answered MAKE at every paint for nothing.
 static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
                               os64_gui_rect_t clip, int keep)
 {
@@ -15551,11 +15558,15 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
     GlassThrough *t = keep == YONDER_KEEP_HAVE
                           ? pane_sheets_kept(gp, bounds)
                           : pane_sheets_open(gp, bounds, SHEET_SIDE, SHEET_PIXELS, keep);
-    if (t == NULL)
+    if (t == NULL) {
+        if (keep == YONDER_KEEP_MAKE)
+            yonder_keeps_spoiled(g.keeps, &gp->asked, gp->asked_face);
         return false;
+    }
     if (keep != YONDER_KEEP_NO) {
         t->key = gp->asked;
         t->face = gp->asked_face;
+        t->refused = yonder_scratch_counts(g.paint_scratch).refused;
     }
     os64_memcpy(t->m, m, sizeof(t->m));
     t->clip = clip;
@@ -15566,8 +15577,10 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
 // pixel (i, j) is the group's (i + bounds.x, j + bounds.y), the matrix
 // takes that to the page coordinates painted before, and the target's
 // offset onto its pixels — inside the clip and what the target paints.
-// Made to be kept, they are the store's after (`keep`), else the store
-// is told they may not be kept.
+// Made to be kept, they are the store's after (`keep`), unless the paint's
+// scratch refused a take since they opened — something inside was drawn
+// short of memory, which a later paint may not be — and else the store is
+// told they may not be kept.
 static void pane_through_close(void *ctx, uint8_t alpha, bool keep)
 {
     GlassPane *gp = ctx;
@@ -15585,6 +15598,8 @@ static void pane_through_close(void *ctx, uint8_t alpha, bool keep)
             (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
     }
     if (t->keep == YONDER_KEEP_MAKE) {
+        if (yonder_scratch_counts(g.paint_scratch).refused != t->refused)
+            keep = false;
         if (!keep)
             yonder_keeps_spoiled(g.keeps, &t->key, t->face);
         else if (yonder_keeps_put(g.keeps, &t->key, t->face, t->surf[0].pixels, t->surf[1].pixels))

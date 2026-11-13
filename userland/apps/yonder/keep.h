@@ -41,7 +41,7 @@ void yonder_keeps_paint(yonder_keeps_t *k, uint64_t tree);
 int yonder_keeps_ask(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64_t face);
 
 // The sheets held for `key` and `face` — black and white, key->bounds.w a
-// row — or false when none are.
+// row, counted as laid — or false when none are.
 bool yonder_keeps_sheets(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64_t face,
                          const uint32_t **black, const uint32_t **white);
 
@@ -56,7 +56,8 @@ bool yonder_keeps_put(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64_t 
 // stamp changes.
 void yonder_keeps_spoiled(yonder_keeps_t *k, const yonder_keep_key_t *key, uint64_t face);
 
-// Since the counts last restarted: drawings laid from what was kept, made,
+// Since the counts last restarted: drawings laid from what was kept (sheets
+// handed out by yonder_keeps_sheets), made,
 // groups seen with a key or stamp they were not kept under, makings
 // spoiled, and drawings that did not fit; and what is held now, in bytes
 // and drawings, against the budget. All zero for NULL.

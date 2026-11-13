@@ -4625,19 +4625,29 @@ static void motion_drawn_cases(void)
         DRAWN_PAGE("#t{animation:spin 1s linear infinite}#c{animation:tint 1s linear infinite}"),
         DRAWN_PAGE("#t{animation:fade 1s linear infinite}"),
         DRAWN_PAGE("#t{animation:tint 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes go{to{translate:30px 10px}}#t{animation:go 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes turn{to{rotate:90deg}}#t{animation:turn 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes grow{to{scale:2}}#t{animation:grow 1s linear infinite}"),
+        DRAWN_PAGE("@keyframes pivot{to{transform-origin:0 0}}"
+                   "#t{transform:rotate(30deg);animation:pivot 1s linear infinite}"),
     };
 #undef DRAWN_PAGE
     // What each page's tick stamps: p, t and c, own (1) or not (0).
-    static const int kStamped[4][3] = {{1, 0, 0}, {1, 1, 1}, {1, 0, 0}, {1, 1, 0}};
-    static const char *const kWhat[4] = {
+    static const int kStamped[8][3] = {{1, 0, 0}, {1, 1, 1}, {1, 0, 0}, {1, 1, 0},
+                                       {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}};
+    static const char *const kWhat[8] = {
         "drawn: a turn stamps the boxes it is inside, not itself or what it holds",
         "drawn: a colour inside a turn stamps it, the turn and the box around, alike",
         "drawn: a fade stamps the boxes it is inside, not itself",
         "drawn: a box's own colour stamps it and the boxes it is inside, not its child",
+        "drawn: `translate` stamps the boxes it is inside, not itself",
+        "drawn: `rotate` stamps the boxes it is inside, not itself",
+        "drawn: `scale` stamps the boxes it is inside, not itself",
+        "drawn: `transform-origin` stamps the boxes it is inside, not itself",
     };
     const flow_point_t o = {0, 0};
-    uint64_t serials[4];
-    for (int i = 0; i < 4; i++) {
+    uint64_t serials[8];
+    for (int i = 0; i < 8; i++) {
         Moving m;
         moving_open_for(&m, kPages[i], 0, true);
         serials[i] = flow_tree_serial(m.tree);

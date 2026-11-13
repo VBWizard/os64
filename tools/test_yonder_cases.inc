@@ -993,6 +993,60 @@ static void paint_cases(void)
                     "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
                     "text \"Hi\" 0 14 #101010 clip 0 0 100 20\n"
                     "end through 255\n");
+    // A canvas is a replaced box where scripting is on.
+    s_canvas_verb = true;
+    s_paint_scripting = true;
+    paint_page_case("a canvas inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } canvas { display: block }</style>"
+                    "<div class=t><canvas width=20 height=20></canvas></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "canvas 0 0 20 20 clip 0 0 100 20\n"
+                    "end through 255\n");
+    s_canvas_verb = false;
+    s_paint_scripting = false;
+    paint_page_case("a background attribute's picture inside spoils the keeping",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " transform: rotate(90deg) } table { border-spacing: 0 } td { padding: 0;"
+                    " width: 20px; height: 20px }</style>"
+                    "<div class=t><table><tr><td background=p.png></td></tr></table></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 0 0 100 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 make\n"
+                    "backdrop 0 0 20 20 from 0 0 origin 0 0 20 20\n"
+                    "end through 255\n");
+    // A MAKE the face cannot open (its sheets past its limits) is opened
+    // again as NO, cut to what shows.
+    s_make_refused = true;
+    paint_page_case("a making the face refuses is opened again as no",
+                    kKeptPage, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds 0 0 100 20 scroll 0 0 tree set\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
+                    "end through 255\n");
+    s_make_refused = false;
+    // Nothing inside a kept drawing that is laid opens anything: a
+    // filtered child at the group's corner, whose blur would reach a
+    // square round the origin, opens no layer. The blur's reach, three box
+    // blurs of 2, grows the group's bounds 12 all round.
+    s_keep_answer = YONDER_KEEP_HAVE;
+    paint_page_case("a filtered child inside a kept drawing opens no layer",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) } .c { width: 20px;"
+                    " height: 20px; background: #0000ff; filter: blur(4px) }</style>"
+                    "<div class=t><div class=c></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "keep? div drawn 0 bounds -12 -12 112 44 scroll 0 0 tree set\n"
+                    "through -12 -12 112 44 0 1000 -1000 0 60000 -40000 clip 0 0 200 100 have\n"
+                    "end through 255\n");
+    s_keep_answer = YONDER_KEEP_MAKE;
     // A text clip the face cannot make: its text drawn in one colour.
     s_clip_refused = true;
     paint_page_case("a text clip drawn in one colour spoils the keeping",
