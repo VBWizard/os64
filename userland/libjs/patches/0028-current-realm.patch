@@ -1,0 +1,300 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -401,12 +401,15 @@
+     struct JSSettingsFrame *settings_script_frame;
+     JSContext *settings_entry;
+     JSContext *settings_backup;
++    JSContext *settings_current;
++    JSContext *native_caller_context;
+     unsigned settings_depth;
+ };
+ 
+ typedef struct JSSettingsFrame {
+     struct JSSettingsFrame *previous;
+     JSContext *context;
++    JSContext *previous_current;
+     unsigned skip;
+ } JSSettingsFrame;
+ 
+@@ -3115,6 +3118,17 @@
+     return TRUE;
+ }
+ 
++JSContext *JS_GetCurrentContext(JSRuntime *rt)
++{
++    return rt && rt->settings_entry ? rt->settings_current : NULL;
++}
++
++JSContext *JS_GetNativeCallerContext(JSRuntime *rt)
++{
++    return rt && rt->settings_entry && rt->native_call_contexts
++        ? rt->native_caller_context : NULL;
++}
++
+ JSContext *JS_GetEntryContext(JSRuntime *rt)
+ {
+     return rt ? rt->settings_entry : NULL;
+@@ -3133,7 +3147,7 @@
+                           JSSettingsBody *body, void *opaque, JSValue *out)
+ {
+     JSRuntime *rt;
+-    JSContext *previous_entry, *previous_backup;
++    JSContext *previous_entry, *previous_backup, *previous_current;
+     JSSettingsFrame *skipped;
+     JSValue result;
+     if (!entry || !body || !out || (incumbent && incumbent->rt != entry->rt))
+@@ -3141,6 +3155,8 @@
+     rt = entry->rt;
+     if (rt->settings_depth == JS_SETTINGS_SCOPE_LIMIT)
+         return FALSE;
++    previous_current = rt->settings_current;
++    rt->settings_current = entry;
+     previous_entry = rt->settings_entry;
+     previous_backup = rt->settings_backup;
+     skipped = incumbent ? rt->settings_script_frame : NULL;
+@@ -3156,6 +3172,7 @@
+         assert(rt->settings_script_frame == skipped && skipped->skip > 0);
+         skipped->skip--;
+     }
++    rt->settings_current = previous_current;
+     rt->settings_backup = previous_backup;
+     rt->settings_entry = previous_entry;
+     rt->settings_depth--;
+@@ -3168,6 +3185,8 @@
+ {
+     frame->previous = rt->settings_script_frame;
+     frame->context = context;
++    frame->previous_current = rt->settings_current;
++    rt->settings_current = context;
+     frame->skip = 0;
+     if (has_script)
+         rt->settings_script_frame = frame;
+@@ -3175,6 +3194,7 @@
+ 
+ static void js_settings_script_leave(JSRuntime *rt, JSSettingsFrame *frame)
+ {
++    rt->settings_current = frame->previous_current;
+     assert(frame->skip == 0);
+     rt->settings_script_frame = frame->previous;
+ }
+@@ -6378,6 +6398,8 @@
+     JSRuntime *rt = ctx->rt;
+     const JSNativeCallContexts *previous = rt->native_call_contexts;
+     JSNativeCallContexts contexts = { ctx, s->realm };
++    JSContext *previous_current = rt->settings_current;
++    JSContext *previous_caller = rt->native_caller_context;
+     JSValue result;
+     int i;
+ 
+@@ -6393,7 +6415,11 @@
+     }
+ 
+     rt->native_call_contexts = &contexts;
++    rt->native_caller_context = previous_current;
++    rt->settings_current = s->realm;
+     result = s->func(ctx, this_val, argc, arg_buf, s->magic, s->data);
++    rt->settings_current = previous_current;
++    rt->native_caller_context = previous_caller;
+     rt->native_call_contexts = previous;
+     return result;
+ }
+@@ -17019,6 +17045,8 @@
+             JSExecutionScope scope;
+             JSNativeCallContexts contexts = { ctx, p->u.cfunc.realm };
+             const JSNativeCallContexts *previous;
++            JSContext *previous_current = rt->settings_current;
++            JSContext *previous_caller = rt->native_caller_context;
+             JSValue result;
+ 
+             /* This dispatch bypasses JS_CallInternal to avoid result boxing,
+@@ -17040,9 +17068,13 @@
+                 argv = args;
+             }
+             func = p->u.cfunc.c_function;
++            rt->native_caller_context = previous_current;
++            rt->settings_current = p->u.cfunc.realm;
+             /* Optimized iterator callbacks receive the incoming context. */
+             result = func.iterator_next(ctx, enum_obj, argc, argv,
+                                         pdone, p->u.cfunc.magic);
++            rt->settings_current = previous_current;
++            rt->native_caller_context = previous_caller;
+             rt->native_call_contexts = previous;
+             if (rt->execution_scope_tracking)
+                 js_execution_scope_leave(rt, &scope);
+@@ -18071,6 +18103,8 @@
+     JSCFunctionEnum cproto;
+     const JSNativeCallContexts *previous = rt->native_call_contexts;
+     JSNativeCallContexts contexts;
++    JSContext *previous_current = rt->settings_current;
++    JSContext *previous_caller = rt->native_caller_context;
+ 
+     p = JS_VALUE_GET_OBJ(func_obj);
+     cproto = p->u.cfunc.cproto;
+@@ -18085,6 +18119,8 @@
+     prev_sf = rt->current_stack_frame;
+     sf->prev_frame = prev_sf;
+     rt->current_stack_frame = sf;
++    rt->native_caller_context = previous_current;
++    rt->settings_current = p->u.cfunc.realm;
+     ctx = p->u.cfunc.realm; /* change the current realm */
+     sf->js_mode = 0;
+     sf->cur_func = (JSValue)func_obj;
+@@ -18187,6 +18223,8 @@
+     }
+ 
+     rt->current_stack_frame = sf->prev_frame;
++    rt->settings_current = previous_current;
++    rt->native_caller_context = previous_caller;
+     rt->native_call_contexts = previous;
+     return ret_val;
+ }
+@@ -18376,6 +18414,40 @@
+     info = js_execution_call_info(ctx, function, JS_EXECUTION_SCOPE_CALL);
+     return info.code_kind != JS_EXECUTION_CODE_UNKNOWN && info.code &&
+         !info.code->executable_failed;
++}
++
++/* Bound/proxy dispatch does not create an execution context. Native C/data
++   functions establish their realm at their own dispatcher. Other built-in
++   call classes have known function realms; custom classes have no such proof. */
++static JSValue js_call_class(JSContext *ctx, JSValueConst function,
++                             JSValueConst receiver, int argc,
++                             JSValueConst *argv, int flags, JSClassCall *call)
++{
++    JSRuntime *rt = ctx->rt;
++    JSContext *previous = rt->settings_current;
++    JSValue result;
++    switch (JS_VALUE_GET_OBJ(function)->class_id) {
++    case JS_CLASS_C_FUNCTION:
++    case JS_CLASS_C_FUNCTION_DATA:
++    case JS_CLASS_BOUND_FUNCTION:
++    case JS_CLASS_PROXY:
++        return call(ctx, function, receiver, argc, argv, flags);
++    case JS_CLASS_GENERATOR_FUNCTION:
++    case JS_CLASS_ASYNC_FUNCTION:
++    case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
++    case JS_CLASS_ASYNC_FUNCTION_RESOLVE:
++    case JS_CLASS_ASYNC_FUNCTION_REJECT:
++    case JS_CLASS_PROMISE_RESOLVE_FUNCTION:
++    case JS_CLASS_PROMISE_REJECT_FUNCTION:
++        rt->settings_current = JS_GetFunctionRealm(ctx, function);
++        break;
++    default:
++        rt->settings_current = NULL;
++        break;
++    }
++    result = call(ctx, function, receiver, argc, argv, flags);
++    rt->settings_current = previous;
++    return result;
+ }
+ 
+ static JSValue JS_CallInternalImpl(JSContext *caller_ctx, JSValueConst func_obj,
+@@ -18492,8 +18564,8 @@
+         not_a_function:
+             return JS_ThrowTypeError(caller_ctx, "not a function");
+         }
+-        return call_func(caller_ctx, func_obj, this_obj, argc,
+-                         (JSValueConst *)argv, flags);
++        return js_call_class(caller_ctx, func_obj, this_obj, argc,
++                             (JSValueConst *)argv, flags, call_func);
+     }
+     b = p->u.func.function_bytecode;
+ 
+@@ -21413,29 +21485,35 @@
+         not_a_function:
+             return JS_ThrowTypeError(ctx, "not a function");
+         }
+-        return call_func(ctx, func_obj, new_target, argc,
+-                         (JSValueConst *)argv, flags);
++        return js_call_class(ctx, func_obj, new_target, argc,
++                             (JSValueConst *)argv, flags, call_func);
+     }
+ 
+     b = p->u.func.function_bytecode;
++    JSContext *previous_current = ctx->rt->settings_current;
++    JSValue result;
++    ctx->rt->settings_current = b->realm;
+     if (b->is_derived_class_constructor) {
+-        return JS_CallInternal(ctx, func_obj, JS_UNDEFINED, new_target, argc, argv, flags);
++        result = JS_CallInternal(ctx, func_obj, JS_UNDEFINED, new_target, argc, argv, flags);
+     } else {
+         JSValue obj, ret;
+-        /* legacy constructor behavior */
++        /* Prototype lookup belongs to the constructor's execution context. */
+         obj = js_create_from_ctor(ctx, new_target, JS_CLASS_OBJECT);
+-        if (JS_IsException(obj))
+-            return JS_EXCEPTION;
+-        ret = JS_CallInternal(ctx, func_obj, obj, new_target, argc, argv, flags);
+-        if (JS_VALUE_GET_TAG(ret) == JS_TAG_OBJECT ||
+-            JS_IsException(ret)) {
+-            JS_FreeValue(ctx, obj);
+-            return ret;
++        if (JS_IsException(obj)) {
++            result = JS_EXCEPTION;
+         } else {
+-            JS_FreeValue(ctx, ret);
+-            return obj;
+-        }
+-    }
++            ret = JS_CallInternal(ctx, func_obj, obj, new_target, argc, argv, flags);
++            if (JS_VALUE_GET_TAG(ret) == JS_TAG_OBJECT || JS_IsException(ret)) {
++                JS_FreeValue(ctx, obj);
++                result = ret;
++            } else {
++                JS_FreeValue(ctx, ret);
++                result = obj;
++            }
++        }
++    }
++    ctx->rt->settings_current = previous_current;
++    return result;
+ }
+ 
+ JSValue JS_CallConstructor2(JSContext *ctx, JSValueConst func_obj,
+@@ -21902,9 +21980,27 @@
+     return JS_UNDEFINED;
+ }
+ 
++static JSValue js_async_function_call_impl(JSContext *ctx, JSValueConst func_obj,
++                                           JSValueConst this_obj,
++                                           int argc, JSValueConst *argv, int flags);
++
+ static JSValue js_async_function_call(JSContext *ctx, JSValueConst func_obj,
+                                       JSValueConst this_obj,
+                                       int argc, JSValueConst *argv, int flags)
++{
++    JSRuntime *rt = ctx->rt;
++    JSContext *previous = rt->settings_current;
++    JSValue result;
++    /* Module roots also enter here directly, without js_call_class. */
++    rt->settings_current = JS_VALUE_GET_OBJ(func_obj)->u.func.function_bytecode->realm;
++    result = js_async_function_call_impl(ctx, func_obj, this_obj, argc, argv, flags);
++    rt->settings_current = previous;
++    return result;
++}
++
++static JSValue js_async_function_call_impl(JSContext *ctx, JSValueConst func_obj,
++                                           JSValueConst this_obj,
++                                           int argc, JSValueConst *argv, int flags)
+ {
+     JSValue promise;
+     JSAsyncFunctionState *s;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -473,6 +473,16 @@
+    incumbent can be determined. No allocation, script or exception access. */
+ JSContext *JS_GetEntryContext(JSRuntime *rt);
+ JSContext *JS_GetIncumbentContext(JSRuntime *rt);
++/* Current execution realm, including script-free bytecode, native functions,
++   and the host's prepared realm context. Unknown custom call classes mask it.
++   NativeCaller snapshots current before the innermost C-function/data or
++   optimized iterator entry, and remains that invocation's snapshot across JS
++   reentry. It is not the native dispatch argument or a generic caller query.
++   Both borrow without allocation/exception access, and return null without
++   explicit settings. NativeCaller also returns null outside native dispatch.
++   Browser lifecycle and operation-specific security checks remain with host. */
++JSContext *JS_GetCurrentContext(JSRuntime *rt);
++JSContext *JS_GetNativeCallerContext(JSRuntime *rt);
+ void JS_SetClassProto(JSContext *ctx, JSClassID class_id, JSValue obj);
+ JSValue JS_GetClassProto(JSContext *ctx, JSClassID class_id);
+ 

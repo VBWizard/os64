@@ -1,8 +1,10 @@
 # F.4b — settings attribution interfaces
 
 F.4b supplies raw native call facts (#571) and explicit engine entry/incumbent
-scopes. The wrapper adds opt-in lifecycle-checked entry/incumbent scopes. Browser callback capture, job integration and
-operation-specific security checks remain acceptance gates. These primitives
+scopes. The wrapper adds lifecycle-checked queries and scopes, with native
+callback ownership and current/pre-native-entry attribution. Browser callback
+integration, job integration and operation-specific security checks remain
+acceptance gates. These primitives
 have no production DOM consumer; F.4 remains in progress.
 
 ## Roles and source findings
@@ -201,12 +203,54 @@ is not a general proof for bound functions, proxies or callback objects.
 This cut leaves that proof at the adapter boundary and adds no DOM consumer.
 Evidence: [IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md](IFRAME_F4_CALLBACK_CAPTURE_VALIDATION.md).
 
+## Current execution and native entry
+
+Patch `0028-current-realm.patch` adds borrowed raw queries:
+
+```c
+JSContext *JS_GetCurrentContext(JSRuntime *rt);
+JSContext *JS_GetNativeCallerContext(JSRuntime *rt);
+```
+
+Both require explicit host settings preparation. CURRENT follows the executing
+realm, including bytecode without ScriptOrModule presence, native functions,
+constructors, generator/async resumes and known built-in call classes. Host
+preparation supplies its realm execution context during the native body.
+Ordinary property exotics preserve the executing context. Bound/proxy calls
+preserve current until a trap/target enters; unknown custom call classes mask
+it rather than inheriting an unproved identity.
+
+NativeCaller snapshots current before C-function/data or optimized-iterator
+entry. It stays attached to that native invocation across reentry; CURRENT
+instead follows the reentrant code. In a C body calling a data function with
+an explicitly chosen incoming A argument, native caller can still be C.
+Defining/current, incoming, incumbent, entry and task owner are separate facts.
+The existing incoming/defining query and native argument conventions remain
+unchanged. The snapshot is not a generic source-authority decision.
+
+The checked wrapper exposes additive CURRENT and NATIVE_CALLER roles using the
+same scope, runtime and lifecycle admission as ENTRY/INCUMBENT. An absent,
+unregistered, retired or installing realm refuses; queries do not allocate,
+sample time or consume exceptions. The engine retains no new roots and saves
+scope state on the native stack. Public layouts/ABI 5 remain unchanged; the
+prepared engine identity changes, requiring coherent headers and objects.
+
+The source basis is [HTML current settings and host preparation](https://html.spec.whatwg.org/multipage/webappapis.html#current)
+and [ECMAScript function execution contexts](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-builtincallorconstruct).
+[HTML's platform-object check](https://html.spec.whatwg.org/multipage/nav-history-apis.html#isplatformobjectsameorigin)
+requires the context at the appropriate operation boundary. A future binding
+must perform its pre-member check before conversions or reentry and obtain
+relevant settings from the target. This cut supplies attribution, not that
+binding/security integration. Native jobs still require host preparation;
+Promise incumbent capture and exact script/module identity remain separate.
+Evidence: [IFRAME_F4_CURRENT_REALM_VALIDATION.md](IFRAME_F4_CURRENT_REALM_VALIDATION.md).
+
 ## Remaining F.4b interfaces and acceptance gates
 
 Before publishing browser settings queries, implement and prove:
 
 - DOM integration of checked entry/lifecycle scopes and role-specific
-  current/relevant settings attribution. Relevant settings come from the target binding.
+  attribution, including relevant settings from the target binding.
 - Integrate native capture records at WebIDL conversion and invocation sites,
   proving associated-object entry realm and callback activity/security checks.
   Preserve captured incumbent independently of callable realm and task owner.

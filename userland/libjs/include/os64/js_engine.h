@@ -10,7 +10,9 @@ typedef uint32_t JSClassID;
 
 typedef enum {
     OS64_JS_SETTINGS_ENTRY,
-    OS64_JS_SETTINGS_INCUMBENT
+    OS64_JS_SETTINGS_INCUMBENT,
+    OS64_JS_SETTINGS_CURRENT,
+    OS64_JS_SETTINGS_NATIVE_CALLER
 } os64_js_settings_role_t;
 typedef JSValue os64_js_settings_body_t(JSContext *entry, void *opaque);
 /* Owner-thread checked scope inside an existing turn/task. Entry and optional
@@ -30,7 +32,11 @@ os64_js_status_t os64_js_realm_with_settings(os64_js_realm_t *entry,
 /* Borrow a live realm for this role inside a checked scope. NULL on refusal;
  * no fallback for missing/foreign/retired/installing settings. No allocation,
  * clock read, exception consumption or lifetime extension. Recheck after
- * reentry/retirement. This is attribution, not an origin permission check. */
+ * reentry/retirement. NATIVE_CALLER is the pre-entry realm of the innermost
+ * active C-function/data/optimized-iterator invocation, retained across its
+ * JS reentry; it is not CURRENT or a generic caller. Unknown custom call
+ * classes mask CURRENT and supply no native-caller proof to their callees.
+ * This is attribution, not an origin permission check. */
 os64_js_realm_t *os64_js_settings_realm(os64_js_runtime_t *runtime,
     const char *caller_abi, os64_js_settings_role_t role, os64_js_outcome_t *outcome);
 

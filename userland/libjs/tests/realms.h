@@ -581,6 +581,7 @@ static void realm_failure_order_cases(void)
 #include "settings_scopes.h"
 #include "settings_bridge.h"
 #include "callback_settings.h"
+#include "current_settings.h"
 
 static void realm_cases(void)
 {
@@ -589,6 +590,7 @@ static void realm_cases(void)
     settings_scope_cases();
     settings_bridge_cases();
     callback_settings_cases();
+    current_settings_cases();
     retirement_cases();
     staging_cases();
     realm_identity_cases();
