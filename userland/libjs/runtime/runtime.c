@@ -1,4 +1,5 @@
 #include "os64/js_engine.h"
+#include "os64/js_failure.h"
 #include "os64/js_callbacks.h"
 #include "os64/mem.h"
 #include "os64/io.h"
@@ -80,6 +81,9 @@ struct os64_js_runtime {
     uint64_t jobs, discarded_jobs;
     os64_js_status_t failure;
     os64_js_limit_t failed_limit;
+    os64_js_failure_record_t failure_record;
+    const JSJobInfo *failure_job;
+    bool failure_records_enabled;
     unsigned cancelled;
     bool active, turn, task, checkpointing, source_truncated, destroying;
     bool ran_jobs;
@@ -169,6 +173,8 @@ static os64_js_status_t status(os64_js_outcome_t *out, os64_js_status_t value,
     return value;
 }
 
+#include "failure.inc"
+
 static void latch(os64_js_runtime_t *runtime, os64_js_status_t value,
                   os64_js_limit_t limit, int64_t error)
 {
@@ -176,7 +182,12 @@ static void latch(os64_js_runtime_t *runtime, os64_js_status_t value,
         runtime->failure = value;
         runtime->failed_limit = limit;
         runtime->host_error = error;
+        if (runtime->failure_records_enabled) failure_capture(runtime, value, limit, error);
     }
+    if (runtime->failure_records_enabled &&
+        !(value == OS64_JS_LIMIT && limit == OS64_JS_LIMIT_EXECUTION) &&
+        runtime->failure_record.global.status == OS64_JS_OK)
+        runtime->failure_record.global = (os64_js_failure_cause_t){value, limit, error};
 }
 
 /* An interrupt or allocator refusal is sticky even if script catches the
@@ -189,11 +200,17 @@ static bool observe(os64_js_runtime_t *runtime)
         latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_MEMORY, 0);
     if (runtime->allocator.failures & JSPORT_ALLOC_OOM)
         latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
-    if (runtime->failure == OS64_JS_OK && runtime->turn) {
+    /* A diagnostic runtime keeps observing global health after a timeout;
+     * the original terminal verdict and deadline are never replaced. */
+    bool after_timeout = runtime->failure_records_enabled &&
+        runtime->failure_record.original.status == OS64_JS_LIMIT &&
+        runtime->failure_record.original.limit == OS64_JS_LIMIT_EXECUTION &&
+        runtime->failure_record.global.status == OS64_JS_OK;
+    if ((runtime->failure == OS64_JS_OK && runtime->turn) || after_timeout) {
         int64_t now = os64_micros();
         if (now < 0)
             latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
-        else if (now >= runtime->deadline)
+        else if (runtime->failure == OS64_JS_OK && now >= runtime->deadline)
             latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_EXECUTION, 0);
     }
     return runtime->failure != OS64_JS_OK;
@@ -627,7 +644,10 @@ static int step_job_group(os64_js_runtime_t *runtime, JSJobGroup *group, JSConte
     }
     runtime->jobs++;
     runtime->ran_jobs = true;
+    const JSJobInfo *previous = runtime->failure_job;
+    if (runtime->failure_records_enabled) runtime->failure_job = &info;
     int result = JS_ExecuteJobGroup(runtime->engine, group, NULL);
+    if (runtime->failure_records_enabled) runtime->failure_job = previous;
     *context = info.owner != NULL ? info.owner : info.context;
     return result;
 }
@@ -874,6 +894,30 @@ JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
                                          os64_js_outcome_t *outcome)
 {
     return os64_js_create_with_teardown(config, OS64_JS_TEARDOWN_FATAL, caller_abi, out, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_create_with_failure_records(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi,
+    os64_js_runtime_t **out, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_create_with_teardown(config, policy, caller_abi, out, outcome);
+    if (result == OS64_JS_OK) {
+        (*out)->failure_records_enabled = true;
+        JS_EnableExecutionScopeTracking((*out)->engine);
+    }
+    return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_observe_failure(os64_js_runtime_t *runtime,
+    const char *caller_abi, os64_js_failure_record_t *record)
+{
+    if (runtime == NULL || caller_abi == NULL || record == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0) return OS64_JS_ABI_MISMATCH;
+    if (!runtime->failure_records_enabled) return OS64_JS_ADMISSION_REFUSED;
+    if (runtime->destroying) return OS64_JS_FAILED_RUNTIME;
+    observe(runtime);
+    *record = runtime->failure_record;
+    return OS64_JS_OK;
 }
 
 JS_PUBLIC JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
@@ -1942,10 +1986,12 @@ JS_PUBLIC os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const ch
     /* A sticky failure ended the task's work, not the task: closing it is
      * what lets the host see one verdict and go on to drain and destroy. */
     if (runtime != NULL && !runtime->active && runtime->task && runtime->failure != OS64_JS_OK) {
+        if (runtime->failure_records_enabled) observe(runtime);
         os64_memset(outcome, 0, sizeof(*outcome));
         runtime->task = false;
         runtime->turn = false;
         sticky(runtime, outcome);
+        outcome->jobs_pending = JS_IsJobPending(runtime->engine);
         outcome->jobs_executed = runtime->jobs;
         outcome->jobs_discarded = runtime->discarded_jobs;
         copy_text(outcome->source_name, sizeof(outcome->source_name), runtime->source_name);

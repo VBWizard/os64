@@ -54,6 +54,12 @@ and does not clear wrapper failure. Default wrapper setup leaves tracking disabl
 
 ## Executable containment and module owners
 
+The opt-in failure-record constructor stores borrowed stable realm handles and
+scalar facts in charged wrapper storage. Capture uses native scratch and adds
+no engine roots, finalizers or cleanup allocations. Observation remains usable
+after failure and task closure; destruction refuses it before releasing roots.
+These records do not make a failed wrapper reusable or certify native cleanup.
+
 An explicit raw-engine executable-failure mark does not drain values, free
 contexts, discard queues or alter wrapper teardown. Retained functions remain
 GC roots but their failed code cannot execute. Modules hold a GC-marked context
