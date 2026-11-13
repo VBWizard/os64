@@ -588,11 +588,12 @@ What the code does that the text above does not say, or says differently:
 - **`micros()` moved** into `kernel/src/micros.c` as `micros_now()`; the
   syscall calls it.
 
-Measured in QEMU (TCG, so the absolute figures mean little and the ratio
-some): a position read costs 5.2 microseconds against 3.5 for `micros()`,
-which is the syscall floor. Q5's "no more than a syscall would" holds to
-within the handle's pin and one lock. The P5's figure is taken with the
-first real use.
+Measured on the P5 (Chris, 2026-11-13, `/tests/audiotest` step 11): a
+position read costs 392 ns against 277 ns for `micros()`, which is the
+syscall floor. Q5's "no more than a syscall would" holds to within the
+handle's pin and one lock: 115 ns, or seven microseconds a second for a
+player asking sixty times a second. (QEMU under TCG says 5.2 microseconds
+against 3.5: the same ratio.) The whole fixture passed there too.
 
 A second cold read, of the code, found that a flush could lose to a signal
 or a close that landed with it (the write answered a count for sound that

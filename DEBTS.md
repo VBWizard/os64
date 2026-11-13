@@ -851,7 +851,6 @@ how a worklist fills with things nobody intends to do.
 | **The volume is forgotten at reboot**: it is a number in the kernel. Keeping it is a conf question for whoever builds the slider | Feature | Small | A volume control in the desktop | `audio_volume_write` |
 | **No recording, and one listener at the tap**: `/dev/audiotap` is the proof's ear and takes one open; there is no input device at all | Feature | Large | A microphone, or a second program that wants to watch what plays | `audio_stream_tap_open` |
 | **A killed player leaves up to 200 ms playing**: a close never cuts the sound, and a program that dies with no chance to write `flush` leaves its ring to play out | Behaviour | Small | It being heard as a fault | AUDIO_SEAM.md § Close never waits |
-| **The position's cost is measured in QEMU only**: 5.2 microseconds a read against 3.5 for `micros()` under TCG, which says the ratio and not the figure | Measurement | Small | The first player on the P5 | `/tests/audiotest` step 11 |
 
 ## Text on the glass
 
