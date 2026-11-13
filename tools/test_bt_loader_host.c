@@ -14,6 +14,7 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
+#include "../kernel/src/driver/system/usb/bt_acl.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
@@ -236,6 +237,9 @@ static void test_controller_step(void)
                 unsigned n=6;
                 if (op==0x1003) { n=14; reply[1]=12; reply[10]=0x40; reply[12]=1; }
                 if (op==0x1009) { n=12; reply[1]=10; reply[6]=0xab; }
+                // 1021-byte ACL packets, 8 of them; LE: 251 bytes, 3.
+                if (op==0x1005) { n=13; reply[1]=11; reply[6]=0xfd; reply[7]=3; reply[8]=64; reply[9]=8; reply[11]=8; }
+                if (op==0x2002) { n=9; reply[1]=7; reply[6]=251; reply[8]=3; }
                 if (op==0x0401) {
                     const uint8_t inquiry[]={0x0f,4,0,1,1,4, 1,1,0};
                     queue(inquiry,sizeof(inquiry),0);
@@ -355,6 +359,17 @@ static void runtime_transport(void)
     xhci_bt_runtime_poll();
     CHECK(bt_releases==1 && s->phase==BT_LE_STOPPED && p->device->ep0.enqueue==enqueued);
     CHECK(mouse->phase==BT_LE_READY && mouse_packets==1 && mouse_buttons==1);
+    // The start-up round read the controller's ACL buffers, and the host
+    // took them before this scan cleared the round's copy.
+    CHECK(p->host.acl.known && !bt_acl_shared(&p->host.acl));
+    CHECK(p->host.acl.classic_size==1021 && p->host.acl.classic_total==8);
+    CHECK(p->host.acl.le_size==251 && p->host.acl.le_total==3);
+    {
+        char status[2048];
+        bt_host_status(&p->host,status,sizeof(status));
+        CHECK(strstr(status,"acl pools: classic 8 x 1021 bytes, in use 0; le 3 x 251 bytes, in use 0; "
+                            "stray completions 0, bad completions 0\n")!=NULL);
+    }
     CHECK(xhci_bluetooth_scan() && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     CHECK(!xhci_bluetooth_connection("reconnect",9));
     p->host.scan=(bt_scan_t){.shared_controller=true};
