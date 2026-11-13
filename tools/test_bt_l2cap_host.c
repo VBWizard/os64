@@ -234,6 +234,7 @@ static void test_we_open_sdp_ours_first(void)
     bt_l2cap_close(&L, ch, T);
     CHECK(!bt_l2cap_is_open(&L, ch));
     CHECK(!bt_l2cap_is_free(&L, ch));
+    CHECK(!L.ch[ch].queued);              // dropped at the close, not held for the answer
     expect_cmd(DISC_REQ, 3, BYTES(W(0x0070), W(0x0040)));
     expect_nothing();
     peer_data(0x0040, BYTES(9));          // data after the close is not delivered
