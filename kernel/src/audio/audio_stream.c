@@ -102,15 +102,16 @@ long audio_stream_write(audio_stream_t *s, const uint8_t *bytes, size_t length, 
 
 	size_t used = 0;
 
-	// A frame an earlier write ended inside is finished first. Whole, it
-	// waits here for room like any other frame.
+	// A frame an earlier write ended inside is finished first. The bytes
+	// that would finish it are not taken while the ring has no room for it:
+	// a byte this call counts is a byte that will be played.
 	if (s->split_len > 0)
 	{
+		if (s->split_len + length >= OS64_AUDIO_FRAME_BYTES && s->fill == s->capacity)
+			return 0;
 		while (s->split_len < OS64_AUDIO_FRAME_BYTES && used < length)
 			s->split[s->split_len++] = bytes[used++];
 		if (s->split_len < OS64_AUDIO_FRAME_BYTES)
-			return (long)used;
-		if (s->fill == s->capacity)
 			return (long)used;
 		ring_put(s, s->split);
 		s->split_len = 0;

@@ -201,8 +201,12 @@ void audio_open_close(audio_open_t *o)
 			republish_locked();
 			if (s_stream.generation != before)
 				nudge_sink_locked();   // a paused stream's close is a flush
-			// A sibling parked in a write on this open: it finds `closed`.
+			// A sibling parked in a write on this open: it finds `closed`
+			// (or the flush). The slot is the stream's, not this open's,
+			// so it is emptied here: the next open's first write must not
+			// find a thread of the last one still named in it.
 			wake_writer_locked();
+			s_writer = NULL;
 		}
 		else if (o->face == AUDIO_FACE_TAP && s_tap_open == o)
 		{
@@ -211,6 +215,7 @@ void audio_open_close(audio_open_t *o)
 			capture = audio_stream_tap_close(&s_stream);
 			s_tap_open = NULL;
 			wake_listener_locked();
+			s_listener = NULL;   // the next open's, as the writer's slot above
 		}
 	}
 	spinlock_release_irqrestore(&s_lock, flags);
@@ -253,6 +258,16 @@ long audio_write(audio_open_t *o, const uint8_t *bytes, size_t length,
 			if (waited > s_writer_wait_max_us)
 				s_writer_wait_max_us = waited;
 			parked_at = 0;
+		}
+
+		// A failed sink or a flush outranks every other way out: nothing
+		// this call placed survives either, so the count it has is not an
+		// answer, whatever else also happened while it was parked.
+		if (s_stream.failed || s_stream.generation != generation)
+		{
+			long gone = s_stream.failed ? OS64_AUDIO_FAILED : OS64_AUDIO_FLUSHED;
+			spinlock_release_irqrestore(&s_lock, flags);
+			return gone;
 		}
 
 		long end = 0;
@@ -616,8 +631,13 @@ size_t audio_report(char *out, size_t capacity)
 	os64_audio_position_t p;
 	audio_stream_position(&s_stream, &p);
 	audio_stream_t s = s_stream;   // the counters, as of the same instant
-	const char *sink = s_sink != NULL ? s_sink->name : "null";
-	const char *why = s_failed_why;
+	// Copied while the lock holds the sink in place: a sink may detach, and
+	// take its strings with it, the moment the lock is released.
+	char sink[32], why[64];
+	strncpy(sink, s_sink != NULL ? s_sink->name : "null", sizeof(sink) - 1);
+	sink[sizeof(sink) - 1] = '\0';
+	strncpy(why, s_failed_why != NULL ? s_failed_why : "no reason given", sizeof(why) - 1);
+	why[sizeof(why) - 1] = '\0';
 	char owner[sizeof(s_owner)];
 	memcpy(owner, s_owner, sizeof(owner));
 	uint64_t slips = s_clock_slips, parks = s_writer_parks, wait_max = s_writer_wait_max_us;
@@ -660,7 +680,7 @@ size_t audio_report(char *out, size_t capacity)
 		"tap: %s\n"
 		"tap_dropped: %lu\n",
 		sink, p.state == OS64_AUDIO_FAILED_STATE ? " FAILED: " : "",
-		p.state == OS64_AUDIO_FAILED_STATE ? (why != NULL ? why : "no reason given") : "",
+		p.state == OS64_AUDIO_FAILED_STATE ? why : "",
 		OS64_AUDIO_CHANNELS, p.rate,
 		state_name(p.state),
 		p.generation,

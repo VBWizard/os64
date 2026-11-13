@@ -100,7 +100,7 @@ typedef struct audio_sink
 
 void audio_sink_attach(const audio_sink_t *sink);
 void audio_sink_detach(const audio_sink_t *sink);
-void audio_sink_failed(const audio_sink_t *sink, const char *why);   // `why` must outlive the sink
+void audio_sink_failed(const audio_sink_t *sink, const char *why);   // `why` and the sink's name must last until it detaches
 void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us);
 // Fill `out` with `frames` frames (audio_stream_pull) and wake whoever was
 // waiting on what it changed. Any thread; never sleeps.

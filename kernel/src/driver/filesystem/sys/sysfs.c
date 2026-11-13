@@ -1195,14 +1195,10 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 // is almost always comparative ("what is loaded, what does it cost"), and a
 // single readable table answers it in one `cat`. The clipboard's ruling
 // applies in reverse — a file that wants to stay a file.
-// /sys/usb — which controller carries which device, how often the poll
-// that serves them has come round, and what Bluetooth did when. Read it
-// FIRST when a USB or Bluetooth device is slow to answer: it separates an
-// event that sat unread from one that had not happened yet. The driver
-// renders it, under the flag that serializes it with the poll.
-// /sys/audio — the sound stream's report (audio/audio.h renders it, under
-// the stream's own lock). Its since-read counters start again at each open
-// of this file.
+
+// /sys/audio — the sound stream's report. audio.c renders it from one look
+// at the stream under its lock; the since-read counters start again at each
+// open of this file.
 #define SYS_AUDIO_TEXT_BYTES 2048
 static void sys_gen_audio(synth_text_t *t)
 {
@@ -1213,6 +1209,11 @@ static void sys_gen_audio(synth_text_t *t)
 	kfree(text);
 }
 
+// /sys/usb — which controller carries which device, how often the poll
+// that serves them has come round, and what Bluetooth did when. Read it
+// FIRST when a USB or Bluetooth device is slow to answer: it separates an
+// event that sat unread from one that had not happened yet. The driver
+// renders it, under the flag that serializes it with the poll.
 #define SYS_USB_TEXT_BYTES 12288
 static void sys_gen_usb(synth_text_t *t)
 {

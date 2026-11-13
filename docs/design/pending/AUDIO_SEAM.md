@@ -570,6 +570,10 @@ What the code does that the text above does not say, or says differently:
   announce, though a nudge carries no fact for the order to matter to.
 - **A pull's silence is counted as time.** The null sink's clock advances by
   every frame it was given, sound or fill, so a dry stream is still paced.
+- **The bytes that would finish a split frame are not taken while the ring
+  is full**; the write waits with them. So the stream never holds a whole
+  frame outside the ring, and what a close or a flush drops is at most
+  three bytes.
 - **A write looks for a pending signal before it looks for room.** A write
   made with a caught signal pending places nothing and answers
   `OS64_INTERRUPTED`; the handler runs and the program writes again.
@@ -590,8 +594,15 @@ which is the syscall floor. Q5's "no more than a syscall would" holds to
 within the handle's pin and one lock. The P5's figure is taken with the
 first real use.
 
+A second cold read, of the code, found that a flush could lose to a signal
+or a close that landed with it (the write answered a count for sound that
+was gone), that the writer's slot could name a thread of the last open
+when the next one first wrote, and that a split frame finished against a
+full ring was counted and could then be dropped. All three are fixed, and
+the fixture now proves the last handle's close frees the name.
+
 Proven: `tools/test_audio_stream_host.sh` (twelve named cases and random
-rounds beside the model), `tools/test_audio_stream_mutants.py` (110
+rounds beside the model), `tools/test_audio_stream_mutants.py` (111
 mutants), and `/tests/audiotest` (eleven steps, in `testrun`) on 8 CPUs and
 on the sparse 24.
 

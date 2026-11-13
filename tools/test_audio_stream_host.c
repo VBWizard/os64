@@ -65,20 +65,22 @@ static long m_write(model_t *m, const uint8_t *b, size_t len, uint32_t gen)
 	if (m->failed) return OS64_AUDIO_FAILED;
 	if (gen != m->gen) return OS64_AUDIO_FLUSHED;
 	size_t used = 0;
-	for (;;)
+	// Frame by frame: one is begun only if this write can finish it and
+	// there is room for it, or if this write ends inside it.
+	while (used < len)
 	{
-		if (m->part_n == 4)
+		size_t need = 4 - m->part_n;
+		if (len - used < need)
 		{
-			if (m->n == MCAP) return (long)used;
-			m_push(m, m->part);
-			m->part_n = 0;
+			while (used < len) m->part[m->part_n++] = b[used++];
+			break;
 		}
-		if (used == len) return (long)used;
-		// A whole frame is only begun when there is room for it; the bytes
-		// of one already begun are always taken.
-		if (m->part_n == 0 && len - used >= 4 && m->n == MCAP) return (long)used;
-		m->part[m->part_n++] = b[used++];
+		if (m->n == MCAP) break;
+		while (m->part_n < 4) m->part[m->part_n++] = b[used++];
+		m_push(m, m->part);
+		m->part_n = 0;
 	}
+	return (long)used;
 }
 
 static int16_t m_gain(int16_t x, uint32_t v)
@@ -391,30 +393,34 @@ static void test_a_finished_split_frame_waits_for_room(void)
 	CHECK_EQ(out[0], 9); CHECK_EQ(out[1], 10);
 	CHECK_EQ(out[2], 50); CHECK_EQ(out[14], 56);
 
-	// A split frame finished against a full ring: its bytes are taken, the
-	// frame waits whole, and nothing more is taken until it has gone in.
+	// A split frame against a full ring: the bytes that would finish it are
+	// not taken, since a byte counted is a byte that will be played; fewer
+	// than would finish it are, since they need no room yet.
 	uint8_t eight[32];
 	for (int i = 0; i < 8; i++)
 		frame_bytes(eight + i * 4, (int16_t)(70 + i), 0);
 	gen = t_open();
 	CHECK_EQ(audio_stream_write(&T, eight, 32, gen), 32);
-	CHECK_EQ(audio_stream_pull(&T, NULL, out, 1, 1).frames, 1);
-	CHECK_EQ(audio_stream_write(&T, b, 3, gen), 3);          // a split, with one slot free
-	CHECK_EQ(audio_stream_write(&T, eight, 4, gen), 4);      // finishes it into the last slot; three bytes begin the next
+	CHECK_EQ(audio_stream_write(&T, b, 1, gen), 1);          // begins a frame; the ring is full
+	CHECK_EQ(audio_stream_write(&T, b + 1, 1, gen), 1);
+	CHECK_EQ(audio_stream_write(&T, b + 2, 2, gen), 0);      // would finish it: nothing taken
+	CHECK_EQ(audio_stream_write(&T, eight, 32, gen), 0);
 	os64_audio_position_t p;
 	audio_stream_position(&T, &p);
-	CHECK_EQ(p.queued, 8);
-	CHECK_EQ(p.accepted, 9);
-	CHECK_EQ(audio_stream_write(&T, eight, 4, gen), 1);      // one byte finishes that one; the ring is full
-	CHECK_EQ(audio_stream_write(&T, eight, 4, gen), 0);      // and it holds everything behind it back
-	CHECK_EQ(audio_stream_write(&T, eight, 1, gen), 0);
+	CHECK_EQ(p.accepted, 8);
+	CHECK_EQ(audio_stream_pull(&T, NULL, out, 1, 1).frames, 1);
+	CHECK_EQ(audio_stream_write(&T, b + 2, 6 - 4, gen), 2);  // room: finished and placed
 	audio_stream_position(&T, &p);
 	CHECK_EQ(p.accepted, 9);
-	CHECK_EQ(audio_stream_pull(&T, NULL, out, 1, 2).frames, 1);
-	CHECK_EQ(audio_stream_write(&T, eight, 4, gen), 0);      // the waiting frame goes in; the ring is full again
-	audio_stream_position(&T, &p);
-	CHECK_EQ(p.accepted, 10);
 	CHECK_EQ(p.queued, 8);
+	// A close with a frame begun and unfinished drops those bytes and no
+	// whole frame: everything counted as accepted is still in the ring.
+	CHECK_EQ(audio_stream_write(&T, b, 3, gen), 3);
+	audio_stream_close(&T);
+	CHECK_EQ(T.fill, 8);
+	CHECK_EQ(T.split_len, 0);
+	CHECK_EQ(audio_stream_pull(&T, NULL, out, 8, 2).frames, 8);
+	CHECK_EQ(out[14], 9); CHECK_EQ(out[15], 10);             // the split frame, last in
 }
 
 static void test_flush_and_generations(void)

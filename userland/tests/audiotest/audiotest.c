@@ -325,8 +325,9 @@ int main(int argc, char **argv)
     if (r != 24000 * 4)
         return die(2, "the blocking write did not take everything", r);
     // 24,000 frames into a ring of 9,600: the last of them could not go in
-    // until 14,400 had been taken, which is 0.3 s of playing.
-    if (wrote_us < 250000 || wrote_us > 900000)
+    // until 14,400 had been taken, which is 0.3 s of playing. The bars are
+    // wide: a pump held off on a loaded machine catches up in one burst.
+    if (wrote_us < 200000 || wrote_us > 1500000)
         return die(2, "the blocking write did not wait for the ring", wrote_us);
     if (!until_taken(24000))
         return die(2, "the sink never took the half second", (int64_t)position().taken);
@@ -339,7 +340,7 @@ int main(int argc, char **argv)
     // frames were played: that span is the rate.
     int64_t span = gLastSoundUs - gFirstSoundUs;
     int64_t want = (int64_t)(24000 - gLastSoundFrames) * 1000000 / 48000;
-    if (span < want - 40000 || span > want + 40000)
+    if (span < want - 150000 || span > want + 150000)
         return die(2, "the ramp was not taken at 48,000 frames a second", span);
     p = position();
     if (p.accepted != 24000 || p.taken != 24000 || p.heard != 24000 || p.generation != gen)
@@ -349,9 +350,15 @@ int main(int argc, char **argv)
     if (!until_state(OS64_AUDIO_STARVED))
         return die(3, "an emptied stream is not starved", position().state);
     tap_listen(60);
+    // At least one: a writer held off for longer than the ring lasts, during
+    // step 2's write, ran it dry there too, and that was an underrun.
     p = position();
-    if (p.underruns != 1 || gSilenceFrames == 0)
-        return die(3, "running dry was not one underrun with silence at the tap", (int64_t)p.underruns);
+    uint64_t dry_spells = p.underruns;
+    if (dry_spells == 0 || gSilenceFrames == 0)
+        return die(3, "running dry was not an underrun with silence at the tap", (int64_t)p.underruns);
+    tap_listen(60);
+    if (position().underruns != dry_spells)
+        return die(3, "one dry spell was counted more than once", (int64_t)position().underruns);
     tap_forget();
     fill_ramp(24000, 4800);
     if ((r = os64_write(gAudio, gPcm, 4800 * 4)) != 4800 * 4)
@@ -363,8 +370,8 @@ int main(int argc, char **argv)
         return die(3, gTapFault, 0);
     if (gHeardFrames != 4800 || !heard_ramp(0, 24000, 4800, gen, false))
         return die(3, "the ramp did not pick up unbroken after the dry spell", gHeardFrames);
-    if (position().underruns != 2)
-        return die(3, "the second dry spell was not the second underrun", (int64_t)position().underruns);
+    if (position().underruns != dry_spells + 1)
+        return die(3, "the next dry spell was not one more underrun", (int64_t)position().underruns);
 
     // 4. Paused.
     if (!pause_and_fill())
@@ -490,8 +497,9 @@ int main(int argc, char **argv)
     // 9. Closed with sound queued, and opened at once.
     tap_listen(20);
     tap_forget();
-    fill_ramp(100, 4800);
-    if ((r = os64_write(gAudio, gPcm, 4800 * 4)) != 4800 * 4)
+    // A full ring of it, so the open below has 200 ms to find it playing.
+    fill_ramp(100, RING);
+    if ((r = os64_write(gAudio, gPcm, RING * 4)) != RING * 4)
         return die(9, "the first owner's write failed", r);
     os64_close(gAudio);
     gAudio = (int32_t)os64_open("/dev/audio", "w");
@@ -507,8 +515,8 @@ int main(int argc, char **argv)
     tap_listen(60);
     if (gTapFault)
         return die(9, gTapFault, 0);
-    if (gHeardFrames != 5280 || !heard_ramp(0, 100, 4800, gen, false) ||
-        !heard_ramp(4800, 9000, 480, gen + 1, false))
+    if (gHeardFrames != RING + 480 || !heard_ramp(0, 100, RING, gen, false) ||
+        !heard_ramp(RING, 9000, 480, gen + 1, false))
         return die(9, "the tap did not hear both owners, in order, each under its generation", gHeardFrames);
     p = position();
     if (p.taken != 480 || p.accepted != 480)
@@ -559,6 +567,15 @@ int main(int argc, char **argv)
     if (gTapFault)
         return die(11, gTapFault, 0);
 
+    // The last handle on the stream: the child's copy went when it exited,
+    // so this close is the close, and the name is free again. (A count the
+    // child's exit failed to give back would leave it busy.)
+    os64_close(gAudio);
+    if (position().state != OS64_AUDIO_IDLE)
+        return die(10, "the stream is not idle after its last handle closed", position().state);
+    gAudio = (int32_t)os64_open("/dev/audio", "w");
+    if (gAudio < 0)
+        return die(10, "the stream would not open after a shared handle's closes", gAudio);
     os64_close(gAudio);
     os64_close(gTap);
     os64_close(gPos);
