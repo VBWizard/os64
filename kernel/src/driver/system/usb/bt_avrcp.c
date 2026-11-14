@@ -570,20 +570,28 @@ void bt_avrcp_receive(bt_avrcp_t *a, const uint8_t *p, size_t n, uint64_t now)
 }
 
 // A command of ours unanswered BT_AVRCP_REPLY_MS after it was sent has a
-// second period; unanswered again, the controller has FAILED. A question
-// or registration is queued again for its second period, the same label
-// and bytes under a new serial (BlueZ's one retry), since asking twice
-// gets the same answer. A Set is not: sent twice, its second copy would
-// put back a level they had since changed with their own button, and say
-// so only in an answer we could no longer take. It waits the second
-// period out.
+// second period. A question or registration is queued again for it, the
+// same label and bytes under a new serial (BlueZ's one retry), since
+// asking twice gets the same answer; unanswered again, the controller has
+// FAILED. A Set is not sent again: its second copy would put back a level
+// they had since changed with their own button, and say so only in an
+// answer we could no longer take. It waits the second period out, and
+// silent through both it ends only itself: counted, READY and the
+// standing registration kept, the level we hold unchanged (their next
+// CHANGED or our next Set corrects it), and a newer level held meanwhile
+// goes next.
 static void ar_timer(bt_avrcp_t *a, bt_avrcp_command_t *c)
 {
     if(!c->live || !c->waiting || a->now<c->deadline) return;
     a->silences++;
+    if(c==&a->set) {
+        if(c->tries) { a->sets_silent++; ar_set_done(a); return; }
+        c->tries=1;
+        c->deadline=a->now+BT_AVRCP_REPLY_MS;
+        return;
+    }
     if(c->tries) { ar_controller_ends(a,BT_AVRCP_FAILED); return; }
     c->tries=1;
-    if(c==&a->set) { c->deadline=a->now+BT_AVRCP_REPLY_MS; return; }
     c->sent=false; c->waiting=false;
     c->msg.id=ar_id(a);
 }
@@ -745,8 +753,9 @@ size_t bt_avrcp_status(const bt_avrcp_t *a, char *out, size_t cap)
     else w=snprintf(out,cap,"avrcp: %s, their volume not known\n",bt_avrcp_state_name(a->state));
     if(w>0) n+=(size_t)w;
     if(n<cap) {
-        w=snprintf(out+n,cap-n,"avrcp: sets %u (accepted %u, interim %u, rejected %u)%s, registrations %u, silences %u, restarts %u of %u\n",
+        w=snprintf(out+n,cap-n,"avrcp: sets %u (accepted %u, interim %u, rejected %u, silent %u)%s, registrations %u, silences %u, restarts %u of %u\n",
                    (unsigned)a->sets,(unsigned)a->sets_accepted,(unsigned)a->sets_interim,(unsigned)a->sets_rejected,
+                   (unsigned)a->sets_silent,
                    a->set_pending ? ", one waiting" : "",(unsigned)a->registrations,(unsigned)a->silences,
                    (unsigned)a->restarts,(unsigned)BT_AVRCP_RESTARTS);
         if(w>0) n+=(size_t)w;

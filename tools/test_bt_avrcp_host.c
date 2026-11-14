@@ -692,26 +692,64 @@ static void test_controller_silence(void)
             CHECK(bt_avrcp_set_volume(&A, 6, T));
             label = SET(6);
         }
-        // ... and a new command has two silences of its own: the second is
-        // FAILED (the Register sent again between them, the Set not).
+        // ... and a new command has two silences of its own (the Register
+        // sent again between them, the Set not).
         T += REPLY_MS; bt_avrcp_tick(&A, T);
         if (which == 0) CHECK_EQ(REGISTERED(), label);
         else expect_nothing();
         T += REPLY_MS - 1; bt_avrcp_tick(&A, T);
         CHECK(bt_avrcp_state(&A) != BT_AVRCP_FAILED);
+        CHECK_EQ(A.sets_silent, 0);
         T += 1; bt_avrcp_tick(&A, T);
-        CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
         CHECK_EQ(A.silences, 3);
         uint8_t v;
-        CHECK(!bt_avrcp_volume(&A, &v));
-        CHECK(!bt_avrcp_set_volume(&A, 1, T));
+        if (which == 0) {
+            // A registration silent through both: FAILED.
+            CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+            CHECK(!bt_avrcp_volume(&A, &v));
+            CHECK(!bt_avrcp_set_volume(&A, 1, T));
+            expect_nothing();
+            msg_t late = volume_reply(label, R_INTERIM, 6);   // a late answer is a stray
+            feed(&late);
+            CHECK(A.strays >= 1);
+            CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+            continue;
+        }
+        // A Set silent through both ends only itself: still READY, the
+        // level as it was, the registration standing; a later Set works,
+        // and their CHANGED is still taken.
+        CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+        CHECK_EQ(A.sets_silent, 1);
+        expect_volume(which == 1 ? 3 : 5);
         expect_nothing();
-        // A late answer is a stray.
-        msg_t late = set_reply(label, R_ACCEPTED, 6);
+        char line[1024];
+        bt_avrcp_status(&A, line, sizeof(line));
+        CHECK(strstr(line, "silent 1)") != NULL);
+        msg_t late = set_reply(label, R_ACCEPTED, 6);       // a late answer is a stray
         feed(&late);
         CHECK(A.strays >= 1);
-        CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+        expect_volume(which == 1 ? 3 : 5);
+        CHECK(bt_avrcp_set_volume(&A, 7, T));
+        unsigned s7 = SET(7);
+        msg_t ok = set_reply(s7, R_ACCEPTED, 7);
+        feed(&ok);
+        expect_volume(7);
+        msg_t ch = volume_reply(A.reg.label, R_CHANGED, 40);    // the registration standing since READY
+        feed(&ch);
+        expect_volume(40);
+        REGISTERED();
     }
+    // A Set silent while a newer level waits: the silent one ends alone and
+    // the newer one goes next.
+    to_ready(30);
+    CHECK(bt_avrcp_set_volume(&A, 50, T));
+    unsigned s50 = SET(50);
+    CHECK(bt_avrcp_set_volume(&A, 51, T));
+    T += 2 * REPLY_MS; bt_avrcp_tick(&A, T);
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
+    CHECK_EQ(A.sets_silent, 1);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    CHECK(SET(51) != s50);
     // An answer to the first transmission, arriving while the second copy
     // still waits to be sent, is taken, and the copy is withdrawn: never sent.
     fresh(); bt_avrcp_channel_open(&A, T);
@@ -1646,15 +1684,20 @@ static void test_restarts(void)
     CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_PLAIN);
     CHECK_EQ(A.restarts, 0);
     expect_nothing();
-    // A restart from FAILED reached by a silent Set works the same way.
+    // A Set ignored mid-song is no FAILED: READY stays, and playing begins
+    // nothing again.
     to_ready(20);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
     CHECK(bt_avrcp_set_volume(&A, 5, T));
     SET(5);
     T += 2 * REPLY_MS; bt_avrcp_tick(&A, T);
     T += REPLY_MS; bt_avrcp_tick(&A, T);
-    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    expect_volume(20);
+    bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
     bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
-    ASKED();
+    CHECK_EQ(A.restarts, 0);
+    expect_nothing();
 }
 
 static void test_status(void)

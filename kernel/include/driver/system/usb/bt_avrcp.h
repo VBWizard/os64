@@ -66,7 +66,8 @@ typedef enum {
     BT_AVRCP_REGISTERING,     // our Register Notification (volume changed) is queued or out
     BT_AVRCP_READY,           // their volume is known and a registration stands (or is being made again)
     BT_AVRCP_PLAIN,           // they have no absolute volume: not listed, rejected or not implemented
-    BT_AVRCP_FAILED,          // a command of ours went unanswered twice (playing begins again: bt_avrcp_playback)
+    BT_AVRCP_FAILED,          // our Get Capabilities or Register Notification went unanswered through both periods
+                              // (a silent Set ends only itself); playing begins again: bt_avrcp_playback
 } bt_avrcp_state_t;
 
 // One message waiting for its turn on the channel. `id` names this message
@@ -80,20 +81,21 @@ typedef struct {
 
 // A command of ours. It is QUEUED until the carrier says it is sent
 // (bt_avrcp_sent), and while queued may be replaced or retired; once sent
-// it waits BT_AVRCP_REPLY_MS for its answer, then a second period, then the
-// controller has FAILED. For the second period a question or registration
-// is queued again with the same label and bytes, so an answer to either
-// transmission is its answer, even one to the first that arrives while the
-// second copy still waits to be sent (the copy is then withdrawn and
-// never sent); a Set is not sent twice (bt_avrcp.c,
-// ar_timer, says why). A registration answered INTERIM STANDS: it keeps
-// its label, and no timer, until its CHANGED.
+// it waits BT_AVRCP_REPLY_MS for its answer, then a second period. For
+// the second period a question or registration is queued again with the
+// same label and bytes, so an answer to either transmission is its
+// answer, even one to the first that arrives while the second copy still
+// waits to be sent (the copy is then withdrawn and never sent); silent
+// through both, the controller has FAILED. A Set is not sent twice, and
+// silent through both it ends only itself (bt_avrcp.c, ar_timer, says
+// why). A registration answered INTERIM STANDS: it keeps its label, and
+// no timer, until its CHANGED.
 typedef struct {
     bool live, sent;
     bool waiting;             // sent, and its timer is running (a registration that stands is not)
     uint8_t pdu_id;           // the AVRCP PDU it carries
     uint8_t label;
-    uint8_t tries;            // silences so far: the second is FAILED
+    uint8_t tries;            // silences so far: the second ends it
     uint64_t deadline;
     bt_avrcp_msg_t msg;
 } bt_avrcp_command_t;
@@ -143,6 +145,7 @@ typedef struct bt_avrcp {
     uint32_t presses[7];      // presses taken, by operation (volume up, down, play, stop, pause, forward, backward)
     uint32_t auto_released, presses_lost, unmatched_releases, not_taken;
     uint32_t sets, sets_accepted, sets_rejected, sets_interim, registrations, silences;
+    uint32_t sets_silent;     // a Set unanswered through both periods, ended alone
     uint8_t restarts;         // FAILED begun again by playing, on this channel
     uint32_t answered, rejected, not_implemented;
     uint32_t strays;          // a response that answers nothing of ours (no live command has its label, or another PDU)
