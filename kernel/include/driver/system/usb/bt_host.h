@@ -5,6 +5,8 @@
 #include "driver/system/usb/bt_classic.h"
 #include "driver/system/usb/bt_l2cap.h"
 #include "driver/system/usb/bt_sdp.h"
+#include "driver/system/usb/bt_avdtp.h"
+#include "driver/system/usb/bt_a2dp.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // The transport's ACL send slots (xhci.c): each holds one packet until its
@@ -99,6 +101,36 @@ typedef struct {
     char sdp_result_line[128], sdp_line[128];
     uint32_t sdp_ended, l2cap_refusals;
     uint16_t l2cap_refused_result, l2cap_refused_psm;
+    // The SDP channel a query that ended left open, PLUS ONE, and its CID:
+    // closed once AVDTP's signalling channel is open (bt_host.c § Slot 2's
+    // audio), and forgotten with the connection.
+    uint8_t sdp_kept;
+    uint16_t sdp_kept_cid;
+    // Slot 2's audio (AUDIO_A2DP.md part P): AVDTP's signalling and the
+    // A2DP pump, the Classic link's as `l2cap` and `sdp` are, started over
+    // when the link comes up and when it goes. The pump reaches the seam,
+    // the encoder and the clock through `a2dp_ops`, which the transport
+    // supplies (bt_host_audio); with none, AVDTP is neither admitted nor
+    // opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
+    // has the channels' lifecycle table; the fields below are its state.
+    const bt_a2dp_ops_t *a2dp_ops;
+    void *a2dp_ctx;
+    bt_avdtp_t avdtp;
+    // The 0x0019 channels: signalling, media, and the one we are asking
+    // for (connecting or configuring, not yet given a role), each its index
+    // PLUS ONE (0: none) and its CID, as sdp_channel is.
+    uint8_t avdtp_sig, avdtp_media, avdtp_asking;
+    uint16_t avdtp_sig_cid, avdtp_media_cid, avdtp_asking_cid;
+    bool avdtp_asking_media;
+    // Signalling channels we asked for on this connection, and signalling
+    // channels (anyone's) that ended or attempts of ours that failed: we
+    // ask for at most one more after the first ends, not before
+    // avdtp_sig_again_at.
+    uint8_t avdtp_sig_asked, avdtp_sig_ends;
+    uint64_t avdtp_sig_again_at;
+    // PDUs that arrived on the media channel (we are a source) or on a
+    // 0x0019 channel with no role, dropped. Since start-up.
+    uint32_t avdtp_media_dropped;
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at
@@ -186,6 +218,11 @@ void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
 void bt_host_tick(bt_host_t *, uint64_t now, bool usb_done, unsigned tx_in_flight, bool failed,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
+// Slot 2's audio sink: the seam, the encoder and the clock as the pump
+// reaches them, and the context handed back to each. Given once, after
+// bt_host_init (which clears it). Until it is given, AVDTP is neither
+// admitted nor opened.
+void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
 bool bt_host_scan(bt_host_t *, uint64_t);
 // `scan classic`: a Classic inquiry, then the LE scan. Refused as
 // bt_host_scan is, and while the Classic link is neither quiescent nor

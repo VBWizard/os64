@@ -18,6 +18,7 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_classic.c"
 #include "../kernel/src/driver/system/usb/bt_l2cap.c"
 #include "../kernel/src/driver/system/usb/bt_sdp.c"
+#include "../kernel/src/driver/system/usb/bt_avdtp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
