@@ -427,8 +427,10 @@ static bool sdp_attributes(const uint8_t *p, size_t at, size_t lim, size_t *next
     return true;
 }
 
-// One record's attribute list for the attributes marked: its bytes, and
-// the list written at `out`.
+// One record's attribute list for the attributes marked: the length of
+// its contents (sdp_list_contents), its whole length with the sequence's
+// header (sdp_list_bytes), and the list itself written at `out`, its
+// length returned (sdp_list_put).
 static size_t sdp_list_contents(const sdp_service_t *r, const bool wanted[SDP_RECORD_ATTRIBUTES])
 {
     size_t n=0;

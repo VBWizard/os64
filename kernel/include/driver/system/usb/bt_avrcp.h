@@ -148,13 +148,19 @@ typedef struct bt_avrcp {
     uint32_t sets_silent;     // a Set unanswered through both periods, ended alone
     uint8_t restarts;         // FAILED begun again by playing, on this channel
     uint32_t answered, rejected, not_implemented;
-    uint32_t strays;          // a response that answers nothing of ours (no live command has its label, or another PDU)
-    uint32_t malformed;       // a message, or a response of ours, not well formed
+    // A response of theirs that answers nothing of ours: no live command
+    // sent under its label, or that label with another PDU or a
+    // non-vendor opcode, or a response under another profile without IPID.
+    uint32_t strays;
+    // Their messages we cannot read: an empty payload, a single packet
+    // without its profile, a command without an AV/C header or carrying
+    // IPID, and their response to a command of ours that is not well formed.
+    uint32_t malformed;
     uint32_t fragments_dropped, too_long;
     uint32_t unsendable;      // a message longer than the channel's MTU, dropped
     uint32_t stale_sends;     // bt_avrcp_sent for a serial no message has any more
     uint32_t overrun;         // a command of theirs with no room for its answer, dropped
-    uint32_t ignored;         // a message while IDLE
+    uint32_t ignored;         // a message received while IDLE, dropped unread and unanswered
     uint32_t invalid_profile; // their messages for another profile, and their answers saying ours was
 } bt_avrcp_t;
 
@@ -163,13 +169,18 @@ void bt_avrcp_init(bt_avrcp_t *a);                   // the link came up: IDLE, 
 // host has not read, and a release for a press it has, so every press the
 // host sees is followed by its release.
 void bt_avrcp_reset(bt_avrcp_t *a);
-void bt_avrcp_channel_open(bt_avrcp_t *a, uint64_t now);    // the AVCTP channel is open: we begin asking
+// The AVCTP channel is open: we begin asking. The host calls it before it
+// hands over the channel's first payload: until then the state is IDLE,
+// and a message received in IDLE is dropped unread and unanswered
+// (counted as `ignored`), their commands included.
+void bt_avrcp_channel_open(bt_avrcp_t *a, uint64_t now);
 // It closed, the link staying up or not: IDLE. Everything the channel
 // carried goes (answers owed, our commands, their registrations, their
 // volume, the restarts counted, reassembly); a press held is released.
 void bt_avrcp_channel_closed(bt_avrcp_t *a, uint64_t now);
 // One whole L2CAP payload from the AVCTP channel: a single packet or one
-// fragment of a message.
+// fragment of a message. In IDLE (no bt_avrcp_channel_open yet, or since
+// the close) it is dropped and counted.
 void bt_avrcp_receive(bt_avrcp_t *a, const uint8_t *pdu, size_t bytes, uint64_t now);
 void bt_avrcp_tick(bt_avrcp_t *a, uint64_t now);     // the timers: our commands', a press held
 // The message to send NOW: the oldest answer owed first, then our commands
