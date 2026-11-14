@@ -3200,7 +3200,10 @@ static void scratch_cases(void)
     d = yonder_scratch_counts(s);
     expect("scratch: a take that finds no memory is counted",
            pooled == NULL && tiny == NULL && d.refused == c.refused + 2, NULL);
+    // A heap may answer a take of nothing with no memory; this one is made to.
+    s_alloc_refuse_once = true;
     void *nothing = yonder_scratch_take(s, 0);
+    s_alloc_refuse_once = false;
     yonder_scratch_give(s, nothing);
     expect("scratch: a take of nothing is no refusal", yonder_scratch_counts(s).refused == d.refused,
            NULL);

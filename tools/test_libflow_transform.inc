@@ -609,17 +609,18 @@ static void xform_group_close(void *ctx, const flow_box_t *b)
     ((XformGroups *)ctx)->closes++;
 }
 
-// How the walk is asked to cull inside each drawn-through group, and the
-// boxes it was asked about.
+// How the walk is asked to cull inside each drawn-through group — the box
+// `s_xform_inner` answered apart, when set — and how often it asked.
 static flow_inside_t s_xform_inside;
 static int32_t s_xform_asked;
+static const flow_box_t *s_xform_inner;
+static flow_inside_t s_xform_inner_inside;
 
 static flow_inside_t xform_inside(void *ctx, const flow_box_t *b)
 {
     (void)ctx;
-    (void)b;
     s_xform_asked++;
-    return s_xform_inside;
+    return b == s_xform_inner ? s_xform_inner_inside : s_xform_inside;
 }
 
 static bool rect_is(os64_gui_rect_t r, int32_t x, int32_t y, int32_t w, int32_t h)
@@ -808,6 +809,19 @@ static void transform_through_cases(void)
                opens[0] == 2 && opens[1] == 2 && opens[2] == 2 && asked[0] == 2 &&
                asked[1] == 2 && asked[2] == 2,
            said);
+    // Nothing inside a group asked for none is handed over, though a group
+    // inside it asks for all of its own: all of nothing is nothing.
+    s_xform_inside = FLOW_INSIDE_NONE;
+    s_xform_inner = nb;
+    s_xform_inner_inside = FLOW_INSIDE_ALL;
+    XformGroups none_all = {0};
+    none_all.watch = nb;
+    flow_visitor_t nv = {xform_group_visit, xform_group_open, xform_group_close, &none_all, NULL,
+                         xform_inside};
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 200, 100}, top, &nv);
+    s_xform_inner = NULL;
+    expect("transform: a group asked for all inside one asked for none is handed nothing",
+           nb != NULL && !none_all.seen && none_all.opens == 2, NULL);
     flow_free(t);
     sheeted_close(&q);
 

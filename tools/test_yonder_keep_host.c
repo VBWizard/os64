@@ -101,6 +101,12 @@ static void two_paints_then_held(void)
     expect("an ask alone lays nothing", yonder_keeps_counts(k).laid == 1);
     expect("sheets handed out lay one", yonder_keeps_sheets(k, &key, 1, &b, &w) &&
                                             yonder_keeps_counts(k).laid == 2);
+    // Sheets go only to the key and the stamp they were made under.
+    yonder_keep_key_t drawn = key_of(0, 7, 4, 10, 8);
+    expect("no sheets for the box drawn since", !yonder_keeps_sheets(k, &drawn, 1, &b, &w) &&
+                                                    yonder_keeps_counts(k).laid == 2);
+    expect("no sheets under another stamp", !yonder_keeps_sheets(k, &key, 2, &b, &w) &&
+                                                yonder_keeps_counts(k).laid == 2);
     yonder_keeps_free(k);
     expect("all freed", s_blocks == 0);
 }

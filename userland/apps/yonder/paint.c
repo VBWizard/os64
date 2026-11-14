@@ -1777,11 +1777,10 @@ static bool frame_layer(const Painter *p, const flow_box_t *b, const Round *oute
         if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
             return gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
     } else if (l.image != NULL || (!sheet && i == 0)) {
-        // A picture comes, moves and goes with no tick to say so: a sheet's,
-        // or the `background` attribute's when the verbs say there is one.
-        if (l.image != NULL ||
-            (making(p) && p->v->backdrop(p->v->ctx, b, -1, NULL, (os64_gui_rect_t){0}, 0, 0,
-                                         on_page(p, p->view))))
+        // A picture comes, moves and goes with no tick to say so: a sheet's
+        // or the `background` attribute's, whichever the verbs say is there.
+        if (making(p) && p->v->backdrop(p->v->ctx, b, -1, NULL, (os64_gui_rect_t){0}, 0, 0,
+                                        on_page(p, p->view)))
             spoil(p);
         os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
         if (outer != NULL) {
