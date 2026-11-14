@@ -24,13 +24,12 @@
 
 typedef struct yonder_media yonder_media_t;
 
-// What a media request is made with, all of it yonder's, borrowed until
-// yonder_media_stop: the browser's agent and preset lines, its cookies,
-// preflight cache and HTTP cache, and how a thread tells the window it
-// has news (rings the window's media bell; any thread may call it).
+// What every media request is made with, all of it yonder's, borrowed
+// until yonder_media_stop: the browser's cookies, preflight cache and HTTP
+// cache, and how a thread tells the window it has news (rings the window's
+// media bell; any thread may call it). The agent is each request's own
+// (yonder_media_request_t).
 typedef struct {
-    const char *agent;
-    const way_identity_t *identity;
     way_jar_t *jar;
     way_preflight_t *preflight;
     way_cache_t *cache;
@@ -40,13 +39,17 @@ typedef struct {
 // The resource: its absolute address (http, https, data: or file:), the
 // page that asks (its address, which is its origin and the Referer, and
 // its serial, which names an opaque origin), the element's crossorigin,
-// and its preload.
+// and its preload; and the browser's agent and preset lines as they are
+// chosen when it opens (Settings can change them), borrowed for the
+// session's life as a script's request borrows them.
 typedef struct {
     const char *url;
     const char *page_url;
     uint64_t page;
     os64_dom_media_cors_t cors;
     os64_dom_media_preload_t preload;
+    const char *agent;
+    const way_identity_t *identity;
 } yonder_media_request_t;
 
 // Once, before the first open; and once as yonder leaves, after the pages

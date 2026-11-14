@@ -381,6 +381,14 @@ static void dom_media_document_cases(void)
     media_turn(&f, "media: the second fails");
     media_script(&f, "assert(e.networkState===3,'no source left: '+e.networkState);",
                  "media: the second's failure is heard too");
+    /* A <source> added once every candidate has failed resumes the
+     * selection there. */
+    media_script(&f, "const s=document.createElement('source');s.src='t.mp3';s.type='audio/mpeg';e.appendChild(s);"
+                     "assert(s.src==='https://example.test/dir/t.mp3','source.src reflects, resolved');",
+                 "media: a new source after the failures");
+    media_turn(&f, "media: the new candidate");
+    check(media_opened == 7 && strcmp(media_sessions[6].url, "https://example.test/dir/t.mp3") == 0,
+          "media: the appended source is tried");
 
     /* A seek a script asks of a parsed element before its first turn is
      * kept through the load the turn starts. */
@@ -388,12 +396,12 @@ static void dom_media_document_cases(void)
                      "document.body.appendChild(g);g.currentTime=1.5;",
                  "media: a seek before the first turn");
     media_turn(&f, "media: the first turn");
-    media_ready(&media_sessions[6], 3);
+    media_ready(&media_sessions[7], 3);
     media_turn(&f, "media: metadata");
-    check(media_sessions[6].seek_generation == 1 && media_sessions[6].seek_to == 1.5,
+    check(media_sessions[7].seek_generation == 1 && media_sessions[7].seek_to == 1.5,
           "media: the early seek is made once the length is known");
     fixture_free(&f);
-    check(media_closed == 7, "media: every session closed at teardown");
+    check(media_closed == 8, "media: every session closed at teardown");
 }
 
 static void dom_media_loop_cases(void)
@@ -438,6 +446,10 @@ static void dom_media_rule_cases(void)
     if (!fixture_ready(&f)) return;
     /* load() and play() on a parsed element before its first turn: one
      * load, and play()'s promise is not rejected by a second. */
+    /* Before metadata, currentTime is the seek asked for. */
+    media_script(&f, "const c=document.createElement('audio');c.currentTime=1.5;assert(c.currentTime===1.5,'pending: '+c.currentTime);"
+                     "c.currentTime+=1;assert(c.currentTime===2.5,'added to: '+c.currentTime);",
+                 "media: currentTime before metadata");
     media_script(&f, "globalThis.a=document.createElement('audio');a.setAttribute('src','s.mp3');a.muted=true;"
                      "document.body.appendChild(a);hear(a);globalThis.R=[];a.load();"
                      "a.play().then(()=>R.push('ok'),e=>R.push(e.name));",

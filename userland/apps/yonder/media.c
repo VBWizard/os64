@@ -96,6 +96,8 @@ struct yonder_media {
     // The decoder's own.
     char *url;
     char *page_url;
+    const char *agent;              // borrowed (yonder_media_request_t)
+    const way_identity_t *identity;
     uint64_t page;
     os64_dom_media_cors_t cors;
     yonder_fetch_job_t *job;
@@ -423,8 +425,8 @@ static bool loader_start(yonder_media_t *m)
         return false;
     job->kind = YONDER_JOB_FETCH;
     job->page = m->page;
-    job->agent = s_env.agent;
-    job->identity = s_env.identity;
+    job->agent = m->agent;
+    job->identity = m->identity;
     job->default_accept = "*/*";
     job->url = copy_text(m->url);
     job->headers = os64_calloc(1, 1);
@@ -1187,6 +1189,8 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->want_all = r->preload == OS64_DOM_MEDIA_PRELOAD_AUTO;
     m->cors = r->cors;
     m->page = r->page;
+    m->agent = r->agent;
+    m->identity = r->identity;
     m->facts.duration = NAN;
     m->bell = (os64_bell_t)OS64_BELL_NONE;
     m->url = copy_text(r->url);

@@ -46,6 +46,7 @@ static const DReflection kRows[] = {
     STRING(D_PROTO_IMAGE, "srcset", "srcset"), STRING(D_PROTO_IMAGE, "sizes", "sizes"),
     STRING(D_PROTO_SOURCE, "srcset", "srcset"), STRING(D_PROTO_SOURCE, "sizes", "sizes"),
     STRING(D_PROTO_SOURCE, "media", "media"), STRING(D_PROTO_SOURCE, "type", "type"),
+    {"src", "src", K_URL, D_KIND(D_PROTO_SOURCE), NULL, NULL, NULL, 0},
     STRING(D_PROTO_LINK, "media", "media"), STRING(D_PROTO_LINK, "type", "type"),
     STRING(D_PROTO_LINK, "integrity", "integrity"),
     {"as", "as", K_ENUM, D_KIND(D_PROTO_LINK), kLinkDestinations, "", "", 0},

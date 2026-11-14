@@ -10560,7 +10560,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // what it holds. Refused, it is the element's network error.
     if (media_file_scheme(url) && !media_file_scheme(page))
         return NULL;
-    yonder_media_request_t r = {url, page, serial, cors, preload};
+    yonder_media_request_t r = {url, page, serial, cors, preload, g.way.agent, g.way.identity};
     return yonder_media_open(&r);
 }
 static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }
@@ -18320,7 +18320,7 @@ int main(int argc, char **argv)
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK);
     // The media elements' sessions make their requests as every other
     // request is made (media.h); their threads start with the first.
-    const yonder_media_env_t media_env = {g.way.agent, g.way.identity, g.way.jar, s_preflight, g.cache, media_bell};
+    const yonder_media_env_t media_env = {g.way.jar, s_preflight, g.cache, media_bell};
     yonder_media_start(&media_env);
     g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);

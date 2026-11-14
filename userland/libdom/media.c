@@ -67,6 +67,7 @@ struct DMediaElement {
     bool wanted;                    /* play() or load() asked: preload=none no longer defers */
     bool dormant;                   /* gave its session back; play() or a seek wakes it (session_wake) */
     bool from_children;             /* the resource is a <source>'s */
+    bool awaiting_source;           /* every <source> so far failed: a new one resumes at `candidate` */
     uint32_t candidate;             /* which <source> is being tried */
     bool loadeddata;                /* loadeddata fired for this load */
     bool ended;                     /* it has ended playback */
@@ -284,6 +285,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     m->select_pending = false;
     m->deferred = false;
     m->dormant = false;
+    m->awaiting_source = false;
     m->candidate = 0;
     if (ctx != NULL) {
         DMediaTask **link = &s->head, *last = NULL;
@@ -324,6 +326,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
         m->position = 0;
         m->duration = NAN;
     }
+    m->played_end = 0;              /* played is the resource's, and this is another */
     m->loadeddata = false;
     m->ended = false;
     m->error_seen = false;
@@ -443,8 +446,10 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         const os64_html_node_t *c = candidate_at(dom, m->node, m->candidate);
         if (c == NULL) {
             /* No source (or none left): the element waits for one, with no
-             * error of its own, as the standard's children mode does. */
+             * error of its own, as the standard's children mode does; a
+             * <source> added later resumes it from this candidate (step). */
             m->network = m->from_children ? N_NO_SOURCE : N_EMPTY;
+            m->awaiting_source = m->from_children;
             m->from_children = false;
             return;
         }
@@ -656,6 +661,10 @@ static void step(os64_dom_t *dom, DMediaElement *m)
     }
     if (m->network == N_EMPTY && !m->select_pending && src == NULL && has_source_child(m->node))
         m->select_pending = true;
+    if (m->awaiting_source && !m->select_pending && src == NULL && candidate_at(dom, m->node, m->candidate) != NULL) {
+        m->awaiting_source = false;
+        m->select_pending = true;
+    }
     if (m->select_pending) select_resource(dom, m);
     if (m->session != NULL && loops(m) != m->loop_seen) tell_settings(dom, m);
     fold_facts(dom, m);
@@ -910,6 +919,9 @@ static void src_set(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
 static double fresh_position(os64_dom_t *dom, const DMediaElement *m)
 {
     if (m->seeking) return m->seek_to;
+    /* Before metadata a seek is the default playback start position,
+     * which HTML's getter answers (so `currentTime += 1` adds to it). */
+    if (m->ready == R_NOTHING) return m->default_start;
     if (m->paused || m->ended || m->session == NULL || dom->media_provider.facts == NULL) return m->position;
     os64_dom_media_facts_t f = {0};
     dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
