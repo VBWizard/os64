@@ -539,7 +539,8 @@ virtio because its drain waits for the tick.
   (`bt_l2cap.c`, pure, Basic mode, admitting SDP and, with an audio sink,
   AVDTP), and at `READY` the host asks the headphones one SDP question a
   connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
-  answers for os64's Audio Source record), and KEEPS THAT CHANNEL OPEN
+  answers for os64's own records: Audio Source and the two remote-control
+  ones), and KEEPS THAT CHANNEL OPEN
   until AVDTP's signalling channel is: the P5's pair hangs up a link whose
   last channel has closed; L2CAP sends only after the LE peers have had
   their turn, while the count gives it a buffer and a send slot is left
@@ -554,6 +555,12 @@ virtio because its drain waits for the tick.
   channel once the SDP query has ended, found or not, and gives each
   0x0019 channel its role from AVDTP's state (`bt_host.c` § Slot 2's audio
   has the lifecycle table; AUDIO_A2DP.md § V, as built is AVDTP's record)
+  **AVCTP and AVRCP** are `bt_avrcp.c` (pure, both roles;
+  `tools/test_bt_avrcp_host.sh` plays the headphones, 201 mutants): as the
+  target it answers their buttons and says what is playing; as the
+  controller it learns whether they have absolute volume, hears it change
+  and sets it. The host does not call it: AUDIO_REMOTE.md § Part W is
+  where it is wired, § R, as built its record
   **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
   `tools/test_bt_a2dp_host.sh`), run by the host inside `kusb`'s pass
   after the LE peers: it is the audio seam's sink, named `a2dp` in
