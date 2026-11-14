@@ -688,6 +688,10 @@ static int64_t decoder_main(void *arg)
             os64_lock_acquire(&m->lock);
             os64_media_queue_end(&m->queue);
             decoded_all = true;
+            // A length the probe could not tell is known now: where the
+            // decode ended (libdom fires durationchange for it).
+            if (!isfinite(m->facts.duration))
+                m->facts.duration = (double)os64_media_position(media) / RATE;
             (void)readiness_locked(m, true);
             if (landing) {
                 m->facts.seeked = landing_generation;
@@ -820,6 +824,14 @@ static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *de
             heard += (now - pos.micros) * pos.rate / 1000000u;
         if (heard > pos.taken)
             heard = pos.taken;
+    }
+    // Anchors the ear has gone past (its successor is heard too) are done
+    // with; dropping them here is what frees room for more (the take waits
+    // while there is none).
+    while (d->anchors > 1 && d->anchor[1].stream <= heard) {
+        for (uint32_t k = 1; k < d->anchors; k++)
+            d->anchor[k - 1] = d->anchor[k];
+        d->anchors--;
     }
     uint32_t i = d->anchors;
     while (i > 1 && d->anchor[i - 1].stream > heard)
@@ -1046,7 +1058,11 @@ static int64_t audio_main(void *arg)
             os64_lock_acquire(&owner->lock);
         }
         int64_t at = 0;
-        uint32_t n = buf != NULL ? os64_media_queue_take(&owner->queue, buf, WRITE_FRAMES, &at) : 0;
+        // No take while every anchor is in use (a clip a few milliseconds
+        // long on loop starts a run per write): the device holds runs not
+        // yet heard, and their anchors are what the clock reads them by.
+        uint32_t n = buf != NULL && (d.anchors < ANCHORS || d.position < 0)
+            ? os64_media_queue_take(&owner->queue, buf, WRITE_FRAMES, &at) : 0;
         bool finished = os64_media_queue_finished(&owner->queue);
         double gain = owner->gain;
         if (n > 0)
@@ -1055,6 +1071,8 @@ static int64_t audio_main(void *arg)
 
         if (n > 0) {
             if (d.anchors == 0 || at != d.media_end) {
+                // Full only with no position to read (nothing prunes, and
+                // nothing reads them): the oldest goes.
                 if (d.anchors == ANCHORS) {
                     for (uint32_t i = 1; i < ANCHORS; i++)
                         d.anchor[i - 1] = d.anchor[i];
@@ -1254,11 +1272,14 @@ void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation)
     os64_lock_release(&m->lock);
 }
 
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop)
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all)
 {
     os64_lock_acquire(&m->lock);
     m->gain = gain < 0 ? 0 : gain > 1 ? 1 : gain;
     m->loop = loop;
+    // Wanting the whole is never taken back: what was read stays read.
+    if (all)
+        m->want_all = true;
     ring_decoder_locked(m);
     os64_lock_release(&m->lock);
 }

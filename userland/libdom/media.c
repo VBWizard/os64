@@ -59,6 +59,7 @@ struct DMediaElement {
     char *src_seen;                 /* the src attribute as last acted on; NULL when absent */
     bool src_looked;                /* the record has looked at its src */
     bool loop_seen;                 /* the loop attribute as the host was last told */
+    bool all_seen;                  /* wants_all as the host was last told */
     char *current_src;              /* currentSrc; NULL is "" */
     uint8_t network, ready;
     bool paused, seeking, autoplaying, connected, seen;
@@ -133,11 +134,21 @@ static double gain_of(const DMediaElement *m) { return m->muted ? 0 : m->volume;
 
 static bool loops(const DMediaElement *m) { return os64_html_attr(m->node, "loop") != NULL; }
 
+/* Whether the whole resource is wanted before play() asks: preload auto
+ * (or empty), or autoplay, which preload is a hint to (HTML § 4.8.11.3). */
+static bool wants_all(const DMediaElement *m)
+{
+    const os64_html_attr_t *preload = os64_html_attr(m->node, "preload");
+    return (preload != NULL && (preload->value[0] == '\0' || os64_streq_nocase(preload->value, "auto"))) ||
+           os64_html_attr(m->node, "autoplay") != NULL;
+}
+
 static void tell_settings(os64_dom_t *dom, DMediaElement *m)
 {
     m->loop_seen = loops(m);
+    m->all_seen = wants_all(m);
     if (m->session != NULL && dom->media_provider.settings != NULL)
-        dom->media_provider.settings(dom->media_provider.opaque, m->session, gain_of(m), m->loop_seen);
+        dom->media_provider.settings(dom->media_provider.opaque, m->session, gain_of(m), m->loop_seen, m->all_seen);
 }
 
 static void session_close(os64_dom_t *dom, DMediaElement *m)
@@ -456,7 +467,9 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         m->from_children = true;
         reference = os64_html_attr(c, "src")->value;
     }
-    if (m->candidate == 0 || !m->from_children) {
+    /* loadstart once per selection: not again for the next candidate, nor
+     * for a load preload=none deferred (left NETWORK_IDLE) going on. */
+    if ((m->candidate == 0 || !m->from_children) && m->network != N_IDLE) {
         m->network = N_LOADING;
         queue(dom, m, "loadstart", SETTLE_NONE);
     }
@@ -482,10 +495,7 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         return;
     }
     m->network = N_LOADING;
-    /* preload is a hint autoplay overrides (HTML § 4.8.11.3): an element
-     * that will start by itself needs the whole of it decoding. */
-    bool all = (preload != NULL && (preload->value[0] == '\0' || os64_streq_nocase(preload->value, "auto"))) ||
-               os64_html_attr(m->node, "autoplay") != NULL;
+    bool all = wants_all(m);
     m->session = dom->media_provider.open != NULL
         ? dom->media_provider.open(dom->media_provider.opaque, m->node, m->current_src, cors_of(m),
                                    all ? OS64_DOM_MEDIA_PRELOAD_AUTO : OS64_DOM_MEDIA_PRELOAD_METADATA)
@@ -602,9 +612,12 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     }
     /* The end with loop on: the host loops by itself when loop was on as
      * its decoder reached the end; one turned on after that is HTML's own
-     * loop step, a seek to the start. */
-    if (f.ended && !m->ended && !m->seeking && loops(m)) seek(dom, m, 0);
-    if (f.ended && !m->ended && !m->seeking && !loops(m)) {
+     * loop step, a seek to the start. An end a failure made (the sound ran
+     * out at the error) is no loop point: it ends the element, or a loop
+     * would replay the same failure forever. */
+    bool loop_point = loops(m) && m->error == 0;
+    if (f.ended && !m->ended && !m->seeking && loop_point) seek(dom, m, 0);
+    if (f.ended && !m->ended && !m->seeking && !loop_point) {
         m->ended = true;
         if (isfinite(m->duration)) m->position = m->duration;
         queue(dom, m, "timeupdate", SETTLE_NONE);
@@ -665,8 +678,17 @@ static void step(os64_dom_t *dom, DMediaElement *m)
         m->awaiting_source = false;
         m->select_pending = true;
     }
+    /* preload set to none deferred the load; set to anything else since,
+     * it goes on (play() and load() end the wait their own way). */
+    if (m->deferred && !m->select_pending) {
+        const os64_html_attr_t *preload = os64_html_attr(m->node, "preload");
+        if (preload == NULL || !os64_streq_nocase(preload->value, "none") || wants_all(m)) {
+            m->deferred = false;
+            m->select_pending = true;
+        }
+    }
     if (m->select_pending) select_resource(dom, m);
-    if (m->session != NULL && loops(m) != m->loop_seen) tell_settings(dom, m);
+    if (m->session != NULL && (loops(m) != m->loop_seen || wants_all(m) != m->all_seen)) tell_settings(dom, m);
     fold_facts(dom, m);
     /* Done with, for now: ended or failed, paused, and in no document. Its
      * session goes back to the host (session_wake). */

@@ -67,7 +67,7 @@ void yonder_media_close(yonder_media_t *m);
 void yonder_media_play(yonder_media_t *m);
 void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop);
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all);
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);

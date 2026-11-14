@@ -36,7 +36,7 @@ void yonder_media_close(yonder_media_t *m) { (void)m; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
-void yonder_media_settings(yonder_media_t *m, double gain, bool loop) { (void)m; (void)gain; (void)loop; }
+void yonder_media_settings(yonder_media_t *m, double gain, bool loop, bool all) { (void)m; (void)gain; (void)loop; (void)all; }
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}

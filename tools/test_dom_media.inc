@@ -20,7 +20,7 @@ typedef struct {
     os64_dom_media_preload_t preload;
     bool playing;
     double gain;
-    bool loop;
+    bool loop, all;
     double seek_to;
     uint64_t seek_generation;
     os64_dom_media_facts_t facts;
@@ -54,11 +54,12 @@ static void media_seek(void *opaque, void *session, double t, uint64_t generatio
     s->seek_to = t;
     s->seek_generation = generation;
 }
-static void media_settings(void *opaque, void *session, double gain, bool loop)
+static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
 {
     (void)opaque;
     ((MediaSession *)session)->gain = gain;
     ((MediaSession *)session)->loop = loop;
+    ((MediaSession *)session)->all = all;
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
@@ -469,6 +470,44 @@ static void dom_media_rule_cases(void)
     media_activated = true;
     media_script(&f, "a.play();a.muted=true;a.muted=false;assert(!a.paused,'with the person it plays on');",
                  "media: unmute with activation");
+
+    /* preload=none defers the load; preload set to auto later resumes it,
+     * once, with no second loadstart, and a metadata session told so. */
+    media_script(&f, "globalThis.n=document.createElement('audio');n.preload='none';n.src='n.mp3';"
+                     "document.body.appendChild(n);globalThis.N=[];"
+                     "n.addEventListener('loadstart',()=>N.push('loadstart'));"
+                     "n.addEventListener('suspend',()=>N.push('suspend'));",
+                 "media: preload none");
+    size_t before = media_opened;
+    media_turn(&f, "media: deferred");
+    check(media_opened == before, "media: preload none opens nothing");
+    media_script(&f, "n.preload='auto';", "media: preload auto");
+    media_turn(&f, "media: resumed");
+    check(media_opened == before + 1 && media_sessions[before].preload == OS64_DOM_MEDIA_PRELOAD_AUTO,
+          "media: the deferred load goes on, the whole wanted");
+    media_script(&f, "assert(N.join()==='loadstart,suspend','one loadstart: '+N.join());", "media: one loadstart");
+    media_script(&f, "globalThis.k=document.createElement('audio');k.src='k.mp3';document.body.appendChild(k);",
+                 "media: a metadata element");
+    media_turn(&f, "media: opened for metadata");
+    MediaSession *k = &media_sessions[media_opened - 1];
+    check(k->preload == OS64_DOM_MEDIA_PRELOAD_METADATA && !k->all, "media: for its metadata");
+    media_script(&f, "k.preload='auto';", "media: and then auto");
+    media_turn(&f, "media: told");
+    check(k->all, "media: the host is told the whole is wanted");
+
+    /* A looping element whose sound ended at a failure is no loop point:
+     * it ends instead of seeking back to the same failure. */
+    media_script(&f, "globalThis.l=new Audio('lf.mp3');l.loop=true;l.play();", "media: a looping element");
+    media_turn(&f, "media: open it");
+    MediaSession *ls = &media_sessions[media_opened - 1];
+    media_ready(ls, 2);
+    media_turn(&f, "media: playing");
+    ls->facts.error = OS64_DOM_MEDIA_ERR_NETWORK;
+    media_turn(&f, "media: it fails part way");
+    ls->facts.ended = true;
+    media_turn(&f, "media: its sound runs out");
+    media_script(&f, "assert(l.paused&&!l.seeking&&l.error.code===2,'it stops, no loop');", "media: no loop after failure");
+    check(ls->seek_generation == 0, "media: no seek back");
     fixture_free(&f);
 }
 

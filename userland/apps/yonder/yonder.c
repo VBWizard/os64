@@ -10571,10 +10571,10 @@ static void media_seek(void *opaque, void *session, double seconds, uint64_t gen
     (void)opaque;
     yonder_media_seek(session, seconds, generation);
 }
-static void media_settings(void *opaque, void *session, double gain, bool loop)
+static void media_settings(void *opaque, void *session, double gain, bool loop, bool all)
 {
     (void)opaque;
-    yonder_media_settings(session, gain, loop);
+    yonder_media_settings(session, gain, loop, all);
 }
 static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out)
 {
