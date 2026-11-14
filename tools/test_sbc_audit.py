@@ -169,12 +169,13 @@ check(undefined - defined == {'memset'}, f'the port reaches outside itself for {
 #     named in BOUNDARY_CALLERS below, by its object path under kernel/.
 #     The encoder keeps one state for the machine and the caller serializes
 #     every call (sbc_port.h), so a caller is a decision, made by adding its
-#     name here in the commit that adds the call: AUDIO_A2DP.md part P's
-#     pump (bt_a2dp.c) is the one the design plans.
+#     name here in the commit that adds the call. The A2DP pump's ops
+#     (bt_a2dp_seam.c, AUDIO_A2DP.md part P) are the caller: the pump
+#     reaches the encoder through them, from kusb's pass alone.
 # Symbols cannot see a type, so a source that includes upstream's headers
 # (to use SBC_ENC_PARAMS, say) is also refused by name.
 BOUNDARY = {'sbc_port_begin', 'sbc_port_encode'}
-BOUNDARY_CALLERS = set()
+BOUNDARY_CALLERS = {'obj/driver/system/usb/bt_a2dp_seam.c.o'}
 port_obj = KERNEL / 'obj/ports/sbc/port/sbc_port.c.o'
 exported = {l.split()[-1] for l in run('x86_64-elf-nm', '--defined-only', '-g', port_obj).splitlines()}
 check(exported == BOUNDARY, f'sbc_port.c.o exports {sorted(exported)}')
@@ -187,6 +188,7 @@ check({'SBC_Encode', 'SBC_Encoder_Init', 'EncMaxShiftCounter'} <= upstream_defin
 others = [p for p in sorted((KERNEL / 'obj').rglob('*.o'))
           if not str(p.relative_to(KERNEL)).startswith(('obj/ports/sbc/', 'obj/host-sbc/'))]
 check(len(others) > 100, f'only {len(others)} kernel objects found outside the port')
+callers_seen = set()
 for obj in others:
     name = str(obj.relative_to(KERNEL))
     # An object with no symbols at all (an .S of pure code) makes nm say so
@@ -199,6 +201,12 @@ for obj in others:
     calls = wanted & BOUNDARY
     check(not calls or name in BOUNDARY_CALLERS,
           f'{name} calls {sorted(calls)} and is not in BOUNDARY_CALLERS (tools/test_sbc_audit.py)')
+    if calls:
+        callers_seen.add(name)
+# A name in BOUNDARY_CALLERS that calls nothing (renamed, moved, or its call
+# gone) is a permission nobody uses: it would let a new object of that name
+# in unread.
+check(callers_seen == BOUNDARY_CALLERS, f'BOUNDARY_CALLERS names {sorted(BOUNDARY_CALLERS - callers_seen)}, which call nothing')
 headers = re.compile(r'#\s*include\s*[<"](sbc_encoder|sbc_enc_func_declare|sbc_dct|sbc_if)\.h[>"]')
 for tree in ('src', 'include', 'test'):
     for p in (KERNEL / tree).rglob('*'):

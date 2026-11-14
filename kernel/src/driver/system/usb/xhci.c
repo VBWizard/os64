@@ -33,6 +33,8 @@
 #include "driver/system/usb/bt_le.h"
 #include "driver/system/usb/bt_manager.h"
 #include "driver/system/usb/bt_host.h"
+#include "driver/system/usb/bt_a2dp_seam.h"   // slot 2's audio sink, given to the host at bring-up
+#include "micros.h"                            // the pump's clock, handed to each host tick
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
@@ -1418,6 +1420,7 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			// enumeration left standing so the next one raises an event.
 			xhci_port_ack_changes(s_hc->bluetooth.device->port);
 			bt_host_init(&s_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+			bt_host_audio(&s_hc->bluetooth.host, &kBtA2dpSeamOps, NULL);
 			for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
 				s_hc->bluetooth.keyboards[i].name = "bluetooth";
 				s_hc->bluetooth.keyboards[i].debug = DEBUG_USB;
@@ -1697,7 +1700,7 @@ static void xhci_bt_runtime_poll(void)
     }
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
-    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
+    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND, micros_now(),
                  usb_done, p->tx_slots, usb_failed, xhci_bt_runtime_send,
                  xhci_bt_acl_send, xhci_bt_input_report, p);
     if (p->scan_history.valid && !p->scan_history.finished &&

@@ -116,6 +116,11 @@ typedef struct {
     const bt_a2dp_ops_t *a2dp_ops;
     void *a2dp_ctx;
     bt_avdtp_t avdtp;
+    bt_a2dp_t a2dp;
+    // The microsecond clock of the last tick: the pump's, and AVDTP's in
+    // milliseconds (every AVDTP call is handed now_us / 1000, so its timers
+    // and the pump's calls into it share one clock).
+    uint64_t now_us;
     // The 0x0019 channels: signalling, media, and the one we are asking
     // for (connecting or configuring, not yet given a role), each its index
     // PLUS ONE (0: none) and its CID, as sdp_channel is.
@@ -129,8 +134,13 @@ typedef struct {
     uint8_t avdtp_sig_asked, avdtp_sig_ends;
     uint64_t avdtp_sig_again_at;
     // PDUs that arrived on the media channel (we are a source) or on a
-    // 0x0019 channel with no role, dropped. Since start-up.
-    uint32_t avdtp_media_dropped;
+    // 0x0019 channel with no role, dropped; media packets that left the
+    // channel's payload slot without being handed to the controller (the
+    // peer's new MTU no longer took one, or the controller's packet could
+    // not carry it), let go as sent so the pump goes on. Since start-up.
+    uint32_t avdtp_media_dropped, a2dp_media_lost;
+    // The media packet the pump writes and L2CAP copies.
+    uint8_t a2dp_packet[BT_L2CAP_MTU];
     // Reconnection (AUDIO_CLASSIC.md § L6): with a bond and `classic_auto`,
     // page the headphones once when the bond is loaded, and again after a
     // drop they may come back from or a page they did not answer, at
@@ -206,16 +216,19 @@ void bt_host_event(bt_host_t *, const uint8_t *, size_t);
 // the host failed.
 void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
-// One step. `usb_done`: no command's control transfer is in flight.
-// `tx_in_flight`: how many of the transport's BT_HOST_TX_SLOTS send slots
-// hold a packet whose USB transfer has not completed. `failed`: the
-// transport is gone. ACL packets leave through the `bt_le_acl_send_t`
-// callback, whole, never more than one slot's worth, and only into a free
-// slot: the LE peers first, then the Classic link's L2CAP, which leaves
-// a slot free for them and waits while one of them holds a packet. An LE
-// packet is therefore never kept waiting for a slot or a buffer; it does
-// queue behind Classic packets already on the one transmit ring.
-void bt_host_tick(bt_host_t *, uint64_t now, bool usb_done, unsigned tx_in_flight, bool failed,
+// One step. `now` is milliseconds, the clock of everything but slot 2's
+// audio; `now_us` is the monotonic microsecond clock the pump paces by
+// (and AVDTP's, in milliseconds). `usb_done`: no command's control
+// transfer is in flight. `tx_in_flight`: how many of the transport's
+// BT_HOST_TX_SLOTS send slots hold a packet whose USB transfer has not
+// completed. `failed`: the transport is gone. ACL packets leave through
+// the `bt_le_acl_send_t` callback, whole, never more than one slot's
+// worth, and only into a free slot: the LE peers first, then the Classic
+// link's L2CAP, which leaves a slot free for them and waits while one of
+// them holds a packet. An LE packet is therefore never kept waiting for a
+// slot or a buffer; it does queue behind Classic packets already on the
+// one transmit ring.
+void bt_host_tick(bt_host_t *, uint64_t now, uint64_t now_us, bool usb_done, unsigned tx_in_flight, bool failed,
                   bt_scan_send_t, bt_le_acl_send_t, bt_host_report_t, void *);
 void bt_host_policy(bt_host_t *, uint64_t);
 // Slot 2's audio sink: the seam, the encoder and the clock as the pump

@@ -7,6 +7,8 @@
 #include "../kernel/src/driver/system/usb/bt_l2cap.c"
 #include "../kernel/src/driver/system/usb/bt_sdp.c"
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
+#include "../kernel/src/audio/sbc_frame.c"
+#include "../kernel/src/driver/system/usb/bt_a2dp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
 
@@ -204,7 +206,7 @@ static void headphones_deliver(void);
 static void step(void)
 {
     ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
-    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static void notify_keyboard(void)
 {
@@ -336,7 +338,7 @@ static void credits_and_faults(void)
     step(); assert(host.owner==3 && cmd_n);
     const uint8_t ok[]={0x0e,10,1,9,0x10,0,1,2,3,4,5,6};
     cmd_n=0; multi_event(ok,sizeof(ok));
-    bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+    ++now; bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
     assert(!cmd_n && host.owner==3 && host.peers[1].le.pending);
     step(); assert(cmd_n && le_u16(cmd)==0x2002);
     // A truncated mouse report must release that source without inventing motion.
@@ -509,7 +511,7 @@ static void start_up_rounds(void)
     // A failed transport is not a round to repeat.
     setup(); host=(bt_host_t){.credits=1,.scan={.phase=BT_SCAN_STOPPED}};
     step(); now=host.init_retry_at; cmd_n=0; step();
-    bt_host_tick(&host,++now,true,0,true,multi_command,multi_acl,multi_report,NULL);
+    ++now; bt_host_tick(&host,now,now*1000,true,0,true,multi_command,multi_acl,multi_report,NULL);
     assert(host.failed && host.init_failed_rounds==0);
     puts("PASS: an unanswered start-up round is run again with its credit restored, three failures fail the host, a failed transport is not retried");
 }
@@ -629,7 +631,7 @@ static void mouse_interval(void)
         if(failure!=1 && failure!=3) multi_event(updated,sizeof(updated));
         // Command status can precede USB completion and an inspect request.
         assert(bt_host_command(&host,"slot 1 inspect",14,now));
-        bt_host_tick(&host,++now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        ++now; bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(s->pending && host.owner==3 && !cmd_n);
         s->phase=BT_LE_READY; step();
         assert(!s->pending && !host.owner && !cmd_n && !s->error && !host.failed);
@@ -962,7 +964,7 @@ static void step_watched(void)
     w_free=!host.owner || (host.command_done && !host_owner_pending(&host));
     w_urgent=bt_classic_urgent(&host.classic);
     w_before=CM.n;
-    bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+    bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static bt_classic_bond_t ph_bond(void)
 {
@@ -1263,13 +1265,13 @@ static void classic_owner_bounds(void)
     uint64_t sent_at=now;
     for(unsigned i=0;i<4900;i++) {
         ++now; classic_deliver();   // the model's reply arrives; the transfer never completes
-        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
         assert(!host.failed && host.owner==BT_HOST_OWNER_CLASSIC);
         if(i==100) assert(host.command_done);
     }
     for(unsigned i=0;i<300 && !host.failed;i++) {
         ++now; classic_deliver();
-        bt_host_tick(&host,now,false,0,false,multi_command,multi_acl,multi_report,NULL);
+        bt_host_tick(&host,now,now*1000,false,0,false,multi_command,multi_acl,multi_report,NULL);
     }
     assert(host.failed && now>=sent_at+5000 && now<sent_at+5200);
     puts("PASS: every command-slot owner is bounded in routing and retirement; a Classic command unanswered, or answered with its transfer never done, fails the controller; a late reply frees the slot");
@@ -1653,7 +1655,7 @@ static void classic_le_first(void)
         ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
         const bt_le_t *k=&host.peers[0].le;
         bool eligible=k->queue_count && !k->outstanding && !tx_holding(12);
-        bt_host_tick(&host,now,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+        bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
         int le_at=-1, classic_at=-1;
         for(unsigned s=0;s<TX.sent_n;s++) {
             if(TX.sent[s]==12 && le_at<0) le_at=(int)s;

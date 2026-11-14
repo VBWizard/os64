@@ -11,8 +11,9 @@ what the proof found. AUDIO_A2DP.md § Part E is the design; its "E, as
 built" says where this differs from it.
 
 The kernel may call two functions, `sbc_port.h`'s, and only from an object
-named in `tools/test_sbc_audit.py`'s `BOUNDARY_CALLERS` (empty today; the
-A2DP pump is added there by name in the commit that adds its call). The
+named in `tools/test_sbc_audit.py`'s `BOUNDARY_CALLERS`: the A2DP pump's
+ops, `kernel/src/driver/system/usb/bt_a2dp_seam.c`, through which the
+pump (`bt_a2dp.c`) reaches the encoder from kusb's pass. The
 audit reads every kernel object's symbols and fails if one outside
 `ports/sbc` reaches any symbol the upstream objects define, calls the
 boundary without being named, or a kernel source includes an upstream
@@ -222,8 +223,8 @@ decode's frame count and FFmpeg's error output, and proves that check can
 fail: one flipped scale-factor bit in a good stream must be caught.
 
 The host proof exercises the HOST compiler's build of the same sources
-with the same switches. The kernel's objects are audited, not executed,
-until part P runs them.
+with the same switches. The kernel's objects are audited on the host, and
+executed only in the kernel, by the A2DP sink on the real machine.
 
 `tools/test_sbc_audit.py` builds the kernel and reads it: the import is the
 pinned commit; every name upstream tests in a preprocessor condition is

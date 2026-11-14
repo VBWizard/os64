@@ -19,6 +19,8 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_l2cap.c"
 #include "../kernel/src/driver/system/usb/bt_sdp.c"
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
+#include "../kernel/src/audio/sbc_frame.c"
+#include "../kernel/src/driver/system/usb/bt_a2dp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
@@ -83,6 +85,19 @@ uint64_t kCPUCyclesPerSecond = 1000000000;
 doorbell_t kUsbDoorbell;
 void doorbell_ring(doorbell_t *db) { db->rings++; }
 uint64_t rdtsc(void) { static uint64_t cycles; return cycles += 1000; }
+// The pump's clock, and its way to the seam and the encoder: no Classic
+// link comes up in these cases, so the pump never runs, and a call to any
+// of its ops is a failure.
+uint64_t micros_now(void) { return kTicksSinceStart * 10000; }
+static bt_a2dp_pulled_t no_pull(void *c,int16_t *o,uint32_t f) { (void)c; (void)o; (void)f; abort(); }
+static bool no_sound(void *c) { (void)c; abort(); }
+static void no_seam(void *c) { (void)c; abort(); }
+static void no_failed(void *c,const char *w) { (void)c; (void)w; abort(); }
+static void no_delay(void *c,uint32_t d) { (void)c; (void)d; abort(); }
+static bool no_begin(void *c,const sbc_settings_t *s) { (void)c; (void)s; abort(); }
+static bool no_encode(void *c,const int16_t *p,uint8_t *o,size_t n) { (void)c; (void)p; (void)o; (void)n; abort(); }
+static uint64_t no_clock(void *c) { (void)c; abort(); }
+const bt_a2dp_ops_t kBtA2dpSeamOps={no_pull,no_sound,no_seam,no_seam,no_failed,no_delay,no_begin,no_encode,no_clock};
 void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 volatile uint64_t kSystemCurrentTime;
 // Fixed calendar fixture: exercise captured timestamps and formatting without
@@ -855,6 +870,8 @@ int main(void)
         if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS) CHECK(!failure_log[0]);
         if (retained) {
             CHECK(hc.bt_probe==&hc.bluetooth && hc.bluetooth.device==&hc.bluetooth_device);
+            // The host was given slot 2's audio sink at bring-up.
+            CHECK(hc.bluetooth.host.a2dp_ops==&kBtA2dpSeamOps && !hc.bluetooth.host.a2dp.attached);
             CHECK(!released && allocations-frees==10 && dcbaa[2]);
             // The original stack device can change after enumeration returns.
             device.slot=99;
