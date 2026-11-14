@@ -42,6 +42,7 @@
 #define BT_AVRCP_PRESSES        16      // the ring of presses and releases not yet read by the host
 #define BT_AVRCP_REPLY_MS       2000    // a command of ours waits this long after it is sent, twice (bt_avrcp_command_t)
 #define BT_AVRCP_HOLD_MS        2000    // a press with no release is released by us this long after its last repeat
+#define BT_AVRCP_RESTARTS       3       // FAILED begins again at playing at most this often a channel (bt_avrcp_playback)
 
 // The pass-through operations taken (AV/C Panel Subunit; the low seven
 // bits of the operation byte, the top bit being "released").
@@ -65,7 +66,7 @@ typedef enum {
     BT_AVRCP_REGISTERING,     // our Register Notification (volume changed) is queued or out
     BT_AVRCP_READY,           // their volume is known and a registration stands (or is being made again)
     BT_AVRCP_PLAIN,           // they have no absolute volume: not listed, rejected or not implemented
-    BT_AVRCP_FAILED,          // a command of ours went unanswered twice
+    BT_AVRCP_FAILED,          // a command of ours went unanswered twice (playing begins again: bt_avrcp_playback)
 } bt_avrcp_state_t;
 
 // One message waiting for its turn on the channel. `id` names this message
@@ -140,6 +141,7 @@ typedef struct bt_avrcp {
     uint32_t presses[7];      // presses taken, by operation (volume up, down, play, stop, pause, forward, backward)
     uint32_t auto_released, presses_lost, unmatched_releases, not_taken;
     uint32_t sets, sets_accepted, sets_rejected, sets_interim, registrations, silences;
+    uint8_t restarts;         // FAILED begun again by playing, on this channel
     uint32_t answered, rejected, not_implemented;
     uint32_t strays;          // a response that answers nothing of ours (no live command has its label, or another PDU)
     uint32_t malformed;       // a message, or a response of ours, not well formed
@@ -159,7 +161,7 @@ void bt_avrcp_reset(bt_avrcp_t *a);
 void bt_avrcp_channel_open(bt_avrcp_t *a, uint64_t now);    // the AVCTP channel is open: we begin asking
 // It closed, the link staying up or not: IDLE. Everything the channel
 // carried goes (answers owed, our commands, their registrations, their
-// volume, reassembly); a press held is released.
+// volume, the restarts counted, reassembly); a press held is released.
 void bt_avrcp_channel_closed(bt_avrcp_t *a, uint64_t now);
 // One whole L2CAP payload from the AVCTP channel: a single packet or one
 // fragment of a message.
@@ -193,7 +195,10 @@ bool bt_avrcp_set_volume(bt_avrcp_t *a, uint8_t raw, uint64_t now);
 bool bt_avrcp_press(bt_avrcp_t *a, bt_avrcp_press_t *out);   // the oldest press or release not yet read; false when none
 // The playback status as the host finds it (BT_AVRCP_STOPPED, PLAYING or
 // PAUSED; anything else is ignored), each tick. A change is announced to a
-// standing registration with CHANGED, which spends it.
+// standing registration with CHANGED, which spends it. A change TO playing
+// while the controller is FAILED begins it again at ASKING, at most
+// BT_AVRCP_RESTARTS times until the channel closes: headphones may hold
+// back their volume registration's answer until something plays.
 void bt_avrcp_playback(bt_avrcp_t *a, uint8_t status, uint64_t now);
 
 const char *bt_avrcp_state_name(bt_avrcp_state_t s);

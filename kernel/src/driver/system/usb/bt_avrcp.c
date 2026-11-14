@@ -240,12 +240,15 @@ static void ar_vendor_in(bt_avrcp_t *a, bt_avrcp_msg_t *m, uint8_t label, const 
             ar_vendor(m,pdu,2);
             ar_put(m,EVENT_PLAYBACK); ar_put(m,a->playback);
         } else {
-            // "No track selected": we have no notion of a track, so the
-            // registration is never spent.
+            // While we play, the identifier 0: "a track is playing", as a
+            // target without browsing says it (Android's does); otherwise
+            // all ones, "no track selected". We have no notion of a track
+            // changing, so the registration is never spent.
             a->track_registered=true;
             ar_vendor(m,pdu,9);
             ar_put(m,EVENT_TRACK);
-            for(int i=0;i<8;i++) ar_put(m,0xff);
+            uint8_t track=a->playback==BT_AVRCP_PLAYING ? 0x00 : 0xff;
+            for(int i=0;i<8;i++) ar_put(m,track);
         }
         break;
     case PDU_GET_PLAY_STATUS:
@@ -515,6 +518,7 @@ void bt_avrcp_channel_closed(bt_avrcp_t *a, uint64_t now)
     a->answers=0;
     ar_controller_ends(a,BT_AVRCP_IDLE);
     a->play_registered=false; a->track_registered=false;
+    a->restarts=0;
     a->rx_active=false;
 }
 
@@ -677,6 +681,14 @@ void bt_avrcp_playback(bt_avrcp_t *a, uint8_t status, uint64_t now)
     a->now=now;
     if(status>BT_AVRCP_PAUSED || status==a->playback) return;
     a->playback=status;
+    // Headphones may hold back their volume registration's answer until
+    // something plays, and so be FAILED for silence alone: playing begins
+    // the controller again, a bounded number of times a channel. PLAIN is
+    // their own answer and stays.
+    if(status==BT_AVRCP_PLAYING && a->state==BT_AVRCP_FAILED && a->restarts<BT_AVRCP_RESTARTS) {
+        a->restarts++;
+        ar_ask(a);
+    }
     if(!a->play_registered) return;
     a->play_registered=false;
     if(a->answers>=BT_AVRCP_ANSWERS) { a->overrun++; return; }   // the kept slot makes this a guard, never a path
@@ -709,9 +721,10 @@ size_t bt_avrcp_status(const bt_avrcp_t *a, char *out, size_t cap)
     else w=snprintf(out,cap,"avrcp: %s, their volume not known\n",bt_avrcp_state_name(a->state));
     if(w>0) n+=(size_t)w;
     if(n<cap) {
-        w=snprintf(out+n,cap-n,"avrcp: sets %u (accepted %u, interim %u, rejected %u)%s, registrations %u, silences %u\n",
+        w=snprintf(out+n,cap-n,"avrcp: sets %u (accepted %u, interim %u, rejected %u)%s, registrations %u, silences %u, restarts %u of %u\n",
                    (unsigned)a->sets,(unsigned)a->sets_accepted,(unsigned)a->sets_interim,(unsigned)a->sets_rejected,
-                   a->set_pending ? ", one waiting" : "",(unsigned)a->registrations,(unsigned)a->silences);
+                   a->set_pending ? ", one waiting" : "",(unsigned)a->registrations,(unsigned)a->silences,
+                   (unsigned)a->restarts,(unsigned)BT_AVRCP_RESTARTS);
         if(w>0) n+=(size_t)w;
     }
     if(n<cap) {

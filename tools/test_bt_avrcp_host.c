@@ -1192,7 +1192,8 @@ static void test_notifications(void)
     expect(w);
     w = OURS(4, R_CHANGED, 0x49, OP_VENDOR); vendor(&w, REGISTER, 2); put(&w, EV_PLAYBACK); put(&w, BT_AVRCP_STOPPED);
     expect(w);
-    // Track changed: INTERIM with "no track selected", never CHANGED.
+    // Track changed: INTERIM with "no track selected" while not playing and
+    // "a track is playing" (identifier 0) while playing; never CHANGED.
     r = vcmd(6, C_NOTIFY, REGISTER, P(EV_TRACK, 0, 0, 0, 0));
     feed(&r);
     expect(vanswer(6, R_INTERIM, REGISTER, P(EV_TRACK, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
@@ -1200,6 +1201,19 @@ static void test_notifications(void)
     bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
     bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
     T += 60000; bt_avrcp_tick(&A, T);
+    expect_nothing();
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    r = vcmd(7, C_NOTIFY, REGISTER, P(EV_TRACK, 0, 0, 0, 0));
+    feed(&r);
+    expect(vanswer(7, R_INTERIM, REGISTER, P(EV_TRACK, 0, 0, 0, 0, 0, 0, 0, 0)));
+    bt_avrcp_playback(&A, BT_AVRCP_PAUSED, T);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    expect_nothing();
+    bt_avrcp_playback(&A, BT_AVRCP_PAUSED, T);
+    r = vcmd(8, C_NOTIFY, REGISTER, P(EV_TRACK, 0, 0, 0, 0));
+    feed(&r);
+    expect(vanswer(8, R_INTERIM, REGISTER, P(EV_TRACK, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
     expect_nothing();
 
     // Several commands of theirs back to back, with none lost and the
@@ -1439,6 +1453,100 @@ static void test_avctp(void)
     expect_volume(44);
 }
 
+// From ASKING with Get Capabilities queued: the question answered with the
+// volume event, and the registration never answered, sent twice: FAILED.
+static void fail_silent_registration(void)
+{
+    unsigned g = ASKED();
+    msg_t e = events(g, ALL_EVENTS, 3);
+    feed(&e);
+    unsigned r = REGISTERED();
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
+    CHECK_EQ(REGISTERED(), r);
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+    expect_nothing();
+}
+
+static void test_restarts(void)
+{
+    // Headphones that hold their registration's answer until something
+    // plays: FAILED, then playing begins the controller again, and this
+    // time they answer.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    fail_silent_registration();
+    bt_avrcp_playback(&A, BT_AVRCP_PAUSED, T);     // paused is not playing
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+    expect_nothing();
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_ASKING);
+    CHECK_EQ(A.restarts, 1);
+    unsigned g = ASKED();
+    msg_t e = events(g, ALL_EVENTS, 3);
+    feed(&e);
+    unsigned r = REGISTERED();
+    msg_t i = volume_reply(r, R_INTERIM, 33);
+    feed(&i);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    expect_volume(33);
+    char line[1024];
+    bt_avrcp_status(&A, line, sizeof(line));
+    CHECK(strstr(line, "restarts 1 of 3\n") != NULL);
+    // Playing again in READY begins nothing.
+    bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    expect_nothing();
+
+    // The bound: three a channel, each at a change to playing.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    fail_silent_registration();
+    for (int k = 1; k <= BT_AVRCP_RESTARTS; k++) {
+        bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+        CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_ASKING);
+        CHECK_EQ(A.restarts, k);
+        bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);   // no change, no second ask
+        fail_silent_registration();
+        bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
+    }
+    CHECK_EQ(BT_AVRCP_RESTARTS, 3);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+    CHECK_EQ(A.restarts, 3);
+    expect_nothing();
+    bt_avrcp_status(&A, line, sizeof(line));
+    CHECK(strstr(line, "restarts 3 of 3\n") != NULL);
+    // A channel closed and opened again counts afresh.
+    bt_avrcp_channel_closed(&A, T);
+    CHECK_EQ(A.restarts, 0);
+    bt_avrcp_channel_open(&A, T);
+    bt_avrcp_playback(&A, BT_AVRCP_STOPPED, T);
+    fail_silent_registration();
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_ASKING);
+    CHECK_EQ(A.restarts, 1);
+    ASKED();
+    // PLAIN is their own answer: playing begins nothing.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    g = ASKED();
+    msg_t rj = refusal(g, GET_CAPS, ST_INVALID_COMMAND);
+    feed(&rj);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_PLAIN);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_PLAIN);
+    CHECK_EQ(A.restarts, 0);
+    expect_nothing();
+    // A restart from FAILED reached by a silent Set works the same way.
+    to_ready(20);
+    CHECK(bt_avrcp_set_volume(&A, 5, T));
+    SET(5);
+    T += 2 * REPLY_MS; bt_avrcp_tick(&A, T);
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
+    bt_avrcp_playback(&A, BT_AVRCP_PLAYING, T);
+    ASKED();
+}
+
 static void test_status(void)
 {
     char line[1024];
@@ -1644,6 +1752,7 @@ int main(int argc, char **argv)
     test_answers();
     test_notifications();
     test_avctp();
+    test_restarts();
     test_status();
     fuzz_random(rounds);
     fuzz_peer(rounds);
