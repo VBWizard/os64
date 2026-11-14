@@ -33,6 +33,7 @@ typedef struct
 	uint32_t gen, prev_gen;
 	uint64_t accepted, taken, underruns, stamp, given;
 	uint32_t delay_us, volume;
+	bool owned;          // the sink owns the volume: no gain
 	const void *sink;
 } model_t;
 
@@ -83,8 +84,9 @@ static long m_write(model_t *m, const uint8_t *b, size_t len, uint32_t gen)
 	return (long)used;
 }
 
-static int16_t m_gain(int16_t x, uint32_t v)
+static int16_t m_gain(int16_t x, uint32_t v, bool owned)
 {
+	if (owned) return x;
 	long long g = (long long)v * v * 32768 / 10000;
 	return (int16_t)((long long)x * g / 32768);
 }
@@ -102,8 +104,8 @@ static mpull_t m_pull(model_t *m, const void *sink, int16_t *out, uint32_t frame
 		n++;
 	for (uint32_t i = 0; i < frames; i++)
 	{
-		out[i * 2]     = i < n ? m_gain(m->q[i].l, m->volume) : 0;
-		out[i * 2 + 1] = i < n ? m_gain(m->q[i].r, m->volume) : 0;
+		out[i * 2]     = i < n ? m_gain(m->q[i].l, m->volume, m->owned) : 0;
+		out[i * 2 + 1] = i < n ? m_gain(m->q[i].r, m->volume, m->owned) : 0;
 	}
 	if (old) r.gen = m->prev_gen; else m->taken += n;
 	memmove(m->q, m->q + n, (m->n - n) * sizeof(mframe_t));
@@ -161,6 +163,8 @@ static void compare(void)
 	CHECK_EQ(audio_stream_has_sound(&S, S.sink), !M.failed && !M.paused && M.n > 0);
 	CHECK(!audio_stream_has_sound(&S, S.sink == (const void *)&other_sink ? (const void *)&some_sink : (const void *)&other_sink));
 	CHECK_EQ(audio_stream_writer_should_wake(&S), MCAP - M.n >= MCAP / 4);
+	CHECK_EQ(S.volume, M.volume);
+	CHECK_EQ(S.volume_owned, M.owned);
 }
 
 static void do_write(size_t len, uint32_t gen)
@@ -280,17 +284,36 @@ static void random_rounds(unsigned rounds)
 					break;
 				}
 				case 15:
-					switch (rand() % 6)
+					switch (rand() % 8)
 					{
 						case 0:
 							audio_stream_sink_attach(&S, &some_sink);
-							M.sink = &some_sink; M.failed = false; M.delay_us = 0; m_restart(&M);
+							M.sink = &some_sink; M.failed = false; M.delay_us = 0; M.owned = false; m_restart(&M);
 							break;
 						case 1:
 						{
 							const void *who = rand() % 2 ? &some_sink : &other_sink;
 							audio_stream_sink_detach(&S, who);
-							if (who == M.sink) { M.sink = NULL; M.failed = false; M.delay_us = 0; m_restart(&M); }
+							if (who == M.sink) { M.sink = NULL; M.failed = false; M.delay_us = 0; M.owned = false; m_restart(&M); }
+							break;
+						}
+						case 6:
+						{
+							// The sink, a stranger, or the null sink, owning or letting go.
+							const void *who = rand() % 3 == 0 ? NULL : rand() % 4 ? M.sink : &other_sink;
+							bool owned = rand() % 2;
+							bool ok = who != NULL && who == M.sink;
+							CHECK_EQ(audio_stream_sink_owns_volume(&S, who, owned), ok);
+							if (ok) M.owned = owned;
+							break;
+						}
+						case 7:
+						{
+							const void *who = rand() % 3 == 0 ? NULL : rand() % 4 ? M.sink : &other_sink;
+							uint32_t v = (uint32_t)(rand() % 120);
+							bool ok = who != NULL && who == M.sink && v <= 100;
+							CHECK_EQ(audio_stream_sink_volume_set(&S, who, v), ok);
+							if (ok) M.volume = v;
 							break;
 						}
 						case 2:
@@ -634,6 +657,86 @@ static void test_gain(void)
 	CHECK_EQ(out[0], 0);
 }
 
+// One frame through the sink's pull, as the gain leaves it.
+static int16_t t_through(int16_t sample)
+{
+	uint8_t b[4];
+	frame_bytes(b, sample, sample);
+	CHECK_EQ(audio_stream_write(&T, b, 4, T.generation), 4);
+	int16_t out[2] = { 0x5555, 0x5555 };
+	CHECK_EQ(audio_stream_pull(&T, T.sink, out, 1, 1).frames, 1);
+	CHECK_EQ(out[0], out[1]);
+	return out[0];
+}
+
+// The sink owning the volume: unity whatever the number; a write while
+// owned moves the number and not the gain; release computes the gain again
+// from the number; attach and detach each give it back; a stranger and the
+// null sink are refused; more than 100 is refused.
+static void test_volume_owned(void)
+{
+	t_open();
+	audio_stream_sink_attach(&T, &some_sink);
+	CHECK(audio_stream_open(&T) == false);          // still the one open
+	CHECK(audio_stream_set_volume(&T, 50));
+	CHECK_EQ(t_through(1000), 250);
+	CHECK(audio_stream_sink_owns_volume(&T, &some_sink, true));
+	CHECK(T.volume_owned);
+	CHECK_EQ(T.volume, 50);
+	CHECK_EQ(t_through(1000), 1000);                // unity, the number untouched
+	CHECK(audio_stream_set_volume(&T, 20));          // /dev/volume while owned
+	CHECK_EQ(T.volume, 20);
+	CHECK_EQ(t_through(1000), 1000);
+	CHECK(audio_stream_sink_volume_set(&T, &some_sink, 0));   // their end says 0
+	CHECK_EQ(T.volume, 0);
+	CHECK_EQ(t_through(1000), 1000);
+	CHECK(!audio_stream_sink_volume_set(&T, &some_sink, 101));
+	CHECK_EQ(T.volume, 0);
+	CHECK(audio_stream_sink_volume_set(&T, &some_sink, 30));
+	// Released: the gain is the number's again, at once.
+	CHECK(audio_stream_sink_owns_volume(&T, &some_sink, false));
+	CHECK(!T.volume_owned);
+	CHECK_EQ(T.volume, 30);
+	CHECK_EQ(t_through(1000), 89);                  // 0.3 squared, in q15, toward zero
+	// Not owned, the sink's setting moves the gain as a write would.
+	CHECK(audio_stream_sink_volume_set(&T, &some_sink, 50));
+	CHECK_EQ(t_through(1000), 250);
+
+	// A stranger, and the null sink, are refused and change nothing.
+	CHECK(!audio_stream_sink_owns_volume(&T, &other_sink, true));
+	CHECK(!audio_stream_sink_owns_volume(&T, NULL, true));
+	CHECK(!T.volume_owned);
+	CHECK(!audio_stream_sink_volume_set(&T, &other_sink, 10));
+	CHECK(!audio_stream_sink_volume_set(&T, NULL, 10));
+	CHECK_EQ(T.volume, 50);
+	CHECK(audio_stream_sink_owns_volume(&T, &some_sink, true));
+	CHECK(!audio_stream_sink_owns_volume(&T, &other_sink, false));
+	CHECK(T.volume_owned);
+
+	// A detach gives the volume back: the null sink plays at the number.
+	audio_stream_sink_detach(&T, &other_sink);       // a stranger's detach: nothing
+	CHECK(T.volume_owned);
+	audio_stream_sink_detach(&T, &some_sink);
+	CHECK(!T.volume_owned);
+	CHECK_EQ(T.volume, 50);
+	CHECK_EQ(t_through(1000), 250);
+	CHECK(!audio_stream_sink_owns_volume(&T, NULL, true));
+	// So does an attach, even of the sink that owned it.
+	audio_stream_sink_attach(&T, &some_sink);
+	CHECK(audio_stream_sink_owns_volume(&T, &some_sink, true));
+	audio_stream_sink_attach(&T, &some_sink);
+	CHECK(!T.volume_owned);
+	CHECK_EQ(t_through(1000), 250);
+	CHECK(audio_stream_sink_owns_volume(&T, &some_sink, true));
+	audio_stream_sink_attach(&T, &other_sink);
+	CHECK(!T.volume_owned);
+	CHECK_EQ(t_through(1000), 250);
+	// A failure keeps the sink, and the ownership with it.
+	CHECK(audio_stream_sink_owns_volume(&T, &other_sink, true));
+	audio_stream_sink_failed(&T, &other_sink);
+	CHECK(T.volume_owned);
+}
+
 static void test_heard_is_taken_less_the_delay(void)
 {
 	uint32_t gen = t_open();
@@ -843,6 +946,7 @@ int main(int argc, char **argv)
 	test_underruns_are_counted_once_a_spell();
 	test_pause_freezes_and_refuses();
 	test_gain();
+	test_volume_owned();
 	test_heard_is_taken_less_the_delay();
 	test_sinks();
 	test_clock();

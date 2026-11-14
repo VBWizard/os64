@@ -165,17 +165,20 @@ static void host_sdp_answer_offer(bt_host_t *h)
         h->sdp_answered++; host_sdp_answer_drop(h);
     }
 }
-// A whole PDU on an open channel: AVDTP's go to slot 2's audio (below). On
+// A whole PDU on an open channel: AVDTP's go to slot 2's audio and AVCTP's
+// to its remote control (below). On
 // an SDP channel we opened, it is the answer to our query. On one the
 // headphones opened, it is their question, answered from our record into
 // the host's buffer and queued; with L2CAP's one payload slot still taken
 // the answer is held (one at most) and offered every tick.
 static void host_avdtp_deliver(bt_host_t *h,unsigned channel,const uint8_t *data,size_t bytes);
+static void host_avctp_deliver(bt_host_t *h,unsigned channel,const uint8_t *data,size_t bytes);
 static void host_l2cap_deliver(void *context,unsigned channel,uint16_t psm,const uint8_t *data,size_t bytes)
 {
     bt_host_t *h=context;
     if(channel>=BT_L2CAP_CHANNELS) return;
     if(psm==BT_L2CAP_PSM_AVDTP) { host_avdtp_deliver(h,channel,data,bytes); return; }
+    if(psm==BT_L2CAP_PSM_AVCTP) { host_avctp_deliver(h,channel,data,bytes); return; }
     if(psm!=BT_L2CAP_PSM_SDP) return;
     const bt_l2cap_channel_t *c=&h->l2cap.ch[channel];
     if(c->outgoing) {
@@ -204,14 +207,17 @@ static void host_sdp_clear(bt_host_t *h)
 static void host_audio_link(bt_host_t *h,bool up);
 static void host_sniff_reset(bt_host_t *h);
 // The Classic link connected (up) or went: L2CAP starts over, admitting SDP
-// and, with an audio sink, AVDTP; and so does everything the last
+// and, with an audio sink, AVDTP and AVCTP; and so does everything the last
 // connection held, its sniff policy among it.
 static void host_services_link(bt_host_t *h,bool up)
 {
     if(up) {
         bt_l2cap_init(&h->l2cap);
         bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_SDP,true);
-        if(h->a2dp_ops) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+        if(h->a2dp_ops) {
+            bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+            bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVCTP,true);
+        }
     } else bt_l2cap_reset(&h->l2cap);
     h->l2cap_encrypted=false;
     host_sdp_clear(h);
@@ -361,11 +367,18 @@ static uint16_t host_avdtp_version(const bt_host_t *h)
 }
 // The link came up or went: the pump lets the seam go if it held it (a
 // link that comes up under a new handle may not have been seen going),
-// and the pump and AVDTP start over.
+// and the pump, AVDTP and AVRCP start over.
+static void host_buttons_drain(bt_host_t *h);
 static void host_audio_link(bt_host_t *h,bool up)
 {
+    // The presses not yet read are the last connection's, drained while
+    // AVRCP still says what state they came in; its reset then releases a
+    // press still held, and that release is drained too.
+    host_buttons_drain(h);
+    bt_avrcp_reset(&h->avrcp);
+    host_buttons_drain(h);
     if(h->a2dp_ops) bt_a2dp_reset(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
-    if(up) { bt_a2dp_init(&h->a2dp); bt_avdtp_init(&h->avdtp); }
+    if(up) { bt_a2dp_init(&h->a2dp); bt_avdtp_init(&h->avdtp); bt_avrcp_init(&h->avrcp); }
     else bt_avdtp_reset(&h->avdtp);
     h->avdtp_sig=h->avdtp_media=h->avdtp_asking=0;
     h->avdtp_sig_cid=h->avdtp_media_cid=h->avdtp_asking_cid=0;
@@ -373,6 +386,13 @@ static void host_audio_link(bt_host_t *h,bool up)
     h->avdtp_sig_parked=0;
     h->avdtp_sig_asked=h->avdtp_sig_ends=0;
     h->avdtp_sig_again_at=0;
+    h->avctp=h->avctp_asking=h->avctp_theirs=0;
+    h->avctp_cid=h->avctp_asking_cid=h->avctp_theirs_cid=0;
+    h->avctp_parked=0;
+    h->avctp_sig_since=h->avctp_again_at=0;
+    h->avctp_asked=h->avctp_ends=0;
+    h->vol_owned=false;          // the pump's detach above took the volume back, if it was owned
+    h->vol_waiting=false;
 }
 // The roles, settled and claimed (the table above). `lnow` is L2CAP's
 // clock, for the channels this closes.
@@ -383,7 +403,7 @@ static void host_avdtp_channels(bt_host_t *h,uint64_t lnow)
     bt_avdtp_t *a=&h->avdtp;
     uint64_t at=host_avdtp_now(h);
     if(h->avdtp_sig && !host_role_live(h,h->avdtp_sig,h->avdtp_sig_cid)) {
-        h->avdtp_sig=0; h->avdtp_sig_cid=0; h->avdtp_sig_parked=0;
+        h->avdtp_sig=0; h->avdtp_sig_cid=0; h->avdtp_sig_parked=0; h->avctp_sig_since=0;
         bt_avdtp_signalling_closed(a,at);
         h->avdtp_sig_ends++; h->avdtp_sig_again_at=at+BT_HOST_AVDTP_AGAIN_MS;
     }
@@ -412,7 +432,7 @@ static void host_avdtp_channels(bt_host_t *h,uint64_t lnow)
             h->avdtp_media=(uint8_t)(i+1); h->avdtp_media_cid=c->cid;
             bt_avdtp_media_open(a,at);
         } else if(!h->avdtp_sig && st==BT_AVDTP_IDLE) {
-            h->avdtp_sig=(uint8_t)(i+1); h->avdtp_sig_cid=c->cid;
+            h->avdtp_sig=(uint8_t)(i+1); h->avdtp_sig_cid=c->cid; h->avctp_sig_since=at?at:1;
             bt_avdtp_signalling_open(a,at,host_avdtp_version(h));
         } else bt_l2cap_close(l,i,lnow);
     }
@@ -478,7 +498,7 @@ static void host_a2dp_settle(bt_host_t *h)
     if(h->l2cap.ch[h->avdtp_media-1u].queued) return;
     bt_a2dp_lost(&h->a2dp);
 }
-// The one loop, after LE's turn and SDP's and AVDTP's, at most three times
+// The one loop, after LE's turn and SDP's, AVDTP's and AVRCP's, at most three times
 // round: while the media channel is open and the send gate allows, a packet
 // is made if the channel's slot is empty (the pump makes one only when one
 // is due, and none while one is pending), and L2CAP is given a turn, which
@@ -592,8 +612,11 @@ static void host_sniff_waking(bt_host_t *h,uint64_t now)
 static void host_sniff_tick(bt_host_t *h,uint64_t now)
 {
     bt_classic_t *c=&h->classic;
-    // This tick's one reading of the seam (the comment above says why).
-    h->sniff_sound=h->a2dp_ops && h->a2dp_ops->has_sound(h->a2dp_ctx);
+    // This tick's one reading of the seam (the comment above says why),
+    // which AVRCP's playback status is also told from.
+    h->seam_paused=false;
+    h->sniff_sound=h->a2dp_ops && (h->a2dp_ops->sound?h->a2dp_ops->sound(h->a2dp_ctx,&h->seam_paused):
+                                                      h->a2dp_ops->has_sound(h->a2dp_ctx));
     if(!h->a2dp_ops || c->phase!=BT_CLASSIC_READY || !c->connected) {
         host_sniff_reset(h);
         h->sniff_start_ok=false;     // a link that is not READY (closing, say) is given no Start
@@ -659,8 +682,10 @@ static void host_sniff_tick(bt_host_t *h,uint64_t now)
 static bt_a2dp_pulled_t host_pump_pull(void *x,int16_t *out,uint32_t frames)
 { bt_host_t *h=x; return h->a2dp_ops->pull(h->a2dp_ctx,out,frames); }
 static bool host_pump_has_sound(void *x) { bt_host_t *h=x; return h->sniff_sound && h->sniff_start_ok; }
-static void host_pump_attach(void *x) { bt_host_t *h=x; h->a2dp_ops->attach(h->a2dp_ctx); }
-static void host_pump_detach(void *x) { bt_host_t *h=x; h->a2dp_ops->detach(h->a2dp_ctx); }
+// The seam takes the volume back at every attach and detach (§ Slot 2's
+// volume), so the host's word that the sink owns it goes with it.
+static void host_pump_attach(void *x) { bt_host_t *h=x; h->vol_owned=false; h->a2dp_ops->attach(h->a2dp_ctx); }
+static void host_pump_detach(void *x) { bt_host_t *h=x; h->vol_owned=false; h->a2dp_ops->detach(h->a2dp_ctx); }
 static void host_pump_failed(void *x,const char *why) { bt_host_t *h=x; h->a2dp_ops->failed(h->a2dp_ctx,why); }
 static void host_pump_delay(void *x,uint32_t us) { bt_host_t *h=x; h->a2dp_ops->delay(h->a2dp_ctx,us); }
 static bool host_pump_begin(void *x,const sbc_settings_t *s)
@@ -673,16 +698,342 @@ static const bt_a2dp_ops_t host_pump_ops={
     .failed=host_pump_failed, .delay=host_pump_delay, .encoder_begin=host_pump_begin,
     .encoder_encode=host_pump_encode, .clock_us=host_pump_clock,
 };
+// ── Slot 2's remote control: AVCTP and AVRCP (AUDIO_REMOTE.md § Part W) ───
+//
+// Only with an audio sink: without one PSM 0x0017 is not admitted, so their
+// requests are refused, and we ask for none. One AVCTP channel carries
+// AVRCP (bt_avrcp.h), and which 0x0017 channel it is, as with AVDTP's
+// roles, is decided from STATE each time the host looks: after every ACL
+// packet L2CAP takes, which is when a channel can open, and at every tick.
+// A channel is held by index AND CID, and is live while L2CAP holds it
+// connected under that CID. Ours and theirs open or opening together:
+// THEIRS is kept and ours closed, since "the one that opened second" is
+// judged differently at each end and can leave none.
+//
+//   channel  | begins                                    | ends, and what follows
+//   ---------+-------------------------------------------+-----------------------------------
+//   asking   | we connect, the link READY and encrypted  | it opens: the AVCTP channel. One
+//   (ours,   | and no 0x0017 channel in any state (one   | of theirs appears, open or not:
+//   not yet  | of theirs still connecting counts): our   | ours is closed, which is not an
+//   open)    | first request once AVDTP's signalling has | end. It ends unopened: an end (a
+//            | been open BT_HOST_AVCTP_WAIT_MS, our      | refusal is counted by its index)
+//            | second BT_HOST_AVCTP_AGAIN_MS after an    |
+//            | end. Never a third on one connection      |
+//   AVCTP    | a 0x0017 channel OPENS while none is the  | either side or L2CAP's timers close
+//            | AVCTP channel: theirs, or ours while none | it: bt_avrcp_channel_closed, and an
+//            | of theirs exists. bt_avrcp_channel_open,  | end. One of theirs appears while
+//            | before a payload of it is delivered       | ours is it: ours is closed, with
+//            |                                           | channel_closed, which is not an end
+//   theirs,  | a 0x0017 channel of theirs exists, open   | it opens: the AVCTP channel (the
+//   waiting  | or opening, and is not the AVCTP channel  | row above). It goes first (refused,
+//            |                                           | its configuration never finished,
+//            |                                           | closed): an end
+//   (closed) | a 0x0017 channel opens while another is   | L2CAP finishes the disconnection
+//            | the AVCTP channel (a second of theirs),   |
+//            | or ours while one of theirs exists        |
+//
+// Each tick, inside slot 2's audio: the channel settled, AVRCP ticked, our
+// request if one may be made, AVRCP told the playback status, then fed
+// after AVDTP and before the media loop, under the same send gate. PDUs on
+// a 0x0017 channel that is not the AVCTP channel are dropped and counted.
+#define BT_HOST_AVCTP_WAIT_MS 2000
+#define BT_HOST_AVCTP_AGAIN_MS 1000
+// An end (the table): the count saturates, so endless ends of theirs never
+// wrap it below our requests.
+static void host_avctp_ended(bt_host_t *h,uint64_t at)
+{
+    if(h->avctp_ends<255) h->avctp_ends++;
+    h->avctp_again_at=at+BT_HOST_AVCTP_AGAIN_MS;
+}
+static void host_avctp_channels(bt_host_t *h,uint64_t lnow)
+{
+    if(!h->a2dp_ops || !h->l2cap.up) return;
+    bt_l2cap_t *l=&h->l2cap;
+    uint64_t at=host_avdtp_now(h);
+    if(h->avctp && !host_role_live(h,h->avctp,h->avctp_cid)) {
+        h->avctp=0; h->avctp_cid=0; h->avctp_parked=0;
+        bt_avrcp_channel_closed(&h->avrcp,at);
+        host_avctp_ended(h,at);
+    }
+    if(h->avctp_asking && !host_role_live(h,h->avctp_asking,h->avctp_asking_cid)) {
+        uint16_t psm, refused=bt_l2cap_refusal(l,h->avctp_asking-1u,&psm);
+        h->avctp_asking=0; h->avctp_asking_cid=0;
+        if(refused) { h->l2cap_refusals++; h->l2cap_refused_result=refused; h->l2cap_refused_psm=psm; }
+        host_avctp_ended(h,at);
+    }
+    if(h->avctp_theirs && !host_role_live(h,h->avctp_theirs,h->avctp_theirs_cid)) {
+        h->avctp_theirs=0; h->avctp_theirs_cid=0;
+        host_avctp_ended(h,at);   // theirs failed before it carried AVRCP
+    }
+    // Theirs: the one that is the AVCTP channel, else the first of theirs
+    // open or opening.
+    int theirs=-1;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
+        const bt_l2cap_channel_t *c=&l->ch[i];
+        if(c->psm!=BT_L2CAP_PSM_AVCTP || c->outgoing || c->state==BT_L2CAP_FREE || c->state==BT_L2CAP_DISCONNECTING)
+            continue;
+        if(theirs<0 || host_role_is(h->avctp,h->avctp_cid,i,c->cid)) theirs=(int)i;
+    }
+    if(theirs>=0) {
+        // Followed until it carries AVRCP: if it goes first, that is an end.
+        if(!host_role_is(h->avctp,h->avctp_cid,(unsigned)theirs,l->ch[theirs].cid)) {
+            h->avctp_theirs=(uint8_t)(theirs+1); h->avctp_theirs_cid=l->ch[theirs].cid;
+        }
+        if(h->avctp && h->l2cap.ch[h->avctp-1u].outgoing) {
+            bt_l2cap_close(l,h->avctp-1u,lnow);
+            h->avctp=0; h->avctp_cid=0; h->avctp_parked=0;
+            bt_avrcp_channel_closed(&h->avrcp,at);
+        }
+        if(h->avctp_asking) {
+            bt_l2cap_close(l,h->avctp_asking-1u,lnow);
+            h->avctp_asking=0; h->avctp_asking_cid=0;
+        }
+    }
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) {
+        const bt_l2cap_channel_t *c=&l->ch[i];
+        if(c->psm!=BT_L2CAP_PSM_AVCTP || !bt_l2cap_is_open(l,i)) continue;
+        if(host_role_is(h->avctp,h->avctp_cid,i,c->cid)) continue;
+        if(host_role_is(h->avctp_asking,h->avctp_asking_cid,i,c->cid)) { h->avctp_asking=0; h->avctp_asking_cid=0; }
+        if(!h->avctp && (theirs<0 || theirs==(int)i)) {
+            h->avctp=(uint8_t)(i+1); h->avctp_cid=c->cid; h->avctp_parked=0;
+            if(host_role_is(h->avctp_theirs,h->avctp_theirs_cid,i,c->cid)) { h->avctp_theirs=0; h->avctp_theirs_cid=0; }
+            bt_avrcp_channel_open(&h->avrcp,at);
+        } else bt_l2cap_close(l,i,lnow);
+    }
+}
+static void host_avctp_deliver(bt_host_t *h,unsigned channel,const uint8_t *data,size_t bytes)
+{
+    host_avctp_channels(h,h->classic.now);
+    if(host_role_is(h->avctp,h->avctp_cid,channel,h->l2cap.ch[channel].cid))
+        bt_avrcp_receive(&h->avrcp,data,bytes,host_avdtp_now(h));
+    else h->avctp_dropped++;
+}
+// Whether we may ask for the AVCTP channel now (the table above).
+static bool host_avctp_may_ask(const bt_host_t *h)
+{
+    if(h->classic.phase!=BT_CLASSIC_READY || !h->classic.encrypted || !h->l2cap.encrypted) return false;
+    if(h->avctp || h->avctp_asking || h->avctp_asked>=2 || h->avctp_ends<h->avctp_asked) return false;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++)
+        if(h->l2cap.ch[i].state!=BT_L2CAP_FREE && h->l2cap.ch[i].psm==BT_L2CAP_PSM_AVCTP) return false;
+    uint64_t at=host_avdtp_now(h);
+    if(at<h->avctp_again_at) return false;
+    if(h->avctp_asked) return true;
+    return h->avctp_sig_since && at-h->avctp_sig_since>=BT_HOST_AVCTP_WAIT_MS;
+}
+static bool host_avctp_connect(bt_host_t *h,uint64_t now)
+{
+    if(!h->l2cap.encrypted || !h->classic.encrypted) return false;
+    int ch=bt_l2cap_connect(&h->l2cap,BT_L2CAP_PSM_AVCTP,now);
+    if(ch<0) return false;
+    h->avctp_asking=(uint8_t)(ch+1); h->avctp_asking_cid=h->l2cap.ch[ch].cid;
+    return true;
+}
+// AVRCP's message onto the AVCTP channel, as host_avdtp_feed does AVDTP's:
+// what AVRCP wants sent now is asked each time, a parked message whose
+// serial is no longer the one offered is taken back, and a message is
+// SENT, for AVRCP, only when host_l2cap_send hands it to the controller
+// (bt_avrcp_sent).
+static void host_avctp_feed(bt_host_t *h)
+{
+    if(!h->avctp) return;
+    unsigned ch=h->avctp-1u;
+    bt_l2cap_t *l=&h->l2cap;
+    if(!bt_l2cap_is_open(l,ch)) return;          // reconfiguring: the slot is held as it is
+    uint8_t msg[BT_AVRCP_LONGEST];
+    uint32_t serial;
+    size_t n=bt_avrcp_next(&h->avrcp,msg,sizeof(msg),(uint16_t)host_l2cap_room(h,ch),host_avdtp_now(h),&serial);
+    if(l->ch[ch].queued) {
+        if(h->avctp_parked && serial==h->avctp_parked) return;
+        (void)bt_l2cap_unqueue(l,ch);
+    }
+    h->avctp_parked=0;
+    if(n && bt_l2cap_send(l,ch,msg,n)) h->avctp_parked=serial;
+}
+// The playback status the target answers with, from this tick's one
+// reading of the seam: playing while AVDTP streams and the seam has sound,
+// paused while the stream is paused, stopped otherwise.
+static uint8_t host_avrcp_playback(const bt_host_t *h)
+{
+    if(bt_avdtp_state(&h->avdtp)==BT_AVDTP_STREAMING && h->sniff_sound) return BT_AVRCP_PLAYING;
+    return h->seam_paused?BT_AVRCP_PAUSED:BT_AVRCP_STOPPED;
+}
+// ── Slot 2's volume (AUDIO_REMOTE.md § Who owns the volume) ────────────────
+//
+// When the headphones have absolute volume, /dev/volume IS their volume:
+// the seam's number is carried out at their end, and the seam applies no
+// gain. CONNECTING NEVER RAISES THE HEADPHONES' LEVEL, AND NEVER CHANGES THE
+// SOUND OF A STREAM THAT IS PLAYING: when ownership begins the seam's number
+// takes THEIR level first, and only then does the seam stop applying its
+// gain; nothing is sent to them; and it begins only on a tick where that
+// cannot change what is heard (no stream going out, or the seam at unity
+// already). They get louder only when a person writes a larger number or
+// presses their own button. The cost of one number: a stream that STARTS
+// owned plays at their own level whatever /dev/volume held before, which
+// can be louder than the seam's gain would have made it.
+//
+// Ownership is a STATE, decided every tick with the volume ops (all three;
+// without them nothing is owned): OWNED while AVRCP is READY and the pump
+// is the seam's sink (attached, from the stream's open to the session's
+// end). It BEGINS only while AVDTP is not starting, streaming or
+// suspending, or the seam's number is 100; until then it waits
+// (`vol_waiting`) and /dev/volume is the seam's gain. Ownership already
+// held goes on through a stream. The seam takes it back by itself at every
+// attach and detach.
+//
+//   the tick finds              | it does
+//   ----------------------------+-----------------------------------------------
+//   owned, not yet the seam's,  | nothing: waiting. The number stays the
+//   a stream going out and the  | person's and the gain theirs
+//   number below 100            |
+//   owned, not yet the seam's,  | volume_set(their level, as 0..100), THEN
+//   otherwise                   | owns_volume(true); their level is the one
+//                               | shared, and their serial taken. Nothing sent
+//   owned, and the seam's       | the number now differs from what the shared
+//                               | level converts to: a write of ours, sent as
+//                               | ONE Set, and its level is the one shared.
+//                               | Then, AVRCP's serial moved (their CHANGED,
+//                               | INTERIM or a Set's ACCEPTED): their level is
+//                               | the one shared, written to the seam only if
+//                               | it converts to another number. Nothing sent.
+//                               | Then, a Set of ours rejected or never
+//                               | answered (AVRCP's counts moved): their level
+//                               | as AVRCP knows it is the one shared, and the
+//                               | seam's number its conversion. Nothing sent
+//   not owned, the seam's       | owns_volume(false): the number stays what it
+//                               | is, so the sound can only be quieter or the
+//                               | same
+//
+// One 0..127 level is kept as both ends' (`vol_raw`), so the ends never
+// chase each other: 0..100 to 0..127 is (v*127+50)/100 and back
+// (x*100+63)/127, and every one of the 101 numbers survives the round trip.
+// A level of theirs that does not survive (27 of 128) is written to the
+// seam as the number it converts to and never sent back.
+static uint8_t host_volume_raw(uint8_t v) { return (uint8_t)((v*127u+50u)/100u); }
+static uint8_t host_volume_number(uint8_t x) { return (uint8_t)(((x&0x7fu)*100u+63u)/127u); }
+static bool host_volume_ops(const bt_host_t *h)
+{
+    const bt_a2dp_ops_t *o=h->a2dp_ops;
+    return o && o->owns_volume && o->volume_set && o->volume_now;
+}
+static void host_volume_tick(bt_host_t *h)
+{
+    if(!host_volume_ops(h)) return;
+    const bt_a2dp_ops_t *o=h->a2dp_ops;
+    uint8_t theirs;
+    h->vol_waiting=false;
+    if(!bt_avrcp_volume(&h->avrcp,&theirs) || !h->a2dp.attached) {
+        if(h->vol_owned) { (void)o->owns_volume(h->a2dp_ctx,false); h->vol_owned=false; }
+        return;
+    }
+    if(!h->vol_owned) {
+        // Not while sound may be going out, unless the seam is at unity
+        // already: the gain would step up with their level unchanged.
+        bt_avdtp_state_t st=bt_avdtp_state(&h->avdtp);
+        h->vol_waiting=(st==BT_AVDTP_STARTING || st==BT_AVDTP_STREAMING || st==BT_AVDTP_SUSPENDING) &&
+                       o->volume_now(h->a2dp_ctx)!=100;
+        if(h->vol_waiting) return;
+        // The order is the rule: a seam that applied no gain while it still
+        // held its old number would have that number sent to them as a write.
+        if(!o->volume_set(h->a2dp_ctx,host_volume_number(theirs)) || !o->owns_volume(h->a2dp_ctx,true)) return;
+        h->vol_owned=true; h->vol_raw=theirs; h->vol_serial=bt_avrcp_volume_serial(&h->avrcp);
+        h->vol_refused=h->avrcp.sets_rejected+h->avrcp.sets_silent;
+        h->vol_ownerships++;
+        return;
+    }
+    uint8_t number=o->volume_now(h->a2dp_ctx);
+    if(number!=host_volume_number(h->vol_raw)) {
+        uint8_t raw=host_volume_raw(number);
+        if(bt_avrcp_set_volume(&h->avrcp,raw,host_avdtp_now(h))) { h->vol_raw=raw; h->vol_sets++; }
+    }
+    uint32_t serial=bt_avrcp_volume_serial(&h->avrcp);
+    if(serial!=h->vol_serial) {
+        h->vol_serial=serial; h->vol_raw=theirs;
+        uint8_t now=host_volume_number(theirs);
+        if(now!=number && o->volume_set(h->a2dp_ctx,now)) h->vol_taken++;
+    }
+    // A Set they rejected, or never answered, leaves them where they were:
+    // that is the level shared, and the seam's number says it (owned, the
+    // sound does not change), so the same write made again is sent again.
+    uint32_t refused=h->avrcp.sets_rejected+h->avrcp.sets_silent;
+    if(refused!=h->vol_refused) {
+        h->vol_refused=refused; h->vol_raw=theirs; h->vol_refusals++;
+        uint8_t now=host_volume_number(theirs);
+        if(now!=o->volume_now(h->a2dp_ctx)) (void)o->volume_set(h->a2dp_ctx,now);
+    }
+}
+// ── Slot 2's buttons (AUDIO_REMOTE.md § Their buttons) ─────────────────────
+//
+// Every press and release AVRCP answered (bt_avrcp_press) is drained each
+// tick, and before AVRCP starts over with the link: counted by name, kept
+// as the last, and held in a ring of its own for a consumer, with loss
+// counted (bt_host.h). The transport logs each from the ring by its number.
+// A PRESS DOES NOTHING, with one exception the design makes: headphones
+// without absolute volume (AVRCP not READY) that send volume up or down
+// move the seam's number by BT_HOST_VOLUME_STEP, clamped to 0..100, through
+// volume_set, which the seam takes from its sink whether or not the sink
+// owns the volume. While AVRCP is READY their volume presses are ignored:
+// their CHANGED is the truth.
+#define BT_HOST_VOLUME_STEP 5
+static void host_button_keep(bt_host_t *h,const bt_host_button_t *b)
+{
+    if(h->buttons_count==BT_HOST_BUTTONS) {
+        h->buttons_head=(uint8_t)((h->buttons_head+1)%BT_HOST_BUTTONS);
+        h->buttons_count--; h->buttons_lost++;
+    }
+    h->buttons[(h->buttons_head+h->buttons_count)%BT_HOST_BUTTONS]=*b;
+    h->buttons_count++;
+    h->buttons_seen++;
+    h->button_last=*b;
+}
+static void host_volume_press(bt_host_t *h,uint8_t operation)
+{
+    if(bt_avrcp_state(&h->avrcp)==BT_AVRCP_READY || !host_volume_ops(h) || !h->a2dp.attached) return;
+    int number=h->a2dp_ops->volume_now(h->a2dp_ctx);
+    number+=operation==BT_AVRCP_OP_VOLUME_UP?BT_HOST_VOLUME_STEP:-BT_HOST_VOLUME_STEP;
+    number=number<0?0:number>100?100:number;
+    if(h->a2dp_ops->volume_set(h->a2dp_ctx,(uint8_t)number)) h->vol_presses++;
+}
+static void host_buttons_drain(bt_host_t *h)
+{
+    bt_avrcp_press_t p;
+    // AVRCP's ring is bounded, so this is too.
+    for(unsigned i=0;i<BT_AVRCP_PRESSES && bt_avrcp_press(&h->avrcp,&p);i++) {
+        bt_host_button_t b={.operation=p.operation,.pressed=p.pressed,.at_ms=host_avdtp_now(h)};
+        host_button_keep(h,&b);
+        if(!p.pressed) continue;
+        int at=bt_avrcp_operation_index(p.operation);
+        h->button_presses[at<0?BT_AVRCP_OPERATIONS:(unsigned)at]++;
+        if(p.operation==BT_AVRCP_OP_VOLUME_UP || p.operation==BT_AVRCP_OP_VOLUME_DOWN) host_volume_press(h,p.operation);
+    }
+}
+bool bt_host_button_take(bt_host_t *h,bt_host_button_t *out)
+{
+    if(!h->buttons_count) return false;
+    *out=h->buttons[h->buttons_head];
+    h->buttons_head=(uint8_t)((h->buttons_head+1)%BT_HOST_BUTTONS);
+    h->buttons_count--;
+    return true;
+}
+bool bt_host_button(const bt_host_t *h,uint32_t number,bt_host_button_t *out)
+{
+    // The ring holds the numbers buttons_seen - buttons_count .. buttons_seen - 1.
+    uint32_t back=h->buttons_seen-number;
+    if(number>=h->buttons_seen || back>h->buttons_count) return false;
+    *out=h->buttons[(h->buttons_head+h->buttons_count-back)%BT_HOST_BUTTONS];
+    return true;
+}
 
-// Slot 2's audio, each tick, after SDP: the roles, the channels AVDTP wants
-// opened and closed, its timers and its messages, then the pump's policy
-// and its packets.
+// Slot 2's audio, each tick, after SDP: the roles and the AVCTP channel,
+// the channels AVDTP and AVCTP want opened and closed, their timers, the
+// pump's policy, AVRCP's playback status, the messages, then the pump's
+// packets.
 static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
 {
     if(!h->a2dp_ops || !h->l2cap.up) return;
     bt_l2cap_t *l=&h->l2cap;
     bt_avdtp_t *a=&h->avdtp;
     host_avdtp_channels(h,now);
+    host_avctp_channels(h,now);
     // The SDP channel the query left open goes once signalling is open:
     // the headphones keep a link with a channel on it.
     if(h->sdp_kept && h->avdtp_sig) {
@@ -690,6 +1041,7 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
         h->sdp_kept=0; h->sdp_kept_cid=0;
     }
     bt_avdtp_tick(a,host_avdtp_now(h));
+    bt_avrcp_tick(&h->avrcp,host_avdtp_now(h));
     if(bt_avdtp_wants_closed(a)) {
         // A session gone wrong: media, then signalling, and whatever of
         // ours is still being asked for.
@@ -703,15 +1055,22 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
         (void)host_avdtp_connect(h,true,now);
     }
     if(host_avdtp_may_ask(h) && host_avdtp_connect(h,false,now)) h->avdtp_sig_asked++;
-    // What was let go above is AVDTP's news now, not at the next look.
+    if(host_avctp_may_ask(h) && host_avctp_connect(h,now)) h->avctp_asked++;
+    // What was let go above is AVDTP's and AVRCP's news now, not at the
+    // next look.
     host_avdtp_channels(h,now);
+    host_avctp_channels(h,now);
     host_avdtp_feed(h);
     host_a2dp_settle(h);
     // The pump's policy hears this tick's one reading of the seam, and "no
     // sound yet" on any tick whose sniff state does not say the link is
     // awake (§ Slot 2's sniff), so our Start waits for the link.
     bt_a2dp_step(&h->a2dp,a,h->now_us,&host_pump_ops,h);
+    bt_avrcp_playback(&h->avrcp,host_avrcp_playback(h),host_avdtp_now(h));
+    host_buttons_drain(h);
+    host_volume_tick(h);         // after the pump's policy, so an attach this tick is seen
     host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
+    host_avctp_feed(h);          // after AVDTP's, and before the media loop's packet
     host_a2dp_send(h,now,call);
 }
 size_t bt_host_media_room(const bt_host_t *h)
@@ -721,7 +1080,10 @@ size_t bt_host_media_room(const bt_host_t *h)
 void bt_host_audio(bt_host_t *h,const bt_a2dp_ops_t *ops,void *ctx)
 {
     h->a2dp_ops=ops; h->a2dp_ctx=ctx;
-    if(ops && h->l2cap.up) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+    if(ops && h->l2cap.up) {
+        bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+        bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVCTP,true);
+    }
 }
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)
@@ -763,12 +1125,13 @@ void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
         // The Classic link's packets are its L2CAP's. This function has no
         // clock of its own: the time is the Classic link's, that of its
         // last tick. A packet for a handle nobody holds is dropped. A
-        // channel opens only inside L2CAP's receive, so the AVDTP roles are
-        // settled after each packet: the one that opened first is the one
-        // seen first.
+        // channel opens only inside L2CAP's receive, so the AVDTP roles and
+        // the AVCTP channel are settled after each packet: the one that
+        // opened first is the one seen first.
         if(!routed && h->classic.connected && h->classic.handle==handle) {
             bt_l2cap_receive(&h->l2cap,h->wire,h->wire_need,h->classic.now,host_l2cap_deliver,h);
             host_avdtp_channels(h,h->classic.now);
+            host_avctp_channels(h,h->classic.now);
         }
         host_wire_empty(h);
     }
@@ -850,7 +1213,8 @@ static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
     host_wipe(packet,4+n);
     // The media channel's PDU (its peer's CID heads it) is the pump's one
     // packet, handed to the controller now: its frames are sent. The
-    // signalling channel's is AVDTP's parked message: sent now, not before.
+    // signalling channel's is AVDTP's parked message, and the AVCTP
+    // channel's AVRCP's: sent now, not before.
     if(n>=4 && host_role_live(h,h->avdtp_media,h->avdtp_media_cid) &&
        host_u16(pdu+2)==h->l2cap.ch[h->avdtp_media-1u].dcid)
         bt_a2dp_sent(&h->a2dp);
@@ -858,6 +1222,11 @@ static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
        host_u16(pdu+2)==h->l2cap.ch[h->avdtp_sig-1u].dcid && h->avdtp_sig_parked) {
         (void)bt_avdtp_sent(&h->avdtp,h->avdtp_sig_parked,host_avdtp_now(h));
         h->avdtp_sig_parked=0;
+    }
+    if(n>=4 && host_role_live(h,h->avctp,h->avctp_cid) &&
+       host_u16(pdu+2)==h->l2cap.ch[h->avctp-1u].dcid && h->avctp_parked) {
+        (void)bt_avrcp_sent(&h->avrcp,h->avctp_parked,host_avdtp_now(h));
+        h->avctp_parked=0;
     }
 }
 // L2CAP may hand over a packet only when it costs the LE peers nothing:
@@ -1103,7 +1472,10 @@ void bt_host_tick(bt_host_t *h,uint64_t now,uint64_t now_us,bool usb_done,unsign
     // A failed controller runs no services: the pump lets the seam go, so
     // the null sink plays and a player's writes are not held for ever. Its
     // counters and reasons stay, for the status file to show.
-    if(h->failed && h->a2dp_ops && h->a2dp.attached) bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+    if(h->failed && h->a2dp_ops && h->a2dp.attached) {
+        bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+        h->vol_owned=false;      // the seam took the volume back at the detach
+    }
     bt_host_policy(h,now);
     host_classic_policy(h,now);
 }
@@ -1262,6 +1634,60 @@ bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
     }
     return bt_manager_command(&peer->manager,&peer->le,&h->scan,p,n,now);
 }
+// Slot 2's remote control, after AVDTP's lines: the AVCTP channel (an
+// index, as L2CAP's lines name it, and who opened it), AVRCP's own text,
+// who owns the volume, and their buttons.
+static size_t host_remote_status(const bt_host_t *h,char *out,size_t used,size_t cap)
+{
+    char channel[24]="none", asking[24]="";
+    if(h->avctp) snprintf(channel,sizeof channel,"%u, %s",h->avctp-1u,h->l2cap.ch[h->avctp-1u].outgoing?"ours":"theirs");
+    if(h->avctp_asking) snprintf(asking,sizeof asking,"; asking on %u",h->avctp_asking-1u);
+    int n=snprintf(out+used,cap-used,"avctp channel: %s%s; our requests %u of 2, ended %u; "
+                   "pdus received on another avctp channel, dropped: %u\n",
+                   channel,asking,(unsigned)h->avctp_asked,(unsigned)h->avctp_ends,(unsigned)h->avctp_dropped);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    used+=bt_avrcp_status(&h->avrcp,out+used,cap-used);
+    if(used>=cap-1) return used;
+    if(h->vol_owned)
+        n=snprintf(out+used,cap-used,"volume: the headphones' (/dev/volume %u is carried out at their end, "
+                   "the seam applies no gain); level shared %u/127",
+                   (unsigned)host_volume_number(h->vol_raw),(unsigned)h->vol_raw);
+    else if(h->vol_waiting)
+        n=snprintf(out+used,cap-used,"volume: the seam's (its gain follows /dev/volume); the headphones' once the "
+                   "stream stops, since taking it now would change the sound");
+    else n=snprintf(out+used,cap-used,"volume: the seam's (its gain follows /dev/volume)");
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    n=snprintf(out+used,cap-used,"; ownerships %u, sets sent %u, their levels taken %u, volume presses applied %u, "
+               "sets refused or unanswered %u\n",
+               (unsigned)h->vol_ownerships,(unsigned)h->vol_sets,(unsigned)h->vol_taken,(unsigned)h->vol_presses,
+               (unsigned)h->vol_refusals);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    if(h->buttons_seen)
+        n=snprintf(out+used,cap-used,"buttons: last %s %s at %lu ms;",bt_avrcp_operation_name(h->button_last.operation),
+                   h->button_last.pressed?"pressed":"released",(unsigned long)h->button_last.at_ms);
+    else n=snprintf(out+used,cap-used,"buttons: none yet;");
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    for(unsigned i=0;i<=BT_AVRCP_OPERATIONS && used<cap-1;i++) {
+        n=snprintf(out+used,cap-used,"%s %s %u",i?",":" pressed:",
+                   i<BT_AVRCP_OPERATIONS?bt_avrcp_operation_name(bt_avrcp_operation(i)):"other",
+                   (unsigned)h->button_presses[i]);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    if(used>=cap-1) return used;
+    n=snprintf(out+used,cap-used,"; held for a consumer %u, lost %u; a press does nothing yet\n",
+               (unsigned)h->buttons_count,(unsigned)h->buttons_lost);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    return used;
+}
 // Slot 2's services, after the link's own lines: L2CAP's text, the query
 // on this connection, what an earlier connection's query found when this
 // one has found nothing yet, and the questions the headphones asked us.
@@ -1321,7 +1747,8 @@ static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size
                (unsigned)h->avdtp_media_dropped);
     if(n<0) return used;
     used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
-    return used;
+    if(used>=cap-1) return used;
+    return host_remote_status(h,out,used,cap);
 }
 size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
 {

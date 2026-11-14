@@ -389,6 +389,32 @@ cat /sys/audio                                  # sink: a2dp
   returns when they reconnect. A failed encoder fails the stream instead:
   `play` is told, and the session is made again at the next connection or
   `slot 2 reconnect`.
+- **The volume is the headphones' own.** Headphones that let their host
+  set their volume (AVRCP's absolute volume; slot 2's `avrcp:` line says
+  `ready` when they do, `plain` when they do not) hand
+  it to `/dev/volume` while the stream is open: `cat /dev/volume` reads
+  their level, `echo 30 > /dev/volume` turns THEM down, and their own
+  volume buttons move the number `cat` shows. Connecting never turns the
+  headphones up and never changes a song that is already playing:
+  `/dev/volume` takes the level they were already at, nothing is sent to
+  them until somebody writes a number or presses their button, and if a
+  song is playing when they connect, the volume stays the machine's until
+  it stops (slot 2's `volume:` line says so). One number has a cost: the
+  next song plays at THEIR level, whatever `/dev/volume` said before, so
+  it can be louder than the machine's own gain had it; `cat /dev/volume`
+  shows the level you will hear. While it is theirs `/sys/audio` reads `volume: 31 (set at
+  its end by the sink a2dp)`; when the stream closes or they disconnect,
+  `/dev/volume` keeps the number and the machine's own gain applies it
+  again. Headphones without absolute volume keep their own level, and a
+  volume press from them moves `/dev/volume` by 5. 0 to 100 here is 0 to
+  127 at their end, and "30" when it is theirs is not the same loudness
+  as "30" when it is the machine's: their curve is not ours.
+- **Their play, pause, next and previous buttons are heard and do nothing
+  yet.** Each press is answered (so the headphones are content), counted
+  under its name on slot 2's `buttons:` line with the last one, and
+  logged under `DEBUG_USB` (`bluetooth: slot 2 avrcp: play pressed`).
+  Slot 2's `avctp channel:`, `avrcp:` and `volume:` lines show the remote
+  control's channel, what AVRCP knows, and whose the volume is.
 - `/sys/usb`'s timeline has slot 2's steps (`slot 2 classic paging ->
   authenticating`), and the log a `bluetooth: slot 2 ...` line for each end,
   each query, each audio session made or gone wrong, and a failed sink.

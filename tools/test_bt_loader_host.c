@@ -21,6 +21,7 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
 #include "../kernel/src/audio/sbc_frame.c"
 #include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
@@ -97,7 +98,8 @@ static void no_delay(void *c,uint32_t d) { (void)c; (void)d; abort(); }
 static bool no_begin(void *c,const sbc_settings_t *s) { (void)c; (void)s; abort(); }
 static bool no_encode(void *c,const int16_t *p,uint8_t *o,size_t n) { (void)c; (void)p; (void)o; (void)n; abort(); }
 static uint64_t no_clock(void *c) { (void)c; abort(); }
-const bt_a2dp_ops_t kBtA2dpSeamOps={no_pull,no_sound,no_seam,no_seam,no_failed,no_delay,no_begin,no_encode,no_clock};
+const bt_a2dp_ops_t kBtA2dpSeamOps={.pull=no_pull,.has_sound=no_sound,.attach=no_seam,.detach=no_seam,.failed=no_failed,
+                                    .delay=no_delay,.encoder_begin=no_begin,.encoder_encode=no_encode,.clock_us=no_clock};
 void signal_raise(signals signal, uint64_t data, void *thread) { (void)signal; (void)data; (void)thread; }
 volatile uint64_t kSystemCurrentTime;
 // Fixed calendar fixture: exercise captured timestamps and formatting without

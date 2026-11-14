@@ -7,6 +7,7 @@
 #include "driver/system/usb/bt_sdp.h"
 #include "driver/system/usb/bt_avdtp.h"
 #include "driver/system/usb/bt_a2dp.h"
+#include "driver/system/usb/bt_avrcp.h"
 
 #define BT_HOST_PEERS BT_BOND_SLOTS
 // The transport's ACL send slots (xhci.c): each holds one packet until its
@@ -28,6 +29,12 @@ enum {
 };
 // Slot 2's sniff policy (bt_host.c § Slot 2's sniff).
 enum { BT_HOST_SNIFF_AWAKE, BT_HOST_SNIFF_ALLOWING, BT_HOST_SNIFF_DOZING, BT_HOST_SNIFF_WAKING };
+// One press or release of the headphones' buttons, as slot 2 keeps it for a
+// consumer: the AVRCP pass-through operation (bt_avrcp.h BT_AVRCP_OP_*),
+// press or release, and when (AVRCP's clock, milliseconds: bt_host_tick's
+// now_us / 1000).
+#define BT_HOST_BUTTONS 16
+typedef struct { uint8_t operation; bool pressed; uint64_t at_ms; } bt_host_button_t;
 // Controller commands and ACL credits are shared; pairing, encryption, ATT,
 // bond policy and input state belong to a peer. USB's serializing flag
 // (xhci.c) orders access.
@@ -59,7 +66,7 @@ typedef struct {
     uint16_t acl_classic;
     // The Classic link's services (AUDIO_CLASSIC.md part S). `l2cap` is
     // brought up when the link connects, admitting SDP and, with an audio
-    // sink, AVDTP, and reset when it goes; every ACL packet on the link's
+    // sink, AVDTP and AVCTP, and reset when it goes; every ACL packet on the link's
     // handle is its.
     // `l2cap_encrypted` is what it was last told of the link's encryption.
     bt_l2cap_t l2cap;
@@ -114,16 +121,17 @@ typedef struct {
     // A2DP pump, the Classic link's as `l2cap` and `sdp` are, started over
     // when the link comes up and when it goes. The pump reaches the seam,
     // the encoder and the clock through `a2dp_ops`, which the transport
-    // supplies (bt_host_audio); with none, AVDTP is neither admitted nor
-    // opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
+    // supplies (bt_host_audio); with none, neither AVDTP nor AVCTP is
+    // admitted or opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
     // has the channels' lifecycle table; the fields below are its state.
     const bt_a2dp_ops_t *a2dp_ops;
     void *a2dp_ctx;
     bt_avdtp_t avdtp;
     bt_a2dp_t a2dp;
-    // The microsecond clock of the last tick: the pump's, and AVDTP's in
-    // milliseconds (every AVDTP call is handed now_us / 1000, so its timers
-    // and the pump's calls into it share one clock).
+    // The microsecond clock of the last tick: the pump's, and AVDTP's and
+    // AVRCP's in milliseconds (every AVDTP and AVRCP call is handed
+    // now_us / 1000, so their timers and the pump's calls into AVDTP share
+    // one clock).
     uint64_t now_us;
     // The 0x0019 channels: signalling, media, and the one we are asking
     // for (connecting or configuring, not yet given a role), each its index
@@ -148,6 +156,64 @@ typedef struct {
     uint32_t avdtp_media_dropped;
     // The media packet the pump writes and L2CAP copies.
     uint8_t a2dp_packet[BT_L2CAP_MTU];
+    // Slot 2's remote control (AUDIO_REMOTE.md § Part W): AVCTP's one
+    // channel and the AVRCP it carries, with an audio sink, started over
+    // when the link comes up and when it goes, as AVDTP is. bt_host.c
+    // § Slot 2's remote control has the channel's lifecycle table; the
+    // fields below are its state. `avctp` is the AVCTP channel,
+    // `avctp_asking` the one we asked for that has not opened, and
+    // `avctp_theirs` one of theirs, open or opening, that has not yet
+    // carried AVRCP, each its index PLUS ONE (0: none) and its CID;
+    // `avctp_parked` the serial
+    // (bt_avrcp_next) of AVRCP's message in the channel's payload slot, 0
+    // when the slot holds none. `avctp_sig_since` is when AVDTP's
+    // signalling channel began (0: none is open), which our first request
+    // waits two seconds from. `avctp_asked` counts our requests on this
+    // connection and `avctp_ends` the AVCTP channels (anyone's) that ended,
+    // requests of ours that failed, and channels of theirs that went before
+    // carrying AVRCP; a request after an end waits until
+    // avctp_again_at. `avctp_dropped`, since start-up: PDUs on a 0x0017
+    // channel that is not the AVCTP channel.
+    bt_avrcp_t avrcp;
+    uint8_t avctp, avctp_asking, avctp_theirs;
+    uint16_t avctp_cid, avctp_asking_cid, avctp_theirs_cid;
+    uint32_t avctp_parked;
+    uint64_t avctp_sig_since, avctp_again_at;
+    uint8_t avctp_asked, avctp_ends;
+    uint32_t avctp_dropped;
+    // Who owns the volume (bt_host.c § Slot 2's volume), decided each tick
+    // from state. `vol_owned`: the seam took the host's word that the sink
+    // owns it, and the host has not seen it take the volume back. The seam
+    // takes it back at every attach and detach: the pump's own (through the
+    // host) clear this at once, but another sink taking the seam is seen
+    // only at the pump's next pull (displaced), and this stays true until
+    // the next volume tick finds the pump detached. `vol_raw`: the last
+    // 0..127 level both ends are known to share. `vol_serial`: AVRCP's
+    // volume serial as last taken. Counted since start-up: ownerships
+    // begun, Sets sent, levels of theirs that changed the seam's number,
+    // volume presses applied to it, and Sets of ours they rejected or never
+    // answered, after which their known level was taken back.
+    // `vol_waiting`: this tick found the volume to be owned but did not
+    // begin, a stream being under way with the seam below unity.
+    bool vol_owned, vol_waiting;
+    uint8_t vol_raw;
+    uint32_t vol_serial;
+    // AVRCP's rejected and silent Sets, summed, as last taken.
+    uint32_t vol_refused;
+    uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses, vol_refusals;
+    // Their buttons (bt_host.c § Slot 2's buttons), since start-up: every
+    // press and release AVRCP reports, drained from it each tick, numbered
+    // from 0 (`buttons_seen` is the next number), and the last
+    // BT_HOST_BUTTONS of them held for a consumer, oldest first, the
+    // oldest overwritten when the ring is full and counted in
+    // `buttons_lost`. Presses (not releases) by operation, in AVRCP's
+    // order (bt_avrcp_operation_index), the last slot for any other; and
+    // the last event (`button_last`, valid once `buttons_seen`).
+    bt_host_button_t buttons[BT_HOST_BUTTONS];
+    uint8_t buttons_head, buttons_count;
+    uint32_t buttons_seen, buttons_lost;
+    uint32_t button_presses[BT_AVRCP_OPERATIONS+1];
+    bt_host_button_t button_last;
     // Slot 2's sniff policy (AUDIO_REMOTE.md § Part Z), kept with an audio
     // sink while the link is READY and started over when it is not;
     // bt_host.c § Slot 2's sniff has the lifecycle table. `sniff_state` is
@@ -160,12 +226,14 @@ typedef struct {
     // wake first saw the refusing write confirmed (0: not yet), the start
     // of its settle; `sniff_wake_spent` that this stream's wake ran out its
     // second. `sniff_sound` is this tick's ONE reading of the seam's
-    // has_sound, and `sniff_start_ok` whether this tick may decide our
-    // Start; the pump's policy sees their conjunction. Counted per host,
-    // not per connection.
+    // has_sound, `seam_paused` the same reading's word on a pause (the
+    // ops' `sound`; false without it), and `sniff_start_ok` whether this
+    // tick may decide our Start; the pump's policy sees the conjunction of
+    // the first and the last, AVRCP's playback status the first two.
+    // Counted per host, not per connection.
     uint8_t sniff_state;
     uint64_t sniff_idle_since, sniff_wake_began, sniff_wake_last, sniff_refused_at;
-    bool sniff_barred, sniff_awake_allowed, sniff_wake_spent, sniff_sound, sniff_start_ok;
+    bool sniff_barred, sniff_awake_allowed, sniff_wake_spent, sniff_sound, sniff_start_ok, seam_paused;
     uint8_t sniff_wake_tries;
     uint32_t sniff_dozes, sniff_wakes, sniff_woke_late, sniff_wake_retries;
     uint32_t sniff_allows_failed, sniff_refuses_failed;
@@ -246,7 +314,7 @@ void bt_host_receive(bt_host_t *, const uint8_t *, size_t, size_t max_packet,
                      bt_host_report_t, void *);
 // One step. `now` is milliseconds, the clock of everything but slot 2's
 // audio; `now_us` is the monotonic microsecond clock the pump paces by
-// (and AVDTP's, in milliseconds). `usb_done`: no command's control
+// (and AVDTP's and AVRCP's, in milliseconds). `usb_done`: no command's control
 // transfer is in flight. `tx_in_flight`: how many of the transport's
 // BT_HOST_TX_SLOTS send slots hold a packet whose USB transfer has not
 // completed. `failed`: the transport is gone. ACL packets leave through
@@ -261,9 +329,16 @@ void bt_host_tick(bt_host_t *, uint64_t now, uint64_t now_us, bool usb_done, uns
 void bt_host_policy(bt_host_t *, uint64_t);
 // Slot 2's audio sink: the seam, the encoder and the clock as the pump
 // reaches them, and the context handed back to each. Given once, after
-// bt_host_init (which clears it). Until it is given, AVDTP is neither
-// admitted nor opened.
+// bt_host_init (which clears it). Until it is given, neither AVDTP nor
+// AVCTP is admitted or opened.
 void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
+// Their buttons, as slot 2 holds them (bt_host_t buttons). A press does
+// nothing yet: these are where a consumer will be handed them. _take
+// gives the oldest held and removes it (false when none). bt_host_button
+// gives the event numbered `number` (0 is the first since start-up)
+// without removing it, false once the ring no longer holds it.
+bool bt_host_button_take(bt_host_t *, bt_host_button_t *);
+bool bt_host_button(const bt_host_t *, uint32_t number, bt_host_button_t *);
 // The largest payload the host sends on the media channel (the MTU it
 // hands bt_a2dp_packet); 0 when there is no open media channel.
 size_t bt_host_media_room(const bt_host_t *);

@@ -53,8 +53,12 @@ typedef struct audio_stream
 	// Who may pull. NULL is the null sink.
 	const void *sink;
 
-	uint32_t volume;     // 0..100
-	int32_t  gain_q15;   // (volume/100)^2
+	// The volume: one number, 0..100. While the sink owns it, the sink
+	// carries it out at its end (headphones that set their own level) and
+	// the pull applies no gain; otherwise the gain is (volume/100)^2.
+	uint32_t volume;
+	bool     volume_owned;
+	int32_t  gain_q15;
 
 	// Since boot.
 	uint64_t total_given;       // every frame a pull filled, sound and silence
@@ -104,10 +108,23 @@ audio_pulled_t audio_stream_pull(audio_stream_t *s, const void *sink, int16_t *o
 bool audio_stream_pause(audio_stream_t *s);
 bool audio_stream_resume(audio_stream_t *s);
 void audio_stream_flush(audio_stream_t *s);
+// /dev/volume's write: the number, 0..100 (more is refused). The gain
+// follows it unless the sink owns the volume, when it stays at unity.
 bool audio_stream_set_volume(audio_stream_t *s, uint32_t volume);
 
-// A change of sink is a flush that always moves the generation. Detach and
-// failed are ignored from a sink that is not the sink.
+// The sink's word on the volume. Each is refused (false, nothing changed)
+// from a sink that is not the sink, and from the null sink. Owning: while
+// true the pull applies no gain; released, the gain is computed again from
+// the number held. Setting: the volume is this at the sink's end, with
+// set_volume's rule for the gain; it needs no ownership, so a sink that
+// does not own the volume moves the seam's gain with it.
+bool audio_stream_sink_owns_volume(audio_stream_t *s, const void *sink, bool owned);
+bool audio_stream_sink_volume_set(audio_stream_t *s, const void *sink, uint32_t volume);
+
+// A change of sink is a flush that always moves the generation, and gives
+// the volume back to the seam (a later sink never inherits a pull that
+// applies no gain). Detach and failed are ignored from a sink that is not
+// the sink.
 void audio_stream_sink_attach(audio_stream_t *s, const void *sink);
 void audio_stream_sink_detach(audio_stream_t *s, const void *sink);
 void audio_stream_sink_failed(audio_stream_t *s, const void *sink);

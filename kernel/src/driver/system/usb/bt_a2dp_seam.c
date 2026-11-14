@@ -33,6 +33,12 @@ static bool seam_has_sound(void *ctx)
 	return audio_sink_has_sound(&s_sink);
 }
 
+static bool seam_sound(void *ctx, bool *paused)
+{
+	(void)ctx;
+	return audio_sink_sound(&s_sink, paused);
+}
+
 static void seam_attach(void *ctx)
 {
 	(void)ctx;
@@ -71,6 +77,24 @@ static bool seam_encoder_encode(void *ctx, const int16_t *pcm, uint8_t *out, siz
 	return sbc_port_encode(pcm, out, capacity);
 }
 
+static bool seam_owns_volume(void *ctx, bool owned)
+{
+	(void)ctx;
+	return audio_sink_owns_volume(&s_sink, owned);
+}
+
+static bool seam_volume_set(void *ctx, uint8_t volume)
+{
+	(void)ctx;
+	return audio_sink_volume_set(&s_sink, volume);
+}
+
+static uint8_t seam_volume_now(void *ctx)
+{
+	(void)ctx;
+	return (uint8_t)audio_sink_volume_now(&s_sink);   // 0..100
+}
+
 static uint64_t seam_clock_us(void *ctx)
 {
 	(void)ctx;
@@ -87,4 +111,8 @@ const bt_a2dp_ops_t kBtA2dpSeamOps = {
 	.encoder_begin = seam_encoder_begin,
 	.encoder_encode = seam_encoder_encode,
 	.clock_us = seam_clock_us,
+	.sound = seam_sound,
+	.owns_volume = seam_owns_volume,
+	.volume_set = seam_volume_set,
+	.volume_now = seam_volume_now,
 };

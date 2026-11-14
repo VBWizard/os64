@@ -19,8 +19,13 @@
 // ACL packet, so what we SEND is never fragmented. It is also the
 // signalling MTU we take, since the reassembly buffer holds that much.
 #define BT_L2CAP_MTU       1017
-#define BT_L2CAP_CHANNELS  4
+// Slot 2 at rest holds their SDP channel to us, AVDTP's signalling and
+// media, and AVCTP's: four. A fifth and sixth are for a moment: our SDP
+// query before signalling opens, and a crossing (both ends opening
+// signalling, or AVCTP, at once) until the host closes one.
+#define BT_L2CAP_CHANNELS  6
 #define BT_L2CAP_PSM_SDP   0x0001
+#define BT_L2CAP_PSM_AVCTP 0x0017
 #define BT_L2CAP_PSM_AVDTP 0x0019
 
 // Signalling waiting for a turn: requests we make and answers we owe, each

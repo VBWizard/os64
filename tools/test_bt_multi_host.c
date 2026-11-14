@@ -9,6 +9,7 @@
 #include "../kernel/src/driver/system/usb/bt_avdtp.c"
 #include "../kernel/src/audio/sbc_frame.c"
 #include "../kernel/src/driver/system/usb/bt_a2dp.c"
+#include "../kernel/src/driver/system/usb/bt_avrcp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "hid_mouse_fixtures.h"
 #include "sbc_port.h"
@@ -259,6 +260,7 @@ static bool classic_on;
 static const uint8_t CM_LOCAL[6]={0x11,0x22,0x33,0x44,0x55,0x66};
 static void classic_slot(const bt_classic_bond_t *bond,bool boot_page);
 static void ha_reset(void);
+static void rc_reset(void);
 static void setup(void)
 {
     begin(REPORT_PROTOCOL); cmd_n=tx_n=0;
@@ -274,7 +276,7 @@ static void setup(void)
     reset_count=0;
     memset(&CM,0,sizeof(CM)); CM.present=true; cm_held_n=0;
     memset(&HP,0,sizeof(HP)); HP.mtu=48; HP.ident=0x80; HP.follow=true;
-    ha_reset();
+    ha_reset(); rc_reset();
     memset(&TX,0,sizeof(TX));
     if(classic_on) {
         bt_classic_bond_t none={0};
@@ -1027,16 +1029,19 @@ static void ha_connect(void)
     HA.their_conn_reqs++;
     hp_connect(BT_L2CAP_PSM_AVDTP,HA.ch[k].cid);
 }
+static void rc_link_down(void);
 static void ha_link_down(void)
 {
+    rc_link_down();
     for(unsigned i=0;i<HA.chn;i++) HA.ch[i].live=false;
     HA.sig=HA.media=-1; HA.st=HA_IDLE; HA.hanging=false; HA.seq_known=false;
 }
 // The headphones' channels: their SDP server's, their client's, and the
 // 0x0019 ones. With none left, the Bose pair hangs up two seconds later.
+static unsigned rc_live(void);
 static unsigned ha_channels(void)
 {
-    unsigned k=(HP.out_open && !HP.out_closed)+(HP.host_in!=0);
+    unsigned k=(HP.out_open && !HP.out_closed)+(HP.host_in!=0)+rc_live();
     for(unsigned i=0;i<HA.chn;i++) k+=HA.ch[i].live;
     return k;
 }
@@ -1046,11 +1051,13 @@ static void ha_hang_up_check(void)
     HA.hanging=true; HA.hangups++;
     cm_disconn(2000,0x13); CM.live=false;
 }
+static void rc_signalling_opened(void);
 static void ha_opened(int k)
 {
     if(!ha_open(k) || k==HA.sig || k==HA.media) return;
     if(HA.sig<0) {
         HA.sig=k;
+        rc_signalling_opened();
         // They begin the session themselves: their Set Configuration first.
         if(HA.they_begin) HA_CMD(AV_SETCONF,AV_S(1),AV_S(HA_SEID),AV_TRANSPORT,AV_SBC(AV_F48|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,51),AV_DELAYREP);
     } else if(HA.st==HA_OPENED && HA.media<0) {
@@ -1151,6 +1158,233 @@ static void ha_media(const uint8_t *p,size_t n)
     HA.packets++; HA.frames+=frames*128u;
 }
 
+// ── The headphones' AVCTP and AVRCP (AUDIO_REMOTE.md § Part W) ─────────────
+//
+// Written here from AVCTP 1.3 and AVRCP 1.4, not shared with
+// tools/test_bt_avrcp_host.c's peer: their end of the AVCTP channel and both
+// roles. As their volume's target they answer Get Capabilities (listing
+// volume changed, or not: no absolute volume), Register Notification for
+// their volume (INTERIM with their level; CHANGED when their own button
+// moves it) and Set Absolute Volume (ACCEPTED with the level they took: the
+// one asked, or with `rounds` the even one below it; with `reject_sets`
+// REJECTED, with `silent_sets` nothing). With `mute` they answer none of
+// our commands; with `theirs_unconfigured` a channel they open never gets
+// their configuration. As the buttons'
+// controller they register for our playback status on the channel they
+// talk on, and press. Without `on` they refuse PSM 0x0017; with `prompt`
+// they open the channel themselves as AVDTP's signalling opens, and
+// without it never; with `cross` they open one the moment ours arrives.
+// Every message of ours is parsed: single packets, our profile, the PDUs
+// a controller and a target of AVRCP 1.4 send.
+typedef struct {
+    bool live, theirs;
+    uint16_t host_cid, cid;          // ours (0 until we answer theirs), theirs
+    bool out_done, in_done, by_us, registered;
+} rc_ch_t;
+static struct {
+    bool on, absolute, prompt, rounds, cross;
+    bool mute;                           // our commands go unanswered (headphones busy at connect)
+    bool theirs_unconfigured;            // they never send the configuration of a channel they open
+    bool reject_sets, silent_sets;       // a Set is answered REJECTED, or not at all
+    unsigned delay_ours, delay_theirs;   // ms before they configure a channel we, or they, asked for
+    rc_ch_t ch[8]; unsigned chn;
+    int cur;                             // the channel they talk on, -1 for none
+    uint16_t next_cid;
+    unsigned conn_reqs, their_conn_reqs, closed_by_us;
+    uint64_t asked_at[8];                // when each of our requests arrived
+    uint8_t level;                       // their volume, 0..127
+    bool vol_registered; uint8_t vol_label;
+    unsigned getcaps, registrations, sets; uint8_t set_asked;
+    uint8_t label;                       // the label of their next command
+    bool play_registered; uint8_t playback; unsigned play_interims, play_changes;
+    unsigned press_answers, messages, unanswered;
+} RC;
+#define RC_PROFILE 0x110e
+static void rc_reset(void) { memset(&RC,0,sizeof(RC)); RC.cur=-1; RC.next_cid=0x00c0; }
+static int rc_find(uint16_t cid)
+{
+    for(unsigned i=0;i<RC.chn;i++) if(RC.ch[i].live && RC.ch[i].cid==cid) return (int)i;
+    return -1;
+}
+static bool rc_open(int k) { return k>=0 && RC.ch[k].live && RC.ch[k].out_done && RC.ch[k].in_done && RC.ch[k].host_cid; }
+static int rc_new(bool theirs,uint16_t host_cid)
+{
+    assert(RC.chn<8);
+    RC.ch[RC.chn]=(rc_ch_t){.live=true,.theirs=theirs,.host_cid=host_cid,.cid=RC.next_cid++};
+    return (int)RC.chn++;
+}
+static unsigned rc_live(void)
+{
+    unsigned k=0;
+    for(unsigned i=0;i<RC.chn;i++) k+=RC.ch[i].live;
+    return k;
+}
+static void rc_config(int k,unsigned delay)
+{
+    hp_delay=delay;
+    HP_CMD(4,HP.ident++,W16(RC.ch[k].host_cid),0,0,1,2,W16(48));
+    hp_delay=0;
+}
+// One AVCTP message of theirs, a single packet under our profile.
+static void rc_say(int k,uint8_t header,const uint8_t *f,size_t n)
+{
+    uint8_t b[64];
+    assert(k>=0 && 3+n<=sizeof b);
+    b[0]=header; b[1]=(uint8_t)(RC_PROFILE>>8); b[2]=(uint8_t)RC_PROFILE;
+    memcpy(b+3,f,n);
+    hp_pdu(RC.ch[k].host_cid,b,3+n);
+}
+#define RC_COMMAND(label) (uint8_t)(((label)&15)<<4)
+#define RC_RESPONSE(label) (uint8_t)((((label)&15)<<4)|0x02)
+// A vendor-dependent frame under the Bluetooth SIG's company, to the panel.
+static size_t rc_vendor(uint8_t *f,uint8_t ctype,uint8_t pdu,const uint8_t *params,uint16_t n)
+{
+    f[0]=ctype; f[1]=0x48; f[2]=0x00; f[3]=0x00; f[4]=0x19; f[5]=0x58;
+    f[6]=pdu; f[7]=0; f[8]=(uint8_t)(n>>8); f[9]=(uint8_t)n;
+    memcpy(f+10,params,n);
+    return 10u+n;
+}
+// The channel they talk on: the last one a message of ours came on, else
+// the first open one.
+static int rc_channel(void)
+{
+    if(rc_open(RC.cur)) return RC.cur;
+    for(unsigned i=0;i<RC.chn;i++) if(rc_open((int)i)) return (int)i;
+    return -1;
+}
+static void rc_register_playback(int k)
+{
+    uint8_t e[5]={0x01,0,0,0,0}, f[24];
+    rc_say(k,RC_COMMAND(RC.label),f,rc_vendor(f,0x03,0x31,e,5));
+    RC.label=(uint8_t)((RC.label+1)&15);
+    RC.play_registered=true;
+}
+// A channel opens: they register for our playback status on one they
+// opened, or on ours when they opened none.
+static void rc_opened(int k)
+{
+    if(!rc_open(k) || RC.ch[k].registered) return;
+    bool theirs_live=false;
+    for(unsigned i=0;i<RC.chn;i++) theirs_live|=RC.ch[i].live && RC.ch[i].theirs;
+    if(!RC.ch[k].theirs && theirs_live) return;
+    RC.ch[k].registered=true; RC.cur=k;
+    rc_register_playback(k);
+}
+static void rc_closed(int k)
+{
+    RC.ch[k].live=false;
+    if(RC.cur==k) { RC.cur=-1; RC.vol_registered=false; RC.play_registered=false; }
+}
+static void rc_link_down(void)
+{
+    for(unsigned i=0;i<RC.chn;i++) RC.ch[i].live=false;
+    RC.cur=-1; RC.vol_registered=RC.play_registered=false;
+}
+// They open a 0x0017 channel to us.
+static void rc_connect(void)
+{
+    int k=rc_new(true,0);
+    RC.their_conn_reqs++;
+    hp_connect(BT_L2CAP_PSM_AVCTP,RC.ch[k].cid);
+}
+// They close one.
+static void rc_disconnect(int k)
+{
+    assert(rc_open(k));
+    HP_CMD(6,HP.ident++,W16(RC.ch[k].host_cid),W16(RC.ch[k].cid));
+}
+// Prompt headphones open theirs as AVDTP's signalling opens.
+static void rc_signalling_opened(void) { if(RC.on && RC.prompt) rc_connect(); }
+static void rc_conn_req(uint8_t ident,uint16_t host_cid)
+{
+    assert(host.a2dp_ops);
+    if(RC.conn_reqs<8) RC.asked_at[RC.conn_reqs]=now;
+    RC.conn_reqs++;
+    if(!RC.on) { HP_CMD(3,ident,0,0,W16(host_cid),W16(0x0002),0,0); return; }
+    int k=rc_new(false,host_cid);
+    HP_CMD(3,ident,W16(RC.ch[k].cid),W16(host_cid),0,0,0,0);
+    rc_config(k,RC.delay_ours);
+    if(RC.cross) { RC.cross=false; rc_connect(); }
+}
+// A press or a release of theirs.
+// Ticks in which the loudness may rise: a press or their button moves it
+// on purpose (a2_checks, below).
+static unsigned a2_loud_allow;
+static void rc_press(uint8_t operation,bool released)
+{
+    a2_loud_allow=300;
+    uint8_t f[5]={0x00,0x48,0x7c,(uint8_t)(operation|(released?0x80:0)),0x00};
+    rc_say(rc_channel(),RC_COMMAND(RC.label),f,5);
+    RC.label=(uint8_t)((RC.label+1)&15);
+}
+// Their own button moves their volume, and a standing registration hears.
+static void rc_button(uint8_t level)
+{
+    a2_loud_allow=300;
+    RC.level=level;
+    if(!RC.vol_registered) return;
+    RC.vol_registered=false;
+    uint8_t e[2]={0x0d,level}, f[24];
+    rc_say(rc_channel(),RC_RESPONSE(RC.vol_label),f,rc_vendor(f,0x0d,0x31,e,2));
+}
+// What arrives on an AVCTP channel.
+static void rc_receive(int k,const uint8_t *p,size_t n)
+{
+    RC.messages++; RC.cur=k;
+    assert(n>=6 && ((p[0]>>2)&3)==0 && !(p[0]&1) && be16(p+1)==RC_PROFILE);
+    uint8_t label=p[0]>>4, ctype=p[3]&15;
+    const uint8_t *f=p+3;
+    size_t fn=n-3;
+    if(!(p[0]&2)) {
+        // A command of ours: vendor dependent, to the panel, one packet.
+        assert(f[1]==0x48 && f[2]==0x00 && fn>=10 && f[3]==0 && f[4]==0x19 && f[5]==0x58 && f[7]==0 && be16(f+8)==fn-10);
+        const uint8_t *q=f+10;
+        uint8_t r[32];
+        if(RC.mute) { RC.unanswered++; return; }
+        switch(f[6]) {
+        case 0x10: {
+            assert(ctype==0x1 && be16(f+8)==1 && q[0]==0x03);
+            RC.getcaps++;
+            uint8_t e[4]={0x03,1,0x01,0x0d};
+            if(RC.absolute) e[1]=2;
+            rc_say(k,RC_RESPONSE(label),r,rc_vendor(r,0x0c,0x10,e,(uint16_t)(2u+e[1])));
+            break;
+        }
+        case 0x31: {
+            assert(ctype==0x3 && be16(f+8)==5 && q[0]==0x0d && RC.absolute);
+            RC.registrations++; RC.vol_registered=true; RC.vol_label=label;
+            uint8_t e[2]={0x0d,RC.level};
+            rc_say(k,RC_RESPONSE(label),r,rc_vendor(r,0x0f,0x31,e,2));
+            break;
+        }
+        case 0x50: {
+            assert(ctype==0x0 && be16(f+8)==1 && !(q[0]&0x80) && RC.absolute);
+            RC.sets++; RC.set_asked=q[0];
+            if(RC.silent_sets) break;
+            if(RC.reject_sets) {
+                uint8_t e[1]={0x01};          // invalid parameter
+                rc_say(k,RC_RESPONSE(label),r,rc_vendor(r,0x0a,0x50,e,1));
+                break;
+            }
+            RC.level=RC.rounds?(uint8_t)(q[0]&~1u):q[0];
+            uint8_t e[1]={RC.level};
+            rc_say(k,RC_RESPONSE(label),r,rc_vendor(r,0x09,0x50,e,1));
+            break;
+        }
+        default: printf("unexpected AVRCP command %02x\n",f[6]); assert(0);
+        }
+        return;
+    }
+    // Our answers to theirs: a press accepted, their playback registration.
+    if(f[2]==0x7c) { assert(ctype==0x9 && fn==5); RC.press_answers++; return; }
+    assert(f[2]==0x00 && fn>=12 && f[6]==0x31 && f[10]==0x01);
+    RC.playback=f[11];
+    if(ctype==0xf) { RC.play_interims++; return; }
+    assert(ctype==0xd && RC.play_registered);
+    RC.play_changes++; RC.play_registered=false;
+    rc_register_playback(k);
+}
+
 // What the host sends them on the Classic link.
 static void headphones_acl(const uint8_t *p,size_t n)
 {
@@ -1171,6 +1405,8 @@ static void headphones_acl(const uint8_t *p,size_t n)
         if(av==HA.media) ha_media(d,len); else ha_signal(av,d,len);
         return;
     }
+    int rc=rc_find(cid);
+    if(rc>=0) { assert(rc_open(rc)); rc_receive(rc,d,len); return; }
     assert(cid==1);
     while(len) {
         assert(len>=4 && le_u16(d+2)<=len-4);
@@ -1178,9 +1414,10 @@ static void headphones_acl(const uint8_t *p,size_t n)
         uint16_t m=le_u16(d+2);
         const uint8_t *x=d+4;
         switch(code) {
-        case 2:     // our Connection Request: to their SDP, or (a host with a sink) to AVDTP
-            assert(m==4 && (le_u16(x)==BT_L2CAP_PSM_SDP || le_u16(x)==BT_L2CAP_PSM_AVDTP));
+        case 2:     // our Connection Request: to their SDP, or (a host with a sink) to AVDTP or AVCTP
+            assert(m==4 && (le_u16(x)==BT_L2CAP_PSM_SDP || le_u16(x)==BT_L2CAP_PSM_AVDTP || le_u16(x)==BT_L2CAP_PSM_AVCTP));
             if(le_u16(x)==BT_L2CAP_PSM_AVDTP) { ha_conn_req(ident,le_u16(x+2)); break; }
+            if(le_u16(x)==BT_L2CAP_PSM_AVCTP) { rc_conn_req(ident,le_u16(x+2)); break; }
             HP.conn_reqs++; HP.host_out=le_u16(x+2); HP.served=0; HP.out_open=HP.out_closed=false;
             if(HP.refuse) { HP_CMD(3,ident,0,0,W16(HP.host_out),W16(HP.refuse),0,0); break; }
             HP_CMD(3,ident,W16(HP_SERVER_CID),W16(HP.host_out),0,0,0,0);
@@ -1195,6 +1432,15 @@ static void headphones_acl(const uint8_t *p,size_t n)
                 else if(le_u16(x+4)!=1) HA.ch[k].live=false;       // refused; 1 is "pending"
                 break;
             }
+            if(rc_find(le_u16(x+2))>=0) {
+                int k=rc_find(le_u16(x+2));
+                if(le_u16(x+4)==0) {
+                    RC.ch[k].host_cid=le_u16(x);
+                    if(!RC.theirs_unconfigured) rc_config(k,RC.delay_theirs);
+                }
+                else if(le_u16(x+4)!=1) RC.ch[k].live=false;
+                break;
+            }
             if(le_u16(x+2)==HP_CLIENT_CID) {
                 HP.in_result=le_u16(x+4); HP.in_answered=true;
                 if(!HP.in_result) { HP.host_in=le_u16(x); hp_config(HP.host_in); }
@@ -1203,16 +1449,18 @@ static void headphones_acl(const uint8_t *p,size_t n)
         case 4: {   // our Configuration Request: our MTU, accepted
             assert(m==8 && x[4]==1 && x[5]==2 && le_u16(x+6)==BT_L2CAP_MTU);
             uint16_t theirs=le_u16(x);
-            int k=ha_find(theirs);
-            uint16_t ours=k>=0?HA.ch[k].host_cid:theirs==HP_SERVER_CID?HP.host_out:HP.host_in;
+            int k=ha_find(theirs), r=rc_find(theirs);
+            uint16_t ours=k>=0?HA.ch[k].host_cid:r>=0?RC.ch[r].host_cid:theirs==HP_SERVER_CID?HP.host_out:HP.host_in;
             HP_CMD(5,ident,W16(ours),0,0,0,0);
             if(k>=0) { HA.ch[k].out_done=true; ha_opened(k); }
+            if(r>=0) { RC.ch[r].out_done=true; rc_opened(r); }
             break;
         }
         case 5: {   // the answer to theirs
             assert(m>=6 && !le_u16(x+4));
-            int k=ha_find(le_u16(x));
+            int k=ha_find(le_u16(x)), r=rc_find(le_u16(x));
             if(k>=0) { HA.ch[k].in_done=true; ha_opened(k); }
+            else if(r>=0) { RC.ch[r].in_done=true; rc_opened(r); }
             else if(le_u16(x)==HP_SERVER_CID) HP.out_open=true; else HP.in_conf_rsps++;
             break;
         }
@@ -1227,11 +1475,15 @@ static void headphones_acl(const uint8_t *p,size_t n)
                 ha_hang_up_check();
             }
             if(k>=0) { HA.ch[k].by_us=true; HA.closed_by_us++; ha_closed(k); }
+            int r=rc_find(le_u16(x));
+            if(r>=0) { RC.ch[r].by_us=true; RC.closed_by_us++; rc_closed(r); ha_hang_up_check(); }
             break;
         }
         case 7: {   // the answer to their Disconnection Request
-            int k=m==4?ha_find(le_u16(x+2)):-1;
-            if(k>=0) ha_closed(k); else HP.other++;
+            int k=m==4?ha_find(le_u16(x+2)):-1, r=m==4?rc_find(le_u16(x+2)):-1;
+            if(k>=0) ha_closed(k);
+            else if(r>=0) { rc_closed(r); ha_hang_up_check(); }
+            else HP.other++;
             break;
         }
         case 9: HP.echo_rsps++; break;
@@ -2285,6 +2537,12 @@ static struct {
     int attaches, detaches;
     int16_t last[SEAM_FRAMES*2]; uint32_t last_asked;
     uint64_t sound_step, lands_at; unsigned sound_calls, sound_calls_most;
+    // The volume, as audio_stream.c keeps it: the number, whether the sink
+    // owns it (taken back at every attach and detach), and the number at
+    // the moment ownership was taken, which the rule says is theirs.
+    uint8_t volume, volume_at_own;
+    bool owned;
+    unsigned owns, releases, volume_sets;
 } SEAM;
 static struct {
     bool fail_encode;
@@ -2326,8 +2584,8 @@ static bool seam_has_sound(void *ctx)
     if(SEAM.lands_at==now && SEAM.sound_calls==1) return false;
     return SEAM.attached && !SEAM.paused && (SEAM.endless || SEAM.available>0);
 }
-static void seam_attach(void *ctx) { (void)ctx; assert(!SEAM.attached); SEAM.attached=true; SEAM.attaches++; SEAM.failed=false; SEAM.delay_told=false; SEAM.generation++; }
-static void seam_detach(void *ctx) { (void)ctx; assert(SEAM.attached); SEAM.attached=false; SEAM.detaches++; SEAM.failed=false; SEAM.generation++; }
+static void seam_attach(void *ctx) { (void)ctx; assert(!SEAM.attached); SEAM.attached=true; SEAM.attaches++; SEAM.failed=false; SEAM.delay_told=false; SEAM.generation++; SEAM.owned=false; }
+static void seam_detach(void *ctx) { (void)ctx; assert(SEAM.attached); SEAM.attached=false; SEAM.detaches++; SEAM.failed=false; SEAM.generation++; SEAM.owned=false; }
 static void seam_failed(void *ctx,const char *why) { (void)ctx; assert(SEAM.attached && why); SEAM.failed=true; SEAM.why=why; SEAM.available=0; SEAM.endless=false; }
 static void seam_delay(void *ctx,uint32_t us) { (void)ctx; assert(SEAM.attached); SEAM.delay=us; SEAM.delay_told=true; }
 static bool enc_begin(void *ctx,const sbc_settings_t *s)
@@ -2350,15 +2608,58 @@ static bool enc_encode(void *ctx,const int16_t *pcm,uint8_t *out,size_t cap)
     return ok;
 }
 static uint64_t enc_clock(void *ctx) { (void)ctx; if(ENC.clock<now*1000) ENC.clock=now*1000; return ++ENC.clock; }
-static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock};
+// The host's one reading: has_sound's answer, counted as a call of it, and
+// whether the stream is paused, whoever the sink is.
+static bool seam_sound(void *ctx,bool *paused) { *paused=SEAM.paused; return seam_has_sound(ctx); }
+// The seam as parts P and Z knew it: no volume ops, so nothing is owned.
+static const bt_a2dp_ops_t A2_OPS={.pull=seam_pull,.has_sound=seam_has_sound,.attach=seam_attach,.detach=seam_detach,
+                                   .failed=seam_failed,.delay=seam_delay,.encoder_begin=enc_begin,
+                                   .encoder_encode=enc_encode,.clock_us=enc_clock,.sound=seam_sound};
+// The volume ops, with the seam's rules: refused while the pump is not the
+// sink, and past 100.
+static bool seam_owns_volume(void *ctx,bool owned)
+{
+    (void)ctx;
+    if(!SEAM.attached) return false;
+    SEAM.owned=owned;
+    if(owned) { SEAM.owns++; SEAM.volume_at_own=SEAM.volume; } else SEAM.releases++;
+    return true;
+}
+static bool seam_volume_set(void *ctx,uint8_t volume)
+{
+    (void)ctx;
+    if(!SEAM.attached || volume>100) return false;
+    SEAM.volume=volume; SEAM.volume_sets++;
+    return true;
+}
+static uint8_t seam_volume_now(void *ctx) { (void)ctx; return SEAM.volume; }
+static const bt_a2dp_ops_t A2_OPS_W={.pull=seam_pull,.has_sound=seam_has_sound,.attach=seam_attach,.detach=seam_detach,
+                                     .failed=seam_failed,.delay=seam_delay,.encoder_begin=enc_begin,
+                                     .encoder_encode=enc_encode,.clock_us=enc_clock,.sound=seam_sound,
+                                     .owns_volume=seam_owns_volume,.volume_set=seam_volume_set,
+                                     .volume_now=seam_volume_now};
+// The ops a2_bonded gives the host.
+static const bt_a2dp_ops_t *a2_ops=&A2_OPS;
 
 // Per step: the pump's sent packets against the headphones' received ones
 // (a pump started over begins its count again), the packets lost and the
 // gaps in the headphones' sequence against what the case expects (none,
 // unless it says), the controller alive unless the case fails it, and the
-// most channels in use.
+// most channels in use. And the loudness of a stream that is playing: the
+// seam's gain (unity while owned, else the square rule, as audio_stream.c)
+// times their level never rises from one tick to the next, unless a write
+// of ours or a press of theirs came within `a2_loud_allow` ticks before
+// (the time their answer and our Set take on this model's link).
 static unsigned a2_peak, a2_base, a2_seen_sent, a2_expect_lost;
 static bool a2_expect_failed;
+static uint64_t a2_loud_last;
+static bool a2_loud_playing;
+static unsigned a2_loud_ticks;
+static uint32_t seam_gain(void) { return SEAM.owned?32768u:(uint32_t)SEAM.volume*SEAM.volume*32768u/10000u; }
+static uint64_t a2_loudness(void) { return (uint64_t)seam_gain()*RC.level; }
+// A write to /dev/volume, and their own button or a press: either may
+// raise the loudness.
+static void rc_write(uint8_t volume) { SEAM.volume=volume; a2_loud_allow=300; }
 static void a2_checks(void)
 {
     unsigned used=0;
@@ -2369,6 +2670,15 @@ static void a2_checks(void)
     assert(host.a2dp.packets_sent+a2_base==HA.packets);
     assert(host.a2dp.packets_lost==a2_expect_lost && HA.gaps<=a2_expect_lost);
     assert(host.failed==a2_expect_failed);
+    bt_avdtp_state_t st=bt_avdtp_state(&host.avdtp);
+    bool playing=SEAM.attached && st>=BT_AVDTP_STARTING && st<=BT_AVDTP_SUSPENDING;
+    uint64_t loud=a2_loudness();
+    if(playing && a2_loud_playing && !a2_loud_allow) {
+        if(loud>a2_loud_last) { printf("louder with no hand on anything: %lu to %lu\n",(unsigned long)a2_loud_last,(unsigned long)loud); assert(0); }
+        a2_loud_ticks++;
+    }
+    a2_loud_last=loud; a2_loud_playing=playing;
+    if(a2_loud_allow) a2_loud_allow--;
 }
 static void a2_step(void) { HA.order_n=0; step(); a2_checks(); }
 // The host with its Classic slot and an audio sink, bonded to the
@@ -2377,9 +2687,11 @@ static void a2_bonded_refusing(uint16_t refuse)
 {
     setup(); bt_classic_bond_t none={0}; classic_slot(&none,false);
     HP.refuse=refuse;
-    bt_host_audio(&host,&A2_OPS,NULL);
+    bt_host_audio(&host,a2_ops,NULL);
     memset(&SEAM,0,sizeof(SEAM)); memset(&ENC,0,sizeof(ENC));
+    SEAM.volume=100;                     // the seam's own start
     a2_peak=a2_base=a2_seen_sent=a2_expect_lost=0; a2_expect_failed=false;
+    a2_loud_last=0; a2_loud_playing=false; a2_loud_allow=0;
     HA.on=true;
     host.scan.count=1; host.scan.devices[0]=(bt_scan_device_t){.le=false};
     memcpy(host.scan.devices[0].address,PH,6);
@@ -2404,7 +2716,10 @@ static unsigned a2_avdtp_index(uint8_t role) { assert(role); return role-1u; }
 // `slot 2 bond` to READY, then with nobody typing: the SDP query ends, our
 // signalling channel opens, and only then is the SDP channel closed; Get
 // All Capabilities (their record says AVDTP 1.3) through Open, the media
-// channel, and the pump attaches. Never more than four channels.
+// channel, and the pump attaches. These headphones refuse AVCTP, so our
+// request for it is a third channel for a moment, made twice (two seconds
+// after signalling opens, and once more a second after the refusal), and
+// never again. Never more than three channels at once.
 static void a2dp_session_from_bond(void)
 {
     a2_bonded();
@@ -2418,8 +2733,9 @@ static void a2dp_session_from_bond(void)
     assert(ENC.begins==1 && ENC.settings.bitpool==51 && ENC.settings.joint && ENC.fb==115);
     assert(bt_host_media_room(&host)==672);         // their MTU: 672 < ours and a controller packet's room
     assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && host.a2dp.sessions_begun==1);
-    // Nothing to play: no Start, no packet.
-    for(unsigned i=0;i<2000;i++) a2_step();
+    // Nothing to play: no Start, no packet, for long enough that both our
+    // AVCTP requests have been made and refused.
+    for(unsigned i=0;i<5000;i++) a2_step();
     assert(!HA.starts && !HA.packets && !SEAM.pulls && bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN);
     assert(status_has("avdtp: open, sessions made 1, gone wrong 0\n"));
     assert(status_has("a2dp: attached\n"));
@@ -2428,7 +2744,9 @@ static void a2dp_session_from_bond(void)
                             a2_avdtp_index(host.avdtp_sig),a2_avdtp_index(host.avdtp_media));
     assert(status_has(want));
     assert(status_has("avdtp pdus received off the signalling channel (media, or a channel being closed), dropped: 0\n"));
-    assert(a2_peak==2 && a2_peak<=BT_L2CAP_CHANNELS);
+    assert(a2_peak==3 && a2_peak<=BT_L2CAP_CHANNELS);
+    assert(RC.conn_reqs==2 && !host.avctp && !host.avctp_asking && host.avctp_asked==2 && host.avctp_ends==2);
+    assert(bt_avrcp_state(&host.avrcp)==BT_AVRCP_IDLE);
     // The whole text fits the file's buffer.
     static char text[BT_SCAN_TEXT_BYTES];
     assert(bt_host_status(&host,text,sizeof text)<sizeof(text)-512);
@@ -2767,7 +3085,8 @@ static void a2dp_older_first(void)
 // The headphones open signalling first; and they begin one at the moment
 // we do, their channel or ours opening first. One signalling channel
 // survives (the other is closed by us), the session is made once, and
-// with their SDP channel to us held as well, the table is full.
+// with their SDP channel to us held as well, four channels are in use at
+// once: two short of the table.
 static void a2dp_signalling_crossings(void)
 {
     // They open it first, before our SDP query ends: we ask for media alone.
@@ -2790,11 +3109,11 @@ static void a2dp_signalling_crossings(void)
         for(unsigned i=0;i<HA.chn;i++) if(HA.ch[i].by_us) closed=(int)i;
         assert(closed>=0 && HA.ch[closed].theirs==!theirs_first);
         assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && HA.setconfs==1 && HA.discovers==1);
-        assert(a2_peak==BT_L2CAP_CHANNELS);
+        assert(a2_peak==4 && a2_peak<BT_L2CAP_CHANNELS);
         SEAM.endless=true;
         a2_until(a2_is_streaming,100);
     }
-    puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; the table full");
+    puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; four channels at once");
 }
 
 // The headphones go and come back by calling us (the P5's pair did, switched
@@ -3008,11 +3327,17 @@ static void z_step(void) { HA.order_n=0; step(); z_checks(); }
     if(!(done)()) { printf("z_until(%s) not reached by line %d\n",#done,__LINE__); assert(0); } \
 } while(0)
 static uint64_t z_ready_at;
+// With `z_remote`, the host has the volume ops and the headphones a remote
+// control with absolute volume (§ Slot 2's remote control, below), so
+// AVRCP talks on the link beside everything part Z asserts.
+static bool z_remote;
+static void rc_bonded(bool absolute,bool prompt,uint8_t level);
+static bool rc_owned(void);
 // Bonded, READY (when the idle clock starts) and the stream open, nothing
 // to play, headphones of the personality given.
 static void z_open(bool asks)
 {
-    a2_bonded();
+    if(z_remote) rc_bonded(true,false,40); else a2_bonded();
     CM.sniff_asks=asks; z_ready_at=now;
     z_until(a2_is_open,5000);
 }
@@ -3335,6 +3660,12 @@ static void sniff_beside_le(void)
     for(unsigned i=0;i<TICKS;i++) {
         if(i==SOUND) { assert(z_dozing() && CM.sniff); z_mark(); SEAM.endless=true; }
         if(i==SILENCE) { assert(!CM.start_in_sniff && !CM.media_in_sniff && CM.active_at); SEAM.endless=false; SEAM.available=0; }
+        // AVRCP on a dozing link, then during the song: their volume button
+        // and a press, then a write of ours and their button again.
+        if(z_remote && i==11000) { assert(z_dozing() && CM.sniff && rc_owned()); rc_button(70); }
+        if(z_remote && (i==11500 || i==11600)) rc_press(BT_AVRCP_OP_PLAY,i==11600);
+        if(z_remote && i==15000) { assert(rc_owned() && SEAM.volume==55); rc_write(60); }
+        if(z_remote && i==16000) rc_button(30);
         TX.delay=5;
         notify_keyboard(); incoming(4,motion,sizeof motion);
         bt_le_t *k=&host.peers[0].le;
@@ -3361,7 +3692,515 @@ static void sniff_beside_le(void)
     assert(eligible_ticks>2000 && both>50);
     assert(CM.allow_writes==2 && CM.refuse_writes==1 && CM.wakes==1 && z_dozing() && CM.sniff);
     assert(host.sniff_dozes==2 && host.sniff_wakes==1 && !host.sniff_woke_late && a2_ready());
+    if(z_remote) {
+        assert(rc_owned() && RC.sets==1 && RC.set_asked==76 && SEAM.volume==24 && host.vol_taken==2);
+        assert(RC.press_answers==2 && host.button_presses[2]==1 && !host.avrcp.stale_sends && RC.play_changes>=2);
+        puts("PASS: sniff and AVRCP beside a typing keyboard and a moving mouse: their volume and a press on a dozing link do not wake it; a write is one Set; every LE assertion holds");
+        return;
+    }
     puts("PASS: sniff beside a typing keyboard and a moving mouse: doze, wake, stream, doze again; every LE packet that may go leaves in its tick ahead of Classic");
+}
+
+// ── Slot 2's remote control: AVCTP, AVRCP, the volume (AUDIO_REMOTE.md § Part W)
+//
+// The host is given the seam's volume ops (A2_OPS_W) and the headphones
+// their remote control (RC): absolute volume or none, a channel they open
+// promptly or never, a Set rounded to a level of their own or not.
+
+// Bonded and READY with the volume ops; the headphones' remote control on,
+// their volume `level`.
+static void rc_bonded(bool absolute,bool prompt,uint8_t level)
+{
+    a2_ops=&A2_OPS_W; a2_bonded(); a2_ops=&A2_OPS;
+    RC.on=true; RC.absolute=absolute; RC.prompt=prompt; RC.level=level;
+}
+static bool rc_owned(void) { return host.vol_owned && SEAM.owned; }
+static bool rc_ready(void) { return bt_avrcp_state(&host.avrcp)==BT_AVRCP_READY && SEAM.attached; }
+static bool a2_is_streaming_now(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING; }
+static bool rc_plain(void) { return bt_avrcp_state(&host.avrcp)==BT_AVRCP_PLAIN; }
+static unsigned rc_host_channels(void)
+{
+    unsigned k=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) k+=host.l2cap.ch[i].psm==BT_L2CAP_PSM_AVCTP && !bt_l2cap_is_free(&host.l2cap,i);
+    return k;
+}
+
+// Every one of the 101 numbers survives the round trip through 0..127;
+// 27 of their 128 levels do not, and each is never more than one step off.
+static void remote_round_trip(void)
+{
+    for(unsigned v=0;v<=100;v++) {
+        uint8_t raw=host_volume_raw((uint8_t)v);
+        assert(raw<=127 && host_volume_number(raw)==v);
+    }
+    assert(host_volume_raw(0)==0 && host_volume_raw(100)==127 && host_volume_raw(50)==64 && host_volume_number(40)==31);
+    unsigned lost=0;
+    for(unsigned x=0;x<=127;x++) {
+        unsigned back=host_volume_raw(host_volume_number((uint8_t)x));
+        lost+=back!=x;
+        assert(back+1>=x && back<=x+1);
+    }
+    assert(lost==27);
+    puts("PASS: volume: every one of the 101 numbers survives 0..127 and back; 27 of their 128 levels do not");
+}
+
+// Connecting never makes anything louder: READY with nothing typed, the
+// seam's number reading THEIR level (the seam at 100, the headphones at 40:
+// they stay at 40 and the seam reads 31; headphones that say 0 read 0), the
+// number theirs at the moment the seam stopped applying its gain, and no
+// Set on the wire, then or after.
+static void remote_volume_adopted(void)
+{
+    static const uint8_t levels[]={40,0,127};
+    static const uint8_t numbers[]={31,0,100};
+    for(unsigned t=0;t<3;t++) {
+        rc_bonded(true,false,levels[t]);
+        a2_until(a2_is_open,5000);
+        assert(SEAM.volume==100 && !SEAM.owned);
+        a2_until(rc_owned,4000);
+        assert(bt_avrcp_state(&host.avrcp)==BT_AVRCP_READY && RC.getcaps==1 && RC.registrations==1);
+        assert(RC.conn_reqs==1 && host.avctp && host.l2cap.ch[host.avctp-1].outgoing);
+        assert(SEAM.volume==numbers[t] && SEAM.volume_at_own==numbers[t] && SEAM.owns==1);
+        assert(RC.sets==0 && RC.level==levels[t] && host.vol_raw==levels[t] && host.vol_ownerships==1);
+        for(unsigned i=0;i<3000;i++) a2_step();
+        assert(RC.sets==0 && RC.level==levels[t] && SEAM.volume==numbers[t] && SEAM.owned && SEAM.owns==1);
+        assert(!host.vol_sets && !host.vol_taken && host.avrcp.registrations==1);
+    }
+    char want[160];
+    snprintf(want,sizeof want,"avctp channel: %u, ours; our requests 1 of 2, ended 0;",host.avctp-1u);
+    assert(status_has(want));
+    assert(status_has("avrcp: ready, their volume 127/127 (told 1 times)\n"));
+    assert(status_has("volume: the headphones' (/dev/volume 100 is carried out at their end, the seam applies no gain); "
+                      "level shared 127/127; ownerships 1, sets sent 0, their levels taken 0, volume presses applied 0, "
+                      "sets refused or unanswered 0\n"));
+    assert(status_has("buttons: none yet; pressed: volume up 0,"));
+    static char text[BT_SCAN_TEXT_BYTES];
+    assert(bt_host_status(&host,text,sizeof text)<sizeof(text)-512);
+    puts("PASS: volume: READY with nothing typed, the seam takes THEIR level before it stops applying gain, and no Set is sent");
+}
+
+// Owned: a write reaches them as exactly one Set and reads back unchanged;
+// their button moves the seam and nothing is sent back; a written level
+// they round differently does not ping-pong (one Set over 1,000 ticks).
+static void remote_volume_writes(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    rc_write(50);                                    // a write to /dev/volume
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.sets==1 && RC.set_asked==64 && RC.level==64 && SEAM.volume==50 && SEAM.volume_sets==1);
+    assert(host.vol_raw==64 && host.vol_sets==1 && !host.vol_taken && host.avrcp.sets_accepted==1);
+    // Their button: the seam follows, nothing is sent back.
+    rc_button(90);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.sets==1 && SEAM.volume==71 && host.vol_raw==90 && host.vol_taken==1 && RC.registrations==2);
+    // Headphones that keep even levels: 51 is 65, they take 64, which is 50.
+    RC.rounds=true;
+    rc_write(51);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.sets==2 && RC.set_asked==65 && RC.level==64 && SEAM.volume==50 && host.vol_raw==64);
+    assert(host.vol_sets==2 && host.vol_taken==2 && SEAM.owned);
+    puts("PASS: volume: a write is one Set and reads back unchanged; their button moves the seam, nothing sent back; a rounded level does not ping-pong");
+}
+
+// A Set they reject, and one they never answer: the level shared and the
+// seam's number go back to where they are, and the same write made again
+// reaches them.
+static void remote_set_refused(void)
+{
+    for(unsigned silent=0;silent<2;silent++) {
+        rc_bonded(true,false,40);
+        a2_until(a2_is_open,5000);
+        a2_until(rc_owned,4000);
+        if(silent) RC.silent_sets=true; else RC.reject_sets=true;
+        rc_write(50);
+        for(unsigned i=0;i<(silent?4500u:100u);i++) a2_step();
+        assert(RC.sets==1 && RC.level==40 && host.vol_refusals==1);
+        assert(silent?host.avrcp.sets_silent==1:host.avrcp.sets_rejected==1);
+        assert(SEAM.volume==31 && host.vol_raw==40 && SEAM.owned && !host.avrcp.set.live);
+        assert(bt_avrcp_volume_serial(&host.avrcp)==1);       // what they told us, and nothing else
+        RC.reject_sets=RC.silent_sets=false;
+        rc_write(50);
+        for(unsigned i=0;i<200;i++) a2_step();
+        assert(RC.sets==2 && RC.set_asked==64 && RC.level==64 && SEAM.volume==50 && host.vol_raw==64);
+    }
+    puts("PASS: volume: a Set rejected or never answered puts the level shared and /dev/volume back where they are; the same write then reaches them");
+}
+
+// Ownership ends and the seam's gain returns: when the session ends, when
+// AVCTP closes with the stream up, and when the link drops; the number
+// stays. It begins again on a second session under a standing AVRCP,
+// adopting their level again.
+static bool rc_not_owned(void) { return !host.vol_owned && !SEAM.owned; }
+static void remote_ownership_ends(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming,100);
+    // The session ends: they close the media channel, the pump lets the
+    // seam go and the seam takes the volume back.
+    int k=HA.media;
+    HP_CMD(6,HP.ident++,W16(HA.ch[k].host_cid),W16(HA.ch[k].cid));
+    a2_until(rc_not_owned,50);
+    assert(SEAM.volume==31 && bt_avrcp_state(&host.avrcp)==BT_AVRCP_READY);
+    // A write while it is the seam's is the seam's gain, and is not sent.
+    rc_write(90);
+    // The second session, theirs, under the AVRCP that stood: their level
+    // again.
+    for(unsigned i=0;i<20;i++) a2_step();
+    HA.they_begin=true;
+    HA_CMD(AV_SETCONF,AV_S(1),AV_S(HA_SEID),AV_TRANSPORT,AV_SBC(AV_F48|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,51),AV_DELAYREP);
+    a2_until(rc_owned,3000);
+    assert(bt_avdtp_edges(&host.avdtp)->sessions==2);
+    assert(SEAM.volume==31 && SEAM.volume_at_own==31 && SEAM.owns==2 && host.vol_ownerships==2 && RC.sets==0);
+    assert(RC.conn_reqs==1 && host.avrcp.registrations==1);
+    // AVCTP closes with the stream up: the volume is the seam's again at
+    // once, and the number stays. A person writes a lower one in the gap. A
+    // second later we ask once more and AVRCP is ready under the stream:
+    // taking the volume now would change the sound, so their number is kept
+    // until the stream stops, and the next stream is owned.
+    a2_until(a2_is_streaming,2000);
+    rc_button(60);
+    a2_until(rc_owned,100);
+    for(unsigned i=0;i<20;i++) a2_step();
+    assert(SEAM.volume==47);
+    rc_disconnect(rc_channel());
+    a2_until(rc_not_owned,50);
+    assert(SEAM.attached && SEAM.volume==47 && SEAM.releases>=1 && bt_avrcp_state(&host.avrcp)==BT_AVRCP_IDLE);
+    rc_write(30);
+    a2_until(rc_ready,3000);
+    for(unsigned i=0;i<500;i++) { a2_step(); assert(!SEAM.owned && SEAM.volume==30 && host.vol_waiting); }
+    assert(RC.conn_reqs==2 && RC.sets==0 && bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING);
+    assert(status_has("volume: the seam's (its gain follows /dev/volume); the headphones' once the stream stops"));
+    SEAM.endless=false; SEAM.available=0;
+    a2_until(rc_owned,5000);
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN && SEAM.volume==47 && host.vol_ownerships==3 && RC.sets==0);
+    SEAM.endless=true;
+    a2_until(a2_is_streaming_now,500);
+    for(unsigned i=0;i<200;i++) a2_step();
+    assert(rc_owned() && SEAM.volume==47);
+    // The link drops: the pump lets the seam go, and the volume with it.
+    cm_disconn(0,0x08); CM.live=false; a2_step();
+    ha_link_down();
+    assert(rc_not_owned() && !SEAM.attached && SEAM.volume==47);
+    assert(bt_avrcp_state(&host.avrcp)==BT_AVRCP_IDLE && !host.avctp && !host.avctp_asking);
+    puts("PASS: volume: ownership ends with the session, with AVCTP closing mid-stream and with the link; the number stays; a second session adopts their level again");
+}
+
+// AVRCP ready while a stream plays (their channel opened only once the
+// song had begun), the headphones at 127: with /dev/volume at 20 the
+// loudness does not change, ownership waits, the number stays 20, and it
+// begins once the stream has suspended, the next stream owned; with
+// /dev/volume at 100 the seam is at unity already, so it begins at once
+// and the loudness is the same. a2_checks holds the loudness at every tick.
+static void remote_ready_mid_stream(void)
+{
+    for(unsigned t=0;t<2;t++) {
+        uint8_t number=t?100:20;
+        rc_bonded(true,false,127);
+        RC.on=false;                         // they refuse our requests
+        a2_until(a2_is_open,5000);
+        rc_write(number);
+        SEAM.endless=true;
+        a2_until(a2_is_streaming_now,500);
+        for(unsigned i=0;i<4000;i++) a2_step();
+        assert(RC.conn_reqs==2 && !SEAM.owned && host.avctp_asked==2);
+        unsigned checked=a2_loud_ticks;
+        uint64_t loud=a2_loudness();
+        RC.on=true; rc_connect();            // and open their own, mid-song
+        a2_until(rc_ready,500);
+        for(unsigned i=0;i<300;i++) a2_step();
+        assert(a2_loudness()==loud && a2_loud_ticks>checked+290 && a2_is_streaming_now() && !RC.sets);
+        if(number==100) {
+            assert(rc_owned() && SEAM.volume==100 && !host.vol_waiting);
+            continue;
+        }
+        assert(!SEAM.owned && SEAM.volume==20 && host.vol_waiting && !host.vol_ownerships);
+        SEAM.endless=false; SEAM.available=0;
+        a2_until(rc_owned,5000);
+        assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN && SEAM.volume==100 && SEAM.volume_at_own==100 && !RC.sets);
+        SEAM.endless=true;
+        a2_until(a2_is_streaming_now,500);
+        for(unsigned i=0;i<200;i++) a2_step();
+        assert(rc_owned() && SEAM.volume==100 && host.vol_ownerships==1);
+    }
+    puts("PASS: volume: AVRCP ready mid-stream never changes the sound: below 100 ownership waits for the stream to stop; at 100 it begins at once");
+}
+
+// Headphones busy at connect (none of our commands answered) are FAILED;
+// sound starting asks again, and AVRCP is ready mid-stream: ownership
+// waits, the number and the loudness unchanged.
+static bool rc_failed(void) { return bt_avrcp_state(&host.avrcp)==BT_AVRCP_FAILED; }
+static void remote_failed_retry(void)
+{
+    rc_bonded(true,false,127);
+    RC.mute=true;
+    a2_until(a2_is_open,5000);
+    rc_write(20);
+    a2_until(rc_failed,8000);
+    RC.mute=false;
+    SEAM.endless=true;
+    a2_until(rc_ready,1000);
+    assert(host.avrcp.restarts==1 && a2_is_streaming_now());
+    uint64_t loud=a2_loudness();
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(!SEAM.owned && SEAM.volume==20 && host.vol_waiting && a2_loudness()==loud && !RC.sets);
+    puts("PASS: volume: AVRCP ready mid-stream through the FAILED retry waits too; nothing changes the sound");
+}
+
+// Headphones with no absolute volume: nothing is owned; a volume press
+// moves the seam's number by five, clamped; a release does nothing.
+static void remote_plain(void)
+{
+    rc_bonded(false,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_plain,4000);
+    assert(RC.getcaps==1 && !RC.registrations && !SEAM.owns && !host.vol_owned);
+    static const struct { uint8_t from, op, to; } presses[]={
+        {50,BT_AVRCP_OP_VOLUME_UP,55},{55,BT_AVRCP_OP_VOLUME_DOWN,50},{98,BT_AVRCP_OP_VOLUME_UP,100},
+        {3,BT_AVRCP_OP_VOLUME_DOWN,0},{0,BT_AVRCP_OP_VOLUME_DOWN,0},
+    };
+    for(unsigned i=0;i<sizeof presses/sizeof presses[0];i++) {
+        rc_write(presses[i].from);
+        rc_press(presses[i].op,false);
+        for(unsigned s=0;s<20;s++) a2_step();
+        assert(SEAM.volume==presses[i].to);
+        rc_press(presses[i].op,true);
+        for(unsigned s=0;s<20;s++) a2_step();
+        assert(SEAM.volume==presses[i].to);
+    }
+    assert(RC.press_answers==10 && host.vol_presses==5 && !SEAM.owns && !RC.sets);
+    assert(host.button_presses[0]==2 && host.button_presses[1]==3);
+    for(unsigned i=0;i<2000;i++) a2_step();
+    assert(!SEAM.owns && !RC.sets && rc_plain());
+    puts("PASS: volume: headphones with no absolute volume own nothing; a volume press moves the seam by five, clamped");
+}
+
+// Their buttons: answered, counted by name, the last kept, logged by
+// number; a volume press from READY headphones moves nothing; a press does
+// nothing else. Not drained by any consumer, the ring loses its oldest and
+// counts them.
+static void remote_buttons(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    static const uint8_t ops[]={BT_AVRCP_OP_PLAY,BT_AVRCP_OP_PAUSE,BT_AVRCP_OP_FORWARD,BT_AVRCP_OP_BACKWARD,
+                                BT_AVRCP_OP_STOP,BT_AVRCP_OP_VOLUME_UP};
+    for(unsigned i=0;i<sizeof ops;i++) {
+        rc_press(ops[i],false);
+        for(unsigned s=0;s<10;s++) a2_step();
+        rc_press(ops[i],true);
+        for(unsigned s=0;s<10;s++) a2_step();
+    }
+    assert(RC.press_answers==12 && host.buttons_seen==12 && host.buttons_count==12 && !host.buttons_lost);
+    assert(host.button_presses[2]==1 && host.button_presses[3]==1 && host.button_presses[4]==1 &&
+           host.button_presses[5]==1 && host.button_presses[6]==1 && host.button_presses[0]==1 &&
+           !host.button_presses[1] && !host.button_presses[BT_AVRCP_OPERATIONS]);
+    assert(SEAM.volume==31 && !host.vol_presses && !RC.sets && !SEAM.endless && !HA.starts);
+    bt_host_button_t b;
+    assert(bt_host_button(&host,0,&b) && b.operation==BT_AVRCP_OP_PLAY && b.pressed);
+    assert(bt_host_button(&host,11,&b) && b.operation==BT_AVRCP_OP_VOLUME_UP && !b.pressed && b.at_ms<=now);
+    assert(!bt_host_button(&host,12,&b));
+    assert(host.button_last.operation==BT_AVRCP_OP_VOLUME_UP && !host.button_last.pressed);
+    char want[96];
+    snprintf(want,sizeof want,"buttons: last volume up released at %lu ms; pressed: volume up 1, volume down 0, play 1,",
+             (unsigned long)host.button_last.at_ms);
+    assert(status_has(want));
+    assert(status_has(", other 0; held for a consumer 12, lost 0; a press does nothing yet\n"));
+    // Nobody takes them: eight more events lose the four oldest.
+    for(unsigned i=0;i<4;i++) {
+        rc_press(BT_AVRCP_OP_PLAY,false);
+        for(unsigned s=0;s<10;s++) a2_step();
+        rc_press(BT_AVRCP_OP_PLAY,true);
+        for(unsigned s=0;s<10;s++) a2_step();
+    }
+    assert(host.buttons_seen==20 && host.buttons_count==BT_HOST_BUTTONS && host.buttons_lost==4 && host.button_presses[2]==5);
+    assert(!bt_host_button(&host,3,&b) && bt_host_button(&host,4,&b) && b.operation==BT_AVRCP_OP_FORWARD && b.pressed);
+    // A consumer takes the oldest held, in order.
+    assert(bt_host_button_take(&host,&b) && b.operation==BT_AVRCP_OP_FORWARD && b.pressed);
+    assert(bt_host_button_take(&host,&b) && b.operation==BT_AVRCP_OP_FORWARD && !b.pressed);
+    assert(host.buttons_count==BT_HOST_BUTTONS-2);
+    assert(status_has("held for a consumer 14, lost 4;"));
+    puts("PASS: buttons: answered, counted by name, the last kept; a volume press while READY moves nothing; the ring's loss counted");
+}
+
+// The playback status their registration hears, from the tick's one
+// reading of the seam: playing while AVDTP streams with sound, paused while
+// the stream is paused, stopped otherwise; each change one CHANGED.
+static bool rc_hears_playing(void) { return RC.playback==BT_AVRCP_PLAYING && RC.play_registered; }
+static bool rc_hears_paused(void) { return RC.playback==BT_AVRCP_PAUSED && RC.play_registered; }
+static bool rc_hears_stopped(void) { return RC.playback==BT_AVRCP_STOPPED && RC.play_changes>=3 && RC.play_registered; }
+static void remote_playback(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    assert(RC.play_interims==1 && RC.playback==BT_AVRCP_STOPPED && !RC.play_changes);
+    SEAM.endless=true;
+    a2_until(rc_hears_playing,500);
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && RC.play_changes==1);
+    SEAM.paused=true;
+    a2_until(rc_hears_paused,50);
+    assert(RC.play_changes==2);
+    SEAM.paused=false; SEAM.endless=false; SEAM.available=0;
+    a2_until(rc_hears_stopped,50);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.play_changes==3 && RC.play_interims==4 && RC.playback==BT_AVRCP_STOPPED && !RC.sets);
+    assert(status_has("avrcp: playback stopped; they registered for playback yes, track no;"));
+    puts("PASS: avrcp: their registration hears playing, paused and stopped, from the tick's one reading of the seam");
+}
+
+// Both ends opening AVCTP at once, ours opening first and theirs first:
+// theirs is kept, ours closed, exactly one channel after; the volume is
+// owned through theirs. The table's peak against six.
+static void remote_crossing(void)
+{
+    for(unsigned theirs_first=0;theirs_first<2;theirs_first++) {
+        rc_bonded(true,false,40);
+        RC.cross=true;
+        if(theirs_first) RC.delay_ours=5; else RC.delay_theirs=5;
+        a2_until(a2_is_open,5000);
+        a2_until(rc_owned,4000);
+        for(unsigned i=0;i<200;i++) a2_step();
+        assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1);
+        int closed=-1;
+        for(unsigned i=0;i<RC.chn;i++) if(RC.ch[i].by_us) closed=(int)i;
+        assert(closed>=0 && !RC.ch[closed].theirs);
+        assert(rc_live()==1 && rc_host_channels()==1 && host.avctp && !host.l2cap.ch[host.avctp-1].outgoing);
+        assert(RC.ch[RC.cur].theirs && RC.registrations>=1 && SEAM.volume==31 && !RC.sets);
+        assert(a2_peak<=BT_L2CAP_CHANNELS && a2_peak>=4);
+        char want[64];
+        snprintf(want,sizeof want,"avctp channel: %u, theirs;",host.avctp-1u);
+        assert(status_has(want));
+    }
+    // Theirs arriving long after ours is the AVCTP channel: ours is closed
+    // the moment theirs exists, AVRCP starts over on theirs, and the volume
+    // is theirs again with nothing sent.
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    rc_connect();
+    a2_until(rc_not_owned,50);
+    a2_until(rc_owned,3000);
+    for(unsigned i=0;i<200;i++) a2_step();
+    assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1 && rc_live()==1 && rc_host_channels()==1);
+    assert(!host.l2cap.ch[host.avctp-1].outgoing && !host.avctp_ends && SEAM.volume==31 && !RC.sets && host.vol_ownerships==2);
+    // Theirs, crossing ours, never configured: ours is closed for it, it
+    // fails at L2CAP's configuration deadline, and that is an end, so we
+    // ask once more a second later and our channel carries AVRCP.
+    rc_bonded(true,false,40);
+    RC.cross=true; RC.theirs_unconfigured=true;
+    a2_until(a2_is_open,5000);
+    for(unsigned i=0;i<4000 && RC.closed_by_us<1;i++) a2_step();
+    assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1 && !host.avctp && host.avctp_theirs);
+    uint64_t waited=now;
+    a2_until(rc_owned,35000);
+    assert(RC.conn_reqs==2 && now>=waited+29000 && host.avctp && host.l2cap.ch[host.avctp-1].outgoing);
+    assert(!host.avctp_theirs && host.avctp_ends==1 && rc_host_channels()==1 && SEAM.volume==31 && !RC.sets);
+    // Prompt headphones: theirs, and we never ask.
+    rc_bonded(true,true,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    for(unsigned i=0;i<5000;i++) a2_step();
+    assert(!RC.conn_reqs && RC.their_conn_reqs==1 && rc_host_channels()==1 && !host.l2cap.ch[host.avctp-1].outgoing);
+    puts("PASS: avctp: both ends opening at once, either first: theirs kept, ours closed, one channel; prompt headphones' own, and we never ask");
+}
+
+// They never open one: we ask two seconds after signalling opens. The
+// channel closes: we ask once more a second later, and never again.
+static void remote_asks(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    uint64_t sig=host.avctp_sig_since;
+    assert(sig);
+    a2_until(rc_owned,4000);
+    assert(RC.conn_reqs==1 && RC.asked_at[0]>=sig+2000 && RC.asked_at[0]<sig+2010);
+    for(unsigned i=0;i<500;i++) a2_step();
+    rc_disconnect(rc_channel());
+    uint64_t closed=now;
+    a2_until(rc_not_owned,50);
+    a2_until(rc_owned,3000);
+    assert(RC.conn_reqs==2 && RC.asked_at[1]>=closed+1000 && RC.asked_at[1]<closed+1010);
+    for(unsigned i=0;i<500;i++) a2_step();
+    rc_disconnect(rc_channel());
+    for(unsigned i=0;i<10000;i++) a2_step();
+    assert(RC.conn_reqs==2 && !host.avctp && !host.avctp_asking && host.avctp_ends==2 && !rc_live());
+    assert(bt_avrcp_state(&host.avrcp)==BT_AVRCP_IDLE && rc_not_owned() && a2_ready());
+    // They open one themselves after all: it is taken.
+    rc_connect();
+    a2_until(rc_owned,500);
+    assert(RC.conn_reqs==2 && !host.l2cap.ch[host.avctp-1].outgoing);
+    puts("PASS: avctp: we ask two seconds after signalling opens, once more a second after it closes, then never; theirs is taken whenever");
+}
+
+// A command of theirs received between our command's parking and its send
+// (the gate shut): their answer goes ahead, our Set is taken back and goes
+// after it, and nothing is sent twice.
+static void remote_parked_crossing(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    for(unsigned i=0;i<100;i++) a2_step();
+    a2_close_the_gate();
+    unsigned messages=RC.messages;
+    rc_write(50);
+    a2_step();
+    assert(host.avrcp.set.live && host.avctp_parked==host.avrcp.set.msg.id && host.l2cap.ch[host.avctp-1].queued);
+    rc_press(BT_AVRCP_OP_PLAY,false);
+    a2_step(); a2_step();
+    assert(host.avrcp.answers==1 && host.avctp_parked==host.avrcp.answer[0].id && host.avrcp.set.live && !host.avrcp.set.sent);
+    for(unsigned i=0;i<20;i++) { a2_step(); assert(RC.messages==messages); }
+    a2_open_the_gate();
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.messages==messages+2 && RC.press_answers==1 && RC.sets==1 && RC.set_asked==64 && SEAM.volume==50);
+    assert(!host.avrcp.stale_sends && host.avrcp.sets==1);
+    puts("PASS: avrcp: their command between our Set's parking and its send goes first; our Set follows; nothing twice");
+}
+
+// The channel table full: our SDP channel kept, and their SDP client
+// opening five more; the seventh request is refused "no resources" (0x0004)
+// and the six stand.
+static void remote_table_full(void)
+{
+    classic_bonded();
+    for(unsigned i=0;i<2000;i++) step();
+    unsigned used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==1 && host.sdp_kept);
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS-1u;i++) { hp_connect(BT_L2CAP_PSM_SDP,(uint16_t)(0x0100+i)); step(); step(); }
+    used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==BT_L2CAP_CHANNELS && HP.last_conn_result==0);
+    unsigned answers=HP.conn_rsps;
+    hp_connect(BT_L2CAP_PSM_SDP,0x0110); step(); step();
+    assert(HP.conn_rsps==answers+1 && HP.last_conn_result==0x0004);
+    used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==BT_L2CAP_CHANNELS && a2_ready());
+    puts("PASS: l2cap: six channels in use on slot 2, and a seventh request refused for want of one");
+}
+
+// No sink: they open AVCTP and are refused; we never ask.
+static void remote_none_without_sink(void)
+{
+    classic_bonded();
+    RC.on=true;
+    for(unsigned i=0;i<3000;i++) step();
+    rc_connect();
+    for(unsigned i=0;i<5000;i++) {
+        step();
+        if(tx_n) { tx_n=0; const uint8_t complete[]={0x13,5,1,12,0,1,0}; multi_event(complete,sizeof(complete)); }
+    }
+    assert(a2_ready() && !host.a2dp_ops && !RC.conn_reqs && HP.last_conn_result==0x0002 && !rc_live());
+    assert(!host.avctp && !host.avctp_asking && !rc_host_channels() && !host.avctp_dropped);
+    puts("PASS: avctp: with no audio sink their channel is refused and we ask for none");
 }
 
 int main(void)
@@ -3424,5 +4263,21 @@ int main(void)
     sniff_request_in_flight();
     sniff_asleep_while_awake();
     sniff_beside_le();
+    remote_round_trip();
+    remote_volume_adopted();
+    remote_volume_writes();
+    remote_set_refused();
+    remote_ownership_ends();
+    remote_ready_mid_stream();
+    remote_failed_retry();
+    remote_plain();
+    remote_buttons();
+    remote_playback();
+    remote_crossing();
+    remote_asks();
+    remote_parked_crossing();
+    remote_none_without_sink();
+    remote_table_full();
+    z_remote=true; sniff_beside_le(); z_remote=false;
     puts("Bluetooth multi-peer host tests passed");
 }

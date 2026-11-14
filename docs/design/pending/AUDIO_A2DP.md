@@ -503,8 +503,9 @@ the sanitizers; a mutant harness.
   signalling channel at once, the one that opens first is used and the
   other, ours or theirs, is closed.
 - **The channel table is exactly enough**: their SDP, sig, media, and for
-  a moment our SDP or a crossing sig. It stays four, and the multi-host
-  suite fills it.
+  a moment our SDP or a crossing sig. It stayed four for A.3, and the
+  multi-host suite filled it; AUDIO_REMOTE.md § Part W makes it six, for
+  AVCTP's channel and its crossing.
 - **The SDP channel is closed once sig is open**, not before.
 - **AVDTP is tried even when the SDP query was not made.** The PSM is
   fixed by assigned numbers; without their record (or before it has come)

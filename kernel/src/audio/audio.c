@@ -472,10 +472,44 @@ void audio_sink_delay(const audio_sink_t *sink, uint32_t delay_us)
 	spinlock_release_irqrestore(&s_lock, flags);
 }
 
+bool audio_sink_owns_volume(const audio_sink_t *sink, bool owned)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	bool done = audio_stream_sink_owns_volume(&s_stream, sink, owned);
+	spinlock_release_irqrestore(&s_lock, flags);
+	return done;
+}
+
+bool audio_sink_volume_set(const audio_sink_t *sink, uint32_t volume)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	bool done = audio_stream_sink_volume_set(&s_stream, sink, volume);
+	spinlock_release_irqrestore(&s_lock, flags);
+	return done;
+}
+
+uint32_t audio_sink_volume_now(const audio_sink_t *sink)
+{
+	(void)sink;
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	uint32_t volume = s_stream.volume;
+	spinlock_release_irqrestore(&s_lock, flags);
+	return volume;
+}
+
 bool audio_sink_has_sound(const audio_sink_t *sink)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
 	bool sound = audio_stream_has_sound(&s_stream, sink);
+	spinlock_release_irqrestore(&s_lock, flags);
+	return sound;
+}
+
+bool audio_sink_sound(const audio_sink_t *sink, bool *paused)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	bool sound = audio_stream_has_sound(&s_stream, sink);
+	*paused = s_stream.paused;
 	spinlock_release_irqrestore(&s_lock, flags);
 	return sound;
 }
@@ -596,6 +630,10 @@ bool audio_volume_write(const char *text, size_t length)
 	}
 	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
 	bool done = audio_stream_set_volume(&s_stream, volume);
+	// A sink that owns the volume carries the number out at its end, which
+	// its next pass reads; the nudge only brings that pass sooner.
+	if (done)
+		nudge_sink_locked();
 	spinlock_release_irqrestore(&s_lock, flags);
 	return done;
 }
@@ -664,7 +702,7 @@ size_t audio_report(char *out, size_t capacity)
 		"state: %s\n"
 		"generation: %u\n"
 		"opened_by: %s\n"
-		"volume: %u\n"
+		"volume: %u (%s%s)\n"
 		"ring_frames: %u of %u\n"
 		"ring_ms: %u of %u\n"
 		"accepted: %lu\n"
@@ -693,7 +731,8 @@ size_t audio_report(char *out, size_t capacity)
 		state_name(p.state),
 		p.generation,
 		owner[0] != '\0' ? owner : "-",
-		s.volume,
+		s.volume, s.volume_owned ? "set at its end by the sink " : "the seam's gain",
+		s.volume_owned ? sink : "",
 		p.queued, s.capacity,
 		p.queued * 1000u / p.rate, s.capacity * 1000u / p.rate,
 		p.accepted, p.taken, p.heard, p.micros, p.delay_us,
