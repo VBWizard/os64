@@ -4164,6 +4164,29 @@ static void remote_parked_crossing(void)
     puts("PASS: avrcp: their command between our Set's parking and its send goes first; our Set follows; nothing twice");
 }
 
+// The channel table full: our SDP channel kept, and their SDP client
+// opening five more; the seventh request is refused "no resources" (0x0004)
+// and the six stand.
+static void remote_table_full(void)
+{
+    classic_bonded();
+    for(unsigned i=0;i<2000;i++) step();
+    unsigned used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==1 && host.sdp_kept);
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS-1u;i++) { hp_connect(BT_L2CAP_PSM_SDP,(uint16_t)(0x0100+i)); step(); step(); }
+    used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==BT_L2CAP_CHANNELS && HP.last_conn_result==0);
+    unsigned answers=HP.conn_rsps;
+    hp_connect(BT_L2CAP_PSM_SDP,0x0110); step(); step();
+    assert(HP.conn_rsps==answers+1 && HP.last_conn_result==0x0004);
+    used=0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;i++) used+=!bt_l2cap_is_free(&host.l2cap,i);
+    assert(used==BT_L2CAP_CHANNELS && a2_ready());
+    puts("PASS: l2cap: six channels in use on slot 2, and a seventh request refused for want of one");
+}
+
 // No sink: they open AVCTP and are refused; we never ask.
 static void remote_none_without_sink(void)
 {
@@ -4254,6 +4277,7 @@ int main(void)
     remote_asks();
     remote_parked_crossing();
     remote_none_without_sink();
+    remote_table_full();
     z_remote=true; sniff_beside_le(); z_remote=false;
     puts("Bluetooth multi-peer host tests passed");
 }
