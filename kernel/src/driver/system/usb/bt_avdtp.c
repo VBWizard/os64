@@ -164,16 +164,27 @@ static void av_drop_stream(bt_avdtp_t *a)
     a->configured=false;
 }
 
-// Our command is abandoned: its answer, if it comes, is a stray. An Abort
-// already sent is kept: they saw it before whatever they sent since, so it
-// cannot touch what follows, and it runs out its own short timer; its
-// accept changes no state. An Abort still queued is dropped: the session
-// it ends is gone for them too (they would not configure an endpoint
-// their side still held), and a late Abort naming the same endpoint would
-// tear down the configuration just accepted.
+// They changed the stream's state with a command of theirs we accepted.
+// A command of ours still QUEUED is retired: it describes a stream that
+// has since changed, and handed out now it would act on the new one (a
+// stale Start, once they had suspended again, would start a stream we
+// think open). A command already SENT is on their side to answer and
+// keeps its tracking: its timer runs, and its answer is taken without
+// changing a state it no longer applies to.
+static void av_retire_queued(bt_avdtp_t *a)
+{
+    if(!a->command_sent) a->command_live=false;
+}
+
+// They ended the session (their Close, Abort or Set Configuration
+// accepted): a queued command is retired as above, and a sent one is
+// abandoned too (its answer, if it comes, is a stray), except an Abort,
+// which they saw before whatever they sent since, so it cannot touch what
+// follows: it runs out its own short timer and its accept changes no state.
 static void av_abandon_command(bt_avdtp_t *a)
 {
-    if(a->command_signal!=SIG_ABORT || !a->command_sent) a->command_live=false;
+    av_retire_queued(a);
+    if(a->command_signal!=SIG_ABORT) a->command_live=false;
 }
 
 // To CONNECTED: the session is over and a new one is theirs to ask for or
@@ -359,8 +370,7 @@ static void av_their_setconf(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, co
     }
     uint8_t cat=0, code=0;
     if(!av_judge(a,p+2,n-2,&cat,&code)) { av_reject(m,label,SIG_SET_CONFIGURATION,cat,code); return; }
-    // Accepted: our own sequence is abandoned (an Abort of ours already
-    // sent runs out its timer; one still queued is dropped).
+    // Accepted: our own sequence is abandoned (av_abandon_command).
     av_abandon_command(a);
     a->remote_seid=intr;
     a->configured=true;
@@ -409,6 +419,7 @@ static void av_answer(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, uint8_t s
         if(!n) { av_reject(m,label,signal,0,ERR_BAD_LENGTH); return; }
         if(seid!=BT_AVDTP_SEID) { av_reject(m,label,signal,0,ERR_BAD_ACP_SEID); return; }
         if(a->state!=BT_AVDTP_CONFIGURED) { av_reject(m,label,signal,0,ERR_BAD_STATE); return; }
+        av_retire_queued(a);
         a->state=BT_AVDTP_AWAITING_MEDIA;
         a->media_ours=false;
         a->state_deadline=a->now+BT_AVDTP_HOLD_MS;
@@ -418,6 +429,7 @@ static void av_answer(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, uint8_t s
         if(!n) { av_reject(m,label,signal,0,ERR_BAD_LENGTH); return; }
         if(seid!=BT_AVDTP_SEID) { av_reject(m,label,signal,seid,ERR_BAD_ACP_SEID); return; }
         if(a->state!=BT_AVDTP_OPEN && a->state!=BT_AVDTP_STARTING) { av_reject(m,label,signal,seid,ERR_BAD_STATE); return; }
+        av_retire_queued(a);
         a->state=BT_AVDTP_STREAMING;
         a->edges.their_starts++;
         av_start(m,label,MSG_ACCEPT,signal);
@@ -426,6 +438,7 @@ static void av_answer(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, uint8_t s
         if(!n) { av_reject(m,label,signal,0,ERR_BAD_LENGTH); return; }
         if(seid!=BT_AVDTP_SEID) { av_reject(m,label,signal,seid,ERR_BAD_ACP_SEID); return; }
         if(a->state!=BT_AVDTP_STREAMING && a->state!=BT_AVDTP_SUSPENDING) { av_reject(m,label,signal,seid,ERR_BAD_STATE); return; }
+        av_retire_queued(a);
         a->state=BT_AVDTP_OPEN;
         a->edges.their_suspends++;
         av_start(m,label,MSG_ACCEPT,signal);

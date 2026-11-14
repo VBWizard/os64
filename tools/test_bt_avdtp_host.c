@@ -1292,6 +1292,104 @@ static void test_both_at_once(void)
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
 }
 
+// A command of ours still queued is retired when a command of theirs that
+// we accept changes the stream's state; one already sent keeps its
+// tracking. Every (their command, our queued command) pair that can occur.
+typedef enum { Q_OPEN, Q_START, Q_SUSPEND, Q_CLOSE, Q_COUNT } queued_t;
+static void queue_ours(queued_t q)
+{
+    switch (q) {
+    case Q_OPEN: to_configuring(); FEED(ACC(LAST), SETCONF); CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPENING); break;
+    case Q_START: to_open(); CHECK(bt_avdtp_start(&A, now)); break;
+    case Q_SUSPEND: to_streaming(); CHECK(bt_avdtp_suspend(&A, now)); break;
+    default: to_open(); CHECK(bt_avdtp_close(&A, now)); break;
+    }
+    CHECK(A.command_live && !A.command_sent);
+    L++;                                      // its label goes with it, sent or not
+}
+
+static void test_queued_commands_retired(void)
+{
+    // The reviewer's sequence: our Start queued; their Start accepted; the
+    // accept handed out; their Suspend accepted. Nothing of ours follows.
+    queue_ours(Q_START);
+    FEED(CMD(5), START, S(1));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK(!A.command_live);
+    // The pump is told nothing of ours is out: Suspend may be asked, Start may not (streaming).
+    CHECK(!bt_avdtp_start(&A, now));
+    OUT(ACC(5), START);
+    FEED(CMD(6), SUSPEND, S(1));
+    OUT(ACC(6), SUSPEND);
+    NONE();
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK(!A.command_live);
+    CHECK_EQ(bt_avdtp_edges(&A)->start_rejects, 0);
+    CHECK_EQ(bt_avdtp_edges(&A)->their_starts, 1);
+    CHECK(bt_avdtp_start(&A, now));           // and we may start it ourselves now
+    OURS(START, S(3));
+    // ...and with Suspend asked of the pump right after their Start.
+    queue_ours(Q_START);
+    FEED(CMD(5), START, S(1));
+    CHECK(bt_avdtp_suspend(&A, now));
+    OUT(ACC(5), START);
+    OURS(SUSPEND, S(3));
+    NONE();
+    // The mirror: our Suspend queued; their Suspend, then their Start.
+    queue_ours(Q_SUSPEND);
+    FEED(CMD(5), SUSPEND, S(1));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK(!A.command_live);
+    CHECK(!bt_avdtp_suspend(&A, now));        // open, so not ours to suspend
+    OUT(ACC(5), SUSPEND);
+    FEED(CMD(6), START, S(1));
+    OUT(ACC(6), START);
+    NONE();
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK(!A.command_live);
+    CHECK_EQ(bt_avdtp_edges(&A)->suspend_rejects, 0);
+    // Their Close, and their Abort, with each of our commands queued: the
+    // accept alone goes, and the session is over.
+    for (int abort = 0; abort < 2; abort++)
+        for (int q = 0; q < Q_COUNT; q++) {
+            queue_ours((queued_t)q);
+            if (abort) { FEED(CMD(7), ABORT, S(1)); OUT(ACC(7), ABORT); }
+            else { FEED(CMD(7), CLOSE, S(1)); OUT(ACC(7), CLOSE); }
+            NONE();
+            if (bt_avdtp_state(&A) != BT_AVDTP_CONNECTED || A.command_live) {
+                failures++;
+                printf("FAIL %s: their %s with our queued command %d\n", __func__, abort ? "Abort" : "Close", q);
+            }
+            CHECK_EQ(A.wrongs, 0);
+        }
+    // Their Set Configuration with our Get All Capabilities queued (the
+    // Discover, Set Configuration and Abort cases are in test_both_at_once).
+    fresh(0x0103);
+    bt_avdtp_begin(&A, now);
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
+    CHECK(A.command_live && !A.command_sent);
+    L++;
+    FEED(CMD(8), SETCONF, S(1), S(3), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(8), SETCONF);
+    NONE();
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    // A command of theirs that changes no state retires nothing: their
+    // Abort with no stream leaves our queued Discover to go.
+    fresh(0x0103);
+    bt_avdtp_begin(&A, now);
+    FEED(CMD(9), ABORT, S(1));
+    OUT(ACC(9), ABORT);
+    OURS(DISCOVER);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_DISCOVERING);
+    // Nor does one we refuse: their Start while our Close is queued is rejected, and our Close goes.
+    queue_ours(Q_CLOSE);
+    L--;
+    FEED(CMD(9), START, S(1));
+    OUT(REJ(9), START, S(1), E_BAD_STATE);
+    OURS(CLOSE, S(3));
+}
+
 // One answer and one command may wait, and the answer goes first; a second
 // command of theirs while an answer is owed is rejected (bad state).
 static void test_one_answer_one_command(void)
@@ -1998,6 +2096,24 @@ static uint32_t rnd(void)
 
 static bool streamed_or_opening(bt_avdtp_state_t s) { return s >= BT_AVDTP_CONFIGURED && s <= BT_AVDTP_CLOSING; }
 
+// A command of ours still queued belongs to the state that queued it: one
+// left behind by a change of theirs would act on a stream that has moved on.
+static bool queued_fits(bt_avdtp_state_t s)
+{
+    if (!A.command_live || A.command_sent) return true;
+    switch (A.command_signal) {
+    case DISCOVER: return s == BT_AVDTP_DISCOVERING;
+    case GETCAP: case GETALL: return s == BT_AVDTP_ASKING;
+    case SETCONF: return s == BT_AVDTP_CONFIGURING;
+    case OPEN: return s == BT_AVDTP_OPENING;
+    case START: return s == BT_AVDTP_STARTING;
+    case SUSPEND: return s == BT_AVDTP_SUSPENDING;
+    case CLOSE: return s == BT_AVDTP_CLOSING;
+    case ABORT: return s == BT_AVDTP_CONNECTED || s == BT_AVDTP_ENDING || s == BT_AVDTP_FAILED;
+    default: return false;
+    }
+}
+
 static void invariants(const char *where)
 {
     bt_avdtp_state_t s = bt_avdtp_state(&A);
@@ -2010,7 +2126,8 @@ static void invariants(const char *where)
         && A.rx_have <= sizeof(A.rx) && A.endpoint_count <= BT_AVDTP_ENDPOINTS
         && (s != BT_AVDTP_IDLE || (!A.answer[0].bytes && !A.command_live))
         && (!bt_avdtp_wants_closed(&A) || s == BT_AVDTP_ENDING || s == BT_AVDTP_FAILED)
-        && (!bt_avdtp_may_begin(&A, now) || (s == BT_AVDTP_CONNECTED && !A.command_live));
+        && (!bt_avdtp_may_begin(&A, now) || (s == BT_AVDTP_CONNECTED && !A.command_live))
+        && queued_fits(s);
     const bt_avdtp_sbc_t *set = bt_avdtp_settings(&A);
     if (set) ok = ok && set->rate == 48000 && set->blocks == 16 && set->subbands == 8 && !set->snr
                     && set->bitpool >= 2 && set->bitpool <= BT_AVDTP_BITPOOL;
@@ -2192,6 +2309,7 @@ int main(int argc, char **argv)
     test_acceptor_set_configuration();
     test_acceptor_wrong_states();
     test_both_at_once();
+    test_queued_commands_retired();
     test_one_answer_one_command();
     test_endings();
     test_fragments();
