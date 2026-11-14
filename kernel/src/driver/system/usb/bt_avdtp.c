@@ -250,7 +250,10 @@ static void av_ask(bt_avdtp_t *a, unsigned from)
         if(!av_audio_sink(e) || e->in_use) continue;
         a->endpoint_at=(uint8_t)i;
         a->remote_seid=e->seid;
-        bool all=a->peer_version>=0x0103 && !a->no_get_all;
+        // A version not known (0) is asked Get All Capabilities too: the
+        // answer is the one that offers delay reporting, and a reject of it
+        // falls back to Get Capabilities (no_get_all).
+        bool all=(a->peer_version==0 || a->peer_version>=0x0103) && !a->no_get_all;
         a->state=BT_AVDTP_ASKING;
         av_command_seid(a,all ? SIG_GET_ALL_CAPABILITIES : SIG_GET_CAPABILITIES,BT_AVDTP_REPLY_MS);
         return;

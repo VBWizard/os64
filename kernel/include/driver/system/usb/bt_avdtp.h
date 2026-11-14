@@ -182,7 +182,8 @@ void bt_avdtp_reset(bt_avdtp_t *a);                      // the link dropped: li
 
 // What the host tells it. `peer_version` is the AVDTP version from their
 // SDP record (0x0103), or 0 when the record was not read: Get All
-// Capabilities is asked only of 0x0103 or later.
+// Capabilities is asked of 0x0103 or later and of 0 (a reject of it falls
+// back to Get Capabilities), Get Capabilities of a version below 0x0103.
 void bt_avdtp_signalling_open(bt_avdtp_t *a, uint64_t now, uint16_t peer_version);
 // Sig closed with the link up: everything the channel carried is cleared
 // and the state is IDLE. When there was a session to go wrong (a stream

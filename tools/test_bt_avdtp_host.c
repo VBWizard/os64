@@ -149,7 +149,8 @@ static void to_asking(uint16_t version)
     OURS(DISCOVER);
     FEED(ACC(LAST), DISCOVER, EP(1, 0, 0, 0), EP(2, 1, 0, 1), EP(3, 0, 0, 1));
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_ASKING);
-    if (version >= 0x0103) OURS(GETALL, S(3)); else OURS(GETCAP, S(3));
+    // Get All Capabilities of 1.3 and later, and of a version not known.
+    if (version >= 0x0103 || version == 0) OURS(GETALL, S(3)); else OURS(GETCAP, S(3));
 }
 static void to_configuring(void)
 {
@@ -271,12 +272,12 @@ static void test_initiator_end_to_end(void)
     OURS(DISCOVER);
 }
 
-// Get Capabilities for a 1.2 peer and for one whose record was not read; no
-// delay reporting is offered, so none is configured.
+// Get Capabilities for a peer whose record says before 1.3; no delay
+// reporting is offered, so none is configured.
 static void test_initiator_older_peers(void)
 {
-    static const uint16_t versions[] = { 0x0102, 0x0000, 0x0100 };
-    for (unsigned i = 0; i < 3; i++) {
+    static const uint16_t versions[] = { 0x0102, 0x0100 };
+    for (unsigned i = 0; i < 2; i++) {
         to_asking(versions[i]);
         FEED(ACC(LAST), GETCAP, TRANSPORT, ALLSBC);
         OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
@@ -288,6 +289,32 @@ static void test_initiator_older_peers(void)
     // AVDTP 1.4 is 1.3 or later.
     to_asking(0x0104);
     CHECK_EQ(A.command.pdu[1], GETALL);
+}
+
+// A version not known (their record not read when signalling opened): Get
+// All Capabilities first, so a 1.3 sink's delay reporting is not lost to the
+// order things arrived in; a reject of it, of either shape, falls back to
+// Get Capabilities, as for a 1.3 peer that refuses it.
+static void test_initiator_unknown_version(void)
+{
+    // Accepted: delay reporting offered, and configured.
+    to_asking(0x0000);
+    FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC, DELAYREP);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51), DELAYREP);
+    // Rejected: Get Capabilities, and no delay reporting.
+    to_asking(0x0000);
+    FEED(REJ(LAST), GETALL, E_NSC);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_ASKING);
+    OURS(GETCAP, S(3));
+    FEED(ACC(LAST), GETCAP, TRANSPORT, ALLSBC);
+    OURS(SETCONF, S(3), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
+    // A general reject, and AVDTP 1.0's with no signal: the same fallback.
+    to_asking(0x0000);
+    FEED(GREJ(LAST), GETALL);
+    OURS(GETCAP, S(3));
+    to_asking(0x0000);
+    FEED(REJ(LAST));
+    OURS(GETCAP, S(3));
 }
 
 // Set Configuration's exact bytes for each settings outcome.
@@ -2298,6 +2325,7 @@ int main(int argc, char **argv)
     int rounds = argc > 1 ? atoi(argv[1]) : 3000;
     test_initiator_end_to_end();
     test_initiator_older_peers();
+    test_initiator_unknown_version();
     test_initiator_settings();
     test_initiator_get_all_rejected();
     test_initiator_walk();
