@@ -580,6 +580,22 @@ virtio because its drain waits for the tick.
   record of what was checked upstream. `tools/test_resample_host.sh`,
   `/tests/resampletest` and `/tests/playtest` prove it; run
   `tools/test_sound_audit.py` after a build that touches it
+  **The SBC encoder is built and linked with the kernel**
+  (`kernel/ports/sbc/`, the first third-party code in ring 0), but
+  `--gc-sections` leaves all of it out of the binary until something calls
+  the boundary (the A2DP sink, AUDIO_A2DP.md part P). Android's, unpatched
+  in `upstream/`, pinned by `manifest.json`, built by `sbc.mk` with flags of
+  its own (the kernel's code generation, `-O2`, warnings not fatal) and the
+  switches in `port/sbc_switches.h`. The kernel may call `sbc_port.h`'s two functions
+  and nothing else: `sbc_port_begin` (settings `sbc_settings_valid` takes,
+  `kernel/include/audio/sbc_frame.h`, and exactly the bitpool asked) and
+  `sbc_port_encode` (one frame into the boundary's own guarded buffer;
+  a wrong length or a touched guard fails it until the next begin).
+  `tools/test_sbc_host.sh` proves it against FFmpeg's decoder and encoder
+  and FAILS without ffmpeg; `tools/test_sbc_audit.py` reads the objects
+  (integer-only, `memset` the one import, and no caller of the boundary
+  but those named in its `BOUNDARY_CALLERS`, which the pump's commit
+  joins). Its README is the record
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
