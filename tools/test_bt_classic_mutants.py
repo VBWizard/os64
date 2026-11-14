@@ -296,8 +296,10 @@ mutants = [
      'c->refusal_count=0; cl_key_wipe(c);'),
     ('a-refused-policy-write-is-confirmed', 'if(c->policy_out && same && !st) c->sniff_confirmed',
      'if(c->policy_out && same) c->sniff_confirmed'),
-    ('a-late-answer-is-confirmed', 'if(c->policy_out && same && !st) c->sniff_confirmed',
-     'if(c->policy_out && !st) c->sniff_confirmed'),
+    # No mutant for cl_sniff_done's `same` (a late answer confirms nothing):
+    # every way out of READY clears policy_out first, so `same` never decides
+    # and breaking it alone is invisible. 'a-drop-keeps-the-sniff-state' is
+    # the break that a late answer would show.
     ('the-policy-out-flag-stays', '    c->policy_out=false;\n    // A change asked', '    // A change asked'),
     ('a-change-while-out-is-forgotten', 'c->policy_owed=c->policy_owed && c->sniff_wanted!=c->sniff_confirmed;',
      'c->policy_owed=false;'),

@@ -213,7 +213,7 @@ and reply shapes, the turn behind a latched answer, behind `next_op` and
 ahead of page scan, refused, refused by status, malformed, for another
 handle and unanswered with the link still READY, a failed Mode Change,
 the link dropping with each owed and each out, a late answer for a dead
-link, the value changing while a write is out; 37 mutants, 215 in all)
+link, the value changing while a write is out; 36 mutants, 214 in all)
 and `tools/test_bt_multi_host.sh` (the model controller takes both
 commands, the model headphones either sniff as the P5's pair does or
 never, and the model link in sniff delivers and completes a Classic

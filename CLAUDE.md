@@ -516,7 +516,7 @@ virtio because its drain waits for the tick.
   the count (§ S, as built), always leaving a send slot for the LE peers
   **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
-  headphones, 215 mutants): `scan classic`, then `slot 2 bond <address>`,
+  headphones, 214 mutants): `scan classic`, then `slot 2 bond <address>`,
   `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
   drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
   wait starts over once a connection has lasted half a minute), until
