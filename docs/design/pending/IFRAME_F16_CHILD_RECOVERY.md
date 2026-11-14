@@ -4,10 +4,11 @@ Implementation PR: **#582**, source `9d2b1265`.
 
 This chapter composes the merged terminal records (#577) and F4 current-realm
 engine (#579) with an executable recovery path for an audited native host.
-It implements the libjs protocol and its engine fence together. F.16 remains
-in progress. Libdom's separate [native recovery chapter](IFRAME_F16_DOM_RECOVERY.md)
-selects this policy for an audited subset; Yonder remains opted out. Streams
-consistency and coherent host/guest acceptance remain open.
+It implements the libjs protocol and its engine fence together. Libdom's
+[native recovery chapter](IFRAME_F16_DOM_RECOVERY.md) selects this policy for an
+audited subset, completed by [host/guest acceptance](IFRAME_F16_HOST_ACCEPTANCE.md).
+Yonder remains opted out; broader settings/Streams consistency remains outside
+the supported subset.
 
 ## Supported behavior
 
@@ -256,5 +257,6 @@ output names retained upstream evidence files and imported audio comments;
 the composition changes no audio code beyond the accepted merge.
 
 These composition checks do not broaden recovery admission or replace the
-initial chapter's qualified broad DOM and mutation evidence. Browser recovery
-and DOM/native/Streams certification remain open.
+initial chapter's qualified broad DOM and mutation evidence. Later DOM/native
+and host receipts supply their own certification; browser enablement and
+broader settings/Streams recovery remain separate.

@@ -5,9 +5,11 @@ Implementation PR: **#593**, source `0d23ad19`.
 This chapter adds an opt-in libdom policy over the libjs protocol from #582.
 It contains an attributed child EXECUTION episode after complete engine unwind,
 settles native activity behind the execution fence, and permits independent
-healthy work after commit. Yonder retains terminal handling. F.16 remains in
-progress; browser routing, guest/WPT acceptance and Streams unwind are separate
-obligations. Failed slots and backing remain charged until root destruction.
+healthy work after commit. Yonder retains terminal handling.
+[Host/guest/web acceptance](IFRAME_F16_HOST_ACCEPTANCE.md) completes the initial
+supported subset; browser enablement and broader settings/Streams recovery
+remain separate obligations. Failed slots and backing remain charged until
+root destruction.
 
 ## Construction and supported boundary
 
