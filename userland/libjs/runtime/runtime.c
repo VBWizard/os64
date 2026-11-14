@@ -2235,7 +2235,10 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm,
     if (runtime->destroying) return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
     if (realm->retired && host != NULL)
         return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
-    if (runtime->active && (host == NULL || realm->evaluated || realm->host_configured)) return status(outcome, OS64_JS_BUSY, "runtime is executing");
+    bool recovery_detach = host == NULL && runtime->recovery_enabled &&
+        runtime->recovery_state == OS64_JS_RECOVERY_PREPARING && realm->failed;
+    if (runtime->active && !recovery_detach && (host == NULL || realm->evaluated || realm->host_configured))
+        return status(outcome, OS64_JS_BUSY, "runtime is executing");
     realm->hosted = host != NULL;
     realm->host_configured |= host != NULL;
     if (host != NULL) realm->host = *host;
@@ -2998,7 +3001,9 @@ JS_PUBLIC os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *real
         return status(outcome, OS64_JS_FAILED_RUNTIME, "runtime is being destroyed");
     if (realm->retired && loader != NULL)
         return status(outcome, realm->failed ? OS64_JS_REALM_FAILED : OS64_JS_REALM_RETIRED, "realm has retired");
-    if (runtime->active && (loader == NULL || realm->evaluated || realm->loader_configured))
+    bool recovery_detach = loader == NULL && runtime->recovery_enabled &&
+        runtime->recovery_state == OS64_JS_RECOVERY_PREPARING && realm->failed;
+    if (runtime->active && !recovery_detach && (loader == NULL || realm->evaluated || realm->loader_configured))
         return status(outcome, OS64_JS_BUSY, "runtime is executing");
     if (loader != NULL) realm->loader = *loader;
     else os64_memset(&realm->loader, 0, sizeof(realm->loader));

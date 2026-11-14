@@ -543,11 +543,19 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
     for (DObserver *o = s->observers; o != NULL && status == 0;) {
         DObserver *next = o == last ? NULL : o->next;
         os64_dom_t *owner = o->dom;
+        /* An inactive registration needs native payload release, not a
+         * context borrow that a failed realm cannot grant. */
+        if (!d_delivery_active(owner)) {
+            queue_clear(owner, o);
+            registrations_drop(dom, transient_for, o);
+            o = next;
+            continue;
+        }
         os64_js_outcome_t outcome;
         JSContext *callback_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
         if (!callback_ctx) { status = -1; break; }
         bool any = o->first != NULL;
-        int eligible = d_delivery_active(owner);
+        int eligible = 1;
         if (eligible && any) eligible = d_delivery_eligible(owner, callback_ctx, o->callback);
         if (eligible <= 0) queue_clear(owner, o);
         if (eligible == 0) {
@@ -588,12 +596,12 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         status = signal_failed(dom, ctx);
     }
     for (size_t i = 0; i < signals.n; i++) {
-        if (status == 0) {
-            os64_dom_t *owner = d_owner(dom, signals.slots[i]);
+        os64_dom_t *owner = d_owner(dom, signals.slots[i]);
+        if (status == 0 && d_delivery_active(owner)) {
             os64_js_outcome_t outcome;
             JSContext *event_ctx = os64_js_realm_context(owner->realm, OS64_JS_ABI_ID, &outcome);
             if (!event_ctx) status = -1;
-            else if (d_delivery_active(owner)) {
+            else {
                 JSValue event = d_event_new(owner, event_ctx, "slotchange", true, false, true);
                 if (JS_IsException(event) || d_dispatch(owner, event_ctx, event, signals.slots[i]) < 0)
                     status = signal_failed(owner, event_ctx);

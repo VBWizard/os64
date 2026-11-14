@@ -253,7 +253,12 @@ retained direct-function execution. Root destruction retains both teardown
 policies and the zero-leaked-roots obligation.
 
 This interface delegates native safety to an audited host; it does not supply a
-DOM/Streams/provider certificate. Yonder/libdom remain opted out. Source audit,
+DOM/Streams/provider certificate. Libdom supplies a separate paired opt-in
+constructor and coordinator for its audited native subset; Yonder remains
+opted out. During guarded PREPARING, NULL-only module-loader/script-host detach
+is permitted for failed realms. Healthy realms, replacement services and other
+active phases retain their existing BUSY/retirement checks. See
+[the DOM policy](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md). Source audit,
 proofs and reproducible commands: [F16 child recovery](../../docs/design/pending/IFRAME_F16_CHILD_RECOVERY.md).
 
 ## Realms

@@ -3,7 +3,7 @@
 bool d_provider_enter(os64_dom_t *dom);
 void d_provider_leave(os64_dom_t *dom);
 bool d_provider_busy(const os64_dom_t *dom);
-void d_storage_drain(os64_dom_t *dom);
+int64_t d_storage_drain(os64_dom_t *dom);
 
 enum {
     RP_GEOMETRY, RP_HIT, RP_RECTS, RP_SVG, RP_VIEW, RP_SCROLL, RP_COMPUTED,

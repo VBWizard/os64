@@ -51,6 +51,12 @@ static os64_js_status_t recovery_host_prepare(void *opaque, const os64_js_recove
         os64_js_realm_t *realm = failure->realms[i];
         check(os64_js_realm_is_failed(realm) && os64_js_realm_is_retired(realm),
               "executable and activity ineligibility publish before native cleanup");
+        check(os64_js_realm_set_script_host(realm, OS64_JS_ABI_ID, NULL, &out) == OS64_JS_OK &&
+              os64_js_realm_set_module_loader(realm, OS64_JS_ABI_ID, NULL, &out) == OS64_JS_OK,
+              "failed native services can detach only inside fenced preparation");
+        check(os64_js_realm_set_script_host(h->realm[0], OS64_JS_ABI_ID, NULL, &out) == OS64_JS_BUSY &&
+              os64_js_realm_set_module_loader(h->realm[0], OS64_JS_ABI_ID, NULL, &out) == OS64_JS_BUSY,
+              "preparation cannot detach an unrelated healthy realm's native services");
         for (unsigned j = 0; j < 4; j++) if (h->realm[j] == realm) {
             h->cleaned |= 1u << j;
             check(JS_IsContextExecutableFailed(h->ctx[j]), "engine failed-code guard publishes before native preparation");

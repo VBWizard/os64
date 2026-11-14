@@ -83,6 +83,39 @@ runtime failure requires root teardown after its stacks unwind; FAILED_RUNTIME
 from finish does not certify that unwind. Ordinary sibling exceptions do not
 prevent finishing a marked child. Repeated mark and finish are harmless.
 
+`os64_dom_cluster_create_with_recovery` creates a paired runtime and cluster
+with an explicit native recovery policy. The caller owns the runtime and uses
+the same cluster drain, runtime destroy, cluster free order. Ordinary clusters
+and Yonder retain terminal failure handling. After a supported child-only
+EXECUTION episode closes, `os64_dom_cluster_recover` fences engine execution,
+marks affected realms failed, and pauses cluster activity before native cleanup.
+Cluster-wide provider loans, DOM walks, reaction frames and borrowed animation
+layout generations return BUSY; provider opaque storage remains owned until a
+successful retry commits the same generation. Cleanup checks loans again after
+provider reentry and before commit. It never runs author callbacks or resumes
+the abandoned task.
+
+Affected storage gets one final settlement attempt. A negative provider status
+or serialization OOM refuses native certification. Requests cancel through
+their original producer; timers and other obsolete delivery payloads stop.
+Provider pointers and libjs module/script hosts detach before success. Retained
+nodes, listeners, custom definitions, observer registrations, Canvas pixels and
+animation data keep their backing and charges. Healthy callbacks on adopted
+nodes and native owed custom/observer queues retain independent delivery;
+failed callbacks cannot execute. Partial DOM/data mutations survive.
+
+The supported subset requires empty engine job/rejection/module bookkeeping.
+Native owed reactions between tasks are separate from queued engine jobs.
+Raw/checked settings, native callback overruns and other unproved engine scopes
+retain libjs's global fallback. Streams state needs a separate unwind proof:
+creating a Readable/Writable/Transform stream record or using a private Streams
+bridge marks the cluster permanently ineligible for local recovery. Installing
+the interfaces alone does not. BUSY grants no storage-release permission;
+failure requires root cleanup after loans unwind. Only a successful coordinator
+commit permits affected provider release and independent healthy tasks.
+[The native audit and proofs](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md)
+record this subset; no browser recovery adoption or slot reuse is implied.
+
 For root teardown, stop host deliveries, drain the cluster, destroy its runtime once, release
 layout borrowers, then free the cluster. Native records and allocation-owner
 descriptors survive finalizers and all native sweeps. Document records remain

@@ -554,14 +554,14 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * back what the store kept. Changes that could not be written down for
  * want of memory wait for the next ordinary commit, OS64_DOM_STORAGE_COMMIT_MS on. Cleanup
  * instead drops uncommitted changes after its final attempt. */
-static void area_commit(DStorageArea *area, bool cleanup)
+static int64_t area_commit(DStorageArea *area, bool cleanup)
 {
     os64_dom_t *dom = area->dom;
     if (area->committing || (!cleanup && !d_delivery_active(dom)) ||
-        !kept(dom, area) || area->changes.count == 0) return;
+        !kept(dom, area) || area->changes.count == 0) return 0;
     area->committing = true;
     uint64_t now = cleanup ? dom->clock_seen_ms : now_ms(dom);
-    if (!cleanup && !d_delivery_active(dom)) { area->committing = false; return; }
+    if (!cleanup && !d_delivery_active(dom)) { area->committing = false; return 0; }
     /* Cleanup settles already owed changes even while closed/retired. Its
      * caller has excluded borrowers; the loan covers serialization and the
      * callback, so reentrant settle/forget/drain cannot consume these maps. */
@@ -576,7 +576,7 @@ static void area_commit(DStorageArea *area, bool cleanup)
     if (changes == NULL) {
         d_provider_leave(dom);
         area->committing = false;
-        return;
+        return -3; /* Native serialization allocation failed. */
     }
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
@@ -587,6 +587,7 @@ static void area_commit(DStorageArea *area, bool cleanup)
     else area->loaded = false;
     d_provider_leave(dom);
     area->committing = false;
+    return status;
 }
 
 static uint64_t area_due(const DStorageArea *area)
@@ -646,19 +647,22 @@ void os64_dom_storage_forget(os64_dom_t *dom)
     }
 }
 
-void d_storage_drain(os64_dom_t *dom)
+int64_t d_storage_drain(os64_dom_t *dom)
 {
-    if (d_provider_busy(dom)) return;
+    if (d_provider_busy(dom)) return -4;
+    int64_t error = 0;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++) {
         DStorageArea *area = dom->storage[i];
         if (area != NULL) {
-            area_commit(area, true);
+            int64_t status = area_commit(area, true);
+            if (error == 0) error = status;
             /* Final settlement is one attempt, including serialization
              * failure; retained maps survive but no retry owes the host. */
             map_free(&area->changes);
         }
         os64_memset(&dom->storage_providers[i], 0, sizeof(dom->storage_providers[i]));
     }
+    return error;
 }
 
 void d_storage_free(os64_dom_t *dom)

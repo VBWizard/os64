@@ -1,5 +1,6 @@
 #include "internal.h"
 #include "os64/proc.h"
+#include "os64/js_failure.h"
 
 /* Allocation ownership survives cross-document operations. The packed word
  * stores the charged size and census kind; the owner releases that charge. */
@@ -156,10 +157,15 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
     return true;
 }
 
-bool d_delivery_active(const os64_dom_t *dom)
+bool d_activity_eligible(const os64_dom_t *dom)
 {
     return dom && !dom->closed && !dom->installing && !(dom->cluster && (dom->cluster->poisoned || dom->cluster->drained)) &&
            !os64_js_realm_is_retired(dom->realm);
+}
+
+bool d_delivery_active(const os64_dom_t *dom)
+{
+    return d_activity_eligible(dom) && !(dom->cluster && dom->cluster->recovering);
 }
 
 bool d_require_active(os64_dom_t *dom, JSContext *ctx)
@@ -538,6 +544,45 @@ os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *cluster, os64_
     return admission;
 }
 
+static os64_js_status_t recovery_prepare_native(void *, const os64_js_recovery_token_t *,
+    const os64_js_failure_record_t *, int64_t *);
+
+static os64_dom_cluster_t *cluster_allocate(const os64_dom_cluster_limits_t *limits,
+    os64_js_outcome_t *outcome)
+{
+    if (!limits || limits->dom_bytes < sizeof(os64_dom_cluster_t)) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return NULL;
+    }
+    os64_dom_cluster_t *cluster = os64_calloc(1, sizeof(*cluster));
+    if (!cluster) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
+    cluster->limits = *limits;
+    cluster->bytes = sizeof(*cluster);
+    cluster->html = os64_html_group_create(limits->html_bytes);
+    cluster->page = os64_page_state_group_create(limits->page_bytes);
+    if (!cluster->html || !cluster->page) {
+        outcome->status = OS64_JS_HOST_FAILURE;
+        os64_page_state_group_free(cluster->page);
+        os64_html_group_free(cluster->html);
+        os64_free(cluster);
+        return NULL;
+    }
+    return cluster;
+}
+
+static bool cluster_register(os64_dom_cluster_t *cluster, os64_js_realm_t *primary,
+    JSContext *ctx, os64_js_outcome_t *outcome)
+{
+    if (os64_js_realm_task_begin(primary, OS64_JS_ABI_ID, "DOM cluster", outcome) != OS64_JS_OK) return false;
+    /* Registration claims this runtime without using libjs's opaque slots
+     * or storing a native pointer in an engine object. */
+    const JSClassDef definition = {.class_name = "DOMCluster"};
+    int registered = JS_NewClass(JS_GetRuntime(ctx), os64_js_class_id(&cluster_slot), &definition);
+    if (os64_js_task_end(cluster->runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) return false;
+    if (registered < 0) { outcome->status = OS64_JS_HOST_FAILURE; return false; }
+    return true;
+}
+
 os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *runtime,
     const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
 {
@@ -546,32 +591,42 @@ os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *runtime,
     JSContext *ctx = os64_js_realm_context(primary, OS64_JS_ABI_ID, outcome);
     if (!ctx) return NULL;
     JSRuntime *engine = JS_GetRuntime(ctx);
-    JSClassID id = os64_js_class_id(&cluster_slot);
     if (!limits || limits->dom_bytes < sizeof(os64_dom_cluster_t) ||
-        JS_IsRegisteredClass(engine, id) ||
+        JS_IsRegisteredClass(engine, os64_js_class_id(&cluster_slot)) ||
         JS_IsRegisteredClass(engine, os64_js_class_id(&anchor_slot))) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return NULL;
     }
-    os64_dom_cluster_t *cluster = os64_calloc(1, sizeof(*cluster));
-    if (!cluster) { outcome->status = OS64_JS_HOST_FAILURE; return NULL; }
+    os64_dom_cluster_t *cluster = cluster_allocate(limits, outcome);
+    if (!cluster) return NULL;
     cluster->runtime = runtime;
-    cluster->limits = *limits;
-    cluster->bytes = sizeof(*cluster);
-    cluster->html = os64_html_group_create(limits->html_bytes);
-    cluster->page = os64_page_state_group_create(limits->page_bytes);
-    if (!cluster->html || !cluster->page) {
-        outcome->status = OS64_JS_HOST_FAILURE;
+    if (cluster_register(cluster, primary, ctx, outcome)) return cluster;
+    os64_page_state_group_free(cluster->page);
+    os64_html_group_free(cluster->html);
+    os64_free(cluster);
+    return NULL;
+}
+
+os64_dom_cluster_t *os64_dom_cluster_create_with_recovery(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *caller_abi,
+    const os64_dom_cluster_limits_t *limits, os64_js_runtime_t **runtime, os64_js_outcome_t *outcome)
+{
+    if (runtime) *runtime = NULL;
+    if (!outcome) return NULL;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (!runtime) { outcome->status = OS64_JS_BAD_ARGUMENT; return NULL; }
+    os64_dom_cluster_t *cluster = cluster_allocate(limits, outcome);
+    if (!cluster) return NULL;
+    os64_js_recovery_host_t host = {.opaque=cluster, .prepare=recovery_prepare_native};
+    if (os64_js_create_with_child_recovery(config, policy, caller_abi, &host, runtime, outcome) != OS64_JS_OK)
         goto fail;
-    }
-    if (os64_js_realm_task_begin(primary, OS64_JS_ABI_ID, "DOM cluster", outcome) != OS64_JS_OK) goto fail;
-    /* Registration claims this runtime without using libjs's opaque slots
-     * or storing a native pointer in an engine object. */
-    const JSClassDef definition = {.class_name = "DOMCluster"};
-    int registered = JS_NewClass(engine, id, &definition);
-    if (os64_js_task_end(runtime, OS64_JS_ABI_ID, outcome) != OS64_JS_OK) goto fail;
-    if (registered < 0) { outcome->status = OS64_JS_HOST_FAILURE; goto fail; }
-    return cluster;
+    cluster->runtime = *runtime;
+    cluster->recovery_enabled = true;
+    os64_js_realm_t *primary = os64_js_primary_realm(*runtime, OS64_JS_ABI_ID, outcome);
+    JSContext *ctx = os64_js_realm_context(primary, OS64_JS_ABI_ID, outcome);
+    if (ctx && cluster_register(cluster, primary, ctx, outcome)) return cluster;
+    os64_js_destroy(*runtime);
+    *runtime = NULL;
 fail:
     os64_page_state_group_free(cluster->page);
     os64_html_group_free(cluster->html);
@@ -979,6 +1034,31 @@ os64_dom_child_t os64_dom_create_child(os64_dom_cluster_t *cluster,
     return child;
 }
 
+/* Quiescent activity shutdown retains exported values, registration identity
+ * and layout generations; callers exclude native walks and provider loans. */
+static void departure_activity_cancel(os64_dom_t *dom)
+{
+    d_report_drain(dom);
+    d_timer_drain(dom);
+    d_timer_free(dom);
+    d_idle_drain(dom);
+    d_idle_free(dom);
+    d_animation_drain(dom);
+    d_message_cancel(dom);
+    d_pointer_drain(dom);
+    d_web_animations_cancel(dom);
+    d_custom_cancel(dom);
+    d_observers_cancel(dom);
+    d_intersections_cancel(dom);
+    d_performance_cancel(dom);
+    if (dom->subtle_queue) {
+        JS_FreeValueRT(dom->engine, dom->subtle_queue->value);
+        dom->subtle_queue->value = JS_UNDEFINED;
+    }
+    dom->subtle_head = dom->subtle_tail = 0;
+    dom->subtle_drain_queued = false;
+}
+
 os64_js_status_t os64_dom_depart_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     /* Query first: in particular, do not overwrite an outcome borrowed by
@@ -1004,31 +1084,15 @@ os64_js_status_t os64_dom_depart_finish(os64_dom_t *dom, os64_js_outcome_t *outc
     if (status != OS64_JS_OK) goto done;
     status = os64_js_realm_set_module_loader(dom->realm, OS64_JS_ABI_ID, NULL, outcome);
     if (status != OS64_JS_OK) goto done;
-    d_report_drain(dom);
-    d_timer_drain(dom);
-    d_timer_free(dom);
-    d_idle_drain(dom);
-    d_idle_free(dom);
-    d_animation_drain(dom);
-    d_message_cancel(dom);
-    d_pointer_drain(dom);
-    d_web_animations_cancel(dom);
-    d_custom_cancel(dom);
-    d_observers_cancel(dom);
-    d_intersections_cancel(dom);
-    d_performance_cancel(dom);
-    if (dom->subtle_queue) {
-        JS_FreeValueRT(dom->engine, dom->subtle_queue->value);
-        dom->subtle_queue->value = JS_UNDEFINED;
-    }
-    dom->subtle_head = dom->subtle_tail = 0;
-    dom->subtle_drain_queued = false;
+    departure_activity_cancel(dom);
     departure_detach(dom);
     dom->departure_finished = true;
 done:
     dom->departure_finishing = false;
     return status;
 }
+
+#include "recovery.inc"
 
 static void binding_drain(os64_dom_t *dom)
 {

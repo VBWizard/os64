@@ -896,7 +896,17 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 callback_dom = entry->node ? d_owner(dom, entry->node) : entry->dom;
             os64_js_outcome_t context_out;
             JSContext *callback_ctx = os64_js_realm_context(callback_dom->realm, OS64_JS_ABI_ID, &context_out);
-            if (!callback_ctx) { JS_FreeValue(d->ctx, callback); result = -1; break; }
+            if (!callback_ctx) {
+                JS_FreeValue(d->ctx, callback);
+                /* A sealed callback cannot run, but later listeners in the
+                 * healthy activity document still have their own delivery. */
+                if (context_out.status == OS64_JS_REALM_FAILED) {
+                    if (final) break;
+                    continue;
+                }
+                result = -1;
+                break;
+            }
             DActiveEvent callback_active = {callback_dom->current_event, d->object};
             callback_dom->current_event = &callback_active;
             DScripts before = d_script_enter(callback_dom, listener->script);

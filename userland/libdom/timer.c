@@ -323,7 +323,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
                                       dom->window->value, argc, args, &call);
             else
                 os64_js_realm_call(report_owner->realm, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
-            if (call.status == OS64_JS_REALM_RETIRED) {
+            if (call.status == OS64_JS_REALM_RETIRED || call.status == OS64_JS_REALM_FAILED) {
                 /* The callback cannot become eligible again. In particular,
                  * do not leave its interval waking the live document. */
                 DTimer *discarded = interval ? unlink_id(dom, id, binding) : NULL;
