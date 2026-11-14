@@ -712,6 +712,29 @@ static void test_controller_silence(void)
         CHECK(A.strays >= 1);
         CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
     }
+    // An answer to the first transmission, arriving while the second copy
+    // still waits to be sent, is taken, and the copy is withdrawn: never sent.
+    fresh(); bt_avrcp_channel_open(&A, T);
+    unsigned q = ASKED();
+    T += REPLY_MS; bt_avrcp_tick(&A, T);         // the copy is queued, not taken
+    msg_t qe = events(q, ALL_EVENTS, 3);
+    feed(&qe);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_REGISTERING);
+    unsigned qr = REGISTERED();                   // the Register, not the question's copy
+    expect_nothing();
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
+    uint8_t copy[64];
+    uint32_t copy_serial = 0;
+    CHECK(bt_avrcp_next(&A, copy, sizeof(copy), 48, T, &copy_serial) > 0);   // the copy handed out, parked
+    msg_t qi = volume_reply(qr, R_INTERIM, 12);
+    feed(&qi);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    expect_volume(12);
+    CHECK(!bt_avrcp_sent(&A, copy_serial, T));    // withdrawn: the carrier must not send it
+    expect_nothing();
+    T += 10 * REPLY_MS; bt_avrcp_tick(&A, T);
+    CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_READY);
+    CHECK_EQ(A.strays, 0);
     // The timer runs from the sending: a command the carrier holds back is
     // not silent.
     fresh(); bt_avrcp_channel_open(&A, T);

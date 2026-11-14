@@ -417,12 +417,15 @@ static void ar_capabilities(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size
 // gives the new level, spends it, and it is made again (a CHANGED before
 // any INTERIM is taken the same way). A second INTERIM on a standing
 // registration (the answer to its second transmission) is taken as their
-// level too: it left them after the first, so it is the newer.
+// level too: it left them after the first, so it is the newer. An INTERIM
+// that arrives while the second copy is still queued withdraws that copy
+// (marked sent, so it never leaves); every other answer ends or replaces
+// the command, and its queued copy with it.
 static void ar_registration(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size_t n)
 {
     if(n!=2 || p[0]!=EVENT_VOLUME || (ctype!=CT_INTERIM && ctype!=CT_CHANGED)) { a->malformed++; return; }
     if(ctype==CT_INTERIM) {
-        a->reg.waiting=false;
+        a->reg.sent=true; a->reg.waiting=false;
         ar_level(a,p[1]);
         a->state=BT_AVRCP_READY;
         return;
@@ -444,17 +447,23 @@ static void ar_set_answer(bt_avrcp_t *a, uint8_t ctype, const uint8_t *p, size_t
 }
 
 // A response is taken only when it carries the label of a command of ours
-// that has been sent; anything else is a stray. One that carries the
-// label and another PDU is a stray too, and one we cannot read is
-// malformed: either way the command goes on waiting, its timer deciding
-// (a registration that stands goes on standing).
+// that has been sent at least once (a silence counted means it was: the
+// timer runs only after a send), so an answer to the first transmission
+// is taken while the second copy still waits in the queue; anything else
+// is a stray. One that carries the label and another PDU is a stray too,
+// and one we cannot read is malformed: either way the command goes on
+// waiting, its timer deciding (a registration that stands goes on
+// standing).
 // NOT IMPLEMENTED may echo our command or carry less of it; what PDU it
 // carries must be ours.
+static bool ar_answerable(const bt_avrcp_command_t *c, uint8_t label)
+{
+    return c->live && (c->sent || c->tries) && c->label==label;
+}
 static void ar_response(bt_avrcp_t *a, uint8_t header, const uint8_t *f, size_t n)
 {
     uint8_t label=header>>4;
-    bt_avrcp_command_t *c=a->reg.live && a->reg.sent && a->reg.label==label ? &a->reg
-                         : a->set.live && a->set.sent && a->set.label==label ? &a->set : 0;
+    bt_avrcp_command_t *c=ar_answerable(&a->reg,label) ? &a->reg : ar_answerable(&a->set,label) ? &a->set : 0;
     if(!c) { a->strays++; return; }
     if(header&HDR_IPID) { a->invalid_profile++; ar_refused(a,c); return; }
     if(n<3) { a->malformed++; return; }

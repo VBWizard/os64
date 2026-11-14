@@ -83,7 +83,9 @@ typedef struct {
 // it waits BT_AVRCP_REPLY_MS for its answer, then a second period, then the
 // controller has FAILED. For the second period a question or registration
 // is queued again with the same label and bytes, so an answer to either
-// transmission is its answer; a Set is not sent twice (bt_avrcp.c,
+// transmission is its answer, even one to the first that arrives while the
+// second copy still waits to be sent (the copy is then withdrawn and
+// never sent); a Set is not sent twice (bt_avrcp.c,
 // ar_timer, says why). A registration answered INTERIM STANDS: it keeps
 // its label, and no timer, until its CHANGED.
 typedef struct {
