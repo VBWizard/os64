@@ -27,8 +27,9 @@ cat /sys/bluetooth/devices
 Runtime discovery uses two-second LE scans plus command overhead. Controller
 initialization runs an initial scan before connection commands are accepted.
 Read the files again for progress; each open is a consistent snapshot. Discovery
-does not pair or connect, and a device must advertise to appear. Classic inquiry
-is not exposed by the shared runtime controller.
+does not pair or connect, and a device must advertise to appear. `echo "scan
+classic" > /sys/bluetooth/scan` runs a Classic inquiry (about ten seconds) and
+then the LE scan, for headphones and other Classic devices.
 
 `scan` also reports the latest round's start and finish dates in UTC,
 boot-relative milliseconds, and outcome. Manual and automatic rounds both use
@@ -339,6 +340,49 @@ cleanup disconnects the resulting handle. Confirmed cleanup permits slot reuse
 and retains errors and bonds. A transport failure, missing command reply, or
 unconfirmed cleanup makes the controller terminal and releases both inputs.
 A routine peer disconnect does not reset the controller. DMA stays allocated.
+
+## Headphones (Classic, slot 2)
+
+Slot 2 of `/sys/bluetooth/connection` is one Classic (BR/EDR) link, for
+headphones. It carries no sound: it pairs, encrypts, keeps the bond, comes back
+without being asked, and learns what the headphones are. The audio connection
+is docs/design/pending/AUDIO_TRACKER.csv's A.3, and headphones announce
+"connected" only when that opens. docs/design/pending/AUDIO_CLASSIC.md is the
+design.
+
+```sh
+echo "scan classic" > /sys/bluetooth/scan      # headphones in pairing mode
+cat /sys/bluetooth/devices                      # the line that begins "Classic"
+echo "slot 2 bond 4c:87:5d:6d:9a:37" > /sys/bluetooth/connection
+cat /sys/bluetooth/connection                   # slot 2: state: ready
+```
+
+- **Use the `Classic` line's address.** Dual-mode headphones also appear as an
+  `LE` device (the P5's pair as `LE-Bonzo`) under a random address that changes;
+  slot 2 refuses it. A Classic address does not change, and slot 2 takes it
+  whether or not the last scan heard it.
+- `bond` pairs (Secure Simple Pairing, no PIN) and saves the bond to
+  `/home/bluetooth_bond_classic`; `connect` pairs without keeping it;
+  `reconnect` pages the bonded headphones now; `disconnect` ends the link and
+  stops automatic reconnection until `bond` or `reconnect`; `forget` also
+  erases the bond.
+- **With a bond, the link comes back by itself**: at boot, after the headphones
+  drop, and after a page they did not answer, at 5 s doubling to a minute, the
+  wait starting over once a connection has lasted half a minute. While bonded
+  headphones are off that is one five-second page a minute. The `automatic:`
+  line says what is owed.
+- At `ready` the host asks the headphones what they are and shows the answer:
+  `sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0001, psm 0019 (complete)`.
+  The channel it asked on stays open, shown as `channel 0: open psm 0001`.
+- `/sys/usb`'s timeline has slot 2's steps (`slot 2 classic paging ->
+  authenticating`), and the log a `bluetooth: slot 2 ...` line for each end and
+  each query.
+
+Measured on the P5 with a Bose SoundLink around-ear II (2026-11-13): bonded in
+under four seconds; reconnected with the saved key in about 140 ms once a page
+was answered; back with no typing after a power cycle and after a reboot. These
+headphones never called the P5 themselves, and hung up two seconds after their
+last L2CAP channel was closed, which is why the SDP channel is left open.
 
 ## Controller and transport
 
