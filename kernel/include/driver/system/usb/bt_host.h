@@ -172,6 +172,18 @@ typedef struct {
     uint64_t avctp_sig_since, avctp_again_at;
     uint8_t avctp_asked, avctp_ends;
     uint32_t avctp_dropped;
+    // Who owns the volume (bt_host.c § Slot 2's volume), decided each tick
+    // from state. `vol_owned`: the seam has taken the host's word that the
+    // sink owns it, and has not taken the volume back since (it does at
+    // every attach and detach, so those clear this too). `vol_raw`: the last
+    // 0..127 level both ends are known to share. `vol_serial`: AVRCP's
+    // volume serial as last taken. Counted since start-up: ownerships
+    // begun, Sets sent, levels of theirs that changed the seam's number,
+    // and volume presses applied to it.
+    bool vol_owned;
+    uint8_t vol_raw;
+    uint32_t vol_serial;
+    uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses;
     // Slot 2's sniff policy (AUDIO_REMOTE.md § Part Z), kept with an audio
     // sink while the link is READY and started over when it is not;
     // bt_host.c § Slot 2's sniff has the lifecycle table. `sniff_state` is

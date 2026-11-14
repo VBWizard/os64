@@ -70,6 +70,14 @@ typedef struct {
     // could disagree. Without it the host reads has_sound and never finds
     // the stream paused.
     bool (*sound)(void *ctx, bool *paused);
+    // The volume (audio.h's audio_sink_owns_volume and its two
+    // neighbours): whether the sink owns it, what it is at the sink's end
+    // (0..100), and the number now. The first two are refused (false) while
+    // the pump is not the seam's sink. All three or none: without them the
+    // host never owns the volume.
+    bool (*owns_volume)(void *ctx, bool owned);
+    bool (*volume_set)(void *ctx, uint8_t volume);
+    uint8_t (*volume_now)(void *ctx);
 } bt_a2dp_ops_t;
 
 typedef struct bt_a2dp {

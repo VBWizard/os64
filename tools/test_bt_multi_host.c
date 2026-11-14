@@ -2372,8 +2372,10 @@ static uint64_t enc_clock(void *ctx) { (void)ctx; if(ENC.clock<now*1000) ENC.clo
 // The host's one reading: has_sound's answer, counted as a call of it, and
 // whether the stream is paused, whoever the sink is.
 static bool seam_sound(void *ctx,bool *paused) { *paused=SEAM.paused; return seam_has_sound(ctx); }
-static const bt_a2dp_ops_t A2_OPS={seam_pull,seam_has_sound,seam_attach,seam_detach,seam_failed,seam_delay,enc_begin,enc_encode,enc_clock,
-                                   seam_sound};
+// The seam as parts P and Z knew it: no volume ops, so nothing is owned.
+static const bt_a2dp_ops_t A2_OPS={.pull=seam_pull,.has_sound=seam_has_sound,.attach=seam_attach,.detach=seam_detach,
+                                   .failed=seam_failed,.delay=seam_delay,.encoder_begin=enc_begin,
+                                   .encoder_encode=enc_encode,.clock_us=enc_clock,.sound=seam_sound};
 
 // Per step: the pump's sent packets against the headphones' received ones
 // (a pump started over begins its count again), the packets lost and the

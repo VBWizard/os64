@@ -384,6 +384,7 @@ static void host_audio_link(bt_host_t *h,bool up)
     h->avctp_parked=0;
     h->avctp_sig_since=h->avctp_again_at=0;
     h->avctp_asked=h->avctp_ends=0;
+    h->vol_owned=false;          // the pump's detach above took the volume back, if it was owned
 }
 // The roles, settled and claimed (the table above). `lnow` is L2CAP's
 // clock, for the channels this closes.
@@ -673,8 +674,10 @@ static void host_sniff_tick(bt_host_t *h,uint64_t now)
 static bt_a2dp_pulled_t host_pump_pull(void *x,int16_t *out,uint32_t frames)
 { bt_host_t *h=x; return h->a2dp_ops->pull(h->a2dp_ctx,out,frames); }
 static bool host_pump_has_sound(void *x) { bt_host_t *h=x; return h->sniff_sound && h->sniff_start_ok; }
-static void host_pump_attach(void *x) { bt_host_t *h=x; h->a2dp_ops->attach(h->a2dp_ctx); }
-static void host_pump_detach(void *x) { bt_host_t *h=x; h->a2dp_ops->detach(h->a2dp_ctx); }
+// The seam takes the volume back at every attach and detach (§ Slot 2's
+// volume), so the host's word that the sink owns it goes with it.
+static void host_pump_attach(void *x) { bt_host_t *h=x; h->vol_owned=false; h->a2dp_ops->attach(h->a2dp_ctx); }
+static void host_pump_detach(void *x) { bt_host_t *h=x; h->vol_owned=false; h->a2dp_ops->detach(h->a2dp_ctx); }
 static void host_pump_failed(void *x,const char *why) { bt_host_t *h=x; h->a2dp_ops->failed(h->a2dp_ctx,why); }
 static void host_pump_delay(void *x,uint32_t us) { bt_host_t *h=x; h->a2dp_ops->delay(h->a2dp_ctx,us); }
 static bool host_pump_begin(void *x,const sbc_settings_t *s)
@@ -833,6 +836,77 @@ static uint8_t host_avrcp_playback(const bt_host_t *h)
     if(bt_avdtp_state(&h->avdtp)==BT_AVDTP_STREAMING && h->sniff_sound) return BT_AVRCP_PLAYING;
     return h->seam_paused?BT_AVRCP_PAUSED:BT_AVRCP_STOPPED;
 }
+// ── Slot 2's volume (AUDIO_REMOTE.md § Who owns the volume) ────────────────
+//
+// When the headphones have absolute volume, /dev/volume IS their volume:
+// the seam's number is carried out at their end, and the seam applies no
+// gain. CONNECTING NEVER MAKES ANYTHING LOUDER: when ownership begins the
+// seam's number takes THEIR level first, and only then does the seam stop
+// applying its gain; nothing is sent to them. They get louder only when a
+// person writes a larger number or presses their own button.
+//
+// Ownership is a STATE, decided every tick with the volume ops (all three;
+// without them nothing is owned): OWNED while AVRCP is READY and the pump
+// is the seam's sink (attached, from the stream's open to the session's
+// end). The seam takes it back by itself at every attach and detach.
+//
+//   the tick finds              | it does
+//   ----------------------------+-----------------------------------------------
+//   owned, not yet the seam's   | volume_set(their level, as 0..100), THEN
+//                               | owns_volume(true); their level is the one
+//                               | shared, and their serial taken. Nothing sent
+//   owned, and the seam's       | the number now differs from what the shared
+//                               | level converts to: a write of ours, sent as
+//                               | ONE Set, and its level is the one shared.
+//                               | Then, AVRCP's serial moved (their CHANGED,
+//                               | INTERIM or a Set's answer): their level is
+//                               | the one shared, written to the seam only if
+//                               | it converts to another number. Nothing sent
+//   not owned, the seam's       | owns_volume(false): the number stays what it
+//                               | is, so the sound can only be quieter or the
+//                               | same
+//
+// One 0..127 level is kept as both ends' (`vol_raw`), so the ends never
+// chase each other: 0..100 to 0..127 is (v*127+50)/100 and back
+// (x*100+63)/127, and every one of the 101 numbers survives the round trip.
+// A level of theirs that does not survive (27 of 128) is written to the
+// seam as the number it converts to and never sent back.
+static uint8_t host_volume_raw(uint8_t v) { return (uint8_t)((v*127u+50u)/100u); }
+static uint8_t host_volume_number(uint8_t x) { return (uint8_t)(((x&0x7fu)*100u+63u)/127u); }
+static bool host_volume_ops(const bt_host_t *h)
+{
+    const bt_a2dp_ops_t *o=h->a2dp_ops;
+    return o && o->owns_volume && o->volume_set && o->volume_now;
+}
+static void host_volume_tick(bt_host_t *h)
+{
+    if(!host_volume_ops(h)) return;
+    const bt_a2dp_ops_t *o=h->a2dp_ops;
+    uint8_t theirs;
+    if(!bt_avrcp_volume(&h->avrcp,&theirs) || !h->a2dp.attached) {
+        if(h->vol_owned) { (void)o->owns_volume(h->a2dp_ctx,false); h->vol_owned=false; }
+        return;
+    }
+    if(!h->vol_owned) {
+        // The order is the rule: a seam that applied no gain while it still
+        // held its old number would have that number sent to them as a write.
+        if(!o->volume_set(h->a2dp_ctx,host_volume_number(theirs)) || !o->owns_volume(h->a2dp_ctx,true)) return;
+        h->vol_owned=true; h->vol_raw=theirs; h->vol_serial=bt_avrcp_volume_serial(&h->avrcp);
+        h->vol_ownerships++;
+        return;
+    }
+    uint8_t number=o->volume_now(h->a2dp_ctx);
+    if(number!=host_volume_number(h->vol_raw)) {
+        uint8_t raw=host_volume_raw(number);
+        if(bt_avrcp_set_volume(&h->avrcp,raw,host_avdtp_now(h))) { h->vol_raw=raw; h->vol_sets++; }
+    }
+    uint32_t serial=bt_avrcp_volume_serial(&h->avrcp);
+    if(serial!=h->vol_serial) {
+        h->vol_serial=serial; h->vol_raw=theirs;
+        uint8_t now=host_volume_number(theirs);
+        if(now!=number && o->volume_set(h->a2dp_ctx,now)) h->vol_taken++;
+    }
+}
 
 // Slot 2's audio, each tick, after SDP: the roles and the AVCTP channel,
 // the channels AVDTP and AVCTP want opened and closed, their timers, the
@@ -878,6 +952,7 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     // awake (§ Slot 2's sniff), so our Start waits for the link.
     bt_a2dp_step(&h->a2dp,a,h->now_us,&host_pump_ops,h);
     bt_avrcp_playback(&h->avrcp,host_avrcp_playback(h),host_avdtp_now(h));
+    host_volume_tick(h);         // after the pump's policy, so an attach this tick is seen
     host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
     host_avctp_feed(h);          // after AVDTP's, and before the media loop's packet
     host_a2dp_send(h,now,call);
@@ -1281,7 +1356,10 @@ void bt_host_tick(bt_host_t *h,uint64_t now,uint64_t now_us,bool usb_done,unsign
     // A failed controller runs no services: the pump lets the seam go, so
     // the null sink plays and a player's writes are not held for ever. Its
     // counters and reasons stay, for the status file to show.
-    if(h->failed && h->a2dp_ops && h->a2dp.attached) bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+    if(h->failed && h->a2dp_ops && h->a2dp.attached) {
+        bt_a2dp_detach(&h->a2dp,h->a2dp_ops,h->a2dp_ctx);
+        h->vol_owned=false;      // the seam took the volume back at the detach
+    }
     bt_host_policy(h,now);
     host_classic_policy(h,now);
 }
