@@ -2287,6 +2287,7 @@ static void a2dp_session_from_bond(void)
     assert(HA.sig>=0 && HA.media>=0 && host.avdtp_sig && host.avdtp_media && !host.avdtp_asking);
     assert(SEAM.attached && SEAM.attaches==1 && SEAM.delay_told && SEAM.delay==BT_A2DP_DEFAULT_DELAY_US);
     assert(ENC.begins==1 && ENC.settings.bitpool==51 && ENC.settings.joint && ENC.fb==115);
+    assert(bt_host_media_room(&host)==672);         // their MTU: 672 < ours and a controller packet's room
     assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && host.a2dp.sessions_begun==1);
     // Nothing to play: no Start, no packet.
     for(unsigned i=0;i<2000;i++) a2_step();

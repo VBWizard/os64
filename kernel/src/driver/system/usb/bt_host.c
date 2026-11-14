@@ -527,6 +527,10 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
     host_a2dp_send(h,now,call);
 }
+size_t bt_host_media_room(const bt_host_t *h)
+{
+    return h->avdtp_media && bt_l2cap_is_open(&h->l2cap,h->avdtp_media-1u)?host_l2cap_room(h,h->avdtp_media-1u):0;
+}
 void bt_host_audio(bt_host_t *h,const bt_a2dp_ops_t *ops,void *ctx)
 {
     h->a2dp_ops=ops; h->a2dp_ctx=ctx;

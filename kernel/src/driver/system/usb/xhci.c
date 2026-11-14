@@ -1588,13 +1588,10 @@ static void xhci_bt_log_audio(xhci_bt_probe_t *p)
 	else if (h->avdtp_media && st >= BT_AVDTP_OPEN && st <= BT_AVDTP_SUSPENDING &&
 	    a->sessions_begun != p->logged.a2dp_sessions) {
 		p->logged.a2dp_sessions = a->sessions_begun;
-		// The packet as the pump will make it: as many whole frames as the
-		// media channel's room holds after the headers, at most 15.
-		size_t room = bt_l2cap_peer_mtu(&h->l2cap, h->avdtp_media - 1u);
-		size_t packet = bt_acl_packet_size(&h->acl, false);
-		if (room > BT_L2CAP_MTU) room = BT_L2CAP_MTU;
-		if (packet < 4) room = 0;
-		else if (room > packet - 4) room = packet - 4;
+		// The packet as the pump will make it (bt_a2dp_packet): as many
+		// whole frames as the media channel's room holds after the
+		// headers, at most 15.
+		size_t room = bt_host_media_room(h);
 		unsigned frames = a->frame_bytes && room > BT_A2DP_HEADER_BYTES ?
 			(unsigned)((room - BT_A2DP_HEADER_BYTES) / a->frame_bytes) : 0;
 		if (frames > BT_A2DP_FRAMES_MAX) frames = BT_A2DP_FRAMES_MAX;

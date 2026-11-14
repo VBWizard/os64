@@ -236,6 +236,9 @@ void bt_host_policy(bt_host_t *, uint64_t);
 // bt_host_init (which clears it). Until it is given, AVDTP is neither
 // admitted nor opened.
 void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
+// The largest payload the host sends on the media channel (the MTU it
+// hands bt_a2dp_packet); 0 when there is no open media channel.
+size_t bt_host_media_room(const bt_host_t *);
 bool bt_host_scan(bt_host_t *, uint64_t);
 // `scan classic`: a Classic inquiry, then the LE scan. Refused as
 // bt_host_scan is, and while the Classic link is neither quiescent nor
