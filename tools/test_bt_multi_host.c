@@ -3908,6 +3908,19 @@ static void remote_crossing(void)
         snprintf(want,sizeof want,"avctp channel: %u, theirs;",host.avctp-1u);
         assert(status_has(want));
     }
+    // Theirs arriving long after ours is the AVCTP channel: ours is closed
+    // the moment theirs exists, AVRCP starts over on theirs, and the volume
+    // is theirs again with nothing sent.
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    rc_connect();
+    a2_until(rc_not_owned,50);
+    a2_until(rc_owned,3000);
+    for(unsigned i=0;i<200;i++) a2_step();
+    assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1 && rc_live()==1 && rc_host_channels()==1);
+    assert(!host.l2cap.ch[host.avctp-1].outgoing && !host.avctp_ends && SEAM.volume==31 && !RC.sets && host.vol_ownerships==2);
     // Prompt headphones: theirs, and we never ask.
     rc_bonded(true,true,40);
     a2_until(a2_is_open,5000);
