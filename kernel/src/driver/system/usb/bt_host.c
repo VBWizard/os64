@@ -386,8 +386,8 @@ static void host_audio_link(bt_host_t *h,bool up)
     h->avdtp_sig_parked=0;
     h->avdtp_sig_asked=h->avdtp_sig_ends=0;
     h->avdtp_sig_again_at=0;
-    h->avctp=h->avctp_asking=0;
-    h->avctp_cid=h->avctp_asking_cid=0;
+    h->avctp=h->avctp_asking=h->avctp_theirs=0;
+    h->avctp_cid=h->avctp_asking_cid=h->avctp_theirs_cid=0;
     h->avctp_parked=0;
     h->avctp_sig_since=h->avctp_again_at=0;
     h->avctp_asked=h->avctp_ends=0;
@@ -724,6 +724,10 @@ static const bt_a2dp_ops_t host_pump_ops={
 //            | of theirs exists. bt_avrcp_channel_open,  | end. One of theirs appears while
 //            | before a payload of it is delivered       | ours is it: ours is closed, with
 //            |                                           | channel_closed, which is not an end
+//   theirs,  | a 0x0017 channel of theirs exists, open   | it opens: the AVCTP channel (the
+//   waiting  | or opening, and is not the AVCTP channel  | row above). It goes first (refused,
+//            |                                           | its configuration never finished,
+//            |                                           | closed): an end
 //   (closed) | a 0x0017 channel opens while another is   | L2CAP finishes the disconnection
 //            | the AVCTP channel (a second of theirs),   |
 //            | or ours while one of theirs exists        |
@@ -757,6 +761,10 @@ static void host_avctp_channels(bt_host_t *h,uint64_t lnow)
         if(refused) { h->l2cap_refusals++; h->l2cap_refused_result=refused; h->l2cap_refused_psm=psm; }
         host_avctp_ended(h,at);
     }
+    if(h->avctp_theirs && !host_role_live(h,h->avctp_theirs,h->avctp_theirs_cid)) {
+        h->avctp_theirs=0; h->avctp_theirs_cid=0;
+        host_avctp_ended(h,at);   // theirs failed before it carried AVRCP
+    }
     // Theirs: the one that is the AVCTP channel, else the first of theirs
     // open or opening.
     int theirs=-1;
@@ -767,6 +775,10 @@ static void host_avctp_channels(bt_host_t *h,uint64_t lnow)
         if(theirs<0 || host_role_is(h->avctp,h->avctp_cid,i,c->cid)) theirs=(int)i;
     }
     if(theirs>=0) {
+        // Followed until it carries AVRCP: if it goes first, that is an end.
+        if(!host_role_is(h->avctp,h->avctp_cid,(unsigned)theirs,l->ch[theirs].cid)) {
+            h->avctp_theirs=(uint8_t)(theirs+1); h->avctp_theirs_cid=l->ch[theirs].cid;
+        }
         if(h->avctp && h->l2cap.ch[h->avctp-1u].outgoing) {
             bt_l2cap_close(l,h->avctp-1u,lnow);
             h->avctp=0; h->avctp_cid=0; h->avctp_parked=0;
@@ -784,6 +796,7 @@ static void host_avctp_channels(bt_host_t *h,uint64_t lnow)
         if(host_role_is(h->avctp_asking,h->avctp_asking_cid,i,c->cid)) { h->avctp_asking=0; h->avctp_asking_cid=0; }
         if(!h->avctp && (theirs<0 || theirs==(int)i)) {
             h->avctp=(uint8_t)(i+1); h->avctp_cid=c->cid; h->avctp_parked=0;
+            if(host_role_is(h->avctp_theirs,h->avctp_theirs_cid,i,c->cid)) { h->avctp_theirs=0; h->avctp_theirs_cid=0; }
             bt_avrcp_channel_open(&h->avrcp,at);
         } else bt_l2cap_close(l,i,lnow);
     }

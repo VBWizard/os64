@@ -607,7 +607,9 @@ the design left open, and what differs:
   for AVDTP's signalling to have been open two seconds and for no 0x0017
   channel to exist in any state; the second waits a second after an END,
   which is the AVCTP channel closing (theirs or ours) or a request of ours
-  refused or unanswered. Ours closed because theirs appeared is not an end.
+  refused or unanswered, or a channel of theirs going before it ever
+  carried AVRCP (so ours, closed for it, is asked for again). Ours closed
+  because theirs appeared is not an end.
   Their channels are taken whenever they open, however many of ours have
   been made; after one of theirs closes, our requests are still bounded at
   two a connection.

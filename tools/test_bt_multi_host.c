@@ -1168,7 +1168,8 @@ static void ha_media(const uint8_t *p,size_t n)
 // moves it) and Set Absolute Volume (ACCEPTED with the level they took: the
 // one asked, or with `rounds` the even one below it; with `reject_sets`
 // REJECTED, with `silent_sets` nothing). With `mute` they answer none of
-// our commands. As the buttons'
+// our commands; with `theirs_unconfigured` a channel they open never gets
+// their configuration. As the buttons'
 // controller they register for our playback status on the channel they
 // talk on, and press. Without `on` they refuse PSM 0x0017; with `prompt`
 // they open the channel themselves as AVDTP's signalling opens, and
@@ -1183,6 +1184,7 @@ typedef struct {
 static struct {
     bool on, absolute, prompt, rounds, cross;
     bool mute;                           // our commands go unanswered (headphones busy at connect)
+    bool theirs_unconfigured;            // they never send the configuration of a channel they open
     bool reject_sets, silent_sets;       // a Set is answered REJECTED, or not at all
     unsigned delay_ours, delay_theirs;   // ms before they configure a channel we, or they, asked for
     rc_ch_t ch[8]; unsigned chn;
@@ -1432,7 +1434,10 @@ static void headphones_acl(const uint8_t *p,size_t n)
             }
             if(rc_find(le_u16(x+2))>=0) {
                 int k=rc_find(le_u16(x+2));
-                if(le_u16(x+4)==0) { RC.ch[k].host_cid=le_u16(x); rc_config(k,RC.delay_theirs); }
+                if(le_u16(x+4)==0) {
+                    RC.ch[k].host_cid=le_u16(x);
+                    if(!RC.theirs_unconfigured) rc_config(k,RC.delay_theirs);
+                }
                 else if(le_u16(x+4)!=1) RC.ch[k].live=false;
                 break;
             }
@@ -4085,6 +4090,18 @@ static void remote_crossing(void)
     for(unsigned i=0;i<200;i++) a2_step();
     assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1 && rc_live()==1 && rc_host_channels()==1);
     assert(!host.l2cap.ch[host.avctp-1].outgoing && !host.avctp_ends && SEAM.volume==31 && !RC.sets && host.vol_ownerships==2);
+    // Theirs, crossing ours, never configured: ours is closed for it, it
+    // fails at L2CAP's configuration deadline, and that is an end, so we
+    // ask once more a second later and our channel carries AVRCP.
+    rc_bonded(true,false,40);
+    RC.cross=true; RC.theirs_unconfigured=true;
+    a2_until(a2_is_open,5000);
+    for(unsigned i=0;i<4000 && RC.closed_by_us<1;i++) a2_step();
+    assert(RC.conn_reqs==1 && RC.their_conn_reqs==1 && RC.closed_by_us==1 && !host.avctp && host.avctp_theirs);
+    uint64_t waited=now;
+    a2_until(rc_owned,35000);
+    assert(RC.conn_reqs==2 && now>=waited+29000 && host.avctp && host.l2cap.ch[host.avctp-1].outgoing);
+    assert(!host.avctp_theirs && host.avctp_ends==1 && rc_host_channels()==1 && SEAM.volume==31 && !RC.sets);
     // Prompt headphones: theirs, and we never ask.
     rc_bonded(true,true,40);
     a2_until(a2_is_open,5000);

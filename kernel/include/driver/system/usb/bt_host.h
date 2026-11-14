@@ -160,20 +160,23 @@ typedef struct {
     // channel and the AVRCP it carries, with an audio sink, started over
     // when the link comes up and when it goes, as AVDTP is. bt_host.c
     // § Slot 2's remote control has the channel's lifecycle table; the
-    // fields below are its state. `avctp` is the AVCTP channel and
-    // `avctp_asking` the one we asked for that has not opened, each its
-    // index PLUS ONE (0: none) and its CID; `avctp_parked` the serial
+    // fields below are its state. `avctp` is the AVCTP channel,
+    // `avctp_asking` the one we asked for that has not opened, and
+    // `avctp_theirs` one of theirs, open or opening, that has not yet
+    // carried AVRCP, each its index PLUS ONE (0: none) and its CID;
+    // `avctp_parked` the serial
     // (bt_avrcp_next) of AVRCP's message in the channel's payload slot, 0
     // when the slot holds none. `avctp_sig_since` is when AVDTP's
     // signalling channel began (0: none is open), which our first request
     // waits two seconds from. `avctp_asked` counts our requests on this
-    // connection and `avctp_ends` the AVCTP channels (anyone's) that ended
-    // and requests of ours that failed; a request after an end waits until
+    // connection and `avctp_ends` the AVCTP channels (anyone's) that ended,
+    // requests of ours that failed, and channels of theirs that went before
+    // carrying AVRCP; a request after an end waits until
     // avctp_again_at. `avctp_dropped`, since start-up: PDUs on a 0x0017
     // channel that is not the AVCTP channel.
     bt_avrcp_t avrcp;
-    uint8_t avctp, avctp_asking;
-    uint16_t avctp_cid, avctp_asking_cid;
+    uint8_t avctp, avctp_asking, avctp_theirs;
+    uint16_t avctp_cid, avctp_asking_cid, avctp_theirs_cid;
     uint32_t avctp_parked;
     uint64_t avctp_sig_since, avctp_again_at;
     uint8_t avctp_asked, avctp_ends;
