@@ -304,7 +304,13 @@ static void exchange(void)
     if (sig_busy) return;
     uint8_t m[64];
     size_t n;
-    while ((n = bt_avdtp_next(&A, m, sizeof(m), 672, now / MS))) peer_take(m, n);
+    uint32_t serial;
+    // Each message is sent (bt_avdtp_sent) before the peer sees it, as a
+    // carrier that hands it to the controller at once would.
+    while ((n = bt_avdtp_next(&A, m, sizeof(m), 672, now / MS, &serial))) {
+        CHECK(bt_avdtp_sent(&A, serial, now / MS));
+        peer_take(m, n);
+    }
 }
 
 static void release_suspend(bool accept)

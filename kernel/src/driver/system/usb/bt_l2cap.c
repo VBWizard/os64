@@ -629,6 +629,13 @@ bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t 
     return true;
 }
 
+bool bt_l2cap_unqueue(bt_l2cap_t *l, unsigned channel)
+{
+    if(channel>=BT_L2CAP_CHANNELS || !l->ch[channel].queued) return false;
+    l->ch[channel].queued=false;
+    return true;
+}
+
 void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t send, void *context)
 {
     l->now=now;
@@ -674,6 +681,8 @@ void bt_l2cap_tick(bt_l2cap_t *l, uint64_t now, bool may_send, bt_l2cap_send_t s
         if(l2_sendable(&l->ch[i]) && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;
     if(oldest<0) return;
     bt_l2cap_channel_t *c=&l->ch[oldest];
+    // The slot is emptied before the hand-over, so bt_l2cap_unqueue cannot
+    // take back a payload `send` has (or is being given).
     c->queued=false;
     send(context,c->out,c->queued_bytes);
 }

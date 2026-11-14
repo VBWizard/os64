@@ -542,7 +542,7 @@ virtio because its drain waits for the tick.
   AVDTP's PSM, or why the query was not made) and the questions answered.
   §§ L and S, as built are the record
   **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
-  `tools/test_bt_avdtp_host.sh` plays the sink, 324 mutants): find the
+  `tools/test_bt_avdtp_host.sh` plays the sink, 332 mutants): find the
   headphones' SBC endpoint, configure it, open, start, suspend, close, and
   answer when they do the same to us. The host opens its signalling
   channel once the SDP query has ended, found or not, and gives each

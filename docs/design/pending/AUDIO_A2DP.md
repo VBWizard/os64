@@ -368,10 +368,14 @@ command at a time.
 **Answers owed and one command may wait.** An L2CAP channel holds one
 payload. While our command waits its turn, they may send something that
 must be answered. `bt_avdtp.c` keeps up to two answers owed and one
-command to send, and hands the host the answers first each time the
-channel can take a payload. A peer sends one command at a time, so a
-third message while two answers are owed is dropped and counted; except
-an Abort, which is always obeyed and takes the newer answer's place.
+command to send, and offers the host the answers first. A peer sends one
+command at a time, so a third message while two answers are owed is
+dropped and counted; except an Abort, which is always obeyed and takes
+the newer answer's place. **A message is SENT only when L2CAP hands it to
+the controller** (`bt_avdtp_sent`); until then it is QUEUED, even parked
+in the channel's payload slot behind a shut send gate, and AVDTP may
+retire it or put an answer ahead of it, and what sits in the slot follows
+(§ V, as built).
 
 ### When they do it to us
 
@@ -433,10 +437,23 @@ the sanitizers; a mutant harness.
   refusal. Their Set Configuration is taken while ours is queued and not
   yet sent, or waiting for its one retry. Both sending Open is not
   resolved: theirs is rejected (bad state).
+- **Taken is not sent.** `bt_avdtp_next` copies out the message AVDTP
+  wants sent now with its serial (the message's id: a new, retired or
+  replaced head has another) and consumes nothing; `bt_avdtp_sent(serial)`
+  is the carrier saying it left, and only then is an answer off the owed
+  list or our command out, its answer awaited. A send for a serial that is
+  no longer the head's is refused and counted (`stale sends`). The
+  command's timer still runs from when it was queued: a carrier holds a
+  message back for milliseconds (a shut gate), which the six seconds
+  absorb, and a timer from the send would need a second bound for a
+  message parked for ever.
 - **A command of ours still queued is retired when we accept a command
   of theirs that changes the stream** (their Set Configuration, Open,
   Start, Suspend, Close, Abort): it describes a stream that has since
-  changed. One already SENT is theirs to answer, and its answer is taken
+  changed. Queued means not yet SENT in the sense above, parked included:
+  a host that parked an Abort behind a shut gate takes it back when their
+  new Set Configuration retires it, so it can never reach the stream they
+  just configured. One already SENT is theirs to answer, and its answer is taken
   without changing a state it no longer applies to. What that leaves: our
   Start sent, their Start and then their Suspend accepted, and only then
   their accept of ours. Whether they are streaming depends on the order
@@ -471,7 +488,7 @@ the sanitizers; a mutant harness.
 - Proof: `tools/test_bt_avdtp_host.sh`, every message compared with one
   built from the specification, messages fed in storage of exactly their
   length so a read past the end is a sanitizer report, a responsive
-  random peer that must reach `OPEN` and `STREAMING`; 324 mutants.
+  random peer that must reach `OPEN` and `STREAMING`; 332 mutants.
 
 ## Part P: the pump (`bt_a2dp.c`) and the wiring
 
@@ -741,6 +758,19 @@ it left open:
   AVDTP's messages are queued before the pump's step and again after it,
   so a command the pump asks for leaves in the same tick when the
   signalling slot is free.
+- **The signalling slot follows AVDTP's head.** The host keeps the serial
+  of the AVDTP message parked in the signalling channel's payload slot;
+  each time it feeds AVDTP it asks for the head, takes the parked message
+  back (`bt_l2cap_unqueue`) when its serial is no longer the head's, and
+  queues the head in a free slot. It calls `bt_avdtp_sent` from its L2CAP
+  send callback when the signalling channel's PDU is handed over, as it
+  calls `bt_a2dp_sent` for media, and forgets the parked serial when
+  signalling closes or the link drops. The SDP answer and the media packet
+  were checked for the same fault: an SDP answer is stateless (our record
+  is fixed) and right whenever it leaves, and a media packet parked across
+  a Suspend was queued before the Suspend's accept and so leaves before it,
+  while a session replaced ends with its media channel, which takes the
+  packet with it.
 - **The probe is allocated** (`kmalloc_try`), filled in place, copied into
   the controller's storage and freed on every way out of bring-up; no
   memory for it releases the slot. `bt_host_init` and `bt_scan_start` wipe

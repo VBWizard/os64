@@ -368,6 +368,7 @@ static void host_audio_link(bt_host_t *h,bool up)
     h->avdtp_sig=h->avdtp_media=h->avdtp_asking=0;
     h->avdtp_sig_cid=h->avdtp_media_cid=h->avdtp_asking_cid=0;
     h->avdtp_asking_media=false;
+    h->avdtp_sig_parked=0;
     h->avdtp_sig_asked=h->avdtp_sig_ends=0;
     h->avdtp_sig_again_at=0;
 }
@@ -380,7 +381,7 @@ static void host_avdtp_channels(bt_host_t *h,uint64_t lnow)
     bt_avdtp_t *a=&h->avdtp;
     uint64_t at=host_avdtp_now(h);
     if(h->avdtp_sig && !host_role_live(h,h->avdtp_sig,h->avdtp_sig_cid)) {
-        h->avdtp_sig=0; h->avdtp_sig_cid=0;
+        h->avdtp_sig=0; h->avdtp_sig_cid=0; h->avdtp_sig_parked=0;
         bt_avdtp_signalling_closed(a,at);
         h->avdtp_sig_ends++; h->avdtp_sig_again_at=at+BT_HOST_AVDTP_AGAIN_MS;
     }
@@ -432,18 +433,28 @@ static bool host_avdtp_may_ask(const bt_host_t *h)
     return h->avdtp_sig_ends<=1 && h->avdtp_sig_asked<=h->avdtp_sig_ends &&
            host_avdtp_now(h)>=h->avdtp_sig_again_at;
 }
-// AVDTP's messages onto the signalling channel, while its payload slot is
-// free: the answers owed first, in AVDTP's own order; a message longer
-// than the channel's room is AVDTP's to drop.
+// AVDTP's message onto the signalling channel. What AVDTP wants sent now
+// (the answers owed first, in its own order; a message longer than the
+// channel's room is AVDTP's to drop) is asked each time; the message parked
+// in the channel's payload slot follows it: one AVDTP has retired or put
+// behind another (its serial no longer the head's) is taken back, and the
+// head is queued in a free slot. A message is SENT, for AVDTP, only when
+// host_l2cap_send hands it to the controller (bt_avdtp_sent).
 static void host_avdtp_feed(bt_host_t *h)
 {
     if(!h->avdtp_sig) return;
     unsigned ch=h->avdtp_sig-1u;
+    bt_l2cap_t *l=&h->l2cap;
+    if(!bt_l2cap_is_open(l,ch)) return;          // reconfiguring: the slot is held as it is
     uint8_t msg[BT_AVDTP_LONGEST];
-    while(bt_l2cap_is_open(&h->l2cap,ch) && !h->l2cap.ch[ch].queued) {
-        size_t n=bt_avdtp_next(&h->avdtp,msg,sizeof(msg),(uint16_t)host_l2cap_room(h,ch),host_avdtp_now(h));
-        if(!n || !bt_l2cap_send(&h->l2cap,ch,msg,n)) break;
+    uint32_t serial;
+    size_t n=bt_avdtp_next(&h->avdtp,msg,sizeof(msg),(uint16_t)host_l2cap_room(h,ch),host_avdtp_now(h),&serial);
+    if(l->ch[ch].queued) {
+        if(h->avdtp_sig_parked && serial==h->avdtp_sig_parked) return;
+        (void)bt_l2cap_unqueue(l,ch);
     }
+    h->avdtp_sig_parked=0;
+    if(n && bt_l2cap_send(l,ch,msg,n)) h->avdtp_sig_parked=serial;
 }
 static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n);
 static bool host_l2cap_may_send(const bt_host_t *h);
@@ -673,10 +684,16 @@ static void host_l2cap_send(void *context,const uint8_t *pdu,size_t n)
     c->acl(c->context,packet,4+n);
     host_wipe(packet,4+n);
     // The media channel's PDU (its peer's CID heads it) is the pump's one
-    // packet, handed to the controller now: its frames are sent.
+    // packet, handed to the controller now: its frames are sent. The
+    // signalling channel's is AVDTP's parked message: sent now, not before.
     if(n>=4 && host_role_live(h,h->avdtp_media,h->avdtp_media_cid) &&
        host_u16(pdu+2)==h->l2cap.ch[h->avdtp_media-1u].dcid)
         bt_a2dp_sent(&h->a2dp);
+    if(n>=4 && host_role_live(h,h->avdtp_sig,h->avdtp_sig_cid) &&
+       host_u16(pdu+2)==h->l2cap.ch[h->avdtp_sig-1u].dcid && h->avdtp_sig_parked) {
+        (void)bt_avdtp_sent(&h->avdtp,h->avdtp_sig_parked,host_avdtp_now(h));
+        h->avdtp_sig_parked=0;
+    }
 }
 // L2CAP may hand over a packet only when it costs the LE peers nothing:
 // the count gives the Classic link a buffer of the controller's (it is the

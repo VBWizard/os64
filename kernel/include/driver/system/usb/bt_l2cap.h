@@ -167,6 +167,10 @@ uint16_t bt_l2cap_refusal(const bt_l2cap_t *l, unsigned channel, uint16_t *psm);
 // with an MTU the payload no longer fits, it is dropped (`outgrown`). A
 // channel that closes drops it.
 bool bt_l2cap_send(bt_l2cap_t *l, unsigned channel, const uint8_t *data, size_t bytes);
+// Take back the payload queued on a channel and not yet handed to `send`
+// (bt_l2cap_tick clears the slot before it calls `send`, so a payload being
+// or already handed over cannot be taken back). True when one was removed.
+bool bt_l2cap_unqueue(bt_l2cap_t *l, unsigned channel);
 
 // One step: runs the timers (a request unanswered for 10 s, or 60 s after
 // "pending"; security awaited for 30 s; configuration unfinished after

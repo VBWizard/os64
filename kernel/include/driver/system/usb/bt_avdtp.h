@@ -85,10 +85,13 @@ typedef struct {
     uint32_t suspend_rejects;  // our Suspend, rejected while still SUSPENDING
 } bt_avdtp_edges_t;
 
-// One message waiting for its turn on the channel.
+// One message waiting for its turn on the channel. `id` names this message
+// and no other (a new one, or one rebuilt, gets a new id): it is the serial
+// bt_avdtp_next gives for it.
 typedef struct {
     uint8_t bytes;            // 0: the slot is empty
     uint8_t pdu[BT_AVDTP_LONGEST];
+    uint32_t id;
 } bt_avdtp_msg_t;
 
 // An endpoint from their Discover answer.
@@ -116,16 +119,19 @@ typedef struct bt_avdtp {
     // General Reject). A further command is dropped and counted, except an
     // Abort, which takes the place of the newer answer.
     bt_avdtp_msg_t answer[2];
-    // Our one command: built when queued, then handed out (`sent`), then
-    // answered or timed out, its timer running from when it was queued.
-    // Labels run 0 to 15 and round again, one a command. A response is
-    // taken only with this label and this signal (a reject carrying no
-    // signal at all, AVDTP 1.0's general reject, is matched on the label
-    // alone), and only once the command has been handed out; anything else
-    // is a stray.
+    // Our one command: built when queued, then SENT (`command_sent`: the
+    // carrier handed it to the controller and said so with bt_avdtp_sent),
+    // then answered or timed out, its timer running from when it was
+    // queued. Until it is sent it is QUEUED, wherever the carrier has parked
+    // it, and may be retired or replaced. Labels run 0 to 15 and round
+    // again, one a command. A response is taken only with this label and
+    // this signal (a reject carrying no signal at all, AVDTP 1.0's general
+    // reject, is matched on the label alone), and only once the command has
+    // been sent; anything else is a stray.
     bt_avdtp_msg_t command;
     bool command_live;        // a command is queued or outstanding
     bool command_sent;
+    uint32_t next_id;         // the last message id given (bt_avdtp_msg_t)
     uint8_t command_signal, command_label;
     uint64_t command_deadline;
     uint8_t next_label;
@@ -171,6 +177,7 @@ typedef struct bt_avdtp {
     uint32_t malformed;       // a message, capability list or reject not well formed
     uint32_t fragments_dropped;
     uint32_t unsendable;      // a message longer than the channel's MTU, dropped
+    uint32_t stale_sends;     // bt_avdtp_sent for a serial that was no longer the head's
     uint32_t overrun;         // a command of theirs with two answers owed, or the answer an Abort displaced, dropped
     uint32_t ignored;         // a message in a state that takes none (IDLE, ENDING)
     uint32_t media_refused;
@@ -199,12 +206,21 @@ void bt_avdtp_media_closed(bt_avdtp_t *a, uint64_t now, bool refused);
 // one fragment of a message.
 void bt_avdtp_receive(bt_avdtp_t *a, const uint8_t *pdu, size_t bytes, uint64_t now);
 void bt_avdtp_tick(bt_avdtp_t *a, uint64_t now);         // the timers
-// The next message to send, when the channel's payload slot is free: the
-// oldest answer owed first, then our command. Returns its length; 0 when
-// there is nothing, or `capacity` is too small (the message waits). A
-// message longer than `mtu` (the peer's MTU for the channel) is dropped and
-// counted: a command so dropped is left to its timer.
-size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t capacity, uint16_t mtu, uint64_t now);
+// The message AVDTP wants sent NOW: the oldest answer owed first, then our
+// command if it is not sent. It is copied to `out` and its serial to
+// *serial (a message's id: a new, retired or replaced head gives another);
+// nothing is consumed, so asking again before bt_avdtp_sent gives the same
+// message and serial. Returns its length; 0 (and serial 0) when there is
+// nothing, or `capacity` is too small (the message waits). A message longer
+// than `mtu` (the peer's MTU for the channel) is dropped here and counted:
+// a command so dropped is treated as sent and left to its timer.
+size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t capacity, uint16_t mtu, uint64_t now,
+                     uint32_t *serial);
+// The message with this serial was handed to the controller: an answer
+// leaves the owed list, our command is sent (its answer awaited). False,
+// and nothing changes, when the serial is not the head's any more (it was
+// retired or replaced while parked): the carrier should not have sent it.
+bool bt_avdtp_sent(bt_avdtp_t *a, uint32_t serial, uint64_t now);
 
 // May we begin a walk of our own now? CONNECTED, no command of ours
 // outstanding, and: not yet tried on this signalling channel; or, when our
@@ -229,7 +245,7 @@ bool bt_avdtp_wants_media(const bt_avdtp_t *a);          // AWAITING_MEDIA, and 
 // CLOSING; the host closes one it holds when this is false.
 bool bt_avdtp_media_wanted(const bt_avdtp_t *a);
 // A session gone wrong: the host is to close both channels. True once the
-// answers owed and the Abort that goes first, if any, have been handed out.
+// answers owed and the Abort that goes first, if any, have been sent.
 bool bt_avdtp_wants_closed(const bt_avdtp_t *a);
 const bt_avdtp_sbc_t *bt_avdtp_settings(const bt_avdtp_t *a);   // what was agreed, from CONFIGURED or OPENING until the stream ends; else NULL
 bool bt_avdtp_delay(const bt_avdtp_t *a, uint32_t *delay_100us); // their latest Delay Report

@@ -345,6 +345,15 @@ mutants = [
     ('a-held-payload-blocks-the-rest',
      '        if(l2_sendable(&l->ch[i]) && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0) return;',
      '        if(l->ch[i].queued && (oldest<0 || (int32_t)(l->ch[i].queued_seq-l->ch[oldest].queued_seq)<0)) oldest=(int)i;\n    if(oldest<0 || !l2_sendable(&l->ch[oldest])) return;'),
+    # Taking back a queued payload, never one handed over.
+    ('unqueue-takes-nothing', '    l->ch[channel].queued=false;\n    return true;', '    return true;'),
+    ('unqueue-says-no', '    l->ch[channel].queued=false;\n    return true;', '    l->ch[channel].queued=false;\n    return false;'),
+    ('unqueue-from-an-empty-slot', '    if(channel>=BT_L2CAP_CHANNELS || !l->ch[channel].queued) return false;',
+     '    if(channel>=BT_L2CAP_CHANNELS) return false;'),
+    ('unqueue-past-the-table', '    if(channel>=BT_L2CAP_CHANNELS || !l->ch[channel].queued) return false;',
+     '    if(!l->ch[channel].queued) return false;'),
+    ('the-slot-is-emptied-after-the-hand-over', '    c->queued=false;\n    send(context,c->out,c->queued_bytes);',
+     '    send(context,c->out,c->queued_bytes);\n    c->queued=false;'),
     # A refusal is the channel index's, as its last attempt ended.
     ('a-new-attempt-keeps-the-old-refusal', '    l->refused[i]=0; l->refused_psm[i]=psm;', '    l->refused_psm[i]=psm;'),
     ('an-attempt-records-no-psm', '    l->refused[i]=0; l->refused_psm[i]=psm;', '    l->refused[i]=0;'),

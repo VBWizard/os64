@@ -109,10 +109,21 @@ static void feed_(const uint8_t *p, size_t n)
 }
 #define FEED(...) feed_(BYTES(__VA_ARGS__))
 
+// What we send, as a carrier that hands each message to the controller the
+// moment it asks: taken (bt_avdtp_next) and then sent (bt_avdtp_sent).
+// Nothing taken has serial 0; something taken a serial its send accepts.
+static size_t take(uint8_t *out, size_t cap, uint16_t mtu)
+{
+    uint32_t serial = 0xdeadbeef;
+    size_t g = bt_avdtp_next(&A, out, cap, mtu, now, &serial);
+    if (g) { CHECK(serial != 0); CHECK(bt_avdtp_sent(&A, serial, now)); }
+    else CHECK_EQ(serial, 0);
+    return g;
+}
 static void out_(const char *f, int line, const uint8_t *want, size_t n)
 {
     uint8_t got[64];
-    size_t g = bt_avdtp_next(&A, got, sizeof(got), 672, now);
+    size_t g = take(got, sizeof(got), 672);
     if (g != n || memcmp(got, want, n)) {
         failures++;
         printf("FAIL %s:%d: the message we send\n", f, line);
@@ -133,7 +144,7 @@ static void ours_(const char *f, int line, const uint8_t *body, size_t n)
 static void none_(const char *f, int line)
 {
     uint8_t got[64];
-    size_t g = bt_avdtp_next(&A, got, sizeof(got), 672, now);
+    size_t g = take(got, sizeof(got), 672);
     if (g) { failures++; printf("FAIL %s:%d: we sent something\n", f, line); dump("got ", got, g); }
 }
 #define NONE() none_(__func__, __LINE__)
@@ -289,6 +300,90 @@ static void test_initiator_older_peers(void)
     // AVDTP 1.4 is 1.3 or later.
     to_asking(0x0104);
     CHECK_EQ(A.command.pdu[1], GETALL);
+}
+
+// A message is SENT only when the carrier says it left (bt_avdtp_sent).
+// Until then it is parked, and AVDTP may retire or replace it: asking
+// again gives the same message and serial; a send of a serial no longer at
+// the head is refused and changes nothing.
+static uint32_t peek(uint8_t *out, size_t *n)
+{
+    uint32_t serial = 0;
+    *n = bt_avdtp_next(&A, out, 64, 672, now, &serial);
+    return serial;
+}
+static void test_parked(void)
+{
+    uint8_t m[64], m2[64];
+    size_t n, n2;
+    // Asking twice: the same message, the same serial, nothing consumed.
+    fresh(0x0103);
+    CHECK(bt_avdtp_begin(&A, now));
+    uint32_t s = peek(m, &n), s2 = peek(m2, &n2);
+    CHECK(s != 0 && s == s2 && n == 2 && n2 == 2 && !memcmp(m, m2, n));
+    CHECK(!A.command_sent);
+    CHECK(!bt_avdtp_sent(&A, s + 1, now) && !A.command_sent);
+    CHECK_EQ(A.stale_sends, 1);
+    OURS(DISCOVER);
+    CHECK(A.command_sent);
+
+    // The review's case: the media channel lost queues an Abort; parked; their
+    // Set Configuration is accepted, which retires it; it is never sent.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    s = peek(m, &n);
+    CHECK(n == 3 && m[1] == ABORT);
+    FEED(CMD(9), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    s2 = peek(m2, &n2);
+    CHECK(s2 != s && n2 == 2 && m2[0] == ACC(9) && m2[1] == SETCONF);
+    unsigned stale = A.stale_sends;
+    CHECK(!bt_avdtp_sent(&A, s, now));               // the Abort, had it been handed over late
+    CHECK_EQ(A.stale_sends, stale + 1);
+    OUT(ACC(9), SETCONF);
+    NONE();                                          // the Abort is gone
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+
+    // A parked answer survives what follows: a command queued behind it.
+    fresh(0x0103);
+    FEED(CMD(2), DISCOVER);
+    s = peek(m, &n);
+    CHECK(n == 4 && m[0] == ACC(2));
+    CHECK(bt_avdtp_begin(&A, now));
+    CHECK_EQ(peek(m2, &n2), s);
+    CHECK(bt_avdtp_sent(&A, s, now));
+    OURS(DISCOVER);
+
+    // A parked command replaced at the head by an answer newly owed: the
+    // answer goes first, and the command, the same message, after it.
+    fresh(0x0103);
+    CHECK(bt_avdtp_begin(&A, now));
+    uint32_t c = peek(m, &n);
+    FEED(CMD(3), DISCOVER);
+    s = peek(m2, &n2);
+    CHECK(s != c && m2[0] == ACC(3));
+    CHECK(!bt_avdtp_sent(&A, c, now) && !A.command_sent);
+    OUT(ACC(3), DISCOVER, EP(1, 0, 0, 0));
+    CHECK_EQ(peek(m2, &n2), c);
+    OURS(DISCOVER);
+
+    // A serial is sent once: after two answers owed have both gone, a third
+    // has a serial of its own, which a repeated send of an old one cannot
+    // commit.
+    fresh(0x0103);
+    FEED(CMD(4), DISCOVER);
+    FEED(CMD(5), DISCOVER);
+    uint32_t first = peek(m, &n);
+    CHECK(bt_avdtp_sent(&A, first, now));
+    uint32_t second = peek(m, &n);
+    CHECK(second != first && bt_avdtp_sent(&A, second, now));
+    FEED(CMD(6), DISCOVER);
+    uint32_t third = peek(m, &n);
+    CHECK(third != first && third != second && m[0] == ACC(6));
+    CHECK(!bt_avdtp_sent(&A, second, now) && !bt_avdtp_sent(&A, first, now));
+    CHECK(A.answer[0].bytes);
+    OUT(ACC(6), DISCOVER, EP(1, 0, 0, 0));
 }
 
 // A version not known (their record not read when signalling opened): Get
@@ -1022,7 +1117,7 @@ static void test_acceptor_wrong_states(void)
             memcpy(m + 2, rows[r].p, rows[r].n);
             feed_(m, 2u + rows[r].n);
             uint8_t got[64];
-            size_t g = bt_avdtp_next(&A, got, sizeof(got), 672, now);
+            size_t g = take(got, sizeof(got), 672);
             bool allowed = rows[r].allowed & BIT(d);
             if (allowed) {
                 CHECK(g >= 2 && got[0] == ACC(9) && got[1] == rows[r].sig);
@@ -1055,7 +1150,7 @@ static void test_acceptor_wrong_states(void)
         drive((drive_t)d);
         FEED(CMD(9), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
         uint8_t got[64];
-        size_t g = bt_avdtp_next(&A, got, sizeof(got), 672, now);
+        size_t g = take(got, sizeof(got), 672);
         if (d <= D_ASKING) {
             CHECK(g == 2 && got[0] == ACC(9) && got[1] == SETCONF);
             CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
@@ -1518,13 +1613,13 @@ static void test_one_answer_one_command(void)
     fresh(0x0103);
     FEED(CMD(4), GETCAP, S(1));
     uint8_t small[4];
-    CHECK_EQ(bt_avdtp_next(&A, small, sizeof(small), 672, now), 0);
-    CHECK_EQ(bt_avdtp_next(&A, small, sizeof(small), 11, now), 0);
+    CHECK_EQ(take(small, sizeof(small), 672), 0);
+    CHECK_EQ(take(small, sizeof(small), 11), 0);
     CHECK_EQ(A.unsendable, 1);
     NONE();
     bt_avdtp_begin(&A, now);
     uint8_t big[64];
-    CHECK_EQ(bt_avdtp_next(&A, big, sizeof(big), 1, now), 0);
+    CHECK_EQ(take(big, sizeof(big), 1), 0);
     CHECK_EQ(A.unsendable, 2);
     NONE();
     tick(now + 6000);
@@ -1532,10 +1627,10 @@ static void test_one_answer_one_command(void)
     // An MTU exactly the message's length is enough.
     fresh(0x0103);
     FEED(CMD(4), GETCAP, S(1));
-    CHECK_EQ(bt_avdtp_next(&A, big, sizeof(big), 12, now), 12);
+    CHECK_EQ(take(big, sizeof(big), 12), 12);
     to_asking(0x0103);
     FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC, DELAYREP);
-    CHECK_EQ(bt_avdtp_next(&A, big, 16, 16, now), 16);
+    CHECK_EQ(take(big, 16, 16), 16);
 }
 
 // ── Sessions ending, and going wrong ────────────────────────────────────────
@@ -2003,7 +2098,7 @@ static void test_malformed_capabilities(void)
             printf("FAIL %s: case %u left %s\n", __func__, i, bt_avdtp_state_name(bt_avdtp_state(&A)));
         }
         if (cases[i].suits) {
-            CHECK(bt_avdtp_next(&A, (uint8_t[64]){0}, 64, 672, now) > 0);
+            CHECK(take((uint8_t[64]){0}, 64, 672) > 0);
         }
     }
     to_asking(0x0103);
@@ -2167,7 +2262,7 @@ static void invariants(const char *where)
 // Our output is always a whole single packet within the MTU asked.
 static size_t drain_one(uint8_t *out, uint16_t mtu)
 {
-    size_t n = bt_avdtp_next(&A, out, 64, mtu, now);
+    size_t n = take(out, 64, mtu);
     if (n && (n > mtu || n > BT_AVDTP_LONGEST || n < 2 || ((out[0] >> 2) & 3) != P_SINGLE)) {
         failures++; printf("FAIL fuzz: we sent %zu bytes under an MTU of %u\n", n, mtu);
     }
@@ -2326,6 +2421,7 @@ int main(int argc, char **argv)
     test_initiator_end_to_end();
     test_initiator_older_peers();
     test_initiator_unknown_version();
+    test_parked();
     test_initiator_settings();
     test_initiator_get_all_rejected();
     test_initiator_walk();

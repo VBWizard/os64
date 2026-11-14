@@ -33,9 +33,13 @@ static uint8_t sent[BT_L2CAP_MTU + 64];
 static size_t sent_n;
 static int sends;            // PDUs handed over in the current tick
 
+// With unqueue_in_send at a channel, each hand-over tries to take back that
+// channel's payload, and says what it got in unqueue_said.
+static int unqueue_in_send = -1, unqueue_said;
 static void on_send(void *context, const uint8_t *pdu, size_t bytes)
 {
     (void)context;
+    if (unqueue_in_send >= 0) unqueue_said = bt_l2cap_unqueue(&L, (unsigned)unqueue_in_send);
     sends++;
     if (bytes > sizeof(sent)) { failures++; printf("FAIL a PDU of %zu bytes\n", bytes); return; }
     memcpy(sent, pdu, bytes);
@@ -1568,6 +1572,32 @@ static void test_admit_list(void)
     expect_cmd(CONN_RSP, 2, BYTES(W(0), W(0x0051), W(2), W(0)));
 }
 
+// A payload queued and not yet handed over is taken back; one handed over
+// (or being handed over, inside `send`) is not; an empty slot, a channel
+// not open or past the table gives nothing back.
+static void test_unqueue(void)
+{
+    fresh();
+    CHECK(!bt_l2cap_unqueue(&L, 0));
+    CHECK(!bt_l2cap_unqueue(&L, BT_L2CAP_CHANNELS));
+    open_outgoing();
+    const uint8_t p[] = { 1, 2, 3, 4, 5 }, q[] = { 9, 8, 7 };
+    CHECK(bt_l2cap_send(&L, 0, p, sizeof(p)));
+    CHECK(!bt_l2cap_send(&L, 0, q, sizeof(q)));      // the slot is taken
+    CHECK(bt_l2cap_unqueue(&L, 0));
+    CHECK(!L.ch[0].queued && !bt_l2cap_wants_send(&L));
+    expect_nothing();
+    CHECK(!bt_l2cap_unqueue(&L, 0));
+    // The slot is free for another, which leaves as itself.
+    CHECK(bt_l2cap_send(&L, 0, q, sizeof(q)));
+    unqueue_in_send = 0; unqueue_said = -1;
+    expect_data(0x0070, q, sizeof(q));
+    unqueue_in_send = -1;
+    CHECK_EQ(unqueue_said, 0);                        // not taken back in the hand-over
+    CHECK(!bt_l2cap_unqueue(&L, 0));                  // nor after it
+    expect_nothing();
+}
+
 static void test_status(void)
 {
     fresh();
@@ -1792,6 +1822,7 @@ int main(int argc, char **argv)
     test_reset_from_every_state();
     test_admit_list();
     test_status();
+    test_unqueue();
     fuzz(rounds);
     if (failures) { printf("bt_l2cap: %d failure(s)\n", failures); return 1; }
     printf("bt_l2cap: all scripted cases and %d fuzz rounds passed\n", rounds);

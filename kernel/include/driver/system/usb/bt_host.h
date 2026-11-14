@@ -129,6 +129,10 @@ typedef struct {
     uint8_t avdtp_sig, avdtp_media, avdtp_asking;
     uint16_t avdtp_sig_cid, avdtp_media_cid, avdtp_asking_cid;
     bool avdtp_asking_media;
+    // The serial (bt_avdtp_next) of the AVDTP message parked in the
+    // signalling channel's payload slot, 0 when the slot holds none of
+    // AVDTP's: it is AVDTP's to retire until L2CAP hands it over.
+    uint32_t avdtp_sig_parked;
     // Signalling channels we asked for on this connection, and signalling
     // channels (anyone's) that ended or attempts of ours that failed: we
     // ask for at most one more after the first ends, not before

@@ -2558,6 +2558,70 @@ static void a2dp_controller_fails(void)
     puts("PASS: the controller failing mid-stream detaches the pump, pulls nothing more, and the status keeps the evidence");
 }
 
+static bool a2_they_streaming(void);
+// The send gate held shut: the controller withholds the Classic link's
+// completions while four Echo answers fill its pool.
+static void a2_close_the_gate(void)
+{
+    CM.withhold=true;
+    for(unsigned i=0;i<4;i++) HP_CMD(8,HP.ident++,0x66);
+    for(unsigned i=0;i<50 && bt_acl_outstanding(&host.acl,CM.handle)<4;i++) a2_step();
+    assert(bt_acl_outstanding(&host.acl,CM.handle)==4 && !host_l2cap_may_send(&host));
+}
+static void a2_open_the_gate(void)
+{
+    CM.withhold=false;
+    CM_PUSH(0,0x13,5,1,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),(uint8_t)CM.withheld,0); CM.withheld=0;
+}
+// The review's sequence: with the gate shut, they close the media channel
+// (AVDTP queues an Abort, which the host parks in the signalling slot) and
+// then configure a new session, which AVDTP accepts and which retires the
+// Abort. When the gate opens the Abort is never transmitted: their accept
+// goes instead, and the new session stands and streams.
+static void a2dp_parked_abort_retired(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    a2_close_the_gate();
+    int k=HA.media;
+    HP_CMD(6,HP.ident++,W16(HA.ch[k].host_cid),W16(HA.ch[k].cid));      // they close media
+    for(unsigned i=0;i<5;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_CONNECTED && host.avdtp.command_live &&
+           host.avdtp.command_signal==0x0a && !host.avdtp.command_sent);
+    assert(host.avdtp_sig_parked==host.avdtp.command.id && host.l2cap.ch[host.avdtp_sig-1].queued);
+    // Their new session, over the same signalling channel.
+    HA.they_begin=true;
+    HA_CMD(AV_SETCONF,AV_S(1),AV_S(HA_SEID),AV_TRANSPORT,AV_SBC(AV_F48|AV_JOINT,AV_B16|AV_SB8|AV_LOUD,2,51),AV_DELAYREP);
+    for(unsigned i=0;i<5;i++) a2_step();
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_CONFIGURED && !host.avdtp.command_live);
+    assert(host.avdtp_sig_parked==host.avdtp.answer[0].id && host.l2cap.ch[host.avdtp_sig-1].queued);
+    unsigned accepted=HA.accepted;
+    for(unsigned i=0;i<20;i++) { a2_step(); assert(HA.accepted==accepted && !HA.aborts); }
+    a2_open_the_gate();
+    SEAM.endless=true;
+    a2_until(a2_they_streaming,2000);
+    assert(!HA.aborts && HA.accepted>=accepted+3 && bt_avdtp_edges(&host.avdtp)->sessions==2);
+    assert(!host.avdtp.stale_sends);
+    puts("PASS: an Abort parked behind a shut gate and retired by their new configuration is never transmitted; the new session streams");
+}
+// A parked answer goes once, exactly, when the gate opens.
+static void a2dp_parked_answer_once(void)
+{
+    a2_bonded();
+    a2_until(a2_is_open,5000);
+    a2_close_the_gate();
+    unsigned accepted=HA.accepted;
+    HA_CMD(AV_DELAY,AV_S(1),0x07,0xd0);
+    for(unsigned i=0;i<50;i++) a2_step();
+    assert(HA.accepted==accepted && host.avdtp.answer[0].bytes && host.avdtp_sig_parked==host.avdtp.answer[0].id);
+    a2_open_the_gate();
+    for(unsigned i=0;i<10 && HA.accepted==accepted;i++) a2_step();
+    assert(HA.accepted==accepted+1 && !host.avdtp.answer[0].bytes && !host.avdtp_sig_parked);
+    for(unsigned i=0;i<500;i++) a2_step();
+    assert(HA.accepted==accepted+1 && !host.avdtp.stale_sends);
+    puts("PASS: an AVDTP answer parked behind a shut gate is transmitted once, when it opens");
+}
+
 // L2CAP sends something older first: an AVDTP answer (to their Delay
 // Report) queued in the same tick as a media packet. Both leave, the
 // answer first, and the counts stay right; the delay reaches the seam.
@@ -2836,6 +2900,8 @@ int main(void)
     a2dp_gate_closed_with_a_packet();
     a2dp_packet_let_go();
     a2dp_controller_fails();
+    a2dp_parked_abort_retired();
+    a2dp_parked_answer_once();
     a2dp_older_first();
     a2dp_signalling_crossings();
     a2dp_they_call_and_open_first();
