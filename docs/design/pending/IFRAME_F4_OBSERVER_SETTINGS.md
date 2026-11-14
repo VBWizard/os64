@@ -62,11 +62,36 @@ and [PerformanceObserver tasks](https://w3c.github.io/performance-timeline/#queu
 
 `tools/test_dom_host.sh --observer-settings` exercises independently named
 A/B/C/D realms under both teardown policies and engine profiles. It covers
-capture and delivery, receiver/record identity, independent role retirement,
+capture and delivery, receiver identity and record delivery, independent role retirement,
 constructor getter exceptions and retirement, unprepared host/Promise refusal,
 legacy constructor selection, disconnect/GC during invocation, callback-root
 release, native and engine allocation refusal, revoked-proxy continuation and
 terminal interruption. Each case checks scope restoration and balanced cleanup.
+
+Recorded validation uses ASan/UBSan and LeakSanitizer:
+
+- Pre-composition full shipping DOM: **346,621 checks, zero failures,
+  12,949 binding allocation sweeps**. Its observer implementation is the
+  same; the final focused fixture additionally drops the last author observer
+  reference during delivery. No new full DOM campaign after #597 is claimed.
+- After composing merged F16 #597, focused observer settings pass **8,472
+  shipping-engine / 10,704 instrumented-engine checks**, both teardown policies.
+- Final composition: recovery **2,532 / 6,672**, host recovery **674 / 674**,
+  handlers **5,526 / 5,526**, scheduled callbacks **5,570 / 6,066**, callback
+  reporting **1,118 / 1,118**, retirement queues **9,770 / 9,770**, resize
+  **239 / 1,309**, intersection **409 / 409**, performance **478 / 3,169**
+  and mutation observers **32 / 32**. All pass.
+- Before that composition, eight isolated defects are rejected by named
+  assertions in both profiles: wrong entry, wrong incumbent, wrong opt-in,
+  missing mutation/performance preparation, wrong resize receiver, missing
+  post-getter liveness check and capture after intersection options.
+- The pre-composition instrumented cohort also passes events, reporting,
+  window, report retirement, listener/timer settings, departure, custom
+  elements, Streams realms and child-installation engine checks.
+- Final target libdom/Yonder and CLI builds pass; the CLI suites pass
+  **199 / 40** checks. Contract-header/manifest, teardown and suite-inventory
+  audits pass. The runtime implementation and engine are unchanged; no new
+  full-runtime campaign is claimed.
 
 Custom elements, Promise reactions/thenables and the pre-member-check boundary
 remain F.4b work. Browsing-context/origin ownership (F.4c), WindowProxy/Location
