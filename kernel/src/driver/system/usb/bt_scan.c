@@ -345,8 +345,9 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         break;
     // Role switch allowed; sniff NOT. A link in sniff carries data only at
     // its anchor points (the P5's headphones asked for one every 500 ms
-    // and kept it through a stream), so until something takes the link
-    // out of sniff when sound starts, sniff is refused.
+    // and kept it through a stream), so every new link begins awake; the
+    // host allows sniff on an idle Classic link and refuses it again, the
+    // link woken, before our stream starts (bt_host.c § Slot 2's sniff).
     case BT_SCAN_POLICY: op=0x080f; length=2; p[0]=0x01; break;
     case BT_SCAN_PAGE_TIMEOUT: op=0x0c18; length=2; p[1]=0x20; break;   // 0x2000 slots: 5.12 s
     case BT_SCAN_ACCEPT_TIMEOUT: op=0x0c16; length=2; p[0]=0xa0; p[1]=0x1f; break;   // 0x1fa0 slots: 5.06 s

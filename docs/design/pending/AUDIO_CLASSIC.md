@@ -312,7 +312,7 @@ Only silence fails the round, as it does for every command.
 | Write Simple Pairing Mode (0x0c56) | on | SSP, § 7.3.59 |
 | Write Local Name (0x0c13) | `os64` | headphones show it, and some refuse a nameless host |
 | Write Class Of Device (0x0c24) | 0x200104 | service class Audio, major class Computer, minor class Desktop: a computer that is a source of sound |
-| Write Default Link Policy Settings (0x080f) | role switch allowed, sniff refused | a sink that asks to be master is let. Sniff was allowed until the first sound on the P5 (2026-11-13): the headphones put the idle link into sniff at 500 ms and left it there through the stream, so audio left twice a second. It is refused until A.4 manages it (AUDIO_A2DP.md § P, as built) |
+| Write Default Link Policy Settings (0x080f) | role switch allowed, sniff refused | a sink that asks to be master is let. Sniff was allowed until the first sound on the P5 (2026-11-13): the headphones put the idle link into sniff at 500 ms and left it there through the stream, so audio left twice a second. It stays refused as every new link's default; A.4 allows it per link while nothing plays and refuses it again before our stream starts (AUDIO_REMOTE.md § Part Z) |
 | Write Page Timeout (0x0c18) | 5.12 s (the default) | stated, not left to the controller's last host |
 | Write Connection Accept Timeout (0x0c16) | 5.06 s (the default) | how long the controller holds a caller while we find a turn to answer: the bound § L3's latching is built against |
 
@@ -362,7 +362,8 @@ Events answered in any linked state, because the far end may start them:
   bond, saved when encryption comes up, as LE's is saved when its keys
   are distributed.
 - **Role Change** (0x12), **Mode Change** (0x14): recorded for the status
-  file. Sniff is A.4's.
+  file. A.4's sniff policy reads the mode, and a Mode Change carrying an
+  error is counted (AUDIO_REMOTE.md § Part Z).
 - **Connection Request** (0x04) from any address but the bonded one:
   Reject Connection Request (0x040a, reason 0x0f, "unacceptable address").
   For a synchronous link (SCO, eSCO), from anyone: Reject Synchronous

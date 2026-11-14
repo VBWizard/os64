@@ -696,12 +696,16 @@ it left open:
 - **The flush question (Q7) is answered**: a flush mid-song is heard as a
   click and the song carries on; no tail of old sound plays from the
   headphones' own buffer. Nothing is done around a flush.
-- **Sniff is refused, link-wide** (the start-up round's default link
-  policy, `bt_scan.c`). The first sound on the P5 came out as clicks: the
+- **Sniff is managed, not refused** (A.4: AUDIO_REMOTE.md § Part Z and
+  its "Z, as built"). The
+  first sound on the P5 came out as clicks: the
   headphones had put the idle link into sniff with a 500 ms interval and
   left it so through the stream, and a link in sniff carries data only at
   its anchor points. 207 packets left where 750 were due, with 116 slips
-  and the Classic pool full. Sniff with a stream that leaves it is A.4's.
+  and the Classic pool full. Every new link still begins with sniff
+  refused (the start-up round's default link policy, `bt_scan.c`); the
+  host allows it on a link idle for ten seconds and refuses it again,
+  taking the link out of sniff, before our Start.
   The headphones also took the central's role; we send when they poll us,
   and whether their polling is enough is what the next run shows.
 - **Four Starts in all.** Each rejected Start holds the next for 1, 2 and

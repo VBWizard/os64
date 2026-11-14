@@ -45,6 +45,33 @@ static struct {
     // Classic link, and how many it has held back.
     bool withhold;
     uint16_t withheld;
+    // Sniff (AUDIO_REMOTE.md § Part Z). The link policy the controller
+    // holds for the Classic link, and the status each kind of write is
+    // answered with (0: taken). The headphones' personality: `sniff_asks`,
+    // they ask for sniff as soon as a write allows it and never leave it by
+    // themselves (the P5's pair); without it they never ask. `sniff` is the
+    // mode as the host has been told it, its anchors every CM_SNIFF_MS from
+    // the Mode Change; `exit_pending` an Exit Sniff Mode taking effect at
+    // the next anchor; `exit_lost` one answered by its Command Status and
+    // then nothing.
+    // `policy_delay` is how late a policy write is answered (0: 1 ms) and
+    // `sniff_ask_ms` how long after that answer the headphones' sniff
+    // request completes (0: 19 ms), so a case can put the request in flight
+    // across the refusing write.
+    uint16_t policy;
+    uint8_t refuse_allowing, refuse_refusing;
+    uint64_t policy_delay, sniff_ask_ms;
+    bool sniff_asks, sniff, exit_pending, exit_lost;
+    uint64_t sniff_anchor;
+    // What was seen on the wire, for the order a case asserts: the writes
+    // of each kind and when the last went, the first Exit Sniff Mode since
+    // the case's mark and how many in all, the Mode Changes to active and
+    // to sniff as delivered, our AVDTP Start and the first media packet as
+    // they LEFT for the controller, and what left while the mode read sniff.
+    unsigned allow_writes, refuse_writes, wakes;
+    uint64_t allow_at, refuse_at, exit_at, active_at, sniff_at, start_at, first_media_at;
+    bool start_in_sniff;
+    unsigned media_in_sniff, media_discarded;
 } CM;
 // The headphones' L2CAP and SDP (headphones_acl, below): their end of the
 // channel we open to their SDP server, and of the one they open to ours.
@@ -100,7 +127,12 @@ static void multi_event(const uint8_t *p,size_t n)
                 uint16_t k=le_u16(p+5+4*i);
                 CM.acl_out=k<=CM.acl_out?(uint16_t)(CM.acl_out-k):0;
             }
-    if(p[0]==0x05 && n==6 && le_u16(p+3)==CM.handle) CM.acl_out=0;
+    if(p[0]==0x05 && n==6 && le_u16(p+3)==CM.handle) { CM.acl_out=0; CM.sniff=CM.exit_pending=false; }
+    // The model link's mode follows the Mode Changes the host is given.
+    if(p[0]==0x14 && n==8 && !p[2] && le_u16(p+3)==CM.handle) {
+        CM.sniff=p[5]==2; CM.exit_pending=false;
+        if(CM.sniff) CM.sniff_anchor=CM.sniff_at=now; else CM.active_at=now;
+    }
     bt_host_event(&host,p,n);
 }
 static void multi_wire(const uint8_t *p,size_t n)
@@ -178,6 +210,7 @@ static void classic_deliver(void)
 // Every packet takes a send slot: one sent with none free is what fails the
 // real transport.
 static void headphones_acl(const uint8_t *p,size_t n);
+static bool cm_hold(const uint8_t *p,size_t n,unsigned slot);
 static void multi_acl(void *ctx,const uint8_t *p,size_t n)
 {
     assert(n>=4 && n==4u+le_u16(p+2));
@@ -188,6 +221,7 @@ static void multi_acl(void *ctx,const uint8_t *p,size_t n)
     if(TX.sent_n<8) TX.sent[TX.sent_n++]=handle;
     if(host.classic.connected && handle==host.classic.handle) {
         assert((le_u16(p)>>12)==2 && n>=8 && le_u16(p+4)==n-8);
+        if(cm_hold(p,n,slot)) return;      // the link is in sniff: it goes at the next anchor
         headphones_acl(p,n); return;
     }
     acl(ctx,p,n);
@@ -204,9 +238,11 @@ static unsigned tx_holding(uint16_t handle)
     return k;
 }
 static void headphones_deliver(void);
+static void sniff_release(void);
+static unsigned cm_held_n;           // Classic packets held for the next sniff anchor (cm_hold)
 static void step(void)
 {
-    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+    ++now; classic_deliver(); headphones_deliver(); sniff_release(); tx_settle(); TX.sent_n=0;
     bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
 }
 static void notify_keyboard(void)
@@ -236,7 +272,7 @@ static void setup(void)
         .phase=BT_LE_READY,.handle=12,.input_value=10};
     host.peers[0].le.peer[0]=0x44;
     reset_count=0;
-    memset(&CM,0,sizeof(CM)); CM.present=true;
+    memset(&CM,0,sizeof(CM)); CM.present=true; cm_held_n=0;
     memset(&HP,0,sizeof(HP)); HP.mtu=48; HP.ident=0x80; HP.follow=true;
     ha_reset();
     memset(&TX,0,sizeof(TX));
@@ -681,6 +717,13 @@ static void cm_enc(uint64_t d) { CM_PUSH(d,0x08,4,0,(uint8_t)CM.handle,(uint8_t)
 static void cm_disconn(uint64_t d,uint8_t reason)
 { CM_PUSH(d,0x05,4,0,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),reason); }
 static bool cm_ours(const uint8_t *p,uint8_t n) { return n>=6 && !memcmp(p,PH,6); }
+// The model link's next sniff anchor, strictly after now.
+#define CM_SNIFF_MS 500
+static uint64_t cm_next_anchor(void)
+{
+    uint64_t a=CM.sniff_anchor;
+    return now<a?a:a+((now-a)/CM_SNIFF_MS+1)*CM_SNIFF_MS;
+}
 static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
 {
     CM.classic++;
@@ -741,6 +784,34 @@ static void classic_model(uint16_t op,const uint8_t *p,uint8_t n)
         CM_PUSH(100,1,1,0);
         break;
     case 0x0402: cm_cc(1,op,0); break;
+    // Sniff (AUDIO_REMOTE.md § Part Z). The policy written is answered with
+    // its status and handle; headphones that sniff ask for it once a write
+    // allows it.
+    case 0x080d: {
+        assert(n==4 && CM.live && le_u16(p)==CM.handle && (le_u16(p+2)==0x0001 || le_u16(p+2)==0x0005));
+        bool allow=le_u16(p+2)==0x0005;
+        if(allow) { CM.allow_writes++; CM.allow_at=now; } else { CM.refuse_writes++; CM.refuse_at=now; }
+        uint8_t status=allow?CM.refuse_allowing:CM.refuse_refusing;
+        uint64_t d=CM.policy_delay?CM.policy_delay:1;
+        if(!status) CM.policy=le_u16(p+2);
+        CM_PUSH(d,0x0e,6,1,(uint8_t)op,(uint8_t)(op>>8),status,p[0],p[1]);
+        // 800 slots: 500 ms. Once accepted it completes, whatever is written after.
+        if(!status && allow && CM.sniff_asks && !CM.sniff)
+            CM_PUSH(d+(CM.sniff_ask_ms?CM.sniff_ask_ms:19),0x14,6,0,p[0],p[1],2,0x20,0x03);
+        break;
+    }
+    // Exit Sniff Mode takes effect at the next anchor; out of sniff, or
+    // with one already taking effect, it is command disallowed.
+    case 0x0804:
+        assert(n==2 && CM.live && le_u16(p)==CM.handle);
+        CM.wakes++;
+        if(!CM.exit_at) CM.exit_at=now;
+        if(!CM.sniff || CM.exit_pending) { cm_cs(1,0x0c,op); break; }
+        cm_cs(1,0,op);
+        if(CM.exit_lost) break;
+        CM.exit_pending=true;
+        CM_PUSH(cm_next_anchor()-now,0x14,6,0,p[0],p[1],0,0,0);
+        break;
     default: printf("unexpected Classic command %04x\n",op); assert(0);
     }
 }
@@ -1169,6 +1240,42 @@ static void headphones_acl(const uint8_t *p,size_t n)
         d+=4u+m; len-=4u+m;
     }
 }
+// The model link in sniff carries data only at its anchors: a packet the
+// controller takes (its USB transfer completes as ever) reaches the
+// headphones, and is completed, at the next anchor, so the controller's
+// Classic buffers stay full until then. Every Classic packet that leaves
+// is watched for our AVDTP Start and the media (CM's wire record).
+#define CM_HELD_MAX 8
+static struct { uint8_t b[4+BT_L2CAP_MTU+4]; size_t n; uint64_t due; bool media; } CM_HELD[CM_HELD_MAX];
+static bool cm_hold(const uint8_t *p,size_t n,unsigned slot)
+{
+    (void)slot;
+    int av=ha_find(le_u16(p+6));
+    bool media=av>=0 && av==HA.media;
+    bool start=av>=0 && av!=HA.media && n>=10 && (p[8]&3)==0 && (p[9]&0x3f)==AV_START;
+    if(media) { if(!CM.first_media_at) CM.first_media_at=now; CM.media_in_sniff+=CM.sniff; }
+    if(start) { CM.start_at=now; CM.start_in_sniff|=CM.sniff; }
+    if(!CM.sniff) return false;
+    assert(cm_held_n<CM_HELD_MAX && n<=sizeof(CM_HELD[0].b));
+    memcpy(CM_HELD[cm_held_n].b,p,n); CM_HELD[cm_held_n].n=n;
+    CM_HELD[cm_held_n].due=cm_next_anchor(); CM_HELD[cm_held_n].media=media;
+    cm_held_n++;
+    CM.acl_out++;      // the controller holds it now; headphones_acl counts it on delivery, so one back then
+    return true;
+}
+// The held packets whose anchor has come (or all, once the link is out of
+// sniff), in order; a link gone takes them with it.
+static void sniff_release(void)
+{
+    unsigned i=0;
+    for(;i<cm_held_n;i++) {
+        if(CM.live && CM.sniff && now<CM_HELD[i].due) break;
+        if(CM.live) { CM.acl_out--; headphones_acl(CM_HELD[i].b,CM_HELD[i].n); }
+        else CM.media_discarded+=CM_HELD[i].media;
+    }
+    memmove(CM_HELD,CM_HELD+i,(cm_held_n-i)*sizeof(CM_HELD[0]));
+    cm_held_n-=i;
+}
 // The LE model answers what it knows; the scan's two commands are
 // answered here, as scan_recovery does.
 static void answer_le(void)
@@ -1217,7 +1324,7 @@ static bool w_free, w_urgent;
 static unsigned w_before;
 static void step_watched(void)
 {
-    ++now; classic_deliver(); headphones_deliver(); tx_settle(); TX.sent_n=0;
+    ++now; classic_deliver(); headphones_deliver(); sniff_release(); tx_settle(); TX.sent_n=0;
     w_free=!host.owner || (host.command_done && !host_owner_pending(&host));
     w_urgent=bt_classic_urgent(&host.classic);
     w_before=CM.n;
@@ -2177,6 +2284,7 @@ static struct {
     uint64_t next_frame, pulls;
     int attaches, detaches;
     int16_t last[SEAM_FRAMES*2]; uint32_t last_asked;
+    uint64_t sound_step, lands_at; unsigned sound_calls, sound_calls_most;
 } SEAM;
 static struct {
     bool fail_encode;
@@ -2207,7 +2315,17 @@ static bt_a2dp_pulled_t seam_pull(void *ctx,int16_t *out,uint32_t frames)
     memcpy(SEAM.last,out,(size_t)frames*4);
     return (bt_a2dp_pulled_t){k,SEAM.generation,false,true};
 }
-static bool seam_has_sound(void *ctx) { (void)ctx; return SEAM.attached && !SEAM.paused && (SEAM.endless || SEAM.available>0); }
+// has_sound counts its calls in each step (the most any step made), and on
+// step `lands_at` answers no to the first call and yes to any later one: a
+// player's first write landing on another CPU between two readings.
+static bool seam_has_sound(void *ctx)
+{
+    (void)ctx;
+    if(SEAM.sound_step!=now) { SEAM.sound_step=now; SEAM.sound_calls=0; }
+    if(++SEAM.sound_calls>SEAM.sound_calls_most) SEAM.sound_calls_most=SEAM.sound_calls;
+    if(SEAM.lands_at==now && SEAM.sound_calls==1) return false;
+    return SEAM.attached && !SEAM.paused && (SEAM.endless || SEAM.available>0);
+}
 static void seam_attach(void *ctx) { (void)ctx; assert(!SEAM.attached); SEAM.attached=true; SEAM.attaches++; SEAM.failed=false; SEAM.delay_told=false; SEAM.generation++; }
 static void seam_detach(void *ctx) { (void)ctx; assert(SEAM.attached); SEAM.attached=false; SEAM.detaches++; SEAM.failed=false; SEAM.generation++; }
 static void seam_failed(void *ctx,const char *why) { (void)ctx; assert(SEAM.attached && why); SEAM.failed=true; SEAM.why=why; SEAM.available=0; SEAM.endless=false; }
@@ -2859,7 +2977,391 @@ static void a2dp_quiet_without_a_bond(void)
     assert(!CM.acl_packets && !host.l2cap.up && !SEAM.pulls && !SEAM.attaches && !ENC.begins);
     assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_IDLE && !host.a2dp.sessions_begun && !host.a2dp.packets_sent);
     assert(input_count[0]==10000 && !release_count[0] && !HA.avdtp_conn_reqs);
-    puts("PASS: with the sink given and no Classic bond, ten thousand ticks of keyboard traffic: no L2CAP byte, the pump and AVDTP idle");
+    // Nor either sniff command: there is no link to doze.
+    assert(op_index(0x080d,0)<0 && op_index(0x0804,0)<0 && host.sniff_state==BT_HOST_SNIFF_AWAKE && !host.sniff_dozes);
+    puts("PASS: with the sink given and no Classic bond, ten thousand ticks of keyboard traffic: no L2CAP byte, the pump and AVDTP idle, no sniff command");
+}
+
+// ── Slot 2's sniff (AUDIO_REMOTE.md § Part Z) ──────────────────────────────
+//
+// The host's lifecycle (bt_host.c § Slot 2's sniff) end to end, against
+// model headphones that either ask for sniff as soon as the policy allows
+// it and never leave it by themselves (the P5's pair) or never ask, on a
+// model link that in sniff carries data only at its anchors (cm_hold).
+// Each step checks what a2_checks does, counting media held for an anchor
+// or lost with a link that went while it was held.
+static void z_checks(void)
+{
+    unsigned held=0;
+    for(unsigned i=0;i<cm_held_n;i++) held+=CM_HELD[i].media;
+    unsigned reached=HA.packets+held+CM.media_discarded;
+    if(host.a2dp.packets_sent<a2_seen_sent) a2_base=reached-(unsigned)host.a2dp.packets_sent;
+    a2_seen_sent=(unsigned)host.a2dp.packets_sent;
+    assert(host.a2dp.packets_sent+a2_base==reached);
+    assert(host.a2dp.packets_lost==a2_expect_lost);
+    assert(host.failed==a2_expect_failed);
+    assert(host.classic.error==NULL || host.classic.phase!=BT_CLASSIC_READY);
+}
+static void z_step(void) { HA.order_n=0; step(); z_checks(); }
+#define z_until(done,most) do { \
+    for(unsigned i_=0;i_<(most) && !(done)();i_++) z_step(); \
+    if(!(done)()) { printf("z_until(%s) not reached by line %d\n",#done,__LINE__); assert(0); } \
+} while(0)
+static uint64_t z_ready_at;
+// Bonded, READY (when the idle clock starts) and the stream open, nothing
+// to play, headphones of the personality given.
+static void z_open(bool asks)
+{
+    a2_bonded();
+    CM.sniff_asks=asks; z_ready_at=now;
+    z_until(a2_is_open,5000);
+}
+// What the wire record says from here on.
+static void z_mark(void)
+{
+    CM.allow_at=CM.refuse_at=CM.exit_at=CM.active_at=CM.sniff_at=CM.start_at=CM.first_media_at=0;
+    CM.start_in_sniff=false; CM.media_in_sniff=0;
+}
+static bool z_dozing(void) { return host.sniff_state==BT_HOST_SNIFF_DOZING && (!CM.sniff_asks || CM.sniff); }
+static bool z_awake(void) { return host.sniff_state==BT_HOST_SNIFF_AWAKE; }
+static bool z_streaming(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && CM.first_media_at; }
+static bool z_open_again(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_OPEN; }
+static unsigned z_ops(uint16_t op,unsigned from)
+{
+    unsigned k=0;
+    for(unsigned i=from;i<CM.n;i++) k+=CM.ops[i]==op;
+    return k;
+}
+
+// Idle ten seconds: the allowing write, once; the headphones go to sniff.
+// Sound: the refusing write, Exit Sniff Mode, the Mode Change at the next
+// anchor, and only then our Start and the first media packet, none of it
+// while the mode read sniff. The song ends: ten idle seconds after the
+// stream is suspended, dozing again.
+static void sniff_cycle(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    assert(CM.allow_writes==1 && !CM.refuse_writes && !CM.wakes);
+    assert(CM.allow_at>=z_ready_at+10000 && CM.allow_at<z_ready_at+10100);
+    assert(CM.policy==0x0005 && bt_classic_sniff_allowed(&host.classic));
+    assert(bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_SNIFF && host.classic.mode_interval==0x0320);
+    for(unsigned i=0;i<20000;i++) z_step();
+    assert(CM.allow_writes==1 && !CM.refuse_writes && !CM.wakes && z_dozing() && host.sniff_dozes==1);
+    assert(status_has("mode: sniff interval 800\nsniff: wanted allowed confirmed allowed; policy writes 1 failed 0"));
+    assert(status_has("sniff manager: dozing; idle "));
+    z_mark();
+    uint64_t sound=now;
+    SEAM.endless=true;
+    z_until(z_streaming,2000);
+    assert(CM.refuse_writes==1 && CM.wakes==1 && HA.starts==1);
+    assert(CM.refuse_at>sound && CM.exit_at>CM.refuse_at && CM.active_at>CM.exit_at);
+    assert(CM.start_at>=CM.active_at && CM.first_media_at>=CM.start_at);
+    assert(CM.active_at<=CM.exit_at+CM_SNIFF_MS);
+    assert(!CM.start_in_sniff && !CM.media_in_sniff && !CM.sniff);
+    assert(z_awake() && !host.sniff_woke_late && host.sniff_wakes==1 && !host.sniff_wake_retries);
+    assert(!bt_classic_sniff_allowed(&host.classic) && bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_ACTIVE);
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<3000;i++) z_step();
+    assert(HA.packets>packets+200 && !host.a2dp.slips && !CM.media_in_sniff && CM.refuse_writes==1 && CM.wakes==1);
+    // The song ends: silence, our Suspend three seconds on, then ten idle seconds.
+    SEAM.endless=false; SEAM.available=0;
+    z_until(z_open_again,4000);
+    uint64_t quiet=now;
+    z_until(z_dozing,12000);
+    assert(CM.allow_writes==2 && CM.allow_at>=quiet+10000 && CM.allow_at<quiet+10100 && CM.sniff);
+    assert(host.sniff_dozes==2 && host.sniff_wakes==1 && a2_ready());
+    assert(status_has("dozes 2 wakes 1 woke late 0 exit sniff retries 0 allowing refused 0 awake with sniff allowed 0"));
+    puts("PASS: sniff: idle ten seconds allows it once; sound wakes the link before our Start and first packet; ten idle seconds after the song, dozing again");
+}
+
+// Exit Sniff Mode answered by its Command Status and then nothing: retried
+// each second, five times in all; our Start goes at one second all the
+// same, counted woke late. The link stays up.
+static void sniff_wake_unanswered(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    CM.exit_lost=true;
+    z_mark();
+    unsigned from=CM.n;
+    uint64_t sound=now;
+    SEAM.endless=true;
+    for(unsigned i=0;i<1500 && !HA.starts && !CM.start_at;i++) z_step();
+    assert(CM.start_at>=sound+1000 && CM.start_at<=sound+1010 && CM.start_in_sniff);
+    assert(host.sniff_woke_late==1 && z_awake());
+    for(unsigned i=0;i<7000;i++) z_step();
+    assert(z_ops(0x0804,from)==5 && host.sniff_wake_retries==4 && CM.wakes==5);
+    uint64_t last=0;
+    // A second apart as asked; the first waited its turn behind the refusing write.
+    for(unsigned i=from;i<CM.n;i++) if(CM.ops[i]==0x0804) {
+        assert(!last || (CM.at[i]>=last+995 && CM.at[i]<=last+1005));
+        last=CM.at[i];
+    }
+    assert(CM.sniff && a2_ready() && CM.refuse_writes==1 && CM.media_in_sniff>0);
+    assert(status_has("woke late 1 exit sniff retries 4"));
+    puts("PASS: sniff: an Exit Sniff Mode that never takes is asked five times, a second apart; our Start goes at one second, woke late counted");
+}
+
+// The refusing write refused: Exit Sniff Mode is still sent, the link is
+// woken and stays up, awake with sniff still allowed, counted and shown.
+static void sniff_refusing_refused(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    CM.refuse_refusing=0x0c;
+    z_mark();
+    SEAM.endless=true;
+    z_until(z_streaming,2000);
+    assert(CM.refuse_writes==1 && CM.wakes==1 && CM.active_at && !CM.media_in_sniff && !CM.start_in_sniff);
+    assert(host.classic.policy_failed==1 && host.classic.policy_status==0x0c && bt_classic_sniff_allowed(&host.classic));
+    assert(host.sniff_refuses_failed==1 && z_awake() && a2_ready());
+    // Never confirmed, so the wake ran its whole second (the settle rule).
+    assert(host.sniff_woke_late==1 && CM.start_at>=CM.refuse_at+999);
+    for(unsigned i=0;i<3000;i++) z_step();
+    assert(CM.refuse_writes==1 && host.sniff_refuses_failed==1 && a2_ready() && !host.classic.error);
+    assert(status_has("awake with sniff allowed 1"));
+    assert(status_has("policy writes 2 failed 1 last status 0c"));
+    puts("PASS: sniff: the refusing write refused, Exit Sniff Mode still wakes the link, which stays up; counted");
+}
+
+// The allowing write refused: AWAKE, counted, and not asked again until a
+// stream has come and gone; then asked, and taken.
+static bool z_allow_refused(void) { return host.sniff_allows_failed==1; }
+static void sniff_allowing_refused(void)
+{
+    z_open(true);
+    CM.refuse_allowing=0x0c;
+    z_until(z_allow_refused,12000);
+    assert(z_awake() && host.sniff_barred && CM.allow_writes==1 && !CM.sniff);
+    assert(status_has("sniff manager: awake (sniff not asked again until a stream has come and gone)"));
+    for(unsigned i=0;i<30000;i++) z_step();
+    assert(CM.allow_writes==1 && z_awake() && a2_ready());
+    CM.refuse_allowing=0;
+    SEAM.endless=true;
+    z_until(z_streaming,200);
+    for(unsigned i=0;i<1000;i++) z_step();
+    assert(CM.allow_writes==1 && !host.sniff_barred);
+    SEAM.endless=false; SEAM.available=0;
+    z_until(z_open_again,4000);
+    uint64_t quiet=now;
+    z_until(z_dozing,12000);
+    assert(CM.allow_writes==2 && CM.allow_at>=quiet+10000 && host.sniff_allows_failed==1 && CM.sniff);
+    puts("PASS: sniff: the allowing write refused is not asked again until a stream has come and gone");
+}
+
+// Headphones that never ask for sniff: dozing changes nothing, sound asks
+// the refusing write and no Exit Sniff Mode, and the stream starts.
+static void sniff_never_asked(void)
+{
+    z_open(false);
+    z_until(z_dozing,12000);
+    for(unsigned i=0;i<5000;i++) z_step();
+    assert(bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_UNKNOWN && CM.allow_writes==1);
+    z_mark();
+    SEAM.endless=true;
+    z_until(z_streaming,200);
+    assert(!CM.wakes && CM.refuse_writes==1 && CM.start_at>CM.refuse_at && !host.sniff_woke_late && z_awake());
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<2000;i++) z_step();
+    assert(HA.packets>packets+130 && !host.a2dp.slips && bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_UNKNOWN);
+    puts("PASS: sniff: headphones that never ask for it lose nothing: no Exit Sniff Mode, the stream starts at once");
+}
+
+// A stream THEY start while the link dozes: not held, so its first media
+// goes at sniff's rhythm, visibly late; the wake still happens.
+static bool z_they_stream(void) { return bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && CM.first_media_at && !CM.sniff; }
+static void sniff_they_start(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    z_mark();
+    HA_CMD(AV_START,AV_S(1));
+    z_until(z_they_stream,2000);
+    assert(!HA.starts && CM.refuse_writes==1 && CM.wakes>=1 && CM.active_at);
+    assert(CM.first_media_at<CM.active_at && CM.media_in_sniff>0 && !host.sniff_woke_late);
+    unsigned packets=HA.packets;
+    for(unsigned i=0;i<1000;i++) z_step();
+    assert(HA.packets>packets+60 && !HA.starts && a2_ready());
+    puts("PASS: sniff: a stream they start while dozing is not held (its media waits for the anchors) and the link is woken all the same");
+}
+
+// The link dropping in each state: everything starts over, nothing is sent
+// under the dead handle, and the next connection starts AWAKE with a fresh
+// idle clock.
+static bool z_allowing(void) { return host.sniff_state==BT_HOST_SNIFF_ALLOWING; }
+static bool z_waking(void) { return host.sniff_state==BT_HOST_SNIFF_WAKING; }
+static void sniff_link_drops(void)
+{
+    for(unsigned target=BT_HOST_SNIFF_AWAKE;target<=BT_HOST_SNIFF_WAKING;target++) {
+        z_open(true);
+        if(target==BT_HOST_SNIFF_ALLOWING) z_until(z_allowing,12000);
+        if(target==BT_HOST_SNIFF_DOZING || target==BT_HOST_SNIFF_WAKING) z_until(z_dozing,12000);
+        if(target==BT_HOST_SNIFF_WAKING) { SEAM.endless=true; z_until(z_waking,100); }
+        assert(host.sniff_state==target);
+        unsigned wakes=CM.wakes;
+        cm_disconn(0,0x08); CM.live=false; z_step();
+        ha_link_down();
+        assert(z_awake() && !host.sniff_idle_since && !host.sniff_barred && !host.sniff_wake_tries);
+        assert(!bt_classic_policy_busy(&host.classic) && !bt_classic_wake_busy(&host.classic));
+        z_until(a2_ready,20000);
+        uint64_t ready=now;
+        assert(z_awake() && !bt_classic_sniff_allowed(&host.classic) && !host.classic.sniff_wanted);
+        assert(bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_UNKNOWN);
+        unsigned allows=CM.allow_writes;
+        if(target==BT_HOST_SNIFF_WAKING) {
+            // The ring still has sound: the stream starts at once, awake, nobody held.
+            a2_packets_mark=HA.packets;
+            z_until(a2_streaming_again,5000);
+            assert(CM.wakes==wakes && z_awake() && CM.allow_writes==allows && !host.sniff_woke_late);
+        } else {
+            z_until(z_dozing,12000);
+            assert(CM.allow_writes==allows+1 && CM.allow_at>=ready+10000 && CM.allow_at<ready+10100);
+        }
+    }
+    puts("PASS: sniff: the link dropping in AWAKE, ALLOWING, DOZING or WAKING starts over clean; the next connection begins AWAKE");
+}
+
+// With no audio sink none of it runs: a bonded link READY and idle for
+// twenty seconds, headphones that would sniff, and neither command is sent.
+static void sniff_none_without_sink(void)
+{
+    classic_bonded();
+    CM.sniff_asks=true;
+    unsigned from=CM.n;
+    for(unsigned i=0;i<20000;i++) {
+        step();
+        if(tx_n) { tx_n=0; const uint8_t complete[]={0x13,5,1,12,0,1,0}; multi_event(complete,sizeof(complete)); }
+    }
+    assert(a2_ready() && !host.a2dp_ops && z_ops(0x080d,from)==0 && z_ops(0x0804,from)==0);
+    assert(host.sniff_state==BT_HOST_SNIFF_AWAKE && !host.sniff_dozes && !CM.sniff);
+    static char text[BT_SCAN_TEXT_BYTES];
+    bt_host_status(&host,text,sizeof text);
+    assert(!strstr(text,"sniff manager:"));
+    puts("PASS: sniff: with no audio sink a READY link idles twenty seconds and neither command is sent");
+}
+
+// ONE reading of the seam a tick: a player's first write landing between
+// two readings in one tick (the model seam answers no to the tick's first
+// call and yes to any later one) must not let our Start go on that tick,
+// into a link that is asleep. The Start goes after the wake, and no tick
+// reads the seam twice.
+static void sniff_one_reading(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    z_mark();
+    SEAM.sound_calls_most=0;
+    SEAM.endless=true; SEAM.lands_at=now+1;
+    z_step();
+    assert(!CM.start_at && !host.a2dp.streaming && host.sniff_state==BT_HOST_SNIFF_DOZING);
+    z_until(z_streaming,2000);
+    assert(CM.start_at>SEAM.lands_at && !CM.start_in_sniff && !CM.media_in_sniff && CM.wakes==1);
+    assert(SEAM.sound_calls_most==1);
+    puts("PASS: sniff: the seam is read once a tick, so a write landing between two readings cannot Start a sleeping link");
+}
+
+// A sniff request in flight across the refusing write: the settle keeps
+// our Start back until the Mode Change it brings has arrived, and the wake
+// answers it. Sound arriving while the allowing write is out, and sound
+// arriving just after it is confirmed, with the headphones' request still
+// on its way in both.
+static bool z_allowing_out(void) { return host.sniff_state==BT_HOST_SNIFF_ALLOWING && host.classic.policy_out; }
+static bool z_dozing_state(void) { return host.sniff_state==BT_HOST_SNIFF_DOZING; }
+static void sniff_request_in_flight(void)
+{
+    for(unsigned confirmed=0;confirmed<2;confirmed++) {
+        z_open(true);
+        CM.sniff_ask_ms=80;
+        if(!confirmed) { CM.policy_delay=30; z_until(z_allowing_out,12000); }
+        else z_until(z_dozing_state,12000);
+        assert(!CM.sniff);
+        z_mark();
+        SEAM.endless=true;
+        z_until(z_streaming,2000);
+        // The request did land, after the refusing write was confirmed, and
+        // was answered by Exit Sniff Mode before our Start.
+        assert(CM.sniff_at>CM.refuse_at && CM.exit_at>CM.sniff_at && CM.active_at>CM.exit_at);
+        assert(CM.start_at>=CM.active_at && !CM.start_in_sniff && !CM.media_in_sniff);
+        assert(CM.refuse_writes==1 && CM.wakes==1 && !host.sniff_woke_late && z_awake());
+        unsigned packets=HA.packets;
+        for(unsigned i=0;i<2000;i++) z_step();
+        assert(HA.packets>packets+130 && !CM.media_in_sniff && !CM.sniff);
+    }
+    puts("PASS: sniff: a sniff request in flight across the refusing write is waited for and answered before our Start");
+}
+
+// AWAKE with sniff still allowed (the refusing write was refused), the
+// headphones go back to sleep while the idle count runs, and sound comes:
+// held all the same, the link woken first.
+static void sniff_asleep_while_awake(void)
+{
+    z_open(true);
+    z_until(z_dozing,12000);
+    CM.refuse_refusing=0x0c;
+    SEAM.endless=true;
+    z_until(z_streaming,2000);
+    SEAM.endless=false; SEAM.available=0;
+    z_until(z_open_again,4000);
+    for(unsigned i=0;i<100;i++) z_step();
+    assert(z_awake() && bt_classic_sniff_allowed(&host.classic) && !CM.sniff);
+    // They sleep again; sniff is still allowed.
+    CM_PUSH(0,0x14,6,0,(uint8_t)CM.handle,(uint8_t)(CM.handle>>8),2,0x20,0x03);
+    for(unsigned i=0;i<20;i++) z_step();
+    assert(CM.sniff && z_awake() && bt_classic_mode(&host.classic)==BT_CLASSIC_MODE_SNIFF);
+    z_mark();
+    unsigned wakes=CM.wakes;
+    SEAM.endless=true;
+    z_until(z_streaming,2000);
+    assert(host.sniff_wakes==2 && CM.wakes==wakes+1 && CM.active_at && CM.start_at>=CM.active_at);
+    assert(!CM.start_in_sniff && !CM.media_in_sniff && a2_ready());
+    puts("PASS: sniff: a link asleep while AWAKE (sniff left allowed) is woken before our Start");
+}
+
+// The whole cycle beside a typing keyboard and a moving mouse, every tick:
+// part S's LE assertions (a2dp_beside_le's) at every step, and the count
+// agreeing at every step (step's acl_agrees).
+static void sniff_beside_le(void)
+{
+    z_open(true);
+    bt_le_t *m=&host.peers[1].le;
+    *m=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+        .handle=11,.input_value=10,.mouse=true};
+    assert(hid_mouse_parse(packed,sizeof(packed),&m->mouse_layout));
+    const uint8_t ack[]={0x1e};
+    const uint8_t motion[]={0x1b,10,0,1,2,0,3,0,0,0,0};
+    unsigned eligible_ticks=0, both=0, typed=input_count[0], moved=input_count[1];
+    enum { TICKS=32000, SOUND=13000, SILENCE=17000 };
+    for(unsigned i=0;i<TICKS;i++) {
+        if(i==SOUND) { assert(z_dozing() && CM.sniff); z_mark(); SEAM.endless=true; }
+        if(i==SILENCE) { assert(!CM.start_in_sniff && !CM.media_in_sniff && CM.active_at); SEAM.endless=false; SEAM.available=0; }
+        TX.delay=5;
+        notify_keyboard(); incoming(4,motion,sizeof motion);
+        bt_le_t *k=&host.peers[0].le;
+        if(i%7==0 && !k->queue_count && !k->outstanding) assert(le_queue(k,4,ack,1));
+        if(i%11==0 && !m->queue_count && !m->outstanding) assert(le_queue(m,4,ack,1));
+        HA.order_n=0;
+        ++now; classic_deliver(); headphones_deliver(); sniff_release(); tx_settle(); TX.sent_n=0;
+        bool eligible=(k->queue_count || m->queue_count) && !k->outstanding && !m->outstanding &&
+                      !tx_holding(12) && !tx_holding(11);
+        bt_host_tick(&host,now,now*1000,true,TX.n,false,multi_command,multi_acl,multi_report,NULL); acl_agrees();
+        z_checks();
+        int le_at=-1, classic_at=-1;
+        for(unsigned s=0;s<TX.sent_n;s++) {
+            if((TX.sent[s]==12 || TX.sent[s]==11) && le_at<0) le_at=(int)s;
+            if(TX.sent[s]==CM.handle && classic_at<0) classic_at=(int)s;
+        }
+        if(eligible) { assert(le_at>=0); eligible_ticks++; }
+        if(le_at>=0 && classic_at>=0) { assert(le_at<classic_at); both++; }
+        assert(tx_holding(CM.handle)<=BT_HOST_TX_SLOTS-1 && TX.n<=BT_HOST_TX_SLOTS);
+        assert(k->phase==BT_LE_READY && m->phase==BT_LE_READY && !release_count[0] && !release_count[1]);
+        le_completes();
+    }
+    assert(input_count[0]==typed+TICKS && input_count[1]==moved+TICKS);
+    assert(eligible_ticks>2000 && both>50);
+    assert(CM.allow_writes==2 && CM.refuse_writes==1 && CM.wakes==1 && z_dozing() && CM.sniff);
+    assert(host.sniff_dozes==2 && host.sniff_wakes==1 && !host.sniff_woke_late && a2_ready());
+    puts("PASS: sniff beside a typing keyboard and a moving mouse: doze, wake, stream, doze again; every LE packet that may go leaves in its tick ahead of Classic");
 }
 
 int main(void)
@@ -2910,5 +3412,17 @@ int main(void)
     a2dp_link_drop();
     a2dp_pause_flush_silence();
     a2dp_encoder_fails();
+    sniff_cycle();
+    sniff_wake_unanswered();
+    sniff_refusing_refused();
+    sniff_allowing_refused();
+    sniff_never_asked();
+    sniff_they_start();
+    sniff_link_drops();
+    sniff_none_without_sink();
+    sniff_one_reading();
+    sniff_request_in_flight();
+    sniff_asleep_while_awake();
+    sniff_beside_le();
     puts("Bluetooth multi-peer host tests passed");
 }

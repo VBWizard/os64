@@ -36,6 +36,18 @@ static bool cl_ours(const bt_classic_t *c, const uint8_t *address)
 { return cl_active(c) && cl_equal(address,c->peer,6); }
 static bool cl_our_handle(const bt_classic_t *c, const uint8_t *p)
 { return c->connected && cl_u16(p)==c->handle; }
+// Where the sniff commands may be asked and sent.
+static bool cl_link_up(const bt_classic_t *c)
+{ return c->phase==BT_CLASSIC_READY && c->connected; }
+// The sniff state of a connection, gone with it (bt_classic.h): nothing is
+// sent under a dead handle, and a new connection starts at the policy the
+// start-up round gave every link, sniff refused.
+static void cl_sniff_clear(bt_classic_t *c)
+{
+    c->sniff_wanted=c->sniff_confirmed=false;
+    c->policy_owed=c->policy_out=c->policy_out_value=false;
+    c->wake_owed=c->wake_out=false;
+}
 // The far end went away and may come back: connection timeout, remote
 // user ended it, remote low resources, remote power off, LMP response
 // timeout. Authentication and key trouble and an end we asked for are not.
@@ -88,6 +100,7 @@ static void cl_close(bt_classic_t *c, uint8_t reason)
     c->crossing=c->crossing && !c->answer[BT_CLASSIC_ANSWER_ACCEPT].set;   // a crossing call refused is owed nothing
     cl_answers_clear(c);
     cl_key_wipe(c);
+    cl_sniff_clear(c);
     c->next_op=0; c->waiting=false; c->close_reason=reason;
     if(c->connected) { c->phase=BT_CLASSIC_CLOSING; c->next_op=0x0406; }
     else if(c->link_may_active) {
@@ -108,12 +121,13 @@ static void cl_give_up(bt_classic_t *c, const char *why, uint16_t op, uint8_t st
 {
     cl_error(c,why,op,status,false);
     c->connected=false; c->encrypted=false; c->link_may_active=false; c->crossing=false;
+    cl_sniff_clear(c);
     c->next_op=0; c->waiting=false; c->phase=BT_CLASSIC_STOPPED;
 }
 
 // A new attempt: everything the last one learned is cleared, except the
-// bond, page scan, the refusals still owed, any command in flight and the
-// malformed count.
+// bond, page scan, the refusals still owed, any command in flight, the
+// malformed count and the sniff commands' counts and last statuses.
 static void cl_session(bt_classic_t *c, bt_classic_session_t kind, const uint8_t peer[6], const char *name)
 {
     c->attempt++;
@@ -126,7 +140,7 @@ static void cl_session(bt_classic_t *c, bt_classic_session_t kind, const uint8_t
     c->role_known=c->mode_known=c->peer_io_known=c->ssp_done=false;
     c->role=c->mode=c->key_size=c->refresh_status=0; c->mode_interval=0;
     c->peer_io[0]=c->peer_io[1]=c->peer_io[2]=0;
-    cl_answers_clear(c); cl_key_wipe(c);
+    cl_answers_clear(c); cl_key_wipe(c); cl_sniff_clear(c);
     c->waiting=false; c->next_op=0;
 }
 
@@ -232,14 +246,17 @@ static const struct { uint8_t code, params; bool shared; } cl_events[]={
 // What a command's reply carries. Asynchronous commands are accepted by
 // Command Status and finished by an event; the rest answer with Command
 // Complete: the address back (pairing answers, refusals, the page
-// cancel), the handle and key size, or the status alone.
-enum { CL_ASYNC, CL_ADDRESS, CL_KEY_SIZE, CL_STATUS };
+// cancel), the handle and key size, the handle alone (Write Link Policy
+// Settings), or the status alone.
+enum { CL_ASYNC, CL_ADDRESS, CL_KEY_SIZE, CL_HANDLE, CL_STATUS };
 static unsigned cl_reply_kind(uint16_t op)
 {
     switch(op) {
     case 0x0405: case 0x0406: case 0x0409: case 0x040a: case 0x0411: case 0x0413: case 0x042a:
+    case 0x0804:
         return CL_ASYNC;
     case 0x1408: return CL_KEY_SIZE;
+    case 0x080d: return CL_HANDLE;
     case 0x0c1a: return CL_STATUS;
     default: return CL_ADDRESS;
     }
@@ -259,10 +276,11 @@ static bool cl_reply(bt_classic_t *c, const uint8_t *e, size_t n)
         c->status=e[2]; c->command_done=true;
         return true;
     }
-    size_t want=kind==CL_ADDRESS ? 12 : kind==CL_KEY_SIZE ? 9 : 6;
+    size_t want=kind==CL_ADDRESS ? 12 : kind==CL_KEY_SIZE ? 9 : kind==CL_HANDLE ? 8 : 6;
     if(kind==CL_ASYNC || n!=want) { c->malformed++; return true; }
     if(!e[5]) {
         if(kind==CL_ADDRESS && !cl_equal(e+6,c->command_address,6)) { c->malformed++; return true; }
+        if(kind==CL_HANDLE && cl_u16(e+6)!=c->command_handle) { c->malformed++; return true; }
         if(kind==CL_KEY_SIZE) {
             if(cl_u16(e+6)!=c->command_handle || e[8]>16) { c->malformed++; return true; }
             c->key_size=e[8];
@@ -364,7 +382,11 @@ bool bt_classic_event(bt_classic_t *c, const uint8_t *e, size_t n)
         if(cl_ours(c,e+3) && !e[2]) { c->role_known=true; c->role=e[9]; }
         return true;
     case 0x14:     // Mode Change: status, handle, mode, interval
-        if(cl_our_handle(c,e+3) && !e[2]) { c->mode_known=true; c->mode=e[5]; c->mode_interval=cl_u16(e+6); }
+        if(!cl_our_handle(c,e+3)) return true;
+        // One that failed leaves the mode as it was, and is seen: an
+        // unsniff that did not take would explain a stream gone to clicks.
+        if(e[2]) { c->mode_failed++; c->mode_fail_status=e[2]; }
+        else { c->mode_known=true; c->mode=e[5]; c->mode_interval=cl_u16(e+6); }
         return true;
     case 0x16:     // PIN Code Request: legacy pairing is not offered
         if(cl_ours(c,e+2)) cl_latch(c,BT_CLASSIC_ANSWER_PIN);
@@ -428,11 +450,33 @@ static void cl_ready(bt_classic_t *c)
     cl_key_wipe(c);
 }
 
+// Write Link Policy Settings or Exit Sniff Mode is over: answered with
+// `st`, or (0xff) given up on, its reply malformed or missing. Recorded
+// and counted, its flag cleared, and nothing else: neither can end the
+// link, so neither reaches the failures below. The policy is confirmed
+// only by a good answer for the connection that is still up.
+static bool cl_sniff_op(uint16_t op) { return op==0x080d || op==0x0804; }
+static void cl_sniff_done(bt_classic_t *c, uint16_t op, uint8_t st)
+{
+    bool same=c->command_attempt==c->attempt && cl_link_up(c) && c->command_handle==c->handle;
+    if(op==0x0804) {
+        c->wake_status=st; c->wakes_failed+=st!=0; c->wake_out=false;
+        return;
+    }
+    c->policy_status=st; c->policy_failed+=st!=0;
+    if(c->policy_out && same && !st) c->sniff_confirmed=c->policy_out_value;
+    c->policy_out=false;
+    // A change asked while this write was out is still owed, unless the
+    // controller now holds it.
+    c->policy_owed=c->policy_owed && c->sniff_wanted!=c->sniff_confirmed;
+}
+
 // The command in flight has its reply and its USB transfer is done.
 static void cl_finish(bt_classic_t *c)
 {
     uint8_t st=c->status;
     uint16_t op=c->opcode;
+    if(cl_sniff_op(op)) { cl_sniff_done(c,op,st); return; }
     if(op==0x0c1a) {
         if(!st) c->scan_enable_set=c->command_value;
         c->scan_enable_status=st;
@@ -472,6 +516,7 @@ static void cl_finish(bt_classic_t *c)
 static void cl_timeout(bt_classic_t *c)
 {
     uint16_t op=c->opcode;
+    if(cl_sniff_op(op)) { cl_sniff_done(c,op,0xff); return; }
     if(op==0x0c1a) { c->scan_enable_status=0xff; return; }
     if(!c->command_link || c->command_attempt!=c->attempt) return;
     if(op==0x0406 || op==0x0408) {
@@ -489,7 +534,7 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
     if(failed) {
         cl_error(c,"USB transport failed; reboot required",c->opcode,0,false);
         c->phase=BT_CLASSIC_FAILED; c->pending=false; c->next_op=0; c->waiting=false;
-        cl_answers_clear(c); c->refusal_count=0; cl_key_wipe(c);
+        cl_answers_clear(c); c->refusal_count=0; cl_key_wipe(c); cl_sniff_clear(c);
         return;
     }
     // A command given up on this tick still holds the controller's command
@@ -594,6 +639,14 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
             cl_put(p,c->handle); len=2;
             break;
         }
+    } else if(c->policy_owed && cl_link_up(c)) {
+        // Role switch always; sniff when wanted. No phase wait is armed:
+        // the command's own deadline is all, and its end is never the link's.
+        op=0x080d; cl_put(p,c->handle); cl_put(p+2,c->sniff_wanted ? 0x0005 : 0x0001); len=4;
+        c->policy_owed=false; c->policy_out=true; c->policy_out_value=c->sniff_wanted; c->policy_writes++;
+    } else if(c->wake_owed && cl_link_up(c)) {
+        op=0x0804; cl_put(p,c->handle); len=2;
+        c->wake_owed=false; c->wake_out=true; c->wakes++;
     } else if(cl_scan_owed(c)) {
         op=0x0c1a; p[0]=c->scan_enable_wanted; len=1; link=false;
         c->scan_enable_tried=p[0]; c->command_value=p[0];
@@ -604,6 +657,34 @@ void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
     cl_copy(c->command_address,p,6);
     send(context,op,p,len);
     cl_wipe(p,sizeof(p));
+}
+
+void bt_classic_policy(bt_classic_t *c, bool sniff)
+{
+    if(!cl_link_up(c) || sniff==c->sniff_wanted) return;
+    c->sniff_wanted=sniff;
+    // A write already out decides what the controller will hold next.
+    c->policy_owed=sniff!=(c->policy_out ? c->policy_out_value : c->sniff_confirmed);
+}
+
+void bt_classic_wake(bt_classic_t *c)
+{
+    if(cl_link_up(c) && !c->wake_out) c->wake_owed=true;
+}
+
+bool bt_classic_sniff_allowed(const bt_classic_t *c) { return c->sniff_confirmed; }
+bool bt_classic_policy_busy(const bt_classic_t *c) { return c->policy_owed || c->policy_out; }
+bool bt_classic_wake_busy(const bt_classic_t *c) { return c->wake_owed || c->wake_out; }
+
+bt_classic_mode_t bt_classic_mode(const bt_classic_t *c)
+{
+    if(!c->connected || !c->mode_known) return BT_CLASSIC_MODE_UNKNOWN;
+    switch(c->mode) {
+    case 0: return BT_CLASSIC_MODE_ACTIVE;
+    case 1: return BT_CLASSIC_MODE_HOLD;
+    case 2: return BT_CLASSIC_MODE_SNIFF;
+    default: return BT_CLASSIC_MODE_UNKNOWN;
+    }
 }
 
 bool bt_classic_urgent(const bt_classic_t *c)
@@ -659,7 +740,10 @@ size_t bt_classic_status(const bt_classic_t *c, char *out, size_t cap)
     for(unsigned i=0;i<BT_CLASSIC_ANSWERS;i++) waiting+=c->answer[i].set;
     int n=snprintf(out,cap,"state: %s\nsession: %s\npeer: %02x:%02x:%02x:%02x:%02x:%02x name %s\n"
         "connected: %s handle %04x encrypted: %s key size: %u\n"
-        "role: %s mode: %s\npeer pairing capabilities: %s simple pairing: %s\n"
+        "role: %s mode: %s\n"
+        "sniff: wanted %s confirmed %s%s; policy writes %u failed %u last status %02x; "
+        "exit sniff sent %u failed %u last status %02x%s; mode changes failed %u last status %02x\n"
+        "peer pairing capabilities: %s simple pairing: %s\n"
         "bond: %s (to save: %s)\npage scan: wanted %02x confirmed %02x last write status %02x\n"
         "answers waiting: %u refusals waiting: %u refusals dropped: %u\n"
         "error: %s (opcode %04x status %02x)%s\ndisconnect reason: %02x retryable: %s\n"
@@ -668,7 +752,14 @@ size_t bt_classic_status(const bt_classic_t *c, char *out, size_t cap)
         cl_phase_text(c->phase),sessions[c->session],
         c->peer[5],c->peer[4],c->peer[3],c->peer[2],c->peer[1],c->peer[0],c->peer_name[0] ? c->peer_name : "(none)",
         c->connected ? "yes" : "no",(unsigned)c->handle,c->encrypted ? "yes" : "no",(unsigned)c->key_size,
-        !c->role_known ? "unknown" : c->role ? "peripheral" : "central",role,io,c->ssp_done ? "complete" : "not done",
+        !c->role_known ? "unknown" : c->role ? "peripheral" : "central",role,
+        c->sniff_wanted ? "allowed" : "refused",c->sniff_confirmed ? "allowed" : "refused",
+        c->policy_out ? " (write out)" : c->policy_owed ? " (write owed)" : "",
+        (unsigned)c->policy_writes,(unsigned)c->policy_failed,c->policy_status,
+        (unsigned)c->wakes,(unsigned)c->wakes_failed,c->wake_status,
+        c->wake_out ? " (out)" : c->wake_owed ? " (owed)" : "",
+        (unsigned)c->mode_failed,c->mode_fail_status,
+        io,c->ssp_done ? "complete" : "not done",
         bond,c->bond_dirty ? "yes" : "no",c->scan_enable_wanted,c->scan_enable_set,c->scan_enable_status,
         waiting,c->refusal_count,(unsigned)c->refusals_dropped,
         c->error ? c->error : "none",c->error_opcode,c->error_status,timeout,

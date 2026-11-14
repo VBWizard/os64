@@ -146,6 +146,33 @@ typedef struct bt_classic {
     bool role_known, mode_known, peer_io_known, ssp_done;
     uint8_t role, mode, key_size, refresh_status, peer_io[3];
     uint16_t mode_interval;
+    // Sniff, managed by the owner (docs/design/pending/AUDIO_REMOTE.md
+    // § Part Z): Write Link Policy Settings (0x080d) and Exit Sniff Mode
+    // (0x0804), each OWED by a flag of its own (not `next_op`, which
+    // closing overwrites) and sent at the link's turn after `next_op` and
+    // before page scan, only while READY and connected. Neither can end
+    // the link: a refusal, a malformed reply or no reply is recorded and
+    // counted, and the flag is cleared. That is the LINK's answer. A
+    // command the controller never answers at all still holds its command
+    // credit, and the host fails the controller three seconds past the
+    // deadline (bt_host.c BT_HOST_CLASSIC_REPLY_GRACE_MS), as an
+    // unanswered command of any link's does; a READY link sending these
+    // makes that reachable more often than its setup alone did.
+    // `sniff_wanted` is what the owner last asked (bt_classic_policy),
+    // `sniff_confirmed` what the controller confirmed for this connection;
+    // a new connection starts at "refused, confirmed", which is the
+    // start-up round's default policy. `policy_out`, with the value it
+    // carries, while a write is in flight; `wake_out` while Exit Sniff
+    // Mode is. These go with the connection: every way out of READY
+    // clears them.
+    bool sniff_wanted, sniff_confirmed, policy_owed, policy_out, policy_out_value;
+    bool wake_owed, wake_out;
+    // The last reply's status of each (0xff: malformed or unanswered) and
+    // of a Mode Change that carried an error, with counts. Kept from
+    // start-up, like `malformed`. A failed Exit Sniff Mode is most often
+    // 0x0c, command disallowed: the link left sniff a moment before.
+    uint8_t policy_status, wake_status, mode_fail_status;
+    uint32_t policy_writes, policy_failed, wakes, wakes_failed, mode_failed;
     // The first error, as bt_scan.c records it; `timed_out` and its two
     // halves say what a command timeout was missing.
     const char *error;
@@ -187,9 +214,36 @@ bool bt_classic_event(bt_classic_t *c, const uint8_t *event, size_t bytes);
 // `failed`: the transport is gone; FAILED, and nothing is sent again.
 void bt_classic_tick(bt_classic_t *c, uint64_t now, bool control, bool failed,
                      bt_scan_send_t send, void *context);
-// An answer is latched that the controller is waiting for.
+// Sniff (AUDIO_REMOTE.md § Part Z). Both are ignored unless the link is
+// READY and connected.
+// `sniff_allowed`: the policy this connection should have. A write is owed
+// when it differs from what the controller confirmed and from a write
+// already out; a write refused or unanswered is not asked again until the
+// value asked for next changes.
+void bt_classic_policy(bt_classic_t *c, bool sniff_allowed);
+// Exit Sniff Mode, owed unless one is already out. The owner asks while
+// the mode reads sniff; the Mode Change that follows is what says it took.
+void bt_classic_wake(bt_classic_t *c);
+// What the controller confirmed for this connection: sniff allowed.
+bool bt_classic_sniff_allowed(const bt_classic_t *c);
+// A policy write, or an Exit Sniff Mode, owed or in flight.
+bool bt_classic_policy_busy(const bt_classic_t *c);
+bool bt_classic_wake_busy(const bt_classic_t *c);
+// The connected link's mode as the last good Mode Change said; UNKNOWN
+// when no Mode Change has come on this connection (a link begins active)
+// or there is no connection.
+typedef enum {
+    BT_CLASSIC_MODE_UNKNOWN, BT_CLASSIC_MODE_ACTIVE, BT_CLASSIC_MODE_HOLD, BT_CLASSIC_MODE_SNIFF
+} bt_classic_mode_t;
+bt_classic_mode_t bt_classic_mode(const bt_classic_t *c);
+// An answer is latched that the controller is waiting for. The sniff
+// commands are not answers and never make a link urgent.
 bool bt_classic_urgent(const bt_classic_t *c);
-// IDLE or STOPPED, nothing in flight, latched or left to send.
+// IDLE or STOPPED, nothing in flight, latched or left to send. A sniff
+// command OWED never stands between a link and quiescence: it is owed only
+// while READY and every way out of READY clears it. One in FLIGHT when the
+// link drops does, like any command in flight, until it is answered or
+// times out (the reconnection ladder and the Classic scan ask this).
 bool bt_classic_quiescent(const bt_classic_t *c);
 size_t bt_classic_status(const bt_classic_t *c, char *out, size_t capacity);
 #endif
