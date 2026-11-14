@@ -340,6 +340,8 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
         m->duration = NAN;
     }
     m->played_end = 0;              /* played is the resource's, and this is another */
+    d_free(dom, m->current_src);    /* none is selected until the selection says (currentSrc "") */
+    m->current_src = NULL;
     m->loadeddata = false;
     m->ended = false;
     m->error_seen = false;

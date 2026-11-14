@@ -365,6 +365,9 @@ static void dom_media_document_cases(void)
     check(media_opened == 4 && strcmp(media_sessions[3].url, "https://example.test/dir/w.mp3") == 0,
           "media: the source whose type plays");
     media_script(&f, "assert(d.currentSrc==='https://example.test/dir/w.mp3');", "media: currentSrc is the source's");
+    media_script(&f, "const z=document.createElement('audio');z.src='z2.mp3';z.removeAttribute('src');z.load();"
+                     "assert(z.currentSrc===''&&z.networkState===3,'no resource selected: '+z.currentSrc);",
+                 "media: load() with no source clears currentSrc");
 
     /* Two playable candidates that both fail while loading: each failure
      * moves on, and after the last the element has no source. */
