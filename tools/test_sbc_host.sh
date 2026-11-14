@@ -5,9 +5,9 @@
 # decoded by FFmpeg and held against FFmpeg's own encoder at the same
 # settings. tools/test_sbc_host.c says what each step asserts.
 #
-# This suite FAILS when ffmpeg is missing; it does not skip. It is the only
+# The full run FAILS when ffmpeg is missing; it does not skip. It is the only
 # proof the first third-party code in ring 0 has, so it may not pass by not
-# running.
+# running. --selftest (below) needs no ffmpeg.
 #
 # Its builds and files go in kernel/obj/host-sbc/, overwritten each run and
 # removed by `make -C kernel clean`.
@@ -24,12 +24,16 @@ fail() { echo "FAIL test_sbc_host: $*" >&2; exit 1; }
 mode=${1:-}
 case $mode in "" | --selftest) ;; *) fail "unknown argument $mode" ;; esac
 
-command -v ffmpeg >/dev/null 2>&1 ||
-	fail "ffmpeg is not installed. This suite is the SBC encoder's proof and does not skip: install ffmpeg (6.1, with the sbc encoder, the sbc decoder and the raw sbc format) and run it again."
-ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' sbc ' || fail "this ffmpeg has no sbc encoder"
-ffmpeg -hide_banner -decoders 2>/dev/null | grep -q ' sbc ' || fail "this ffmpeg has no sbc decoder"
-ffmpeg -hide_banner -formats 2>/dev/null | grep -q ' DE sbc ' || fail "this ffmpeg cannot read and write raw sbc"
-echo "     $(ffmpeg -hide_banner -version | head -n 1)"
+# The full run needs FFmpeg and says so before building anything; --selftest
+# does not touch it.
+if [ "$mode" != --selftest ]; then
+	command -v ffmpeg >/dev/null 2>&1 ||
+		fail "ffmpeg is not installed. This suite is the SBC encoder's proof and does not skip: install ffmpeg (6.1, with the sbc encoder, the sbc decoder and the raw sbc format) and run it again."
+	ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' sbc ' || fail "this ffmpeg has no sbc encoder"
+	ffmpeg -hide_banner -decoders 2>/dev/null | grep -q ' sbc ' || fail "this ffmpeg has no sbc decoder"
+	ffmpeg -hide_banner -formats 2>/dev/null | grep -q ' DE sbc ' || fail "this ffmpeg cannot read and write raw sbc"
+	echo "     $(ffmpeg -hide_banner -version | head -n 1)"
+fi
 
 out=kernel/obj/host-sbc
 mkdir -p "$out"

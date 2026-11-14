@@ -73,6 +73,13 @@ mutants = [
     # sbc_port.c: begin.
     ('begin-keeps-the-old-encoder', PORT, '\ts_ready = false;\n\tif (!sbc_settings_valid(settings))',
      '\tif (!sbc_settings_valid(settings))'),
+    # Caught by test_sbc_host.c's restart() alone: no other test begins the
+    # same settings again and compares what the encoder then makes.
+    ('begin-keeps-the-same-settings-history', PORT, '\t\treturn false;\n\n\tuint8_t *raw',
+     '\t\treturn false;\n'
+     '\tif (s_frame_bytes == sbc_frame_bytes(settings) && s_params.s16BitPool == settings->bitpool &&\n'
+     '\t    s_params.s16AllocationMethod == (settings->snr ? SBC_SNR : SBC_LOUDNESS))\n'
+     '\t{\n\t\ts_ready = true;\n\t\treturn true;\n\t}\n\n\tuint8_t *raw'),
     ('begin-skips-validation', PORT, '\tif (!sbc_settings_valid(settings))\n\t\treturn false;\n\n\tuint8_t', '\n\tuint8_t'),
     ('rates-swapped', PORT, 'settings->rate == 48000 ? SBC_sf48000 : SBC_sf44100',
      'settings->rate == 48000 ? SBC_sf44100 : SBC_sf48000'),
@@ -98,6 +105,21 @@ mutants = [
     ('copy-short', PORT, '\tfor (uint32_t i = 0; i < length; i++)\n\t\tout[i]', '\tfor (uint32_t i = 1; i < length; i++)\n\t\tout[i]'),
     ('copy-last-byte-lost', PORT, '\tfor (uint32_t i = 0; i < length; i++)\n\t\tout[i]', '\tfor (uint32_t i = 0; i + 1 < length; i++)\n\t\tout[i]'),
 ]
+
+# The suite must pass on the tree as it is before any mutant means anything:
+# a red tree (a test that fails, a speed bound missed, a build that breaks)
+# would otherwise read as every mutant caught. tools/mutants_parallel.py runs
+# its own baseline per worker as well; this one is for a run by hand, and
+# costs one --selftest (a few seconds) per call.
+with (args.logs / 'baseline.log').open('w') as out:
+    try:
+        baseline = subprocess.run(['bash', '-c', CASES], cwd=root, stdout=out, stderr=out, timeout=300).returncode
+    except subprocess.TimeoutExpired:
+        baseline = 'timeout'
+if baseline != 0:
+    print(f'sbc mutants: the suite FAILS on the unmutated tree ({baseline}); no mutant was run. '
+          f'See {args.logs / "baseline.log"}', file=sys.stderr)
+    sys.exit(2)
 
 caught, missed, unbuilt = [], [], []
 for name, target, old, new in mutants:

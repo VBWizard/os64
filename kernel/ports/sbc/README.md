@@ -10,8 +10,13 @@ it. This file is the record of what was taken, what was read in it, and
 what the proof found. AUDIO_A2DP.md § Part E is the design; its "E, as
 built" says where this differs from it.
 
-The kernel may call two functions, `sbc_port.h`'s. Nothing else in the
-kernel names the encoder; `tools/test_sbc_audit.py` fails if anything does.
+The kernel may call two functions, `sbc_port.h`'s, and only from an object
+named in `tools/test_sbc_audit.py`'s `BOUNDARY_CALLERS` (empty today; the
+A2DP pump is added there by name in the commit that adds its call). The
+audit reads every kernel object's symbols and fails if one outside
+`ports/sbc` reaches any symbol the upstream objects define, calls the
+boundary without being named, or a kernel source includes an upstream
+header.
 
 ## What was taken
 
@@ -62,7 +67,7 @@ the generic rule.
 
 | Flags, for `upstream/` | Why |
 |---|---|
-| the kernel's code generation, taken from `CFLAGS` with the optimisation, warnings, include paths and dependency flags filtered out: `-mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mcmodel=kernel -march=x86-64 -m64 -ffreestanding -fno-stack-protector -fno-stack-check -fno-PIC -fno-lto -ffunction-sections -fdata-sections -masm=intel -std=gnu11 -g -pipe` | it is kernel code: no SIMD, no red zone, the kernel's memory model. Filtering rather than restating means a flag the kernel adds reaches this code too |
+| the kernel's code generation, taken from `CFLAGS` with the optimisation, warnings (but not `-Wa,`, `-Wl,`, `-Wp,`, which pass options on), include paths and dependency flags filtered out: `-mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mcmodel=kernel -march=x86-64 -m64 -ffreestanding -fno-stack-protector -fno-stack-check -fno-PIC -fno-lto -ffunction-sections -fdata-sections -masm=intel -std=gnu11 -g -pipe` | it is kernel code: no SIMD, no red zone, the kernel's memory model. Filtering rather than restating means a flag the kernel adds reaches this code too |
 | `-O2` | the kernel is `-O0`; upstream at `-O0` costs about three times as much a frame (8.7 µs against 3 on the build machine, measured once) |
 | `-fno-strict-aliasing` | `sbc_analysis.c` keeps its history in `int32_t s32X[]` and reads and writes it through `int16_t *s16X` |
 | `-Wall -Wextra`, no `-Werror` | upstream's warnings are shown; they are upstream's to fix. **There are none**: GCC 14.2 (the kernel's) and GCC 13.3 (the host's) are both silent |
@@ -76,31 +81,36 @@ the generic rule.
 
 Every switch `sbc_encoder.h` defaults is set there, to upstream's own
 default, and used by every build (the kernel's, `sbc_port.c`'s, the host
-proof's). The audit fails if upstream's headers default a switch that file
-does not set.
+proof's). The audit fails if any upstream file tests a name in a
+preprocessor condition (`#if`, `#elif`, `#ifdef`, `#ifndef`) that this file
+does not set, unless it is an include guard or `__cplusplus`.
 
 | Switch | Value | What it chooses |
 |---|---|---|
 | `SBC_ARM_ASM_OPT` | FALSE | ARM inline assembly for the multiplies |
 | `SBC_DSP_OPT` | FALSE | an external 32x16 multiply function |
-| `SBC_IPAQ_OPT` | TRUE | multiplies done in `int64_t`, which x86-64 has natively |
+| `SBC_IPAQ_OPT` | TRUE | the window as unrolled macros with its coefficients as constants (so `sbc_enc_coeffs.c`'s tables are not compiled), accumulated in `int32_t` because `SBC_IS_64_MULT_IN_WINDOW_ACCU` is FALSE; and the DCT's 32x16 multiply as one `int64_t` product shifted down, which x86-64 does natively. It does not make every multiply 64-bit |
 | `SBC_GHS_COMPILER` | FALSE | Green Hills assembly syntax (read only with ARM assembly) |
 | `SBC_ARM_COMPILER` | TRUE | ARM compiler assembly syntax (read only with ARM assembly) |
 | `SBC_USE_ARM_PRAGMA` | FALSE | `#pragma arm section` around the filter history |
-| `SBC_IS_64_MULT_IN_WINDOW_ACCU` | FALSE | 32-bit window coefficients; FALSE uses the 16-bit table |
+| `SBC_IS_64_MULT_IN_WINDOW_ACCU` | FALSE | TRUE would take 32-bit window coefficients and accumulate in 64 bits; FALSE takes 16-bit coefficients and accumulates in `int32_t` |
 | `SBC_IS_64_MULT_IN_IDCT` | FALSE | 64-bit multiplies in the DCT |
 | `SBC_IS_64_MULT_IN_QUANTIZER` | TRUE | a 64-bit product in the quantiser (FALSE whistles at 5.5 and 11 kHz, upstream says) |
-| `SBC_FAST_DCT` | TRUE | the fast DCT; FALSE uses the table and matrix |
+| `SBC_FAST_DCT` | TRUE | the fast DCT; FALSE uses the matrix and `sbc_dct_coeffs.c`'s tables |
 | `SBC_JOINT_STE_INCLUDED` | TRUE | joint stereo (also changes `SBC_ENC_PARAMS`' layout) |
 | `SBC_MAX_NUM_FRAME` | 1 | frames per call |
 | `ENC_VX_BUFFER_SIZE` | `MINIMUM_ENC_VX_BUFFER_SIZE + 64` | the analysis history, 224 samples |
 | `TRUE`, `FALSE` | `(!FALSE)`, `0` | as `sbc_encoder.h` spells them |
 
-There is no floating point in the code at any setting of these, not even a
-literal in a table compiled out: the DCT's cosines appear as decimals only
-in comments, beside the hex fixed-point values the code uses. The audit
-reads the objects all the same: the kernel is `-mno-sse` but the x87 is not disabled, so a `double`
-would compile.
+No floating-point arithmetic is compiled at these settings. One file holds
+floating-point LITERALS: `srce/sbc_dct_coeffs.c`'s matrix DCT tables,
+written `(int16_t)(0.7071 * 32768)`, which `SBC_FAST_DCT` TRUE compiles out.
+Compiled in, they would still be constant initialisers the compiler folds,
+and no floating-point instruction would result. Elsewhere the cosines
+appear as decimals only in comments (`sbc_dct.c`), beside the hex
+fixed-point values the code uses. The audit reads the objects either way:
+the kernel is `-mno-sse` but the x87 is not disabled, so a `double` would
+compile.
 
 ## What was read upstream, and the answers
 
@@ -195,6 +205,9 @@ quantiser, not in packing.
    SNR) and beat it by up to 7 dB.
 3. **Side information** for identical, opposite and one-silent channels.
 4. **Random**: 4,800 frames at 400 random settings, under ASan and UBSan.
+   **Restarts**: the same PCM after a begin gives the same bytes whether
+   the encoder last ran other settings or these very ones (both rates,
+   joint and plain stereo).
 5. **Speed**: about 3 µs a frame (48 kHz joint stereo, bitpool 51, the
    port's flags, no sanitizers), 0.11% of a core in real time on the
    build machine. Bound: 200 µs.
@@ -208,12 +221,23 @@ and without it a bad frame is dropped in silence. So the suite checks the
 decode's frame count and FFmpeg's error output, and proves that check can
 fail: one flipped scale-factor bit in a good stream must be caught.
 
-`tools/test_sbc_audit.py`: the import is the pinned commit; every object
-is integer-only (and the scan is shown to see x87 and SSE code in a probe);
-`memset` is the only name left undefined; the boundary's object exports
-the two functions and nothing else; the licence carries the NOTICE and
+The host proof exercises the HOST compiler's build of the same sources
+with the same switches. The kernel's objects are audited, not executed,
+until part P runs them.
+
+`tools/test_sbc_audit.py` builds the kernel and reads it: the import is the
+pinned commit; every name upstream tests in a preprocessor condition is
+set; the upstream objects record, in their DWARF producer string, the flags
+that make them kernel code (`-mno-red-zone -mcmodel=kernel -mno-sse
+-mno-sse2 -mno-mmx -ffreestanding -O2 -fno-strict-aliasing`); every port
+object is integer-only (and the scan is shown to see x87 and SSE code in a
+probe); `memset` is the only name the port leaves undefined; the
+boundary's object exports the two functions and nothing else; no other
+kernel object reaches past it, or calls it unless named (above); and
+the licence carries the NOTICE and
 every file's notice. `tools/test_sbc_frame_mutants.py` breaks our two files
-one rule at a time (`mutants_parallel.py ... --with kernel`).
+one rule at a time (`mutants_parallel.py ... --with kernel`), after checking
+the suite passes on the tree as it is.
 
 ## Upstream, and the monthly scan
 

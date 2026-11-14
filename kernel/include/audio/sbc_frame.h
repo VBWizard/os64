@@ -6,7 +6,8 @@
 // written for AVDTP and the A2DP pump as well, which need to know what may
 // be configured and how long a frame is without knowing the encoder.
 // tools/test_sbc_host.sh proves them; tools/test_sbc_frame_mutants.py
-// breaks each rule.
+// breaks them one rule at a time, and its docstring names the rules it
+// leaves alone because no accepted setting can tell them broken.
 
 #ifndef SBC_FRAME_H
 #define SBC_FRAME_H

@@ -74,9 +74,11 @@ Bluetooth module; Copyright 1999-2012 Broadcom Corporation; Apache License
 
 - **C, eight source files and four headers**, about 3,000 lines, the
   largest being the analysis filter's macros.
-- **Integer-only.** No `float`, `double` or `<math.h>` in code, and no
-  floating-point literal either: `sbc_dct.c`'s cosines appear as decimals
-  only in comments, beside the fixed-point values the code uses. The
+- **Integer-only in its default configuration.** No `float`, `double` or
+  `<math.h>` in code. One file, `sbc_dct_coeffs.c`, holds floating-point
+  LITERALS (`(int16_t)(0.7071 * 32768)`) in tables the default switch
+  compiles out (`SBC_FAST_DCT` true); compiled in, they would be constant
+  initialisers the compiler folds, with no floating-point instruction. The
   kernel is built `-mno-sse` but not without the x87, so floating point
   added by mistake would compile; the audit reads the objects for
   floating-point instructions so that it cannot pass.
@@ -91,7 +93,7 @@ Its rough edges, and what the port does about each:
 | Edge | Handling |
 |---|---|
 | State in file-scope statics and three globals: one encoder in the machine | There is one stream in the machine (AUDIO_SEAM.md). The boundary says so: a second `begin` restarts the one encoder with its settings |
-| `SBC_Encode(params, pcm, out)` takes no output capacity | The boundary encodes into its own buffer, sized for the longest frame ANY setting gives, with guard bytes after it. A length that is not the one the settings give, or a disturbed guard, fails the sink |
+| `SBC_Encode(params, pcm, out)` takes no output capacity | The boundary encodes into its own buffer, sized for the longest frame any setting it ACCEPTS gives (513 bytes, at bitpool 250; the bitpools upstream allows above that are refused, not fitted), with guard bytes after it. A length that is not the one the settings give, or a disturbed guard, fails the sink |
 | **Its knob is a bit rate, not a bitpool.** `SBC_Encoder_Init` computes the bitpool from `u16BitRate`, corrects it once, clamps it, and writes it over whatever the caller put there | AVDTP agrees a BITPOOL with the headphones. The boundary takes the bitpool, gives the encoder the bit rate that upstream's own formula turns into it, and refuses to begin unless the bitpool the encoder then holds is exactly the one asked. Whether writing the field after Init is also sound is settled by reading Init when the port is built, and recorded in the README; the check stands either way |
 | It reads one buffer through two pointer types (a 16-bit view of 32-bit storage) | Built `-fno-strict-aliasing` |
 | An unrecognised sampling-frequency value silently means 48 kHz | The boundary validates every setting before the encoder sees it (`sbc_frame.c`) |
@@ -231,8 +233,9 @@ above, and why:
   derives nothing else from the bit rate.
 - **The PCM is cast, not copied**: upstream only reads it.
 - **The switches are written out** in `port/sbc_switches.h`, force-included
-  by every build, each at upstream's default; the audit fails if upstream
-  grows one the file does not set.
+  by every build, each at upstream's default; the audit fails if any
+  upstream file tests a name in a preprocessor condition that the file does
+  not set (include guards and `__cplusplus` aside).
 - **Upstream compiles without a warning** under `-Wall -Wextra`, so "shown,
   not fatal" has nothing to show today.
 - **UBSan found one idiom**, a left shift of a negative value at five lines
@@ -254,8 +257,17 @@ above, and why:
 - **The kernel links the objects and calls nothing yet**, so the binary
   carries none of the encoder until P; the licence goes on the images then
   (DEBTS).
-- **The audit builds the objects it reads**, and proves its instruction
-  scan sees x87 and SSE code in a probe built the same way.
+- **The audit builds the kernel and reads it**: it proves its instruction
+  scan sees x87 and SSE code in a probe built the same way; checks the
+  upstream objects' recorded compiler flags (DWARF producer) for the
+  kernel's; and enforces "nothing above `bt_a2dp.c` knows an encoder
+  exists" from the symbols: no object outside `ports/sbc` may reach a
+  symbol upstream defines, and only objects named in its
+  `BOUNDARY_CALLERS` may call the boundary (empty until P adds the pump).
+- **A second `begin` is proven to restart**: the same PCM after a begin
+  gives the same bytes whether other settings or the same ones ran before.
+- **The host proof runs the host compiler's build** of the same sources;
+  the kernel's objects are audited, not executed, until P runs them.
 
 ## Part V: AVDTP (`bt_avdtp.c`)
 

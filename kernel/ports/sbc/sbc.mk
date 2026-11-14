@@ -8,7 +8,8 @@
 #   - the kernel's code-generation flags, taken from CFLAGS itself so that a
 #     flag the kernel adds (an -mno-* above all) reaches this code too: what
 #     is filtered out is the optimisation level, the warnings and their
-#     -Werror, the include paths and the dependency flags;
+#     -Werror (but not -Wa, -Wl, -Wp), the include paths and the dependency
+#     flags; tools/test_sbc_audit.py reads the flags back from the objects;
 #   - -O2, because upstream at -O0 costs about three times as much a frame;
 #   - -fno-strict-aliasing, because upstream reads its filter history as
 #     int16_t through an int32_t array (sbc_analysis.c's s16X over s32X);
@@ -23,9 +24,14 @@ SBC_UPSTREAM_OBJ := $(patsubst %.c,obj/%.c.o,$(SBC_UPSTREAM_SRCS))
 SBC_PORT_OBJ := $(patsubst %.c,obj/%.c.o,$(SBC_PORT_SRCS))
 SBC_OBJ := $(SBC_UPSTREAM_OBJ) $(SBC_PORT_OBJ)
 
-# CFLAGS spells the kernel's own include directory as two words ("-I
-# include"), hence the bare `include` in the filter.
-SBC_UPSTREAM_CFLAGS = $(filter-out -O% -W% -I% include -MMD -MP,$(CFLAGS)) \
+# The kernel's warning flags: every -W... except -Wa, -Wl, and -Wp, which
+# pass options to the assembler, linker and preprocessor and are code
+# generation's business, not warnings. CFLAGS spells the kernel's own
+# include directory as two words ("-I include"), hence the bare `include`
+# in the filter.
+sbc_comma := ,
+SBC_KERNEL_WARNINGS = $(filter-out -Wa$(sbc_comma)% -Wl$(sbc_comma)% -Wp$(sbc_comma)%,$(filter -W%,$(CFLAGS)))
+SBC_UPSTREAM_CFLAGS = $(filter-out -O% $(SBC_KERNEL_WARNINGS) -I% include -MMD -MP,$(CFLAGS)) \
     -O2 -fno-strict-aliasing -Wall -Wextra \
     -include ports/sbc/port/sbc_switches.h \
     -Iports/sbc/port/compat -Iports/sbc/upstream/include -MMD -MP

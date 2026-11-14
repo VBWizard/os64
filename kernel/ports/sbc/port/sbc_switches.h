@@ -18,8 +18,10 @@
 #define TRUE (!FALSE)
 
 // The integer paths. SBC_ARM_ASM_OPT and SBC_DSP_OPT would substitute ARM
-// assembly and an external multiply; SBC_IPAQ_OPT does its multiplies in
-// int64_t, which x86-64 does natively.
+// assembly and an external multiply. SBC_IPAQ_OPT unrolls the window with
+// constant coefficients (accumulated in int32_t, since
+// SBC_IS_64_MULT_IN_WINDOW_ACCU is FALSE) and does the DCT's 32x16 multiply
+// as one int64_t product, which x86-64 does natively.
 #define SBC_ARM_ASM_OPT FALSE
 #define SBC_DSP_OPT FALSE
 #define SBC_IPAQ_OPT TRUE

@@ -9,7 +9,8 @@
 // factors, the CRC), which shares nothing with either encoder.
 //
 //   test_sbc selftest                 settings, side information, random
-//                                     frames, the wrong-length tripwire
+//                                     frames, restarts, the wrong-length
+//                                     tripwire
 //   test_sbc guard                    (the build whose frame room is too
 //                                     small) the guard must fail the encode
 //   test_sbc ceiling                  (the build whose bit-rate search is
@@ -495,6 +496,59 @@ static void random_frames(void)
 	printf("PASS random: %u frames over 400 random settings\n", frames);
 }
 
+// ── A second begin restarts the encoder ─────────────────────────────────────
+//
+// Upstream's filter history is static, so what a begin promises is that the
+// frames after it depend on nothing encoded before it. The same PCM after a
+// begin must give the same bytes whether the encoder last ran other
+// settings or these very settings.
+
+#define RESTART_FRAMES 24
+
+static void encode_run(const sbc_settings_t *s, const int16_t *pcm, uint32_t frames, uint8_t *out)
+{
+	uint32_t bytes = sbc_frame_bytes(s);
+	CHECK(sbc_port_begin(s), "begin");
+	for (uint32_t f = 0; f < frames; f++)
+		CHECK(sbc_port_encode(pcm + (size_t)f * 256, out + (size_t)f * bytes, bytes), "frame %u", f);
+}
+
+static void restart(void)
+{
+	static const uint32_t rates[] = { 44100, 48000 };
+	uint32_t n;
+	int16_t *music = make_signal("music", 48000, &n);
+	int16_t junk[RESTART_FRAMES * 256];
+	for (size_t i = 0; i < sizeof(junk) / sizeof(junk[0]); i++)
+		junk[i] = (int16_t)rnd();
+	static uint8_t first[RESTART_FRAMES * SBC_FRAME_BYTES_MAX], again[RESTART_FRAMES * SBC_FRAME_BYTES_MAX];
+	static uint8_t scratch[RESTART_FRAMES * SBC_FRAME_BYTES_MAX];
+	for (int r = 0; r < 2; r++)
+		for (int joint = 0; joint < 2; joint++)
+		{
+			sbc_settings_t b = { rates[r], 2, joint, 16, 8, false, 51 };
+			sbc_settings_t other = { rates[1 - r], 2, !joint, 16, 8, true, 33 };
+			size_t len = (size_t)RESTART_FRAMES * sbc_frame_bytes(&b);
+			// From the middle of the music, so that whatever history a
+			// begin failed to clear would differ from what it should be.
+			const int16_t *x = music + (size_t)50 * 256;
+
+			encode_run(&b, x, RESTART_FRAMES, first);
+			encode_run(&other, junk, RESTART_FRAMES, scratch);
+			encode_run(&b, x, RESTART_FRAMES, again);
+			CHECK(memcmp(first, again, len) == 0, "%u Hz %s: a begin after other settings remembered them",
+			      b.rate, joint ? "joint" : "stereo");
+
+			encode_run(&b, junk, RESTART_FRAMES, scratch);
+			encode_run(&b, x, RESTART_FRAMES, again);
+			CHECK(memcmp(first, again, len) == 0, "%u Hz %s: a begin with the same settings kept the history",
+			      b.rate, joint ? "joint" : "stereo");
+		}
+	free(music);
+	printf("PASS restart: after a begin, the same PCM gives the same bytes, whatever ran before "
+	       "(other settings or the same; both rates, joint and plain stereo)\n");
+}
+
 // ── 6. The tripwires ─────────────────────────────────────────────────────────
 
 static void wrong_length(void)
@@ -752,6 +806,7 @@ int main(int argc, char **argv)
 		every_setting();
 		side_information();
 		random_frames();
+		restart();
 		wrong_length();
 		return 0;
 	}

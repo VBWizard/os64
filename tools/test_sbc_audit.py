@@ -5,8 +5,8 @@ the objects the kernel links meet the rule for code in ring 0.
 The rule (BLUETOOTH_AUDIO.md § Where the encoder lives, ruled 2026-11-12):
 integer-only, allocates nothing, and host-tested before the kernel links it.
 tools/test_sbc_host.sh is the testing; this reads what was built. It builds
-the port's objects itself (make -C kernel, those targets only), so what it
-judges is what the sources in the tree build to, not an object left over.
+the kernel itself (make -C kernel) before reading, so what it judges is what
+the sources in the tree build to, not an object left over.
 
 Each check names the property it protects, so a failure says what was lost.
 """
@@ -69,24 +69,47 @@ built = set(re.findall(r'ports/sbc/upstream/(\S+\.c)', sources))
 vendored = {f for f in manifest['files'] if f.endswith('.c')}
 check(built == vendored, f'sources.mk and the vendored sources disagree: {sorted(built ^ vendored)}')
 
-# The configuration is a decision on this side: every switch upstream's
-# headers default (`#ifndef NAME` that is not an include guard) is set in
-# sbc_switches.h, so a newer header cannot change the build by defaulting a
-# new one.
-defaulted = set()
+# The configuration is a decision on this side: every name any upstream file
+# tests in a preprocessor condition (#if, #elif, #ifdef, #ifndef) is set in
+# sbc_switches.h, is an include guard (an #ifndef followed at once by the
+# #define of the same name), or is a macro the language or compiler defines,
+# listed here by name. So a newer upstream cannot change the build by testing
+# a name nobody set, whether in a header's default or in a .c file's #if.
+COMPILER_MACROS = {'__cplusplus'}
+CONDITION = re.compile(r'^[ \t]*#[ \t]*(if|elif|ifdef|ifndef)\b(.*)$', re.M)
+tested, guards = set(), set()
 for name in manifest['files']:
-    if name.endswith('.h'):
-        defaulted |= {m for m in re.findall(r'^#ifndef\s+(\w+)', (UPSTREAM / name).read_text(), re.M)
-                      if not m.endswith('_H')}
+    text = (UPSTREAM / name).read_text()
+    guards |= set(re.findall(r'^#ifndef\s+(\w+)\s*\n#define\s+\1\s*$', text, re.M))
+    for _, expr in CONDITION.findall(text):
+        expr = re.sub(r'/\*.*?(\*/|$)|//.*$', '', expr)
+        tested |= {w for w in re.findall(r'\b[A-Za-z_]\w*\b', expr) if w != 'defined'}
 switches = {m for m in re.findall(r'^#define\s+(\w+)', (PORT / 'port/sbc_switches.h').read_text(), re.M)
             if m != 'SBC_SWITCHES_H'}
-check(defaulted <= switches, f'sbc_switches.h does not set {sorted(defaulted - switches)}')
-check(switches <= defaulted, f'sbc_switches.h sets {sorted(switches - defaulted)}, which upstream does not read')
+unset = tested - switches - guards - COMPILER_MACROS
+check(not unset, f'upstream tests {sorted(unset)} in a preprocessor condition, and sbc_switches.h does not set it')
+check(switches <= tested, f'sbc_switches.h sets {sorted(switches - tested)}, which upstream does not test')
 
 # ── The objects ───────────────────────────────────────────────────────────
+# The whole kernel is built, not only the port: who may reach the encoder is
+# a question about every other object the kernel links.
 objects = [f'obj/{s[:-2]}.c.o' for s in re.findall(r'ports/sbc/\S+\.c', sources)] + ['obj/audio/sbc_frame.c.o']
-subprocess.run(['make', '-s', '-C', str(KERNEL), *objects], check=True, stdout=subprocess.DEVNULL)
+subprocess.run(['make', '-s', '-C', str(KERNEL)], check=True, stdout=subprocess.DEVNULL)
 paths = [KERNEL / o for o in objects]
+upstream_paths = [p for p in paths if '/ports/sbc/upstream/' in str(p)]
+
+# The flags the upstream objects were built with, as the compiler recorded
+# them (they carry -g, so DW_AT_producer names every code-generation switch):
+# kernel code, no SIMD, the optimisation sbc.mk promises.
+REQUIRED_FLAGS = ('-mno-red-zone', '-mcmodel=kernel', '-mno-sse', '-mno-sse2', '-mno-mmx',
+                  '-ffreestanding', '-O2', '-fno-strict-aliasing')
+for obj in upstream_paths:
+    producers = re.findall(r'DW_AT_producer\s*:.*?: (.*)$', run('x86_64-elf-readelf', '--debug-dump=info', obj), re.M)
+    check(producers, f'{obj.relative_to(ROOT)} records no compiler flags')
+    for producer in producers:
+        recorded = set(producer.split())
+        missing = [f for f in REQUIRED_FLAGS if f not in recorded]
+        check(not missing, f'{obj.relative_to(ROOT)} was built without {missing}')
 
 # Integer-only. The kernel is built -mno-sse, but nothing turns off the x87,
 # so a float or a double would compile, to x87 code. Read every instruction:
@@ -135,18 +158,52 @@ for obj in paths:
     undefined |= {l.split()[-1] for l in run('x86_64-elf-nm', '-u', obj).splitlines()}
 check(undefined - defined == {'memset'}, f'the port reaches outside itself for {sorted(undefined - defined)}')
 
-# The boundary is the kernel's only way in: its object exports the two
-# functions of sbc_port.h and nothing else (no test hook in the kernel's
-# build), and nothing in the kernel outside ports/sbc names upstream's
-# header or its functions.
+# The boundary is the kernel's only way in, read from the symbols:
+#   - its object exports the two functions of sbc_port.h and nothing else
+#     (no test hook in the kernel's build);
+#   - no kernel object outside ports/sbc leaves undefined any symbol an
+#     upstream object defines (a function or a global: it would be reaching
+#     past the boundary);
+#   - THE RULE FOR WHO MAY CALL THE BOUNDARY: an object outside ports/sbc
+#     may leave sbc_port_begin or sbc_port_encode undefined only if it is
+#     named in BOUNDARY_CALLERS below, by its object path under kernel/.
+#     The encoder keeps one state for the machine and the caller serializes
+#     every call (sbc_port.h), so a caller is a decision, made by adding its
+#     name here in the commit that adds the call: AUDIO_A2DP.md part P's
+#     pump (bt_a2dp.c) is the one the design plans.
+# Symbols cannot see a type, so a source that includes upstream's headers
+# (to use SBC_ENC_PARAMS, say) is also refused by name.
+BOUNDARY = {'sbc_port_begin', 'sbc_port_encode'}
+BOUNDARY_CALLERS = set()
 port_obj = KERNEL / 'obj/ports/sbc/port/sbc_port.c.o'
 exported = {l.split()[-1] for l in run('x86_64-elf-nm', '--defined-only', '-g', port_obj).splitlines()}
-check(exported == {'sbc_port_begin', 'sbc_port_encode'}, f'sbc_port.c.o exports {sorted(exported)}')
-reach = re.compile(r'sbc_encoder\.h|sbc_enc_func_declare\.h|\bSBC_Encode\b|\bSBC_Encoder_Init\b|SBC_ENC_PARAMS')
+check(exported == BOUNDARY, f'sbc_port.c.o exports {sorted(exported)}')
+upstream_defined = set()
+for obj in upstream_paths:
+    upstream_defined |= {l.split()[-1] for l in run('x86_64-elf-nm', '--defined-only', '-g', obj).splitlines()}
+check({'SBC_Encode', 'SBC_Encoder_Init', 'EncMaxShiftCounter'} <= upstream_defined,
+      f'the upstream objects do not define what they should: {sorted(upstream_defined)}')
+# obj/host-sbc/ is tools/test_sbc_host.sh's host build, not the kernel's.
+others = [p for p in sorted((KERNEL / 'obj').rglob('*.o'))
+          if not str(p.relative_to(KERNEL)).startswith(('obj/ports/sbc/', 'obj/host-sbc/'))]
+check(len(others) > 100, f'only {len(others)} kernel objects found outside the port')
+for obj in others:
+    name = str(obj.relative_to(KERNEL))
+    # An object with no symbols at all (an .S of pure code) makes nm say so
+    # on stderr; it leaves nothing undefined, which is the answer wanted.
+    listing = subprocess.run(['x86_64-elf-nm', '-u', str(obj)], text=True, check=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+    wanted = {l.split()[-1] for l in listing.splitlines()}
+    reached = wanted & upstream_defined
+    check(not reached, f'{name} reaches past the boundary for {sorted(reached)}')
+    calls = wanted & BOUNDARY
+    check(not calls or name in BOUNDARY_CALLERS,
+          f'{name} calls {sorted(calls)} and is not in BOUNDARY_CALLERS (tools/test_sbc_audit.py)')
+headers = re.compile(r'#\s*include\s*[<"](sbc_encoder|sbc_enc_func_declare|sbc_dct|sbc_if)\.h[>"]')
 for tree in ('src', 'include', 'test'):
     for p in (KERNEL / tree).rglob('*'):
         if p.suffix in ('.c', '.h', '.S') and p.is_file():
-            check(not reach.search(p.read_text(errors='replace')), f'{p.relative_to(ROOT)} reaches past the boundary')
+            check(not headers.search(p.read_text(errors='replace')), f'{p.relative_to(ROOT)} includes an upstream header')
 
 # ── The notice ────────────────────────────────────────────────────────────
 # Apache 2.0 asks that a redistribution carry the licence and the NOTICE, and
