@@ -436,6 +436,10 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_listener_settings(os64_js_runti
  * queueMicrotask. Promise reactions and HTML handler slots remain separate. */
 os64_dom_cluster_t *os64_dom_cluster_create_with_scheduled_settings(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Extends scheduled settings to HTML handler properties, named handlers and
+ * lazy inline attributes. Promise preparation and origin gates remain separate. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_handler_settings(os64_js_runtime_t *,
+    const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
 os64_dom_admission_t os64_dom_create_in_realm(os64_dom_cluster_t *, os64_js_realm_t *,
     os64_html_document_t *, os64_page_state_t *, const os64_dom_options_t *, os64_js_outcome_t *);
 

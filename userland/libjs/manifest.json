@@ -238,6 +238,11 @@
       "path": "patches/0031-object-realm-identity.patch",
       "sha256": "8926970d5204a3ceca655888b82b25ccbbcbc2dc358e55670a163f5f3e591b47",
       "reason": "Record immutable non-owning object creation-context identity for callback-interface entry, with no prototype inference or context-slot reuse."
+    },
+    {
+      "path": "patches/0032-inline-handler-provenance.patch",
+      "sha256": "cdba9e1972443b5593f678476dd273163366fa32d400745ca85545fcbf590ff8",
+      "reason": "Clear ScriptOrModule presence on source-verified inline-handler bytecode closures without changing executable realm, ownership or exceptions."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
