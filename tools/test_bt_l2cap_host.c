@@ -649,14 +649,11 @@ static void test_connection_refusals(void)
     peer_cmd(CONN_REQ, 6, BYTES(W(0x0001), W(0x0055)));
     expect_cmd(CONN_RSP, 6, BYTES(W(0), W(0x0055), W(7), W(0)));
     // No free channel.
-    CHECK(bt_l2cap_connect(&L, 1, T) == 1);
-    CHECK(bt_l2cap_connect(&L, 1, T) == 2);
-    CHECK(bt_l2cap_connect(&L, 1, T) == 3);
+    for (int i = 1; i < BT_L2CAP_CHANNELS; i++) CHECK(bt_l2cap_connect(&L, 1, T) == i);
     CHECK(bt_l2cap_connect(&L, 1, T) == -1);
     peer_cmd(CONN_REQ, 7, BYTES(W(0x0001), W(0x0090)));
-    expect_cmd(CONN_REQ, 2, BYTES(W(0x0001), W(0x0041)));
-    expect_cmd(CONN_REQ, 3, BYTES(W(0x0001), W(0x0042)));
-    expect_cmd(CONN_REQ, 4, BYTES(W(0x0001), W(0x0043)));
+    for (int i = 1; i < BT_L2CAP_CHANNELS; i++)
+        expect_cmd(CONN_REQ, (uint8_t)(i + 1), BYTES(W(0x0001), W(0x0040 + i)));
     expect_cmd(CONN_RSP, 7, BYTES(W(0), W(0x0090), W(4), W(0)));
     // A connect to a PSM that is not valid, or on a link that is down.
     bt_l2cap_close(&L, 3, T);

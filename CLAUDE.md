@@ -536,8 +536,8 @@ virtio because its drain waits for the tick.
   controller three seconds past its deadline, as any unanswered command
   does (`bt_host.c` § Slot 2's sniff is the lifecycle, AUDIO_REMOTE.md
   § Part Z the design). Its data packets are its L2CAP's
-  (`bt_l2cap.c`, pure, Basic mode, admitting SDP and, with an audio sink,
-  AVDTP), and at `READY` the host asks the headphones one SDP question a
+  (`bt_l2cap.c`, pure, Basic mode, six channels, admitting SDP and, with
+  an audio sink, AVDTP and AVCTP), and at `READY` the host asks the headphones one SDP question a
   connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
   answers for os64's own records: Audio Source and the two remote-control
   ones), and KEEPS THAT CHANNEL OPEN

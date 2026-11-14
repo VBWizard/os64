@@ -59,7 +59,7 @@ typedef struct {
     uint16_t acl_classic;
     // The Classic link's services (AUDIO_CLASSIC.md part S). `l2cap` is
     // brought up when the link connects, admitting SDP and, with an audio
-    // sink, AVDTP, and reset when it goes; every ACL packet on the link's
+    // sink, AVDTP and AVCTP, and reset when it goes; every ACL packet on the link's
     // handle is its.
     // `l2cap_encrypted` is what it was last told of the link's encryption.
     bt_l2cap_t l2cap;
@@ -114,8 +114,8 @@ typedef struct {
     // A2DP pump, the Classic link's as `l2cap` and `sdp` are, started over
     // when the link comes up and when it goes. The pump reaches the seam,
     // the encoder and the clock through `a2dp_ops`, which the transport
-    // supplies (bt_host_audio); with none, AVDTP is neither admitted nor
-    // opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
+    // supplies (bt_host_audio); with none, neither AVDTP nor AVCTP is
+    // admitted or opened and slot 2 is what part S made it. bt_host.c § Slot 2's audio
     // has the channels' lifecycle table; the fields below are its state.
     const bt_a2dp_ops_t *a2dp_ops;
     void *a2dp_ctx;
@@ -261,8 +261,8 @@ void bt_host_tick(bt_host_t *, uint64_t now, uint64_t now_us, bool usb_done, uns
 void bt_host_policy(bt_host_t *, uint64_t);
 // Slot 2's audio sink: the seam, the encoder and the clock as the pump
 // reaches them, and the context handed back to each. Given once, after
-// bt_host_init (which clears it). Until it is given, AVDTP is neither
-// admitted nor opened.
+// bt_host_init (which clears it). Until it is given, neither AVDTP nor
+// AVCTP is admitted or opened.
 void bt_host_audio(bt_host_t *, const bt_a2dp_ops_t *, void *);
 // The largest payload the host sends on the media channel (the MTU it
 // hands bt_a2dp_packet); 0 when there is no open media channel.

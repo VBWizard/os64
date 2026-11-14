@@ -204,14 +204,17 @@ static void host_sdp_clear(bt_host_t *h)
 static void host_audio_link(bt_host_t *h,bool up);
 static void host_sniff_reset(bt_host_t *h);
 // The Classic link connected (up) or went: L2CAP starts over, admitting SDP
-// and, with an audio sink, AVDTP; and so does everything the last
+// and, with an audio sink, AVDTP and AVCTP; and so does everything the last
 // connection held, its sniff policy among it.
 static void host_services_link(bt_host_t *h,bool up)
 {
     if(up) {
         bt_l2cap_init(&h->l2cap);
         bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_SDP,true);
-        if(h->a2dp_ops) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+        if(h->a2dp_ops) {
+            bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+            bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVCTP,true);
+        }
     } else bt_l2cap_reset(&h->l2cap);
     h->l2cap_encrypted=false;
     host_sdp_clear(h);
@@ -721,7 +724,10 @@ size_t bt_host_media_room(const bt_host_t *h)
 void bt_host_audio(bt_host_t *h,const bt_a2dp_ops_t *ops,void *ctx)
 {
     h->a2dp_ops=ops; h->a2dp_ctx=ctx;
-    if(ops && h->l2cap.up) bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+    if(ops && h->l2cap.up) {
+        bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVDTP,true);
+        bt_l2cap_admit(&h->l2cap,BT_L2CAP_PSM_AVCTP,true);
+    }
 }
 void bt_host_receive(bt_host_t *h,const uint8_t *p,size_t n,size_t max_packet,
                      bt_host_report_t report,void *ctx)

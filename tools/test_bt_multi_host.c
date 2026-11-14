@@ -2404,7 +2404,7 @@ static unsigned a2_avdtp_index(uint8_t role) { assert(role); return role-1u; }
 // `slot 2 bond` to READY, then with nobody typing: the SDP query ends, our
 // signalling channel opens, and only then is the SDP channel closed; Get
 // All Capabilities (their record says AVDTP 1.3) through Open, the media
-// channel, and the pump attaches. Never more than four channels.
+// channel, and the pump attaches. Never more than two channels at once.
 static void a2dp_session_from_bond(void)
 {
     a2_bonded();
@@ -2767,7 +2767,8 @@ static void a2dp_older_first(void)
 // The headphones open signalling first; and they begin one at the moment
 // we do, their channel or ours opening first. One signalling channel
 // survives (the other is closed by us), the session is made once, and
-// with their SDP channel to us held as well, the table is full.
+// with their SDP channel to us held as well, four channels are in use at
+// once: two short of the table.
 static void a2dp_signalling_crossings(void)
 {
     // They open it first, before our SDP query ends: we ask for media alone.
@@ -2790,11 +2791,11 @@ static void a2dp_signalling_crossings(void)
         for(unsigned i=0;i<HA.chn;i++) if(HA.ch[i].by_us) closed=(int)i;
         assert(closed>=0 && HA.ch[closed].theirs==!theirs_first);
         assert(bt_avdtp_edges(&host.avdtp)->sessions==1 && HA.setconfs==1 && HA.discovers==1);
-        assert(a2_peak==BT_L2CAP_CHANNELS);
+        assert(a2_peak==4 && a2_peak<BT_L2CAP_CHANNELS);
         SEAM.endless=true;
         a2_until(a2_is_streaming,100);
     }
-    puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; the table full");
+    puts("PASS: their signalling first, and both at once in either order: one channel survives, the other we close, one session; four channels at once");
 }
 
 // The headphones go and come back by calling us (the P5's pair did, switched

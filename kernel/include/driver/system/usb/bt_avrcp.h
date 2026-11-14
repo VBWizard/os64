@@ -23,7 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BT_AVRCP_PSM            0x0017  // AVCTP's control channel
+#define BT_AVRCP_PSM            0x0017  // AVCTP's control channel (bt_l2cap.h BT_L2CAP_PSM_AVCTP)
 #define BT_AVRCP_PROFILE        0x110E  // the AVCTP profile identifier: AV Remote Control
 #define BT_AVRCP_MESSAGE        512     // the longest AV/C frame reassembled from fragments
 // The longest message we build, AVCTP's header included: an answer that
