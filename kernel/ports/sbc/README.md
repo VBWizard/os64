@@ -255,7 +255,7 @@ encoder wrote past its frame by more than the guard, kernel memory beside
 the boundary's buffer. Its inputs are our PCM and settings
 `sbc_settings_valid` admitted; it parses nothing from outside.
 
-**For `THIRD_PARTY.md`** (not in this tree; this is its row when it is):
+**Its row in `THIRD_PARTY.md`** (the monthly scan reads that file; this copy is where the row was drafted):
 
 | Component | Pinned at | Where in the tree | What it is for | What a bug there reaches | Upstream, and where fixes are announced |
 |---|---|---|---|---|---|
