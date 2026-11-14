@@ -305,11 +305,11 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
     return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
 }
 
-bool d_scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
-                          DScheduledCallback *record)
+static bool scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                              DScheduledCallback *record, bool enabled)
 {
     *record = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
-    if (dom->cluster && dom->cluster->scheduled_settings) {
+    if (enabled) {
         os64_js_outcome_t out;
         JSContext *associated = JS_GetCallbackRealm(ctx, value);
         record->entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;
@@ -321,6 +321,33 @@ bool d_scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
         record->value = record->captured.value;
     } else record->value = JS_DupValue(ctx, value);
     return true;
+}
+
+bool d_scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                          DScheduledCallback *record)
+{
+    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->scheduled_settings);
+}
+
+bool d_observer_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                         DScheduledCallback *record)
+{
+    return scheduled_capture(dom, ctx, value, record, dom->cluster && dom->cluster->observer_settings);
+}
+
+int d_observer_eligible(os64_dom_t *dom, JSContext *ctx, const DScheduledCallback *record)
+{
+    if (!d_delivery_active(dom)) return 0;
+    if (record->captured.runtime) {
+        if (os64_js_realm_is_retired(record->captured.incumbent) ||
+            os64_js_realm_is_retired(record->entry)) return 0;
+        /* The executable-realm lookup runs no author code. Its revoked-proxy
+         * exception belongs to the associated realm, just as invocation does. */
+        os64_js_outcome_t out;
+        ctx = os64_js_realm_context(record->entry, OS64_JS_ABI_ID, &out);
+        if (!ctx) return 0;
+    }
+    return d_callback_eligible(dom, ctx, record->value);
 }
 
 bool d_scheduled_live(JSContext *ctx, const DScheduledCallback *record)

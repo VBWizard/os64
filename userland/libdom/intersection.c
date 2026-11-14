@@ -55,7 +55,8 @@ typedef struct DIObserver {
      * observer `dead`), and whether the binding holds it. */
     JSValue object;
     bool held, dead;
-    JSValue callback, thresholds_array;
+    JSValue thresholds_array;
+    DScheduledCallback callback;
     uint32_t script;
     os64_dom_t *report_owner;
     /* The root as given: NULL for none, else an element or a document,
@@ -635,7 +636,7 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
         for (DIObserver *o = s->observers; ctx != NULL && o != NULL && d_delivery_active(dom);) {
             DIObserver *next = o == last ? NULL : o->next;
             if (o->first != NULL && !o->dead && JS_IsObject(o->object)) {
-                int eligible = d_delivery_eligible(dom, ctx, o->callback);
+                int eligible = d_observer_eligible(dom, ctx, &o->callback);
                 if (eligible <= 0) {
                     entries_clear(dom, o);
                     hold_update(dom, ctx, o);
@@ -648,7 +649,6 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                     continue;
                 }
                 JSValue self = JS_DupValue(ctx, o->object);
-                JSValue callback = JS_DupValue(ctx, o->callback);
                 JSValue records = take_records(dom, ctx, o);
                 hold_update(dom, ctx, o);
                 os64_js_outcome_t call;
@@ -662,14 +662,13 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
                 } else {
                     JSValue args[2] = {records, self};
                     DScripts before = d_script_enter(o->report_owner, o->script);
-                    os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                    d_scheduled_call(o->report_owner, &o->callback, self, 2, args, &call);
                     d_script_leave(o->report_owner, &before, true);
                     d_outcome_fold(out, &call);
                     if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                     d_task_settle(dom, out);
                 }
                 JS_FreeValue(ctx, records);
-                JS_FreeValue(ctx, callback);
                 JS_FreeValue(ctx, self);
                 if (out->status != OS64_JS_OK && out->status != OS64_JS_EXCEPTION &&
                     out->status != OS64_JS_UNHANDLED_REJECTION)
@@ -696,9 +695,9 @@ static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DIObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
-    JS_FreeValueRT(rt, o->callback);
+    d_scheduled_clear(o->dom, &o->callback);
     JS_FreeValueRT(rt, o->thresholds_array);
-    o->callback = o->thresholds_array = JS_UNDEFINED;
+    o->thresholds_array = JS_UNDEFINED;
     o->object = JS_UNDEFINED;
     o->dead = true;
     if (o->dom->intersections != NULL) o->dom->intersections->has_dead = true;
@@ -708,7 +707,7 @@ static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DIObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
     if (o == NULL) return;
-    JS_MarkValue(rt, o->callback, mark);
+    JS_MarkValue(rt, o->callback.value, mark);
     JS_MarkValue(rt, o->thresholds_array, mark);
 }
 
@@ -964,6 +963,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     struct DIntersections *s = dom->intersections;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "IntersectionObserver needs a callback");
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_observer_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
     sweep(dom);
     /* IntersectionObserverInit converted whole first, its members read in
      * WebIDL's order (lexicographic): delay, root, rootMargin,
@@ -980,7 +981,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     int32_t delay = 0;
     bool track = false;
     int present = d_dictionary(ctx, argc, argv, 1);
-    if (present < 0) return JS_EXCEPTION;
+    if (present < 0) goto failed;
     JSValueConst init = present ? argv[1] : JS_UNDEFINED;
     JSValue v = present ? JS_GetPropertyStr(ctx, init, "delay") : JS_UNDEFINED;
     if (JS_IsException(v) || (!JS_IsUndefined(v) && JS_ToInt32(ctx, &delay, v) < 0))
@@ -1033,6 +1034,10 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) {
+        JS_FreeValue(ctx, prototype);
+        goto failed;
+    }
     os64_dom_t *report_owner;
     uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
     DIObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_INTERSECTION) : NULL;
@@ -1049,7 +1054,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     os64_memset(o, 0, sizeof(*o));
     o->dom = dom;
     o->object = object;
-    o->callback = JS_DupValue(ctx, argv[0]);
+    o->callback = callback;
     o->thresholds_array = frozen;
     o->script = script;
     o->report_owner = report_owner;
@@ -1074,6 +1079,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
 failed_value:
     JS_FreeValue(ctx, v);
 failed:
+    d_scheduled_clear(dom, &callback);
     d_free(dom, thresholds.values);
     d_string_free(dom, &margin_text[0]);
     d_string_free(dom, &margin_text[1]);

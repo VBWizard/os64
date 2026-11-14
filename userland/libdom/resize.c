@@ -39,7 +39,8 @@ typedef struct DRTarget {
 typedef struct DRObserver {
     struct DRObserver *prev, *next;
     os64_dom_t *dom;
-    JSValue object, callback;
+    JSValue object;
+    DScheduledCallback callback;
     bool held, dead;
     uint32_t script;
     os64_dom_t *report_owner;
@@ -357,7 +358,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
             any = any || t->active;
         }
         if (any && !o->dead && JS_IsObject(o->object)) {
-            int eligible = d_delivery_eligible(dom, ctx, o->callback);
+            int eligible = d_observer_eligible(dom, ctx, &o->callback);
             if (eligible <= 0) {
                 /* A permanently retired callback cannot consume a later
                  * resize either. Remember the sample without constructing
@@ -400,7 +401,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 size_t depth = node_depth(dom, t->node);
                 if (depth < shallowest) shallowest = depth;
             }
-            JSValue self = JS_DupValue(ctx, o->object), callback = JS_DupValue(ctx, o->callback);
+            JSValue self = JS_DupValue(ctx, o->object);
             if (JS_IsException(entries)) {
                 if (d_exception_catchable(ctx)) {
                     JSValue error = JS_GetException(ctx);
@@ -411,14 +412,13 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 JSValue args[2] = {entries, self};
                 os64_js_outcome_t call;
                 DScripts before = d_script_enter(o->report_owner, o->script);
-                os64_js_realm_call(o->report_owner->realm, OS64_JS_ABI_ID, callback, self, 2, args, NULL, &call);
+                d_scheduled_call(o->report_owner, &o->callback, self, 2, args, &call);
                 d_script_leave(o->report_owner, &before, true);
                 d_outcome_fold(out, &call);
                 if (call.status == OS64_JS_EXCEPTION) d_errors_fire(o->report_owner, out);
                 d_task_settle(dom, out);
             }
             JS_FreeValue(ctx, entries);
-            JS_FreeValue(ctx, callback);
             JS_FreeValue(ctx, self);
         }
         o = next;
@@ -488,9 +488,10 @@ bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *out)
 static void observer_finalizer(JSRuntime *rt, JSValue value)
 {
     DRObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
+    (void)rt;
     if (o == NULL) return;
-    JS_FreeValueRT(rt, o->callback);
-    o->callback = o->object = JS_UNDEFINED;
+    d_scheduled_clear(o->dom, &o->callback);
+    o->object = JS_UNDEFINED;
     o->dead = true;
     if (o->dom->resizes != NULL) o->dom->resizes->has_dead = true;
 }
@@ -498,7 +499,7 @@ static void observer_finalizer(JSRuntime *rt, JSValue value)
 static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DRObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
-    if (o != NULL) JS_MarkValue(rt, o->callback, mark);
+    if (o != NULL) JS_MarkValue(rt, o->callback.value, mark);
 }
 
 static void entry_finalizer(JSRuntime *rt, JSValue value)
@@ -527,12 +528,18 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (dom == NULL) return JS_EXCEPTION;
     struct DResizes *s = dom->resizes;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "ResizeObserver needs a callback");
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if (!d_observer_capture(dom, ctx, argv[0], &callback)) return JS_EXCEPTION;
     sweep(dom);
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
-    if (JS_IsException(prototype)) return prototype;
+    if (JS_IsException(prototype)) goto failed;
     if (!JS_IsObject(prototype)) {
         JS_FreeValue(ctx, prototype);
         prototype = JS_GetClassProto(ctx, s->observer_class);
+    }
+    if (!d_require_active(dom, ctx) || !d_scheduled_live(ctx, &callback)) {
+        JS_FreeValue(ctx, prototype);
+        goto failed;
     }
     os64_dom_t *report_owner;
     uint32_t script = d_callback_record(dom, ctx, argv[0], &report_owner);
@@ -542,12 +549,12 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     if (JS_IsException(object)) {
         d_free(dom, o);
         if (!JS_HasException(ctx)) d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
-        return JS_EXCEPTION;
+        goto failed;
     }
     os64_memset(o, 0, sizeof(*o));
     o->dom = dom;
     o->object = object;
-    o->callback = JS_DupValue(ctx, argv[0]);
+    o->callback = callback;
     o->script = script;
     o->report_owner = report_owner;
     o->prev = s->observers_last;
@@ -556,6 +563,9 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     s->observers_last = o;
     JS_SetOpaque(object, o);
     return object;
+failed:
+    d_scheduled_clear(dom, &callback);
+    return JS_EXCEPTION;
 }
 
 /* ResizeObserverOptions' one member, `box`, an enum. -1 with a TypeError
