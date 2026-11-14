@@ -395,10 +395,16 @@ cat /sys/audio                                  # sink: a2dp
 
 Measured on the P5 with a Bose SoundLink around-ear II (2026-11-13): bonded in
 under four seconds; reconnected with the saved key in about 140 ms once a page
-was answered; back with no typing after a power cycle and after a reboot. These
-headphones never called the P5 themselves, and hung up two seconds after their
-last L2CAP channel was closed, which is why the SDP channel stays open until
-the audio connection's has opened.
+was answered; back with no typing after a power cycle and after a reboot.
+Before the P5 could carry sound these headphones never called it themselves,
+and they hung up two seconds after their last L2CAP channel was closed, which
+is why the SDP channel stays open until the audio connection's has opened.
+With sound (2026-11-13 and 14): they announce "Connected to Os64"; songs play
+whole, through scans, typing and mousing (14,918 packets, no slip, no
+underrun); and switched off and on mid-song, they call the P5 back and the
+sound returns. The first sound was two clicks a second, because the link was
+in sniff mode at 500 ms; sniff is refused until something leaves it when a
+stream starts.
 
 ## Controller and transport
 

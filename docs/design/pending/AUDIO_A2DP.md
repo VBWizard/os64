@@ -684,6 +684,18 @@ builders from written briefs (`~/os64-opus-kit/BRIEF_BT_A2DP_WIRING.md` is
 the wiring's). Where the code departs from Part P above, or settles what
 it left open:
 
+- **On the P5** (2026-11-13 and 14, the Bose SoundLink around-ear II):
+  the headphones announce "Connected to Os64"; a song plays whole; six in
+  a row from a script, through an LE scan, a Classic scan, typing and
+  mousing: 14,918 packets, no slip, no underrun, none lost, the longest
+  USB event gap 34.6 ms as without sound. Their media MTU is 672: five
+  frames a packet, 75 packets a second. Their Delay Report is 150.0 ms.
+  Switched off mid-song and on again, the song carries on in the null
+  sink, THEY call us (the first time these headphones ever have), and
+  sound returns. `play` and `kusb` each take about 2% of a core.
+- **The flush question (Q7) is answered**: a flush mid-song is heard as a
+  click and the song carries on; no tail of old sound plays from the
+  headphones' own buffer. Nothing is done around a flush.
 - **Sniff is refused, link-wide** (the start-up round's default link
   policy, `bt_scan.c`). The first sound on the P5 came out as clicks: the
   headphones had put the idle link into sniff with a 500 ms interval and
