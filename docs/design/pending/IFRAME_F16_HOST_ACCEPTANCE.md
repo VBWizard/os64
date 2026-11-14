@@ -1,5 +1,7 @@
 # F.16e — host routing and acceptance
 
+Implementation PR: **#597**.
+
 Initial implementation: `43498f3b` on merged userland `48d5ccb2`, including
 native recovery #593. Composed with handler settings #596 (`42c70818`).
 Current prepared engine identity:
@@ -170,6 +172,15 @@ runtime exports. Leak detection remains enabled.
 These composition runs qualify the earlier broad DOM receipt; they do not
 claim a new full DOM or full runtime campaign on the composed branch.
 
+### CLI consumer correction
+
+F16 #582 added `OS64_JS_REALM_FAILED` without updating the CLI's status-name
+switch; strict target builds then failed with `-Werror=switch`. This closeout
+reuses Opus's exact one-line fix `bdc00b3b` as `c9640d43`, preserving its
+authorship. `js-runner` builds and both CLI host suites pass **199 / 40 checks**
+with ASan/UBSan and LeakSanitizer. Public enum/API validation must include this
+consumer rather than inferring its build from libdom or Yonder.
+
 ## Reproduction
 
 ```sh
@@ -182,6 +193,8 @@ python3 tools/test_js_prepare.py
 python3 tools/test_js_teardown_audit.py
 python3 tools/test_js_port_target.py
 python3 tools/host_suites.py --list
+make -C userland -j8 js-runner
+bash tools/test_js_cli_host.sh
 ```
 
 Keep `ASAN_OPTIONS=detect_leaks=1`. Retain the canonical DOM binaries and run
