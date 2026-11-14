@@ -1147,6 +1147,20 @@ static void test_responder_records(void)
     sp[4] = 0x00; sp[6] = 0x01;                     // a maximum of one: its place is past the end
     ask(0x02, 5, sp, sizeof(shead) + 7);
     expect_error(5, 0x0005);
+    // A state shorter than ours, the request in storage of exactly its
+    // length: refused without a byte past it read.
+    for (uint8_t len = 1; len < 6; len++) {
+        uint8_t req[64];
+        memcpy(sp, shead, sizeof(shead));
+        sp[sizeof(shead)] = len;
+        memset(sp + sizeof(shead) + 1, 0, len);
+        size_t qn2 = request(req, 0x02, 9, sp, sizeof(shead) + 1 + len);
+        uint8_t *exact = malloc(qn2);
+        memcpy(exact, req, qn2);
+        resp_n = bt_sdp_respond(exact, qn2, resp, sizeof(resp));
+        free(exact);
+        expect_error(9, 0x0005);
+    }
     // A state an attribute request issued is not a search's.
     ask(0x06, 6, BYTES(0x35, 0x03, 0x19, 0x01, 0x00, BE(10), 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x00));
     CHECK(resp_n == 7 + 10 + 7);

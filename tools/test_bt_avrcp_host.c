@@ -38,6 +38,13 @@ static void dump(const char *what, const uint8_t *p, size_t n)
 
 enum { P_SINGLE, P_START, P_CONT, P_END };
 #define PROFILE 0x110E
+// The figures, written here rather than taken from the header: the longest
+// AV/C frame a peer must take (Android's AVRC_PACKET_LEN), a pressed
+// pass-through's life (AV/C Panel; BlueZ's AVC_PRESS_TIMEOUT), and how long
+// a command waits for its answer (Android's AVRC_CMD_TOUT_MS).
+#define MAX_FRAME 512
+#define HOLD_MS   2000
+#define REPLY_MS  2000
 // AV/C command and response types.
 enum { C_CONTROL = 0x0, C_STATUS = 0x1, C_NOTIFY = 0x3, R_NOT_IMPL = 0x8, R_ACCEPTED = 0x9, R_REJECTED = 0xa,
        R_STABLE = 0xc, R_CHANGED = 0xd, R_INTERIM = 0xf };
@@ -651,7 +658,7 @@ static void test_controller_silence(void)
             CHECK(bt_avrcp_set_volume(&A, 5, T));
             label = SET(5);
         }
-        T += BT_AVRCP_REPLY_MS - 1; bt_avrcp_tick(&A, T);
+        T += REPLY_MS - 1; bt_avrcp_tick(&A, T);
         expect_nothing();
         T += 1; bt_avrcp_tick(&A, T);
         if (which < 2) {
@@ -687,10 +694,10 @@ static void test_controller_silence(void)
         }
         // ... and a new command has two silences of its own: the second is
         // FAILED (the Register sent again between them, the Set not).
-        T += BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T);
+        T += REPLY_MS; bt_avrcp_tick(&A, T);
         if (which == 0) CHECK_EQ(REGISTERED(), label);
         else expect_nothing();
-        T += BT_AVRCP_REPLY_MS - 1; bt_avrcp_tick(&A, T);
+        T += REPLY_MS - 1; bt_avrcp_tick(&A, T);
         CHECK(bt_avrcp_state(&A) != BT_AVRCP_FAILED);
         T += 1; bt_avrcp_tick(&A, T);
         CHECK_EQ(bt_avrcp_state(&A), BT_AVRCP_FAILED);
@@ -708,10 +715,10 @@ static void test_controller_silence(void)
     // The timer runs from the sending: a command the carrier holds back is
     // not silent.
     fresh(); bt_avrcp_channel_open(&A, T);
-    T += 10 * BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T);
+    T += 10 * REPLY_MS; bt_avrcp_tick(&A, T);
     CHECK_EQ(A.silences, 0);
     unsigned g = ASKED();
-    T += BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T);
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
     CHECK_EQ(ASKED(), g);
     // A message too long for the channel's MTU is dropped and counted; a
     // command so dropped is treated as sent and left to its timer.
@@ -721,7 +728,7 @@ static void test_controller_silence(void)
     CHECK_EQ(bt_avrcp_next(&A, out, sizeof(out), 13, T, &serial), 0);
     CHECK_EQ(serial, 0);
     CHECK_EQ(A.unsendable, 1);
-    T += BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T);
+    T += REPLY_MS; bt_avrcp_tick(&A, T);
     CHECK_EQ(A.silences, 1);
     CHECK_EQ(bt_avrcp_next(&A, out, sizeof(out), 14, T, &serial), 14);
     // Too little room: nothing, and the message waits.
@@ -746,7 +753,7 @@ static void test_channel_closing(void)
         if (state == 2) { unsigned g = ASKED(); msg_t e = events(g, ALL_EVENTS, 3); feed(&e); }
         if (state == 3) { to_ready(20); bt_avrcp_set_volume(&A, 5, T); SET(5); bt_avrcp_set_volume(&A, 6, T); }
         if (state == 4) { unsigned g = ASKED(); msg_t m = refusal(g, GET_CAPS, 0); feed(&m); }
-        if (state == 5) { ASKED(); T += 2 * BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T); ASKED(); T += BT_AVRCP_REPLY_MS; bt_avrcp_tick(&A, T); }
+        if (state == 5) { ASKED(); T += 2 * REPLY_MS; bt_avrcp_tick(&A, T); ASKED(); T += REPLY_MS; bt_avrcp_tick(&A, T); }
         static const bt_avrcp_state_t want[] = { BT_AVRCP_IDLE, BT_AVRCP_ASKING, BT_AVRCP_REGISTERING, BT_AVRCP_READY,
                                                  BT_AVRCP_PLAIN, BT_AVRCP_FAILED };
         CHECK_EQ(bt_avrcp_state(&A), want[state]);
@@ -825,7 +832,7 @@ static void test_presses(void)
         msg_t p = pass((unsigned)k, 0x44);
         feed(&p);
         expect(pass_answer((unsigned)k, R_ACCEPTED, 0x44));
-        T += BT_AVRCP_HOLD_MS - 1; bt_avrcp_tick(&A, T);
+        T += HOLD_MS - 1; bt_avrcp_tick(&A, T);
     }
     expect_press(0x44, true);
     expect_no_press();
@@ -846,7 +853,7 @@ static void test_presses(void)
     // repeat, and once only.
     msg_t p = pass(1, 0x4b);
     feed(&p); take((uint8_t[64]){ 0 });
-    T += BT_AVRCP_HOLD_MS - 1; bt_avrcp_tick(&A, T);
+    T += HOLD_MS - 1; bt_avrcp_tick(&A, T);
     expect_press(0x4b, true);
     expect_no_press();
     T += 1; bt_avrcp_tick(&A, T);
@@ -1330,24 +1337,24 @@ static void test_avctp(void)
     // A message as long as allowed (the frame 512 bytes): reassembled and
     // answered; one byte longer, dropped and counted.
     msg_t big = THEIRS(10, C_CONTROL, PANEL, 0x60);
-    while (big.n < 3 + BT_AVRCP_MESSAGE) put(&big, 0xaa);
+    while (big.n < 3 + MAX_FRAME) put(&big, 0xaa);
     size_t bcuts[12];
     for (int i = 0; i < 11; i++) bcuts[i] = (size_t)(i + 1) * 46;
-    bcuts[11] = BT_AVRCP_MESSAGE;
+    bcuts[11] = MAX_FRAME;
     feed_fragments(&big, bcuts, 12);
     uint8_t out[64];
     CHECK_EQ(take(out), BT_AVRCP_LONGEST);
     CHECK(out[3] == R_NOT_IMPL && out[5] == 0x60);
     put(&big, 0xaa);
-    bcuts[11] = BT_AVRCP_MESSAGE + 1;
+    bcuts[11] = MAX_FRAME + 1;
     feed_fragments(&big, bcuts, 12);
     expect_nothing();
     CHECK_EQ(A.too_long, 1);
     // ... and a start alone too long for the buffer.
-    uint8_t *huge = malloc(4 + BT_AVRCP_MESSAGE + 1);
-    memset(huge, 0, 4 + BT_AVRCP_MESSAGE + 1);
+    uint8_t *huge = malloc(4 + MAX_FRAME + 1);
+    memset(huge, 0, 4 + MAX_FRAME + 1);
     huge[0] = 0x14; huge[1] = 2; huge[2] = 0x11; huge[3] = 0x0e;
-    feed_bytes(huge, 4 + BT_AVRCP_MESSAGE + 1);
+    feed_bytes(huge, 4 + MAX_FRAME + 1);
     feed_bytes((const uint8_t[]){ 0x1c, 0 }, 2);
     CHECK_EQ(A.too_long, 2);
     CHECK_EQ(A.fragments_dropped, 1);
