@@ -185,13 +185,16 @@ typedef struct {
     // 0..127 level both ends are known to share. `vol_serial`: AVRCP's
     // volume serial as last taken. Counted since start-up: ownerships
     // begun, Sets sent, levels of theirs that changed the seam's number,
-    // and volume presses applied to it.
+    // volume presses applied to it, and Sets of ours they rejected or never
+    // answered, after which their known level was taken back.
     // `vol_waiting`: this tick found the volume to be owned but did not
     // begin, a stream being under way with the seam below unity.
     bool vol_owned, vol_waiting;
     uint8_t vol_raw;
     uint32_t vol_serial;
-    uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses;
+    // AVRCP's rejected and silent Sets, summed, as last taken.
+    uint32_t vol_refused;
+    uint32_t vol_ownerships, vol_sets, vol_taken, vol_presses, vol_refusals;
     // Their buttons (bt_host.c § Slot 2's buttons), since start-up: every
     // press and release AVRCP reports, drained from it each tick, numbered
     // from 0 (`buttons_seen` is the next number), and the last

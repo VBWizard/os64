@@ -3766,7 +3766,8 @@ static void remote_volume_adopted(void)
     assert(status_has(want));
     assert(status_has("avrcp: ready, their volume 127/127 (told 1 times)\n"));
     assert(status_has("volume: the headphones' (/dev/volume 100 is carried out at their end, the seam applies no gain); "
-                      "level shared 127/127; ownerships 1, sets sent 0, their levels taken 0, volume presses applied 0\n"));
+                      "level shared 127/127; ownerships 1, sets sent 0, their levels taken 0, volume presses applied 0, "
+                      "sets refused or unanswered 0\n"));
     assert(status_has("buttons: none yet; pressed: volume up 0,"));
     static char text[BT_SCAN_TEXT_BYTES];
     assert(bt_host_status(&host,text,sizeof text)<sizeof(text)-512);
@@ -3796,6 +3797,30 @@ static void remote_volume_writes(void)
     assert(RC.sets==2 && RC.set_asked==65 && RC.level==64 && SEAM.volume==50 && host.vol_raw==64);
     assert(host.vol_sets==2 && host.vol_taken==2 && SEAM.owned);
     puts("PASS: volume: a write is one Set and reads back unchanged; their button moves the seam, nothing sent back; a rounded level does not ping-pong");
+}
+
+// A Set they reject, and one they never answer: the level shared and the
+// seam's number go back to where they are, and the same write made again
+// reaches them.
+static void remote_set_refused(void)
+{
+    for(unsigned silent=0;silent<2;silent++) {
+        rc_bonded(true,false,40);
+        a2_until(a2_is_open,5000);
+        a2_until(rc_owned,4000);
+        if(silent) RC.silent_sets=true; else RC.reject_sets=true;
+        rc_write(50);
+        for(unsigned i=0;i<(silent?4500u:100u);i++) a2_step();
+        assert(RC.sets==1 && RC.level==40 && host.vol_refusals==1);
+        assert(silent?host.avrcp.sets_silent==1:host.avrcp.sets_rejected==1);
+        assert(SEAM.volume==31 && host.vol_raw==40 && SEAM.owned && !host.avrcp.set.live);
+        assert(bt_avrcp_volume_serial(&host.avrcp)==1);       // what they told us, and nothing else
+        RC.reject_sets=RC.silent_sets=false;
+        rc_write(50);
+        for(unsigned i=0;i<200;i++) a2_step();
+        assert(RC.sets==2 && RC.set_asked==64 && RC.level==64 && SEAM.volume==50 && host.vol_raw==64);
+    }
+    puts("PASS: volume: a Set rejected or never answered puts the level shared and /dev/volume back where they are; the same write then reaches them");
 }
 
 // Ownership ends and the seam's gain returns: when the session ends, when
@@ -4201,6 +4226,7 @@ int main(void)
     remote_round_trip();
     remote_volume_adopted();
     remote_volume_writes();
+    remote_set_refused();
     remote_ownership_ends();
     remote_ready_mid_stream();
     remote_failed_retry();

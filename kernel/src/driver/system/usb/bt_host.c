@@ -881,7 +881,11 @@ static uint8_t host_avrcp_playback(const bt_host_t *h)
 //                               | Then, AVRCP's serial moved (their CHANGED,
 //                               | INTERIM or a Set's ACCEPTED): their level is
 //                               | the one shared, written to the seam only if
-//                               | it converts to another number. Nothing sent
+//                               | it converts to another number. Nothing sent.
+//                               | Then, a Set of ours rejected or never
+//                               | answered (AVRCP's counts moved): their level
+//                               | as AVRCP knows it is the one shared, and the
+//                               | seam's number its conversion. Nothing sent
 //   not owned, the seam's       | owns_volume(false): the number stays what it
 //                               | is, so the sound can only be quieter or the
 //                               | same
@@ -919,6 +923,7 @@ static void host_volume_tick(bt_host_t *h)
         // held its old number would have that number sent to them as a write.
         if(!o->volume_set(h->a2dp_ctx,host_volume_number(theirs)) || !o->owns_volume(h->a2dp_ctx,true)) return;
         h->vol_owned=true; h->vol_raw=theirs; h->vol_serial=bt_avrcp_volume_serial(&h->avrcp);
+        h->vol_refused=h->avrcp.sets_rejected+h->avrcp.sets_silent;
         h->vol_ownerships++;
         return;
     }
@@ -932,6 +937,15 @@ static void host_volume_tick(bt_host_t *h)
         h->vol_serial=serial; h->vol_raw=theirs;
         uint8_t now=host_volume_number(theirs);
         if(now!=number && o->volume_set(h->a2dp_ctx,now)) h->vol_taken++;
+    }
+    // A Set they rejected, or never answered, leaves them where they were:
+    // that is the level shared, and the seam's number says it (owned, the
+    // sound does not change), so the same write made again is sent again.
+    uint32_t refused=h->avrcp.sets_rejected+h->avrcp.sets_silent;
+    if(refused!=h->vol_refused) {
+        h->vol_refused=refused; h->vol_raw=theirs; h->vol_refusals++;
+        uint8_t now=host_volume_number(theirs);
+        if(now!=o->volume_now(h->a2dp_ctx)) (void)o->volume_set(h->a2dp_ctx,now);
     }
 }
 // ── Slot 2's buttons (AUDIO_REMOTE.md § Their buttons) ─────────────────────
@@ -1634,8 +1648,10 @@ static size_t host_remote_status(const bt_host_t *h,char *out,size_t used,size_t
     if(n<0) return used;
     used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     if(used>=cap-1) return used;
-    n=snprintf(out+used,cap-used,"; ownerships %u, sets sent %u, their levels taken %u, volume presses applied %u\n",
-               (unsigned)h->vol_ownerships,(unsigned)h->vol_sets,(unsigned)h->vol_taken,(unsigned)h->vol_presses);
+    n=snprintf(out+used,cap-used,"; ownerships %u, sets sent %u, their levels taken %u, volume presses applied %u, "
+               "sets refused or unanswered %u\n",
+               (unsigned)h->vol_ownerships,(unsigned)h->vol_sets,(unsigned)h->vol_taken,(unsigned)h->vol_presses,
+               (unsigned)h->vol_refusals);
     if(n<0) return used;
     used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     if(used>=cap-1) return used;

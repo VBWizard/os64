@@ -656,6 +656,11 @@ the design left open, and what differs:
   line says the headphones will have it once the stream stops. The stream
   a player opens on a connected link is owned from the start: the pump
   attaches at AVDTP's `open`, long before the first sound.
+- **A Set they reject or never answer** leaves them where they were, so
+  the level shared becomes the one AVRCP knows for them and the seam's
+  number its conversion (owned, the sound does not change): the same write
+  made again is a change again, and is sent. AVRCP's serial is not moved
+  for it; the host reads AVRCP's rejected and silent counts.
 - **A write and their level in one tick**: the write is sent first, then
   their level is taken into the seam; the answer to our Set, arriving
   later, puts the write back. Whichever arrives last is believed, as part R
@@ -676,9 +681,10 @@ the design left open, and what differs:
   `bt_avrcp_operation`, `bt_avrcp_operation_name`).
 - **Slot 2's status** gains, after AVDTP's lines: `avctp channel:` (its
   index and who opened it, the one being asked for, our requests and the
-  ends), AVRCP's own lines, `volume:` (whose it is; when the headphones'
-  the number and the level shared; ownerships, Sets sent, their levels
-  that changed the seam's number, presses applied) and `buttons:` (the
+  ends), AVRCP's own lines, `volume:` (whose it is, or that it waits for
+  a stream to stop; when the headphones' the number and the level shared;
+  ownerships, Sets sent, their levels that changed the seam's number,
+  presses applied, Sets refused or unanswered) and `buttons:` (the
   last, presses by name, what the ring holds and what it lost).
 - **AVRCP's clock** is AVDTP's: `now_us / 1000`.
 
