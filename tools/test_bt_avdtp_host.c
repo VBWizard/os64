@@ -258,7 +258,15 @@ static void test_initiator_end_to_end(void)
     // The delay is kept: it is their latest report.
     CHECK(bt_avdtp_delay(&A, &d)); CHECK_EQ(d, 1500);
     CHECK_EQ(A.strays, 0); CHECK_EQ(A.malformed, 0);
-    // A new session from CONNECTED, again by us.
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 1);
+    // We walked on this channel already: a new session is theirs to ask for,
+    // or a new channel's.
+    CHECK(!bt_avdtp_may_begin(&A, now));
+    CHECK(!bt_avdtp_begin(&A, now));
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 0);                    // nothing was in flight
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    CHECK(bt_avdtp_may_begin(&A, now));
     CHECK(bt_avdtp_begin(&A, now));
     OURS(DISCOVER);
 }
@@ -340,8 +348,8 @@ static void test_initiator_get_all_rejected(void)
     FEED(ACC(LAST), GETCAP, TRANSPORT, SBC(F44 | JOINT, B16 | SB8 | LOUD, 2, 53));
     OURS(GETCAP, S(6));
     FEED(REJ(LAST), GETCAP, E_BAD_SEID);
-    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
-    CHECK_STR(A.why, "no settings in common: capabilities refused");
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    CHECK_STR(A.walk_why, "no settings in common: capabilities refused");
 
     // The refusal is this session's: the next one asks Get All again.
     to_asking(0x0103);
@@ -382,8 +390,8 @@ static void test_initiator_walk(void)
     OURS(DISCOVER);
     FEED(ACC(LAST), DISCOVER, EP(1, 0, 0, 0), EP(2, 0, 0, 0), EP(3, 0, 0, 0), EP(4, 0, 0, 0), EP(5, 0, 0, 0),
          EP(6, 0, 0, 0), EP(7, 0, 0, 0), EP(8, 0, 0, 0), EP(9, 0, 0, 1));
-    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
-    CHECK_STR(A.why, "no sink endpoint free");
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    CHECK_STR(A.walk_why, "no sink endpoint");
     CHECK_EQ(A.endpoint_count, 8);
     // An odd byte at the end is counted and the whole entries are read.
     fresh(0x0103);
@@ -401,33 +409,74 @@ static void test_initiator_walk(void)
     OURS(GETALL, S(8));
 }
 
-// No sink endpoint; no settings in common, each field missing in turn.
+// No sink endpoint; no settings in common, each field missing in turn. A
+// walk that makes no session is not a session gone wrong: CONNECTED, with
+// the reason kept, and their own Set Configuration still taken on its merits.
 static void test_initiator_failures(void)
 {
-    static const struct { uint8_t eps[4]; uint8_t n; } nosink[] = {
-        { { EP(1, 0, 0, 0) }, 2 },              // a source alone
-        { { EP(2, 1, 0, 1) }, 2 },              // a sink in use
-        { { EP(2, 0, 1, 1) }, 2 },              // a video sink
-        { { 0 }, 0 },                           // nothing
+    static const struct { uint8_t eps[6]; uint8_t n; bool later; } nosink[] = {
+        { { EP(1, 0, 0, 0) }, 2, false },                  // a source alone
+        { { EP(2, 1, 0, 1) }, 2, true },                   // a sink in use
+        { { EP(1, 0, 0, 0), EP(2, 1, 0, 1), EP(4, 1, 0, 1) }, 6, true },   // every sink in use
+        { { EP(2, 0, 1, 1) }, 2, false },                  // a video sink
+        { { EP(2, 1, 1, 1), EP(0, 1, 0, 1) }, 4, false },  // in use, but no audio sink with a SEID
+        { { 0 }, 0, false },                               // nothing
     };
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < sizeof(nosink) / sizeof(nosink[0]); i++) {
         fresh(0x0103);
+        CHECK(bt_avdtp_may_begin(&A, now));
         bt_avdtp_begin(&A, now);
         OURS(DISCOVER);
         uint8_t m[8] = { ACC(LAST), DISCOVER };
         memcpy(m + 2, nosink[i].eps, nosink[i].n);
         feed_(m, 2u + nosink[i].n);
-        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
-        CHECK_STR(A.why, "no sink endpoint free");
+        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+        CHECK_STR(A.walk_why, nosink[i].later ? "no sink endpoint free" : "no sink endpoint");
+        CHECK(A.why == NULL);
+        CHECK_EQ(A.wrongs, 0);
         CHECK(!bt_avdtp_wants_closed(&A));
         NONE();
+        char buf[512];
+        bt_avdtp_status(&A, buf, sizeof(buf));
+        CHECK(strstr(buf, nosink[i].later ? "our walk: no sink endpoint free (again later)"
+                                          : "our walk: no sink endpoint (not again on this link)") != NULL);
+        // Not again at once; a held sink, again 30 s later; no sink, never on this link.
+        CHECK(!bt_avdtp_may_begin(&A, now));
         CHECK(!bt_avdtp_begin(&A, now));
-        // FAILED stays until the link drops, whatever the channels do.
+        CHECK(!bt_avdtp_may_begin(&A, now + 29999));
+        CHECK_EQ(bt_avdtp_may_begin(&A, now + 30000), nosink[i].later);
+        // A new signalling channel does not lift it either way.
         bt_avdtp_signalling_closed(&A, now);
+        CHECK_EQ(A.wrongs, 0);
         bt_avdtp_signalling_open(&A, now, 0x0103);
-        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
+        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+        CHECK(!bt_avdtp_may_begin(&A, now));
+        CHECK_EQ(bt_avdtp_may_begin(&A, now + 30000), nosink[i].later);
+        if (nosink[i].later) {
+            now += 30000;
+            CHECK(bt_avdtp_begin(&A, now));
+            OURS(DISCOVER);
+            CHECK(A.walk_why == NULL);
+            FEED(ACC(LAST), DISCOVER, EP(2, 0, 0, 1));         // the phone let go
+            OURS(GETALL, S(2));
+            // The retry spent the hold: once this session ends, no walk until a new channel.
+            FEED(CMD(3), SETCONF, S(1), S(2), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+            OUT(ACC(3), SETCONF);
+            FEED(CMD(4), CLOSE, S(1));
+            OUT(ACC(4), CLOSE);
+            CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+            CHECK(!bt_avdtp_may_begin(&A, now + 100000));
+        } else {
+            // Their own configuration is still judged, and taken.
+            FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+            OUT(ACC(3), SETCONF);
+            CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+        }
+        // The link dropping lifts everything.
         bt_avdtp_reset(&A);
         CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_IDLE);
+        bt_avdtp_signalling_open(&A, now, 0x0103);
+        CHECK(bt_avdtp_may_begin(&A, now));
     }
     static const struct { uint8_t b0, b1, lo, hi; const char *why; } nofit[] = {
         { F44 | F32 | F16 | JOINT | STEREO, B16 | SB8 | LOUD, 2, 53, "no settings in common: 48 kHz" },
@@ -442,19 +491,48 @@ static void test_initiator_failures(void)
     for (unsigned i = 0; i < sizeof(nofit) / sizeof(nofit[0]); i++) {
         to_asking(0x0103);
         FEED(ACC(LAST), GETALL, TRANSPORT, SBC(nofit[i].b0, nofit[i].b1, nofit[i].lo, nofit[i].hi));
-        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
-        CHECK_STR(A.why, nofit[i].why);
+        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+        CHECK_STR(A.walk_why, nofit[i].why);
+        CHECK_EQ(A.wrongs, 0);
         NONE();
+        CHECK(!bt_avdtp_may_begin(&A, now + 1000000));
     }
     // A codec that is not SBC.
     to_asking(0x0103);
     FEED(ACC(LAST), GETALL, TRANSPORT, 0x07, 0x08, 0x00, 0x02, 0x80, 0x01, 0x8c, 0x84, 0x00, 0x00);
-    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
-    CHECK_STR(A.why, "no settings in common: no SBC");
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    CHECK_STR(A.walk_why, "no settings in common: no SBC");
     // SBC, but for video.
     to_asking(0x0103);
     FEED(ACC(LAST), GETALL, TRANSPORT, 0x07, 0x06, 0x10, 0x00, F48 | JOINT, B16 | SB8 | LOUD, 2, 53);
-    CHECK_STR(A.why, "no settings in common: no SBC");
+    CHECK_STR(A.walk_why, "no settings in common: no SBC");
+    // A sink that did not suit, and another in use: no settings in common
+    // with the one we could ask, and that is for good.
+    fresh(0x0103);
+    bt_avdtp_begin(&A, now);
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(2, 1, 0, 1), EP(3, 0, 0, 1));
+    OURS(GETALL, S(3));
+    FEED(ACC(LAST), GETALL, TRANSPORT, SBC(F44 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    CHECK_STR(A.walk_why, "no settings in common: 48 kHz");
+    CHECK(!bt_avdtp_may_begin(&A, now + 30000));
+    // A walk ending keeps the last session-gone-wrong reason beside its own.
+    fresh(0x0103);
+    bt_avdtp_begin(&A, now);
+    OURS(DISCOVER);
+    tick(now + 6000);
+    NONE();
+    bt_avdtp_signalling_closed(&A, now);
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    CHECK(bt_avdtp_begin(&A, now));
+    CHECK_STR(A.why, "a command went unanswered");
+    OURS(DISCOVER);
+    FEED(ACC(LAST), DISCOVER, EP(1, 0, 0, 0));
+    CHECK_STR(A.why, "a command went unanswered");
+    CHECK_STR(A.walk_why, "no sink endpoint");
+    char buf[512];
+    bt_avdtp_status(&A, buf, sizeof(buf));
+    CHECK(strstr(buf, "gone wrong 1, last: a command went unanswered") && strstr(buf, "our walk: no sink endpoint"));
 }
 
 // Every reject of every command we send, in its real layout, and the state
@@ -524,7 +602,7 @@ static void test_initiator_rejects(void)
     OURS(ABORT, S(3));
     FEED(REJ(LAST), ABORT, E_BAD_STATE);
     CHECK_EQ(A.strays, 0);
-    CHECK(bt_avdtp_begin(&A, now));
+    CHECK(!A.command_live);
     // A reject too short for its layout is counted, and still a reject.
     to_open();
     bt_avdtp_start(&A, now);
@@ -535,9 +613,19 @@ static void test_initiator_rejects(void)
     to_configuring();
     FEED(REJ(LAST), SETCONF, E_IN_USE);
     CHECK_EQ(A.malformed, 1); CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_ENDING);
+    // A reject that ends at its signal is the older general-reject shape:
+    // a reject, with no code, and not malformed.
     to_opening();
     FEED(REJ(LAST), OPEN);
-    CHECK_EQ(A.malformed, 1); CHECK_EQ(A.last_reject_code, 0);
+    CHECK_EQ(A.malformed, 0); CHECK_EQ(A.last_reject_code, 0);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_ENDING);
+    to_open();
+    bt_avdtp_start(&A, now);
+    OURS(START, S(3));
+    FEED(REJ(LAST), START);
+    CHECK_EQ(A.malformed, 0);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK_EQ(bt_avdtp_edges(&A)->start_rejects, 1);
 }
 
 // ── Timers ──────────────────────────────────────────────────────────────────
@@ -591,17 +679,23 @@ static void test_timers(void)
     tick(now + 5999); CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CLOSING);
     tick(now + 1); CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
     CHECK_EQ(A.wrongs, 0);
-    // Abort waits 2 s and nothing waits on it after.
-    to_open();
+    // Abort waits 2 s and nothing waits on it after. (A session they began,
+    // so we have not walked on this channel and may once the Abort is done.)
+    to_configured();
+    FEED(CMD(2), OPEN, S(1));
+    OUT(ACC(2), OPEN);
+    bt_avdtp_media_open(&A, now);
     bt_avdtp_media_closed(&A, now, false);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
-    OURS(ABORT, S(3));
+    OURS(ABORT, S(5));
+    CHECK(!bt_avdtp_may_begin(&A, now));
     CHECK(!bt_avdtp_begin(&A, now));
     tick(now + 1999);
     CHECK(!bt_avdtp_begin(&A, now));
     tick(now + 1);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
     CHECK_EQ(A.wrongs, 0);
+    CHECK(bt_avdtp_may_begin(&A, now));
     CHECK(bt_avdtp_begin(&A, now));
     OURS(DISCOVER);
     // AWAITING_MEDIA waits 10 s for the channel: then Abort and a session gone wrong.
@@ -868,7 +962,12 @@ static void drive(drive_t d)
     case D_STREAMING: to_streaming(); break;
     case D_SUSPENDING: to_streaming(); bt_avdtp_suspend(&A, now); OURS(SUSPEND, S(3)); break;
     case D_CLOSING: to_open(); bt_avdtp_close(&A, now); OURS(CLOSE, S(3)); break;
-    case D_FAILED: fresh(0x0103); bt_avdtp_begin(&A, now); OURS(DISCOVER); FEED(ACC(LAST), DISCOVER); break;
+    case D_FAILED:      // two sessions gone wrong on one connection
+        fresh(0x0103);
+        bt_avdtp_begin(&A, now); OURS(DISCOVER); tick(now + 6000);
+        bt_avdtp_signalling_closed(&A, now); bt_avdtp_signalling_open(&A, now, 0x0103);
+        bt_avdtp_begin(&A, now); OURS(DISCOVER); tick(now + 6000);
+        break;
     default: break;
     }
     CHECK_EQ(bt_avdtp_state(&A), drive_state[d]);
@@ -1044,6 +1143,8 @@ static void test_both_at_once(void)
     bt_avdtp_close(&A, now);
     OURS(CLOSE, S(3));
     FEED(ACC(LAST), CLOSE);
+    bt_avdtp_signalling_closed(&A, now);      // a new channel, so that we may walk again
+    bt_avdtp_signalling_open(&A, now, 0x0103);
     CHECK(bt_avdtp_begin(&A, now));
     OURS(DISCOVER);
     FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
@@ -1066,6 +1167,8 @@ static void test_both_at_once(void)
     bt_avdtp_close(&A, now);
     OURS(CLOSE, S(3));
     FEED(ACC(LAST), CLOSE);
+    bt_avdtp_signalling_closed(&A, now);
+    bt_avdtp_signalling_open(&A, now, 0x0103);
     CHECK(bt_avdtp_begin(&A, now));
     OURS(DISCOVER);
     FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
@@ -1090,8 +1193,12 @@ static void test_both_at_once(void)
     FEED(CMD(5), START, S(1));
     OUT(ACC(5), START);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK(!bt_avdtp_suspend(&A, now));        // our Start is still out
     FEED(REJ(LAST), START, S(3), E_BAD_STATE);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK_EQ(bt_avdtp_edges(&A)->start_rejects, 0);   // no reject of the stream
+    CHECK_EQ(bt_avdtp_edges(&A)->their_starts, 1);
+    CHECK(bt_avdtp_suspend(&A, now));
     to_open();
     bt_avdtp_start(&A, now);
     OURS(START, S(3));
@@ -1099,6 +1206,7 @@ static void test_both_at_once(void)
     OUT(ACC(5), START);
     FEED(ACC(LAST), START);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK_EQ(bt_avdtp_edges(&A)->start_rejects, 0);
     // Their Suspend while ours is out.
     to_streaming();
     bt_avdtp_suspend(&A, now);
@@ -1106,8 +1214,11 @@ static void test_both_at_once(void)
     FEED(CMD(6), SUSPEND, S(1));
     OUT(ACC(6), SUSPEND);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK(!bt_avdtp_start(&A, now));          // our Suspend is still out
     FEED(REJ(LAST), SUSPEND, S(3), E_BAD_STATE);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK_EQ(bt_avdtp_edges(&A)->suspend_rejects, 0);
+    CHECK_EQ(bt_avdtp_edges(&A)->their_suspends, 1);
     to_streaming();
     bt_avdtp_suspend(&A, now);
     OURS(SUSPEND, S(3));
@@ -1115,6 +1226,7 @@ static void test_both_at_once(void)
     OUT(ACC(6), SUSPEND);
     FEED(ACC(LAST), SUSPEND);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_OPEN);
+    CHECK_EQ(bt_avdtp_edges(&A)->suspend_rejects, 0);
     // Their Close while ours is out: ours is forgotten.
     to_open();
     bt_avdtp_close(&A, now);
@@ -1124,6 +1236,42 @@ static void test_both_at_once(void)
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
     FEED(ACC(LAST), CLOSE);
     CHECK_EQ(A.strays, 1);
+
+    // An Abort of ours is not abandoned by their Set Configuration: the
+    // media channel closes (Abort queued), theirs arrives before the Abort
+    // leaves, and both go, the answer first.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(8), SETCONF);
+    OURS(ABORT, S(3));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    CHECK_EQ(A.remote_seid, 5);
+    FEED(ACC(LAST), ABORT);                   // its answer is taken, and changes nothing
+    CHECK_EQ(A.strays, 0);
+    CHECK(!A.command_live);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    // ...and with no answer, its own 2 s, then nothing.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    OURS(ABORT, S(3));
+    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(8), SETCONF);
+    CHECK(A.command_live);
+    tick(now + 2000);
+    CHECK(!A.command_live);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    CHECK_EQ(A.wrongs, 0);
+    // Their Close of that stream does not abandon it either.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(8), SETCONF);
+    FEED(CMD(9), CLOSE, S(1));
+    OUT(ACC(9), CLOSE);
+    OURS(ABORT, S(3));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
 }
 
 // One answer and one command may wait, and the answer goes first; a second
@@ -1171,6 +1319,28 @@ static void test_one_answer_one_command(void)
     OUT(REJ(5), DISCOVER, E_BAD_STATE);
     NONE();
     CHECK_EQ(A.overrun, 1);
+    // An Abort is obeyed even as the third: it takes the newer answer's
+    // place, and that answer is what is counted as dropped.
+    to_streaming();
+    FEED(CMD(4), DISCOVER);
+    FEED(CMD(5), GETCAP, S(1));
+    FEED(CMD(6), ABORT, S(1));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    CHECK_EQ(A.overrun, 1);
+    OUT(ACC(4), DISCOVER, EP(1, 1, 0, 0));
+    OUT(ACC(6), ABORT);
+    NONE();
+    // ...but an Abort naming another endpoint has no answer, so it displaces nothing.
+    to_streaming();
+    FEED(CMD(4), DISCOVER);
+    FEED(CMD(5), GETCAP, S(1));
+    FEED(CMD(6), ABORT, S(2));
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_STREAMING);
+    CHECK_EQ(A.overrun, 0);
+    CHECK_EQ(A.malformed, 1);
+    OUT(ACC(4), DISCOVER, EP(1, 1, 0, 0));
+    OUT(REJ(5), GETCAP, E_BAD_STATE);
+    NONE();
     // With our command waiting too, the answers go first, oldest first.
     fresh(0x0103);
     bt_avdtp_begin(&A, now);
@@ -1305,6 +1475,7 @@ static void test_endings(void)
     bt_avdtp_signalling_open(&A, now, 0x0103);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
     CHECK(bt_avdtp_begin(&A, now));
+    OURS(DISCOVER);                           // our command is out: there is a session to go wrong
     bt_avdtp_signalling_closed(&A, now);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_FAILED);
     CHECK_EQ(A.wrongs, 2);
@@ -1318,6 +1489,66 @@ static void test_endings(void)
     bt_avdtp_signalling_closed(&A, now);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_IDLE);
     CHECK_EQ(A.wrongs, 0);
+
+    // A channel closed with no session in it is only a channel closed:
+    // open, close, open, close while CONNECTED counts nothing.
+    fresh(0x0103);
+    for (int k = 0; k < 3; k++) {
+        bt_avdtp_signalling_closed(&A, now);
+        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_IDLE);
+        bt_avdtp_signalling_open(&A, now, 0x0103);
+        CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
+    }
+    CHECK_EQ(A.wrongs, 0);
+    CHECK(A.why == NULL);
+    // ...nor with our walk begun but its first command not yet sent...
+    CHECK(bt_avdtp_begin(&A, now));
+    L++;                                      // the Discover never sent took its label with it
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 0);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_IDLE);
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    CHECK(bt_avdtp_may_begin(&A, now));       // a new channel may walk
+    // ...nor with their commands answered and nothing of ours in flight.
+    FEED(CMD(1), DISCOVER);
+    OUT(ACC(1), DISCOVER, EP(1, 0, 0, 0));
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 0);
+    // But with our Discover out, it is one...
+    bt_avdtp_signalling_open(&A, now, 0x0103);
+    CHECK(bt_avdtp_begin(&A, now));
+    OURS(DISCOVER);
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 1);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_IDLE);
+    // ...and with our Abort out in CONNECTED, and in CONFIGURED, one each.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    OURS(ABORT, S(3));
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 1);
+    to_configured();
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 1);
+    // An Abort queued and not sent is nothing in flight.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 0);
+    // From CONFIGURING on there is a session, even with our Set
+    // Configuration queued and not sent, or waiting to go again.
+    to_asking(0x0103);
+    FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC);
+    CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURING);
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 1);
+    to_configuring();
+    FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(REJ(3), SETCONF, 0x00, E_IN_USE);
+    FEED(REJ(LAST), SETCONF, 0x00, E_IN_USE);
+    CHECK(A.retry_waiting && !A.command_live);
+    bt_avdtp_signalling_closed(&A, now);
+    CHECK_EQ(A.wrongs, 1);
 
     // A session gone wrong once: ENDING, the host closes both, IDLE; reopened, it can begin again.
     to_open();
@@ -1340,7 +1571,8 @@ static void test_endings(void)
     bt_avdtp_signalling_open(&A, now + 10000, 0x0103);
     now += 10000;
     CHECK(bt_avdtp_begin(&A, now));
-    CHECK(A.why == NULL);                     // a new walk starts with no reason of the last
+    CHECK(A.walk_why == NULL);                // a new walk starts with no reason of the last walk...
+    CHECK_STR(A.why, "a command went unanswered");    // ...and the last session gone wrong keeps its own
     OURS(DISCOVER);
     // ...twice: FAILED, and the host still closes both.
     FEED(ACC(LAST), DISCOVER, EP(3, 0, 0, 1));
@@ -1546,7 +1778,11 @@ static void test_labels(void)
         OUT(ACC(1), SETCONF);
         FEED(CMD(2), CLOSE, S(1));
         OUT(ACC(2), CLOSE);
+        bt_avdtp_signalling_closed(&A, now);  // a new channel each time, so that we may walk
+        bt_avdtp_signalling_open(&A, now, 0x0103);
     }
+    CHECK_EQ(A.wrongs, 0);
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 20);
     // A response with the wrong label, a duplicate, one to nothing, the right label and the wrong signal.
     to_asking(0x0103);
     FEED(ACC(LAST + 1), GETALL, TRANSPORT, ALLSBC);
@@ -1618,7 +1854,7 @@ static void test_malformed_capabilities(void)
         uint8_t m[48] = { ACC(LAST), GETALL };
         memcpy(m + 2, cases[i].m, cases[i].n);
         feed_(m, 2u + cases[i].n);
-        bt_avdtp_state_t want = cases[i].suits ? BT_AVDTP_CONFIGURING : BT_AVDTP_FAILED;
+        bt_avdtp_state_t want = cases[i].suits ? BT_AVDTP_CONFIGURING : BT_AVDTP_CONNECTED;
         if (bt_avdtp_state(&A) != want) {
             failures++;
             printf("FAIL %s: case %u left %s\n", __func__, i, bt_avdtp_state_name(bt_avdtp_state(&A)));
@@ -1629,7 +1865,7 @@ static void test_malformed_capabilities(void)
     }
     to_asking(0x0103);
     FEED(ACC(LAST), GETALL, TRANSPORT, 0x07, 0x00);
-    CHECK_STR(A.why, "no settings in common: capabilities malformed");
+    CHECK_STR(A.walk_why, "no settings in common: capabilities malformed");
     CHECK_EQ(A.malformed, 1);
     // A malformed list moves on to the next sink.
     fresh(0x0103);
@@ -1641,6 +1877,64 @@ static void test_malformed_capabilities(void)
     OURS(GETALL, S(6));
     FEED(ACC(LAST), GETALL, TRANSPORT, ALLSBC);
     OURS(SETCONF, S(6), S(1), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 51));
+}
+
+// ── Edges, and the Delay Report's identifier ────────────────────────────────
+
+static void test_edges_and_delay(void)
+{
+    // A session agreed, either way, moves the edge: a poller sees that the
+    // session it knew ended and another began.
+    to_configured();
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 1);
+    FEED(CMD(2), CLOSE, S(1)); OUT(ACC(2), CLOSE);
+    FEED(CMD(3), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(3), SETCONF);
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 2);
+    FEED(CMD(4), SETCONF, S(1), S(5), TRANSPORT, SBC(F44 | JOINT, B16 | SB8 | LOUD, 2, 53));   // refused: no move
+    OUT(REJ(4), SETCONF, 0x00, E_IN_USE);
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 2);
+    to_configuring();
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 0);    // not until it is accepted
+    FEED(REJ(LAST), SETCONF, 0x07, E_UNSUP);
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 0);
+    to_opening();
+    CHECK_EQ(bt_avdtp_edges(&A)->sessions, 1);
+    // The edges start again at init and at reset.
+    to_streaming();
+    FEED(CMD(2), SUSPEND, S(1)); OUT(ACC(2), SUSPEND);
+    FEED(CMD(3), START, S(1)); OUT(ACC(3), START);
+    CHECK(bt_avdtp_edges(&A)->their_starts == 1 && bt_avdtp_edges(&A)->their_suspends == 1);
+    bt_avdtp_reset(&A);
+    const bt_avdtp_edges_t *e = bt_avdtp_edges(&A);
+    CHECK(!e->sessions && !e->their_starts && !e->their_suspends && !e->start_rejects && !e->suspend_rejects);
+
+    // A Delay Report under our identifier or the stream's sink endpoint,
+    // from CONFIGURED on; any other identifier is refused.
+    uint32_t d = 0;
+    to_streaming();                           // their endpoint is 3
+    FEED(CMD(2), DELAY, S(3), 0x01, 0x2c);
+    OUT(ACC(2), DELAY);
+    CHECK(bt_avdtp_delay(&A, &d)); CHECK_EQ(d, 300);
+    FEED(CMD(3), DELAY, S(1), 0x01, 0x2d);
+    OUT(ACC(3), DELAY);
+    CHECK(bt_avdtp_delay(&A, &d)); CHECK_EQ(d, 301);
+    FEED(CMD(4), DELAY, S(5), 0x09, 0x99);
+    OUT(REJ(4), DELAY, E_BAD_SEID);
+    CHECK(bt_avdtp_delay(&A, &d)); CHECK_EQ(d, 301);
+    to_configured();                          // their endpoint is 5
+    FEED(CMD(2), DELAY, S(5), 0x00, 0x64);
+    OUT(ACC(2), DELAY);
+    CHECK(bt_avdtp_delay(&A, &d)); CHECK_EQ(d, 100);
+    FEED(CMD(3), DELAY, S(3), 0x00, 0x65);
+    OUT(REJ(3), DELAY, E_BAD_SEID);
+    // Before a stream, their endpoint is no one's: the asking walk's sink is not configured.
+    to_asking(0x0103);
+    FEED(CMD(2), DELAY, S(3), 0x00, 0x64);
+    OUT(REJ(2), DELAY, E_BAD_SEID);
+    FEED(CMD(3), DELAY, S(1), 0x00, 0x64);
+    OUT(REJ(3), DELAY, E_BAD_STATE);
+    CHECK(!bt_avdtp_delay(&A, &d));
 }
 
 // ── The status file ─────────────────────────────────────────────────────────
@@ -1667,7 +1961,10 @@ static void test_status(void)
     fresh(0x0103);
     bt_avdtp_begin(&A, now); OURS(DISCOVER); FEED(ACC(LAST), DISCOVER);
     bt_avdtp_status(&A, buf, sizeof(buf));
-    CHECK(strstr(buf, "failed") && strstr(buf, "no sink endpoint free") && strstr(buf, "delay not reported"));
+    CHECK(strstr(buf, "avdtp: connected") && strstr(buf, "our walk: no sink endpoint") && strstr(buf, "delay not reported"));
+    drive(D_FAILED);
+    bt_avdtp_status(&A, buf, sizeof(buf));
+    CHECK(strstr(buf, "avdtp: failed, sessions made 0, gone wrong 2, last: a command went unanswered") != NULL);
     CHECK_STR(bt_avdtp_state_name(BT_AVDTP_AWAITING_MEDIA), "awaiting media");
     CHECK_STR(bt_avdtp_state_name((bt_avdtp_state_t)99), "?");
 }
@@ -1694,7 +1991,8 @@ static void invariants(const char *where)
         && A.command.bytes <= BT_AVDTP_LONGEST && (!A.answer[1].bytes || A.answer[0].bytes)
         && A.rx_have <= sizeof(A.rx) && A.endpoint_count <= BT_AVDTP_ENDPOINTS
         && (s != BT_AVDTP_IDLE || (!A.answer[0].bytes && !A.command_live))
-        && (!bt_avdtp_wants_closed(&A) || s == BT_AVDTP_ENDING || s == BT_AVDTP_FAILED);
+        && (!bt_avdtp_wants_closed(&A) || s == BT_AVDTP_ENDING || s == BT_AVDTP_FAILED)
+        && (!bt_avdtp_may_begin(&A, now) || (s == BT_AVDTP_CONNECTED && !A.command_live));
     const bt_avdtp_sbc_t *set = bt_avdtp_settings(&A);
     if (set) ok = ok && set->rate == 48000 && set->blocks == 16 && set->subbands == 8 && !set->snr
                     && set->bitpool >= 2 && set->bitpool <= BT_AVDTP_BITPOOL;
@@ -1881,6 +2179,7 @@ int main(int argc, char **argv)
     test_fragments();
     test_labels();
     test_malformed_capabilities();
+    test_edges_and_delay();
     test_status();
     fuzz_random(rounds);
     fuzz_peer(rounds);

@@ -8,12 +8,16 @@
 // open, start, suspend and close the stream; as acceptor we answer when
 // they do the same to us, and both may happen at once.
 //
-// PURE: no kernel headers, no allocation, no waits, no logging, no clock.
-// Time is the `now` (milliseconds) its owner hands in. It reads and writes
-// whole signalling messages; carrying them on the L2CAP signalling channel
-// (one payload slot a channel) and opening and closing the channels are the
-// host's. Everything it reads came over the air from a stranger: every
-// length is checked against the bytes that remain before a byte is read.
+// PURE: no allocation, no waits, no logging, no clock. Time is the `now`
+// (milliseconds) its owner hands in. The one header it takes beyond this
+// one is strings/sprintf.h, which only declares snprintf for the status
+// text; a host build compiles it with the same include path and links the C
+// library's snprintf, so the file builds and runs under the host suite
+// unchanged. It reads and writes whole signalling messages; carrying them
+// on the L2CAP signalling channel (one payload slot a channel) and opening
+// and closing the channels are the host's. Everything it reads came over
+// the air from a stranger: every length is checked against the bytes that
+// remain before a byte is read.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -37,23 +41,24 @@
 #define BT_AVDTP_ABORT_MS      2000    // an Abort waits this long, and nothing waits on it after
 #define BT_AVDTP_HOLD_MS       10000   // CONFIGURED for their Open; AWAITING_MEDIA for the channel
 #define BT_AVDTP_RETRY_MS      1000    // our Set Configuration is sent again after this, once
+#define BT_AVDTP_BUSY_MS       30000   // after "no sink endpoint free", we may begin again this much later
 
 typedef enum {
     BT_AVDTP_IDLE,            // no signalling channel
-    BT_AVDTP_CONNECTED,       // sig up, no stream, nothing of ours outstanding
-    BT_AVDTP_DISCOVERING,     // our Discover is out
-    BT_AVDTP_ASKING,          // our Get (All) Capabilities is out
-    BT_AVDTP_CONFIGURING,     // our Set Configuration is out, or waits to be sent again
+    BT_AVDTP_CONNECTED,       // sig up, no stream (an Abort of ours may still be outstanding)
+    BT_AVDTP_DISCOVERING,     // our Discover is queued or out
+    BT_AVDTP_ASKING,          // our Get (All) Capabilities is queued or out
+    BT_AVDTP_CONFIGURING,     // our Set Configuration is queued, out, or waiting to be sent again
     BT_AVDTP_CONFIGURED,      // we accepted THEIR Set Configuration; they are to open
-    BT_AVDTP_OPENING,         // our Open is out
+    BT_AVDTP_OPENING,         // our Open is queued or out
     BT_AVDTP_AWAITING_MEDIA,  // Open is agreed; the media channel is not up yet
     BT_AVDTP_OPEN,            // configured, both channels up, not streaming
-    BT_AVDTP_STARTING,        // our Start is out
+    BT_AVDTP_STARTING,        // our Start is queued or out
     BT_AVDTP_STREAMING,       // media may be sent
-    BT_AVDTP_SUSPENDING,      // our Suspend is out
-    BT_AVDTP_CLOSING,         // our Close is out
+    BT_AVDTP_SUSPENDING,      // our Suspend is queued or out
+    BT_AVDTP_CLOSING,         // our Close is queued or out
     BT_AVDTP_ENDING,          // a session went wrong: the host is closing both channels
-    BT_AVDTP_FAILED,          // no session can be made on this connection; `why` says why
+    BT_AVDTP_FAILED,          // a second session went wrong on this connection; `why` says why
 } bt_avdtp_state_t;
 
 // The SBC settings agreed: the fields of sbc_settings_t (audio/sbc_frame.h),
@@ -69,13 +74,15 @@ typedef struct {
     uint8_t bitpool;
 } bt_avdtp_sbc_t;
 
-// Edges the pump must see even if it only polls: each only goes up, from
-// the link's coming up (bt_avdtp_init).
+// Edges a caller must see even if it only polls: each only goes up, and
+// all start again at zero at bt_avdtp_init and at bt_avdtp_reset, so a
+// caller re-reads them after either.
 typedef struct {
+    uint32_t sessions;         // a configuration agreed: ours accepted, or theirs
     uint32_t their_starts;     // their Start, accepted
     uint32_t their_suspends;   // their Suspend, accepted
-    uint32_t start_rejects;    // our Start, rejected
-    uint32_t suspend_rejects;  // our Suspend, rejected
+    uint32_t start_rejects;    // our Start, rejected while still STARTING
+    uint32_t suspend_rejects;  // our Suspend, rejected while still SUSPENDING
 } bt_avdtp_edges_t;
 
 // One message waiting for its turn on the channel.
@@ -92,6 +99,13 @@ typedef struct {
     bool sink;                // endpoint type: true sink, false source
 } bt_avdtp_endpoint_t;
 
+// Whether we may begin a walk of our own (bt_avdtp_may_begin).
+typedef enum {
+    BT_AVDTP_WALK_OPEN,       // we may, once this signalling channel, unless we already have
+    BT_AVDTP_WALK_LATER,      // their sinks were all in use: again once begin_after passes
+    BT_AVDTP_WALK_NEVER,      // no sink, or no settings in common: not until the link drops
+} bt_avdtp_walk_t;
+
 typedef struct bt_avdtp {
     bt_avdtp_state_t state;
     uint64_t now;
@@ -99,13 +113,16 @@ typedef struct bt_avdtp {
     // The answers we owe, oldest first: the one their command earned, and
     // the answer to one more that arrived before it could leave (a reject,
     // bad state; or for an Abort its accept, for a signal we do not know a
-    // General Reject). A third is dropped and counted.
+    // General Reject). A further command is dropped and counted, except an
+    // Abort, which takes the place of the newer answer.
     bt_avdtp_msg_t answer[2];
     // Our one command: built when queued, then handed out (`sent`), then
     // answered or timed out, its timer running from when it was queued.
     // Labels run 0 to 15 and round again, one a command. A response is
-    // taken only with this label and this signal, and only once the command
-    // has been handed out; anything else is a stray.
+    // taken only with this label and this signal (a reject carrying no
+    // signal at all, AVDTP 1.0's general reject, is matched on the label
+    // alone), and only once the command has been handed out; anything else
+    // is a stray.
     bt_avdtp_msg_t command;
     bool command_live;        // a command is queued or outstanding
     bool command_sent;
@@ -121,7 +138,12 @@ typedef struct bt_avdtp {
     // What their Discover answer offered, and the walk through it.
     bt_avdtp_endpoint_t endpoints[BT_AVDTP_ENDPOINTS];
     uint8_t endpoint_count, endpoint_at;   // endpoint_at: the one being asked or configured
-    bool no_get_all;          // they rejected Get All Capabilities: Get Capabilities from now on
+    bool no_get_all;          // they rejected Get All Capabilities: Get Capabilities for the rest of this walk
+    // Our own walks: begun on this signalling channel, and what the last
+    // one that found nothing allows.
+    bool tried;
+    bt_avdtp_walk_t walk;
+    uint64_t begin_after;     // BT_AVDTP_WALK_LATER: from when we may begin again
     // The stream: their endpoint, the settings, the bitpool range the
     // configuration names, and whether it includes delay reporting.
     uint8_t remote_seid;
@@ -134,7 +156,8 @@ typedef struct bt_avdtp {
     uint8_t wrongs;           // sessions gone wrong on this connection
     bool delay_known;
     uint16_t delay;           // their latest Delay Report, in 100 us units
-    const char *why;          // why the session is FAILED or last went wrong; during the walk, why the last sink did not suit
+    const char *why;          // why the last session went wrong (and so why FAILED); NULL if none has
+    const char *walk_why;     // why our last walk made no session, or during a walk why the last sink did not suit
     // Reassembly of one fragmented message: the start's header byte, the
     // packets still to come, and the signal and payload so far, which with
     // the header byte make at most BT_AVDTP_MESSAGE.
@@ -148,7 +171,7 @@ typedef struct bt_avdtp {
     uint32_t malformed;       // a message, capability list or reject not well formed
     uint32_t fragments_dropped;
     uint32_t unsendable;      // a message longer than the channel's MTU, dropped
-    uint32_t overrun;         // a third command of theirs with two answers owed, dropped
+    uint32_t overrun;         // a command of theirs with two answers owed, or the answer an Abort displaced, dropped
     uint32_t ignored;         // a message in a state that takes none (IDLE, ENDING)
     uint32_t media_refused;
     uint8_t last_reject_signal, last_reject_code;
@@ -161,9 +184,11 @@ void bt_avdtp_reset(bt_avdtp_t *a);                      // the link dropped: li
 // SDP record (0x0103), or 0 when the record was not read: Get All
 // Capabilities is asked only of 0x0103 or later.
 void bt_avdtp_signalling_open(bt_avdtp_t *a, uint64_t now, uint16_t peer_version);
-// Sig closed with the link up: everything the channel carried is cleared,
-// IDLE, and a session gone wrong (the second on this connection is FAILED).
-// In ENDING it is what was asked for, and nothing more is counted; FAILED
+// Sig closed with the link up: everything the channel carried is cleared
+// and the state is IDLE. When there was a session to go wrong (a stream
+// configured or being configured, or a command of ours outstanding), it is
+// a session gone wrong, and the second on this connection is FAILED. In
+// ENDING it is what was asked for, and nothing more is counted; FAILED
 // stays FAILED.
 void bt_avdtp_signalling_closed(bt_avdtp_t *a, uint64_t now);
 void bt_avdtp_media_open(bt_avdtp_t *a, uint64_t now);
@@ -180,8 +205,17 @@ void bt_avdtp_tick(bt_avdtp_t *a, uint64_t now);         // the timers
 // counted: a command so dropped is left to its timer.
 size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t capacity, uint16_t mtu, uint64_t now);
 
+// May we begin a walk of our own now? CONNECTED, no command of ours
+// outstanding, and: not yet tried on this signalling channel; or, when our
+// last walk found their sinks all in use, BT_AVDTP_BUSY_MS after it did.
+// After "no sink endpoint" or "no settings in common", never again until
+// the link drops: asking again would get the same answer. Their own Set
+// Configuration is judged on its merits whatever this says.
+bool bt_avdtp_may_begin(const bt_avdtp_t *a, uint64_t now);
 // What the pump asks for. False: not in a state that allows it, or a
-// command of ours (an Abort) is still outstanding.
+// command of ours is still outstanding (an Abort; or our Start or Suspend,
+// when theirs crossed it and moved the state first). bt_avdtp_begin is
+// also false when bt_avdtp_may_begin is.
 bool bt_avdtp_begin(bt_avdtp_t *a, uint64_t now);        // CONNECTED: start discovering
 bool bt_avdtp_start(bt_avdtp_t *a, uint64_t now);        // OPEN
 bool bt_avdtp_suspend(bt_avdtp_t *a, uint64_t now);      // STREAMING

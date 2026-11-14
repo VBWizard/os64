@@ -164,13 +164,20 @@ static void av_drop_stream(bt_avdtp_t *a)
     a->configured=false;
 }
 
+// Our command is abandoned: its answer, if it comes, is a stray. An Abort
+// is never abandoned; it runs out its own short timer, because what it
+// ends on their side still has to end.
+static void av_abandon_command(bt_avdtp_t *a)
+{
+    if(a->command_signal!=SIG_ABORT) a->command_live=false;
+}
+
 // To CONNECTED: the session is over and a new one is theirs to ask for or
-// ours to begin. A command of ours still outstanding is forgotten (its
-// answer, if it comes, is a stray).
+// ours to begin.
 static void av_to_connected(bt_avdtp_t *a)
 {
     av_drop_stream(a);
-    a->command_live=false;
+    av_abandon_command(a);
     a->state=BT_AVDTP_CONNECTED;
 }
 
@@ -185,7 +192,9 @@ static void av_abort_to_connected(bt_avdtp_t *a)
 
 // A session gone wrong (§ When a session goes wrong): Abort if a stream may
 // be configured, and the host closes media and sig. The second on this
-// connection is FAILED. Its callers have already retired our command.
+// connection is FAILED. Its callers have already retired the command that
+// failed; when a stream may be configured, this Abort replaces any older
+// one still running.
 static void av_gone_wrong(bt_avdtp_t *a, const char *why)
 {
     bool stream=a->state>=BT_AVDTP_CONFIGURING && a->state<=BT_AVDTP_CLOSING && a->remote_seid;
@@ -196,27 +205,34 @@ static void av_gone_wrong(bt_avdtp_t *a, const char *why)
     a->state=a->wrongs>=2 ? BT_AVDTP_FAILED : BT_AVDTP_ENDING;
 }
 
-// No session can be made: asking again would get the same answer. It comes
-// of an answer to our command, so none is outstanding.
-static void av_fail(bt_avdtp_t *a, const char *why)
+// Our walk made no session. That is not a session gone wrong: we go back
+// to CONNECTED, keep the reason in walk_why, and say when (if ever) we may
+// walk again. Their own Set Configuration is still judged on its merits.
+// It comes of an answer to our command, so none is outstanding.
+static void av_walk_ends(bt_avdtp_t *a, const char *why, bt_avdtp_walk_t walk)
 {
     av_drop_stream(a);
-    a->why=why;
-    a->state=BT_AVDTP_FAILED;
+    a->walk_why=why;
+    a->walk=walk;
+    a->begin_after=a->now+BT_AVDTP_BUSY_MS;
+    a->state=BT_AVDTP_CONNECTED;
 }
 
 // ── The initiator's walk ────────────────────────────────────────────────────
 
-static const char *const WHY_NO_SINK="no sink endpoint free";
+static bool av_audio_sink(const bt_avdtp_endpoint_t *e)
+{ return e->media==0 && e->sink && e->seid && e->seid<=SEID_LAST; }
 
 // Ask the first audio sink endpoint not in use at or after `from`. None
-// left: FAILED, "no sink" when none was ever asked, else why the last one
-// did not suit (`why`, which bt_avdtp_begin clears).
+// left: the walk ends, for good with why the last sink asked did not suit
+// (`walk_why`, which bt_avdtp_begin clears) or with no audio sink at all;
+// for a while when every audio sink they have is in use, since a phone
+// holding one lets go of it.
 static void av_ask(bt_avdtp_t *a, unsigned from)
 {
     for(unsigned i=from;i<a->endpoint_count;i++) {
         const bt_avdtp_endpoint_t *e=&a->endpoints[i];
-        if(e->media!=0 || !e->sink || e->in_use || !e->seid || e->seid>SEID_LAST) continue;
+        if(!av_audio_sink(e) || e->in_use) continue;
         a->endpoint_at=(uint8_t)i;
         a->remote_seid=e->seid;
         bool all=a->peer_version>=0x0103 && !a->no_get_all;
@@ -224,7 +240,10 @@ static void av_ask(bt_avdtp_t *a, unsigned from)
         av_command_seid(a,all ? SIG_GET_ALL_CAPABILITIES : SIG_GET_CAPABILITIES,BT_AVDTP_REPLY_MS);
         return;
     }
-    av_fail(a,a->why ? a->why : WHY_NO_SINK);
+    if(a->walk_why) { av_walk_ends(a,a->walk_why,BT_AVDTP_WALK_NEVER); return; }
+    for(unsigned i=0;i<a->endpoint_count;i++)
+        if(av_audio_sink(&a->endpoints[i])) { av_walk_ends(a,"no sink endpoint free",BT_AVDTP_WALK_LATER); return; }
+    av_walk_ends(a,"no sink endpoint",BT_AVDTP_WALK_NEVER);
 }
 
 // Their capabilities: the first SBC codec element and whether delay
@@ -336,10 +355,12 @@ static void av_their_setconf(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, co
     }
     uint8_t cat=0, code=0;
     if(!av_judge(a,p+2,n-2,&cat,&code)) { av_reject(m,label,SIG_SET_CONFIGURATION,cat,code); return; }
-    // Accepted: our own sequence is abandoned.
-    a->command_live=false;
+    // Accepted: our own sequence is abandoned (an Abort of ours still goes,
+    // after this answer).
+    av_abandon_command(a);
     a->remote_seid=intr;
     a->configured=true;
+    a->edges.sessions++;
     a->state=BT_AVDTP_CONFIGURED;
     a->state_deadline=a->now+BT_AVDTP_HOLD_MS;
     av_start(m,label,MSG_ACCEPT,SIG_SET_CONFIGURATION);
@@ -418,8 +439,14 @@ static void av_answer(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, uint8_t s
         av_start(m,label,MSG_ACCEPT,signal);
         return;
     case SIG_DELAY_REPORT:
+        // Taken under either end's identifier: ours, as the specification
+        // has it, or the sink endpoint of the stream, which some sinks send.
+        // With one stream there is nothing to confuse it with.
         if(n<3) { av_reject(m,label,signal,0,ERR_BAD_LENGTH); return; }
-        if(seid!=BT_AVDTP_SEID) { av_reject(m,label,signal,0,ERR_BAD_ACP_SEID); return; }
+        if(seid!=BT_AVDTP_SEID && !(a->configured && seid==a->remote_seid)) {
+            av_reject(m,label,signal,0,ERR_BAD_ACP_SEID);
+            return;
+        }
         if(!av_streamed(a->state)) { av_reject(m,label,signal,0,ERR_BAD_STATE); return; }
         a->delay=(uint16_t)(p[1]<<8 | p[2]);
         a->delay_known=true;
@@ -446,20 +473,30 @@ static void av_one_too_many(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, uin
     av_reject(m,label,signal,names_seid ? p[0]>>2 : 0,ERR_BAD_STATE);
 }
 
+// With two answers owed a further command is dropped and counted, except
+// an Abort, which is always obeyed: its accept takes the newer answer's
+// place, and that answer is the one counted as dropped.
 static void av_command_in(bt_avdtp_t *a, uint8_t label, uint8_t signal, const uint8_t *p, size_t n)
 {
     if(!a->answer[0].bytes) av_answer(a,&a->answer[0],label,signal,p,n);
     else if(!a->answer[1].bytes) av_one_too_many(a,&a->answer[1],label,signal,p,n);
+    else if(signal==SIG_ABORT) {
+        bt_avdtp_msg_t m={0};
+        av_answer(a,&m,label,signal,p,n);
+        if(m.bytes) { a->answer[1]=m; a->overrun++; }
+    }
     else a->overrun++;
 }
 
 // ── Answers to our commands ─────────────────────────────────────────────────
 
-// A reject's error code, read where its signal puts it; 0 for a general
-// reject, which carries none, and for a reject too short to carry one.
+// A reject's error code, read where its signal puts it; 0 when there is
+// none. A general reject carries none, and nor does a reject that ends at
+// its signal (the older general-reject shape): neither is malformed. One
+// that carries some of its layout but not the code is.
 static uint8_t av_reject_code(bt_avdtp_t *a, uint8_t signal, uint8_t type, const uint8_t *p, size_t n)
 {
-    if(type==MSG_GENERAL_REJECT) return 0;
+    if(type==MSG_GENERAL_REJECT || !n) return 0;
     size_t at=signal==SIG_SET_CONFIGURATION || signal==SIG_RECONFIGURE || signal==SIG_START || signal==SIG_SUSPEND ? 1 : 0;
     if(n<at+1) { a->malformed++; return 0; }
     return p[at];
@@ -500,12 +537,12 @@ static void av_response(bt_avdtp_t *a, uint8_t label, uint8_t signal, uint8_t ty
                 av_ask(a,a->endpoint_at);
                 return;
             }
-            a->why="no settings in common: capabilities refused";
+            a->walk_why="no settings in common: capabilities refused";
             av_ask(a,a->endpoint_at+1u);
             return;
         }
         const char *why=0;
-        if(!av_suits(a,p,n,&why)) { a->why=why; av_ask(a,a->endpoint_at+1u); return; }
+        if(!av_suits(a,p,n,&why)) { a->walk_why=why; av_ask(a,a->endpoint_at+1u); return; }
         a->retried=false; a->rejected_theirs=false; a->retry_waiting=false;
         a->state=BT_AVDTP_CONFIGURING;
         av_send_setconf(a);
@@ -514,6 +551,7 @@ static void av_response(bt_avdtp_t *a, uint8_t label, uint8_t signal, uint8_t ty
     case SIG_SET_CONFIGURATION:
         if(accepted) {
             a->configured=true;
+            a->edges.sessions++;
             a->state=BT_AVDTP_OPENING;
             av_command_seid(a,SIG_OPEN,BT_AVDTP_REPLY_MS);
             return;
@@ -534,15 +572,18 @@ static void av_response(bt_avdtp_t *a, uint8_t label, uint8_t signal, uint8_t ty
         return;
     case SIG_START:
         // Their own Start may have been accepted first: the stream is then
-        // streaming whatever they answer ours with.
-        if(accepted) { if(a->state==BT_AVDTP_STARTING) a->state=BT_AVDTP_STREAMING; return; }
+        // streaming whatever they answer ours with, and a reject of ours is
+        // no reject of the stream, so it is not counted.
+        if(a->state!=BT_AVDTP_STARTING) return;
+        if(accepted) { a->state=BT_AVDTP_STREAMING; return; }
         a->edges.start_rejects++;
-        if(a->state==BT_AVDTP_STARTING) a->state=BT_AVDTP_OPEN;
+        a->state=BT_AVDTP_OPEN;
         return;
     case SIG_SUSPEND:
-        if(accepted) { if(a->state==BT_AVDTP_SUSPENDING) a->state=BT_AVDTP_OPEN; return; }
+        if(a->state!=BT_AVDTP_SUSPENDING) return;
+        if(accepted) { a->state=BT_AVDTP_OPEN; return; }
         a->edges.suspend_rejects++;
-        if(a->state==BT_AVDTP_SUSPENDING) a->state=BT_AVDTP_STREAMING;
+        a->state=BT_AVDTP_STREAMING;
         return;
     case SIG_CLOSE:
         if(a->state==BT_AVDTP_CLOSING) av_to_connected(a);
@@ -575,7 +616,9 @@ void bt_avdtp_signalling_open(bt_avdtp_t *a, uint64_t now, uint16_t peer_version
 {
     a->now=now;
     a->peer_version=peer_version;
-    if(a->state==BT_AVDTP_IDLE) a->state=BT_AVDTP_CONNECTED;
+    if(a->state!=BT_AVDTP_IDLE) return;
+    a->state=BT_AVDTP_CONNECTED;
+    a->tried=false;              // a new channel may try once; a walk that ended for good still holds
 }
 
 // Everything the signalling channel carried goes with it.
@@ -593,10 +636,18 @@ void bt_avdtp_signalling_closed(bt_avdtp_t *a, uint64_t now)
     a->now=now;
     bt_avdtp_state_t was=a->state;
     if(was==BT_AVDTP_IDLE) return;
+    // There was a session to go wrong when a stream was configured or being
+    // configured, or a command of ours was out; a channel closed with
+    // nothing in flight (CONNECTED, or a walk whose first command had not
+    // left) is only a channel closed.
+    bool session=(was>=BT_AVDTP_CONFIGURING && was<=BT_AVDTP_CLOSING) || (a->command_live && a->command_sent);
     av_clear_channel(a);
     if(was==BT_AVDTP_FAILED) return;
-    if(was!=BT_AVDTP_ENDING) { a->wrongs++; a->why="the signalling channel closed"; }
-    a->state=a->wrongs>=2 ? BT_AVDTP_FAILED : BT_AVDTP_IDLE;
+    a->state=BT_AVDTP_IDLE;
+    if(was==BT_AVDTP_ENDING || !session) return;
+    a->wrongs++;
+    a->why="the signalling channel closed";
+    if(a->wrongs>=2) a->state=BT_AVDTP_FAILED;
 }
 
 void bt_avdtp_media_open(bt_avdtp_t *a, uint64_t now)
@@ -688,11 +739,25 @@ size_t bt_avdtp_next(bt_avdtp_t *a, uint8_t *out, size_t cap, uint16_t mtu, uint
     }
 }
 
+bool bt_avdtp_may_begin(const bt_avdtp_t *a, uint64_t now)
+{
+    if(a->state!=BT_AVDTP_CONNECTED || a->command_live) return false;
+    switch(a->walk) {
+    case BT_AVDTP_WALK_LATER: return now>=a->begin_after;
+    case BT_AVDTP_WALK_NEVER: return false;
+    default: return !a->tried;
+    }
+}
+
+// A new walk starts with nothing of the last: its reason, its refusal of
+// Get All, its hold. The last session gone wrong keeps its own reason.
 bool bt_avdtp_begin(bt_avdtp_t *a, uint64_t now)
 {
     a->now=now;
-    if(a->state!=BT_AVDTP_CONNECTED || a->command_live) return false;
-    a->endpoint_count=0; a->endpoint_at=0; a->no_get_all=false; a->why=0;
+    if(!bt_avdtp_may_begin(a,now)) return false;
+    a->tried=true;
+    a->walk=BT_AVDTP_WALK_OPEN;
+    a->endpoint_count=0; a->endpoint_at=0; a->no_get_all=false; a->walk_why=0;
     a->state=BT_AVDTP_DISCOVERING;
     av_command(a,SIG_DISCOVER,BT_AVDTP_REPLY_MS);
     return true;
@@ -750,9 +815,14 @@ size_t bt_avdtp_status(const bt_avdtp_t *a, char *out, size_t cap)
 {
     if(!cap) return 0;
     size_t n=0;
-    int w=snprintf(out,cap,"avdtp: %s, sessions gone wrong %u%s%s\n",bt_avdtp_state_name(a->state),(unsigned)a->wrongs,
-                   a->why ? ", why: " : "",a->why ? a->why : "");
+    int w=snprintf(out,cap,"avdtp: %s, sessions made %u, gone wrong %u%s%s\n",bt_avdtp_state_name(a->state),
+                   (unsigned)a->edges.sessions,(unsigned)a->wrongs,a->why ? ", last: " : "",a->why ? a->why : "");
     if(w>0) n+=(size_t)w;
+    if(a->walk_why && n<cap) {
+        w=snprintf(out+n,cap-n,"avdtp: our walk: %s%s\n",a->walk_why,
+                   a->walk==BT_AVDTP_WALK_NEVER ? " (not again on this link)" : a->walk==BT_AVDTP_WALK_LATER ? " (again later)" : "");
+        if(w>0) n+=(size_t)w;
+    }
     if(a->configured && n<cap) {
         const bt_avdtp_sbc_t *s=&a->settings;
         w=snprintf(out+n,cap-n,"avdtp: endpoint %u, sbc %u Hz %s, %u blocks, %u subbands, %s, bitpool %u (%u-%u), delay reporting %s%s\n",
