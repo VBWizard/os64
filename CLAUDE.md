@@ -559,8 +559,19 @@ virtio because its drain waits for the tick.
   `tools/test_bt_avrcp_host.sh` plays the headphones, 201 mutants): as the
   target it answers their buttons and says what is playing; as the
   controller it learns whether they have absolute volume, hears it change
-  and sets it. The host does not call it: AUDIO_REMOTE.md § Part W is
-  where it is wired, § R, as built its record
+  and sets it. The host carries it on one AVCTP channel with an audio sink
+  (`bt_host.c` § Slot 2's remote control: theirs is taken whenever it
+  opens, ours asked for two seconds after AVDTP's signalling, at most
+  twice a connection). **While AVRCP is ready and the pump is the seam's
+  sink, `/dev/volume` IS the headphones' volume** (§ Slot 2's volume):
+  the seam applies no gain, a write becomes one Set Absolute Volume, and
+  their own buttons move the number. Connecting never makes anything
+  louder: the number takes THEIR level first, then the seam stops
+  applying its gain, and nothing is sent to them. Their play, pause,
+  next and previous presses are answered, counted and logged under
+  `DEBUG_USB`, and do nothing yet (§ Slot 2's buttons). Slot 2's status
+  shows the `avctp channel:`, AVRCP's lines, `volume:` and `buttons:`.
+  AUDIO_REMOTE.md §§ R and W, as built are the record
   **The A2DP sink** is the pump, `bt_a2dp.c` (pure;
   `tools/test_bt_a2dp_host.sh`), run by the host inside `kusb`'s pass
   after the LE peers: it is the audio seam's sink, named `a2dp` in
@@ -596,7 +607,15 @@ virtio because its drain waits for the tick.
   write and the tap's read wait, and the position is asked for often enough
   that it must cost a syscall and no more. **`/dev/audioctl`** (`pause`,
   `resume`, `flush`, `format`) and **`/dev/volume`** (0 to 100, applied at
-  the pull) are plain devfs text, and anyone may write them. The write
+  the pull, unless the sink OWNS the volume: then the number is carried
+  out at the sink's end, headphones with absolute volume, and the pull
+  applies no gain) are plain devfs text, and anyone may write them. A sink
+  has three calls for the volume: `audio_sink_owns_volume`,
+  `audio_sink_volume_set` (what it is at the sink's end; needs no
+  ownership) and `audio_sink_volume_now`; the first two are refused from
+  anything but the sink, and the seam takes the volume back by itself at
+  every attach and detach, so no later sink inherits a pull with no gain.
+  `/sys/audio`'s `volume:` line says whose it is. The write
   takes write's patience (forever, some milliseconds, none). One open of
   the stream at a time (`OS64_AUDIO_BUSY`); a close never waits and never
   cuts the sound, and the next open's frames follow under a new

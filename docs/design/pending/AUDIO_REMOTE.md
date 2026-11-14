@@ -466,9 +466,9 @@ REJECTED; BlueZ waits 10 s for a control answer where we wait 2 s twice.
 - AVRCP is fed, ticked and drained each tick beside AVDTP, under the same
   send gate, after the LE peers.
 - **The playback status** the target answers with is the host's to say,
-  from state: playing while AVDTP is streaming and the seam has had sound
-  within the quiet rule; paused when the seam says paused; stopped
-  otherwise.
+  from state: playing while AVDTP is streaming and the tick's one reading
+  of the seam says sound; paused when the seam says paused; stopped
+  otherwise ("W, as built" says why it is the tick's reading).
 
 ### Who owns the volume
 
@@ -497,7 +497,7 @@ gain.
 | A write to `/dev/volume` | The seam's number changes; the host, which reads the seam's volume every pass while it owns it, sees the change and sends Set Absolute Volume |
 | The volume buttons on the cup | They announce CHANGED; the host puts their level in the seam; nothing is sent back |
 | Ownership ends (the stream's session ends, AVRCP leaves `READY`, the link drops) | The seam applies its gain again, at the number it holds. That can only be quieter or the same |
-| AVRCP is `PLAIN` | Today's behaviour: `/dev/volume` is the seam's gain, their buttons are theirs. If they send volume presses, each moves `/dev/volume` by 5 |
+| AVRCP is `PLAIN` | Today's behaviour: `/dev/volume` is the seam's gain, their buttons are theirs. If they send volume presses, each moves `/dev/volume` by 5 (as built, in every state but `READY`) |
 
 **One raw value is tracked, so the two ends never chase each other.** The
 host keeps the last 0-to-127 value both ends are known to share.
@@ -579,6 +579,100 @@ P5, by Chris:
    previous, as these headphones do it): nothing changes yet, and slot 2's
    status counts each press under its name.
 5. Type and move the mouse through all of it.
+
+### W, as built
+
+Built as above: the AVCTP channel's lifecycle in `bt_host.c` § Slot 2's
+remote control, the volume rule in § Slot 2's volume, the buttons in
+§ Slot 2's buttons (each a table where the code is), the seam's three calls
+in `audio_stream.c` and `audio.c`, reached through `bt_a2dp_seam.c`. What
+the design left open, and what differs:
+
+- **The channel table is six** (`BT_L2CAP_CHANNELS`), and PSM 0x0017 is
+  admitted beside 0x0019 whenever there is an audio sink; their request on
+  a link not yet encrypted is answered pending, as for every PSM but SDP.
+- **We ask for AVCTP at most twice a connection.** The first request waits
+  for AVDTP's signalling to have been open two seconds and for no 0x0017
+  channel to exist in any state; the second waits a second after an END,
+  which is the AVCTP channel closing (theirs or ours) or a request of ours
+  refused or unanswered. Ours closed because theirs appeared is not an end.
+  Their channels are taken whenever they open, however many of ours have
+  been made; after one of theirs closes, our requests are still bounded at
+  two a connection.
+- **Ours and theirs together**: the moment one of theirs exists, open or
+  still connecting, ours is closed, whether ours is still being asked for
+  or already carries AVRCP (then AVRCP is told the channel closed and
+  begins again on theirs, and the volume is adopted again). A second
+  channel of theirs is closed once it opens.
+- **The playback status is the tick's one reading of the seam**, the
+  reading part Z already takes (the design said "within the quiet rule"),
+  so the seam is never read twice in a tick and the status and our Start
+  never disagree about it. A momentary empty ring therefore says stopped
+  for the ticks it lasts; the CHANGED that sends spends their
+  registration, which they make again.
+- **The ops gain an optional `sound`**: has_sound's answer and whether the
+  stream is paused, in one hold of the stream's lock (`audio_sink_sound`),
+  because the ops could not say "paused" and a second call would have been
+  a second reading. Paused is the stream's, whoever the sink is. The pump
+  does not call it; without it the host reads has_sound and never says
+  paused.
+- **The seam's rules**: owning and setting are refused from a sink that is
+  not the sink and from the null sink; setting needs no ownership (the
+  rule the PLAIN presses use), and a sink that does not own the volume
+  moves the seam's gain with it, as a write would; more than 100 is
+  refused; attach and detach each give the volume back (detach is an
+  attach of the null sink). A write to `/dev/volume` nudges the sink: the
+  seam already had a factless nudge (the A2DP sink's rings `kusb`'s bell),
+  so the pass comes sooner and decides from what it reads. `/sys/audio`'s
+  line reads `volume: 31 (set at its end by the sink a2dp)` or
+  `volume: 100 (the seam's gain)`.
+- **The host's ops for the volume are all three or none**; with none,
+  nothing is owned. Ownership begins only if the seam takes BOTH calls, in
+  order (their level, then ownership); a refusal leaves it unowned and the
+  next tick tries again, so the seam never applies no gain while it holds a
+  number that is not theirs. The host's word that the seam owns the volume
+  is cleared wherever the seam takes it back: the pump's attach and detach
+  (the host's wrappers of those ops), the link starting over, and a failed
+  controller's detach.
+- **A write and their level in one tick**: the write is sent first, then
+  their level is taken into the seam; the answer to our Set, arriving
+  later, puts the write back. Whichever arrives last is believed, as part R
+  has it for the two crossing on the air.
+- **Volume presses move the seam in every state but `READY`** (the design's
+  table says `PLAIN`): headphones that never answered (`FAILED`) or are
+  still being asked are as unable to announce a level, and a press is all
+  they have. The press needs the pump to be the seam's sink, since the seam
+  takes a level only from its sink.
+- **Their buttons**: drained each tick and, when the link starts over,
+  before and after AVRCP's reset (so a press is handled in the state it
+  came in, and the release the reset makes for a held press is kept). The
+  ring is sixteen events, the oldest overwritten and counted as lost; each
+  event is numbered from start-up, the transport logs each once under
+  `DEBUG_USB` by its number (`bluetooth: slot 2 avrcp: play pressed`), and
+  `bt_host_button_take` is the door a consumer will use. `bt_avrcp.h`
+  names its operations for the host (`bt_avrcp_operation_index`,
+  `bt_avrcp_operation`, `bt_avrcp_operation_name`).
+- **Slot 2's status** gains, after AVDTP's lines: `avctp channel:` (its
+  index and who opened it, the one being asked for, our requests and the
+  ends), AVRCP's own lines, `volume:` (whose it is; when the headphones'
+  the number and the level shared; ownerships, Sets sent, their levels
+  that changed the seam's number, presses applied) and `buttons:` (the
+  last, presses by name, what the ring holds and what it lost).
+- **AVRCP's clock** is AVDTP's: `now_us / 1000`.
+
+Proof, as built: `tools/test_audio_stream_host.sh` (the ownership rule in
+the random rounds' model and a named case; 126 mutants in all, 13 of them
+the rule's) and `tools/test_bt_multi_host.sh`: model headphones with
+AVCTP and both AVRCP roles (absolute volume or none; a channel opened
+promptly, in a crossing, or never; Sets taken as asked or rounded to even
+levels), the cases § Proof lists, the playback status heard as playing,
+paused and stopped, their channel arriving after ours carries AVRCP, and
+part Z's whole cycle beside a typing keyboard and a moving mouse with
+AVRCP talking on the dozing link. The volume rule's order, a Set at the
+start, a level sent back, our channel kept in a crossing, a third request,
+the two-second wait, a parked message left in place, volume presses while
+`READY` and the playback status each fail the suite when broken by hand.
+`bt_host.c` has no mutant harness of its own.
 
 ## What A.4 leaves out, on purpose
 
