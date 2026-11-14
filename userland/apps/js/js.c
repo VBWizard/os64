@@ -240,6 +240,7 @@ static const char *status_name(os64_js_status_t status)
     case OS64_JS_ADMISSION_REFUSED: return "ADMISSION_REFUSED";
     case OS64_JS_REALM_RETIRED: return "REALM_RETIRED";
     case OS64_JS_REALM_INSTALLING: return "REALM_INSTALLING";
+    case OS64_JS_REALM_FAILED: return "REALM_FAILED";
     }
     return "an unknown status";
 }
