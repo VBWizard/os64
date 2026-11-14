@@ -33,11 +33,11 @@ A.2.8,L: slot 2 in /sys/bluetooth/connection with the same words; the owner numb
 A.2.9,"L: the Classic bond, its record and its file; page scan on only while a bond is held; a request from any other address refused",A.2.7,done,#578,
 A.2.10,"L: reconnection: a page at boot and after a retryable drop, and otherwise the headphones call us",A.2.9,done,#578,"As built: an unanswered page is asked again too (5 s to 60 s), because the P5's pair never called us"
 A.2.11,"L: P5 with the headphones: paired from our side, they call back after a power cycle, it survives a reboot, forget ends it; keyboard and mouse throughout",A.2.8 A.2.10,done,#578,"P5 pass 2026-11-13 (Chris, Bose SoundLink around-ear II): bonded from our side, reconnected by our page after a power cycle and after a reboot with no typing, forget ended it, keyboard and mouse throughout. The headphones never called us"
-A.2.12,"S: bt_l2cap.c, reassembly, signalling, channels opened by configuration in both directions, modes declined to Basic, admission by PSM, pure, with a peer model and fuzz",A.2.11,todo,,
-A.2.13,"S: bt_sdp.c asked: the Audio Sink query across continuations, bounded; the versions and features kept",A.2.12,todo,,
-A.2.14,"S: SDP answered: the Audio Source record and the three request kinds, with continuation",A.2.12,todo,,
-A.2.15,"S: P5: the SDP line in /sys/bluetooth/connection, and whether the headphones stay on an idle link",A.2.13 A.2.14,todo,,P5 pass is Chris
-A.2.16,"The books for A.2: CLAUDE.md, DEBTS rows for what each part leaves out, BLUETOOTH.md",A.2.15,todo,,Each pull request carries its own share
+A.2.12,"S: bt_l2cap.c, reassembly, signalling, channels opened by configuration in both directions, modes declined to Basic, admission by PSM, pure, with a peer model and fuzz",A.2.11,done,#581,
+A.2.13,"S: bt_sdp.c asked: the Audio Sink query across continuations, bounded; the versions and features kept",A.2.12,done,#581,
+A.2.14,"S: SDP answered: the Audio Source record and the three request kinds, with continuation",A.2.12,done,#581,
+A.2.15,"S: P5: the SDP line in /sys/bluetooth/connection, and whether the headphones stay on an idle link",A.2.13 A.2.14,done,#581,"P5 pass 2026-11-13 (Chris): sdp: audio sink, avdtp 1.3, a2dp 1.3, features 0x0001, psm 0019. The headphones hung up two seconds after the SDP channel closed, so it is left open; with it open the link holds"
+A.2.16,"The books for A.2: CLAUDE.md, DEBTS rows for what each part leaves out, BLUETOOTH.md",A.2.15,done,#581,Each pull request carries its own share
 A.3,AVDTP and the SBC encoder: sound plays,A.1 A.2,todo,,
 A.3.1,"The design: AVDTP as initiator and acceptor, the A2DP sink behind the seam, the encoder boundary and how it fails closed, pacing against credits, RTP sequence per packet, the latency constant",A.2.1,todo,,
 A.3.2,"The SBC encoder, PORTED, behind PCM-in frames-out: integer-only, no allocation, host-tested against a reference decoder to the error bound the specification allows",A.3.1,todo,,"Which implementation is ported, and its licence, are decided in the design and recorded in THIRD_PARTY.md"

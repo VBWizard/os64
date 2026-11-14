@@ -22,6 +22,8 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "../kernel/src/driver/system/usb/bt_acl.c"
 #include "../kernel/src/driver/system/usb/bt_classic.c"
+#include "../kernel/src/driver/system/usb/bt_l2cap.c"
+#include "../kernel/src/driver/system/usb/bt_sdp.c"
 #include "../kernel/src/driver/system/usb/bt_host.c"
 #include "../kernel/src/driver/system/usb/xhci_service.c"
 #include "../kernel/src/driver/system/usb/xhci.c"

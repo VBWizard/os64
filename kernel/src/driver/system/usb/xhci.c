@@ -185,8 +185,9 @@ typedef struct {
 // it; after that page come BT_TX_SLOTS send slots. A packet is copied into
 // a free slot and queued, so several can be with the controller at once and
 // none can reach the command's bytes, whatever its length. Each slot lies
-// inside one page.
-#define BT_TX_SLOTS       4
+// inside one page. The host is told how many are in flight each pass, and
+// keeps one free for the LE peers (bt_host.h).
+#define BT_TX_SLOTS       BT_HOST_TX_SLOTS
 #define BT_TX_SLOT_STRIDE 2048
 #define BT_TX_SLOT_BYTES  (BT_LE_ACL_MAX + 4)   // an HCI ACL packet as large as the receive side assembles
 #define BT_TX_BYTES       (PAGE_SIZE + BT_TX_SLOTS * BT_TX_SLOT_STRIDE)
@@ -206,8 +207,8 @@ typedef struct {
 	bt_intel_events_t events;
 	uint64_t deadline;
 	uint32_t tx_bytes;
-	// No transmit is with the controller. At runtime that is "no send slot
-	// is in flight"; bring-up has the one transfer.
+	// No transmit is with the controller. Bring-up, which has one transfer
+	// at a time, waits on it; the runtime host is given tx_slots.
 	bool tx_done;
 	// The send slots in flight, oldest first: tx_slots of them, starting at
 	// slot tx_oldest. Transfers on one endpoint complete in the order they
@@ -254,6 +255,7 @@ typedef struct {
 		bool blocked[BT_HOST_PEERS];
 		const char *classic_error;
 		bool classic_refused;
+		uint32_t sdp_ended, l2cap_refusals;
 	} logged;
 } xhci_bt_probe_t;
 
@@ -1621,6 +1623,21 @@ static void xhci_bt_log_trouble(xhci_bt_probe_t *p)
 		       c->phase == BT_CLASSIC_FAILED ? "the controller has failed" :
 		       c->retryable ? "it may be paged again" : "it waits for the headphones or the user");
 	}
+	// Slot 2's services: a channel we asked for that the headphones refused
+	// or never answered, and the end of the one SDP query a connection
+	// makes, in the words of its status line. The query's end is said
+	// whatever it found, fault or not: it is one line a connection, and
+	// what it found is what audio will depend on. Nothing per packet.
+	if (h->l2cap_refusals != p->logged.l2cap_refusals) {
+		p->logged.l2cap_refusals = h->l2cap_refusals;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u l2cap: the headphones %s the channel we asked for (psm %04x, result %04x)\n",
+		       BT_HOST_CLASSIC_SLOT, h->sdp_refused == 0xffff ? "did not answer" : "refused",
+		       h->l2cap.refused_psm, h->sdp_refused);
+	}
+	if (h->sdp_ended != p->logged.sdp_ended) {
+		p->logged.sdp_ended = h->sdp_ended;
+		printd(DEBUG_EXCEPTIONS, "bluetooth: slot %u %s", BT_HOST_CLASSIC_SLOT, h->sdp_line);
+	}
 }
 
 static void xhci_bt_runtime_poll(void)
@@ -1663,7 +1680,7 @@ static void xhci_bt_runtime_poll(void)
     bt_le_phase_t before[BT_HOST_PEERS];
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
     bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-                 usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
+                 usb_done, p->tx_slots, usb_failed, xhci_bt_runtime_send,
                  xhci_bt_acl_send, xhci_bt_input_report, p);
     if (p->scan_history.valid && !p->scan_history.finished &&
         (bt_scan_quiescent(scan) || scan->phase == BT_SCAN_FAILED)) {

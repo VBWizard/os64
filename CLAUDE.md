@@ -512,13 +512,15 @@ virtio because its drain waits for the tick.
   one pool or two, a reserve for LE in a shared pool, completions by
   handle. `/sys/bluetooth/connection`'s `acl pools:` line shows them.
   docs/design/pending/AUDIO_CLASSIC.md is the design; its § T, as built
-  says what is counted but not yet gated
+  says what is counted, and the Classic link's L2CAP is the sender held to
+  the count (§ S, as built), always leaving a send slot for the LE peers
   **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
   headphones, 178 mutants): `scan classic`, then `slot 2 bond <address>`,
   `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
-  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute, until
-  `READY` or `slot 2 disconnect`: the P5's pair held our key and never
+  drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
+  wait starts over once a connection has lasted half a minute), until
+  `slot 2 disconnect`: the P5's pair held our key and never
   called us back. Secure Simple Pairing as
   a device with no keys or display; the bond is
   `/home/bluetooth_bond_classic`; page scan is on only while a bond is
@@ -527,8 +529,16 @@ virtio because its drain waits for the tick.
   command slot, which it takes ahead of the scan and the LE peers when an
   answer is waiting. The start-up round's Classic setup commands may be
   REFUSED without costing the round: the slot then says why it is
-  unavailable and LE is untouched. Its data packets are not read yet
-  (L2CAP is the next part). § L, as built is the record
+  unavailable and LE is untouched. Its data packets are its L2CAP's
+  (`bt_l2cap.c`, pure, Basic mode, admitting SDP alone for now), and at
+  `READY` the host asks the headphones one SDP question a connection, what
+  Audio Sink they are (`bt_sdp.c`, pure, which also answers for os64's
+  Audio Source record), and LEAVES THAT CHANNEL OPEN: the P5's pair hangs
+  up a link whose last channel has closed; L2CAP sends only after the LE peers have had their
+  turn, while the count gives it a buffer and a send slot is left for LE.
+  Slot 2's status shows L2CAP's channels and counters, the `sdp:` line
+  (versions, features and AVDTP's PSM, or why the query was not made) and
+  the questions answered. §§ L and S, as built are the record
 - **Sound** (`audio/audio.c`, `audio/audio_stream.c`, `audio/kaudio.c`) —
   docs/design/pending/AUDIO_SEAM.md is the design. One stream in the
   machine: a program writes PCM (signed 16-bit, two channels, 48 kHz) to
