@@ -1,0 +1,159 @@
+# F.16d — native DOM recovery policy
+
+This chapter adds an opt-in libdom policy over the libjs protocol from #582.
+It contains an attributed child EXECUTION episode after complete engine unwind,
+settles native activity behind the execution fence, and permits independent
+healthy work after commit. Yonder retains terminal handling. F.16 remains in
+progress; browser routing, guest/WPT acceptance and Streams unwind are separate
+obligations. Failed slots and backing remain charged until root destruction.
+
+## Construction and supported boundary
+
+`os64_dom_cluster_create_with_recovery` returns a paired runtime and cluster.
+Native policy storage exists before engine exposure and outlives the runtime.
+The caller admits documents through the existing cluster interfaces and owns
+the runtime. Failure publishes neither handle. Teardown remains: stop delivery,
+release native borrowers, drain cluster, destroy runtime, free cluster.
+Default and timer-settings constructors do not select recovery.
+The new constructor does not enable checked host settings.
+
+Libjs still requires a completely attributed child-only EXECUTION episode,
+closed failed task, idle engine, no queued engine jobs, rejection bookkeeping,
+wrapper module handles or pending exception, and no global failure. Primary
+author frames, unknown/unbound code, native callback/settings/setup/GC/job/
+module/resume scopes, JOBS/MEMORY exhaustion, cancellation and allocator/clock
+failure retain global fallback. A primary incoming context alone is neutral.
+Every affected realm must have a live installed member in this cluster.
+
+Streams are excluded by native evidence, without executing a JS probe during
+cleanup. Private Readable/Writable/Transform record constructors call a captured
+native hook in recovery-enabled clusters. Private native-to-Streams bridge use
+also sets the sticky cluster flag. Any such use in any member requires root
+cleanup, even when no engine jobs are pending. Installing modern interfaces
+alone does not set the flag. Legacy clusters receive no callable hook and
+retain their ordinary Streams behavior. This chapter certifies modern DOM
+with unused Streams, not the consistency of interrupted Streams algorithms.
+
+## Preparation and publication
+
+`os64_dom_cluster_recover` calls libjs prepare before touching its outcome.
+The wrapper protects an enclosing borrowed outcome and rejects active work.
+Libjs fences raw executable entry and marks affected engine contexts and
+wrapper realms failed/retired before calling the DOM policy. The policy records
+the exact generation and pauses delivery across the cluster.
+
+Before cleanup it checks cluster provider loans, dispatch, member walks,
+reaction frames, pointer/animation/observer activity, and borrowed animation
+layout generations. BUSY retains the fence, providers and backing; it grants
+no opaque release permission. Pure native release followed by retry uses the
+same generation. Every affected member is marked finishing before invoking
+providers, so recursive finish/recovery cannot acknowledge work beneath them.
+Callbacks return normally in C and cannot run healthy or failed author code.
+
+The policy checks native loans again after provider callbacks. A layout loan
+acquired during cancellation leaves preparation BUSY without publishing a
+finished member. Repeated cleanup does not repeat final storage settlement or
+request cancellation. Only completed cleanup detaches the remaining providers.
+The coordinator checks loans before committing a separately prepared token.
+Raw preparation alone does not resume DOM delivery; the coordinator publishes
+healthy activity only for the matching completed and committed generation.
+Repeated acknowledgment preserves final abandoned-task counts.
+
+Late cancellation, clock/allocator/memory failure, new jobs or exceptions
+observed by libjs prevent commit and retain root fallback. A failure return
+never grants permission to free provider opaque storage, including after
+partial native cleanup. No old task resumes, deadline/count renews, engine job
+drains, or allocator/global signal clears. A later independent task uses normal
+admission. A second child failure receives a fresh generation and affected set.
+
+## Native state audit
+
+| State | Preparation and retained ownership |
+|---|---|
+| Storage | One native final settlement while producer opaque is valid. First negative provider status is reported; serialization OOM is host error -3. Failure refuses certification. Changes/provider routes detach after the attempt; retained maps release at root. Ordinary retirement/root behavior still ignores final-settlement status. |
+| Fetch/XHR | Unlink tokens before cancel through their original producer. No author abort/error delivery, Promise rejection or Streams settlement. Healthy sibling requests stay pending. |
+| Timers, idle, rAF, messages, reports | Release obsolete affected callbacks/arguments/payloads. Healthy native task order survives. A failed cross-realm interval is removed from a healthy activity queue. |
+| Events | Retain listener identity and registration data. Skip sealed callback contexts before event activation, then continue healthy listeners on adopted nodes. Draining a failed allocation owner would incorrectly erase healthy listeners and is not used. |
+| Custom elements | Keep definitions and native records; discard payloads for inactive current activity documents. Temporary cluster pause is distinct from permanent activity eligibility. A retained failed registry can carry a healthy callback; use the healthy incoming context when the definition context is sealed, then check activity/callable eligibility before delivery. Live definition contexts retain their existing routing. |
+| Mutation observers/slotchange | Clear affected payloads/transient registrations, retain registrations and shared registry order. Skip inactive registrations/slot owners before context borrow; a failed first member cannot stop later healthy deliveries. Native owed between-task queues are distinct from pending engine jobs. |
+| Intersection/resize/performance | Clear affected delivery payloads; release resize observer holds. Registry backing remains through root. Observer finalizers mark dead records rather than unlinking the native walk. |
+| Canvas/animation | Retain pixels, animation/effect objects and layout generations. Stop affected timeline activity without author settlement. Cluster-wide borrowed layout floors exclude preparation and commit. |
+| Subtle crypto | Discard affected native queued payloads without executing continuations. Pending engine jobs already prevent admission. |
+| Provider routes | NULL-only failed-realm module/script-host detach during guarded PREPARING. Clear the global-miss native callback before requesting a failed context; a retained engine trampoline sees no host callback. Detach option, geometry, image/text, history, cookie and observer providers after native exclusion. |
+| Runtime output | Separately granted console/output descriptors remain engine state with their existing host lifetime; DOM provider completion does not transfer or release them. Failed executable aliases remain sealed. |
+| Backing and budgets | No child document/state/anchor/context slot is freed or reused. Existing aggregate/local charges and root teardown order remain authoritative. Partial shared data and native mutations survive. |
+
+The script-host/module-loader setter exception is restricted to NULL services,
+recovery enabled, PREPARING, and an already failed realm. Healthy siblings and
+other active phases remain BUSY; replacement services still fail retirement
+checks. No engine patch, settings identity change, public config/outcome layout
+change or libjs ABI increment is required. The engine identity stays
+`eb3773e6dac0a1b7f7d107384db954271905aa696bbf22def1a393b23866cce9`.
+
+## Regression and validation receipt
+
+`tools/test_dom_recovery.inc`, selected with `--recovery` and included in the
+normal DOM matrix, uses real three-member DOM clusters under both teardown
+policies. It exhausts child bytecode, preserves a mutation before interruption,
+and asserts that abandoned finally/callbacks never run. It checks provider
+reentry/fences/borrowed outcomes, storage and original-producer cancellation,
+freeing successful failed-provider opaque storage, retained global-miss routes,
+adopted listeners, retained Canvas pixels, observer/animation holds, shared owed
+custom/observer order, healthy callbacks in failed registries, native queue
+order, pre/post-provider loans, layout/reaction frames, separately prepared
+tokens, multi-child and repeated generations, primary/unbound fallback,
+Streams use, storage errors, new jobs/exceptions and late global health.
+Constructor failure sweeps cover every allocation on each engine profile;
+root reports require zero leaked engine/native allocations under both policies.
+
+Two real regressions were reproduced before fixes: failed EventTarget callback
+context lookup stopped a healthy adopted listener, and the shared observer walk
+stopped at an inactive failed registration. The latter regression also led to
+the sibling custom-definition/context and slotchange audit above.
+
+Reproduce with leak detection enabled (outside an attachment-restricted sandbox
+when required):
+
+```sh
+DOM_HOST_KEEP=1 bash tools/test_dom_host.sh --recovery
+JS_RUNTIME_KEEP=1 bash tools/test_js_runtime_host.sh
+bash tools/test_js_contract_headers.sh
+python3 tools/test_js_prepare.py
+python3 tools/test_js_teardown_audit.py
+CCACHE_DISABLE=1 make -C userland -j8 js-runtime-test dom-library
+python3 -I tools/tracker.py --csv docs/design/pending/IFRAME_TRACKER.csv --prefix F --quiet
+bash tools/stale_refs.sh
+```
+
+Retain the canonical DOM artifacts, run `target-core-probe` without a selector
+for broad shipping-engine coverage, then run affected selectors on both
+`target-core-probe` and `sanitized-core-probe`: `--recovery`, `--timer-settings`,
+`--callback-reports`, `--realms`, `--realm-retirement`, `--departure`,
+`--stream-realms`, `--child-install`, `--transport-retirement`,
+`--visitor-retirement`, `--custom`, `--observer`, `--events`, `--resize`,
+`--intersection`, and `--animation-retirement`. Set
+`ASAN_OPTIONS=detect_leaks=1`; retain ASan/UBSan on native/wrapper code and ASan
+on the fully instrumented engine. No guest, WPT or P5 recovery acceptance is
+claimed by this native chapter.
+
+Validation on the #582 integration base `59545734`, with the unchanged engine
+identity above:
+
+- Final focused DOM recovery: **2,516 shipping / 6,660 instrumented checks**,
+  both teardown policies; **59 / 1,095 constructor allocation cuts per policy**.
+- Full runtime: **22,056 / 69,404 checks**, zero live allocations; parser failure
+  checks and fatal invariant/exit-badge checks pass on both profiles.
+- Broad shipping DOM: **325,068 checks / 12,938 allocation sweeps** before the
+  final retained-definition context-routing refinement and timer/private-bridge
+  fixture additions. All affected shared dispatch/lifecycle selectors are
+  rerun on both profiles for the final source; the broader selector list above
+  also passes on both profiles before that refinement.
+- Manifest/preparer tests, host/cross headers, target libdom/runtime builds,
+  target teardown audit, exported paired constructor/coordinator symbols and
+  tracker/stale-reference checks pass. Leak detection remains enabled.
+- Ten deliberate defects are rejected by named assertions on both profiles:
+  ignored provider/layout/post-provider loans, certified storage/Streams failure,
+  wrong native generation, dropped healthy reactions, and failed definition,
+  observer or listener context lookup stopping healthy siblings. Mutants compile
+  in isolated source directories against the coherent engine/native objects;
+  compilation failure is not counted as detection.

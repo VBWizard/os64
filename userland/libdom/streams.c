@@ -241,6 +241,18 @@ static JSValue require_callback(JSContext *ctx, JSValueConst self, int argc,
     return d_require_callback(dom, ctx, argv[0]) ? JS_UNDEFINED : JS_EXCEPTION;
 }
 
+/* Record creation is sticky native evidence, not a JS probe during recovery.
+ * Stream algorithms need their own consistency proof before local recovery. */
+static JSValue recovery_streams_used(JSContext *ctx, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    if (dom->cluster && dom->cluster->recovery_enabled) dom->cluster->streams_used = true;
+    return JS_UNDEFINED;
+}
+
 /* The hidden doors retain raw private-field probes, never public methods or
  * page-controlled properties. A retained foreign object keeps its genuine
  * brand after departure; probing does not schedule activity in its realm. */
@@ -325,6 +337,9 @@ static JSValue intrinsics(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(prototype)) goto fail;
     if (JS_DefinePropertyValueStr(ctx, object, "AsyncIteratorPrototype", prototype, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "RequireCallback", require_callback, 1, 0) < 0) goto fail;
+    if (dom->cluster && dom->cluster->recovery_enabled) {
+        if (d_method(dom, ctx, object, "RecoveryStreamsUsed", recovery_streams_used, 0, 0) < 0) goto fail;
+    } else if (JS_DefinePropertyValueStr(ctx, object, "RecoveryStreamsUsed", JS_UNDEFINED, JS_PROP_C_W_E) < 0) goto fail;
     if (d_method(dom, ctx, object, "ForeignStreamSlot", foreign_stream_slot, 2, 0) < 0) goto fail;
     static const struct { const char *name; JSCFunction *function; int length; } helpers[] = {
         {"InternalReaction", internal_reaction, 1},
@@ -386,6 +401,7 @@ done:
 static JSValue door_call(os64_dom_t *dom, JSContext *ctx, const char *name, int argc, JSValueConst *argv)
 {
     if (dom->streams_door == NULL) return JS_ThrowTypeError(ctx, "Streams are not supported");
+    if (dom->cluster && dom->cluster->recovery_enabled) dom->cluster->streams_used = true;
     JSValue verb = JS_GetPropertyStr(ctx, dom->streams_door->value, name);
     if (JS_IsException(verb)) return verb;
     JSValue result = JS_Call(ctx, verb, JS_UNDEFINED, argc, argv);

@@ -364,6 +364,8 @@ os64_js_status_t os64_js_realm_call(os64_js_realm_t *realm, const char *caller_a
     JSValue *argv, bool *returned_false,
     os64_js_outcome_t *outcome);
 
+/* NULL may detach a failed child's hooks from its fenced recovery prepare
+ * callback. Healthy siblings and other active phases retain BUSY. */
 os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm, const char *caller_abi,
     const os64_js_script_host_t *host,
     os64_js_outcome_t *outcome);
@@ -371,6 +373,8 @@ os64_js_status_t os64_js_realm_set_script_host(os64_js_realm_t *realm, const cha
 bool os64_js_realm_take_rejection(os64_js_realm_t *realm, const char *caller_abi,
                                      JSValue *promise, JSValue *reason, uint32_t *tag);
 
+/* The same failed-child PREPARING exception permits NULL-only native loader
+ * detachment; it does not allow installing providers or changing siblings. */
 os64_js_status_t os64_js_realm_set_module_loader(os64_js_realm_t *realm, const char *caller_abi,
     const os64_js_module_loader_t *loader,
     os64_js_outcome_t *outcome);

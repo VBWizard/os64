@@ -46,7 +46,7 @@
 // load, which fails the realm's creation, so the DOM host suite fails at its
 // first window.
 const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply', 'RequireCallback',
-    'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
+    'RecoveryStreamsUsed', 'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
     'Object_getOwnPropertyDescriptor', 'Object_create', 'ForeignStreamSlot',
     'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'InternalMicrotask', 'InternalReaction',
     'ArrayBuffer', 'DataView', 'Int8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array',
@@ -64,6 +64,7 @@ for (let i = 0; i < NEEDED.length; i++)
 const Promise_ = I.Promise;
 const then_ = I.Promise_then;
 const requireCallback = I.RequireCallback;
+const recoveryStreamsUsed = I.RecoveryStreamsUsed;
 const reject_ = I.Promise_reject;
 const apply = I.Reflect_apply;
 const defineProperty = I.Object_defineProperty;
@@ -456,6 +457,7 @@ class RSRecord {
     disturbed;
     controller;
     constructor() {
+        if (recoveryStreamsUsed !== undefined) recoveryStreamsUsed();
         this.pub = undefined;
         this.state = 'readable';
         this.reader = undefined;
@@ -627,6 +629,7 @@ class WSRecord {
     writeRequests;
     backpressure;
     constructor() {
+        if (recoveryStreamsUsed !== undefined) recoveryStreamsUsed();
         this.pub = undefined;
         this.state = 'writable';
         this.storedError = undefined;
@@ -700,6 +703,7 @@ class TSRecord {
     backpressureChange;
     controller;
     constructor() {
+        if (recoveryStreamsUsed !== undefined) recoveryStreamsUsed();
         this.pub = undefined;
         this.readable = undefined;
         this.writable = undefined;

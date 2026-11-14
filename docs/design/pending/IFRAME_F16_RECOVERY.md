@@ -225,7 +225,8 @@ PR scope, not additional completed tracker rows.
 | F16a: this brief | Source audit, supported-case contract, interface map and acceptance plan; shipping unchanged | Review decisions on supported subset, queue boundary and native certification; F.4 interface agreement |
 | F16b: dormant engine scopes | Attribution and failed-entry primitives, disabled recovery; engine/header/manifest identity and focused tests | Raw/JS/native entry map, completeness failures, retained alias guards, suspended state and allocation-free capture proved on both engine profiles |
 | F16c: opt-in libjs protocol | Separate task/global failure records and recovery state machine for trusted native harness; default remains global | Late-global precedence, exact accounting, queue restrictions, no early/recursive commit, repeated cycles and teardown proved |
-| F16d: DOM containment and host acceptance | Native invariant/cleanup integration, three-realm consumer, coherent host routing and contracts | Provider/registry/Streams proof, shipping and instrumented integration, guest/WPT evidence, hardware regression decision where shared browsing changes |
+| F16d: DOM containment | Paired opt-in cluster and native preparation, provider/registry consistency and retained-data proof; Streams use retains global fallback | Native borrow/reentry/generation/error/queue regressions, shipping and instrumented integration; IFRAME_F16_DOM_RECOVERY.md |
+| F16e: coherent host acceptance | Three-realm consumer and host routing over the reviewed native subset | Guest/WPT evidence, supported fallback/Streams limits and hardware regression decision where shared browsing changes |
 
 Split F16b by entry family if needed, keeping primitives dormant until complete.
 Do not combine an incomplete entry guard with enabled recovery. F16d may split

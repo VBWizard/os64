@@ -385,6 +385,9 @@ struct os64_dom_cluster {
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings;
+    bool recovery_enabled, recovering, recovery_running, recovery_completed;
+    bool streams_used; /* Self-hosted stream records require a separate unwind proof. */
+    uint64_t recovery_generation;
 };
 
 struct os64_dom {
@@ -819,6 +822,7 @@ typedef struct { char *data; size_t length; } DString;
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 /* Scheduling eligibility is separate from retained-object usability. */
+bool d_activity_eligible(const os64_dom_t *dom);
 bool d_delivery_active(const os64_dom_t *dom);
 /* Service-creating methods refuse inactive owners after argument conversion. */
 bool d_require_active(os64_dom_t *dom, JSContext *ctx);
@@ -1448,9 +1452,11 @@ bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString 
  * (http, https, ws, wss, ftp; a blob: address its inner http(s) address's),
  * else "null", an opaque origin. False when it does not fit in cap. */
 bool d_origin(const char *url, char *out, size_t cap);
-/* The binding's storage (storage.c): what os64_dom_drain commits, and what
- * os64_dom_free frees. */
-void d_storage_drain(os64_dom_t *dom);
+/* Final storage settlement (storage.c), then native map release. Drain
+ * returns the first provider error, -3 for serialization OOM or -4 for a
+ * borrower. Ordinary teardown still completes native cleanup; recovery
+ * requires zero before admitting independent sibling work. */
+int64_t d_storage_drain(os64_dom_t *dom);
 void d_storage_free(os64_dom_t *dom);
 /* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
 uint64_t d_storage_steps(void);

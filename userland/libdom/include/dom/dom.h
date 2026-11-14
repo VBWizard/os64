@@ -398,6 +398,28 @@ typedef struct {
 } os64_dom_admission_t;
 os64_dom_cluster_t *os64_dom_cluster_create(os64_js_runtime_t *,
     const os64_dom_cluster_limits_t *, os64_js_outcome_t *);
+/* Paired native opt-in: creates a runtime with the DOM preparation policy.
+ * The caller owns the returned runtime; drain cluster, destroy runtime, then
+ * free cluster. On failure neither handle is published. Other constructors
+ * do not select this policy. Raw/checked settings and
+ * unsupported engine scopes retain global fallback. Any Streams record or
+ * private Streams bridge use in the cluster requires root cleanup; interface
+ * installation alone is permitted. Yonder does not select this policy. */
+os64_dom_cluster_t *os64_dom_cluster_create_with_recovery(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *caller_abi,
+    const os64_dom_cluster_limits_t *, os64_js_runtime_t **, os64_js_outcome_t *);
+/* Close the failed task before calling. Preparation pauses cluster activity,
+ * contains affected bindings and waits for native/provider/layout borrowers.
+ * BUSY grants no permission to release provider opaque storage; retry after
+ * the borrowers release. OK commits the generation and permits independent
+ * healthy tasks and affected provider release. Failure requires root cleanup
+ * after native borrowers unwind. Final storage settlement must succeed;
+ * negative provider status or serialization OOM requires root cleanup.
+ * Retained backing/slots are not reclaimed. Use this coordinator to publish
+ * DOM activity after preparation, including separately prepared generations. */
+os64_js_status_t os64_dom_cluster_recover(os64_dom_cluster_t *, const char *caller_abi,
+    os64_js_outcome_t *);
+
 /* Native opt-in timer callback settings, configured before runtime execution.
  * Enables host root scopes and conversion-time timer capture. Promise jobs and
  * other callback kinds require their own preparation; absent settings refuse

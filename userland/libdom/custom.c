@@ -476,8 +476,11 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r, DDefinition *d)
     dom = d->dom;
     os64_dom_t *report_owner = d->constructor_owner;
     os64_js_outcome_t outcome;
-    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-    if (!ctx) return -1;
+    JSContext *definition_ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (definition_ctx) ctx = definition_ctx;
+    else if (outcome.status != OS64_JS_REALM_FAILED) return -1;
+    /* A retained definition can belong to a sealed realm while its callable
+     * and current activity document remain healthy. Use the incoming context. */
     int eligible = d_delivery_eligible(d_owner(dom, element), ctx, d->constructor->value);
     if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, d->constructor_script) : 0;
     /* The wrapper first, so one made now is HTMLElement's and not the
@@ -556,8 +559,9 @@ static int callback(os64_dom_t *dom, JSContext *ctx, DCustom *r, DReaction *reac
     dom = d->dom;
     os64_dom_t *report_owner = d->callback_owners[reaction->kind];
     os64_js_outcome_t outcome;
-    ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
-    if (!ctx) return -1;
+    JSContext *definition_ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
+    if (definition_ctx) ctx = definition_ctx;
+    else if (outcome.status != OS64_JS_REALM_FAILED) return -1;
     uint32_t script = d->scripts[reaction->kind];
     int eligible = d_delivery_eligible(d_owner(dom, r->element), ctx, d->callbacks[reaction->kind]->value);
     if (eligible <= 0) return eligible < 0 ? report(report_owner, ctx, script) : 0;
@@ -663,7 +667,7 @@ void d_custom_cancel(os64_dom_t *dom)
     for (size_t b = 0; b < D_CUSTOM_BUCKETS; ++b)
         for (DCustom *r = agent->records[b]; r != NULL;) {
             DCustom *next = r->hash_next;
-            if (!d_delivery_active(d_owner(dom, r->element))) {
+            if (!d_activity_eligible(d_owner(dom, r->element))) {
                 while (r->first) {
                     DReaction *reaction = r->first;
                     r->first = reaction->next;

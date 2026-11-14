@@ -87,6 +87,17 @@ blocked. Root cleanup must release host resources independently and clear
 C-held values before destroying the runtime. Both teardown profiles retain
 their existing leak checks. See [the recovery contract](CONTRACT.md#opt-in-child-execution-recovery).
 
+Libdom's paired recovery constructor owns the native preparation policy until
+the runtime is destroyed. Its coordinator waits for cluster-wide provider,
+walk and layout loans, cancels affected activity, then detaches providers.
+BUSY/failure grants no opaque release permission. Retained definitions,
+registrations, listener records, exported objects and native backing still
+release at root teardown in the established order. NULL-only failed-realm
+module/script-host clearing inside PREPARING removes provider routes without
+entering author code. This is separate from browser adoption and reclamation;
+[the DOM audit](../../docs/design/pending/IFRAME_F16_DOM_RECOVERY.md) states the
+Streams exclusion and strict storage-settlement failure rules.
+
 ## Detection and reclamation
 
 Manifest patch `0006-reporting-runtime-teardown.patch` preserves the original

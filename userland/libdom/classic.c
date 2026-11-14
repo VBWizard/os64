@@ -531,6 +531,13 @@ void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const
                               void *opaque)
 {
     if (dom == NULL || dom->closed || (heard != NULL && !d_delivery_active(dom))) return;
+    /* Failed realms cannot lend a context. Clear the native route before
+     * querying it; any remaining engine trampoline sees no host callback,
+     * and its DOM shell stays alive through engine destruction. */
+    if (heard == NULL) {
+        dom->global_miss = NULL;
+        dom->global_miss_opaque = NULL;
+    }
     os64_js_outcome_t outcome;
     JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &outcome);
     if (ctx != NULL) {
