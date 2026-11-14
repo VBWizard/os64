@@ -540,7 +540,7 @@ virtio because its drain waits for the tick.
   (versions, features and AVDTP's PSM, or why the query was not made) and
   the questions answered. §§ L and S, as built are the record
   **AVDTP's signalling** is `bt_avdtp.c` (pure, both roles;
-  `tools/test_bt_avdtp_host.sh` plays the sink, 321 mutants): find the
+  `tools/test_bt_avdtp_host.sh` plays the sink, 324 mutants): find the
   headphones' SBC endpoint, configure it, open, start, suspend, close, and
   answer when they do the same to us. Nothing calls it until the A2DP
   pump is wired (docs/design/pending/AUDIO_A2DP.md part P; its § V, as

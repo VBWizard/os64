@@ -433,6 +433,14 @@ the sanitizers; a mutant harness.
   refusal. Their Set Configuration is taken while ours is queued and not
   yet sent, or waiting for its one retry. Both sending Open is not
   resolved: theirs is rejected (bad state).
+- **A command of ours still queued is retired when we accept a command
+  of theirs that changes the stream** (their Set Configuration, Open,
+  Start, Suspend, Close, Abort): it describes a stream that has since
+  changed. One already SENT is theirs to answer, and its answer is taken
+  without changing a state it no longer applies to. What that leaves: our
+  Start sent, their Start and then their Suspend accepted, and only then
+  their accept of ours. Whether they are streaming depends on the order
+  they handled the two, which nothing on the wire says (DEBTS).
 - **An Abort of ours and their new configuration**: an Abort still queued
   is dropped when their Set Configuration is accepted (it names the
   endpoint they have just configured); one already sent keeps its timer
@@ -459,7 +467,7 @@ the sanitizers; a mutant harness.
 - Proof: `tools/test_bt_avdtp_host.sh`, every message compared with one
   built from the specification, messages fed in storage of exactly their
   length so a read past the end is a sanitizer report, a responsive
-  random peer that must reach `OPEN` and `STREAMING`; 321 mutants.
+  random peer that must reach `OPEN` and `STREAMING`; 324 mutants.
 
 ## Part P: the pump (`bt_a2dp.c`) and the wiring
 
