@@ -1,0 +1,17 @@
+id,task,depends_on,status,done_in,notes
+Q1,"When another program holds the stream, does the element wait or fail?",,ruled,,"RULED 2026-11-14 by Chris: wait, since it is about the same work as failing. The element fires waiting, the controls say the sound is busy, and the open is retried until granted (AUDIO_YONDER.md § When the stream is busy)"
+Q2,Several elements in one window: a mixer in yonder?,,ruled,,"RULED 2026-11-14 by Chris: yes if straightforward and not duplicative of a kernel mixer, as a slice and not an arc. It is neither duplicative nor large (§ The audio thread and the mixer): Y.3"
+Q3,How a pause stops the sound at once,,ruled,,"RULED 2026-11-14 by Chris (my lean, refined by his own test of /dev/audioctl): the stream's pause and resume when the element is the only one sounding; flush only when queued sound no longer belongs at the front (a seek, a new src)"
+Q4,Autoplay,,ruled,,"RULED 2026-11-14 by Chris: as other browsers do. Sound needs an interaction with the page first, a muted element may autoplay, a media document plays at once"
+Q5,Does play learn MP3?,,ruled,,"RULED 2026-11-14 by Chris: yes, he wants play to play his MP3s. It is Y.1.2's in-OS proof"
+Q6,FFmpeg or one port per format,,ruled,,"RULED 2026-11-14 by Chris: FFmpeg, started small (built with only what is asked for), as its own shared library because of the LGPL (his flag): /lib/libav.so, never static, never --enable-gpl or --enable-nonfree"
+
+Y.1,"FFmpeg, libmedia, and play learns MP3",,code,,"Design: AUDIO_YONDER.md, cleared by Chris 2026-11-14. Two pull requests. No yonder change"
+Y.1.1,"The port: libav.so (FFmpeg's libavutil, libavcodec, libavformat) built down to the WAV and MP3 readers and the PCM and MP3 decoders; shims over libos64; manifest, licence, THIRD_PARTY.md row; the audit (no GPL or nonfree, imports, exports, configuration matches the pinned configure); host build",Q6,todo,,One cold Opus read before the push
+Y.1.2,"libmedia: source, decoder, resampling to the stream's format, the bounded queue; host-tested against the host's ffmpeg. play reads MP3 through it",Y.1.1 Q5,todo,,One cold Opus read before the push. Proven by /tests/playtest growing an MP3 case at the tap
+
+Y.2,The element: HTMLMediaElement and HTMLAudioElement in yonder,Y.1,todo,,Two pull requests. Codex reviews both (threads meet the window)
+Y.2.1,"libdom interfaces (HTMLMediaElement, HTMLAudioElement, MediaError, TimeRanges, Audio), the event mask widened to 128, the media provider, BELL_MEDIA, the audio thread owning /dev/audio, script play/pause/seek, autoplay's activation rule, the busy wait. One element sounds at a time",Y.1.2 Q1 Q3 Q4,todo,,
+Y.2.2,"The controls widget over the element's box, and the media document (WAY_BODY_MEDIA) for a link straight to a sound file",Y.2.1,todo,,The pull request that makes the pages Chris saw play
+
+Y.3,The mixer: several elements in one window sounding at once,Y.2.1 Q2,todo,,"One pull request, pure and host-tested in libmedia; reviewed here"

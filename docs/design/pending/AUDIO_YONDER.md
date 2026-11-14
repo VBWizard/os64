@@ -1,6 +1,7 @@
 # AUDIO_YONDER.md — a page's sound: `<audio>`, the media document, and FFmpeg
 
-*Opus, 2026-11-14. Status: DESIGN, for Chris. Nothing here is built.*
+*Opus, 2026-11-14. Status: DESIGN, cleared by Chris the same day
+(§ For Chris). Nothing here is built; `YAUDIO_TRACKER.csv` says what is.*
 
 *Chris's goal for this arc (2026-11-14): yonder plays a page's sound,
 generally — WAV and MP3 first, because MP3 is what an ordinary page links
@@ -222,14 +223,22 @@ AUDIO_SEAM.md built: the write parks while the ring is full.
 browser (a game's sound effects over its music; two players on one page
 both started). The thread MIXES: each playing element's queue, times that
 element's `volume` (and zero when `muted`), summed and clamped to 16 bits.
-That is a mixer in yonder, not in the kernel, and it is enough: os64 has
-one stream (AUDIO_SEAM.md § What A.1 leaves out), and inside one program
-a mix is twenty lines and has one owner. The mixer is in libmedia, pure,
-host-tested against a model.
+The mixer is in libmedia, pure, host-tested against a model, and it is a
+slice of its own (Y.3, ruled 2026-11-14: a slice, not an arc). Until it
+lands, the thread sounds one element at a time, and an element that
+starts while another sounds waits exactly as § When the stream is busy
+says, by the same code.
+
+**It is not what a kernel mixer would be.** A kernel mixer (DEBTS since
+A.1) mixes PROGRAMS: two yonder windows, or yonder and `play`. yonder's
+mixer mixes one program's own sounds into its one stream, which is what
+other browsers do too: they mix every tab into one output and hand the
+system one stream. With a kernel mixer in place, yonder's would still be
+the right shape, so neither duplicates the other.
 
 **Two yonder windows are two programs**, and the stream has one owner. The
-second window's play waits (§ When the stream is busy). A kernel mixer is
-the cure for that, booked in DEBTS since A.1; this arc does not need it.
+second window's play waits (§ When the stream is busy) until there is a
+kernel mixer; this arc does not need one.
 
 **`/dev/volume` is the system's, an element's `volume` is the page's.**
 The element's gain is applied in the mix; yonder never writes
@@ -249,14 +258,28 @@ says (only while `PLAYING`, never past `taken`). So the seek bar and
 This is the second thing the design does for video: a picture is shown
 when its time is `currentTime`, and `currentTime` is the ear's.
 
-**Pause.** Pausing an element stops the mixer taking from its queue.
-What is already in the ring (up to 200 ms) still plays, so when the
-paused element was the ONLY one playing, the thread also writes `flush`
-to `/dev/audioctl` — the pause is then immediate — and records the
-element's position at the flush. (The stream is yonder's own while it
-holds `/dev/audio`, so the flush cannot reach another program's sound.)
-With others still playing, the paused element's last fifth of a second
-plays out; the same tail other browsers have.
+**Pause.** When the paused element is the ONLY one sounding, the thread
+writes `pause` to `/dev/audioctl` and stops writing; `play()` writes
+`resume`. The stream's own pause stops the pulls at once and keeps the
+ring, so nothing queued is lost and `heard` freezes where the ear is
+(AUDIO_SEAM.md § The stream's states; Chris drove both verbs by hand on
+2026-11-14). The stream is yonder's own while it holds `/dev/audio`, so
+neither verb can reach another program's sound.
+
+What is queued is DISCARDED (`flush`) only when it no longer belongs at
+the front: a seek, a new `src`, or another element starting while this
+one is paused. The decoder then starts again from the element's `heard`
+position.
+
+A pause that lasts gives the stream back: after 30 seconds paused, the
+thread closes `/dev/audio` (a paused close is a flush, AUDIO_SEAM.md
+§ The stream's states), so a song paused in yonder does not keep `play`
+in a terminal busy for the rest of the evening. Resuming after that opens
+the stream again and is a seek to where the element stood.
+
+With others still sounding (Y.3), pausing one stops the mixer taking
+from its queue, and its last fifth of a second plays out under the
+others: the same tail other browsers have.
 
 **Loop, end.** `loop` makes the decoder thread seek to zero at the end
 and keep going; without it the element's queue runs dry, the mixer sees
@@ -267,7 +290,7 @@ the end, and the element fires `ended`.
 Another program (`play` in a terminal, another yonder window) holds
 `/dev/audio`. The open answers `OS64_AUDIO_BUSY`.
 
-**Lean** (§ For Chris 1): the element does not fail. It behaves as a
+**Ruled** (§ For Chris 1): the element does not fail. It behaves as a
 stream that is not yet ready: `play()` is accepted, the element fires
 `waiting`, its time does not move, the controls say "Sound is busy:
 another program is playing", and the audio thread tries the open again
@@ -444,19 +467,30 @@ A type yonder cannot decode is still offered as a download, unchanged.
 
 ## Slices
 
-1. **M1 — FFmpeg and libmedia.** The port (audio-only configuration
-   above), libmedia's decoder, source, queue and mixer, host-tested.
-   Proven in the OS by `play` learning MP3 (§ For Chris 5) or by a
-   `/tests` fixture if not. No yonder change.
-2. **M2 — the element, its controls, the media document.** libdom's
-   interfaces, the provider, the audio thread, the widget, `leg.sounds`.
-   This is the slice that makes the pages Chris saw play.
-3. **Then the gaps the pages show**, each its own small slice: a decoder
+`YAUDIO_TRACKER.csv` beside this file is the state of each one
+(`~/tracker.sh yaudio` renders it). A slice that lands in one pull
+request is one row; a slice of several has a task row per pull request.
+
+1. **Y.1 — FFmpeg, libmedia, and `play` learns MP3.** Two pull requests:
+   - **Y.1.1** the port: `libav.so` in the audio-only configuration
+     above, its shims, manifest, audit and host build. No consumer yet.
+   - **Y.1.2** libmedia (source, decoder, resampling, queue) and `play`
+     reading MP3 through it (ruled 2026-11-14: Chris wants `play` to play
+     his MP3s). No yonder change.
+2. **Y.2 — the element.** Two pull requests:
+   - **Y.2.1** libdom's interfaces, the provider and events, the audio
+     thread, `play()`/`pause()`/seeking from script. One element sounds
+     at a time.
+   - **Y.2.2** the controls widget and the media document. This is the
+     pull request that makes the pages Chris saw play.
+3. **Y.3 — the mixer.** One pull request: several elements in one window
+   sounding at once.
+4. **Then the gaps the pages show**, each its own small slice: a decoder
    switched on, a member a page needed, `playbackRate`.
 
-M1 is a third-party port with no kernel change: one cold Opus read
-before it is pushed. M2 is yonder, large, with threads meeting the
-window: Codex.
+Y.1 is a third-party port and a library with no kernel change: one cold
+Opus read before each push. Y.2 is yonder with threads meeting the
+window: Codex. Y.3 is small and pure: reviewed here.
 
 ## What this arc leaves out, on purpose
 
@@ -464,28 +498,25 @@ window: Codex.
 (each a configure switch when a page asks); text tracks; Web Audio
 (`AudioContext`); a playback rate other than 1; picture-in-picture;
 DRM (EME), which os64 will never have: a licensed decryption module is
-not something one person's browser can obtain. The headphones' play and
-pause buttons reaching a page are the audio-buttons slice's question
-(how a press reaches a program); when it has an answer, yonder's audio
-thread is the natural listener.
+not something one person's browser can obtain. The headphones' buttons
+(one press is play, two next, three previous) reaching a page wait on
+the audio arc's answer to how a press reaches a program; when there is
+one, yonder's audio thread is the natural listener.
 
 ## For Chris
 
+*Put to Chris 2026-11-14 with leans; his answers the same day:*
+
 1. **The stream is busy** (another program, another window): the element
-   waits and the controls say why (§ When the stream is busy). Lean: as
-   written.
-2. **Several elements in one window mix in yonder**; two windows contend
-   for the one stream. Lean: as written; the kernel mixer stays in DEBTS
-   until two programs at once is a real need.
-3. **Pause flushes the stream when it was the only thing playing**, so a
-   pause is immediate instead of a fifth of a second late. Lean: yes.
-4. **Autoplay matches other browsers** (sound needs an interaction first;
-   muted may autoplay; a media document plays at once). That is web
-   behaviour, so I am telling rather than asking, unless you object.
-5. **`play` learns MP3** through libmedia, as M1's in-OS proof. `play` is
-   Fable's, written as yours to replace (AUDIO_SEAM.md § For Chris 5), so
-   it is your call: lean yes, it is a few lines and it is what you will
-   type to test the headphones with a real song. The alternative is a
-   `/tests` fixture that proves the same thing and that nobody types.
-6. **A tracker** (`AUDIO_YONDER_TRACKER.csv`), since this is the start of
-   an arc that runs to video. Lean: yes, from M1.
+   waits and the controls say why. RULED: yes, it is about the same work
+   as failing.
+2. **Several elements in one window mix in yonder.** RULED: if it is
+   straightforward and not duplicative of a kernel mixer, as a slice and
+   not an arc. It is both (§ The audio thread and the mixer): Y.3.
+3. **Pause.** RULED: my lean, which became the stream's own `pause` and
+   `resume` (Chris tested both verbs by hand), with a flush only when
+   queued sound no longer belongs at the front.
+4. **Autoplay matches other browsers.** RULED: yes.
+5. **`play` learns MP3.** RULED: yes, Chris wants it.
+6. **A tracker.** RULED: yes, `YAUDIO_TRACKER.csv`, slices, with a task
+   per pull request where a slice has more than one.
