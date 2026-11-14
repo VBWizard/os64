@@ -88,9 +88,11 @@ admission. A second child failure receives a fresh generation and affected set.
 The script-host/module-loader setter exception is restricted to NULL services,
 recovery enabled, PREPARING, and an already failed realm. Healthy siblings and
 other active phases remain BUSY; replacement services still fail retirement
-checks. No engine patch, settings identity change, public config/outcome layout
-change or libjs ABI increment is required. The engine identity stays
+checks. The native implementation requires no engine patch, settings identity
+change, public config/outcome layout change or libjs ABI increment. Its original
+engine identity was
 `eb3773e6dac0a1b7f7d107384db954271905aa696bbf22def1a393b23866cce9`.
+The #591 composition below records the integrated engine identity.
 
 ## Regression and validation receipt
 
@@ -159,3 +161,57 @@ identity above:
   observer or listener context lookup stopping healthy siblings. Mutants compile
   in isolated source directories against the coherent engine/native objects;
   compilation failure is not counted as detection.
+
+## Composition with merged F4 listener settings
+
+The merge forward incorporates #591 through `d014f77c`. Conflict resolution
+retains both the recovery and listener-settings test selectors/default matrix
+calls, and both clusters' policy flags. The paired recovery constructor still
+does not enable checked listener settings. Event dispatch keeps the early
+failed-context skip that preserves later healthy adopted listeners, together
+with F4's captured entry/incumbent scope, post-getter eligibility checks and
+uncatchable terminal-exception handling.
+
+Patch 0031 is imported unchanged, SHA-256
+`8926970d5204a3ceca655888b82b25ccbbcbc2dc358e55670a163f5f3e591b47`.
+Patches 0029/0030 retain their original hashes. The composed engine identity is
+`3be09416c3df09ee3c4d85b8fe54af3d8f90d24ed32678042f8a7ca67ac4aa39`;
+ABI 5 is unchanged. Engine object creation identity and native listener layout
+require rebuilding engine, wrapper and DOM objects together. The composition
+does not broaden native recovery admission or claim browser/guest acceptance.
+
+Fresh engine, wrapper and DOM cohorts pass with ASan/UBSan and LeakSanitizer
+enabled under both teardown policies:
+
+| Integrated check | Shipping / instrumented |
+|---|---:|
+| Native DOM recovery | 2,520 / 6,660 |
+| Paired-constructor allocation cuts per policy | 60 / 1,095 |
+| Complete runtime, zero live allocations | 22,014 / 69,404 |
+| Libjs child recovery / raw recovery barrier | 4,637 / 4,637; 505 / 505 |
+| F4 listener settings / timer settings | 1,736 / 1,736; 718 / 718 |
+| Events / callback reporting | 1,020 / 1,020; 1,118 / 1,118 |
+| Shared custom elements / mutation observers | 298 / 298; 32 / 32 |
+| Realm routing / retirement queues | 678 / 678; 9,770 / 9,770 |
+| Departure / Streams / child installation | 353 / 353; 104 / 104; 58 / 58 |
+| Transport / visitor retirement | 1,084 / 1,084; 972 / 972 |
+
+Terminal records and the remaining settings/failed-code/scope selectors pass
+on both profiles. Parser failure and fatal/reclaim invariant/exit-badge checks
+also pass. Omitting the early failed-listener skip produces four named adopted
+listener regression failures per profile, despite F4's later settings guards.
+These isolated mutant runs validate the preserved gate without changing it.
+Target libraries, headers, six source-preparer tests, teardown audit and
+tracker/stale-reference checks pass; target link audits find 217 engine and
+78 wrapper exports with the expected imports.
+
+Reproduce the composition using the canonical build commands above. After
+`--recovery`, run `--listener-settings` and the affected dispatch/lifecycle
+selectors on both rebuilt DOM binaries. Run the full canonical runtime suite,
+then both runtime binaries with `--child-recovery`, `--recovery-barrier`,
+`--failure-records`, `--callback-settings`, `--settings-bridge`,
+`--current-settings`, `--failed-code-only`, `--execution-scopes-only`,
+`--settings-scopes`, `--native-call-contexts`, and `--global-this`.
+`python3 tools/test_js_port_target.py` audits the target link/import surface.
+The initial chapter's broad DOM and ten-defect evidence remains qualified by
+its earlier engine identity; this receipt establishes the affected composition.

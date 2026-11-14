@@ -1365,3 +1365,15 @@ contexts supply ordinary/native functions; bound functions inherit their target
 object's associated context; proxies retain their constructor context even when
 revoked. No property lookup or trap occurs. This is distinct from executable
 `JS_GetFunctionRealm`, and is not an arbitrary object's birth-realm API.
+
+
+Raw `JS_GetObjectRealm(ctx, value)` uses that callable policy for functions;
+for noncallable objects it matches immutable construction-context IDs against
+live contexts. It returns NULL if that context has been collected, without
+substituting a prototype's context or a reused context address. It borrows the
+result and adds no context root, allocation, property access, trap or exception
+mutation. This is a trusted same-runtime API; lifecycle admission and security
+remain embedding responsibilities. Wrapper contexts already stay retained
+through root destruction. Each engine object/context/runtime accounts for one
+additional uint64_t in its allocation. The [listener settings chapter](../../docs/design/pending/IFRAME_F4_LISTENER_SETTINGS.md)
+records the consumer and collection policy.
