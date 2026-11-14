@@ -1,5 +1,7 @@
 # F.15 — departed realm reclamation
 
+Design PR: **#600**. Reclamation is not implemented by this brief.
+
 Design and source audit, 2026-11-14. Baseline: merged `userland` `932551a2`,
 including F16 #597 and F4 handler settings #596. Prepared engine identity:
 `39063a8f7f5747a9737b4f15b67dddb87f6344021bfba9fe3ae79a12ef020fbf`;
