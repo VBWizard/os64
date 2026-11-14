@@ -651,7 +651,10 @@ virtio because its drain waits for the tick.
   those. `configure` runs on the host (`tools/import_av.py`), and its
   answers about a C library are replaced by what the shims in
   `libav/port/` provide (README.md § The C library: no file ever opens,
-  `snprintf` has no `%f`). Built WITHOUT threads, so a program using it
+  `snprintf` is the port's own, `av_format.c`, because libos64's skips an
+  unknown conversion without taking its argument; the shims' own names
+  are libav's alone, so a caller of FFmpeg's headers sees only names
+  libos64 exports). Built WITHOUT threads, so a program using it
   from several threads does every open and close under one lock of its
   own. A program that calls it is named in `LIBAV_PROGRAMS` and compiles
   with `LIBAV_CONSUMER_CFLAGS`. Fixture: `/tests/avtest`

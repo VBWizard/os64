@@ -179,6 +179,14 @@ static void test_format(void)
     SAME("%s|%.2s|%-6s|%6s|%.0s|", "hello", "hello", "ab", "ab", "zzz");
     SAME("%*d|%-*d|%.*d|%*.*s|", 6, 42, 6, 42, 4, 7, 8, 3, "abcdef");
     SAME("%*d|", -6, 42);
+    // A %.Ns of an array of exactly N bytes and no terminator reads none
+    // past them (ASan reports it if it does).
+    char *exactly = malloc(3);
+    memcpy(exactly, "abc", 3);
+    char held[16];
+    CHECK(avlibc_snprintf(held, sizeof(held), "%.3s|%-5.2s|", exactly, exactly) == 10
+          && strcmp(held, "abc|ab   |") == 0, "%%.3s of an unterminated array: \"%s\"", held);
+    free(exactly);
     SAME("100%% %c%c", 'o', 'k');
     SAME("%p %p", (void *)0, (void *)&s_checks);
     char small[4];
