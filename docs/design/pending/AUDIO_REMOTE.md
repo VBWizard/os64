@@ -31,9 +31,9 @@ Codex before the next is stacked.
 - **Sound was quiet at `/dev/volume` 100.** We send full-scale PCM; the
   loudness is the headphones' own setting, which we neither know nor set.
 - **The headphones put an idle link into sniff, at 500 ms, and do not take
-  it out when a stream starts.** Sniff is refused link-wide today, and the
-  refusal holds: our link policy is what our controller answers their
-  request with (AUDIO_A2DP.md § P, as built).
+  it out when a stream starts.** Sniff was refused link-wide before part Z,
+  and the refusal held: our link policy is what our controller answers
+  their request with (AUDIO_A2DP.md § P, as built).
 - **They are the link's central** after connecting either way, and they
   call us back once they know us as an audio host.
 - **An LE scan and a Classic scan during a song cost no slip** (14,918
@@ -87,11 +87,17 @@ link commands, where an unanswered or refused command ends the link:
   link is `READY` and connected. LATCHED answers go first, as always.
 - **Neither can end the link.** A refusal, a malformed reply or no reply is
   recorded (status, a count) and the flag is cleared. `cl_finish` and
-  `cl_timeout` treat these two opcodes apart from the rest.
+  `cl_timeout` treat these two opcodes apart from the rest. That is the
+  link's rule; the host's is older and stays: a command the controller
+  NEVER answers holds the command credit, and the host fails the
+  controller three seconds past its deadline, as it does for an
+  unanswered command of any link's. A READY link that sends these makes
+  that reachable more often.
 - **Each has its own reply shape.** Write Link Policy Settings answers
-  status then handle (eight bytes of parameters, which the link's reader
-  does not know today and would count as malformed); Exit Sniff Mode is
-  asynchronous, like Create Connection.
+  status then handle (an eight-byte Command Complete, six of them
+  parameters, a shape the link's reader did not know before part Z and
+  would have counted as malformed); Exit Sniff Mode is asynchronous, like
+  Create Connection.
 - **A drop clears everything**: the owed flags and what was confirmed go
   with the connection (`cl_close`, `cl_give_up`, a new session), so
   nothing is sent under a dead handle and `bt_classic_quiescent` (which
@@ -117,10 +123,10 @@ untouched).
 
 | State | Meaning | Leaves by |
 |---|---|---|
-| `AWAKE` | Confirmed: sniff refused. Every new link | idle for 10 s: the allowing write is asked: `ALLOWING` |
+| `AWAKE` | Confirmed: sniff refused. Every new link | idle for 10 s: the allowing write is asked: `ALLOWING`. A stream wanted while the mode reads sniff (added as built): `WAKING` |
 | `ALLOWING` | The write allowing sniff is owed or out | confirmed: `DOZING`. Refused or unanswered: `AWAKE`, counted, and not asked again until a stream has come and gone. Sound or a stream arrives first: `WAKING` |
 | `DOZING` | Confirmed: sniff allowed. The mode may be active or sniff | sound waiting, or AVDTP in `STARTING`, `STREAMING` or `SUSPENDING`: `WAKING` |
-| `WAKING` | The refusing write is owed or out; Exit Sniff Mode is sent while the mode reads sniff | the write answered (confirmed or not) AND the mode reads active: `AWAKE`. 1 s gone: `AWAKE` all the same, counted (`woke late`); Exit Sniff Mode goes on being retried, each second up to five times, while the mode reads sniff and a stream is wanted |
+| `WAKING` | The refusing write is owed or out; Exit Sniff Mode is sent while the mode reads sniff | the write CONFIRMED, 100 ms settled since, AND the mode reads active (as built: "Z, as built"; this table first said "answered, confirmed or not"): `AWAKE`. 1 s gone: `AWAKE` all the same, counted (`woke late`); Exit Sniff Mode goes on being retried, each second up to five times, while the mode reads sniff and a stream is wanted |
 
 The link dropping ends every state. If the refusing write is refused,
 Exit Sniff Mode is still sent; the link is then awake with sniff still
@@ -153,6 +159,105 @@ P5: connected and silent for a minute: does slot 2 read `mode: sniff`? (If
 not, they did not ask again, and that is the finding.) `play` starts
 cleanly, with no clicks, and the mode reads active during the song; a
 minute after it ends, sniff again.
+
+### Z, as built
+
+Built as above, in `bt_classic.c` (the two commands) and `bt_host.c`
+(§ Slot 2's sniff: the lifecycle table, the code beneath it). What the
+design left open, and what differs:
+
+- **A write is owed when the value asked for differs from the confirmed
+  one AND from a write already out.** A change asked while a write is out
+  is written after it, unless that write's answer leaves the controller
+  holding the value now wanted. A refused or unanswered write is not
+  asked again until the value asked for changes; the host's own bar (not
+  until a stream has come and gone) sits on top of that.
+- **Both commands are taken by `cl_finish` and `cl_timeout` before
+  anything else**, so none of the paths below them that end the link (a
+  refused or unanswered command's `cl_fail`, `cl_give_up`) is reachable
+  from them.
+  A confirmation counts only for the attempt and handle still up. Exit
+  Sniff Mode's 0x0c is counted with its other failures; the last status
+  says which. Neither command arms the phase wait, whose expiry would end
+  a READY link.
+- **The mode reads awake when it is active OR unknown**: a link begins
+  active and headphones that never sniff send no Mode Change. Hold counts
+  as not awake.
+- **WAKING ends only on the refusing write CONFIRMED, 100 ms settled
+  since, with the mode awake**, or at 1 s (woke late). A sniff request the
+  controller accepted under the allowing policy can complete after the
+  refusing write is confirmed, its Mode Change in flight; ending on
+  "answered, mode unknown" let our Start go into a link about to sleep.
+  The settle is long enough for that Mode Change to arrive, and Exit
+  Sniff Mode then answers it. A refusing write that is refused never
+  confirms, so its wake runs the whole second: sniff is still allowed and
+  no settle can say the headphones will not sleep.
+- **Our Start is decided only on a tick whose state says the link is
+  awake: AWAKE, with the mode not reading sniff** (or this stream's wake
+  having run out its second). The seam's `has_sound` is live, written by
+  a player on another CPU, so it is read ONCE a tick; the sniff decision
+  and the pump's policy both use that reading. Two readings could
+  disagree, the second seeing sound the first did not, and Start the
+  pump into a link that was being allowed to sleep.
+- **A stream wanted while AWAKE and the mode reads sniff goes to
+  WAKING**: the refusing write was refused earlier, sniff is still
+  allowed, and the headphones went back to sleep during the idle count.
+  Not again for a stream whose wake already ran out its second, which
+  would hold our Start for ever behind headphones that never leave sniff.
+- **Exit Sniff Mode is asked whenever a stream is wanted and the mode
+  reads sniff, in WAKING or AWAKE**: at once, then a second after each
+  ask (the first goes on the wire behind the refusing write), five asks a
+  stream. The count starts over when the link is idle again.
+- **"Idle" reads the seam's `has_sound`, which answers only for the
+  pump's own stream**: a player writing into the null sink before AVDTP
+  is open is idle to the host. Sound becomes visible when the pump is the
+  seam's sink, which is when our Start could follow it.
+- **The hold is a second ops table**, given to `bt_a2dp_step` alone, on
+  every tick: every op forwards to the seam's but `has_sound`, which
+  answers the tick's one reading on a tick that may decide our Start and
+  no on any other.
+- **It runs on any READY link with an audio sink**, a `connect` session
+  among them; with no bond there is no link, so nothing runs (the
+  multi-host suite's ten thousand ticks with no bond send neither
+  command). The decisions run in slot 2's services, before the pump's
+  policy; what they ask goes at the link's next turn of the command slot.
+- **Counts are kept from start-up**, the link's and the host's; the
+  per-connection state goes with the connection. Slot 2's status: the
+  link's `sniff:` line follows its `mode:`; the host's `sniff manager:`
+  line (state, time idle, dozes, wakes, woke late, retries, refusals, and
+  "awake with sniff allowed", counted once a wake) follows the link's
+  text.
+- **A sniff command that is never answered at all** is recorded by the
+  link like any unanswered sniff command; in the host, a command with no
+  reply leaves the slot held with no credit, and the controller is called
+  failed three seconds after its deadline, as for an unanswered command
+  of any link's (`BT_HOST_CLASSIC_REPLY_GRACE_MS`); a READY link sending
+  these makes that reachable more often than the link's setup alone did.
+  The multi-host case of "the wake unanswered" is therefore the Command
+  Status with no Mode Change after it, which is what a controller that
+  keeps its credits does.
+
+Proof, as built: `tools/test_bt_classic_host.sh` (both commands' bytes
+and reply shapes, the turn behind a latched answer, behind `next_op` and
+ahead of page scan, refused, refused by status, malformed, for another
+handle and unanswered with the link still READY, a failed Mode Change,
+the link dropping with each owed and each out, a late answer for a dead
+link, the value changing while a write is out; 36 mutants, 214 in all)
+and `tools/test_bt_multi_host.sh` (the model controller takes both
+commands, the model headphones either sniff as the P5's pair does or
+never, and the model link in sniff delivers and completes a Classic
+packet only at an anchor, so the controller's Classic buffers fill and a
+stream started asleep is late: idle to dozing, sound woken before our
+Start and first packet, dozing again after the song, the wake unanswered,
+each write refused, headphones that never sniff, a stream they start, the
+link dropping in each state, a READY link with no sink idle twenty
+seconds sending neither command, the seam's answer changing between two calls
+in one tick (a model seam that counts its calls: the Start does not go on
+that tick, and no tick reads it twice), a sniff request in flight across
+the refusing write (sound while the allowing write is out, and just after
+it is confirmed), the link asleep again while AWAKE, and the whole cycle
+beside a typing keyboard and a moving mouse with part S's LE assertions
+at every step).
 
 ## Part R: AVCTP and AVRCP
 

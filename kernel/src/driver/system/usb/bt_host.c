@@ -202,9 +202,10 @@ static void host_sdp_clear(bt_host_t *h)
     h->sdp_result_current=false;
 }
 static void host_audio_link(bt_host_t *h,bool up);
+static void host_sniff_reset(bt_host_t *h);
 // The Classic link connected (up) or went: L2CAP starts over, admitting SDP
 // and, with an audio sink, AVDTP; and so does everything the last
-// connection held.
+// connection held, its sniff policy among it.
 static void host_services_link(bt_host_t *h,bool up)
 {
     if(up) {
@@ -215,6 +216,7 @@ static void host_services_link(bt_host_t *h,bool up)
     h->l2cap_encrypted=false;
     host_sdp_clear(h);
     host_audio_link(h,up);
+    host_sniff_reset(h);
 }
 // The query is over, one way or another: its line is kept and the
 // transport says it once (sdp_ended).
@@ -512,6 +514,166 @@ static bool host_avdtp_connect(bt_host_t *h,bool media,uint64_t now)
     h->avdtp_asking=(uint8_t)(ch+1); h->avdtp_asking_cid=h->l2cap.ch[ch].cid; h->avdtp_asking_media=media;
     return true;
 }
+// ── Slot 2's sniff (AUDIO_REMOTE.md § Part Z) ──────────────────────────────
+//
+// Sniff is ALLOWED while nothing is streaming and REFUSED while something
+// is, and a link found in sniff when sound arrives is taken out of it before
+// our stream starts. Kept only with an audio sink and the link READY; any
+// other tick, and the link coming up or going, starts it over at AWAKE.
+// Decided each tick from state: the link's confirmed policy and mode (the
+// link's own commands, bt_classic.h), AVDTP's state, the seam's has_sound,
+// and when the link last had neither. A stream is WANTED while the seam has
+// sound or AVDTP is STARTING, STREAMING or SUSPENDING; the link is IDLE
+// while it is READY and no stream is wanted.
+//
+//   state    | meaning                          | leaves by
+//   ---------+----------------------------------+------------------------------------
+//   AWAKE    | the refusing policy asked (every | idle for 10 s, unless barred: the
+//            | new link starts here, at the     | allowing write is asked: ALLOWING.
+//            | controller's "refused")          | A stream wanted while the mode
+//            |                                  | reads sniff, unless this stream's
+//            |                                  | wake already ran out: WAKING
+//   ALLOWING | the write allowing sniff is owed | confirmed: DOZING. Refused or
+//            | or out                           | unanswered: AWAKE, counted, and
+//            |                                  | barred until a stream has come and
+//            |                                  | gone. A stream wanted first: WAKING
+//   DOZING   | confirmed: sniff allowed; the    | a stream wanted: WAKING
+//            | mode may be active or sniff      |
+//   WAKING   | the refusing write is owed or    | the refusing write CONFIRMED, 100 ms
+//            | out; OUR Start is held           | settled since, AND the mode reads
+//            |                                  | active (or unknown: a link begins
+//            |                                  | active): AWAKE. 1 s gone: AWAKE all
+//            |                                  | the same, counted (woke late), the
+//            |                                  | stream's wake spent
+//
+// The settle is there because a sniff negotiation the controller accepted
+// under the allowing policy can still complete after the refusing write is
+// confirmed: its Mode Change is in flight, and "unknown" or "active" would
+// let our Start go into a link about to sleep. A refusing write that is
+// refused never confirms, so its wake runs the whole second.
+//
+// While a stream is wanted, in WAKING or AWAKE, Exit Sniff Mode is asked
+// whenever the mode reads sniff: at once, then again each second, at most
+// five times a stream. A refusing write the controller did not take leaves
+// the link awake with sniff still allowed: counted once a wake, and shown.
+//
+// OUR START IS DECIDED ONLY ON A TICK WHOSE STATE SAYS THE LINK IS AWAKE.
+// The seam's has_sound is live, written by a player on another CPU, so two
+// readings in one tick can disagree: the sniff decision could see silence
+// and the pump, a moment later, sound, and Start into a sleeping link. So
+// the seam is read ONCE a tick (`sniff_sound`), and the pump's policy is
+// given a second ops table whose has_sound answers that reading, and only
+// in AWAKE with the mode not reading sniff (or the stream's wake spent);
+// in every other state it answers no. The pump reads has_sound only to
+// decide OUR Start, so the quiet timer and a stream already running are
+// untouched. A stream THEY start is not held: its media goes at sniff's
+// rhythm until the wake completes.
+#define BT_HOST_SNIFF_IDLE_MS 10000
+#define BT_HOST_SNIFF_WAKE_MS 1000
+#define BT_HOST_SNIFF_SETTLE_MS 100
+#define BT_HOST_SNIFF_WAKES 5
+static void host_sniff_reset(bt_host_t *h)
+{
+    h->sniff_state=BT_HOST_SNIFF_AWAKE; h->sniff_idle_since=0; h->sniff_barred=false;
+    h->sniff_wake_began=h->sniff_wake_last=h->sniff_refused_at=0; h->sniff_wake_tries=0;
+    h->sniff_awake_allowed=false; h->sniff_wake_spent=false;
+}
+static bool host_sniff_stream_wanted(const bt_host_t *h)
+{
+    bt_avdtp_state_t st=bt_avdtp_state(&h->avdtp);
+    return st==BT_AVDTP_STARTING || st==BT_AVDTP_STREAMING || st==BT_AVDTP_SUSPENDING || h->sniff_sound;
+}
+static void host_sniff_waking(bt_host_t *h,uint64_t now)
+{
+    h->sniff_state=BT_HOST_SNIFF_WAKING; h->sniff_wakes++;
+    h->sniff_wake_began=now; h->sniff_wake_last=0; h->sniff_wake_tries=0; h->sniff_refused_at=0;
+    h->sniff_awake_allowed=false; h->sniff_wake_spent=false; h->sniff_idle_since=0;
+}
+static void host_sniff_tick(bt_host_t *h,uint64_t now)
+{
+    bt_classic_t *c=&h->classic;
+    // This tick's one reading of the seam (the comment above says why).
+    h->sniff_sound=h->a2dp_ops && h->a2dp_ops->has_sound(h->a2dp_ctx);
+    if(!h->a2dp_ops || c->phase!=BT_CLASSIC_READY || !c->connected) {
+        host_sniff_reset(h);
+        h->sniff_start_ok=false;     // a link that is not READY (closing, say) is given no Start
+        return;
+    }
+    bool wanted=host_sniff_stream_wanted(h);
+    bt_classic_mode_t mode=bt_classic_mode(c);
+    bool asleep=mode==BT_CLASSIC_MODE_SNIFF;
+    switch(h->sniff_state) {
+    case BT_HOST_SNIFF_AWAKE:
+        if(wanted) {
+            h->sniff_idle_since=0; h->sniff_barred=false;
+            // The link went to sleep with sniff still allowed (a refusing
+            // write refused): it is woken as from DOZING.
+            if(asleep && !h->sniff_wake_spent) host_sniff_waking(h,now);
+            break;
+        }
+        h->sniff_wake_tries=0; h->sniff_wake_spent=false;
+        if(!h->sniff_idle_since) h->sniff_idle_since=now?now:1;
+        if(!h->sniff_barred && now-h->sniff_idle_since>=BT_HOST_SNIFF_IDLE_MS) h->sniff_state=BT_HOST_SNIFF_ALLOWING;
+        break;
+    case BT_HOST_SNIFF_ALLOWING:
+        if(wanted) break;
+        if(bt_classic_policy_busy(c)) break;
+        if(bt_classic_sniff_allowed(c)) { h->sniff_state=BT_HOST_SNIFF_DOZING; h->sniff_dozes++; }
+        else {
+            h->sniff_state=BT_HOST_SNIFF_AWAKE; h->sniff_allows_failed++;
+            h->sniff_barred=true; h->sniff_idle_since=0;
+        }
+        break;
+    case BT_HOST_SNIFF_DOZING:
+        break;
+    case BT_HOST_SNIFF_WAKING:
+        if(!h->sniff_refused_at && !bt_classic_policy_busy(c) && !bt_classic_sniff_allowed(c))
+            h->sniff_refused_at=now?now:1;
+        if(h->sniff_refused_at && now-h->sniff_refused_at>=BT_HOST_SNIFF_SETTLE_MS &&
+           (mode==BT_CLASSIC_MODE_ACTIVE || mode==BT_CLASSIC_MODE_UNKNOWN))
+            h->sniff_state=BT_HOST_SNIFF_AWAKE;
+        else if(now-h->sniff_wake_began>=BT_HOST_SNIFF_WAKE_MS) {
+            h->sniff_state=BT_HOST_SNIFF_AWAKE; h->sniff_woke_late++; h->sniff_wake_spent=true;
+        }
+        break;
+    }
+    if(wanted && (h->sniff_state==BT_HOST_SNIFF_ALLOWING || h->sniff_state==BT_HOST_SNIFF_DOZING))
+        host_sniff_waking(h,now);
+    bt_classic_policy(c,h->sniff_state==BT_HOST_SNIFF_ALLOWING || h->sniff_state==BT_HOST_SNIFF_DOZING);
+    bool awake_side=h->sniff_state==BT_HOST_SNIFF_WAKING || h->sniff_state==BT_HOST_SNIFF_AWAKE;
+    if(wanted && awake_side && asleep && h->sniff_wake_tries<BT_HOST_SNIFF_WAKES &&
+       !bt_classic_wake_busy(c) && (!h->sniff_wake_tries || now-h->sniff_wake_last>=BT_HOST_SNIFF_WAKE_MS)) {
+        bt_classic_wake(c);
+        if(h->sniff_wake_tries) h->sniff_wake_retries++;
+        h->sniff_wake_tries++; h->sniff_wake_last=now;
+    }
+    if(h->sniff_state==BT_HOST_SNIFF_AWAKE && !h->sniff_awake_allowed &&
+       !bt_classic_policy_busy(c) && bt_classic_sniff_allowed(c)) {
+        h->sniff_awake_allowed=true; h->sniff_refuses_failed++;
+    }
+    h->sniff_start_ok=h->sniff_state==BT_HOST_SNIFF_AWAKE && (!asleep || h->sniff_wake_spent);
+}
+// The seam's ops as the pump's policy sees them: the same, but for
+// has_sound, which answers this tick's one reading and only on a tick that
+// may decide our Start (the comment above). The context is the host.
+static bt_a2dp_pulled_t host_pump_pull(void *x,int16_t *out,uint32_t frames)
+{ bt_host_t *h=x; return h->a2dp_ops->pull(h->a2dp_ctx,out,frames); }
+static bool host_pump_has_sound(void *x) { bt_host_t *h=x; return h->sniff_sound && h->sniff_start_ok; }
+static void host_pump_attach(void *x) { bt_host_t *h=x; h->a2dp_ops->attach(h->a2dp_ctx); }
+static void host_pump_detach(void *x) { bt_host_t *h=x; h->a2dp_ops->detach(h->a2dp_ctx); }
+static void host_pump_failed(void *x,const char *why) { bt_host_t *h=x; h->a2dp_ops->failed(h->a2dp_ctx,why); }
+static void host_pump_delay(void *x,uint32_t us) { bt_host_t *h=x; h->a2dp_ops->delay(h->a2dp_ctx,us); }
+static bool host_pump_begin(void *x,const sbc_settings_t *s)
+{ bt_host_t *h=x; return h->a2dp_ops->encoder_begin(h->a2dp_ctx,s); }
+static bool host_pump_encode(void *x,const int16_t *pcm,uint8_t *out,size_t cap)
+{ bt_host_t *h=x; return h->a2dp_ops->encoder_encode(h->a2dp_ctx,pcm,out,cap); }
+static uint64_t host_pump_clock(void *x) { bt_host_t *h=x; return h->a2dp_ops->clock_us(h->a2dp_ctx); }
+static const bt_a2dp_ops_t host_pump_ops={
+    .pull=host_pump_pull, .has_sound=host_pump_has_sound, .attach=host_pump_attach, .detach=host_pump_detach,
+    .failed=host_pump_failed, .delay=host_pump_delay, .encoder_begin=host_pump_begin,
+    .encoder_encode=host_pump_encode, .clock_us=host_pump_clock,
+};
+
 // Slot 2's audio, each tick, after SDP: the roles, the channels AVDTP wants
 // opened and closed, its timers and its messages, then the pump's policy
 // and its packets.
@@ -545,7 +707,10 @@ static void host_audio_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     host_avdtp_channels(h,now);
     host_avdtp_feed(h);
     host_a2dp_settle(h);
-    bt_a2dp_step(&h->a2dp,a,h->now_us,h->a2dp_ops,h->a2dp_ctx);
+    // The pump's policy hears this tick's one reading of the seam, and "no
+    // sound yet" on any tick whose sniff state does not say the link is
+    // awake (§ Slot 2's sniff), so our Start waits for the link.
+    bt_a2dp_step(&h->a2dp,a,h->now_us,&host_pump_ops,h);
     host_avdtp_feed(h);          // what the pump asked of AVDTP, if the slot is still free
     host_a2dp_send(h,now,call);
 }
@@ -731,6 +896,7 @@ static void host_services_tick(bt_host_t *h,uint64_t now,host_call_t *call)
     }
     host_sdp_step(h,now);
     host_sdp_answer_offer(h);
+    host_sniff_tick(h,now);      // before the pump's policy, which the hold must reach in the same tick
     host_audio_tick(h,now,call);
     bt_l2cap_tick(&h->l2cap,now,host_l2cap_may_send(h),host_l2cap_send,call);
     host_a2dp_settle(h);
@@ -1222,7 +1388,23 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
     if(h->initialized && h->classic_available && used<cap-1) {
         used+=bt_classic_status(c,out+used,cap-used);
         if(used>=cap-1) return used;
-        // The link's clock: the time of its last tick.
+        // Times below are on the link's clock: the time of its last tick.
+        if(h->a2dp_ops) {
+            // The host's half of sniff (§ Slot 2's sniff), after the link's
+            // `sniff:` line and its mode.
+            static const char *const states[]={"awake","allowing sniff","dozing","waking"};
+            uint64_t idle=h->sniff_idle_since && c->now>=h->sniff_idle_since?c->now-h->sniff_idle_since:0;
+            n=snprintf(out+used,cap-used,"sniff manager: %s%s; idle %lu ms; dozes %u wakes %u woke late %u "
+                       "exit sniff retries %u allowing refused %u awake with sniff allowed %u\n",
+                       h->sniff_state<4?states[h->sniff_state]:"unknown",
+                       h->sniff_barred?" (sniff not asked again until a stream has come and gone)":"",
+                       (unsigned long)idle,(unsigned)h->sniff_dozes,(unsigned)h->sniff_wakes,
+                       (unsigned)h->sniff_woke_late,(unsigned)h->sniff_wake_retries,
+                       (unsigned)h->sniff_allows_failed,(unsigned)h->sniff_refuses_failed);
+            if(n<0) return used;
+            used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+            if(used>=cap-1) return used;
+        }
         uint64_t wait=h->classic_page_at>c->now?h->classic_page_at-c->now:0;
         if(!h->classic_auto) n=snprintf(out+used,cap-used,"automatic: no\n");
         else if(c->phase==BT_CLASSIC_READY) n=snprintf(out+used,cap-used,"automatic: yes; connected\n");

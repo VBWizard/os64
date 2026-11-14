@@ -3,7 +3,8 @@
 (kernel/src/driver/system/usb/bt_classic.c: the request parser, the event
 lengths and claims, each phase's transition and its condition, the latched
 answers and their order, the refusals, each deadline, page scan, the
-key-size bar, the bond and its codec), against tools/test_bt_classic_host.sh:
+key-size bar, the sniff commands that may never end the link, the bond and
+its codec), against tools/test_bt_classic_host.sh:
 a mutant is CAUGHT when the suite fails, MISSED when it passes, which means a
 test is missing and gets written. A build failure is neither.
 
@@ -224,7 +225,8 @@ mutants = [
     # Closing.
     ('an-unsent-accept-is-dropped', '    if(c->answer[BT_CLASSIC_ANSWER_ACCEPT].set) cl_refuse(c,0x040a,c->peer,0x0f);\n', ''),
     ('a-call-is-cancelled-like-a-page', '        if(c->session!=BT_CLASSIC_SESSION_INBOUND) c->next_op=0x0408;', '        if(1) c->next_op=0x0408;'),
-    ('closing-keeps-the-new-key', '    cl_answers_clear(c);\n    cl_key_wipe(c);\n    c->next_op=0;', '    cl_answers_clear(c);\n    c->next_op=0;'),
+    ('closing-keeps-the-new-key', '    cl_answers_clear(c);\n    cl_key_wipe(c);\n    cl_sniff_clear(c);\n    c->next_op=0;',
+     '    cl_answers_clear(c);\n    cl_sniff_clear(c);\n    c->next_op=0;'),
     ('giving-up-keeps-the-handle', '    c->connected=false; c->encrypted=false; c->link_may_active=false; c->crossing=false;\n',
      '    c->encrypted=false; c->link_may_active=false; c->crossing=false;\n'),
     ('a-late-link-is-left-up', '        if(c->connected && !c->disconnect_sent && !c->next_op) c->next_op=0x0406;\n', ''),
@@ -234,8 +236,8 @@ mutants = [
     # The tick.
     ('failed-is-not-failed', '        c->phase=BT_CLASSIC_FAILED; c->pending=false; c->next_op=0; c->waiting=false;',
      '        c->pending=false; c->next_op=0; c->waiting=false;'),
-    ('failed-keeps-the-new-key', '        cl_answers_clear(c); c->refusal_count=0; cl_key_wipe(c);\n        return;',
-     '        cl_answers_clear(c); c->refusal_count=0;\n        return;'),
+    ('failed-keeps-the-new-key', '        cl_answers_clear(c); c->refusal_count=0; cl_key_wipe(c); cl_sniff_clear(c);\n        return;',
+     '        cl_answers_clear(c); c->refusal_count=0; cl_sniff_clear(c);\n        return;'),
     ('done-before-the-transfer', '        if(c->command_done && control) { c->pending=false; cl_finish(c); }',
      '        if(c->command_done) { c->pending=false; cl_finish(c); }'),
     ('the-timeout-halves-swap', 'c->timeout_usb_done=usb_done; c->timeout_reply=reply;', 'c->timeout_usb_done=reply; c->timeout_reply=usb_done;'),
@@ -266,6 +268,64 @@ mutants = [
     ('encryption-off', 'cl_put(p,c->handle); p[2]=1; len=3;', 'cl_put(p,c->handle); p[2]=0; len=3;'),
     ('refusals-are-not-urgent', '    if(c->refusal_count) return true;\n', ''),
     ('quiescent-with-a-write-owed', '!bt_classic_urgent(c) && !cl_scan_owed(c);', '!bt_classic_urgent(c);'),
+
+    # Sniff: Write Link Policy Settings and Exit Sniff Mode, which can never
+    # end the link (AUDIO_REMOTE.md § Part Z).
+    ('a-refused-sniff-command-ends-the-link', '    if(cl_sniff_op(op)) { cl_sniff_done(c,op,st); return; }\n', ''),
+    ('an-unanswered-sniff-command-ends-the-link', '    if(cl_sniff_op(op)) { cl_sniff_done(c,op,0xff); return; }\n', ''),
+    ('the-policy-reply-is-read-as-an-address', '    case 0x080d: return CL_HANDLE;\n', ''),
+    ('exit-sniff-is-not-asynchronous', '    case 0x0804:\n        return CL_ASYNC;', '        return CL_ASYNC;'),
+    ('the-policy-reply-is-a-byte-long', 'kind==CL_HANDLE ? 8 : 6', 'kind==CL_HANDLE ? 9 : 6'),
+    ('the-policy-reply-handle-is-unchecked',
+     '        if(kind==CL_HANDLE && cl_u16(e+6)!=c->command_handle) { c->malformed++; return true; }\n', ''),
+    ('allowing-drops-role-switch', 'c->sniff_wanted ? 0x0005 : 0x0001', 'c->sniff_wanted ? 0x0004 : 0x0001'),
+    ('refusing-drops-role-switch', 'c->sniff_wanted ? 0x0005 : 0x0001', 'c->sniff_wanted ? 0x0005 : 0x0000'),
+    ('allowing-is-hold', 'c->sniff_wanted ? 0x0005 : 0x0001', 'c->sniff_wanted ? 0x0003 : 0x0001'),
+    ('exit-sniff-carries-a-reason', "op=0x0804; cl_put(p,c->handle); len=2;", "op=0x0804; cl_put(p,c->handle); p[2]=0x13; len=3;"),
+    ('sniff-is-asked-before-ready', '{ return c->phase==BT_CLASSIC_READY && c->connected; }', '{ return c->connected; }'),
+    ('the-policy-goes-ahead-of-a-latched-answer',
+     '    while(k<BT_CLASSIC_ANSWERS && !c->answer[k].set) k++;',
+     '    while(k<BT_CLASSIC_ANSWERS && !c->answer[k].set) k++;\n    if(c->policy_owed) k=BT_CLASSIC_ANSWERS;'),
+    ('the-policy-goes-ahead-of-next-op', '    } else if(c->next_op) {', '    } else if(c->next_op && !c->policy_owed) {'),
+    ('exit-sniff-goes-ahead-of-the-policy', '    } else if(c->policy_owed && cl_link_up(c)) {',
+     '    } else if(c->policy_owed && cl_link_up(c) && !c->wake_owed) {'),
+    ('page-scan-goes-ahead-of-exit-sniff', '    } else if(c->wake_owed && cl_link_up(c)) {',
+     '    } else if(c->wake_owed && cl_link_up(c) && !cl_scan_owed(c)) {'),
+    ('a-drop-keeps-the-sniff-state', '    cl_key_wipe(c);\n    cl_sniff_clear(c);\n', '    cl_key_wipe(c);\n'),
+    ('a-failed-transport-keeps-the-sniff-state', 'c->refusal_count=0; cl_key_wipe(c); cl_sniff_clear(c);',
+     'c->refusal_count=0; cl_key_wipe(c);'),
+    ('a-refused-policy-write-is-confirmed', 'if(c->policy_out && same && !st) c->sniff_confirmed',
+     'if(c->policy_out && same) c->sniff_confirmed'),
+    # No mutant for cl_sniff_done's `same` (a late answer confirms nothing):
+    # every way out of READY clears policy_out first, so `same` never decides
+    # and breaking it alone is invisible. 'a-drop-keeps-the-sniff-state' is
+    # the break that a late answer would show.
+    ('the-policy-out-flag-stays', '    c->policy_out=false;\n    // A change asked', '    // A change asked'),
+    ('a-change-while-out-is-forgotten', 'c->policy_owed=c->policy_owed && c->sniff_wanted!=c->sniff_confirmed;',
+     'c->policy_owed=false;'),
+    ('a-change-while-out-is-written-regardless', 'c->policy_owed=c->policy_owed && c->sniff_wanted!=c->sniff_confirmed;',
+     'c->policy_owed=c->policy_owed;'),
+    ('the-same-value-asks-again', '    if(!cl_link_up(c) || sniff==c->sniff_wanted) return;', '    if(!cl_link_up(c)) return;'),
+    ('the-write-out-is-ignored', 'c->policy_owed=sniff!=(c->policy_out ? c->policy_out_value : c->sniff_confirmed);',
+     'c->policy_owed=sniff!=c->sniff_confirmed;'),
+    ('a-wake-is-owed-while-one-is-out', '    if(cl_link_up(c) && !c->wake_out) c->wake_owed=true;',
+     '    if(cl_link_up(c)) c->wake_owed=true;'),
+    ('the-wake-flag-stays', '        c->wake_status=st; c->wakes_failed+=st!=0; c->wake_out=false;',
+     '        c->wake_status=st; c->wakes_failed+=st!=0;'),
+    ('a-failed-wake-is-not-counted', 'c->wakes_failed+=st!=0;', 'c->wakes_failed+=0;'),
+    ('a-wake-status-is-not-kept', '        c->wake_status=st; c->wakes_failed', '        c->wakes_failed'),
+    ('a-failed-write-is-not-counted', 'c->policy_failed+=st!=0;', 'c->policy_failed+=0;'),
+    ('a-write-status-is-not-kept', '    c->policy_status=st; c->policy_failed', '    c->policy_failed'),
+    ('writes-are-not-counted', 'c->policy_out_value=c->sniff_wanted; c->policy_writes++;', 'c->policy_out_value=c->sniff_wanted;'),
+    ('wakes-are-not-counted', 'c->wake_out=true; c->wakes++;', 'c->wake_out=true;'),
+    ('a-failed-mode-change-is-dropped', '        if(e[2]) { c->mode_failed++; c->mode_fail_status=e[2]; }',
+     '        if(e[2]) { }'),
+    ('a-failed-mode-change-is-taken', '        if(e[2]) { c->mode_failed++; c->mode_fail_status=e[2]; }\n        else {',
+     '        if(0) { }\n        else {'),
+    ('a-mode-change-for-anyone', '        if(!cl_our_handle(c,e+3)) return true;\n        // One that failed', '        // One that failed'),
+    ('hold-reads-as-sniff', '    case 1: return BT_CLASSIC_MODE_HOLD;', '    case 1: return BT_CLASSIC_MODE_SNIFF;'),
+    ('a-dead-link-has-a-mode', '    if(!c->connected || !c->mode_known) return BT_CLASSIC_MODE_UNKNOWN;',
+     '    if(!c->mode_known) return BT_CLASSIC_MODE_UNKNOWN;'),
 
     # The bond and its codec.
     ('a-bond-that-is-not-valid-is-kept', '    if(bond && bond->valid) {', '    if(bond) {'),

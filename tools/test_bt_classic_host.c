@@ -65,6 +65,16 @@ typedef struct {
     bool silent;             // nothing answers
     bool reply_only;         // command replies, no events after them
     uint8_t key_type;        // what Link Key Notification says the new key is
+    // Sniff: the policy the controller holds (written by a good Write Link
+    // Policy Settings), the two commands as received, the statuses they are
+    // answered with, and the headphones' mode.
+    uint16_t policy; unsigned policy_writes, wakes;
+    uint8_t policy_reply, wake_reply;
+    uint16_t drop_op;        // answered with nothing at all
+    uint16_t malform_op;     // answered with a reply of the wrong shape
+    bool wrong_handle;       // Write Link Policy Settings answered good, for another handle
+    uint64_t reply_delay;    // the two commands' replies come this late (0: 1 ms)
+    bool sniff;
 } model_t;
 
 static model_t M;
@@ -107,6 +117,8 @@ static void ev_ssp(model_t *m, uint64_t d, uint8_t status, const uint8_t *a)
 { PUSH(m, d, TAG_NONE, 0x36, 7, status, a[0], a[1], a[2], a[3], a[4], a[5]); }
 static void ev_role(model_t *m, uint64_t d, const uint8_t *a, uint8_t role)
 { PUSH(m, d, TAG_NONE, 0x12, 8, 0, a[0], a[1], a[2], a[3], a[4], a[5], role); }
+static void ev_mode(model_t *m, uint64_t d, uint8_t status, uint16_t h, uint8_t mode, uint16_t interval)
+{ PUSH(m, d, TAG_NONE, 0x14, 6, status, (uint8_t)h, (uint8_t)(h >> 8), mode, (uint8_t)interval, (uint8_t)(interval >> 8)); }
 static void ev_key_notify(model_t *m, uint64_t d, const uint8_t *a, const uint8_t *key, uint8_t type)
 {
     uint8_t b[25] = {0x18, 23};
@@ -236,6 +248,27 @@ static void model_send(void *context, uint16_t op, const uint8_t *p, uint8_t len
         m->scan = p[0]; m->scan_writes++;
         ev_cc_status(m, 1, op, m->scan_reply);
         break;
+    case 0x080d: {   // Write Link Policy Settings: handle, role switch and perhaps sniff
+        uint64_t d = m->reply_delay ? m->reply_delay : 1;
+        WANT(len == 4); WANT(m->live && u16(p) == m->handle); WANT(u16(p + 2) == 0x0001 || u16(p + 2) == 0x0005);
+        m->policy_writes++;
+        if (op == m->drop_op) break;
+        if (op == m->malform_op) { ev_cc_status(m, d, op, 0); break; }   // the status alone: no handle
+        if (!m->policy_reply) m->policy = u16(p + 2);
+        uint16_t h = m->wrong_handle ? (uint16_t)(u16(p) + 1) : u16(p);
+        PUSH(m, d, TAG_NONE, 0x0e, 6, 1, 0x0d, 0x08, m->policy_reply, (uint8_t)h, (uint8_t)(h >> 8));
+        break;
+    }
+    case 0x0804: {   // Exit Sniff Mode: handle
+        uint64_t d = m->reply_delay ? m->reply_delay : 1;
+        WANT(len == 2); WANT(m->live && u16(p) == m->handle);
+        m->wakes++;
+        if (op == m->drop_op) break;
+        if (op == m->malform_op) { ev_cc_status(m, d, op, 0); break; }   // Command Complete for an asynchronous command
+        if (m->wake_reply || !m->sniff) { ev_cs(m, d, m->wake_reply ? m->wake_reply : 0x0c, op); break; }
+        ev_cs(m, d, 0, op); ev_mode(m, d + 20, 0, m->handle, 0, 0); m->sniff = false;
+        break;
+    }
     default:
         failures++; printf("FAIL model: unexpected opcode %04x\n", op);
     }
@@ -2370,6 +2403,325 @@ static void test_soup(unsigned rounds)
     }
 }
 
+// ── Sniff: Write Link Policy Settings and Exit Sniff Mode (AUDIO_REMOTE.md § Part Z)
+
+// A bonded link, reconnected and READY, with nothing owed.
+static void ready_link(bt_classic_t *c)
+{
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    start(c, &b);
+    M.has_key = true; memcpy(M.key, OLD_KEY, 16);
+    CHECK(request(c, "reconnect", NULL, NULL));
+    CHECK(run_until_phase(c, &M, BT_CLASSIC_READY, 3000));
+    run(c, &M, 100);
+}
+static unsigned count_op(uint16_t op, unsigned from)
+{
+    unsigned k = 0;
+    for (unsigned i = from; i < M.logn; i++) k += M.log[i].op == op;
+    return k;
+}
+// The link is up and has recorded no error: neither command ended it.
+#define STILL_UP(c) do { CHECK_EQ((c)->phase, BT_CLASSIC_READY); CHECK((c)->connected); CHECK((c)->encrypted); \
+    CHECK(!(c)->error); CHECK(!(c)->waiting); } while (0)
+
+// The two commands' bytes and answers, a write asked twice, the mode read.
+static void test_sniff_commands(void)
+{
+    bt_classic_t c;
+    ready_link(&c);
+    CHECK(!bt_classic_sniff_allowed(&c)); CHECK(!c.sniff_wanted);
+    CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_UNKNOWN);
+    CHECK_TEXT(&c, "sniff: wanted refused confirmed refused; policy writes 0 failed 0");
+    // Asking for what is confirmed asks nothing.
+    unsigned from = M.logn;
+    bt_classic_policy(&c, false);
+    run(&c, &M, 100);
+    CHECK_EQ(M.logn, from);
+    // Allowing: the handle, role switch and sniff.
+    bt_classic_policy(&c, true);
+    CHECK(bt_classic_policy_busy(&c)); CHECK(!bt_classic_urgent(&c));
+    CHECK_TEXT(&c, "confirmed refused (write owed)");
+    step(&c, &M, 10);
+    CHECK_EQ(M.logn, from + 1);
+    CHECK_EQ(M.log[from].op, 0x080d); CHECK_EQ(M.log[from].len, 4); CHECK_EQ(u16(M.log[from].p), M.handle);
+    CHECK_EQ(M.log[from].p[2], 0x05); CHECK_EQ(M.log[from].p[3], 0x00);
+    CHECK(c.policy_out); CHECK(bt_classic_policy_busy(&c)); CHECK(!bt_classic_sniff_allowed(&c));
+    CHECK_TEXT(&c, "(write out)");
+    run(&c, &M, 50);
+    CHECK(bt_classic_sniff_allowed(&c)); CHECK(!bt_classic_policy_busy(&c)); CHECK_EQ(M.policy, 0x0005);
+    CHECK_EQ(c.policy_writes, 1); CHECK_EQ(c.policy_failed, 0); CHECK_EQ(c.policy_status, 0);
+    CHECK_TEXT(&c, "sniff: wanted allowed confirmed allowed; policy writes 1 failed 0 last status 00;");
+    // The same again sends nothing.
+    bt_classic_policy(&c, true);
+    run(&c, &M, 300);
+    CHECK_EQ(M.policy_writes, 1);
+    // The headphones go to sniff (and to hold, once): the link reads it.
+    ev_mode(&M, 0, 0, M.handle, 1, 0x0010);
+    run(&c, &M, 10);
+    CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_HOLD);
+    ev_mode(&M, 0, 0, M.handle, 2, 0x0320); M.sniff = true;
+    run(&c, &M, 10);
+    CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_SNIFF); CHECK_EQ(c.mode_interval, 0x320);
+    CHECK_TEXT(&c, "mode: sniff interval 800");
+    // Refusing: role switch alone, then Exit Sniff Mode, its Command Status
+    // and the Mode Change.
+    from = M.logn;
+    bt_classic_policy(&c, false);
+    bt_classic_wake(&c);
+    CHECK(bt_classic_wake_busy(&c)); CHECK(!bt_classic_urgent(&c));
+    CHECK_TEXT(&c, "exit sniff sent 0 failed 0 last status 00 (owed)");
+    run(&c, &M, 100);
+    static const uint16_t wake[] = {0x080d, 0x0804};
+    expect_ops("refuse and wake", wake, 2, from);
+    CHECK_EQ(M.log[from].p[2], 0x01); CHECK_EQ(M.log[from].p[3], 0x00); CHECK_EQ(u16(M.log[from].p), M.handle);
+    CHECK_EQ(M.log[from + 1].len, 2); CHECK_EQ(u16(M.log[from + 1].p), M.handle);
+    CHECK(!bt_classic_sniff_allowed(&c)); CHECK_EQ(M.policy, 0x0001); CHECK(!bt_classic_policy_busy(&c));
+    CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_ACTIVE); CHECK(!bt_classic_wake_busy(&c));
+    CHECK_EQ(c.wakes, 1); CHECK_EQ(c.wakes_failed, 0); CHECK_EQ(c.wake_status, 0);
+    CHECK_TEXT(&c, "exit sniff sent 1 failed 0 last status 00; mode changes failed 0");
+    // A wake asked while one is out is not owed twice.
+    M.reply_delay = 200; M.sniff = true;
+    bt_classic_wake(&c);
+    step(&c, &M, 10);
+    CHECK(c.wake_out);
+    bt_classic_wake(&c);
+    CHECK(!c.wake_owed);
+    run(&c, &M, 500);
+    CHECK_EQ(M.wakes, 2);
+    STILL_UP(&c);
+}
+
+// The turn: LATCHED answers first, then `next_op`, then the policy write,
+// then Exit Sniff Mode, then page scan.
+static void test_sniff_turns(void)
+{
+    bt_classic_t c;
+    ready_link(&c);
+    unsigned from = M.logn;
+    M.control = false;
+    bt_classic_policy(&c, true); bt_classic_wake(&c);
+    ev_addr(&M, 0, 0x16, PHONES);            // PIN Code Request: an answer latched
+    run(&c, &M, 50);
+    CHECK(bt_classic_urgent(&c));
+    M.control = true;
+    run(&c, &M, 200);
+    static const uint16_t latched[] = {0x040e, 0x080d, 0x0804};
+    expect_ops("behind a latched answer", latched, 3, from);
+    from = M.logn;
+    M.control = false;
+    bt_classic_policy(&c, false); bt_classic_wake(&c);
+    c.next_op = 0x1408;                      // READY leaves none of its own: one is put there
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    bt_classic_set_bond(&c, &b);             // page scan owed again
+    M.control = true;
+    run(&c, &M, 300);
+    static const uint16_t queued[] = {0x1408, 0x080d, 0x0804, 0x0c1a};
+    expect_ops("behind next_op, ahead of page scan", queued, 4, from);
+    STILL_UP(&c);
+}
+
+// Refused, malformed and unanswered, for each: recorded, counted, the flag
+// cleared, and the link never ended. A refused write is not asked again
+// until the value asked for changes.
+static void test_sniff_failures(void)
+{
+    enum { REFUSED, REFUSED_BY_STATUS, MALFORMED, WRONG_HANDLE, UNANSWERED, KINDS };
+    static const uint8_t want_status[KINDS] = {0x12, 0x0c, 0xff, 0xff, 0xff};
+    for (unsigned kind = 0; kind < KINDS; kind++) {
+        bt_classic_t c;
+        ready_link(&c);
+        uint32_t malformed = c.malformed;
+        unsigned from = M.logn;
+        if (kind == REFUSED) M.policy_reply = 0x12;
+        if (kind == MALFORMED) M.malform_op = 0x080d;
+        if (kind == WRONG_HANDLE) M.wrong_handle = true;
+        if (kind == UNANSWERED || kind == REFUSED_BY_STATUS) M.drop_op = 0x080d;
+        bt_classic_policy(&c, true);
+        step(&c, &M, 10);
+        if (kind == REFUSED_BY_STATUS) ev_cs(&M, 0, 0x0c, 0x080d);
+        run(&c, &M, 3000);
+        CHECK_EQ(count_op(0x080d, from), 1);
+        CHECK_EQ(c.policy_failed, 1); CHECK_EQ(c.policy_status, want_status[kind]);
+        CHECK(!bt_classic_sniff_allowed(&c)); CHECK(!bt_classic_policy_busy(&c)); CHECK(!c.pending);
+        CHECK_EQ(c.malformed, malformed + (kind == MALFORMED || kind == WRONG_HANDLE));
+        STILL_UP(&c);
+        // Not asked again for the same value; nor for the confirmed one.
+        M.policy_reply = 0; M.malform_op = 0; M.wrong_handle = false; M.drop_op = 0;
+        bt_classic_policy(&c, true);
+        run(&c, &M, 200);
+        bt_classic_policy(&c, false);
+        run(&c, &M, 200);
+        CHECK_EQ(count_op(0x080d, from), 1);
+        // A change is asked again.
+        bt_classic_policy(&c, true);
+        run(&c, &M, 200);
+        CHECK_EQ(count_op(0x080d, from), 2);
+        CHECK(bt_classic_sniff_allowed(&c));
+        STILL_UP(&c);
+    }
+    enum { DISALLOWED, WAKE_REFUSED, WAKE_MALFORMED, WAKE_UNANSWERED, WAKE_KINDS };
+    static const uint8_t wake_status[WAKE_KINDS] = {0x0c, 0x12, 0xff, 0xff};
+    for (unsigned kind = 0; kind < WAKE_KINDS; kind++) {
+        bt_classic_t c;
+        ready_link(&c);
+        unsigned from = M.logn;
+        M.sniff = kind != DISALLOWED;             // out of sniff a moment before: command disallowed
+        if (kind == WAKE_REFUSED) M.wake_reply = 0x12;
+        if (kind == WAKE_MALFORMED) M.malform_op = 0x0804;
+        if (kind == WAKE_UNANSWERED) M.drop_op = 0x0804;
+        bt_classic_wake(&c);
+        run(&c, &M, 3000);
+        CHECK_EQ(count_op(0x0804, from), 1);
+        CHECK_EQ(c.wakes, 1); CHECK_EQ(c.wakes_failed, 1); CHECK_EQ(c.wake_status, wake_status[kind]);
+        CHECK(!bt_classic_wake_busy(&c)); CHECK(!c.pending);
+        STILL_UP(&c);
+        // A wake has no memory of the last: asked again, sent again.
+        M.wake_reply = 0; M.malform_op = 0; M.drop_op = 0;
+        bt_classic_wake(&c);
+        run(&c, &M, 200);
+        CHECK_EQ(count_op(0x0804, from), 2);
+        STILL_UP(&c);
+    }
+    bt_classic_t c;
+    ready_link(&c);
+    M.wake_reply = 0;
+    bt_classic_wake(&c);
+    run(&c, &M, 200);
+    CHECK_TEXT(&c, "exit sniff sent 1 failed 1 last status 0c;");
+}
+
+// A Mode Change that carries an error is counted and leaves the mode; one
+// for another handle is not the link's.
+static void test_sniff_mode_change(void)
+{
+    bt_classic_t c;
+    ready_link(&c);
+    ev_mode(&M, 0, 0, M.handle, 2, 0x0320);
+    run(&c, &M, 10);
+    ev_mode(&M, 0, 0x12, M.handle, 0, 0);
+    ev_mode(&M, 0, 0x0c, (uint16_t)(M.handle + 1), 0, 0);
+    ev_mode(&M, 0, 0, (uint16_t)(M.handle + 1), 0, 0);
+    run(&c, &M, 10);
+    CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_SNIFF); CHECK_EQ(c.mode_interval, 0x320);
+    CHECK_EQ(c.mode_failed, 1); CHECK_EQ(c.mode_fail_status, 0x12);
+    CHECK_TEXT(&c, "mode changes failed 1 last status 12\n");
+    STILL_UP(&c);
+    // With the connection gone the mode is nobody's.
+    ev_disconn(&M, 0, 0, M.handle, 0x13); M.live = false;
+    run(&c, &M, 10);
+    CHECK_EQ(c.phase, BT_CLASSIC_STOPPED); CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_UNKNOWN);
+}
+
+// The link dropping with each command owed and with each out: nothing is
+// sent after it, a late answer confirms nothing, the link is quiescent once
+// nothing is in flight, and the next connection starts clean.
+static void test_sniff_drop(void)
+{
+    for (unsigned local = 0; local < 2; local++) {
+        bt_classic_t c;
+        ready_link(&c);
+        M.control = false;
+        bt_classic_policy(&c, true); bt_classic_wake(&c);
+        unsigned from = M.logn;
+        if (local) { M.expect_reason = 0x13; CHECK(request(&c, "disconnect", NULL, NULL)); }
+        else { ev_disconn(&M, 0, 0, M.handle, 0x13); M.live = false; }
+        step(&c, &M, 10);
+        CHECK(!bt_classic_policy_busy(&c)); CHECK(!bt_classic_wake_busy(&c));
+        CHECK(!c.sniff_wanted); CHECK(!bt_classic_sniff_allowed(&c));
+        M.control = true;
+        run(&c, &M, 3000);
+        CHECK_EQ(count_op(0x080d, from) + count_op(0x0804, from), 0);
+        if (local) { static const uint16_t closing[] = {0x0406}; expect_ops("owed, then disconnect", closing, 1, from); }
+        check_clean(&c, local ? "owed, then disconnect" : "owed, then dropped");
+    }
+    for (unsigned answered = 0; answered < 2; answered++) for (unsigned wake = 0; wake < 2; wake++) {
+        bt_classic_t c;
+        ready_link(&c);
+        M.sniff = true;
+        if (answered) M.reply_delay = 500; else M.drop_op = wake ? 0x0804 : 0x080d;
+        if (wake) bt_classic_wake(&c); else bt_classic_policy(&c, true);
+        step(&c, &M, 10);
+        CHECK(wake ? c.wake_out : c.policy_out);
+        unsigned from = M.logn;
+        ev_disconn(&M, 0, 0, M.handle, 0x08); M.live = false;
+        step(&c, &M, 10);
+        CHECK_EQ(c.phase, BT_CLASSIC_STOPPED);
+        CHECK(!bt_classic_policy_busy(&c)); CHECK(!bt_classic_wake_busy(&c));
+        CHECK(!bt_classic_quiescent(&c));    // the command is still in flight
+        run(&c, &M, 3000);
+        CHECK_EQ(M.logn, from);
+        CHECK(!bt_classic_sniff_allowed(&c)); CHECK(!c.pending);
+        check_clean(&c, "out, then dropped");
+        // The next connection begins at "refused, confirmed", nothing owed.
+        M.reply_delay = 0; M.drop_op = 0;
+        CHECK(request(&c, "reconnect", NULL, NULL));
+        CHECK(run_until_phase(&c, &M, BT_CLASSIC_READY, 3000));
+        run(&c, &M, 100);
+        CHECK(!c.sniff_wanted); CHECK(!bt_classic_sniff_allowed(&c));
+        CHECK(!bt_classic_policy_busy(&c)); CHECK(!bt_classic_wake_busy(&c));
+        CHECK_EQ(bt_classic_mode(&c), BT_CLASSIC_MODE_UNKNOWN);
+        from = M.logn;
+        bt_classic_policy(&c, false);
+        run(&c, &M, 100);
+        CHECK_EQ(M.logn, from);
+        bt_classic_policy(&c, true);
+        run(&c, &M, 100);
+        CHECK_EQ(count_op(0x080d, from), 1); CHECK_EQ(u16(M.log[from].p), M.handle);
+        CHECK(bt_classic_sniff_allowed(&c));
+        STILL_UP(&c);
+    }
+    // Before READY neither is taken; a failed transport clears what was owed.
+    bt_classic_t c;
+    bt_classic_bond_t b = bond_for(PHONES, OLD_KEY);
+    silent_link(&c, &b, "reconnect", 0x30);
+    bt_classic_policy(&c, true); bt_classic_wake(&c);
+    CHECK(!c.sniff_wanted); CHECK(!bt_classic_policy_busy(&c)); CHECK(!bt_classic_wake_busy(&c));
+    ready_link(&c);
+    M.control = false;
+    bt_classic_policy(&c, true); bt_classic_wake(&c);
+    bt_classic_tick(&c, M.now + 10, false, true, model_send, &M);
+    CHECK_EQ(c.phase, BT_CLASSIC_FAILED);
+    CHECK(!bt_classic_policy_busy(&c)); CHECK(!bt_classic_wake_busy(&c)); CHECK(!c.sniff_wanted);
+}
+
+// The value asked for changing while a write is out: the newer is written
+// after it, unless the controller ends up holding it anyway.
+static void test_sniff_changed_while_out(void)
+{
+    for (unsigned refused = 0; refused < 2; refused++) {
+        bt_classic_t c;
+        ready_link(&c);
+        unsigned from = M.logn;
+        M.reply_delay = 300; M.policy_reply = refused ? 0x12 : 0;
+        bt_classic_policy(&c, true);
+        step(&c, &M, 10);
+        CHECK(c.policy_out);
+        bt_classic_policy(&c, false);
+        CHECK(c.policy_owed);                        // owed until the answer says otherwise
+        run(&c, &M, 1500);
+        // Granted: refused is written after it. Refused: the controller
+        // already holds "refused", so nothing more.
+        CHECK_EQ(count_op(0x080d, from), refused ? 1 : 2);
+        if (!refused) CHECK_EQ(M.log[M.logn - 1].p[2], 0x01);
+        CHECK(!bt_classic_sniff_allowed(&c)); CHECK(!bt_classic_policy_busy(&c));
+        STILL_UP(&c);
+    }
+    // Changed and changed back while out: the write out is the one wanted.
+    bt_classic_t c;
+    ready_link(&c);
+    unsigned from = M.logn;
+    M.reply_delay = 300;
+    bt_classic_policy(&c, true);
+    step(&c, &M, 10);
+    bt_classic_policy(&c, false);
+    bt_classic_policy(&c, true);
+    CHECK(!c.policy_owed);
+    run(&c, &M, 1500);
+    CHECK_EQ(count_op(0x080d, from), 1);
+    CHECK(bt_classic_sniff_allowed(&c));
+}
+
 // The status text in a buffer too small for it stays a string.
 static void test_status_capacity(void)
 {
@@ -2423,6 +2775,12 @@ int main(int argc, char **argv)
     test_claims();
     test_key_hygiene();
     test_more_rules();
+    test_sniff_commands();
+    test_sniff_turns();
+    test_sniff_failures();
+    test_sniff_mode_change();
+    test_sniff_drop();
+    test_sniff_changed_while_out();
     test_status_capacity();
     test_soup(rounds);
     if (failures) { printf("bt_classic: %d FAILED\n", failures); return 1; }

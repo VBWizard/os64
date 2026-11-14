@@ -516,7 +516,7 @@ virtio because its drain waits for the tick.
   the count (§ S, as built), always leaving a send slot for the LE peers
   **A Classic (BR/EDR) link** is slot 2 of `/sys/bluetooth/connection`
   (`bt_classic.c`, pure; `tools/test_bt_classic_host.sh` plays the
-  headphones, 178 mutants): `scan classic`, then `slot 2 bond <address>`,
+  headphones, 214 mutants): `scan classic`, then `slot 2 bond <address>`,
   `connect`, `reconnect`, `disconnect`, `forget`. Bonded headphones that
   drop or do not answer are PAGED AGAIN, 5 s doubling to a minute (the
   wait starts over once a connection has lasted half a minute), until
@@ -529,7 +529,13 @@ virtio because its drain waits for the tick.
   command slot, which it takes ahead of the scan and the LE peers when an
   answer is waiting. The start-up round's Classic setup commands may be
   REFUSED without costing the round: the slot then says why it is
-  unavailable and LE is untouched. Its data packets are its L2CAP's
+  unavailable and LE is untouched. Sniff is ALLOWED on a link with an
+  audio sink once it has been idle ten seconds, and REFUSED, the link taken
+  out of sniff, before our stream starts; neither of the two commands can
+  end the link, though one the controller NEVER answers still fails the
+  controller three seconds past its deadline, as any unanswered command
+  does (`bt_host.c` § Slot 2's sniff is the lifecycle, AUDIO_REMOTE.md
+  § Part Z the design). Its data packets are its L2CAP's
   (`bt_l2cap.c`, pure, Basic mode, admitting SDP and, with an audio sink,
   AVDTP), and at `READY` the host asks the headphones one SDP question a
   connection, what Audio Sink they are (`bt_sdp.c`, pure, which also
