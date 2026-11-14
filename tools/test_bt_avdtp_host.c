@@ -1237,40 +1237,58 @@ static void test_both_at_once(void)
     FEED(ACC(LAST), CLOSE);
     CHECK_EQ(A.strays, 1);
 
-    // An Abort of ours is not abandoned by their Set Configuration: the
-    // media channel closes (Abort queued), theirs arrives before the Abort
-    // leaves, and both go, the answer first.
+    // Their Set Configuration with an Abort of ours QUEUED: the Abort is
+    // dropped, since a late Abort naming the same endpoint would tear down
+    // the configuration just accepted. Only the accept goes.
     to_open();
     bt_avdtp_media_closed(&A, now, false);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
-    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    CHECK(A.command_live && !A.command_sent);
+    FEED(CMD(8), SETCONF, S(1), S(3), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
     OUT(ACC(8), SETCONF);
-    OURS(ABORT, S(3));
+    NONE();
+    CHECK(!A.command_live);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
-    CHECK_EQ(A.remote_seid, 5);
-    FEED(ACC(LAST), ABORT);                   // its answer is taken, and changes nothing
+    CHECK_EQ(A.remote_seid, 3);
+    // ...with it already SENT: it is kept, its answer is taken and changes
+    // nothing of the new session.
+    to_open();
+    bt_avdtp_media_closed(&A, now, false);
+    OURS(ABORT, S(3));
+    FEED(CMD(8), SETCONF, S(1), S(3), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OUT(ACC(8), SETCONF);
+    NONE();
+    CHECK(A.command_live);
+    FEED(ACC(LAST), ABORT);
     CHECK_EQ(A.strays, 0);
     CHECK(!A.command_live);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
+    CHECK(bt_avdtp_settings(&A) != NULL);
     // ...and with no answer, its own 2 s, then nothing.
     to_open();
     bt_avdtp_media_closed(&A, now, false);
     OURS(ABORT, S(3));
-    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    FEED(CMD(8), SETCONF, S(1), S(3), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
     OUT(ACC(8), SETCONF);
+    tick(now + 1999);
     CHECK(A.command_live);
-    tick(now + 2000);
+    tick(now + 1);
     CHECK(!A.command_live);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONFIGURED);
     CHECK_EQ(A.wrongs, 0);
-    // Their Close of that stream does not abandon it either.
+    // Their Close of the new stream keeps a sent Abort the same way, and
+    // its accept leaves CONNECTED as it is.
     to_open();
     bt_avdtp_media_closed(&A, now, false);
-    FEED(CMD(8), SETCONF, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    OURS(ABORT, S(3));
+    FEED(CMD(8), SETCONF, S(1), S(3), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
     OUT(ACC(8), SETCONF);
     FEED(CMD(9), CLOSE, S(1));
     OUT(ACC(9), CLOSE);
-    OURS(ABORT, S(3));
+    NONE();
+    CHECK(A.command_live);
+    FEED(ACC(LAST), ABORT);
+    CHECK_EQ(A.strays, 0);
     CHECK_EQ(bt_avdtp_state(&A), BT_AVDTP_CONNECTED);
 }
 

@@ -165,11 +165,15 @@ static void av_drop_stream(bt_avdtp_t *a)
 }
 
 // Our command is abandoned: its answer, if it comes, is a stray. An Abort
-// is never abandoned; it runs out its own short timer, because what it
-// ends on their side still has to end.
+// already sent is kept: they saw it before whatever they sent since, so it
+// cannot touch what follows, and it runs out its own short timer; its
+// accept changes no state. An Abort still queued is dropped: the session
+// it ends is gone for them too (they would not configure an endpoint
+// their side still held), and a late Abort naming the same endpoint would
+// tear down the configuration just accepted.
 static void av_abandon_command(bt_avdtp_t *a)
 {
-    if(a->command_signal!=SIG_ABORT) a->command_live=false;
+    if(a->command_signal!=SIG_ABORT || !a->command_sent) a->command_live=false;
 }
 
 // To CONNECTED: the session is over and a new one is theirs to ask for or
@@ -355,8 +359,8 @@ static void av_their_setconf(bt_avdtp_t *a, bt_avdtp_msg_t *m, uint8_t label, co
     }
     uint8_t cat=0, code=0;
     if(!av_judge(a,p+2,n-2,&cat,&code)) { av_reject(m,label,SIG_SET_CONFIGURATION,cat,code); return; }
-    // Accepted: our own sequence is abandoned (an Abort of ours still goes,
-    // after this answer).
+    // Accepted: our own sequence is abandoned (an Abort of ours already
+    // sent runs out its timer; one still queued is dropped).
     av_abandon_command(a);
     a->remote_seid=intr;
     a->configured=true;
