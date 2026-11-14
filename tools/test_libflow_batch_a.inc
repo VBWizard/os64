@@ -113,7 +113,7 @@ static void outline_step_cases(void)
                  200, 600);
     flow_tree_t *tree = flow_layout(p.doc, p.page, 200, &p.env);
     OutlineLog log = {{0}, 0};
-    flow_visitor_t vis = {outline_visit, NULL, NULL, &log, outline_ring};
+    flow_visitor_t vis = {outline_visit, NULL, NULL, &log, outline_ring, NULL};
     flow_visit_groups(tree, (os64_gui_rect_t){0, 0, 200, 600}, (flow_point_t){0, 0}, &vis);
     expect("outline: each last in its stacking context", strcmp(log.seq, "vavdvbvcocoa") == 0,
            log.seq);
@@ -131,7 +131,7 @@ static void outline_step_cases(void)
                  200, 600);
     tree = flow_layout(p.doc, p.page, 200, &p.env);
     OutlineLog far = {{0}, 0};
-    flow_visitor_t fv = {outline_visit, NULL, NULL, &far, outline_ring};
+    flow_visitor_t fv = {outline_visit, NULL, NULL, &far, outline_ring, NULL};
     flow_visit_groups(tree, (os64_gui_rect_t){0, 30, 200, 10}, (flow_point_t){0, 0}, &fv);
     expect("outline: a ring in view is handed over though its box is not",
            strcmp(far.seq, "oa") == 0, far.seq);

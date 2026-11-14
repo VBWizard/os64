@@ -288,6 +288,7 @@ typedef struct {
     const os64_page_t *page;
     RecLayer layers[REC_LAYERS];
     int32_t nlayers;
+    int32_t throughs;       // laid groups open
 } Rec;
 
 // Straight `argb` laid over the open layer's pixel at page (x, y), if it
@@ -359,6 +360,15 @@ static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gu
     out(&rec->out, "\n");
 }
 
+static void rec_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    (void)b;
+    Rec *rec = ctx;
+    out(&rec->out, "canvas %d %d %d %d", c.x, c.y, c.w, c.h);
+    clip_note(rec, clip);
+    out(&rec->out, "\n");
+}
+
 static void rec_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
                          uint32_t ink, uint32_t paper)
 {
@@ -424,27 +434,60 @@ static void rec_group_close(void *ctx, uint8_t alpha)
 // thousandths, and the clip it is laid in. Laid unless the case says the
 // face has no memory for it (s_through_refused).
 static bool s_through_refused;
+// Kept drawings (paint.h, `keep`): when a case sets s_keeps, the face is
+// asked, and answers s_keep_answer, recording the question; an open with
+// HAVE is refused when s_have_refused says the drawing was let go.
+static bool s_keeps, s_have_refused;
+static int s_keep_answer;
+// When set, the face has no memory for a group laid inside another: one
+// inside a group being kept is drawn upright.
+static bool s_inner_through_refused;
+// When set, an open with MAKE is refused (its sheets past the face's
+// limits): it is opened again with NO.
+static bool s_make_refused;
+// When set, the face draws a canvas's pixels (paint.h, `canvas`).
+static bool s_canvas_verb;
+static const char *const kKeepNames[] = {"no", "make", "have"};
 
-static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                             os64_gui_rect_t clip)
+static int rec_keep(void *ctx, const yonder_keep_key_t *key)
 {
     Rec *rec = ctx;
-    if (s_through_refused)
+    out(&rec->out, "keep? %s drawn %llu bounds %d %d %d %d scroll %d %d tree %s\n",
+        key->box != NULL && key->box->node != NULL && key->box->node->name != NULL
+            ? key->box->node->name : "?",
+        (unsigned long long)key->drawn, key->bounds.x, key->bounds.y, key->bounds.w,
+        key->bounds.h, key->scroll.x, key->scroll.y, key->tree != 0 ? "set" : "none");
+    return s_keep_answer;
+}
+
+static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                             os64_gui_rect_t clip, int keep)
+{
+    Rec *rec = ctx;
+    if (s_through_refused || (keep == YONDER_KEEP_HAVE && s_have_refused) ||
+        (keep == YONDER_KEEP_MAKE && s_make_refused))
         return false;
+    if (s_inner_through_refused && rec->throughs > 0)
+        return false;
+    rec->throughs++;
     out(&rec->out, "through %d %d %d %d", bounds.x, bounds.y, bounds.w, bounds.h);
     for (int i = 0; i < 6; i++) {
         double v = m[i] * 1000;
         v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
         out(&rec->out, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
     }
-    out(&rec->out, " clip %d %d %d %d\n", clip.x, clip.y, clip.w, clip.h);
+    out(&rec->out, " clip %d %d %d %d", clip.x, clip.y, clip.w, clip.h);
+    if (keep != YONDER_KEEP_NO)
+        out(&rec->out, " %s", kKeepNames[keep]);
+    out(&rec->out, "\n");
     return true;
 }
 
-static void rec_through_close(void *ctx, uint8_t alpha)
+static void rec_through_close(void *ctx, uint8_t alpha, bool keep)
 {
     Rec *rec = ctx;
-    out(&rec->out, "end through %d\n", (int)alpha);
+    rec->throughs--;
+    out(&rec->out, "end through %d%s\n", (int)alpha, keep ? " kept" : "");
 }
 
 // A text clip (PILE3.md § The text clip): its bounds, where its mask ends
@@ -641,8 +684,10 @@ static yonder_verbs_t verbs_of(Rec *rec)
 {
     return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
-                            rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
-                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL,
+                            rec_mask,     rec_pixels,   rec_stand_in,
+                            s_keeps ? rec_keep : NULL, rec_through_open,
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
+                            s_canvas_verb ? rec_canvas : NULL,
                             rec_layer_open, rec_layer_close, rec_backdrop_filter,
                             rec_layer_take};
 }
@@ -681,7 +726,7 @@ static os64_gui_rect_t whole_of(os64_gui_rect_t view)
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
                          yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
-    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
@@ -763,7 +808,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     if (t != NULL && s_paint_scrolls)
         (void)flow_scroll_set(t, 0, s_paint_scroll);
-    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0};
+    Rec rec = {{0}, view, false, page, {{{0}, NULL}}, 0, 0};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
@@ -3144,6 +3189,24 @@ static void scratch_cases(void)
     expect("scratch: a request past the keep is the heap's",
            past != NULL && s_mallocs == m0 + 1 && d.unpooled == c.unpooled + 1 && d.made == c.made &&
            d.lent == 0 && yonder_scratch_counts(s).idle == 4, NULL);
+
+    // A take that finds no memory, pooled or not, is counted (what a kept
+    // drawing asks); a take of nothing is no refusal.
+    c = yonder_scratch_counts(s);
+    s_alloc_refuse_once = true;
+    void *pooled = yonder_scratch_take(s, part + part / 2);   // more than any idle buffer holds
+    s_alloc_refuse_once = true;
+    void *tiny = yonder_scratch_take(s, 64);
+    d = yonder_scratch_counts(s);
+    expect("scratch: a take that finds no memory is counted",
+           pooled == NULL && tiny == NULL && d.refused == c.refused + 2, NULL);
+    // A heap may answer a take of nothing with no memory; this one is made to.
+    s_alloc_refuse_once = true;
+    void *nothing = yonder_scratch_take(s, 0);
+    s_alloc_refuse_once = false;
+    yonder_scratch_give(s, nothing);
+    expect("scratch: a take of nothing is no refusal", yonder_scratch_counts(s).refused == d.refused,
+           NULL);
 
     // No scratch at all: the heap's, every time.
     m0 = s_mallocs;
