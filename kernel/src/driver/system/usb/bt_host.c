@@ -317,7 +317,8 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
 //               | exists and we may ask (below); media    | counted; media is told AVDTP
 //               | when bt_avdtp_wants_media and there is  | (media_closed, refused or not) if
 //               | no media channel                        | no media channel took its place;
-//               |                                         | signalling counts as an end
+//               |                                         | signalling counts as an end if no
+//               |                                         | signalling channel took its place
 //   signalling  | a 0x0019 channel OPENS, anyone's, while | AVDTP wants both closed (media is
 //               | none is signalling and AVDTP is IDLE:   | closed first), or either side or
 //               | signalling_open (with the SDP record's  | L2CAP's timers close it:
@@ -328,8 +329,8 @@ static void host_sdp_step(bt_host_t *h,uint64_t now)
 //               | media_open                              | media_closed
 //   (closed)    | a 0x0019 channel opens and is none of   | L2CAP finishes the disconnection
 //               | these: a second signalling channel      |
-//               | (the one that opened second), or one in |
-//               | FAILED                                  |
+//               | (the one that opened second), a second  |
+//               | media channel, or one in FAILED         |
 //
 // We ask for signalling at most twice a connection: once, and once more
 // BT_HOST_AVDTP_AGAIN_MS after one ended (ours or theirs, opened or

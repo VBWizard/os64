@@ -56,8 +56,9 @@ typedef struct {
     // acl_link[].
     uint16_t acl_classic;
     // The Classic link's services (AUDIO_CLASSIC.md part S). `l2cap` is
-    // brought up when the link connects, admitting SDP alone, and reset
-    // when it goes; every ACL packet on the link's handle is its.
+    // brought up when the link connects, admitting SDP and, with an audio
+    // sink, AVDTP, and reset when it goes; every ACL packet on the link's
+    // handle is its.
     // `l2cap_encrypted` is what it was last told of the link's encryption.
     bt_l2cap_t l2cap;
     bool l2cap_encrypted;
@@ -89,8 +90,9 @@ typedef struct {
     uint8_t sdp_answer_channel;
     uint16_t sdp_answer_cid;
     uint32_t sdp_answered, sdp_dropped;
-    // What the last query found, kept across a disconnection for A.3 and
-    // the status file, and whether it is from the connection that is up;
+    // What the last query found, kept across a disconnection for the
+    // status file, and whether it is from the connection that is up (AVDTP
+    // takes the version from it only then);
     // with its status line. `sdp_line` is the line the last query ENDED
     // with, whatever the end, and `sdp_ended` counts the ends, so the
     // transport can log each once. `l2cap_refusals` counts the channels we
