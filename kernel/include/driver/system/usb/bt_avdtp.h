@@ -97,8 +97,9 @@ typedef struct bt_avdtp {
     uint64_t now;
     uint16_t peer_version;    // AVDTP version from their SDP record; 0 when not read
     // The answers we owe, oldest first: the one their command earned, and
-    // the reject (or Abort's accept) of one more that arrived before it
-    // could leave. A third is dropped and counted.
+    // the answer to one more that arrived before it could leave (a reject,
+    // bad state; or for an Abort its accept, for a signal we do not know a
+    // General Reject). A third is dropped and counted.
     bt_avdtp_msg_t answer[2];
     // Our one command: built when queued, then handed out (`sent`), then
     // answered or timed out, its timer running from when it was queued.
@@ -133,7 +134,7 @@ typedef struct bt_avdtp {
     uint8_t wrongs;           // sessions gone wrong on this connection
     bool delay_known;
     uint16_t delay;           // their latest Delay Report, in 100 us units
-    const char *why;          // why the session is FAILED, or why it last went wrong
+    const char *why;          // why the session is FAILED or last went wrong; during the walk, why the last sink did not suit
     // Reassembly of one fragmented message: the start's header byte, the
     // packets still to come, and the signal and payload so far, which with
     // the header byte make at most BT_AVDTP_MESSAGE.
@@ -160,9 +161,10 @@ void bt_avdtp_reset(bt_avdtp_t *a);                      // the link dropped: li
 // SDP record (0x0103), or 0 when the record was not read: Get All
 // Capabilities is asked only of 0x0103 or later.
 void bt_avdtp_signalling_open(bt_avdtp_t *a, uint64_t now, uint16_t peer_version);
-// Sig closed with the link up: everything cleared, IDLE, and a session gone
-// wrong (the second on this connection is FAILED). In ENDING it is what was
-// asked for, and nothing more is counted.
+// Sig closed with the link up: everything the channel carried is cleared,
+// IDLE, and a session gone wrong (the second on this connection is FAILED).
+// In ENDING it is what was asked for, and nothing more is counted; FAILED
+// stays FAILED.
 void bt_avdtp_signalling_closed(bt_avdtp_t *a, uint64_t now);
 void bt_avdtp_media_open(bt_avdtp_t *a, uint64_t now);
 // `refused`: our attempt to open it was refused.
@@ -192,9 +194,9 @@ bool bt_avdtp_wants_media(const bt_avdtp_t *a);          // AWAITING_MEDIA, and 
 // CLOSING; the host closes one it holds when this is false.
 bool bt_avdtp_media_wanted(const bt_avdtp_t *a);
 // A session gone wrong: the host is to close both channels. True once the
-// Abort that goes first, if any, has been handed out.
+// answers owed and the Abort that goes first, if any, have been handed out.
 bool bt_avdtp_wants_closed(const bt_avdtp_t *a);
-const bt_avdtp_sbc_t *bt_avdtp_settings(const bt_avdtp_t *a);   // what was agreed; NULL before CONFIGURED/OPENING
+const bt_avdtp_sbc_t *bt_avdtp_settings(const bt_avdtp_t *a);   // what was agreed, from CONFIGURED or OPENING until the stream ends; else NULL
 bool bt_avdtp_delay(const bt_avdtp_t *a, uint32_t *delay_100us); // their latest Delay Report
 const bt_avdtp_edges_t *bt_avdtp_edges(const bt_avdtp_t *a);
 const char *bt_avdtp_state_name(bt_avdtp_state_t s);

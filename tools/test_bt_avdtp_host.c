@@ -778,6 +778,7 @@ static void test_acceptor_set_configuration(void)
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 40, 30)),        // backwards
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 1, 30)),         // under 2
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, 0x07, 0x08, 0x00, 0x02, 0x80, 0x01, 0x8c, 0x84, 0x00, 0x00),  // not SBC
+        CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, 0x07, 0x06, 0x00, 0x01, F48 | JOINT, B16 | SB8 | LOUD, 2, 53), // MPEG, SBC's length
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, 0x07, 0x06, 0x10, 0x00, F48 | JOINT, B16 | SB8 | LOUD, 2, 53), // video
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, 0x07, 0x05, 0x00, 0x00, F48 | JOINT, B16 | SB8 | LOUD, 2),     // SBC of 3 bytes
         CASE(0x07, E_UNSUP, S(1), S(5), TRANSPORT, 0x07, 0x00),                                     // zero-length codec
@@ -1483,6 +1484,12 @@ static void test_fragments(void)
     FEED(H(3, P_CONT, T_CMD), TRANSPORT, 0x07, 0x06);
     FEED(H(3, P_END, T_CMD), 0x00, 0x00, F48 | JOINT, B16 | SB8 | LOUD, 2, 53);
     OUT(ACC(3), SETCONF);
+    // A finished message leaves nothing open: the next fragmented one is whole too.
+    FEED(H(4, P_START, T_CMD), 2, GETCONF);
+    FEED(H(4, P_END, T_CMD), S(1));
+    OUT(ACC(4), GETCONF, TRANSPORT, SBC(F48 | JOINT, B16 | SB8 | LOUD, 2, 53));
+    CHECK_EQ(A.fragments_dropped, 0);
+    CHECK(!A.rx_active);
     // The bound: a message of 256 bytes is taken, one of 257 dropped. A
     // padding element of an unknown category fills it out.
     for (int over = 0; over < 2; over++) {
