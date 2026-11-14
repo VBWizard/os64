@@ -501,6 +501,17 @@ a FunctionBody refuses it. It is the page's own code in its own realm: it can
 change when that code runs, not what it may do. A compiled value that is not
 a function is a compile failure.
 
+Native hosts can enable EventTarget callback settings with
+`os64_dom_cluster_create_with_listener_settings`, which also enables timer
+settings. Listener conversion captures the incumbent before options getters;
+invocation prepares the listener object's associated realm before looking up
+`handleEvent`. Captured settings, executable code and target activity have
+separate eligibility checks, including after a getter adopts the target.
+Once-removal and reentry retain the invocation's capture; plain target cycles
+remain collectable. HTML on-event handler slots, Promise callbacks and origin
+checks remain separate work. Ordinary cluster construction and Yonder retain
+their existing mode. See the [listener settings contract](../../docs/design/pending/IFRAME_F4_LISTENER_SETTINGS.md).
+
 ## Timers
 
 `setTimeout`, `setInterval`, `clearTimeout` and `clearInterval`, on window.

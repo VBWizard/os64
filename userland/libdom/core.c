@@ -588,6 +588,14 @@ os64_dom_cluster_t *os64_dom_cluster_create_with_timer_settings(os64_js_runtime_
     return cluster;
 }
 
+os64_dom_cluster_t *os64_dom_cluster_create_with_listener_settings(os64_js_runtime_t *runtime,
+    const os64_dom_cluster_limits_t *limits, os64_js_outcome_t *outcome)
+{
+    os64_dom_cluster_t *cluster = os64_dom_cluster_create_with_timer_settings(runtime, limits, outcome);
+    if (cluster) cluster->listener_settings = true;
+    return cluster;
+}
+
 /* Trusted bootstrap: install interfaces and private algorithms, without
  * exposing the candidate or invoking author code. */
 static int install_binding(os64_dom_t *dom, JSContext *ctx)

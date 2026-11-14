@@ -1,0 +1,89 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -337,6 +337,7 @@
+     JSClass *class_array;
+ 
+     struct list_head context_list; /* list of JSContext.link */
++    uint64_t next_creation_id; /* Never reused, including failed context setup. */
+     /* list of JSGCObjectHeader.link. List of allocated GC objects (used
+        by the garbage collector) */
+     struct list_head gc_obj_list;
+@@ -536,6 +537,7 @@
+ 
+ struct JSContext {
+     JSGCObjectHeader header; /* must come first */
++    uint64_t creation_id;
+     JSRuntime *rt;
+     BOOL executable_failed;
+     struct list_head link;
+@@ -1039,6 +1041,7 @@
+ 
+ struct JSObject {
+     JSGCObjectHeader header;
++    uint64_t creation_context_id; /* Identity, not a context root. */
+     /* TRUE if the array prototype is "normal":
+        - no small index properties which are get/set or non writable
+        - its prototype is Object.prototype
+@@ -2846,9 +2849,12 @@
+     JSContext *ctx;
+     int i;
+ 
++    if (rt->next_creation_id == UINT64_MAX)
++        return NULL;
+     ctx = js_mallocz_rt(rt, sizeof(JSContext));
+     if (!ctx)
+         return NULL;
++    ctx->creation_id = ++rt->next_creation_id;
+     js_rc(ctx)->ref_count = 1;
+     add_gc_object(rt, &ctx->header, JS_GC_OBJ_TYPE_JS_CONTEXT);
+ 
+@@ -5983,6 +5989,7 @@
+     p = js_malloc(ctx, sizeof(JSObject));
+     if (unlikely(!p))
+         goto fail;
++    p->creation_context_id = ctx->creation_id;
+     p->class_id = class_id;
+     p->is_std_array_prototype = 0;
+     p->extensible = TRUE;
+@@ -21439,6 +21446,28 @@
+             return NULL;
+         }
+     }
++}
++
++/* Live creation identity for non-callable objects, and the established
++   associated callable policy for functions. The identifier does not keep an
++   otherwise unreachable context alive. Embeddings that retain contexts can
++   map the borrowed result to their own lifecycle handles. After context
++   collection, refuse instead of inferring a replacement from a prototype. */
++JSContext *JS_GetObjectRealm(JSContext *ctx, JSValueConst object)
++{
++    struct list_head *el;
++    JSObject *p;
++    if (!JS_IsObject(object))
++        return NULL;
++    if (JS_IsFunction(ctx, object))
++        return JS_GetCallbackRealm(ctx, object);
++    p = JS_VALUE_GET_OBJ(object);
++    list_for_each(el, &ctx->rt->context_list) {
++        JSContext *candidate = list_entry(el, JSContext, link);
++        if (candidate->creation_id == p->creation_context_id)
++            return candidate;
++    }
++    return NULL;
+ }
+ 
+ JSContext *JS_GetFunctionRealm(JSContext *ctx, JSValueConst func_obj)
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -863,6 +863,10 @@
+ /* Borrowed associated realm of supported callables; NULL for unknown classes.
+    No traps or exception mutation; differs from GetFunctionRealm for proxies. */
+ JSContext *JS_GetCallbackRealm(JSContext *ctx, JSValueConst function);
++/* Borrowed live creation realm for non-callable objects; callable policy is
++   GetCallbackRealm's. No lookup, traps, exception mutation or context root.
++   NULL when the recorded context no longer exists. Trusted same-runtime API. */
++JSContext *JS_GetObjectRealm(JSContext *ctx, JSValueConst object);
+ JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
+ JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
+ 

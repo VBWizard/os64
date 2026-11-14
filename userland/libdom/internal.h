@@ -299,6 +299,9 @@ struct DListener {
     DListener *next;
     os64_dom_t *owner, *callback_owner;
     JSValue callback;
+    /* A captured record owns callback in listener-settings mode. */
+    os64_js_callback_t captured;
+    os64_js_realm_t *callback_entry;
     char *type;
     /* Handler slots only: the content attribute's text when last looked at
      * (NULL: absent), so a changed or removed attribute is noticed. */
@@ -384,7 +387,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
-    bool timer_settings;
+    bool timer_settings, listener_settings;
 };
 
 struct os64_dom {
@@ -530,6 +533,8 @@ struct os64_dom {
      * (importmap.c). */
     struct DImportParse *import_parse;
     DValue *invoking_entry;
+    const os64_js_callback_t *invoking_capture;
+    os64_js_realm_t *invoking_realm;
     DTimer *timers;
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
