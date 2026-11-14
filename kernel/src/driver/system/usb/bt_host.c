@@ -1587,6 +1587,55 @@ bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
     }
     return bt_manager_command(&peer->manager,&peer->le,&h->scan,p,n,now);
 }
+// Slot 2's remote control, after AVDTP's lines: the AVCTP channel (an
+// index, as L2CAP's lines name it, and who opened it), AVRCP's own text,
+// who owns the volume, and their buttons.
+static size_t host_remote_status(const bt_host_t *h,char *out,size_t used,size_t cap)
+{
+    char channel[24]="none", asking[24]="";
+    if(h->avctp) snprintf(channel,sizeof channel,"%u, %s",h->avctp-1u,h->l2cap.ch[h->avctp-1u].outgoing?"ours":"theirs");
+    if(h->avctp_asking) snprintf(asking,sizeof asking,"; asking on %u",h->avctp_asking-1u);
+    int n=snprintf(out+used,cap-used,"avctp channel: %s%s; our requests %u of 2, ended %u; "
+                   "pdus received on another avctp channel, dropped: %u\n",
+                   channel,asking,(unsigned)h->avctp_asked,(unsigned)h->avctp_ends,(unsigned)h->avctp_dropped);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    used+=bt_avrcp_status(&h->avrcp,out+used,cap-used);
+    if(used>=cap-1) return used;
+    if(h->vol_owned)
+        n=snprintf(out+used,cap-used,"volume: the headphones' (/dev/volume %u is carried out at their end, "
+                   "the seam applies no gain); level shared %u/127",
+                   (unsigned)host_volume_number(h->vol_raw),(unsigned)h->vol_raw);
+    else n=snprintf(out+used,cap-used,"volume: the seam's (its gain follows /dev/volume)");
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    n=snprintf(out+used,cap-used,"; ownerships %u, sets sent %u, their levels taken %u, volume presses applied %u\n",
+               (unsigned)h->vol_ownerships,(unsigned)h->vol_sets,(unsigned)h->vol_taken,(unsigned)h->vol_presses);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    if(used>=cap-1) return used;
+    if(h->buttons_seen)
+        n=snprintf(out+used,cap-used,"buttons: last %s %s at %lu ms;",bt_avrcp_operation_name(h->button_last.operation),
+                   h->button_last.pressed?"pressed":"released",(unsigned long)h->button_last.at_ms);
+    else n=snprintf(out+used,cap-used,"buttons: none yet;");
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    for(unsigned i=0;i<=BT_AVRCP_OPERATIONS && used<cap-1;i++) {
+        n=snprintf(out+used,cap-used,"%s %s %u",i?",":" pressed:",
+                   i<BT_AVRCP_OPERATIONS?bt_avrcp_operation_name(bt_avrcp_operation(i)):"other",
+                   (unsigned)h->button_presses[i]);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    if(used>=cap-1) return used;
+    n=snprintf(out+used,cap-used,"; held for a consumer %u, lost %u; a press does nothing yet\n",
+               (unsigned)h->buttons_count,(unsigned)h->buttons_lost);
+    if(n<0) return used;
+    used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    return used;
+}
 // Slot 2's services, after the link's own lines: L2CAP's text, the query
 // on this connection, what an earlier connection's query found when this
 // one has found nothing yet, and the questions the headphones asked us.
@@ -1646,7 +1695,8 @@ static size_t host_services_status(const bt_host_t *h,char *out,size_t used,size
                (unsigned)h->avdtp_media_dropped);
     if(n<0) return used;
     used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
-    return used;
+    if(used>=cap-1) return used;
+    return host_remote_status(h,out,used,cap);
 }
 size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
 {

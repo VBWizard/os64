@@ -739,6 +739,7 @@ void bt_avrcp_playback(bt_avrcp_t *a, uint8_t status, uint64_t now)
 _Static_assert(sizeof(ar_ops)==BT_AVRCP_OPERATIONS && sizeof(ar_op_names)/sizeof(ar_op_names[0])==BT_AVRCP_OPERATIONS,
                "one name for each operation taken");
 int bt_avrcp_operation_index(uint8_t operation) { return ar_op_index(operation); }
+uint8_t bt_avrcp_operation(unsigned index) { return index<BT_AVRCP_OPERATIONS ? ar_ops[index] : 0; }
 const char *bt_avrcp_operation_name(uint8_t operation)
 {
     int i=ar_op_index(operation);
