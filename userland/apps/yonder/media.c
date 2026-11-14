@@ -5,8 +5,9 @@
 //   window    opens, closes, plays, pauses, seeks; reads facts; reaps.
 //   decoder   one per session: the bytes kept so far (`bytes`, its alone),
 //             libmedia's object, and the pushes into the PCM queue.
-//   loader    one per network session: runs the fetch job, whose body goes
-//             down the pipe the decoder drains.
+//   loader    one per session whose address is not a file: (the network,
+//             or a data: URL): runs the fetch job, whose body goes down the
+//             pipe the decoder drains.
 //   audio     one for yonder: /dev/audio, /dev/audiopos and /dev/audioctl,
 //             and the takes from the sounding session's queue.
 //
@@ -114,7 +115,7 @@ static struct {
     int64_t thread;
     yonder_media_t *sessions;
     yonder_media_t *owner;
-} s_audio;
+} s_audio = {.bell = OS64_BELL_NONE};   // a zeroed bell would be handle 0, someone's file
 
 static yonder_media_env_t s_env;
 
@@ -297,6 +298,22 @@ static bool pump(yonder_media_t *m)
         moved = true;
     }
     return moved;
+}
+
+// The loader's answer holds the body whole (an answer the cache or a data:
+// URL gave, or the copy a streamed one kept for the cache, up to the cap):
+// once the loader is done and the bytes are kept here, that copy goes.
+static void product_trim(yonder_media_t *m)
+{
+    if (!m->arrived && !m->failed)
+        return;
+    os64_lock_acquire(&m->lock);
+    yonder_fetched_t *got = m->loader_done ? m->product : NULL;
+    if (got != NULL && got->body != NULL) {
+        os64_free(got->body);
+        got->body = NULL;
+    }
+    os64_lock_release(&m->lock);
 }
 
 // Wait for news from the pipe or an ask; false when told to stop.
@@ -547,6 +564,7 @@ static int64_t decoder_main(void *arg)
     bool decoded_all = false;
     bool landing = false;           // a seek whose first frames are not queued yet
     uint64_t landing_generation = 0;
+    uint64_t run_frames = 0;        // frames queued since the last seek (a loop's run)
     while (go) {
         os64_lock_acquire(&m->lock);
         if (m->stop) {
@@ -563,14 +581,31 @@ static int64_t decoder_main(void *arg)
         bool loop = m->loop;
         os64_lock_release(&m->lock);
         if (dom_seek || resync) {
-            int64_t frame = (int64_t)(to * RATE + 0.5);
-            int sought = os64_media_seek(media, frame < 0 ? 0 : frame);
+            // A time past any media's length (a stream's duration is
+            // infinite, so libdom clamps nothing) is held to one the frame
+            // count can hold; libmedia answers a frame past the end with
+            // the end.
+            if (!(to > 0))
+                to = 0;
+            if (to > 1e9)
+                to = 1e9;
+            int sought = os64_media_seek(media, (int64_t)(to * RATE + 0.5));
+            if (sought != 0) {
+                // Refused: nothing moved, so what is queued stays, and the
+                // seek lands at once where the media still is.
+                os64_lock_acquire(&m->lock);
+                if (dom_seek)
+                    m->facts.seeked = asked;
+                os64_lock_release(&m->lock);
+                ring_window();
+                continue;
+            }
             os64_lock_acquire(&m->lock);
             generation = os64_media_queue_flush(&m->queue);
             decoded_all = false;
+            run_frames = 0;
             m->facts.ended = false;
-            if (sought == 0)
-                m->facts.position = (double)os64_media_position(media) / RATE;
+            m->facts.position = (double)os64_media_position(media) / RATE;
             (void)readiness_locked(m, false);
             os64_lock_release(&m->lock);
             // The seek has landed once sound from the new place is queued
@@ -592,7 +627,11 @@ static int64_t decoder_main(void *arg)
             os64_lock_release(&m->lock);
             if (moved)
                 ring_window();
-            if (!decoder_wait(m, 250))
+            product_trim(m);
+            // Parked until rung: every reason to go on rings this bell (a
+            // play, a seek, the settings, a stop, the audio thread taking
+            // from the queue), so a finished or idle element costs nothing.
+            if (!decoder_wait(m, OS64_WAIT_FOREVER))
                 break;
             continue;
         }
@@ -615,19 +654,25 @@ static int64_t decoder_main(void *arg)
                     landing = false;
                     changed = true;
                 }
+                // A seek asked meanwhile flushes what is left anyway, and
+                // the audio thread may be waiting on that seek (a resync)
+                // rather than taking: give way to it.
+                bool giving_way = m->seek_asked || m->resync;
                 os64_lock_release(&m->lock);
                 if (was_empty)
                     ring_audio();
-                if (pushed < (uint32_t)n && !decoder_wait(m, 20))
+                if (pushed < (uint32_t)n && (giving_way || !decoder_wait(m, 20)))
                     break;
             }
+            run_frames += pushed;
             if (changed)
                 ring_window();
         } else if (n == 0) {
-            if (loop) {
-                // The next frames begin a new run at 0, which the queue
-                // keeps apart and the clock follows.
-                (void)os64_media_seek(media, 0);
+            // The next frames begin a new run at 0, which the queue keeps
+            // apart and the clock follows; a run that gave nothing, or a
+            // seek back that fails, ends the media as with no loop.
+            if (loop && run_frames > 0 && os64_media_seek(media, 0) == 0) {
+                run_frames = 0;
                 continue;
             }
             os64_lock_acquire(&m->lock);
@@ -725,9 +770,12 @@ static void device_close(Device *d)
 // every frame written and the ring has run dry, with `*delay_us` what the
 // sink says lies beyond its pull: the last of it reaches the ear that long
 // after (a real sink's `heard` need not catch up with `taken` by itself).
-static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *delay_us)
+// `*lost` is true when the stream began a generation the audio thread did
+// not start: a flush from elsewhere (a sink attached or detached, a
+// `flush` written to /dev/audioctl) threw away what it held of ours.
+static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *delay_us, bool *lost)
 {
-    *playing = *drained = false;
+    *playing = *drained = *lost = false;
     *delay_us = 0;
     if (d->position < 0 || d->anchors == 0)
         return -1;
@@ -738,7 +786,11 @@ static int64_t heard_frame(Device *d, bool *playing, bool *drained, uint32_t *de
         d->generation = pos.generation;
         d->generation_known = true;
     }
-    if (pos.generation != d->generation || pos.accepted > d->written)
+    if (pos.generation != d->generation) {
+        *lost = true;
+        return -1;
+    }
+    if (pos.accepted > d->written)
         return -1;
     *drained = pos.taken >= d->written && pos.state == OS64_AUDIO_STARVED;
     *delay_us = pos.delay_us;
@@ -908,8 +960,13 @@ static int64_t audio_main(void *arg)
                 d.paused = true;
                 d.paused_since = now;
             }
+            os64_lock_acquire(&owner->lock);
+            owner->facts.sounding = false;
+            os64_lock_release(&owner->lock);
             if (d.audio >= 0 && now - d.paused_since >= PAUSE_KEEP_MS) {
                 device_close(&d);
+                // Let go of it last: once it is no owner the window may
+                // reap it, so nothing here touches it after.
                 os64_lock_acquire(&s_audio.lock);
                 if (s_audio.owner == owner) {
                     os64_lock_acquire(&owner->lock);
@@ -919,9 +976,6 @@ static int64_t audio_main(void *arg)
                 }
                 os64_lock_release(&s_audio.lock);
             }
-            os64_lock_acquire(&owner->lock);
-            owner->facts.sounding = false;
-            os64_lock_release(&owner->lock);
             (void)os64_bell_wait(&s_audio.bell, 250);
             continue;
         }
@@ -1001,9 +1055,18 @@ static int64_t audio_main(void *arg)
             }
             d.written += n;
         }
-        bool playing = false, drained = false;
+        bool playing = false, drained = false, lost = false;
         uint32_t delay_us = 0;
-        int64_t frame = heard_frame(&d, &playing, &drained, &delay_us);
+        int64_t frame = heard_frame(&d, &playing, &drained, &delay_us, &lost);
+        if (lost) {
+            // As when another session takes the device: the counters start
+            // again, and the owner goes on from where its ear was.
+            os64_lock_acquire(&owner->lock);
+            owner->resync = true;
+            os64_lock_release(&owner->lock);
+            counters_restart(&d);
+            continue;
+        }
         if (!drained)
             d.drained_since = 0;
         else if (d.drained_since == 0)
@@ -1226,7 +1289,8 @@ void yonder_media_stop(void)
         os64_lock_release(&m->lock);
     }
     s_audio.quit = true;
-    (void)os64_bell_ring(&s_audio.bell);
+    if (s_audio.started)
+        (void)os64_bell_ring(&s_audio.bell);
     os64_lock_release(&s_audio.lock);
     if (s_audio.started)
         thread_reap(s_audio.thread);

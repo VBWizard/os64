@@ -9,8 +9,8 @@
 // A SESSION is one element's resource: the window opens it, plays,
 // pauses, seeks and closes it, and reads its facts; everything slow
 // happens on threads of its own. Each session has a DECODER thread
-// (libmedia: the bytes, the decode, the PCM queue) and, for an address
-// on the network, a LOADER thread (the fetch job, its body streamed down
+// (libmedia: the bytes, the decode, the PCM queue) and, for any address
+// but a file: one, a LOADER thread (the fetch job, its body streamed down
 // a pipe to the decoder). One AUDIO thread for the whole of yonder owns
 // /dev/audio and writes one session's sound at a time.
 

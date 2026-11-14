@@ -10538,13 +10538,29 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
 // belongs to without holding the page. Whether the page may play sound is
 // its host's sticky activation (§ Autoplay).
 
+static bool media_file_scheme(const char *url)
+{
+    static const char kFile[] = "file:";
+    for (size_t i = 0; i < sizeof(kFile) - 1; i++)
+        if (url[i] == '\0' || (url[i] | 0x20) != kFile[i])
+            return false;
+    return true;
+}
+
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
     (void)node;
     uint64_t serial = (uint64_t)(uintptr_t)opaque;
     yonder_scripts_t *host = scripts_for(serial);
-    yonder_media_request_t r = {url, host != NULL ? yonder_scripts_url(host) : "about:blank", serial, cors, preload};
+    const char *page = host != NULL ? yonder_scripts_url(host) : "about:blank";
+    // A file on this machine is a file: page's to play and nobody else's:
+    // a page from the network naming one would learn whether it exists
+    // (the error tells a missing file from one that will not decode) and
+    // what it holds. Refused, it is the element's network error.
+    if (media_file_scheme(url) && !media_file_scheme(page))
+        return NULL;
+    yonder_media_request_t r = {url, page, serial, cors, preload};
     return yonder_media_open(&r);
 }
 static void media_close(void *opaque, void *session) { (void)opaque; yonder_media_close(session); }

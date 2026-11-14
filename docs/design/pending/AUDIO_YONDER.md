@@ -564,9 +564,17 @@ above:
   probes the file's end for its tags and would otherwise wait for the
   whole download. A `Range` request for a seek far ahead is not made yet
   (YAUDIO_TRACKER.csv's Y.2.3).
-- **`preload` is honoured**: metadata (the default) stops reading after
-  the probe, and the fetch waits on the pipe's backpressure; `play()` or
-  `preload=auto` reads on. `none` waits for `play()` or `load()`.
+- **`preload` is honoured, by the decoder**: with metadata (the default)
+  it stops taking bytes after the probe, decodes nothing, and the fetch runs
+  on into the pipe until its backpressure stops it, 16 MiB on; `play()`,
+  `preload=auto` or `autoplay` takes the rest. `none` waits for `play()` or
+  `load()`. So a song smaller than the pipe's window still downloads whole
+  (DEBTS.md § A page's sound).
+- **An element done with gives its session back**: one that has ended or
+  failed, is paused and is in no document closes its session (the host's
+  threads and buffers with it), and `play()` or a seek opens a new one. A
+  page that plays `new Audio(x)` per sound effect keeps one small record
+  each, and no decoder.
 - **Only the shown page's elements turn.** A page loading behind the shown
   one does not advance its media until it is shown.
 - **`playing` fires when the element can play** (readyState reaches

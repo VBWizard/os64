@@ -65,6 +65,7 @@ struct DMediaElement {
     bool select_pending;            /* resource selection is due at the next turn */
     bool deferred;                  /* preload=none: selected, waiting for play() or load() */
     bool wanted;                    /* play() or load() asked: preload=none no longer defers */
+    bool dormant;                   /* gave its session back; play() or a seek wakes it (session_wake) */
     bool from_children;             /* the resource is a <source>'s */
     uint32_t candidate;             /* which <source> is being tried */
     bool loadeddata;                /* loadeddata fired for this load */
@@ -239,8 +240,18 @@ static bool allowed(os64_dom_t *dom, const DMediaElement *m)
         (dom->media_provider.activated != NULL && dom->media_provider.activated(dom->media_provider.opaque));
 }
 
+static void session_wake(os64_dom_t *dom, DMediaElement *m);
+
+/* HTML's seek steps; a resource the host says cannot seek is not sought
+ * (HTML aborts a seek outside the seekable ranges). */
 static void seek(os64_dom_t *dom, DMediaElement *m, double t)
 {
+    session_wake(dom, m);
+    if (m->session != NULL && dom->media_provider.facts != NULL) {
+        os64_dom_media_facts_t f = {0};
+        dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
+        if (f.probed && !f.seekable) return;
+    }
     if (isfinite(m->duration) && t > m->duration) t = m->duration;
     if (!(t > 0)) t = 0;
     m->seeking = true;
@@ -262,6 +273,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     struct DMediaElements *s = dom->media_elements;
     m->select_pending = false;
     m->deferred = false;
+    m->dormant = false;
     m->candidate = 0;
     if (ctx != NULL) {
         DMediaTask **link = &s->head, *last = NULL;
@@ -350,6 +362,45 @@ static void set_message(DMediaElement *m, const char *text)
     os64_strcopy(m->message, sizeof(m->message), text != NULL ? text : "");
 }
 
+static os64_dom_media_cors_t cors_of(const DMediaElement *m)
+{
+    const os64_html_attr_t *cors = os64_html_attr(m->node, "crossorigin");
+    return cors == NULL ? OS64_DOM_MEDIA_NO_CORS
+        : os64_streq_nocase(cors->value, "use-credentials") ? OS64_DOM_MEDIA_CORS_CREDENTIALS
+        : OS64_DOM_MEDIA_CORS_ANONYMOUS;
+}
+
+/* A DORMANT element gave its session back (step: ended or failed, paused,
+ * in no document), which is what lets a page play `new Audio(x)` a
+ * thousand times without the host keeping a thousand decoders. play() or
+ * a seek wakes it: a new session for the resource it had, the whole of it
+ * wanted. One that will not open is the element's network error. */
+static void session_wake(os64_dom_t *dom, DMediaElement *m)
+{
+    if (!m->dormant)
+        return;
+    m->dormant = false;
+    m->session = dom->media_provider.open != NULL && m->current_src != NULL
+        ? dom->media_provider.open(dom->media_provider.opaque, m->node, m->current_src, cors_of(m),
+                                   OS64_DOM_MEDIA_PRELOAD_AUTO)
+        : NULL;
+    if (m->session == NULL) {
+        m->error = OS64_DOM_MEDIA_ERR_NETWORK;
+        set_message(m, "The sound could not be loaded again");
+        m->error_seen = true;
+        queue(dom, m, "error", SETTLE_NONE);
+        return;
+    }
+    m->error = 0;
+    m->message[0] = '\0';
+    m->error_seen = false;
+    if (!JS_IsUndefined(m->error_object)) {
+        JS_FreeValueRT(dom->engine, m->error_object);
+        m->error_object = JS_UNDEFINED;
+    }
+    tell_settings(dom, m);
+}
+
 /* The dedicated media source failure steps (a src that cannot play), or,
  * for a <source>, on to the next candidate. */
 static void select_resource(os64_dom_t *dom, DMediaElement *m);
@@ -414,13 +465,12 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         return;
     }
     m->network = N_LOADING;
-    const os64_html_attr_t *cors = os64_html_attr(m->node, "crossorigin");
-    os64_dom_media_cors_t mode = cors == NULL ? OS64_DOM_MEDIA_NO_CORS
-        : os64_streq_nocase(cors->value, "use-credentials") ? OS64_DOM_MEDIA_CORS_CREDENTIALS
-        : OS64_DOM_MEDIA_CORS_ANONYMOUS;
-    bool all = preload != NULL && (preload->value[0] == '\0' || os64_streq_nocase(preload->value, "auto"));
+    /* preload is a hint autoplay overrides (HTML § 4.8.11.3): an element
+     * that will start by itself needs the whole of it decoding. */
+    bool all = (preload != NULL && (preload->value[0] == '\0' || os64_streq_nocase(preload->value, "auto"))) ||
+               os64_html_attr(m->node, "autoplay") != NULL;
     m->session = dom->media_provider.open != NULL
-        ? dom->media_provider.open(dom->media_provider.opaque, m->node, m->current_src, mode,
+        ? dom->media_provider.open(dom->media_provider.opaque, m->node, m->current_src, cors_of(m),
                                    all ? OS64_DOM_MEDIA_PRELOAD_AUTO : OS64_DOM_MEDIA_PRELOAD_METADATA)
         : NULL;
     if (m->session == NULL) {
@@ -510,8 +560,10 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         }
     }
     if (m->seeking && f.seeked == m->seek_generation) {
+        /* Where the host landed, which is where it was when it could not
+         * move. */
         m->seeking = false;
-        m->position = m->seek_to;
+        m->position = f.position;
         queue(dom, m, "timeupdate", SETTLE_NONE);
         queue(dom, m, "seeked", SETTLE_NONE);
         m->last_timeupdate_ms = now;
@@ -531,6 +583,10 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
             queue(dom, m, "timeupdate", SETTLE_NONE);
         }
     }
+    /* The end with loop on: the host loops by itself when loop was on as
+     * its decoder reached the end; one turned on after that is HTML's own
+     * loop step, a seek to the start. */
+    if (f.ended && !m->ended && !m->seeking && loops(m)) seek(dom, m, 0);
     if (f.ended && !m->ended && !m->seeking && !loops(m)) {
         m->ended = true;
         if (isfinite(m->duration)) m->position = m->duration;
@@ -584,6 +640,12 @@ static void step(os64_dom_t *dom, DMediaElement *m)
     if (m->select_pending) select_resource(dom, m);
     if (m->session != NULL && loops(m) != m->loop_seen) tell_settings(dom, m);
     fold_facts(dom, m);
+    /* Done with, for now: ended or failed, paused, and in no document. Its
+     * session goes back to the host (session_wake). */
+    if (m->session != NULL && m->paused && !m->connected && !m->seeking && (m->ended || m->error != 0)) {
+        session_close(dom, m);
+        m->dormant = true;
+    }
 }
 
 bool os64_dom_media_turn(os64_dom_t *dom)
@@ -887,6 +949,7 @@ static JSValue play(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     m->pending_count++;
     /* HTML's internal play steps. */
     m->wanted = true;
+    session_wake(dom, m);
     if (m->network == N_EMPTY) m->select_pending = true;
     if (m->deferred) {
         m->deferred = false;

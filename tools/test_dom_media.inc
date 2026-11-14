@@ -239,15 +239,6 @@ static void dom_media_play_cases(void)
     media_script(&f, "const h=heard();assert(h.startsWith('canplay:4 playing:4'),'free plays: '+h);heard()",
                  "media: free again");
 
-    /* The end: timeupdate, pause, ended. */
-    s->facts.ended = true;
-    s->facts.position = 3;
-    media_turn(&f, "media: the end");
-    media_script(&f, "const h=heard();assert(h==='timeupdate:4 pause:4 ended:4','the end: '+h);"
-                     "assert(a.ended&&a.paused&&a.currentTime===3);",
-                 "media: ended");
-    check(!s->playing, "media: the end pauses the host too, so a seek back stays silent");
-
     /* Volume and muted reach the host. */
     media_script(&f, "a.volume=0.25;a.volume=0.25;a.muted=true;", "media: volume");
     check(s->gain == 0, "media: muted is a gain of 0");
@@ -256,8 +247,27 @@ static void dom_media_play_cases(void)
     media_turn(&f, "media: volumechange");
     media_script(&f, "const h=heard();assert(h==='volumechange:4 volumechange:4 volumechange:4','three changes: '+h);",
                  "media: volumechange once per change");
+
+    /* The end: timeupdate, pause, ended. In no document, the element then
+     * gives its session back, and play() wakes it with a new one at the
+     * start, its volume carried. */
+    s->facts.ended = true;
+    s->facts.position = 3;
+    media_turn(&f, "media: the end");
+    media_script(&f, "const h=heard();assert(h==='timeupdate:4 pause:4 ended:4','the end: '+h);"
+                     "assert(a.ended&&a.paused&&a.currentTime===3);",
+                 "media: ended");
+    check(!s->playing, "media: the end pauses the host too, so a seek back stays silent");
+    check(!s->open && media_closed == 1, "media: an ended element in no document gives its session back");
+    media_script(&f, "a.play();assert(!a.ended&&a.seeking,'play() after the end seeks to the start');",
+                 "media: play() wakes it");
+    MediaSession *again = &media_sessions[1];
+    check(media_opened == 2 && again->open && again->playing && again->gain == 0.25 &&
+          again->seek_generation == 2 && again->seek_to == 0 &&
+          again->preload == OS64_DOM_MEDIA_PRELOAD_AUTO,
+          "media: a new session, playing, the seek to 0 and the volume carried");
     fixture_free(&f);
-    check(media_closed == 1, "media: the teardown closed the session");
+    check(media_closed == 2, "media: the teardown closed the second session");
 }
 
 static void dom_media_abort_cases(void)
@@ -334,6 +344,8 @@ static void dom_media_document_cases(void)
     media_turn(&f, "media: it can play through");
     media_script(&f, "assert(B.join()==='play'&&!b.paused,'muted autoplay plays');", "media: autoplay plays");
     check(media_sessions[1].playing, "media: the host was told to play");
+    check(media_sessions[1].preload == OS64_DOM_MEDIA_PRELOAD_AUTO,
+          "media: autoplay asks for the whole of it, whatever preload says");
     /* With sound and no activation it does not. */
     media_script(&f, "globalThis.c=document.createElement('audio');c.autoplay=true;c.src='z.mp3';"
                      "document.body.appendChild(c);",
@@ -356,10 +368,46 @@ static void dom_media_document_cases(void)
     check(media_closed == 4, "media: every session closed at teardown");
 }
 
+static void dom_media_loop_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_activated = true;
+    media_script(&f, "globalThis.a=new Audio('l.mp3');hear(a);", "media: a clip");
+    media_turn(&f, "media: open it");
+    MediaSession *s = &media_sessions[0];
+    media_ready(s, 1);
+    media_turn(&f, "media: ready");
+    media_script(&f, "a.play();", "media: play it");
+    media_turn(&f, "media: playing");
+    /* Loop turned on after the host decoded to the end: the host reports
+     * the end, and the element seeks to the start (HTML's loop step), so
+     * it neither stops nor sticks. */
+    media_script(&f, "heard();a.loop=true;", "media: loop on late");
+    s->facts.ended = true;
+    media_turn(&f, "media: the end with loop on");
+    media_script(&f, "const h=heard();assert(h.startsWith('seeking:4'),'loop seeks: '+h);"
+                     "assert(!a.paused&&!a.ended&&a.seeking);",
+                 "media: a late loop seeks to the start");
+    check(s->seek_to == 0 && s->seek_generation == 1 && s->loop, "media: the host seeks to 0 and loops from now on");
+    s->facts.ended = false;
+    s->facts.seeked = 1;
+    s->facts.position = 0;
+    media_turn(&f, "media: landed");
+    /* A resource the host cannot seek is not sought. */
+    s->facts.seekable = false;
+    media_script(&f, "heard();a.currentTime=0.5;assert(!a.seeking,'no seek on what cannot seek');",
+                 "media: unseekable");
+    check(s->seek_generation == 1, "media: the host was not asked to seek");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
     dom_media_interface_cases();
     dom_media_play_cases();
     dom_media_abort_cases();
     dom_media_document_cases();
+    dom_media_loop_cases();
 }

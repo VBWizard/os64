@@ -1614,7 +1614,10 @@ states, queuing each event the standard's steps fire; `os64_dom_media_fire`
 runs one as a task, settling the promises that step took. A script's `src`
 setter, `load()`, `play()`, `pause()` and `currentTime` run their own steps
 at once. `play()` with sound needs the person (the provider's `activated`);
-muted, it does not. `tools/test_dom_media.inc` plays every step against a
+muted, it does not. An element that has ended or failed, is paused and is
+in no document closes its session, and `play()` or a seek opens another
+(`session_wake`), so a page playing `new Audio(x)` per sound keeps no
+decoder for each. `tools/test_dom_media.inc` plays every step against a
 fake host.
 
 ### P2a's rows: a script's failures
