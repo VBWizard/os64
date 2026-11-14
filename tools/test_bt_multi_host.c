@@ -3885,6 +3885,32 @@ static void remote_buttons(void)
     puts("PASS: buttons: answered, counted by name, the last kept; a volume press while READY moves nothing; the ring's loss counted");
 }
 
+// The playback status their registration hears, from the tick's one
+// reading of the seam: playing while AVDTP streams with sound, paused while
+// the stream is paused, stopped otherwise; each change one CHANGED.
+static bool rc_hears_playing(void) { return RC.playback==BT_AVRCP_PLAYING && RC.play_registered; }
+static bool rc_hears_paused(void) { return RC.playback==BT_AVRCP_PAUSED && RC.play_registered; }
+static bool rc_hears_stopped(void) { return RC.playback==BT_AVRCP_STOPPED && RC.play_changes>=3 && RC.play_registered; }
+static void remote_playback(void)
+{
+    rc_bonded(true,false,40);
+    a2_until(a2_is_open,5000);
+    a2_until(rc_owned,4000);
+    assert(RC.play_interims==1 && RC.playback==BT_AVRCP_STOPPED && !RC.play_changes);
+    SEAM.endless=true;
+    a2_until(rc_hears_playing,500);
+    assert(bt_avdtp_state(&host.avdtp)==BT_AVDTP_STREAMING && RC.play_changes==1);
+    SEAM.paused=true;
+    a2_until(rc_hears_paused,50);
+    assert(RC.play_changes==2);
+    SEAM.paused=false; SEAM.endless=false; SEAM.available=0;
+    a2_until(rc_hears_stopped,50);
+    for(unsigned i=0;i<1000;i++) a2_step();
+    assert(RC.play_changes==3 && RC.play_interims==4 && RC.playback==BT_AVRCP_STOPPED && !RC.sets);
+    assert(status_has("avrcp: playback stopped; they registered for playback yes, track no;"));
+    puts("PASS: avrcp: their registration hears playing, paused and stopped, from the tick's one reading of the seam");
+}
+
 // Both ends opening AVCTP at once, ours opening first and theirs first:
 // theirs is kept, ours closed, exactly one channel after; the volume is
 // owned through theirs. The table's peak against six.
@@ -4065,6 +4091,7 @@ int main(void)
     remote_ownership_ends();
     remote_plain();
     remote_buttons();
+    remote_playback();
     remote_crossing();
     remote_asks();
     remote_parked_crossing();
