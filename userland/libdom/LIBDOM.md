@@ -543,6 +543,16 @@ this mode. Other callback families and origin checks remain separate work;
 ordinary cluster construction and Yonder do not enable this mode. See
 [the timer settings contract](../../docs/design/pending/IFRAME_F4_TIMER_SETTINGS.md).
 
+Native hosts can additionally enable frame, idle and microtask callback
+settings with `os64_dom_cluster_create_with_scheduled_settings`. It extends
+the listener/timer opt-in, capturing before idle options conversion and
+preparing associated entry and incumbent for both idle routes, frame batches
+and queued microtasks. Frame/idle callbacks in this mode use WebIDL's undefined
+receiver; the legacy mode retains its window receiver. Native queues transfer
+captures through removal; private engine job holders trace and release them
+on execution or discard. Promise callbacks remain a separate integration gate.
+See the [scheduled callback contract](../../docs/design/pending/IFRAME_F4_SCHEDULED_SETTINGS.md).
+
 ## Asks
 
 A script's task must not reach widgets or the model, so what a script asks

@@ -7,7 +7,7 @@
  * with a microtask/error checkpoint between callbacks. */
 struct DAnimation {
     DAnimation *next;
-    JSValue callback;
+    DScheduledCallback callback;
     os64_dom_t *report_owner;
     uint32_t handle, script;
 };
@@ -26,7 +26,7 @@ static void remove_entry(os64_dom_t *dom,DAnimation **link,DAnimation *previous)
     *link=entry->next;
     if(dom->animation_last==entry)dom->animation_last=previous;
     dom->animation_count--;
-    JS_FreeValueRT(dom->engine,entry->callback);
+    d_scheduled_clear(dom,&entry->callback);
     d_free(dom,entry);
 }
 
@@ -48,18 +48,22 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     }
     if(argc<1||!JS_IsFunction(ctx,argv[0]))
         return JS_ThrowTypeError(ctx,"requestAnimationFrame needs a function");
-    if(!d_require_active(dom,ctx))return JS_EXCEPTION;
+    DScheduledCallback callback = D_SCHEDULED_CALLBACK_INIT;
+    if(!d_scheduled_capture(dom,ctx,argv[0],&callback))return JS_EXCEPTION;
+    if(!d_require_active(dom,ctx)||!d_scheduled_live(ctx,&callback))goto fail;
     os64_dom_t *report_owner;
     uint32_t script=d_callback_record(dom,ctx,argv[0],&report_owner);
-    if(script==D_SCRIPT_FAILED)return JS_EXCEPTION;
-    if(dom->animation_count>=FRAME_CALLBACKS_MAX||dom->animation_handle==UINT32_MAX)
-        return d_error(ctx,"QuotaExceededError","Too many animation callbacks");
+    if(script==D_SCRIPT_FAILED)goto fail;
+    if(dom->animation_count>=FRAME_CALLBACKS_MAX||dom->animation_handle==UINT32_MAX) {
+        d_error(ctx,"QuotaExceededError","Too many animation callbacks");goto fail;
+    }
     DAnimation *entry=d_alloc(dom,sizeof(*entry));
-    if(!entry)return d_error(ctx,"QuotaExceededError","DOM animation callback quota exceeded");
-    *entry=(DAnimation){.callback=JS_DupValue(ctx,argv[0]),.handle=++dom->animation_handle,.script=script,.report_owner=report_owner};
+    if(!entry){d_error(ctx,"QuotaExceededError","DOM animation callback quota exceeded");goto fail;}
+    *entry=(DAnimation){.callback=callback,.handle=++dom->animation_handle,.script=script,.report_owner=report_owner};
+    callback=(DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
     uint64_t now=dom->animations?0:d_host_now_ms(dom);
-    if(!d_require_active(dom,ctx)) {
-        JS_FreeValue(ctx,entry->callback);d_free(dom,entry);return JS_EXCEPTION;
+    if(!d_require_active(dom,ctx)||!d_scheduled_live(ctx,&entry->callback)) {
+        d_scheduled_clear(dom,&entry->callback);d_free(dom,entry);return JS_EXCEPTION;
     }
     if(dom->animation_last)dom->animation_last->next=entry;
     else {
@@ -68,6 +72,9 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     }
     dom->animation_last=entry;dom->animation_count++;
     return JS_NewUint32(ctx,entry->handle);
+fail:
+    d_scheduled_clear(dom,&callback);
+    return JS_EXCEPTION;
 }
 
 uint64_t os64_dom_animation_next(const os64_dom_t *dom)
@@ -94,17 +101,17 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
         if(!ctx)d_outcome_fold(out,&access);
         while(ctx&&d_delivery_active(dom)&&dom->animations&&dom->animations->handle<=last) {
             DAnimation *entry=dom->animations;
-            JSValue callback=JS_DupValueRT(dom->engine,entry->callback);
+            DScheduledCallback callback=entry->callback;
+            entry->callback=(DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
             uint32_t script=entry->script;
             os64_dom_t *report_owner=entry->report_owner;
             remove_entry(dom,&dom->animations,NULL);
             JSValue arg=JS_NewFloat64(ctx,timestamp);
             os64_js_outcome_t call;
             DScripts before=d_script_enter(report_owner,script);
-            os64_js_realm_call(report_owner->realm,OS64_JS_ABI_ID,callback,dom->window->value,1,&arg,NULL,&call);
-            if(call.status==OS64_JS_REALM_RETIRED)os64_memset(&call,0,sizeof(call));
+            d_scheduled_call(report_owner,&callback,callback.captured.runtime?JS_UNDEFINED:dom->window->value,1,&arg,&call);
             d_script_leave(report_owner,&before,true);
-            JS_FreeValueRT(dom->engine,callback);
+            d_scheduled_clear(dom,&callback);
             d_outcome_fold(out,&call);
             if(call.status==OS64_JS_EXCEPTION)d_errors_fire(report_owner,out);
             d_task_settle(dom,out);

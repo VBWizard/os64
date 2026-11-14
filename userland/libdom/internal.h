@@ -387,7 +387,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
-    bool timer_settings, listener_settings;
+    bool timer_settings, listener_settings, scheduled_settings;
 };
 
 struct os64_dom {
@@ -1331,6 +1331,22 @@ os64_dom_t *d_callback_owner(os64_dom_t *dom, JSContext *ctx, JSValueConst funct
 /* Record reporting provenance without moving a revoked-proxy error from
  * invocation to registration. A catchable lookup failure uses the registering
  * binding; a sticky failure returns D_SCRIPT_FAILED. */
+/* One owned callback value; captured.value aliases it in settings mode.
+ * Native queues root it; engine-held records must trace value once. */
+typedef struct {
+    JSValue value;
+    os64_js_callback_t captured;
+    os64_js_realm_t *entry;
+} DScheduledCallback;
+#define D_SCHEDULED_CALLBACK_INIT {JS_UNDEFINED, OS64_JS_CALLBACK_INIT, NULL}
+bool d_scheduled_capture(os64_dom_t *, JSContext *, JSValueConst, DScheduledCallback *);
+bool d_scheduled_live(JSContext *, const DScheduledCallback *);
+void d_scheduled_clear(os64_dom_t *, DScheduledCallback *);
+void d_scheduled_call(os64_dom_t *, const DScheduledCallback *, JSValueConst,
+                      int, JSValueConst *, os64_js_outcome_t *);
+JSValue d_scheduled_invoke(os64_dom_t *, JSContext *, const DScheduledCallback *,
+                           JSValueConst, int, JSValueConst *);
+
 uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
                            os64_dom_t **report_owner);
 /* Around every call the binding makes into a callback of the page's: the

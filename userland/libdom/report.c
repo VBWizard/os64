@@ -305,6 +305,94 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
     return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
 }
 
+bool d_scheduled_capture(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+                          DScheduledCallback *record)
+{
+    *record = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
+    if (dom->cluster && dom->cluster->scheduled_settings) {
+        os64_js_outcome_t out;
+        JSContext *associated = JS_GetCallbackRealm(ctx, value);
+        record->entry = associated ? os64_js_realm_from_context(dom->runtime, associated, OS64_JS_ABI_ID, &out) : NULL;
+        if (!record->entry || os64_js_callback_capture(dom->runtime, OS64_JS_ABI_ID,
+                value, &record->captured, &out) != OS64_JS_OK) {
+            d_error(ctx, "InvalidStateError", "Scheduled callback settings are unavailable");
+            return false;
+        }
+        record->value = record->captured.value;
+    } else record->value = JS_DupValue(ctx, value);
+    return true;
+}
+
+bool d_scheduled_live(JSContext *ctx, const DScheduledCallback *record)
+{
+    if (record->captured.runtime && (os64_js_realm_is_retired(record->captured.incumbent) ||
+                                    os64_js_realm_is_retired(record->entry))) {
+        d_error(ctx, "InvalidStateError", "Scheduled callback settings have retired");
+        return false;
+    }
+    return true;
+}
+
+void d_scheduled_clear(os64_dom_t *dom, DScheduledCallback *record)
+{
+    DScheduledCallback held = *record;
+    *record = (DScheduledCallback)D_SCHEDULED_CALLBACK_INIT;
+    if (held.captured.runtime) {
+        os64_js_outcome_t out;
+        os64_js_callback_clear(dom->runtime, OS64_JS_ABI_ID, &held.captured, &out);
+    } else JS_FreeValueRT(dom->engine, held.value);
+}
+
+void d_scheduled_call(os64_dom_t *report, const DScheduledCallback *record,
+                       JSValueConst self, int argc, JSValueConst *argv, os64_js_outcome_t *out)
+{
+    if (record->captured.runtime)
+        os64_js_callback_call(report->realm, record->entry, OS64_JS_ABI_ID,
+                             &record->captured, self, argc, argv, out);
+    else os64_js_realm_call(report->realm, OS64_JS_ABI_ID, record->value, self, argc, argv, NULL, out);
+    if (out->status == OS64_JS_REALM_RETIRED || out->status == OS64_JS_REALM_FAILED)
+        os64_memset(out, 0, sizeof(*out));
+}
+
+typedef struct {
+    os64_dom_t *activity;
+    JSValueConst self;
+    int argc;
+    JSValueConst *argv;
+} ScheduledInvocation;
+
+static JSValue scheduled_body(JSContext *ctx, JSValueConst function, void *opaque)
+{
+    ScheduledInvocation *call = opaque;
+    int eligible = d_delivery_eligible(call->activity, ctx, function);
+    return eligible < 0 ? JS_EXCEPTION : eligible == 0 ? JS_UNDEFINED
+        : JS_Call(ctx, function, call->self, call->argc, call->argv);
+}
+
+/* A native job or binding timer already owns the turn and wrapper guard.
+ * Prepare only the author callback, preserving its pending terminal exception. */
+JSValue d_scheduled_invoke(os64_dom_t *activity, JSContext *ctx, const DScheduledCallback *record,
+                           JSValueConst self, int argc, JSValueConst *argv)
+{
+    ScheduledInvocation call = {activity, self, argc, argv};
+    if (!record->captured.runtime) return scheduled_body(ctx, record->value, &call);
+    JSValue result = JS_UNDEFINED;
+    os64_js_outcome_t out;
+    os64_js_status_t status = os64_js_callback_with_settings(record->entry, OS64_JS_ABI_ID,
+        &record->captured, scheduled_body, &call, &result, &out);
+    if (status != OS64_JS_OK && status != OS64_JS_EXCEPTION) {
+        if (!JS_IsException(result)) {
+            JS_FreeValue(ctx, result);
+            result = status == OS64_JS_REALM_RETIRED || status == OS64_JS_REALM_FAILED ? JS_UNDEFINED
+                : JS_ThrowInternalError(ctx, "Scheduled callback settings refused: %s", out.message);
+        }
+        if (status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
+            status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME)
+            JS_SetUncatchableException(ctx, true);
+    }
+    return result;
+}
+
 uint32_t d_callback_record(os64_dom_t *dom, JSContext *ctx, JSValueConst function,
                            os64_dom_t **report_owner)
 {
