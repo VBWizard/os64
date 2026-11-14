@@ -250,7 +250,8 @@ packet only at an anchor, so the controller's Classic buffers fill and a
 stream started asleep is late: idle to dozing, sound woken before our
 Start and first packet, dozing again after the song, the wake unanswered,
 each write refused, headphones that never sniff, a stream they start, the
-link dropping in each state, the seam's answer changing between two calls
+link dropping in each state, a READY link with no sink idle twenty
+seconds sending neither command, the seam's answer changing between two calls
 in one tick (a model seam that counts its calls: the Start does not go on
 that tick, and no tick reads it twice), a sniff request in flight across
 the refusing write (sound while the allowing write is out, and just after

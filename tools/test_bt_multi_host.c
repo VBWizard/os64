@@ -3222,6 +3222,25 @@ static void sniff_link_drops(void)
     puts("PASS: sniff: the link dropping in AWAKE, ALLOWING, DOZING or WAKING starts over clean; the next connection begins AWAKE");
 }
 
+// With no audio sink none of it runs: a bonded link READY and idle for
+// twenty seconds, headphones that would sniff, and neither command is sent.
+static void sniff_none_without_sink(void)
+{
+    classic_bonded();
+    CM.sniff_asks=true;
+    unsigned from=CM.n;
+    for(unsigned i=0;i<20000;i++) {
+        step();
+        if(tx_n) { tx_n=0; const uint8_t complete[]={0x13,5,1,12,0,1,0}; multi_event(complete,sizeof(complete)); }
+    }
+    assert(a2_ready() && !host.a2dp_ops && z_ops(0x080d,from)==0 && z_ops(0x0804,from)==0);
+    assert(host.sniff_state==BT_HOST_SNIFF_AWAKE && !host.sniff_dozes && !CM.sniff);
+    static char text[BT_SCAN_TEXT_BYTES];
+    bt_host_status(&host,text,sizeof text);
+    assert(!strstr(text,"sniff manager:"));
+    puts("PASS: sniff: with no audio sink a READY link idles twenty seconds and neither command is sent");
+}
+
 // ONE reading of the seam a tick: a player's first write landing between
 // two readings in one tick (the model seam answers no to the tick's first
 // call and yes to any later one) must not let our Start go on that tick,
@@ -3400,6 +3419,7 @@ int main(void)
     sniff_never_asked();
     sniff_they_start();
     sniff_link_drops();
+    sniff_none_without_sink();
     sniff_one_reading();
     sniff_request_in_flight();
     sniff_asleep_while_awake();
