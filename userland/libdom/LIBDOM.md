@@ -2056,3 +2056,14 @@ at each. A report is the host's: `os64_dom_form_validate` runs a person's
 submission's validation as a task, before the host fires `submit`, as one
 call through the wrapper (`os64_js_call` of the binding's own function), so
 its pattern and its invalid listeners run under the task's budget.
+
+### Opt-in HTML handler settings
+
+`os64_dom_cluster_create_with_handler_settings` extends scheduled settings to
+HTML handler properties, named handlers and inline attributes. Property
+callbacks capture the assigning caller; compiled attributes capture their
+document and clear ScriptOrModule presence. Existing DListener ownership
+handles replacement, invocation and drain without larger records. The
+ordinary constructors and Yonder do not enable this mode. See the
+[handler settings contract](../../docs/design/pending/IFRAME_F4_HANDLER_SETTINGS.md)
+for scope, engine identity requirements and qualified validation.

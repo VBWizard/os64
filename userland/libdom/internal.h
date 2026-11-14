@@ -387,7 +387,7 @@ struct os64_dom_cluster {
     uint64_t effect_generation, animation_serial;
     bool sweep_pending;
     bool poisoned, drained;
-    bool timer_settings, listener_settings, scheduled_settings;
+    bool timer_settings, listener_settings, scheduled_settings, handler_settings;
     bool recovery_enabled, recovering, recovery_running, recovery_completed;
     bool streams_used; /* Self-hosted stream records require a separate unwind proof. */
     uint64_t recovery_generation;

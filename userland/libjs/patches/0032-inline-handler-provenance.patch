@@ -1,0 +1,46 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -6312,6 +6312,27 @@
+             class_id == JS_CLASS_GENERATOR_FUNCTION ||
+             class_id == JS_CLASS_ASYNC_FUNCTION ||
+             class_id == JS_CLASS_ASYNC_GENERATOR_FUNCTION);
++}
++
++/* HTML creates inline handlers without an associated ScriptOrModule.
++   Match the complete expected function text before changing its marker:
++   source concatenation must not let a malformed body select another closure. */
++JS_BOOL JS_ClearFunctionScriptProvenance(JSValueConst function,
++                                       const char *source, size_t length)
++{
++    JSObject *p;
++    JSFunctionBytecode *b;
++    if (!source || JS_VALUE_GET_TAG(function) != JS_TAG_OBJECT)
++        return FALSE;
++    p = JS_VALUE_GET_OBJ(function);
++    if (!js_class_has_bytecode(p->class_id))
++        return FALSE;
++    b = p->u.func.function_bytecode;
++    if (!b->has_debug || !b->debug.source || b->debug.source_len != length ||
++        memcmp(b->debug.source, source, length))
++        return FALSE;
++    p->has_script_provenance = 0;
++    return TRUE;
+ }
+ 
+ /* return NULL without exception if not a function or no bytecode */
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -899,6 +899,13 @@
+    GetCallbackRealm's. No lookup, traps, exception mutation or context root.
+    NULL when the recorded context no longer exists. Trusted same-runtime API. */
+ JSContext *JS_GetObjectRealm(JSContext *ctx, JSValueConst object);
++/* Trusted owner-thread operation on a fresh, unexposed bytecode closure.
++   Clear ScriptOrModule presence for an HTML inline handler only if its saved
++   function source exactly matches source[0..length). False for other values,
++   classes, absent source or a mismatch; no allocation, property lookup,
++   exception change or executable-realm change. */
++JS_BOOL JS_ClearFunctionScriptProvenance(JSValueConst function,
++                                       const char *source, size_t length);
+ JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
+ JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
+ 

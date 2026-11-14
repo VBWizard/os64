@@ -1377,3 +1377,22 @@ remain embedding responsibilities. Wrapper contexts already stay retained
 through root destruction. Each engine object/context/runtime accounts for one
 additional uint64_t in its allocation. The [listener settings chapter](../../docs/design/pending/IFRAME_F4_LISTENER_SETTINGS.md)
 records the consumer and collection policy.
+
+### Inline-handler provenance
+
+Raw `JS_ClearFunctionScriptProvenance(function, source, length)` is a trusted
+owner-thread operation for fresh, unexposed inline-handler bytecode closures.
+It clears the existing ScriptOrModule presence marker only when the saved
+function text exactly matches the supplied source span. Other classes, missing
+source and mismatches refuse without modifying the closure or pending
+exception. It performs no allocation, lookup, executable-realm change or
+reference transfer. The embedding must supply a readable source span and keep
+the value alive; this is not a script-facing operation or a general parser.
+
+HTML handler compilation uses the source check to prevent a concatenation
+escape from selecting another function for provenance mutation. It then
+captures the document's explicitly prepared incumbent. The operation does
+not create complete Script/Module records, change a suspended/active frame's
+record, enter a task or affect F16 recovery. Patch 0032 changes engine identity;
+engine objects and prepared headers must be rebuilt together. Wrapper ABI 5
+and public wrapper layouts remain unchanged.
