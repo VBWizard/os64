@@ -5,10 +5,11 @@ library is distributed under, as they came in the FFmpeg 9.0.2 release.
 os64 ships libav.so as a shared library of its own so that it can be
 replaced: build FFmpeg (the same release or another) as a library with the
 same interface, put it at /lib/libav.so, and every program started after
-uses it. The source os64 built it from is in os64's source tree, under
-userland/libav (upstream/ is FFmpeg's files unmodified; port/ is os64's
-configuration and the C-library shims it needs), with the release archive
-named and hashed in userland/libav/manifest.json.
+uses it. The source os64 built it from is in os64's source tree, which is
+public at https://github.com/VBWizard/os64, under userland/libav
+(upstream/ is FFmpeg's files unmodified; port/ is os64's configuration and
+the C-library shims it needs), with the release archive named and hashed
+in userland/libav/manifest.json. FFmpeg itself is at https://ffmpeg.org.
 ========================================================================
 LICENSE.md
 ========================================================================

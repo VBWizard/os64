@@ -123,7 +123,8 @@ for path in sorted((USERLAND / 'bin').rglob('*')):
 notice = (ROOT / 'license/ffmpeg-LICENSE').read_text()
 check((upstream / 'LICENSE.md').read_text() in notice, 'license/ffmpeg-LICENSE does not carry LICENSE.md')
 check((upstream / 'COPYING.LGPLv2.1').read_text() in notice, 'license/ffmpeg-LICENSE does not carry the LGPL')
-check('userland/libav' in notice, 'license/ffmpeg-LICENSE does not say where the source is')
+check('userland/libav' in notice and 'https://github.com/VBWizard/os64' in notice,
+      'license/ffmpeg-LICENSE does not say where the source is')
 root_make = (ROOT / 'GNUmakefile').read_text()
 check(root_make.count('/etc/licenses/ffmpeg.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
